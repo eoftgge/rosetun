@@ -2,7 +2,7 @@ use std::net::{IpAddr, ToSocketAddrs};
 use std::path::PathBuf;
 
 use rosetun_config::{ConnectionState, Node, RuleSet, Settings, Status};
-use rosetun_core_engine::{EngineProcess, EngineRegistry, RenderRequest};
+use rosetun_engine::{EngineProcess, EngineRegistry, RenderRequest};
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 use rosetun_routing::{RoutingBackend, RoutingGuard, RoutingPlan};
 

@@ -5,7 +5,7 @@ mod state;
 
 use std::sync::{Arc, Mutex};
 
-use rosetun_core_engine::EngineRegistry;
+use rosetun_engine::EngineRegistry;
 use rosetun_engine_singbox::SingBoxBackend;
 use rosetun_engine_xray::XrayBackend;
 use rosetun_ipc::Listener;

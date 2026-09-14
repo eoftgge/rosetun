@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use rosetun_ipc::{
     Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request, Response,
 };

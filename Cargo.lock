@@ -154,6 +154,16 @@ dependencies = [
 [[package]]
 name = "rosetun-helper-privileged"
 version = "0.1.0"
+dependencies = [
+ "rosetun-config",
+ "rosetun-engine",
+ "rosetun-engine-singbox",
+ "rosetun-engine-xray",
+ "rosetun-ipc",
+ "rosetun-routing",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "rosetun-hwid"
