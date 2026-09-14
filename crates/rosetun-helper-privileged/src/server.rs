@@ -1,11 +1,25 @@
 use std::sync::{Arc, Mutex};
+use rosetun_config::Status;
+use rosetun_engine::{EngineProcess, EngineRegistry};
 use rosetun_ipc::{
     Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request, Response,
 };
-
+use rosetun_routing::{RoutingBackend, RoutingGuard};
 use crate::state::HelperState;
 
 const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub struct Helper {
+    status: Mutex<Status>,
+    session: Mutex<Session>,
+}
+
+struct Session {
+    engines: EngineRegistry,
+    routing: Box<dyn RoutingBackend>,
+    process: Option<Box<dyn EngineProcess>>,
+    guard: Option<RoutingGuard>,
+}
 
 pub fn serve(listener: Listener, state: Arc<Mutex<HelperState>>) -> std::io::Result<()> {
     tracing::info!(endpoint = %listener.path().display(), "helper listener started");
@@ -36,7 +50,7 @@ fn handle(mut connection: Connection, state: Arc<Mutex<HelperState>>) -> Result<
         };
 
         let Frame::Request { id, body } = frame else {
-            return Err("получен кадр, который клиент слать не должен".to_owned());
+            return Err("a frame was received that the client should not send".to_owned());
         };
 
         if !greeted && !matches!(body, Request::Hello { .. }) {
