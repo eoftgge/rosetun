@@ -25,10 +25,10 @@ fn main() -> std::process::ExitCode {
 
     match client.status() {
         Ok(status) => {
-            println!("состояние: {:?}", status.state);
-            println!("ядро:      {:?}", status.engine);
+            println!("state: {:?}", status.state);
+            println!("engine:      {:?}", status.engine);
             println!(
-                "трафик:    ↑ {} Б/с  ↓ {} Б/с",
+                "traffic: up {} B/s down {} B/s",
                 status.traffic.up_bps, status.traffic.down_bps
             );
             std::process::ExitCode::SUCCESS

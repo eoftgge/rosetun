@@ -55,7 +55,7 @@ mod tests {
 
     fn roundtrip(frame: &Frame) -> Frame {
         let mut buffer = Vec::new();
-        write_frame(&mut buffer, frame).expect("кадр записан");
+        write_frame(&mut buffer, frame).expect("frame written");
         let mut reader = BufReader::new(buffer.as_slice());
         read_frame(&mut reader)
             .expect("the frame is read")

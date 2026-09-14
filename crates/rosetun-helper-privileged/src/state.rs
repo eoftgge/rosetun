@@ -47,7 +47,7 @@ impl HelperState {
                 None => None,
             };
             if let Some(reason) = exited {
-                tracing::warn!(%reason, "the kernel terminated itself");
+                tracing::warn!(%reason, "the engine terminated itself");
                 self.fail(reason);
             }
         }
@@ -61,7 +61,7 @@ impl HelperState {
         ) {
             return Err(HelperError::new(
                 ErrorCode::InvalidState,
-                format!("the tunnel is already in condition {:?}", self.status.state),
+                format!("tunnel is already {:?}", self.status.state),
             ));
         }
 
@@ -91,7 +91,7 @@ impl HelperState {
         let backend = self.engines.get(settings.engine).ok_or_else(|| {
             HelperError::new(
                 ErrorCode::EngineFailed,
-                format!("engine {} unavailable", settings.engine.as_str()),
+                format!("engine {} is not registered", settings.engine.as_str()),
             )
         })?;
 

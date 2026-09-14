@@ -34,13 +34,13 @@ fn main() -> std::process::ExitCode {
     let listener = match Listener::bind(&endpoint) {
         Ok(listener) => listener,
         Err(error) => {
-            tracing::error!(endpoint = %endpoint.display(), %error, "не удалось занять сокет");
+            tracing::error!(endpoint = %endpoint.display(), %error, "failed to bind socket");
             return std::process::ExitCode::FAILURE;
         }
     };
 
     if let Err(error) = server::serve(listener, state) {
-        tracing::error!(%error, "helper остановлен");
+        tracing::error!(%error, "helper stopped");
         return std::process::ExitCode::FAILURE;
     }
     std::process::ExitCode::SUCCESS

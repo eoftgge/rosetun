@@ -1,6 +1,6 @@
-//! Kernel contract: what Rosetun requires from sing-box, xray, and everything that comes after.
+//! Engine contract: what Rosetun requires from sing-box, xray, and everything that comes after.
 //!
-//! The crate lives on the helper side—the kernel doesn't launch the application. So the tunnel
+//! The crate lives on the helper side—the engine doesn't launch the application. So the tunnel
 //! survives a GUI crash, and the privilege escalation remains at one point.
 //!
 //! Traits are synchronous. Monitoring a child process is blocking by its nature,
@@ -52,17 +52,17 @@ pub trait EngineProcess: Send + std::fmt::Debug {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
-    #[error("исполняемый файл ядра {0} не найден")]
+    #[error("engine binary {0} not found")]
     BinaryNotFound(String),
-    #[error("ядро не поддерживает такую конфигурацию: {0}")]
+    #[error("engine does not support this configuration: {0}")]
     Unsupported(String),
-    #[error("не удалось собрать конфигурацию: {0}")]
+    #[error("failed to render configuration: {0}")]
     Render(String),
-    #[error("ядро завершилось с кодом {code:?}")]
+    #[error("engine exited with code {code:?}")]
     Exited { code: Option<i32> },
-    #[error("статистика недоступна для этого ядра")]
+    #[error("statistics are not available for this engine")]
     StatsUnavailable,
-    #[error("ошибка ввода-вывода: {0}")]
+    #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
 

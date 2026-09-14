@@ -132,7 +132,7 @@ fn dispatch(
         },
         Request::ApplyRules { .. } => Response::Error(HelperError::new(
             ErrorCode::NotImplemented,
-            "on-the-fly rule changes will appear along with the kernel config reboot",
+            "on-the-fly rule changes will appear along with the engine config reboot",
         )),
         Request::Subscribe => Response::Error(HelperError::new(
             ErrorCode::NotImplemented,

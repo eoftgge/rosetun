@@ -69,7 +69,7 @@ impl EngineBackend for SingBoxBackend {
         let config_path = self.work_dir.join(&config.file_name);
         std::fs::write(&config_path, &config.body)?;
 
-        tracing::info!(binary = %binary.display(), config = %config_path.display(), "запуск sing-box");
+        tracing::info!(binary = %binary.display(), config = %config_path.display(), "starting sing-box");
         let child = Command::new(binary)
             .arg("run")
             .arg("-c")
@@ -116,7 +116,7 @@ impl EngineProcess for SingBoxProcess {
     }
 
     fn stop(&mut self) -> Result<(), EngineError> {
-        // TODO: on Unix, first issue SIGTERM to allow the kernel time to remove the routes,
+        // TODO: on Unix, first issue SIGTERM to allow the engine time to remove the routes,
         // and only then kill. It's rough now, but predictable.
         match self.child.kill() {
             Ok(()) => {}
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn disabled_rules_are_dropped() {
         let config = rendered();
-        let rules = config["route"]["rules"].as_array().expect("массив правил");
+        let rules = config["route"]["rules"].as_array().expect("rules array");
         assert_eq!(rules.len(), 2, "the disabled rule should not be included in the config");
     }
 
