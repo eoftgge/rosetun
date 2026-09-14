@@ -13,7 +13,3 @@ thiserror.workspace = true
 
 [lints]
 workspace = true
-[dependencies.serde]
-version = "1.0.229"
-[dependencies.serde]
-features = ["derive"]
