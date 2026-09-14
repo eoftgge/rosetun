@@ -6,6 +6,14 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+rosetun-config.workspace = true
+rosetun-core-engine.workspace = true
+rosetun-engine-singbox.workspace = true
+rosetun-engine-xray.workspace = true
+rosetun-ipc.workspace = true
+rosetun-routing.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
