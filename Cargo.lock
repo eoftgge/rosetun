@@ -3,5 +3,29 @@
 version = 4
 
 [[package]]
-name = "rosetun"
+name = "rosetun-config"
+version = "0.1.0"
+
+[[package]]
+name = "rosetun-core-engine"
+version = "0.1.0"
+
+[[package]]
+name = "rosetun-engine-singbox"
+version = "0.1.0"
+
+[[package]]
+name = "rosetun-engine-xray"
+version = "0.1.0"
+
+[[package]]
+name = "rosetun-hwid"
+version = "0.1.0"
+
+[[package]]
+name = "rosetun-ipc"
+version = "0.1.0"
+
+[[package]]
+name = "rosetun-routing"
 version = "0.1.0"
