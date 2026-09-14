@@ -9,6 +9,14 @@ rust-version = "1.85"
 repository = "https://github.com/eoftgge/rosetun"
 
 [workspace.dependencies]
+rosetun-config = { path = "crates/rosetun-config" }
+rosetun-engine = { path = "crates/rosetun-engine" }
+rosetun-engine-singbox = { path = "crates/rosetun-engine-singbox" }
+rosetun-engine-xray = { path = "crates/rosetun-engine-xray" }
+rosetun-hwid = { path = "crates/rosetun-hwid" }
+rosetun-ipc = { path = "crates/rosetun-ipc" }
+rosetun-routing = { path = "crates/rosetun-routing" }
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
