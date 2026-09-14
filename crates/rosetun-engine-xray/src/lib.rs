@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use rosetun_config::EngineKind;
-use rosetun_core_engine::{
+use rosetun_engine::{
     EngineBackend, EngineError, EngineProcess, RenderRequest, RenderedConfig,
 };
 
