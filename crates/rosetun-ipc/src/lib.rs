@@ -1,14 +1,11 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+#![forbid(unsafe_code)]
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod codec;
+mod protocol;
+pub mod transport;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use codec::{CodecError, MAX_FRAME_BYTES, read_frame, write_frame};
+pub use protocol::{
+    ConnectRequest, ErrorCode, Event, Frame, HelperError, PROTOCOL_VERSION, Request, Response,
+};
+pub use transport::{Connection, Listener, connect, default_endpoint};

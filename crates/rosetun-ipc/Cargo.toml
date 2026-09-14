@@ -6,6 +6,14 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+rosetun-config.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true
+[dependencies.serde]
+version = "1.0.229"
+[dependencies.serde]
+features = ["derive"]
