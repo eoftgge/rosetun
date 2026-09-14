@@ -1,0 +1,231 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Cormorant+Garamond:wght@300;400;600&display=swap">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #171014; font-family: 'Archivo', system-ui, sans-serif; color: #F3ECEE; -webkit-font-smoothing: antialiased; }
+    a { color: #D9475F; text-decoration: none; }
+    a:hover { color: #E86A80; }
+    .num { font-variant-numeric: tabular-nums; }
+    .cap { font-size: 10.5px; letter-spacing: 0.15em; text-transform: uppercase; color: #937F88; font-weight: 600; }
+  </style>
+</helmet>
+
+<div style="position: relative; width: 1200px; height: 780px; background: #171014; overflow: hidden">
+
+  <div style="position: absolute; top: 0; left: 0; width: 1200px; height: 780px; display: flex; flex-direction: column">
+    <div style="position: relative; flex: 0 0 76px; background: #1B1418; border-bottom: 1px solid #33232A; overflow: hidden">
+      <svg width="1200" height="76" viewBox="0 0 1200 76" fill="none" style="position: absolute; top: 0; left: 0">
+        <g fill="#C2374F">
+          <path d="M0 -20 L12 0 L0 22 L-12 0 Z" transform="translate(196 18) rotate(24) scale(1.25)" opacity="0.10"/>
+          <path d="M0 -20 L12 0 L0 22 L-12 0 Z" transform="translate(424 46) rotate(-14) scale(1.35)" opacity="0.08"/>
+          <path d="M0 -20 L12 0 L0 22 L-12 0 Z" transform="translate(676 14) rotate(-62) scale(1.15)" opacity="0.09"/>
+          <path d="M0 -20 L12 0 L0 22 L-12 0 Z" transform="translate(934 58) rotate(58) scale(0.9)" opacity="0.08"/>
+          <path d="M0 -20 L12 0 L0 22 L-12 0 Z" transform="translate(1104 54) rotate(-46) scale(1.2)" opacity="0.07"/>
+        </g>
+      </svg>
+      <div style="position: relative; height: 100%; display: flex; align-items: center; padding: 0 22px; gap: 44px">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <svg width="38" height="38" viewBox="0 0 48 48" fill="none">
+            <g fill="#C2374F" fill-opacity="0.18" stroke="#C2374F" stroke-opacity="0.6" stroke-width="1.4" stroke-linejoin="miter">
+              <path d="M24 3 L34 15 L24 24 L14 15 Z"/>
+              <path d="M24 3 L34 15 L24 24 L14 15 Z" transform="rotate(72 24 24)"/>
+              <path d="M24 3 L34 15 L24 24 L14 15 Z" transform="rotate(144 24 24)"/>
+              <path d="M24 3 L34 15 L24 24 L14 15 Z" transform="rotate(216 24 24)"/>
+              <path d="M24 3 L34 15 L24 24 L14 15 Z" transform="rotate(288 24 24)"/>
+            </g>
+            <path d="M24 31 L18 27 L18 21 L24 17 L30 21 L30 25 L26 28 L22 25 L23 22" fill="none" stroke="#E86A80" stroke-width="1.6" stroke-linejoin="miter"/>
+          </svg>
+          <span style="font-family: 'Cormorant Garamond', Georgia, serif; font-size: 23px; font-weight: 600; letter-spacing: 0.24em; color: #F3ECEE">ROSETUN</span>
+        </div>
+        <div style="display: flex; align-items: stretch; gap: 4px; height: 100%">
+          <div style="display: flex; align-items: center; padding: 0 16px; font-size: 13.5px; color: #B9A9AF">Подключение</div>
+          <div style="display: flex; align-items: center; padding: 0 16px; border-bottom: 2px solid #C2374F; font-size: 13.5px; font-weight: 600; color: #F3ECEE">Правила</div>
+          <div style="display: flex; align-items: center; padding: 0 16px; font-size: 13.5px; color: #B9A9AF">Настройки</div>
+        </div>
+      </div>
+    </div>
+    <div style="flex: 1; padding: 26px 34px; display: flex; flex-direction: column; gap: 18px">
+      <div style="display: flex; align-items: flex-end; gap: 18px">
+        <span style="font-family: 'Cormorant Garamond', Georgia, serif; font-size: 30px; font-weight: 600; color: #F3ECEE; flex: 1">Правила маршрутизации</span>
+        <div style="background: #C2374F; height: 38px; width: 140px; clip-path: polygon(11px 0, 100% 0, 100% calc(100% - 11px), calc(100% - 11px) 100%, 0 100%, 0 11px)"></div>
+      </div>
+      <div style="display: flex; gap: 8px">
+        <div style="background: rgba(194,55,79,0.14); border: 1px solid rgba(194,55,79,0.45); width: 84px; height: 32px"></div>
+        <div style="background: #1F1519; border: 1px solid #33232A; width: 110px; height: 32px"></div>
+        <div style="background: #1F1519; border: 1px solid #33232A; width: 118px; height: 32px"></div>
+      </div>
+      <div style="flex: 1; border: 1px solid #33232A; background: #1B1418"></div>
+    </div>
+  </div>
+
+  <div style="position: absolute; top: 0; left: 0; width: 1200px; height: 780px; background: rgba(9,5,7,0.80)"></div>
+
+  <div style="position: absolute; top: 66px; left: 220px; width: 760px; background: #211519; border: 1px solid #432D36; display: flex; flex-direction: column">
+
+    <div style="position: relative; overflow: hidden; border-bottom: 1px solid #33232A; padding: 20px 24px">
+      <svg width="760" height="84" viewBox="0 0 760 84" fill="none" style="position: absolute; top: 0; left: 0">
+        <g fill="#C2374F">
+          <path d="M0 -20 L12 0 L0 22 L-12 0 Z" transform="translate(586 18) rotate(28) scale(1.2)" opacity="0.10"/>
+          <path d="M0 -20 L12 0 L0 22 L-12 0 Z" transform="translate(668 62) rotate(-40) scale(0.95)" opacity="0.07"/>
+        </g>
+        <path d="M0 -20 L12 0 L0 22 L-12 0 Z" transform="translate(722 16) rotate(96) scale(1.1)" fill="none" stroke="#E86A80" stroke-width="1" opacity="0.16"/>
+      </svg>
+      <div style="position: relative; display: flex; align-items: center; gap: 14px">
+        <div style="flex: 0 0 40px; height: 40px; background: rgba(194,55,79,0.16); display: flex; align-items: center; justify-content: center; clip-path: polygon(11px 0, 100% 0, 100% calc(100% - 11px), calc(100% - 11px) 100%, 0 100%, 0 11px)">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#D9475F" stroke-width="1.5" stroke-linejoin="miter"><path d="M2 10 H7 L12 4.5 H18 M12 15.5 H18 M7 10 L12 15.5"/><path d="M15.5 2.5 L18 4.5 L15.5 6.5 M15.5 13.5 L18 15.5 L15.5 17.5"/></svg>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 3px">
+          <span style="font-family: 'Cormorant Garamond', Georgia, serif; font-size: 25px; font-weight: 600; line-height: 1.1; color: #F3ECEE">Новое правило</span>
+          <span style="font-size: 12.5px; color: #B9A9AF">Действует для всех подписок</span>
+        </div>
+        <svg width="16" height="16" viewBox="0 0 14 14" stroke="#937F88" stroke-width="1.4"><path d="M3 3 L11 11 M11 3 L3 11"/></svg>
+      </div>
+    </div>
+
+    <div style="padding: 20px 24px; display: flex; flex-direction: column; gap: 18px">
+
+      <div style="display: flex; gap: 16px">
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+          <span class="cap">Тип правила</span>
+          <div style="display: flex; align-items: stretch">
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; height: 40px; background: #1B1418; border: 1px solid #33232A">
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="#937F88" stroke-width="1.4" stroke-linejoin="miter"><path d="M10 2 L17 6 V14 L10 18 L3 14 V6 Z"/><path d="M3 10 H17 M10 2 V18"/></svg>
+              <span style="font-size: 13px; color: #937F88">Домен</span>
+            </div>
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; height: 40px; background: rgba(194,55,79,0.16); border: 1px solid #C2374F; margin-left: -1px">
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="#E86A80" stroke-width="1.5" stroke-linejoin="miter"><path d="M3 4 H17 V16 H3 Z"/><path d="M3 8 H17"/><path d="M5.5 6 H7"/></svg>
+              <span style="font-size: 13px; color: #E86A80; font-weight: 600">Процесс</span>
+            </div>
+          </div>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+          <span class="cap">Назначение</span>
+          <div style="display: flex; align-items: stretch">
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; height: 40px; background: rgba(194,55,79,0.16); border: 1px solid #C2374F">
+              <span style="width: 7px; height: 7px; background: #C2374F; transform: rotate(45deg); display: block"></span>
+              <span style="font-size: 13px; color: #E86A80; font-weight: 600">Прокси</span>
+            </div>
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; height: 40px; background: #1B1418; border: 1px solid #33232A; margin-left: -1px">
+              <span style="width: 7px; height: 7px; border: 1px solid #937F88; transform: rotate(45deg); display: block"></span>
+              <span style="font-size: 13px; color: #937F88">Напрямую</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 9px">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <span class="cap">Запущенные процессы · 42</span>
+          <div style="flex: 1; display: flex; align-items: center; gap: 9px; background: #1B1418; border: 1px solid #33232A; padding: 0 12px; height: 34px">
+            <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="#937F88" stroke-width="1.5" stroke-linejoin="miter"><path d="M9 3 L14 8 L9 13 L4 8 Z"/><path d="M12.5 11.5 L17 16"/></svg>
+            <span style="font-size: 12.5px; color: #937F88">Фильтр по имени</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 7px; color: #D9475F; font-size: 12px; font-weight: 500">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="#D9475F" stroke-width="1.6" stroke-linejoin="miter"><path d="M3 11 V6 H12 M9 3 L12 6 L9 9"/><path d="M17 9 V14 H8 M11 17 L8 14 L11 11"/></svg>
+            <span>Обновить</span>
+          </div>
+        </div>
+
+        <div style="border: 1px solid #33232A; background: #1B1418; display: flex; flex-direction: column">
+
+          <div style="display: flex; align-items: center; gap: 12px; padding: 0 14px; height: 54px; background: rgba(194,55,79,0.12); border-bottom: 1px solid #241A1F; box-shadow: inset 3px 0 0 0 #C2374F">
+            <span style="flex: 0 0 28px; height: 28px; background: rgba(194,55,79,0.18); border: 1px solid rgba(194,55,79,0.45); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #E86A80">T</span>
+            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+              <span class="num" style="font-size: 13.5px; font-weight: 600; color: #F3ECEE">Telegram.exe</span>
+              <span class="num" style="font-size: 11.5px; color: #B9A9AF">C:\Users\sandaar\AppData\Roaming\Telegram Desktop\Telegram.exe</span>
+            </div>
+            <span class="num" style="flex: 0 0 74px; font-size: 11.5px; color: #937F88; text-align: right">PID 4812</span>
+            <span class="num" style="flex: 0 0 64px; font-size: 11.5px; color: #937F88; text-align: right">218 МБ</span>
+            <span style="flex: 0 0 14px; width: 14px; height: 14px; background: #C2374F; transform: rotate(45deg); display: block"></span>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 12px; padding: 0 14px; height: 54px; border-bottom: 1px solid #241A1F">
+            <span style="flex: 0 0 28px; height: 28px; background: #241A1F; border: 1px solid #3A2A31; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #B9A9AF">C</span>
+            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+              <span class="num" style="font-size: 13.5px; font-weight: 500; color: #D8CBD0">chrome.exe</span>
+              <span class="num" style="font-size: 11.5px; color: #937F88">C:\Program Files\Google\Chrome\Application\chrome.exe</span>
+            </div>
+            <span class="num" style="flex: 0 0 74px; font-size: 11.5px; color: #937F88; text-align: right">PID 2044</span>
+            <span class="num" style="flex: 0 0 64px; font-size: 11.5px; color: #937F88; text-align: right">1,4 ГБ</span>
+            <span style="flex: 0 0 14px; width: 14px; height: 14px; border: 1px solid #432D36; transform: rotate(45deg); display: block"></span>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 12px; padding: 0 14px; height: 54px; border-bottom: 1px solid #241A1F">
+            <span style="flex: 0 0 28px; height: 28px; background: #241A1F; border: 1px solid #3A2A31; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #B9A9AF">D</span>
+            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+              <span class="num" style="font-size: 13.5px; font-weight: 500; color: #D8CBD0">Discord.exe</span>
+              <span class="num" style="font-size: 11.5px; color: #937F88">C:\Users\sandaar\AppData\Local\Discord\app-1.0.9\Discord.exe</span>
+            </div>
+            <span class="num" style="flex: 0 0 74px; font-size: 11.5px; color: #937F88; text-align: right">PID 7310</span>
+            <span class="num" style="flex: 0 0 64px; font-size: 11.5px; color: #937F88; text-align: right">402 МБ</span>
+            <span style="flex: 0 0 14px; width: 14px; height: 14px; border: 1px solid #432D36; transform: rotate(45deg); display: block"></span>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 12px; padding: 0 14px; height: 54px; border-bottom: 1px solid #241A1F">
+            <span style="flex: 0 0 28px; height: 28px; background: #241A1F; border: 1px solid #3A2A31; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #B9A9AF">S</span>
+            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+              <span class="num" style="font-size: 13.5px; font-weight: 500; color: #D8CBD0">steam.exe</span>
+              <span class="num" style="font-size: 11.5px; color: #937F88">C:\Program Files (x86)\Steam\steam.exe</span>
+            </div>
+            <span class="num" style="flex: 0 0 74px; font-size: 11.5px; color: #937F88; text-align: right">PID 1188</span>
+            <span class="num" style="flex: 0 0 64px; font-size: 11.5px; color: #937F88; text-align: right">336 МБ</span>
+            <span style="flex: 0 0 14px; width: 14px; height: 14px; border: 1px solid #432D36; transform: rotate(45deg); display: block"></span>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 12px; padding: 0 14px; height: 54px">
+            <span style="flex: 0 0 28px; height: 28px; background: #241A1F; border: 1px solid #3A2A31; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #B9A9AF">V</span>
+            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+              <span class="num" style="font-size: 13.5px; font-weight: 500; color: #D8CBD0">Code.exe</span>
+              <span class="num" style="font-size: 11.5px; color: #937F88">C:\Users\sandaar\AppData\Local\Programs\Microsoft VS Code\Code.exe</span>
+            </div>
+            <span class="num" style="flex: 0 0 74px; font-size: 11.5px; color: #937F88; text-align: right">PID 9622</span>
+            <span class="num" style="flex: 0 0 64px; font-size: 11.5px; color: #937F88; text-align: right">874 МБ</span>
+            <span style="flex: 0 0 14px; width: 14px; height: 14px; border: 1px solid #432D36; transform: rotate(45deg); display: block"></span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 14px">
+        <div style="flex: 1; height: 1px; background: #33232A"></div>
+        <span style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #937F88; font-weight: 600">процесс не запущен</span>
+        <div style="flex: 1; height: 1px; background: #33232A"></div>
+      </div>
+
+      <div style="display: flex; align-items: stretch; gap: 10px">
+        <div style="flex: 1; display: flex; align-items: center; gap: 11px; background: #1B1418; border: 1px solid #33232A; padding: 0 14px; height: 44px">
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="#937F88" stroke-width="1.4" stroke-linejoin="miter"><path d="M4 2 H12 L16 6 V18 H4 Z"/><path d="M12 2 V6 H16"/></svg>
+          <span class="num" style="font-size: 13px; color: #937F88">Имя процесса или полный путь к .exe</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 9px; background: #2B1D23; border: 1px solid #432D36; padding: 0 16px; height: 44px">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="#B9A9AF" stroke-width="1.5" stroke-linejoin="miter"><path d="M2 5 H8 L10 7 H18 V16 H2 Z"/></svg>
+          <span style="font-size: 12.5px; color: #D8CBD0; font-weight: 500">Обзор</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid #33232A; padding: 16px 24px; display: flex; align-items: center; gap: 12px">
+      <span style="flex: 1; font-size: 12px; color: #937F88">Новое правило встанет наверх списка — приоритет выше остальных</span>
+      <div style="padding: 0 20px; height: 42px; display: flex; align-items: center; border: 1px solid #33232A">
+        <span style="font-size: 12.5px; color: #B9A9AF; font-weight: 500">Отмена</span>
+      </div>
+      <div style="background: #C2374F; clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px); height: 42px; padding: 0 22px; display: flex; align-items: center; gap: 10px">
+        <span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.1em; color: #FFF4F6">ДОБАВИТЬ ПРАВИЛО</span>
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="#FFF4F6" stroke-width="1.8" stroke-linejoin="miter"><path d="M8 4 L14 10 L8 16"/></svg>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":1200,"height":780}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>
