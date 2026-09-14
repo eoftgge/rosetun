@@ -1,14 +1,115 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+#![forbid(unsafe_code)]
+
+mod ids;
+mod node;
+mod rule;
+mod runtime;
+mod settings;
+mod subscription;
+
+pub use ids::{NodeId, RuleId, RuleSetId, SubscriptionId};
+pub use node::{
+    Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode, TlsParams,
+    Transport, TrojanParams, VlessParams, VmessParams,
+};
+pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
+pub use runtime::{ConnectionState, Status, Traffic};
+pub use settings::{EngineKind, LogLevel, Settings, TunSettings};
+pub use subscription::{Selection, Subscription};
+
+use serde::{Deserialize, Serialize};
+
+
+pub const CONFIG_VERSION: u32 = 1;
+
+pub(crate) fn default_true() -> bool {
+    true
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppConfig {
+    #[serde(default = "default_config_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub settings: Settings,
+    #[serde(default)]
+    pub subscriptions: Vec<Subscription>,
+    #[serde(default)]
+    pub rule_sets: Vec<RuleSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<Selection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_rule_set: Option<RuleSetId>,
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+fn default_config_version() -> u32 {
+    CONFIG_VERSION
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            version: CONFIG_VERSION,
+            settings: Settings::default(),
+            subscriptions: Vec::new(),
+            rule_sets: Vec::new(),
+            active: None,
+            active_rule_set: None,
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn active_node(&self) -> Option<(&Subscription, &Node)> {
+        let selection = self.active.as_ref()?;
+        let subscription = self
+            .subscriptions
+            .iter()
+            .find(|item| item.id == selection.subscription)?;
+        let node = subscription.node(&selection.node)?;
+        Some((subscription, node))
+    }
+
+    pub fn active_rules(&self) -> Option<&RuleSet> {
+        let id = self.active_rule_set.as_ref()?;
+        self.rule_sets.iter().find(|set| &set.id == id)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("configuration version {found} is not supported (expected to be no higher than {expected})")]
+    UnsupportedVersion { found: u32, expected: u32 },
+    #[error("server {node} selected, which is not in subscription {subscription}")]
+    DanglingSelection {
+        subscription: SubscriptionId,
+        node: NodeId,
+    },
+    #[error("ruleset {0} selected, which does not exist")]
+    DanglingRuleSet(RuleSetId),
+}
+
+impl AppConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.version > CONFIG_VERSION {
+            return Err(ConfigError::UnsupportedVersion {
+                found: self.version,
+                expected: CONFIG_VERSION,
+            });
+        }
+        if let Some(selection) = &self.active
+            && self.active_node().is_none()
+        {
+            return Err(ConfigError::DanglingSelection {
+                subscription: selection.subscription.clone(),
+                node: selection.node.clone(),
+            });
+        }
+        if let Some(id) = &self.active_rule_set
+            && self.active_rules().is_none()
+        {
+            return Err(ConfigError::DanglingRuleSet(id.clone()));
+        }
+        Ok(())
     }
 }
