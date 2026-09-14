@@ -1,0 +1,61 @@
+#![allow(unreachable_pub)]
+
+mod server;
+mod state;
+
+use std::sync::{Arc, Mutex};
+
+use rosetun_core_engine::EngineRegistry;
+use rosetun_engine_singbox::SingBoxBackend;
+use rosetun_engine_xray::XrayBackend;
+use rosetun_ipc::Listener;
+
+fn main() -> std::process::ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG")
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    let work_dir = work_dir();
+    let mut engines = EngineRegistry::new();
+    engines
+        .register(Box::new(SingBoxBackend::new(work_dir.join("sing-box"))))
+        .register(Box::new(XrayBackend::new(work_dir.join("xray"))));
+
+    let state = Arc::new(Mutex::new(state::HelperState::new(
+        engines,
+        rosetun_routing::backend(),
+        work_dir,
+    )));
+
+    let endpoint = rosetun_ipc::default_endpoint();
+    let listener = match Listener::bind(&endpoint) {
+        Ok(listener) => listener,
+        Err(error) => {
+            tracing::error!(endpoint = %endpoint.display(), %error, "не удалось занять сокет");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(error) = server::serve(listener, state) {
+        tracing::error!(%error, "helper остановлен");
+        return std::process::ExitCode::FAILURE;
+    }
+    std::process::ExitCode::SUCCESS
+}
+
+fn work_dir() -> std::path::PathBuf {
+    if let Some(custom) = std::env::var_os("ROSETUN_WORK_DIR") {
+        return std::path::PathBuf::from(custom);
+    }
+    #[cfg(unix)]
+    {
+        std::path::PathBuf::from("/run/rosetun")
+    }
+    #[cfg(windows)]
+    {
+        std::path::PathBuf::from(r"C:\ProgramData\Rosetun\run")
+    }
+}
