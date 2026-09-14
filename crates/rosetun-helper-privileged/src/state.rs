@@ -165,7 +165,7 @@ fn resolve(server: &str, port: u16) -> Vec<IpAddr> {
     match (server, port).to_socket_addrs() {
         Ok(addrs) => addrs.map(|addr| addr.ip()).collect(),
         Err(error) => {
-            tracing::warn!(%server, %error, "the server address could not be resolved");
+            tracing::warn!(%server, %error, "failed to resolve server address");
             Vec::new()
         }
     }

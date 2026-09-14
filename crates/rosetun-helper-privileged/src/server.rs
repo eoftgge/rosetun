@@ -59,10 +59,10 @@ fn handle(mut connection: Connection, state: Arc<Mutex<HelperState>>) -> Result<
                 id,
                 Response::Error(HelperError::new(
                     ErrorCode::HandshakeRequired,
-                    "the first message should be hello",
+                    "first message must be hello",
                 )),
             );
-            return Err("the client did not introduce himself".to_owned());
+            return Err("client did not handshake".to_owned());
         }
 
         let response = dispatch(&body, &state, &mut greeted);
@@ -78,10 +78,10 @@ fn handle(mut connection: Connection, state: Arc<Mutex<HelperState>>) -> Result<
         reply(&mut connection, id, response)?;
 
         if fatal {
-            return Err("version protocol doesn't match".to_owned());
+            return Err("protocol version mismatch".to_owned());
         }
         if shutdown {
-            tracing::info!("got command exit");
+            tracing::info!("shutdown requested");
             std::process::exit(0);
         }
     }
@@ -101,7 +101,7 @@ fn dispatch(
                 return Response::Error(HelperError::new(
                     ErrorCode::ProtocolMismatch,
                     format!(
-                        "the client speaks version {protocol_version}, helper on {PROTOCOL_VERSION}"
+                        "client speaks protocol {protocol_version}, helper speaks {PROTOCOL_VERSION}"
                     ),
                 ));
             }
@@ -132,11 +132,11 @@ fn dispatch(
         },
         Request::ApplyRules { .. } => Response::Error(HelperError::new(
             ErrorCode::NotImplemented,
-            "on-the-fly rule changes will appear along with the engine config reboot",
+            "on-the-fly rule changes will appear live rule updates require an engine config reload",
         )),
         Request::Subscribe => Response::Error(HelperError::new(
             ErrorCode::NotImplemented,
-            "events are not yet sent, the status is retrieved by the status request",
+            "events are not pushed yet; poll with status",
         )),
         Request::Shutdown => Response::Ok,
     }
@@ -145,7 +145,7 @@ fn dispatch(
 fn poisoned() -> Response {
     Response::Error(HelperError::new(
         ErrorCode::Internal,
-        "the helper's state is damaged by the previous panic",
+        "helper state poisoned by an earlier panic",
     ))
 }
 

@@ -13,7 +13,7 @@ pub enum ClientError {
     Transport(String),
     #[error("helper answered with an error: {0}")]
     Helper(#[from] HelperError),
-    #[error("helper answered something other than what was asked")]
+    #[error("unexpected response from helper")]
     Unexpected,
     #[error("helper closed the connection")]
     Closed,

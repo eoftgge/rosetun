@@ -34,7 +34,7 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "failed to get state");
+            tracing::error!(%error, "failed to get status");
             std::process::ExitCode::FAILURE
         }
     }

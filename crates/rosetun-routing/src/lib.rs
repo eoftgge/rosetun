@@ -59,9 +59,9 @@ impl Drop for RoutingGuard {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RoutingError {
-    #[error("not enough rights: {0}")]
+    #[error("insufficient privileges: {0}: {0}")]
     NotPrivileged(String),
-    #[error("the system does not have the required: {0}")]
+    #[error("missing system dependency: {0}")]
     MissingDependency(String),
     #[error("failed to bring up interface {name}: {reason}")]
     Tun { name: String, reason: String },
@@ -71,7 +71,7 @@ pub enum RoutingError {
     Dns(String),
     #[error("routing for this platform is not yet implemented")]
     Unsupported,
-    #[error("input/output error: {0}")]
+    #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
 

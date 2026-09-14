@@ -80,12 +80,12 @@ impl AppConfig {
 pub enum ConfigError {
     #[error("configuration version {found} is not supported (expected to be no higher than {expected})")]
     UnsupportedVersion { found: u32, expected: u32 },
-    #[error("server {node} selected, which is not in subscription {subscription}")]
+    #[error("selected node {node} is not in subscription {subscription}")]
     DanglingSelection {
         subscription: SubscriptionId,
         node: NodeId,
     },
-    #[error("ruleset {0} selected, which does not exist")]
+    #[error("selected rule set {0} does not exist")]
     DanglingRuleSet(RuleSetId),
 }
 

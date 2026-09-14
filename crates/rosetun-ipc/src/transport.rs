@@ -102,7 +102,6 @@ mod platform {
 mod platform {
     use super::*;
 
-    /// TODO
     pub fn connect(_endpoint: &Path) -> io::Result<Connection> {
         Err(io::Error::other(
             "transport for windows is not yet implemented",

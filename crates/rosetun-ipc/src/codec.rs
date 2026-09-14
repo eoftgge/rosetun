@@ -6,9 +6,9 @@ pub const MAX_FRAME_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CodecError {
-    #[error("input/output error: {0}")]
+    #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("couldn't make out the frame: {0}")]
+    #[error("failed to decode frame: {0}")]
     Decode(#[from] serde_json::Error),
     #[error("frame is longer than {MAX_FRAME_BYTES} bytes")]
     TooLarge,

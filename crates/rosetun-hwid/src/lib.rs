@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-/// Device print.
+/// Device fingerprint.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Hwid(String);
 
