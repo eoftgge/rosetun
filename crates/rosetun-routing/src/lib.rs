@@ -11,7 +11,7 @@ pub struct RoutingPlan {
     pub kill_switch: bool,
 }
 
-pub trait RoutingBackend: std::fmt::Debug {
+pub trait RoutingBackend: std::fmt::Debug + Send {
     fn name(&self) -> &'static str;
     fn preflight(&self) -> Result<(), RoutingError>;
     fn apply(&mut self, plan: &RoutingPlan) -> Result<RoutingGuard, RoutingError>;
