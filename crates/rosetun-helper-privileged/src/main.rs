@@ -3,6 +3,7 @@
 mod server;
 mod state;
 
+use crate::server::Helper;
 use std::sync::{Arc, Mutex};
 
 use rosetun_engine::EngineRegistry;
@@ -24,12 +25,8 @@ fn main() -> std::process::ExitCode {
         .register(Box::new(SingBoxBackend::new(work_dir.join("sing-box"))))
         .register(Box::new(XrayBackend::new(work_dir.join("xray"))));
 
-    let state = Arc::new(Mutex::new(state::HelperState::new(
-        engines,
-        rosetun_routing::backend(),
-        work_dir,
-    )));
 
+    let helper = Arc::new(Helper::new(engines, rosetun_routing::backend()));
     let endpoint = rosetun_ipc::default_endpoint();
     let listener = match Listener::bind(&endpoint) {
         Ok(listener) => listener,
@@ -39,7 +36,7 @@ fn main() -> std::process::ExitCode {
         }
     };
 
-    if let Err(error) = server::serve(listener, state) {
+    if let Err(error) = server::serve(listener, helper) {
         tracing::error!(%error, "helper stopped");
         return std::process::ExitCode::FAILURE;
     }

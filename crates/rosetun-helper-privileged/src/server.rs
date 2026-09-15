@@ -1,27 +1,14 @@
-use std::sync::{Arc, Mutex};
-use rosetun_config::Status;
-use rosetun_engine::{EngineProcess, EngineRegistry};
+use std::sync::Arc;
+
 use rosetun_ipc::{
     Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request, Response,
 };
-use rosetun_routing::{RoutingBackend, RoutingGuard};
-use crate::state::HelperState;
+
+pub(crate) use crate::state::Helper;
 
 const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub struct Helper {
-    status: Mutex<Status>,
-    session: Mutex<Session>,
-}
-
-struct Session {
-    engines: EngineRegistry,
-    routing: Box<dyn RoutingBackend>,
-    process: Option<Box<dyn EngineProcess>>,
-    guard: Option<RoutingGuard>,
-}
-
-pub fn serve(listener: Listener, state: Arc<Mutex<HelperState>>) -> std::io::Result<()> {
+pub fn serve(listener: Listener, helper: Arc<Helper>) -> std::io::Result<()> {
     tracing::info!(endpoint = %listener.path().display(), "helper listener started");
     loop {
         let connection = match listener.accept() {
@@ -31,16 +18,16 @@ pub fn serve(listener: Listener, state: Arc<Mutex<HelperState>>) -> std::io::Res
                 continue;
             }
         };
-        let state = Arc::clone(&state);
+        let helper = Arc::clone(&helper);
         std::thread::spawn(move || {
-            if let Err(error) = handle(connection, state) {
+            if let Err(error) = handle(connection, helper) {
                 tracing::warn!(%error, "the connection was closed with an error");
             }
         });
     }
 }
 
-fn handle(mut connection: Connection, state: Arc<Mutex<HelperState>>) -> Result<(), String> {
+fn handle(mut connection: Connection, helper: Arc<Helper>) -> Result<(), String> {
     let mut greeted = false;
     loop {
         let frame = match connection.read() {
@@ -65,7 +52,7 @@ fn handle(mut connection: Connection, state: Arc<Mutex<HelperState>>) -> Result<
             return Err("client did not handshake".to_owned());
         }
 
-        let response = dispatch(&body, &state, &mut greeted);
+        let response = dispatch(&body, &helper, &mut greeted);
         let fatal = matches!(
             response,
             Response::Error(HelperError {
@@ -87,11 +74,7 @@ fn handle(mut connection: Connection, state: Arc<Mutex<HelperState>>) -> Result<
     }
 }
 
-fn dispatch(
-    request: &Request,
-    state: &Arc<Mutex<HelperState>>,
-    greeted: &mut bool,
-) -> Response {
+fn dispatch(request: &Request, helper: &Helper, greeted: &mut bool) -> Response {
     match request {
         Request::Hello {
             client,
@@ -112,27 +95,18 @@ fn dispatch(
                 protocol_version: PROTOCOL_VERSION,
             }
         }
-        Request::Status => match state.lock() {
-            Ok(mut state) => Response::Status(state.status()),
-            Err(_) => poisoned(),
+        Request::Status => Response::Status(helper.status()),
+        Request::Connect(connect) => match helper.connect(connect) {
+            Ok(()) => Response::Ok,
+            Err(error) => Response::Error(error),
         },
-        Request::Connect(connect) => match state.lock() {
-            Ok(mut state) => match state.connect(connect) {
-                Ok(()) => Response::Ok,
-                Err(error) => Response::Error(error),
-            },
-            Err(_) => poisoned(),
-        },
-        Request::Disconnect => match state.lock() {
-            Ok(mut state) => match state.disconnect() {
-                Ok(()) => Response::Ok,
-                Err(error) => Response::Error(error),
-            },
-            Err(_) => poisoned(),
+        Request::Disconnect => match helper.disconnect() {
+            Ok(()) => Response::Ok,
+            Err(error) => Response::Error(error),
         },
         Request::ApplyRules { .. } => Response::Error(HelperError::new(
             ErrorCode::NotImplemented,
-            "on-the-fly rule changes will appear live rule updates require an engine config reload",
+            "live rule updates require an engine config reload",
         )),
         Request::Subscribe => Response::Error(HelperError::new(
             ErrorCode::NotImplemented,
@@ -140,13 +114,6 @@ fn dispatch(
         )),
         Request::Shutdown => Response::Ok,
     }
-}
-
-fn poisoned() -> Response {
-    Response::Error(HelperError::new(
-        ErrorCode::Internal,
-        "helper state poisoned by an earlier panic",
-    ))
 }
 
 fn reply(connection: &mut Connection, id: u64, body: Response) -> Result<(), String> {
