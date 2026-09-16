@@ -9,12 +9,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod errors;
+
+use errors::EngineError;
+use rosetun_config::{EngineKind, Node, RuleSet, Settings, Traffic};
 use std::path::{Path, PathBuf};
 
-use rosetun_config::{EngineKind, Node, RuleSet, Settings, Traffic};
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineIntegration {
+    EngineManagedTun,
+}
 
 pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     fn kind(&self) -> EngineKind;
+    fn integration(&self) -> EngineIntegration;
     fn locate_binary(&self) -> Result<PathBuf, EngineError>;
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError>;
 
@@ -48,22 +56,6 @@ pub trait EngineProcess: Send + std::fmt::Debug {
     fn is_running(&mut self) -> Result<bool, EngineError>;
     fn traffic(&mut self) -> Result<Traffic, EngineError>;
     fn stop(&mut self) -> Result<(), EngineError>;
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum EngineError {
-    #[error("engine binary {0} not found")]
-    BinaryNotFound(String),
-    #[error("engine does not support this configuration: {0}")]
-    Unsupported(String),
-    #[error("failed to render configuration: {0}")]
-    Render(String),
-    #[error("engine exited with code {code:?}")]
-    Exited { code: Option<i32> },
-    #[error("statistics are not available for this engine")]
-    StatsUnavailable,
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug, Default)]
