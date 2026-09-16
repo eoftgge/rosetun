@@ -177,6 +177,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "windows-sys",
 ]
 
 [[package]]
