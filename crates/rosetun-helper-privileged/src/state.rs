@@ -210,8 +210,8 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
     use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::sync::{Arc, Mutex};
 
     use rosetun_config::{
         EngineKind, NodeId, Outbound, RuleSetId, RuleTarget, Selection, SubscriptionId, Traffic,
@@ -227,6 +227,7 @@ mod tests {
     struct BlockingRouting {
         entered: Sender<()>,
         release: Receiver<()>,
+        received_plan: Arc<Mutex<Option<RoutingPlan>>>,
     }
 
     impl RoutingBackend for BlockingRouting {
@@ -238,7 +239,11 @@ mod tests {
             Ok(())
         }
 
-        fn apply(&mut self, _plan: &RoutingPlan) -> Result<RoutingGuard, RoutingError> {
+        fn apply(&mut self, plan: &RoutingPlan) -> Result<RoutingGuard, RoutingError> {
+            *self
+                .received_plan
+                .lock()
+                .expect("test routing plan mutex is not poisoned") = Some(plan.clone());
             self.entered.send(()).expect("test observes apply");
             self.release.recv().expect("test releases apply");
             Ok(RoutingGuard::noop())
@@ -321,13 +326,18 @@ mod tests {
     fn status_answers_while_connect_holds_the_session() {
         let (entered, entered_rx) = channel();
         let (release_tx, release) = channel();
+        let received_plan = Arc::new(Mutex::new(None));
 
         let mut engines = EngineRegistry::new();
         engines.register(Box::new(StubEngine));
 
         let helper = Arc::new(Helper::new(
             engines,
-            Box::new(BlockingRouting { entered, release }),
+            Box::new(BlockingRouting {
+                entered,
+                release,
+                received_plan: Arc::clone(&received_plan),
+            }),
         ));
 
         let worker = {
@@ -336,6 +346,18 @@ mod tests {
         };
 
         entered_rx.recv().expect("connect reached routing apply");
+
+        let plan = received_plan
+            .lock()
+            .expect("test routing plan mutex is not poisoned")
+            .clone()
+            .expect("routing receives a protection plan");
+        assert_eq!(
+            plan.bypass,
+            vec!["127.0.0.1".parse::<IpAddr>().expect("valid test address")]
+        );
+        assert_eq!(plan.kill_switch, connect_request().settings.kill_switch);
+
         assert!(matches!(helper.status().state, ConnectionState::Connecting));
 
         release_tx.send(()).expect("release apply");
@@ -350,13 +372,18 @@ mod tests {
     fn second_operation_reports_busy() {
         let (entered, entered_rx) = channel();
         let (release_tx, release) = channel();
+        let received_plan = Arc::new(Mutex::new(None));
 
         let mut engines = EngineRegistry::new();
         engines.register(Box::new(StubEngine));
 
         let helper = Arc::new(Helper::new(
             engines,
-            Box::new(BlockingRouting { entered, release }),
+            Box::new(BlockingRouting {
+                entered,
+                release,
+                received_plan,
+            }),
         ));
 
         let worker = {

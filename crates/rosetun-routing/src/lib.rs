@@ -1,9 +1,7 @@
 use std::net::IpAddr;
 
-use rosetun_config::TunSettings;
-
-mod platform;
 pub mod errors;
+mod platform;
 
 pub use errors::RoutingError;
 pub use platform::backend;
