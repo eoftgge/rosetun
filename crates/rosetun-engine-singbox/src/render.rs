@@ -2,7 +2,8 @@ use rosetun_config::{
     DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleMatcher, RuleSet, RuleTarget,
     Settings, TlsMode, Transport,
 };
-use rosetun_engine::{EngineError, RenderRequest, RenderedConfig};
+use rosetun_engine::errors::EngineError;
+use rosetun_engine::{RenderRequest, RenderedConfig};
 use serde_json::{Map, Value, json};
 
 const TAG_PROXY: &str = "proxy";

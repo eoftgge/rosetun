@@ -220,7 +220,8 @@ mod tests {
         EngineKind, NodeId, Outbound, RuleSetId, RuleTarget, Selection, SubscriptionId, Traffic,
         VlessParams,
     };
-    use rosetun_engine::{EngineBackend, EngineError, RenderedConfig};
+    use rosetun_engine::errors::EngineError;
+    use rosetun_engine::{EngineBackend, RenderedConfig};
     use rosetun_routing::RoutingError;
 
     use super::*;
