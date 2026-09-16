@@ -3,8 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use rosetun_config::EngineKind;
+use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    EngineBackend, EngineError, EngineProcess, RenderRequest, RenderedConfig,
+    EngineBackend, EngineIntegration, EngineProcess, RenderRequest, RenderedConfig,
 };
 
 #[derive(Debug, Clone)]
@@ -29,12 +30,20 @@ impl EngineBackend for XrayBackend {
         EngineKind::Xray
     }
 
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
-        Err(EngineError::Unsupported("the xray backend is not yet implemented".into()))
+        Err(EngineError::Unsupported(
+            "the xray backend is not yet implemented".into(),
+        ))
     }
 
     fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
-        Err(EngineError::Unsupported("the xray backend is not yet implemented".into()))
+        Err(EngineError::Unsupported(
+            "the xray backend is not yet implemented".into(),
+        ))
     }
 
     fn spawn(
@@ -42,6 +51,8 @@ impl EngineBackend for XrayBackend {
         _binary: &Path,
         _config: &RenderedConfig,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
-        Err(EngineError::Unsupported("the xray backend is not yet implemented".into()))
+        Err(EngineError::Unsupported(
+            "the xray backend is not yet implemented".into(),
+        ))
     }
 }

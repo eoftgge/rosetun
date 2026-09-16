@@ -103,9 +103,7 @@ mod platform {
 mod platform {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::{
-        AsRawHandle, FromRawHandle, OwnedHandle, RawHandle,
-    };
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
     use std::sync::Mutex;
 
     use windows_sys::Win32::Foundation::{
@@ -115,8 +113,7 @@ mod platform {
     use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING,
-        PIPE_ACCESS_DUPLEX,
+        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
     };
     use windows_sys::Win32::System::Pipes::{
         CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,

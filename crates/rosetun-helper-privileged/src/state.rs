@@ -221,7 +221,7 @@ mod tests {
         VlessParams,
     };
     use rosetun_engine::errors::EngineError;
-    use rosetun_engine::{EngineBackend, RenderedConfig};
+    use rosetun_engine::{EngineBackend, EngineIntegration, RenderedConfig};
     use rosetun_routing::RoutingError;
 
     use super::*;
@@ -254,6 +254,10 @@ mod tests {
     impl EngineBackend for StubEngine {
         fn kind(&self) -> EngineKind {
             EngineKind::SingBox
+        }
+
+        fn integration(&self) -> EngineIntegration {
+            EngineIntegration::EngineManagedTun
         }
 
         fn locate_binary(&self) -> Result<PathBuf, EngineError> {
@@ -335,10 +339,7 @@ mod tests {
         };
 
         entered_rx.recv().expect("connect reached routing apply");
-        assert!(matches!(
-            helper.status().state,
-            ConnectionState::Connecting
-        ));
+        assert!(matches!(helper.status().state, ConnectionState::Connecting));
 
         release_tx.send(()).expect("release apply");
         worker
@@ -371,6 +372,9 @@ mod tests {
         assert_eq!(error.code, ErrorCode::Busy);
 
         release_tx.send(()).expect("release apply");
-        worker.join().expect("worker thread").expect("connect succeeds");
+        worker
+            .join()
+            .expect("worker thread")
+            .expect("connect succeeds");
     }
 }

@@ -13,7 +13,9 @@ pub enum Request {
     Status,
     Connect(Box<ConnectRequest>),
     Disconnect,
-    ApplyRules { rule_set: RuleSet },
+    ApplyRules {
+        rule_set: RuleSet,
+    },
     Subscribe,
     Shutdown,
 }

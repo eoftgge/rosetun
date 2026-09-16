@@ -25,7 +25,6 @@ fn main() -> std::process::ExitCode {
         .register(Box::new(SingBoxBackend::new(work_dir.join("sing-box"))))
         .register(Box::new(XrayBackend::new(work_dir.join("xray"))));
 
-
     let helper = Arc::new(Helper::new(engines, rosetun_routing::backend()));
     let endpoint = rosetun_ipc::default_endpoint();
     let listener = match Listener::bind(&endpoint) {

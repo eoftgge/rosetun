@@ -7,10 +7,11 @@ use std::process::{Child, Command, Stdio};
 
 use rosetun_config::{EngineKind, Traffic};
 use rosetun_engine::{
-    EngineBackend, EngineError, EngineProcess, RenderRequest, RenderedConfig,
+    EngineBackend, EngineIntegration, EngineProcess, RenderRequest, RenderedConfig,
 };
 
 pub use render::render;
+use rosetun_engine::errors::EngineError;
 
 const BINARY: &str = if cfg!(windows) {
     "sing-box.exe"
@@ -45,6 +46,10 @@ impl EngineBackend for SingBoxBackend {
         EngineKind::SingBox
     }
 
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
         if let Some(binary) = &self.binary {
             return if binary.is_file() {
@@ -53,7 +58,9 @@ impl EngineBackend for SingBoxBackend {
                 Err(EngineError::BinaryNotFound(binary.display().to_string()))
             };
         }
-        find_in_neighbours().or_else(|| find_in_path()).ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))
+        find_in_neighbours()
+            .or_else(|| find_in_path())
+            .ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))
     }
 
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
@@ -217,7 +224,11 @@ mod tests {
     fn disabled_rules_are_dropped() {
         let config = rendered();
         let rules = config["route"]["rules"].as_array().expect("rules array");
-        assert_eq!(rules.len(), 2, "the disabled rule should not be included in the config");
+        assert_eq!(
+            rules.len(),
+            2,
+            "the disabled rule should not be included in the config"
+        );
     }
 
     #[test]

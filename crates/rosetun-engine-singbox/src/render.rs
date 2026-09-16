@@ -143,7 +143,10 @@ fn tls_section(mode: &TlsMode) -> Option<Value> {
                 tls.insert("server_name".into(), sni.clone().into());
             }
             tls.insert("reality".into(), Value::Object(reality));
-            let fingerprint = params.fingerprint.clone().unwrap_or_else(|| "chrome".into());
+            let fingerprint = params
+                .fingerprint
+                .clone()
+                .unwrap_or_else(|| "chrome".into());
             tls.insert(
                 "utls".into(),
                 json!({ "enabled": true, "fingerprint": fingerprint }),

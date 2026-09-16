@@ -19,7 +19,6 @@ pub use subscription::{Selection, Subscription};
 
 use serde::{Deserialize, Serialize};
 
-
 pub const CONFIG_VERSION: u32 = 1;
 
 pub(crate) fn default_true() -> bool {
@@ -78,7 +77,9 @@ impl AppConfig {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("configuration version {found} is not supported (expected to be no higher than {expected})")]
+    #[error(
+        "configuration version {found} is not supported (expected to be no higher than {expected})"
+    )]
     UnsupportedVersion { found: u32, expected: u32 },
     #[error("selected node {node} is not in subscription {subscription}")]
     DanglingSelection {

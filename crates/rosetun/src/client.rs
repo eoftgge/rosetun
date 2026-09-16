@@ -28,8 +28,8 @@ pub struct HelperClient {
 
 impl HelperClient {
     pub fn connect(endpoint: &Path) -> Result<Self, ClientError> {
-        let connection =
-            rosetun_ipc::connect(endpoint).map_err(|error| ClientError::Transport(error.to_string()))?;
+        let connection = rosetun_ipc::connect(endpoint)
+            .map_err(|error| ClientError::Transport(error.to_string()))?;
         let mut client = Self {
             connection,
             next_id: 1,

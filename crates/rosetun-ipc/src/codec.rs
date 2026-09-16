@@ -26,10 +26,7 @@ pub fn read_frame<R: BufRead>(reader: &mut R) -> Result<Option<Frame>, CodecErro
     let mut line = String::new();
     loop {
         line.clear();
-        let read = reader
-            .by_ref()
-            .take(MAX_FRAME_BYTES)
-            .read_line(&mut line)?;
+        let read = reader.by_ref().take(MAX_FRAME_BYTES).read_line(&mut line)?;
         if read == 0 {
             return Ok(None);
         }
@@ -102,11 +99,14 @@ mod tests {
     #[test]
     fn blank_lines_are_skipped() {
         let mut buffer = b"\n\n".to_vec();
-        write_frame(&mut buffer, &Frame::Request {
-            id: 3,
-            body: Request::Status,
-        })
-            .unwrap();
+        write_frame(
+            &mut buffer,
+            &Frame::Request {
+                id: 3,
+                body: Request::Status,
+            },
+        )
+        .unwrap();
         let mut reader = BufReader::new(buffer.as_slice());
         assert!(matches!(
             read_frame(&mut reader).unwrap(),
