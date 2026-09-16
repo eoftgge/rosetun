@@ -154,10 +154,7 @@ impl Session {
             .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
 
         let plan = RoutingPlan {
-            tun: settings.tun.clone(),
             bypass: resolve(&node.server, node.port),
-            dns: Vec::new(),
-            default_route: true,
             kill_switch: settings.kill_switch,
         };
         let guard = self

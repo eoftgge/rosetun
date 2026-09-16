@@ -2,12 +2,17 @@ use std::net::IpAddr;
 
 use rosetun_config::TunSettings;
 
+mod platform;
+pub mod errors;
+
+pub use errors::RoutingError;
+pub use platform::backend;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutingPlan {
-    pub tun: TunSettings,
+    /// VPN server addresses that must remain reachable while protection is active.
     pub bypass: Vec<IpAddr>,
-    pub dns: Vec<IpAddr>,
-    pub default_route: bool,
+    /// Whether the platform protection layer must prevent direct internet access.
     pub kill_switch: bool,
 }
 
@@ -56,9 +61,3 @@ impl Drop for RoutingGuard {
         }
     }
 }
-
-mod platform;
-pub mod errors;
-
-pub use platform::backend;
-use crate::errors::RoutingError;
