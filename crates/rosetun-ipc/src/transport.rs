@@ -311,7 +311,6 @@ mod platform {
                 .unwrap_or(create_instance(&self.name, false)?);
 
             wait_for_connection(&pending)?;
-            let connection = connection_from_handle(pending)?;
 
             let replacement = create_instance(&self.name, false)?;
             let mut slot = self
@@ -319,8 +318,9 @@ mod platform {
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
             *slot = Some(replacement);
+            drop(slot);
 
-            Ok(connection)
+            connection_from_handle(pending)
         }
 
         pub fn path(&self) -> &Path {
@@ -335,6 +335,7 @@ pub use platform::{Listener, connect};
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc;
 
     use crate::{Connection, Frame, Listener, Request, Response, connect};
 
@@ -405,6 +406,55 @@ mod tests {
         let mut first = connect(&endpoint).expect("first client connects");
         roundtrip(&mut first, 1);
         drop(first);
+
+        let mut second = connect(&endpoint).expect("second client connects");
+        roundtrip(&mut second, 2);
+        drop(second);
+
+        server.join().expect("server thread completes");
+    }
+
+    #[test]
+    fn disconnected_client_does_not_stop_the_listener() {
+        let endpoint = test_endpoint();
+        let listener = Listener::bind(&endpoint).expect("listener is bound");
+        let (first_accept_failed, first_accept_failed_rx) = mpsc::channel();
+
+        let server = std::thread::spawn(move || {
+            let error = listener
+                .accept()
+                .expect_err("closed client causes the first accept to fail");
+            assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+            first_accept_failed
+                .send(())
+                .expect("test observes the failed accept");
+
+            let mut second = listener.accept().expect("second client is accepted");
+            assert_eq!(
+                second.read().expect("second request is read"),
+                Some(Frame::Request {
+                    id: 2,
+                    body: Request::Hello {
+                        client: "rosetun-ipc-test".to_owned(),
+                        protocol_version: 1,
+                    },
+                })
+            );
+            second
+                .write(&Frame::Response {
+                    id: 2,
+                    body: Response::Hello {
+                        helper_version: "test".to_owned(),
+                        protocol_version: 1,
+                    },
+                })
+                .expect("second response is written");
+        });
+
+        drop(connect(&endpoint).expect("first client connects"));
+        first_accept_failed_rx
+            .recv()
+            .expect("server observed the failed first accept");
 
         let mut second = connect(&endpoint).expect("second client connects");
         roundtrip(&mut second, 2);
