@@ -219,7 +219,7 @@ mod tests {
         VlessParams,
     };
     use rosetun_engine::errors::EngineError;
-    use rosetun_engine::{EngineBackend, EngineIntegration, RenderedConfig};
+    use rosetun_engine::{EngineBackend, EngineCapabilities, EngineIntegration, RenderedConfig, RuleCapabilities};
     use rosetun_routing::errors::RoutingError;
 
     use super::*;
