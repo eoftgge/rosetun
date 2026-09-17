@@ -3,8 +3,8 @@ use std::ptr;
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FwpmEngineClose0, FwpmTransactionAbort0, FwpmTransactionBegin0, FwpmTransactionCommit0,
-    FWPM_SESSION0, FWPM_SESSION_FLAG_DYNAMIC,
+    FWPM_SESSION_FLAG_DYNAMIC, FWPM_SESSION0, FwpmEngineClose0, FwpmTransactionAbort0,
+    FwpmTransactionBegin0, FwpmTransactionCommit0,
 };
 
 use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
@@ -60,15 +60,7 @@ impl DynamicSession {
         };
         let mut handle = ptr::null_mut();
 
-        let status = unsafe {
-            FwpmEngineOpen0(
-                ptr::null(),
-                0,
-                ptr::null(),
-                &session,
-                &mut handle,
-            )
-        };
+        let status = unsafe { FwpmEngineOpen0(ptr::null(), 0, ptr::null(), &session, &mut handle) };
         if status != 0 {
             return Err(wfp_error(status, "opening the dynamic WFP session"));
         }

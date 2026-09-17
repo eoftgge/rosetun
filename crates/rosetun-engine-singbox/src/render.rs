@@ -1,6 +1,6 @@
 use rosetun_config::{
-    DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher, RuleSet,
-    RuleTarget, Settings, TlsMode, Transport,
+    DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher, RuleSet, RuleTarget,
+    Settings, TlsMode, Transport,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{RenderRequest, RenderedConfig, RuleCapabilities};
@@ -181,7 +181,10 @@ fn transport_section(transport: &Transport) -> Option<Value> {
     }
 }
 
-pub(crate) fn route_section(rules: &RuleSet, capabilities: RuleCapabilities) -> (Value, Vec<RuleId>) {
+pub(crate) fn route_section(
+    rules: &RuleSet,
+    capabilities: RuleCapabilities,
+) -> (Value, Vec<RuleId>) {
     let mut route_rules = Vec::new();
     let mut unsupported = Vec::new();
 
