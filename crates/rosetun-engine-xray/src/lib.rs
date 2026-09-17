@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 
 use rosetun_config::EngineKind;
 use rosetun_engine::errors::EngineError;
-use rosetun_engine::{EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest, RenderedConfig, RuleCapabilities};
+use rosetun_engine::{
+    EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest,
+    RenderedConfig, RuleCapabilities,
+};
 
 #[derive(Debug, Clone)]
 pub struct XrayBackend {

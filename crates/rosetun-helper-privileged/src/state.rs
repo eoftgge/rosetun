@@ -150,17 +150,18 @@ impl Session {
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
         if settings.kill_switch {
-            self.routing.preflight().map_err(|error| {
-                HelperError::new(ErrorCode::RoutingFailed, error.to_string())
-            })?;
+            self.routing
+                .preflight()
+                .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
 
             let plan = RoutingPlan {
                 bypass: resolve(&node.server, node.port),
                 kill_switch: true,
             };
-            let guard = self.routing.apply(&plan).map_err(|error| {
-                HelperError::new(ErrorCode::RoutingFailed, error.to_string())
-            })?;
+            let guard = self
+                .routing
+                .apply(&plan)
+                .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
             self.guard = Some(guard);
         }
 
@@ -219,7 +220,9 @@ mod tests {
         VlessParams,
     };
     use rosetun_engine::errors::EngineError;
-    use rosetun_engine::{EngineBackend, EngineCapabilities, EngineIntegration, RenderedConfig, RuleCapabilities};
+    use rosetun_engine::{
+        EngineBackend, EngineCapabilities, EngineIntegration, RenderedConfig, RuleCapabilities,
+    };
     use rosetun_routing::errors::RoutingError;
 
     use super::*;
@@ -448,6 +451,9 @@ mod tests {
         assert_eq!(status.node, Some(request.node.id));
 
         helper.disconnect().expect("disconnect succeeds");
-        assert!(matches!(helper.status().state, ConnectionState::Disconnected));
+        assert!(matches!(
+            helper.status().state,
+            ConnectionState::Disconnected
+        ));
     }
 }

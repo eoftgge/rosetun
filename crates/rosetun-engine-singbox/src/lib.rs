@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use rosetun_config::{EngineKind, Traffic};
-use rosetun_engine::{EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest, RenderedConfig, RuleCapabilities};
+use rosetun_engine::{
+    EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest,
+    RenderedConfig, RuleCapabilities,
+};
 
 pub use render::render;
 use rosetun_engine::errors::EngineError;
