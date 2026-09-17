@@ -4,7 +4,7 @@ mod server;
 mod state;
 
 use crate::server::Helper;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use rosetun_engine::EngineRegistry;
 use rosetun_engine_singbox::SingBoxBackend;
