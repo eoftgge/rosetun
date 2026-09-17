@@ -239,6 +239,27 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_enabled_rules_are_reported_and_omitted() {
+        let rendered = render::route_section(
+            &rules(),
+            RuleCapabilities {
+                domain_exact: true,
+                domain_suffix: true,
+                domain_keyword: true,
+                process_name: false,
+                process_path: false,
+                ip_cidr: true,
+            },
+        );
+
+        assert_eq!(rendered.1, vec![RuleId::new("r2")]);
+        assert_eq!(
+            rendered.0["rules"].as_array().expect("rules array").len(),
+            1
+        );
+    }
+
+    #[test]
     fn rule_order_is_preserved() {
         let config = rendered();
         let rules = &config["route"]["rules"];

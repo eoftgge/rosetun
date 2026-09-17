@@ -1,9 +1,9 @@
 use rosetun_config::{
-    DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleMatcher, RuleSet, RuleTarget,
-    Settings, TlsMode, Transport,
+    DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher, RuleSet,
+    RuleTarget, Settings, TlsMode, Transport,
 };
 use rosetun_engine::errors::EngineError;
-use rosetun_engine::{RenderRequest, RenderedConfig};
+use rosetun_engine::{RenderRequest, RenderedConfig, RuleCapabilities};
 use serde_json::{Map, Value, json};
 
 const TAG_PROXY: &str = "proxy";
@@ -11,6 +11,7 @@ const TAG_DIRECT: &str = "direct";
 const TAG_BLOCK: &str = "block";
 
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+    let (route, unsupported) = route_section(request.rules, RuleCapabilities::ALL);
     let config = json!({
         "log": log_section(request.settings),
         "inbounds": [tun_inbound(request.settings)],
@@ -19,7 +20,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
             json!({ "type": "direct", "tag": TAG_DIRECT }),
             json!({ "type": "block", "tag": TAG_BLOCK }),
         ],
-        "route": route_section(request.rules),
+        "route": route,
     });
 
     let body = serde_json::to_vec_pretty(&config)
@@ -27,7 +28,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
     Ok(RenderedConfig {
         file_name: "config.json".to_owned(),
         body,
-        unsupported: Vec::new(),
+        unsupported,
     })
 }
 
@@ -180,13 +181,26 @@ fn transport_section(transport: &Transport) -> Option<Value> {
     }
 }
 
-fn route_section(rules: &RuleSet) -> Value {
-    let route_rules: Vec<Value> = rules.enabled().map(route_rule).collect();
-    json!({
-        "rules": route_rules,
-        "final": tag_for(rules.default_target),
-        "auto_detect_interface": true,
-    })
+pub(crate) fn route_section(rules: &RuleSet, capabilities: RuleCapabilities) -> (Value, Vec<RuleId>) {
+    let mut route_rules = Vec::new();
+    let mut unsupported = Vec::new();
+
+    for rule in rules.enabled() {
+        if capabilities.supports(&rule.matcher) {
+            route_rules.push(route_rule(rule));
+        } else {
+            unsupported.push(rule.id.clone());
+        }
+    }
+
+    (
+        json!({
+            "rules": route_rules,
+            "final": tag_for(rules.default_target),
+            "auto_detect_interface": true,
+        }),
+        unsupported,
+    )
 }
 
 fn route_rule(rule: &rosetun_config::Rule) -> Value {

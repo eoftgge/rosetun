@@ -39,6 +39,27 @@ impl RuleCapabilities {
         process_path: true,
         ip_cidr: true,
     };
+
+    pub fn supports(self, matcher: &rosetun_config::RuleMatcher) -> bool {
+        match matcher {
+            rosetun_config::RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(_)) => {
+                self.domain_exact
+            }
+            rosetun_config::RuleMatcher::Domain(rosetun_config::DomainMatch::Suffix(_)) => {
+                self.domain_suffix
+            }
+            rosetun_config::RuleMatcher::Domain(rosetun_config::DomainMatch::Keyword(_)) => {
+                self.domain_keyword
+            }
+            rosetun_config::RuleMatcher::Process(rosetun_config::ProcessMatch::Name(_)) => {
+                self.process_name
+            }
+            rosetun_config::RuleMatcher::Process(rosetun_config::ProcessMatch::Path(_)) => {
+                self.process_path
+            }
+            rosetun_config::RuleMatcher::IpCidr(_) => self.ip_cidr,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
