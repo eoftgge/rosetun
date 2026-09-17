@@ -187,6 +187,7 @@ dependencies = [
  "rosetun-config",
  "thiserror",
  "tracing",
+ "windows-sys",
 ]
 
 [[package]]
