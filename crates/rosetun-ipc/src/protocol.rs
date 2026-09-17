@@ -93,6 +93,7 @@ pub enum ErrorCode {
     RoutingFailed,
     Busy,
     InvalidState,
+    UnsupportedRules,
     NotImplemented,
     Internal,
 }
