@@ -42,12 +42,13 @@ impl TryFrom<&rosetun_config::TunSettings> for TunnelInterface {
     type Error = RoutingError;
 
     fn try_from(settings: &rosetun_config::TunSettings) -> Result<Self, Self::Error> {
-        let (address, _) = settings.ipv4.split_once('/').ok_or_else(|| {
-            RoutingError::Tun {
+        let (address, _) = settings
+            .ipv4
+            .split_once('/')
+            .ok_or_else(|| RoutingError::Tun {
                 name: settings.name.clone(),
                 reason: "the IPv4 address must use CIDR notation".to_owned(),
-            }
-        })?;
+            })?;
         let ipv4 = address.parse().map_err(|error| RoutingError::Tun {
             name: settings.name.clone(),
             reason: format!("invalid IPv4 address: {error}"),

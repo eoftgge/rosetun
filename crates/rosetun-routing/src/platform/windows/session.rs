@@ -1,7 +1,11 @@
-use std::ptr;
 use std::ffi::c_void;
+use std::ptr;
 use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{FWPM_DISPLAY_DATA0, FWPM_PROVIDER0, FWPM_SESSION0, FWPM_SESSION_FLAG_DYNAMIC, FWPM_SUBLAYER0, FWP_BYTE_BLOB, FwpmEngineClose0, FwpmProviderAdd0, FwpmSubLayerAdd0, FwpmTransactionAbort0, FwpmTransactionBegin0, FwpmTransactionCommit0};
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
+    FWP_BYTE_BLOB, FWPM_DISPLAY_DATA0, FWPM_PROVIDER0, FWPM_SESSION_FLAG_DYNAMIC, FWPM_SESSION0,
+    FWPM_SUBLAYER0, FwpmEngineClose0, FwpmProviderAdd0, FwpmSubLayerAdd0, FwpmTransactionAbort0,
+    FwpmTransactionBegin0, FwpmTransactionCommit0,
+};
 use windows_sys::core::GUID;
 
 use crate::RoutingError;

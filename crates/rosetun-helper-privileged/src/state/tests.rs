@@ -39,7 +39,9 @@ impl RoutingBackend for BlockingRouting {
             .received_plan
             .lock()
             .expect("test routing plan mutex is not poisoned") = Some(plan.clone());
-        self.entered.send(()).expect("test observes protection setup");
+        self.entered
+            .send(())
+            .expect("test observes protection setup");
         self.release.recv().expect("test releases protection setup");
         Ok(RoutingGuard::noop())
     }
@@ -286,9 +288,9 @@ fn connect_without_kill_switch_does_not_use_routing_backend() {
 
     helper.disconnect().expect("disconnect succeeds");
     assert!(matches!(
-            helper.status().state,
-            ConnectionState::Disconnected
-        ));
+        helper.status().state,
+        ConnectionState::Disconnected
+    ));
 }
 
 #[test]
@@ -304,9 +306,9 @@ fn connect_rejects_unsupported_rules_before_starting_the_engine() {
     assert_eq!(error.code, ErrorCode::UnsupportedRules);
     assert!(error.message.contains("unsupported-rule"));
     assert!(matches!(
-            helper.status().state,
-            ConnectionState::Failed { .. }
-        ));
+        helper.status().state,
+        ConnectionState::Failed { .. }
+    ));
 }
 
 #[test]
@@ -326,7 +328,7 @@ fn kill_switch_rejects_an_unresolvable_vpn_endpoint_before_routing() {
     assert_eq!(error.code, ErrorCode::RoutingFailed);
     assert!(error.message.contains("failed to resolve VPN endpoint"));
     assert!(matches!(
-            helper.status().state,
-            ConnectionState::Failed { .. }
-        ));
+        helper.status().state,
+        ConnectionState::Failed { .. }
+    ));
 }

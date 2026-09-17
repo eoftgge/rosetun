@@ -34,17 +34,21 @@ mod tests {
 
     #[test]
     fn only_tunnel_not_ready_is_retryable() {
-        assert!(RoutingError::TunnelNotReady {
-            name: "rosetun0".to_owned(),
-            reason: "adapter is still being created".to_owned(),
-        }
-            .is_tunnel_not_ready());
+        assert!(
+            RoutingError::TunnelNotReady {
+                name: "rosetun0".to_owned(),
+                reason: "adapter is still being created".to_owned(),
+            }
+            .is_tunnel_not_ready()
+        );
 
-        assert!(!RoutingError::Tun {
-            name: "rosetun0".to_owned(),
-            reason: "invalid configured address".to_owned(),
-        }
-            .is_tunnel_not_ready());
+        assert!(
+            !RoutingError::Tun {
+                name: "rosetun0".to_owned(),
+                reason: "invalid configured address".to_owned(),
+            }
+            .is_tunnel_not_ready()
+        );
         assert!(!RoutingError::Unsupported.is_tunnel_not_ready());
     }
 }

@@ -98,9 +98,7 @@ mod tests {
         assert_eq!(policy.rules[1].action, Action::Allow);
         assert_eq!(
             policy.rules[1].remote_address,
-            Some(IpAddr::V6(Ipv6Addr::new(
-                0x2001, 0xdb8, 0, 0, 0, 0, 0, 10
-            )))
+            Some(IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10)))
         );
         assert!(policy.rules[1].weight > policy.rules[3].weight);
 
