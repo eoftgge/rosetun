@@ -17,17 +17,40 @@ pub struct RoutingPlan {
 pub trait RoutingBackend: std::fmt::Debug + Send {
     fn name(&self) -> &'static str;
     fn preflight(&self) -> Result<(), RoutingError>;
-    fn apply(&mut self, plan: &RoutingPlan) -> Result<RoutingGuard, RoutingError>;
+
+    /// Installs bootstrap protection before the engine starts. The returned
+    /// guard owns the platform protection session until disconnect.
+    fn begin_protection(
+        &mut self,
+        plan: &RoutingPlan,
+        engine_binary: &std::path::Path,
+    ) -> Result<RoutingGuard, RoutingError>;
+}
+
+/// An engine-owned tunnel interface that has passed engine readiness checks.
+///
+/// Platform routing discovers the concrete OS identity itself. On Windows this
+/// means resolving `alias` to an interface LUID and validating `ipv4` before
+/// adding `FWPM_CONDITION_IP_LOCAL_INTERFACE` filters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TunnelInterface {
+    pub alias: String,
+    pub ipv4: std::net::Ipv4Addr,
+}
+
+trait ProtectionSession: std::fmt::Debug + Send {
+    fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError>;
+    fn teardown(&mut self) -> Result<(), RoutingError>;
 }
 
 pub struct RoutingGuard {
-    revert: Option<Box<dyn FnOnce() -> Result<(), RoutingError> + Send>>,
+    session: Option<Box<dyn ProtectionSession>>,
 }
 
 impl std::fmt::Debug for RoutingGuard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RoutingGuard")
-            .field("armed", &self.revert.is_some())
+            .field("armed", &self.session.is_some())
             .finish()
     }
 }
@@ -35,16 +58,33 @@ impl std::fmt::Debug for RoutingGuard {
 impl RoutingGuard {
     pub fn new(revert: impl FnOnce() -> Result<(), RoutingError> + Send + 'static) -> Self {
         Self {
-            revert: Some(Box::new(revert)),
+            session: Some(Box::new(ClosureSession {
+                revert: Some(Box::new(revert)),
+            })),
         }
     }
+
     pub fn noop() -> Self {
         Self::new(|| Ok(()))
     }
 
+    pub(crate) fn from_session(session: impl ProtectionSession + 'static) -> Self {
+        Self {
+            session: Some(Box::new(session)),
+        }
+    }
+
+    /// Adds phase-2 authorization after the engine has created its TUN adapter.
+    pub fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError> {
+        match self.session.as_mut() {
+            Some(session) => session.authorize_tunnel(tunnel),
+            None => Ok(()),
+        }
+    }
+
     pub fn revert(mut self) -> Result<(), RoutingError> {
-        match self.revert.take() {
-            Some(revert) => revert(),
+        match self.session.take() {
+            Some(mut session) => session.teardown(),
             None => Ok(()),
         }
     }
@@ -52,10 +92,35 @@ impl RoutingGuard {
 
 impl Drop for RoutingGuard {
     fn drop(&mut self) {
-        if let Some(revert) = self.revert.take()
-            && let Err(error) = revert()
+        if let Some(mut session) = self.session.take()
+            && let Err(error) = session.teardown()
         {
-            tracing::error!(%error, "failed to roll back routes");
+            tracing::error!(%error, "failed to tear down routing protection");
+        }
+    }
+}
+
+struct ClosureSession {
+    revert: Option<Box<dyn FnOnce() -> Result<(), RoutingError> + Send>>,
+}
+
+impl std::fmt::Debug for ClosureSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClosureSession")
+            .field("armed", &self.revert.is_some())
+            .finish()
+    }
+}
+
+impl ProtectionSession for ClosureSession {
+    fn authorize_tunnel(&mut self, _tunnel: &TunnelInterface) -> Result<(), RoutingError> {
+        Err(RoutingError::Unsupported)
+    }
+
+    fn teardown(&mut self) -> Result<(), RoutingError> {
+        match self.revert.take() {
+            Some(revert) => revert(),
+            None => Ok(()),
         }
     }
 }

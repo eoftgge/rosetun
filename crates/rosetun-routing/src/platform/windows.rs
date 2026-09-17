@@ -62,7 +62,11 @@ impl RoutingBackend for WfpBackend {
         transaction.commit()
     }
 
-    fn apply(&mut self, _plan: &RoutingPlan) -> Result<RoutingGuard, RoutingError> {
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binary: &std::path::Path,
+    ) -> Result<RoutingGuard, RoutingError> {
         Err(RoutingError::Unsupported)
     }
 }

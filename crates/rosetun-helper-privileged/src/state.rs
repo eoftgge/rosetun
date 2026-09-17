@@ -178,7 +178,7 @@ impl Session {
 
             let guard = self
                 .routing
-                .apply(&plan)
+                .begin_protection(&plan, &binary)
                 .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
             self.guard = Some(guard);
         }
@@ -274,13 +274,17 @@ mod tests {
             Ok(())
         }
 
-        fn apply(&mut self, plan: &RoutingPlan) -> Result<RoutingGuard, RoutingError> {
+        fn begin_protection(
+            &mut self,
+            plan: &RoutingPlan,
+            _engine_binary: &Path,
+        ) -> Result<RoutingGuard, RoutingError> {
             *self
                 .received_plan
                 .lock()
                 .expect("test routing plan mutex is not poisoned") = Some(plan.clone());
-            self.entered.send(()).expect("test observes apply");
-            self.release.recv().expect("test releases apply");
+            self.entered.send(()).expect("test observes protection setup");
+            self.release.recv().expect("test releases protection setup");
             Ok(RoutingGuard::noop())
         }
     }
@@ -297,8 +301,12 @@ mod tests {
             panic!("routing preflight must not run when the kill switch is disabled");
         }
 
-        fn apply(&mut self, _plan: &RoutingPlan) -> Result<RoutingGuard, RoutingError> {
-            panic!("routing apply must not run when the kill switch is disabled");
+        fn begin_protection(
+            &mut self,
+            _plan: &RoutingPlan,
+            _engine_binary: &Path,
+        ) -> Result<RoutingGuard, RoutingError> {
+            panic!("routing protection must not run when the kill switch is disabled");
         }
     }
 
