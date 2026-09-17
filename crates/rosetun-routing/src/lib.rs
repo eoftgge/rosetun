@@ -38,6 +38,28 @@ pub struct TunnelInterface {
     pub ipv4: std::net::Ipv4Addr,
 }
 
+impl TryFrom<&rosetun_config::TunSettings> for TunnelInterface {
+    type Error = RoutingError;
+
+    fn try_from(settings: &rosetun_config::TunSettings) -> Result<Self, Self::Error> {
+        let (address, _) = settings.ipv4.split_once('/').ok_or_else(|| {
+            RoutingError::Tun {
+                name: settings.name.clone(),
+                reason: "the IPv4 address must use CIDR notation".to_owned(),
+            }
+        })?;
+        let ipv4 = address.parse().map_err(|error| RoutingError::Tun {
+            name: settings.name.clone(),
+            reason: format!("invalid IPv4 address: {error}"),
+        })?;
+
+        Ok(Self {
+            alias: settings.name.clone(),
+            ipv4,
+        })
+    }
+}
+
 trait ProtectionSession: std::fmt::Debug + Send {
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError>;
     fn teardown(&mut self) -> Result<(), RoutingError>;
@@ -122,5 +144,56 @@ impl ProtectionSession for ClosureSession {
             Some(revert) => revert(),
             None => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use rosetun_config::TunSettings;
+
+    use super::{RoutingError, TunnelInterface};
+
+    #[test]
+    fn tunnel_interface_uses_alias_and_address_from_cidr() {
+        let settings = TunSettings {
+            name: "rosetun0".to_owned(),
+            ipv4: "172.19.0.1/30".to_owned(),
+            ..Default::default()
+        };
+
+        let tunnel = TunnelInterface::try_from(&settings).expect("valid tunnel settings");
+
+        assert_eq!(tunnel.alias, "rosetun0");
+        assert_eq!(tunnel.ipv4, Ipv4Addr::new(172, 19, 0, 1));
+    }
+
+    #[test]
+    fn tunnel_interface_rejects_an_address_without_prefix() {
+        let settings = TunSettings {
+            name: "rosetun0".to_owned(),
+            ipv4: "172.19.0.1".to_owned(),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            TunnelInterface::try_from(&settings),
+            Err(RoutingError::Tun { .. })
+        ));
+    }
+
+    #[test]
+    fn tunnel_interface_rejects_invalid_ipv4() {
+        let settings = TunSettings {
+            name: "rosetun0".to_owned(),
+            ipv4: "not-an-address/30".to_owned(),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            TunnelInterface::try_from(&settings),
+            Err(RoutingError::Tun { .. })
+        ));
     }
 }
