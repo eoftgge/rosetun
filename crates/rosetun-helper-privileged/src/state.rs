@@ -149,19 +149,20 @@ impl Session {
             })
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
-        self.routing
-            .preflight()
-            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
+        if settings.kill_switch {
+            self.routing.preflight().map_err(|error| {
+                HelperError::new(ErrorCode::RoutingFailed, error.to_string())
+            })?;
 
-        let plan = RoutingPlan {
-            bypass: resolve(&node.server, node.port),
-            kill_switch: settings.kill_switch,
-        };
-        let guard = self
-            .routing
-            .apply(&plan)
-            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
-        self.guard = Some(guard);
+            let plan = RoutingPlan {
+                bypass: resolve(&node.server, node.port),
+                kill_switch: true,
+            };
+            let guard = self.routing.apply(&plan).map_err(|error| {
+                HelperError::new(ErrorCode::RoutingFailed, error.to_string())
+            })?;
+            self.guard = Some(guard);
+        }
 
         let process = backend
             .spawn(&binary, &config)
@@ -247,6 +248,23 @@ mod tests {
             self.entered.send(()).expect("test observes apply");
             self.release.recv().expect("test releases apply");
             Ok(RoutingGuard::noop())
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnusedRouting;
+
+    impl RoutingBackend for UnusedRouting {
+        fn name(&self) -> &'static str {
+            "test-unused"
+        }
+
+        fn preflight(&self) -> Result<(), RoutingError> {
+            panic!("routing preflight must not run when the kill switch is disabled");
+        }
+
+        fn apply(&mut self, _plan: &RoutingPlan) -> Result<RoutingGuard, RoutingError> {
+            panic!("routing apply must not run when the kill switch is disabled");
         }
     }
 
@@ -340,9 +358,12 @@ mod tests {
             }),
         ));
 
+        let mut request = connect_request();
+        request.settings.kill_switch = true;
+
         let worker = {
             let helper = Arc::clone(&helper);
-            std::thread::spawn(move || helper.connect(&connect_request()))
+            std::thread::spawn(move || helper.connect(&request))
         };
 
         entered_rx.recv().expect("connect reached routing apply");
@@ -356,7 +377,7 @@ mod tests {
             plan.bypass,
             vec!["127.0.0.1".parse::<IpAddr>().expect("valid test address")]
         );
-        assert_eq!(plan.kill_switch, connect_request().settings.kill_switch);
+        assert!(plan.kill_switch);
 
         assert!(matches!(helper.status().state, ConnectionState::Connecting));
 
@@ -385,10 +406,12 @@ mod tests {
                 received_plan,
             }),
         ));
+        let mut request = connect_request();
+        request.settings.kill_switch = true;
 
         let worker = {
             let helper = Arc::clone(&helper);
-            std::thread::spawn(move || helper.connect(&connect_request()))
+            std::thread::spawn(move || helper.connect(&request))
         };
 
         entered_rx.recv().expect("connect reached routing apply");
@@ -400,5 +423,24 @@ mod tests {
             .join()
             .expect("worker thread")
             .expect("connect succeeds");
+    }
+
+    #[test]
+    fn connect_without_kill_switch_does_not_use_routing_backend() {
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(StubEngine));
+
+        let helper = Helper::new(engines, Box::new(UnusedRouting));
+        let mut request = connect_request();
+        request.settings.kill_switch = false;
+
+        helper.connect(&request).expect("connect succeeds");
+
+        let status = helper.status();
+        assert!(matches!(status.state, ConnectionState::Connected));
+        assert_eq!(status.node, Some(request.node.id));
+
+        helper.disconnect().expect("disconnect succeeds");
+        assert!(matches!(helper.status().state, ConnectionState::Disconnected));
     }
 }
