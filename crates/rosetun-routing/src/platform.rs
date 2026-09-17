@@ -1,9 +1,10 @@
 #[cfg(windows)]
 mod windows;
 
+#[cfg(not(windows))]
 use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
 
-pub fn backend() -> Box<dyn RoutingBackend> {
+pub fn backend() -> Box<dyn crate::RoutingBackend> {
     #[cfg(windows)]
     {
         return Box::new(windows::WfpBackend::new());
