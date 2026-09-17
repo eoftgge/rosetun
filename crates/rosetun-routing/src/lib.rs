@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 pub mod errors;
-mod platform;
+pub mod platform;
 
 pub use errors::RoutingError;
 pub use platform::backend;
