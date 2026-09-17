@@ -167,14 +167,15 @@ impl Session {
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
         if settings.kill_switch {
+            let plan = RoutingPlan {
+                bypass: resolve(&node.server, node.port)?,
+                kill_switch: true,
+            };
+
             self.routing
                 .preflight()
                 .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
 
-            let plan = RoutingPlan {
-                bypass: resolve(&node.server, node.port),
-                kill_switch: true,
-            };
             let guard = self
                 .routing
                 .apply(&plan)
@@ -209,14 +210,27 @@ impl Drop for Session {
     }
 }
 
-fn resolve(server: &str, port: u16) -> Vec<IpAddr> {
-    match (server, port).to_socket_addrs() {
-        Ok(addrs) => addrs.map(|addr| addr.ip()).collect(),
-        Err(error) => {
-            tracing::warn!(%server, %error, "failed to resolve server address");
-            Vec::new()
-        }
+fn resolve(server: &str, port: u16) -> Result<Vec<IpAddr>, HelperError> {
+    let addresses = (server, port)
+        .to_socket_addrs()
+        .map_err(|error| {
+            tracing::warn!(%server, %error, "failed to resolve the VPN endpoint");
+            HelperError::new(
+                ErrorCode::RoutingFailed,
+                format!("failed to resolve VPN endpoint {server}: {error}"),
+            )
+        })?
+        .map(|address| address.ip())
+        .collect::<Vec<_>>();
+
+    if addresses.is_empty() {
+        return Err(HelperError::new(
+            ErrorCode::RoutingFailed,
+            format!("VPN endpoint {server} resolved to no addresses"),
+        ));
     }
+
+    Ok(addresses)
 }
 
 fn now_unix() -> u64 {
@@ -525,6 +539,28 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::UnsupportedRules);
         assert!(error.message.contains("unsupported-rule"));
+        assert!(matches!(
+            helper.status().state,
+            ConnectionState::Failed { .. }
+        ));
+    }
+
+    #[test]
+    fn kill_switch_rejects_an_unresolvable_vpn_endpoint_before_routing() {
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(StubEngine));
+
+        let helper = Helper::new(engines, Box::new(UnusedRouting));
+        let mut request = connect_request();
+        request.node.server = "invalid host name with spaces".to_owned();
+        request.settings.kill_switch = true;
+
+        let error = helper
+            .connect(&request)
+            .expect_err("an invalid VPN endpoint rejects the connection");
+
+        assert_eq!(error.code, ErrorCode::RoutingFailed);
+        assert!(error.message.contains("failed to resolve VPN endpoint"));
         assert!(matches!(
             helper.status().state,
             ConnectionState::Failed { .. }
