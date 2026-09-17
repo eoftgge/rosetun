@@ -10,6 +10,10 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
 
 use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
 
+mod policy;
+
+use policy::OutboundPolicy;
+
 const PROVIDER_KEY: GUID = GUID {
     data1: 0x51a4_7ec7,
     data2: 0x6459,
