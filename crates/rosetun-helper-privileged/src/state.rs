@@ -138,15 +138,32 @@ impl Session {
             )
         })?;
 
-        let binary = backend
-            .locate_binary()
-            .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
         let config = backend
             .render(&RenderRequest {
                 node,
                 rules,
                 settings,
             })
+            .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+
+        if !config.unsupported.is_empty() {
+            let rule_ids = config
+                .unsupported
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(HelperError::new(
+                ErrorCode::UnsupportedRules,
+                format!(
+                    "engine {} cannot represent enabled rules: {rule_ids}",
+                    backend.kind().as_str()
+                ),
+            ));
+        }
+
+        let binary = backend
+            .locate_binary()
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
         if settings.kill_switch {
@@ -216,8 +233,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use rosetun_config::{
-        EngineKind, NodeId, Outbound, RuleSetId, RuleTarget, Selection, SubscriptionId, Traffic,
-        VlessParams,
+        EngineKind, NodeId, Outbound, RuleId, RuleSetId, RuleTarget, Selection, SubscriptionId,
+        Traffic, VlessParams,
     };
     use rosetun_engine::errors::EngineError;
     use rosetun_engine::{
@@ -273,6 +290,45 @@ mod tests {
 
     #[derive(Debug)]
     struct StubEngine;
+
+    #[derive(Debug)]
+    struct UnsupportedRuleEngine;
+
+    impl EngineBackend for UnsupportedRuleEngine {
+        fn kind(&self) -> EngineKind {
+            EngineKind::SingBox
+        }
+
+        fn integration(&self) -> EngineIntegration {
+            EngineIntegration::EngineManagedTun
+        }
+
+        fn capabilities(&self) -> EngineCapabilities {
+            EngineCapabilities {
+                rules: RuleCapabilities::ALL,
+            }
+        }
+
+        fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+            panic!("the helper must reject unsupported rules before locating the engine binary");
+        }
+
+        fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+            Ok(RenderedConfig {
+                file_name: "config.json".to_owned(),
+                body: Vec::new(),
+                unsupported: vec![RuleId::new("unsupported-rule")],
+            })
+        }
+
+        fn spawn(
+            &self,
+            _binary: &Path,
+            _config: &RenderedConfig,
+        ) -> Result<Box<dyn EngineProcess>, EngineError> {
+            panic!("the helper must reject unsupported rules before spawning the engine");
+        }
+    }
 
     impl EngineBackend for StubEngine {
         fn kind(&self) -> EngineKind {
@@ -454,6 +510,24 @@ mod tests {
         assert!(matches!(
             helper.status().state,
             ConnectionState::Disconnected
+        ));
+    }
+
+    #[test]
+    fn connect_rejects_unsupported_rules_before_starting_the_engine() {
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(UnsupportedRuleEngine));
+
+        let helper = Helper::new(engines, Box::new(UnusedRouting));
+        let error = helper
+            .connect(&connect_request())
+            .expect_err("unsupported rules reject the connection");
+
+        assert_eq!(error.code, ErrorCode::UnsupportedRules);
+        assert!(error.message.contains("unsupported-rule"));
+        assert!(matches!(
+            helper.status().state,
+            ConnectionState::Failed { .. }
         ));
     }
 }
