@@ -1,13 +1,30 @@
 use std::ffi::c_void;
 use std::ptr;
-
+use windows_sys::core::GUID;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FWPM_SESSION_FLAG_DYNAMIC, FWPM_SESSION0, FwpmEngineClose0, FwpmTransactionAbort0,
-    FwpmTransactionBegin0, FwpmTransactionCommit0,
+    FwpmEngineClose0, FwpmProviderAdd0, FwpmSubLayerAdd0, FwpmTransactionAbort0,
+    FwpmTransactionBegin0, FwpmTransactionCommit0, FWPM_DISPLAY_DATA0, FWPM_PROVIDER0,
+    FWPM_SESSION0, FWPM_SESSION_FLAG_DYNAMIC, FWPM_SUBLAYER0, FWP_BYTE_BLOB,
 };
 
 use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
+
+const PROVIDER_KEY: GUID = GUID {
+    data1: 0x51a4_7ec7,
+    data2: 0x6459,
+    data3: 0x4b84,
+    data4: [0x88, 0x54, 0x07, 0x5e, 0x15, 0x76, 0xe7, 0xf9],
+};
+
+const SUBLAYER_KEY: GUID = GUID {
+    data1: 0x0c03_5ef5,
+    data2: 0x4c5c,
+    data3: 0x4583,
+    data4: [0xad, 0x9c, 0x17, 0x97, 0x91, 0x36, 0x0f, 0x5e],
+};
+
+const SUBLAYER_WEIGHT: u16 = 0x8000;
 
 #[link(name = "fwpuclnt")]
 unsafe extern "system" {
@@ -36,7 +53,9 @@ impl RoutingBackend for WfpBackend {
 
     fn preflight(&self) -> Result<(), RoutingError> {
         let session = DynamicSession::open()?;
-        session.verify_transaction()
+        let transaction = session.transaction()?;
+        session.add_provider_and_sublayer()?;
+        transaction.commit()
     }
 
     fn apply(&mut self, _plan: &RoutingPlan) -> Result<RoutingGuard, RoutingError> {
@@ -67,6 +86,7 @@ impl DynamicSession {
 
         Ok(Self { handle })
     }
+
     fn transaction(&self) -> Result<Transaction<'_>, RoutingError> {
         let status = unsafe { FwpmTransactionBegin0(self.handle, 0) };
         if status != 0 {
@@ -79,8 +99,38 @@ impl DynamicSession {
         })
     }
 
-    fn verify_transaction(&self) -> Result<(), RoutingError> {
-        self.transaction()?.commit()
+    fn add_provider_and_sublayer(&self) -> Result<(), RoutingError> {
+        let provider_name = wide("Rosetun");
+        let provider_description = wide("Rosetun dynamic kill-switch policy");
+        let sublayer_name = wide("Rosetun kill switch");
+        let sublayer_description = wide("Rosetun dynamic outbound protection layer");
+
+        let provider = FWPM_PROVIDER0 {
+            providerKey: PROVIDER_KEY,
+            displayData: display_data(&provider_name, &provider_description),
+            flags: 0,
+            providerData: empty_blob(),
+            serviceName: ptr::null_mut(),
+        };
+        let status = unsafe { FwpmProviderAdd0(self.handle, &provider, ptr::null_mut()) };
+        if status != 0 {
+            return Err(wfp_error(status, "adding the Rosetun WFP provider"));
+        }
+
+        let sublayer = FWPM_SUBLAYER0 {
+            subLayerKey: SUBLAYER_KEY,
+            displayData: display_data(&sublayer_name, &sublayer_description),
+            flags: 0,
+            providerKey: (&PROVIDER_KEY as *const GUID).cast_mut(),
+            providerData: empty_blob(),
+            weight: SUBLAYER_WEIGHT,
+        };
+        let status = unsafe { FwpmSubLayerAdd0(self.handle, &sublayer, ptr::null_mut()) };
+        if status != 0 {
+            return Err(wfp_error(status, "adding the Rosetun WFP sublayer"));
+        }
+
+        Ok(())
     }
 }
 
@@ -131,6 +181,24 @@ impl Drop for DynamicSession {
             }
             self.handle = ptr::null_mut();
         }
+    }
+}
+
+fn wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(Some(0)).collect()
+}
+
+fn display_data(name: &[u16], description: &[u16]) -> FWPM_DISPLAY_DATA0 {
+    FWPM_DISPLAY_DATA0 {
+        name: name.as_ptr().cast_mut(),
+        description: description.as_ptr().cast_mut(),
+    }
+}
+
+fn empty_blob() -> FWP_BYTE_BLOB {
+    FWP_BYTE_BLOB {
+        size: 0,
+        data: ptr::null_mut(),
     }
 }
 
