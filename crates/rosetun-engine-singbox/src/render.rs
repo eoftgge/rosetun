@@ -27,6 +27,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
     Ok(RenderedConfig {
         file_name: "config.json".to_owned(),
         body,
+        unsupported: Vec::new(),
     })
 }
 

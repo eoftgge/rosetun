@@ -280,6 +280,12 @@ mod tests {
             EngineIntegration::EngineManagedTun
         }
 
+        fn capabilities(&self) -> EngineCapabilities {
+            EngineCapabilities {
+                rules: RuleCapabilities::ALL,
+            }
+        }
+
         fn locate_binary(&self) -> Result<PathBuf, EngineError> {
             Ok(PathBuf::from("sing-box"))
         }
@@ -288,6 +294,7 @@ mod tests {
             Ok(RenderedConfig {
                 file_name: "config.json".to_owned(),
                 body: Vec::new(),
+                unsupported: Vec::new(),
             })
         }
 

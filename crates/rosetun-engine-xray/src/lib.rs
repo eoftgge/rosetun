@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rosetun_config::EngineKind;
 use rosetun_engine::errors::EngineError;
-use rosetun_engine::{
-    EngineBackend, EngineIntegration, EngineProcess, RenderRequest, RenderedConfig,
-};
+use rosetun_engine::{EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest, RenderedConfig, RuleCapabilities};
 
 #[derive(Debug, Clone)]
 pub struct XrayBackend {
@@ -32,6 +30,12 @@ impl EngineBackend for XrayBackend {
 
     fn integration(&self) -> EngineIntegration {
         EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
     }
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {

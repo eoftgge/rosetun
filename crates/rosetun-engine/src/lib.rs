@@ -12,7 +12,7 @@
 pub mod errors;
 
 use errors::EngineError;
-use rosetun_config::{EngineKind, Node, RuleSet, Settings, Traffic};
+use rosetun_config::{EngineKind, Node, RuleId, RuleSet, Settings, Traffic};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,9 +20,36 @@ pub enum EngineIntegration {
     EngineManagedTun,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleCapabilities {
+    pub domain_exact: bool,
+    pub domain_suffix: bool,
+    pub domain_keyword: bool,
+    pub process_name: bool,
+    pub process_path: bool,
+    pub ip_cidr: bool,
+}
+
+impl RuleCapabilities {
+    pub const ALL: Self = Self {
+        domain_exact: true,
+        domain_suffix: true,
+        domain_keyword: true,
+        process_name: true,
+        process_path: true,
+        ip_cidr: true,
+    };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineCapabilities {
+    pub rules: RuleCapabilities,
+}
+
 pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     fn kind(&self) -> EngineKind;
     fn integration(&self) -> EngineIntegration;
+    fn capabilities(&self) -> EngineCapabilities;
     fn locate_binary(&self) -> Result<PathBuf, EngineError>;
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError>;
 
@@ -44,6 +71,8 @@ pub struct RenderRequest<'a> {
 pub struct RenderedConfig {
     pub file_name: String,
     pub body: Vec<u8>,
+    /// Enabled rules that the backend cannot represent in its configuration.
+    pub unsupported: Vec<RuleId>,
 }
 
 impl RenderedConfig {

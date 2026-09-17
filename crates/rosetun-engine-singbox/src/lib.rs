@@ -6,9 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use rosetun_config::{EngineKind, Traffic};
-use rosetun_engine::{
-    EngineBackend, EngineIntegration, EngineProcess, RenderRequest, RenderedConfig,
-};
+use rosetun_engine::{EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest, RenderedConfig, RuleCapabilities};
 
 pub use render::render;
 use rosetun_engine::errors::EngineError;
@@ -48,6 +46,12 @@ impl EngineBackend for SingBoxBackend {
 
     fn integration(&self) -> EngineIntegration {
         EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
     }
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
