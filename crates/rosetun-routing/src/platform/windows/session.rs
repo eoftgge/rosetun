@@ -57,6 +57,10 @@ impl DynamicSession {
         })
     }
 
+    pub(super) fn handle(&self) -> HANDLE {
+        self.handle
+    }
+
     pub(super) fn add_provider_and_sublayer(&self) -> Result<(), RoutingError> {
         let provider_name = wide("Rosetun");
         let provider_description = wide("Rosetun dynamic kill-switch policy");
@@ -142,7 +146,7 @@ impl Drop for Transaction<'_> {
     }
 }
 
-const PROVIDER_KEY: GUID = GUID {
+pub(crate) const PROVIDER_KEY: GUID = GUID {
     data1: 0x51a4_7ec7,
     data2: 0x6459,
     data3: 0x4b84,
