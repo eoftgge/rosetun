@@ -69,6 +69,47 @@ impl RoutingBackend for UnusedRouting {
 }
 
 #[derive(Debug)]
+struct AuthorizingRouting {
+    spawned: Option<Receiver<()>>,
+    authorized: Sender<TunnelInterface>,
+}
+
+impl RoutingBackend for AuthorizingRouting {
+    fn name(&self) -> &'static str {
+        "test-authorizing"
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binary: &Path,
+    ) -> Result<RoutingGuard, RoutingError> {
+        let spawned = self
+            .spawned
+            .take()
+            .expect("bootstrap protection is created only once");
+        let authorized = self.authorized.clone();
+
+        Ok(RoutingGuard::new_with_authorizer(
+            move |tunnel| {
+                spawned
+                    .recv()
+                    .expect("engine must spawn before phase-2 authorization");
+                authorized
+                    .send(tunnel.clone())
+                    .expect("test observes tunnel authorization");
+                Ok(())
+            },
+            || Ok(()),
+        ))
+    }
+}
+
+#[derive(Debug)]
 struct StubEngine;
 
 #[derive(Debug)]
@@ -160,6 +201,50 @@ impl EngineProcess for StubProcess {
 
     fn stop(&mut self) -> Result<(), EngineError> {
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct SpawnSignalingEngine {
+    spawned: Sender<()>,
+}
+
+impl EngineBackend for SpawnSignalingEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        Ok(PathBuf::from("sing-box"))
+    }
+
+    fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        Ok(RenderedConfig {
+            file_name: "config.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+        })
+    }
+
+    fn spawn(
+        &self,
+        _binary: &Path,
+        _config: &RenderedConfig,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        self.spawned
+            .send(())
+            .expect("routing authorization observes engine spawn");
+        Ok(Box::new(StubProcess))
     }
 }
 
@@ -331,4 +416,40 @@ fn kill_switch_rejects_an_unresolvable_vpn_endpoint_before_routing() {
         helper.status().state,
         ConnectionState::Failed { .. }
     ));
+}
+
+#[test]
+fn kill_switch_authorizes_the_configured_tunnel_after_spawning_the_engine() {
+    let (spawned, spawn_observed) = channel();
+    let (authorized, authorized_rx) = channel();
+
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(SpawnSignalingEngine { spawned }));
+
+    let helper = Helper::new(
+        engines,
+        Box::new(AuthorizingRouting {
+            spawned: Some(spawn_observed),
+            authorized,
+        }),
+    );
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.tun.name = "rosetun-test".to_owned();
+    request.settings.tun.ipv4 = "172.29.10.1/30".to_owned();
+
+    helper
+        .connect(&request)
+        .expect("the spawned engine tunnel is authorized");
+
+    assert_eq!(
+        authorized_rx
+            .recv()
+            .expect("helper authorizes the tunnel after spawn"),
+        TunnelInterface {
+            alias: "rosetun-test".to_owned(),
+            ipv4: "172.29.10.1".parse().expect("valid test IPv4"),
+        }
+    );
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
 }

@@ -80,8 +80,20 @@ impl std::fmt::Debug for RoutingGuard {
 
 impl RoutingGuard {
     pub fn new(revert: impl FnOnce() -> Result<(), RoutingError> + Send + 'static) -> Self {
+        Self::new_with_authorizer(|_| Ok(()), revert)
+    }
+
+    /// Creates a guard whose phase-2 authorization is implemented by closures.
+    ///
+    /// This is intended for routing backends that do not need a dedicated
+    /// platform session type but still need to authorize a discovered tunnel.
+    pub fn new_with_authorizer(
+        authorize: impl FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send + 'static,
+        revert: impl FnOnce() -> Result<(), RoutingError> + Send + 'static,
+    ) -> Self {
         Self {
             session: Some(Box::new(ClosureSession {
+                authorize: Box::new(authorize),
                 revert: Some(Box::new(revert)),
             })),
         }
@@ -124,6 +136,7 @@ impl Drop for RoutingGuard {
 }
 
 struct ClosureSession {
+    authorize: Box<dyn FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send>,
     revert: Option<Box<dyn FnOnce() -> Result<(), RoutingError> + Send>>,
 }
 
@@ -131,13 +144,13 @@ impl std::fmt::Debug for ClosureSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClosureSession")
             .field("armed", &self.revert.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl ProtectionSession for ClosureSession {
-    fn authorize_tunnel(&mut self, _tunnel: &TunnelInterface) -> Result<(), RoutingError> {
-        Ok(())
+    fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError> {
+        (self.authorize)(tunnel)
     }
 
     fn teardown(&mut self) -> Result<(), RoutingError> {
