@@ -1,19 +1,25 @@
-use std::ptr;
+use std::{
+    net::IpAddr,
+    path::Path,
+    ptr,
+};
 
 use windows_sys::{
     core::GUID,
     Win32::NetworkManagement::{
         Ndis::NET_LUID_LH,
         WindowsFilteringPlatform::{
-            FwpmFilterAdd0, FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_CONDITION_VALUE0,
-            FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_UINT8, FWP_UINT64, FWP_VALUE0,
-            FWP_VALUE0_0, FWPM_ACTION0, FWPM_CONDITION_IP_LOCAL_INTERFACE, FWPM_FILTER0,
-            FWPM_FILTER_CONDITION0, FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+            FwpmFilterAdd0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0, FWP_ACTION_BLOCK,
+            FWP_ACTION_PERMIT, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE, FWP_BYTE_BLOB,
+            FWP_BYTE_BLOB_TYPE, FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL,
+            FWP_UINT8, FWP_UINT32, FWP_UINT64, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
+            FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_IP_LOCAL_INTERFACE,
+            FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_FILTER0, FWPM_FILTER_CONDITION0,
+            FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
         },
     },
 };
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{FwpmFreeMemory0, FWP_BYTE_BLOB};
+
 use super::{
     policy::{Action, AddressFamily, Condition, Rule},
     session::DynamicSession,
@@ -22,11 +28,32 @@ use crate::RoutingError;
 
 struct AppIdBlob(*mut FWP_BYTE_BLOB);
 
+impl AppIdBlob {
+    fn from_path(path: &Path) -> Result<Self, RoutingError> {
+        let path = wide_path(path)?;
+        let mut blob = ptr::null_mut();
+
+        let status = unsafe { FwpmGetAppIdFromFileName0(path.as_ptr(), &mut blob) };
+        if status != 0 {
+            return Err(RoutingError::Wfp {
+                code: status,
+                context: "getting the WFP application ID for the engine",
+            });
+        }
+
+        Ok(Self(blob))
+    }
+
+    fn as_ptr(&self) -> *mut FWP_BYTE_BLOB {
+        self.0
+    }
+}
+
 impl Drop for AppIdBlob {
     fn drop(&mut self) {
         if !self.0.is_null() {
             unsafe {
-                FwpmFreeMemory0(self.0.cast());
+                FwpmFreeMemory0((&mut self.0).cast());
             }
         }
     }
@@ -34,29 +61,49 @@ impl Drop for AppIdBlob {
 
 pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), RoutingError> {
     let mut luid = NET_LUID_LH::default();
-    let mut condition = FWPM_FILTER_CONDITION0::default();
+    let mut app_id = None;
+    let mut ipv4 = 0_u32;
+    let mut ipv6 = FWP_BYTE_ARRAY16 {
+        byteArray16: [0; 16],
+    };
+    let mut conditions = Vec::with_capacity(2);
 
-    let conditions = match rule.conditions.as_slice() {
-        [] => ptr::null_mut(),
+    match rule.conditions.as_slice() {
+        [] => {}
         [Condition::LocalInterface(value)] => {
-            luid.Value = *value;
-            condition = interface_condition(&mut luid);
-            &mut condition
+            unsafe {
+                luid.Value = *value;
+            }
+            conditions.push(interface_condition(&mut luid));
+        }
+        [Condition::Application(engine_binary), Condition::RemoteAddress(endpoint)] => {
+            app_id = Some(AppIdBlob::from_path(engine_binary)?);
+            conditions.push(application_condition(
+                app_id.as_ref().expect("application ID was initialized"),
+            ));
+
+            conditions.push(remote_address_condition(
+                rule.family,
+                *endpoint,
+                &mut ipv4,
+                &mut ipv6,
+            )?);
         }
         _ => return Err(RoutingError::Unsupported),
-    };
+    }
 
     let filter = FWPM_FILTER0 {
         layerKey: layer_key(rule.family),
         subLayerKey: sublayer_key(),
         action: action(rule.action),
         weight: weight(rule.weight),
-        numFilterConditions: u32::from(!conditions.is_null()),
-        filterCondition: conditions,
+        numFilterConditions: conditions.len() as u32,
+        filterCondition: conditions.as_mut_ptr(),
         ..Default::default()
     };
 
-    let status = unsafe { FwpmFilterAdd0(session.handle(), &filter, ptr::null_mut(), ptr::null_mut()) };
+    let status =
+        unsafe { FwpmFilterAdd0(session.handle(), &filter, ptr::null_mut(), ptr::null_mut()) };
     if status != 0 {
         return Err(RoutingError::Wfp {
             code: status,
@@ -65,6 +112,55 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
     }
 
     Ok(())
+}
+
+fn application_condition(app_id: &AppIdBlob) -> FWPM_FILTER_CONDITION0 {
+    FWPM_FILTER_CONDITION0 {
+        fieldKey: FWPM_CONDITION_ALE_APP_ID,
+        matchType: FWP_MATCH_EQUAL,
+        conditionValue: FWP_CONDITION_VALUE0 {
+            r#type: FWP_BYTE_BLOB_TYPE,
+            Anonymous: FWP_CONDITION_VALUE0_0 {
+                byteBlob: app_id.as_ptr(),
+            },
+        },
+    }
+}
+
+fn remote_address_condition(
+    family: AddressFamily,
+    endpoint: IpAddr,
+    ipv4: &mut u32,
+    ipv6: &mut FWP_BYTE_ARRAY16,
+) -> Result<FWPM_FILTER_CONDITION0, RoutingError> {
+    let value = match (family, endpoint) {
+        (AddressFamily::Ipv4, IpAddr::V4(address)) => {
+            // WFP expects the IPv4 address in network-byte-order representation.
+            *ipv4 = u32::from_ne_bytes(address.octets());
+
+            FWP_CONDITION_VALUE0 {
+                r#type: FWP_UINT32,
+                Anonymous: FWP_CONDITION_VALUE0_0 { uint32: *ipv4 },
+            }
+        }
+        (AddressFamily::Ipv6, IpAddr::V6(address)) => {
+            ipv6.byteArray16 = address.octets();
+
+            FWP_CONDITION_VALUE0 {
+                r#type: FWP_BYTE_ARRAY16_TYPE,
+                Anonymous: FWP_CONDITION_VALUE0_0 {
+                    byteArray16: ipv6,
+                },
+            }
+        }
+        _ => return Err(RoutingError::Unsupported),
+    };
+
+    Ok(FWPM_FILTER_CONDITION0 {
+        fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+        matchType: FWP_MATCH_EQUAL,
+        conditionValue: value,
+    })
 }
 
 fn layer_key(family: AddressFamily) -> GUID {
@@ -98,7 +194,7 @@ fn interface_condition(luid: &mut NET_LUID_LH) -> FWPM_FILTER_CONDITION0 {
         conditionValue: FWP_CONDITION_VALUE0 {
             r#type: FWP_UINT64,
             Anonymous: FWP_CONDITION_VALUE0_0 {
-                uint64: unsafe { (&mut luid.Value) } as *mut u64,
+                uint64: unsafe { &mut luid.Value },
             },
         },
     }
@@ -111,4 +207,13 @@ fn sublayer_key() -> GUID {
         data3: 0x4583,
         data4: [0xad, 0x9c, 0x17, 0x97, 0x91, 0x36, 0x0f, 0x5e],
     }
+}
+
+fn wide_path(path: &Path) -> Result<Vec<u16>, RoutingError> {
+    let path = path.to_str().ok_or_else(|| RoutingError::Tun {
+        name: path.display().to_string(),
+        reason: "the engine executable path is not valid UTF-8".to_owned(),
+    })?;
+
+    Ok(path.encode_utf16().chain(Some(0)).collect())
 }
