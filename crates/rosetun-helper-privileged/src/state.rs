@@ -49,9 +49,14 @@ impl Helper {
             && let Ok(mut session) = self.session.try_lock()
         {
             let exited = match session.process.as_mut() {
-                Some(process) => process.is_running().err().map(|error| error.to_string()),
+                Some(process) => match process.is_running() {
+                    Ok(true) => None,
+                    Ok(false) => Some("the engine process exited".to_owned()),
+                    Err(error) => Some(error.to_string()),
+                },
                 None => None,
             };
+
             if let Some(reason) = exited {
                 tracing::warn!(%reason, "the engine terminated itself");
                 self.with_status(|status| {

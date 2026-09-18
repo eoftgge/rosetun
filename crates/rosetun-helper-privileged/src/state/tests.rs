@@ -248,6 +248,62 @@ impl EngineBackend for SpawnSignalingEngine {
     }
 }
 
+#[derive(Debug)]
+struct ExitedProcess;
+
+impl EngineProcess for ExitedProcess {
+    fn is_running(&mut self) -> Result<bool, EngineError> {
+        Ok(false)
+    }
+
+    fn traffic(&mut self) -> Result<Traffic, EngineError> {
+        Err(EngineError::StatsUnavailable)
+    }
+
+    fn stop(&mut self) -> Result<(), EngineError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct ExitedEngine;
+
+impl EngineBackend for ExitedEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        Ok(PathBuf::from("sing-box"))
+    }
+
+    fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        Ok(RenderedConfig {
+            file_name: "config.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+        })
+    }
+
+    fn spawn(
+        &self,
+        _binary: &Path,
+        _config: &RenderedConfig,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        Ok(Box::new(ExitedProcess))
+    }
+}
+
 fn connect_request() -> ConnectRequest {
     ConnectRequest {
         selection: Selection {
@@ -452,4 +508,26 @@ fn kill_switch_authorizes_the_configured_tunnel_after_spawning_the_engine() {
         }
     );
     assert!(matches!(helper.status().state, ConnectionState::Connected));
+}
+
+#[test]
+fn status_marks_the_session_failed_when_the_engine_returns_not_running() {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ExitedEngine));
+
+    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+
+    helper
+        .connect(&request)
+        .expect("the process can exit after a successful spawn");
+
+    let status = helper.status();
+
+    assert!(matches!(
+        status.state,
+        ConnectionState::Failed { ref reason } if reason == "the engine process exited"
+    ));
+    assert!(status.since_unix.is_none());
 }
