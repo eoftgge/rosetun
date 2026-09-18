@@ -11,9 +11,10 @@ use windows_sys::{
         WindowsFilteringPlatform::{
             FwpmFilterAdd0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0, FWP_ACTION_BLOCK,
             FWP_ACTION_PERMIT, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE, FWP_BYTE_BLOB,
-            FWP_BYTE_BLOB_TYPE, FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL,
-            FWP_UINT8, FWP_UINT32, FWP_UINT64, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
-            FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_IP_LOCAL_INTERFACE,
+            FWP_BYTE_BLOB_TYPE, FWP_CONDITION_FLAG_IS_LOOPBACK, FWP_CONDITION_VALUE0,
+            FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ALL_SET, FWP_UINT8,
+            FWP_UINT32, FWP_UINT64, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
+            FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FWPM_CONDITION_IP_LOCAL_INTERFACE,
             FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_FILTER0, FWPM_FILTER_CONDITION0,
             FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
         },
@@ -61,6 +62,7 @@ impl Drop for AppIdBlob {
 
 pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), RoutingError> {
     let mut luid = NET_LUID_LH::default();
+    let mut loopback_flags = FWP_CONDITION_FLAG_IS_LOOPBACK;
     let mut app_id = None;
     let mut ipv4 = 0_u32;
     let mut ipv6 = FWP_BYTE_ARRAY16 {
@@ -76,12 +78,14 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
             }
             conditions.push(interface_condition(&mut luid));
         }
+        [Condition::Loopback] => {
+            conditions.push(loopback_condition(&mut loopback_flags));
+        }
         [Condition::Application(engine_binary), Condition::RemoteAddress(endpoint)] => {
             app_id = Some(AppIdBlob::from_path(engine_binary)?);
             conditions.push(application_condition(
                 app_id.as_ref().expect("application ID was initialized"),
             ));
-
             conditions.push(remote_address_condition(
                 rule.family,
                 *endpoint,
@@ -184,6 +188,19 @@ fn weight(value: u8) -> FWP_VALUE0 {
     FWP_VALUE0 {
         r#type: FWP_UINT8,
         Anonymous: FWP_VALUE0_0 { uint8: value },
+    }
+}
+
+fn loopback_condition(flags: &mut u32) -> FWPM_FILTER_CONDITION0 {
+    FWPM_FILTER_CONDITION0 {
+        fieldKey: FWPM_CONDITION_FLAGS,
+        matchType: FWP_MATCH_FLAGS_ALL_SET,
+        conditionValue: FWP_CONDITION_VALUE0 {
+            r#type: FWP_UINT32,
+            Anonymous: FWP_CONDITION_VALUE0_0 {
+                uint32: unsafe { *flags },
+            },
+        },
     }
 }
 
