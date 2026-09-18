@@ -5,8 +5,8 @@ mod tunnel;
 
 use session::DynamicSession;
 
-use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
 use crate::platform::windows::session::WfpProtectionSession;
+use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
 
 #[derive(Debug, Default)]
 pub(super) struct WfpBackend;

@@ -129,10 +129,7 @@ pub(super) struct WfpProtectionSession {
 }
 
 impl WfpProtectionSession {
-    pub(super) fn begin(
-        plan: &RoutingPlan,
-        engine_binary: &Path,
-    ) -> Result<Self, RoutingError> {
+    pub(super) fn begin(plan: &RoutingPlan, engine_binary: &Path) -> Result<Self, RoutingError> {
         let session = DynamicSession::open()?;
         let transaction = session.transaction()?;
 

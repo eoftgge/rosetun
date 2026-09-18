@@ -5,7 +5,10 @@ use super::{
     session::DynamicSession,
 };
 use crate::RoutingError;
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{FwpmFilterAdd0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0, FWP_ACTION_BLOCK, FWPM_CONDITION_FLAGS, FWPM_CONDITION_ALE_APP_ID};
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
+    FWP_ACTION_BLOCK, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FwpmFilterAdd0,
+    FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
+};
 use windows_sys::{
     Win32::NetworkManagement::{
         Ndis::NET_LUID_LH,
@@ -21,7 +24,7 @@ use windows_sys::{
         },
     },
     Win32::Networking::WinSock::{IPPROTO_ICMPV6, IPPROTO_UDP},
-    core::GUID
+    core::GUID,
 };
 
 const DHCP_SERVER_PORT: u16 = 67;
@@ -88,8 +91,8 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
             ]);
         }
         [
-        Condition::Application(engine_binary),
-        Condition::RemoteAddress(endpoint),
+            Condition::Application(engine_binary),
+            Condition::RemoteAddress(endpoint),
         ] => {
             app_id = Some(AppIdBlob::from_path(engine_binary)?);
             conditions.push(application_condition(
@@ -221,7 +224,6 @@ fn protocol_condition(protocol: u8) -> FWPM_FILTER_CONDITION0 {
         },
     }
 }
-
 
 fn port_condition(field_key: GUID, port: u16) -> FWPM_FILTER_CONDITION0 {
     FWPM_FILTER_CONDITION0 {

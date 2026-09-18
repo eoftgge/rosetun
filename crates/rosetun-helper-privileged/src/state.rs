@@ -259,7 +259,10 @@ impl Session {
                     ));
                 }
                 Err(error) => {
-                    return Err(HelperError::new(ErrorCode::RoutingFailed, error.to_string()));
+                    return Err(HelperError::new(
+                        ErrorCode::RoutingFailed,
+                        error.to_string(),
+                    ));
                 }
             }
         }
