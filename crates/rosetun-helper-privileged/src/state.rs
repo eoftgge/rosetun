@@ -3,11 +3,15 @@ mod tests;
 
 use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 use rosetun_config::{ConnectionState, Node, RuleSet, Settings, Status};
 use rosetun_engine::{EngineProcess, EngineRegistry, RenderRequest};
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
-use rosetun_routing::{RoutingBackend, RoutingGuard, RoutingPlan};
+use rosetun_routing::{RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface};
+
+const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct Helper {
     status: Mutex<Status>,
@@ -169,6 +173,12 @@ impl Session {
             .locate_binary()
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
+        let tunnel = settings
+            .kill_switch
+            .then(|| TunnelInterface::try_from(&settings.tun))
+            .transpose()
+            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
+
         if settings.kill_switch {
             let plan = RoutingPlan {
                 bypass: resolve(&node.server, node.port)?,
@@ -190,7 +200,64 @@ impl Session {
             .spawn(&binary, &config)
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
         self.process = Some(process);
+
+        if let Some(tunnel) = tunnel.as_ref() {
+            self.wait_for_tunnel(tunnel)?;
+        }
+
         Ok(())
+    }
+
+    fn wait_for_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), HelperError> {
+        let deadline = Instant::now() + TUNNEL_READY_TIMEOUT;
+
+        loop {
+            let running = self
+                .process
+                .as_mut()
+                .ok_or_else(|| {
+                    HelperError::new(
+                        ErrorCode::EngineFailed,
+                        "engine process disappeared before tunnel readiness",
+                    )
+                })?
+                .is_running()
+                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+
+            if !running {
+                return Err(HelperError::new(
+                    ErrorCode::EngineFailed,
+                    "engine exited before creating its tunnel interface",
+                ));
+            }
+
+            let guard = self.guard.as_mut().ok_or_else(|| {
+                HelperError::new(
+                    ErrorCode::RoutingFailed,
+                    "routing protection disappeared before tunnel authorization",
+                )
+            })?;
+
+            match guard.authorize_tunnel(tunnel) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.is_tunnel_not_ready() && Instant::now() < deadline => {
+                    std::thread::sleep(TUNNEL_READY_POLL_INTERVAL);
+                }
+                Err(error) if error.is_tunnel_not_ready() => {
+                    return Err(HelperError::new(
+                        ErrorCode::RoutingFailed,
+                        format!(
+                            "tunnel interface {} did not become ready within {} seconds: {error}",
+                            tunnel.alias,
+                            TUNNEL_READY_TIMEOUT.as_secs()
+                        ),
+                    ));
+                }
+                Err(error) => {
+                    return Err(HelperError::new(ErrorCode::RoutingFailed, error.to_string()));
+                }
+            }
+        }
     }
 
     fn teardown(&mut self) {

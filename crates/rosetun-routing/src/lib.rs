@@ -137,7 +137,7 @@ impl std::fmt::Debug for ClosureSession {
 
 impl ProtectionSession for ClosureSession {
     fn authorize_tunnel(&mut self, _tunnel: &TunnelInterface) -> Result<(), RoutingError> {
-        Err(RoutingError::Unsupported)
+        Ok(())
     }
 
     fn teardown(&mut self) -> Result<(), RoutingError> {
