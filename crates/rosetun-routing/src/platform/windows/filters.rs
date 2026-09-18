@@ -1,27 +1,31 @@
 use std::{net::IpAddr, path::Path, ptr};
 
-use windows_sys::{
-    Win32::NetworkManagement::{
-        Ndis::NET_LUID_LH,
-        WindowsFilteringPlatform::{
-            FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE,
-            FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE, FWP_CONDITION_FLAG_IS_LOOPBACK,
-            FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ALL_SET,
-            FWP_UINT8, FWP_UINT32, FWP_UINT64, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
-            FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FWPM_CONDITION_IP_LOCAL_INTERFACE,
-            FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_FILTER_CONDITION0, FWPM_FILTER0,
-            FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6, FwpmFilterAdd0,
-            FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
-        },
-    },
-    core::GUID,
-};
-
 use super::{
     policy::{Action, AddressFamily, Condition, Rule},
     session::DynamicSession,
 };
 use crate::RoutingError;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{FwpmFilterAdd0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0, FWP_ACTION_BLOCK, FWPM_CONDITION_FLAGS, FWPM_CONDITION_ALE_APP_ID};
+use windows_sys::{
+    Win32::NetworkManagement::{
+        Ndis::NET_LUID_LH,
+        WindowsFilteringPlatform::{
+            FWP_ACTION_PERMIT, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE, FWP_BYTE_BLOB,
+            FWP_BYTE_BLOB_TYPE, FWP_CONDITION_FLAG_IS_LOOPBACK, FWP_CONDITION_VALUE0,
+            FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ALL_SET, FWP_UINT8,
+            FWP_UINT16, FWP_UINT32, FWP_UINT64, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
+            FWPM_CONDITION_IP_LOCAL_INTERFACE, FWPM_CONDITION_IP_LOCAL_PORT,
+            FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_ADDRESS,
+            FWPM_CONDITION_IP_REMOTE_PORT, FWPM_FILTER_CONDITION0, FWPM_FILTER0,
+            FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+        },
+    },
+    Win32::Networking::WinSock::{IPPROTO_ICMPV6, IPPROTO_UDP},
+    core::GUID
+};
+
+const DHCP_SERVER_PORT: u16 = 67;
+const DHCP_CLIENT_PORT: u16 = 68;
 
 struct AppIdBlob(*mut FWP_BYTE_BLOB);
 
@@ -58,13 +62,12 @@ impl Drop for AppIdBlob {
 
 pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), RoutingError> {
     let mut luid = NET_LUID_LH::default();
-    let mut loopback_flags = FWP_CONDITION_FLAG_IS_LOOPBACK;
     let mut app_id = None;
     let mut ipv4 = 0_u32;
     let mut ipv6 = FWP_BYTE_ARRAY16 {
         byteArray16: [0; 16],
     };
-    let mut conditions = Vec::with_capacity(2);
+    let mut conditions = Vec::with_capacity(3);
 
     match rule.conditions.as_slice() {
         [] => {}
@@ -75,11 +78,18 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
             conditions.push(interface_condition(&mut luid));
         }
         [Condition::Loopback] => {
-            conditions.push(loopback_condition(&mut loopback_flags));
+            conditions.push(loopback_condition());
+        }
+        [Condition::DhcpV4] if rule.family == AddressFamily::Ipv4 => {
+            conditions.extend([
+                protocol_condition(IPPROTO_UDP as u8),
+                port_condition(FWPM_CONDITION_IP_LOCAL_PORT, DHCP_CLIENT_PORT),
+                port_condition(FWPM_CONDITION_IP_REMOTE_PORT, DHCP_SERVER_PORT),
+            ]);
         }
         [
-            Condition::Application(engine_binary),
-            Condition::RemoteAddress(endpoint),
+        Condition::Application(engine_binary),
+        Condition::RemoteAddress(endpoint),
         ] => {
             app_id = Some(AppIdBlob::from_path(engine_binary)?);
             conditions.push(application_condition(
@@ -188,15 +198,38 @@ fn weight(value: u8) -> FWP_VALUE0 {
     }
 }
 
-fn loopback_condition(flags: &mut u32) -> FWPM_FILTER_CONDITION0 {
+fn loopback_condition() -> FWPM_FILTER_CONDITION0 {
     FWPM_FILTER_CONDITION0 {
         fieldKey: FWPM_CONDITION_FLAGS,
         matchType: FWP_MATCH_FLAGS_ALL_SET,
         conditionValue: FWP_CONDITION_VALUE0 {
             r#type: FWP_UINT32,
             Anonymous: FWP_CONDITION_VALUE0_0 {
-                uint32: unsafe { *flags },
+                uint32: FWP_CONDITION_FLAG_IS_LOOPBACK,
             },
+        },
+    }
+}
+
+fn protocol_condition(protocol: u8) -> FWPM_FILTER_CONDITION0 {
+    FWPM_FILTER_CONDITION0 {
+        fieldKey: FWPM_CONDITION_IP_PROTOCOL,
+        matchType: FWP_MATCH_EQUAL,
+        conditionValue: FWP_CONDITION_VALUE0 {
+            r#type: FWP_UINT8,
+            Anonymous: FWP_CONDITION_VALUE0_0 { uint8: protocol },
+        },
+    }
+}
+
+
+fn port_condition(field_key: GUID, port: u16) -> FWPM_FILTER_CONDITION0 {
+    FWPM_FILTER_CONDITION0 {
+        fieldKey: field_key,
+        matchType: FWP_MATCH_EQUAL,
+        conditionValue: FWP_CONDITION_VALUE0 {
+            r#type: FWP_UINT16,
+            Anonymous: FWP_CONDITION_VALUE0_0 { uint16: port },
         },
     }
 }

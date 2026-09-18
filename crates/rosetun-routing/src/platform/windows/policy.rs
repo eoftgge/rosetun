@@ -36,8 +36,6 @@ pub(super) enum Condition {
     Loopback,
     /// Matches the client side of DHCPv4: UDP port 68 to UDP port 67.
     DhcpV4,
-    /// Matches IPv6 ICMP Neighbor Solicitation and Neighbor Advertisement.
-    NeighborDiscoveryV6,
     /// Matches traffic whose local interface is the engine-created TUN adapter.
     ///
     /// This is the opaque `NET_LUID` value consumed later by
@@ -94,12 +92,6 @@ impl BootstrapPolicy {
                 family: AddressFamily::Ipv4,
                 action: Action::Allow,
                 conditions: vec![Condition::DhcpV4],
-                weight: BOOTSTRAP_ALLOW_WEIGHT,
-            },
-            Rule {
-                family: AddressFamily::Ipv6,
-                action: Action::Allow,
-                conditions: vec![Condition::NeighborDiscoveryV6],
                 weight: BOOTSTRAP_ALLOW_WEIGHT,
             },
             block_rule(AddressFamily::Ipv4),
@@ -193,27 +185,23 @@ mod tests {
     fn bootstrap_policy_allows_required_local_network_traffic_then_blocks_both_families() {
         let policy = BootstrapPolicy::from_plan(&plan(), Path::new(r"C:\sing-box.exe"));
 
-        assert_eq!(policy.rules.len(), 8);
+        assert_eq!(policy.rules.len(), 7);
 
         assert_eq!(policy.rules[2].conditions, vec![Condition::Loopback]);
         assert_eq!(policy.rules[3].conditions, vec![Condition::Loopback]);
         assert_eq!(policy.rules[4].conditions, vec![Condition::DhcpV4]);
-        assert_eq!(
-            policy.rules[5].conditions,
-            vec![Condition::NeighborDiscoveryV6]
-        );
 
-        assert_eq!(policy.rules[6].family, AddressFamily::Ipv4);
+        assert_eq!(policy.rules[5].family, AddressFamily::Ipv4);
+        assert_eq!(policy.rules[5].action, Action::Block);
+        assert!(policy.rules[5].conditions.is_empty());
+
+        assert_eq!(policy.rules[6].family, AddressFamily::Ipv6);
         assert_eq!(policy.rules[6].action, Action::Block);
         assert!(policy.rules[6].conditions.is_empty());
 
-        assert_eq!(policy.rules[7].family, AddressFamily::Ipv6);
-        assert_eq!(policy.rules[7].action, Action::Block);
-        assert!(policy.rules[7].conditions.is_empty());
-
-        for rule in &policy.rules[..6] {
+        for rule in &policy.rules[..5] {
+            assert!(rule.weight > policy.rules[5].weight);
             assert!(rule.weight > policy.rules[6].weight);
-            assert!(rule.weight > policy.rules[7].weight);
         }
     }
 
