@@ -13,12 +13,24 @@ use windows_sys::{
         },
     },
 };
-
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{FwpmFreeMemory0, FWP_BYTE_BLOB};
 use super::{
     policy::{Action, AddressFamily, Condition, Rule},
     session::DynamicSession,
 };
 use crate::RoutingError;
+
+struct AppIdBlob(*mut FWP_BYTE_BLOB);
+
+impl Drop for AppIdBlob {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                FwpmFreeMemory0(self.0.cast());
+            }
+        }
+    }
+}
 
 pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), RoutingError> {
     let mut luid = NET_LUID_LH::default();
