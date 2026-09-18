@@ -6,6 +6,7 @@ mod tunnel;
 use session::DynamicSession;
 
 use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
+use crate::platform::windows::session::WfpProtectionSession;
 
 #[derive(Debug, Default)]
 pub(super) struct WfpBackend;
@@ -30,9 +31,12 @@ impl RoutingBackend for WfpBackend {
 
     fn begin_protection(
         &mut self,
-        _plan: &RoutingPlan,
-        _engine_binary: &std::path::Path,
+        plan: &RoutingPlan,
+        engine_binary: &std::path::Path,
     ) -> Result<RoutingGuard, RoutingError> {
-        Err(RoutingError::Unsupported)
+        Ok(RoutingGuard::from_session(WfpProtectionSession::begin(
+            plan,
+            engine_binary,
+        )?))
     }
 }

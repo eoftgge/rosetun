@@ -37,6 +37,12 @@ impl PartialEq for TunnelLuid {
 
 impl Eq for TunnelLuid {}
 
+impl TunnelLuid {
+    pub(super) fn value(self) -> u64 {
+        unsafe { self.0.Value }
+    }
+}
+
 pub(super) fn resolve_luid(tunnel: &TunnelInterface) -> Result<TunnelLuid, RoutingError> {
     let alias = wide(&tunnel.alias);
     let mut luid = NET_LUID_LH::default();

@@ -61,7 +61,7 @@ impl TryFrom<&rosetun_config::TunSettings> for TunnelInterface {
     }
 }
 
-trait ProtectionSession: std::fmt::Debug + Send {
+pub(crate) trait ProtectionSession: std::fmt::Debug + Send {
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError>;
     fn teardown(&mut self) -> Result<(), RoutingError>;
 }

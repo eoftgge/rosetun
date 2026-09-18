@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::path::Path;
 use std::ptr;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
@@ -8,7 +9,12 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
 };
 use windows_sys::core::GUID;
 
-use crate::RoutingError;
+use super::{
+    filters,
+    policy::{self, BootstrapPolicy},
+    tunnel,
+};
+use crate::{ProtectionSession, RoutingError, RoutingPlan, TunnelInterface};
 
 #[link(name = "fwpuclnt")]
 unsafe extern "system" {
@@ -108,6 +114,77 @@ impl Drop for DynamicSession {
             }
             self.handle = ptr::null_mut();
         }
+    }
+}
+
+/// Owns one dynamic WFP session for both kill-switch phases.
+///
+/// Bootstrap policy is installed before the engine starts. Tunnel authorization
+/// is added later to this same session after routing has discovered and
+/// validated the engine-created adapter.
+#[derive(Debug)]
+pub(super) struct WfpProtectionSession {
+    session: Option<DynamicSession>,
+    tunnel_authorized: bool,
+}
+
+impl WfpProtectionSession {
+    pub(super) fn begin(
+        plan: &RoutingPlan,
+        engine_binary: &Path,
+    ) -> Result<Self, RoutingError> {
+        let session = DynamicSession::open()?;
+        let transaction = session.transaction()?;
+
+        session.add_provider_and_sublayer()?;
+
+        let policy = BootstrapPolicy::from_plan(plan, engine_binary);
+        for rule in &policy.rules {
+            filters::add_rule(&session, rule)?;
+        }
+
+        transaction.commit()?;
+
+        Ok(Self {
+            session: Some(session),
+            tunnel_authorized: false,
+        })
+    }
+
+    fn active_session(&self) -> Result<&DynamicSession, RoutingError> {
+        self.session.as_ref().ok_or_else(|| {
+            RoutingError::Route("the WFP protection session has been torn down".to_owned())
+        })
+    }
+}
+
+/// WFP engine handles are not shared concurrently. A `RoutingGuard` owns the
+/// session and may move with its helper session, but it is never `Sync`.
+unsafe impl Send for WfpProtectionSession {}
+
+impl ProtectionSession for WfpProtectionSession {
+    fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError> {
+        if self.tunnel_authorized {
+            return Ok(());
+        }
+
+        let luid = tunnel::resolve_luid(tunnel)?;
+        let session = self.active_session()?;
+        let transaction = session.transaction()?;
+
+        for rule in policy::tunnel_authorization(luid.value()) {
+            filters::add_rule(session, &rule)?;
+        }
+
+        transaction.commit()?;
+        self.tunnel_authorized = true;
+        Ok(())
+    }
+
+    fn teardown(&mut self) -> Result<(), RoutingError> {
+        self.session.take();
+        self.tunnel_authorized = false;
+        Ok(())
     }
 }
 
