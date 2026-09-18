@@ -153,9 +153,7 @@ mod tests {
         path::Path,
     };
 
-    use super::{
-        Action, AddressFamily, BootstrapPolicy, Condition, tunnel_authorization,
-    };
+    use super::{Action, AddressFamily, BootstrapPolicy, Condition, tunnel_authorization};
     use crate::RoutingPlan;
 
     fn plan() -> RoutingPlan {

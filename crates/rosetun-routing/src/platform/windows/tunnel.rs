@@ -7,9 +7,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::ERROR_BUFFER_OVERFLOW,
     NetworkManagement::{
-        IpHelper::{
-            ConvertInterfaceAliasToLuid, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
-        },
+        IpHelper::{ConvertInterfaceAliasToLuid, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH},
         Ndis::{IfOperStatusUp, NET_LUID_LH},
     },
     Networking::WinSock::{AF_INET, SOCKADDR_IN},
@@ -127,9 +125,7 @@ fn has_ipv4_address(adapter: &IP_ADAPTER_ADDRESSES_LH, expected: Ipv4Addr) -> bo
         let current = unsafe { &*unicast };
         let socket = &current.Address;
 
-        if !socket.lpSockaddr.is_null()
-            && unsafe { (*socket.lpSockaddr).sa_family == AF_INET }
-        {
+        if !socket.lpSockaddr.is_null() && unsafe { (*socket.lpSockaddr).sa_family == AF_INET } {
             let address = unsafe {
                 (*socket.lpSockaddr.cast::<SOCKADDR_IN>())
                     .sin_addr
