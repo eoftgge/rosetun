@@ -69,6 +69,39 @@ impl RoutingBackend for UnusedRouting {
 }
 
 #[derive(Debug)]
+struct RevertTrackingRouting {
+    reverted: Sender<()>,
+}
+
+impl RoutingBackend for RevertTrackingRouting {
+    fn name(&self) -> &'static str {
+        "test-revert-tracking"
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binary: &Path,
+    ) -> Result<RoutingGuard, RoutingError> {
+        let reverted = self.reverted.clone();
+
+        Ok(RoutingGuard::new_with_authorizer(
+            |_| Ok(()),
+            move || {
+                reverted
+                    .send(())
+                    .expect("test observes routing protection teardown");
+                Ok(())
+            },
+        ))
+    }
+}
+
+#[derive(Debug)]
 struct AuthorizingRouting {
     spawned: Option<Receiver<()>>,
     authorized: Sender<TunnelInterface>,
@@ -304,6 +337,71 @@ impl EngineBackend for ExitedEngine {
     }
 }
 
+#[derive(Debug)]
+struct ReadyThenExitedProcess {
+    readiness_checked: bool,
+}
+
+impl EngineProcess for ReadyThenExitedProcess {
+    fn is_running(&mut self) -> Result<bool, EngineError> {
+        if self.readiness_checked {
+            Ok(false)
+        } else {
+            self.readiness_checked = true;
+            Ok(true)
+        }
+    }
+
+    fn traffic(&mut self) -> Result<Traffic, EngineError> {
+        Err(EngineError::StatsUnavailable)
+    }
+
+    fn stop(&mut self) -> Result<(), EngineError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct ReadyThenExitedEngine;
+
+impl EngineBackend for ReadyThenExitedEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        Ok(PathBuf::from("sing-box"))
+    }
+
+    fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        Ok(RenderedConfig {
+            file_name: "config.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+        })
+    }
+
+    fn spawn(
+        &self,
+        _binary: &Path,
+        _config: &RenderedConfig,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        Ok(Box::new(ReadyThenExitedProcess {
+            readiness_checked: false,
+        }))
+    }
+}
+
 fn connect_request() -> ConnectRequest {
     ConnectRequest {
         selection: Selection {
@@ -530,4 +628,44 @@ fn status_marks_the_session_failed_when_the_engine_returns_not_running() {
         ConnectionState::Failed { ref reason } if reason == "the engine process exited"
     ));
     assert!(status.since_unix.is_none());
+}
+
+#[test]
+fn engine_exit_keeps_kill_switch_active_until_explicit_disconnect() {
+    let (reverted, reverted_rx) = channel();
+
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ReadyThenExitedEngine));
+
+    let helper = Helper::new(
+        engines,
+        Box::new(RevertTrackingRouting { reverted }),
+    );
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+
+    helper
+        .connect(&request)
+        .expect("the tunnel completes phase-2 authorization before the engine exits");
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed { ref reason } if reason == "the engine process exited"
+    ));
+    assert!(
+        reverted_rx.try_recv().is_err(),
+        "engine failure must not remove kill-switch protection"
+    );
+
+    helper
+        .disconnect()
+        .expect("explicit disconnect tears down protection");
+
+    reverted_rx
+        .recv()
+        .expect("explicit disconnect removes kill-switch protection");
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Disconnected
+    ));
 }
