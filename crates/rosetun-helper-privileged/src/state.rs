@@ -72,6 +72,13 @@ impl Helper {
         let mut session = self.session()?;
 
         let state = self.with_status(|status| status.state.clone());
+        tracing::info!(
+            node = %request.node.id,
+            engine = %request.settings.engine.as_str(),
+            kill_switch = request.settings.kill_switch,
+            "starting tunnel connection"
+        );
+
         if !matches!(
             state,
             ConnectionState::Disconnected | ConnectionState::Failed { .. }
@@ -178,6 +185,8 @@ impl Session {
             .locate_binary()
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
+        tracing::debug!(engine = %backend.kind().as_str(), binary = %binary.display(), "engine binary located");
+
         let tunnel = settings
             .kill_switch
             .then(|| TunnelInterface::try_from(&settings.tun))
@@ -190,6 +199,10 @@ impl Session {
                 kill_switch: true,
             };
 
+            tracing::info!(
+                endpoint_count = plan.bypass.len(),
+                "preflighting and enabling bootstrap routing protection"
+            );
             self.routing
                 .preflight()
                 .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
@@ -201,12 +214,14 @@ impl Session {
             self.guard = Some(guard);
         }
 
+        tracing::info!(engine = %backend.kind().as_str(), "spawning tunnel engine");
         let process = backend
             .spawn(&binary, &config)
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
         self.process = Some(process);
 
         if let Some(tunnel) = tunnel.as_ref() {
+            tracing::debug!(alias = %tunnel.alias, ipv4 = %tunnel.ipv4, "waiting for tunnel readiness");
             self.wait_for_tunnel(tunnel)?;
         }
 
@@ -244,8 +259,20 @@ impl Session {
             })?;
 
             match guard.authorize_tunnel(tunnel) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    tracing::info!(
+                        alias = %tunnel.alias,
+                        ipv4 = %tunnel.ipv4,
+                        "tunnel readiness authorization completed"
+                    );
+                    return Ok(());
+                }
                 Err(error) if error.is_tunnel_not_ready() && Instant::now() < deadline => {
+                    tracing::debug!(
+                        alias = %tunnel.alias,
+                        %error,
+                        "tunnel is not ready yet; retrying"
+                    );
                     std::thread::sleep(TUNNEL_READY_POLL_INTERVAL);
                 }
                 Err(error) if error.is_tunnel_not_ready() => {

@@ -52,6 +52,7 @@ fn handle(mut connection: Connection, helper: Arc<Helper>) -> Result<(), String>
             return Err("client did not handshake".to_owned());
         }
 
+        tracing::debug!(request = ?body, "handling helper request");
         let response = dispatch(&body, &helper, &mut greeted);
         let fatal = matches!(
             response,

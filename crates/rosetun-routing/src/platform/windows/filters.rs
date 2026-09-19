@@ -23,7 +23,7 @@ use windows_sys::{
             FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
         },
     },
-    Win32::Networking::WinSock::{IPPROTO_ICMPV6, IPPROTO_UDP},
+    Win32::Networking::WinSock::IPPROTO_UDP,
     core::GUID,
 };
 
@@ -75,9 +75,7 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
     match rule.conditions.as_slice() {
         [] => {}
         [Condition::LocalInterface(value)] => {
-            unsafe {
-                luid.Value = *value;
-            }
+            luid.Value = *value;
             conditions.push(interface_condition(&mut luid));
         }
         [Condition::Loopback] => {
