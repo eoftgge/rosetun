@@ -1,4 +1,5 @@
 /target
-.idea
+/.idea
+/.aiassistant
 design/rosetun-vpn-client.html
 CONTEXT.md
