@@ -5,7 +5,7 @@ use super::{
     session::DynamicSession,
 };
 use crate::RoutingError;
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{FWP_ACTION_BLOCK, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FwpmFilterAdd0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0, FWP_V4_ADDR_AND_MASK, FWP_V6_ADDR_AND_MASK, FWP_V6_ADDR_MASK, FWP_V4_ADDR_MASK, FWP_BYTE_ARRAY16, FWP_BYTE_ARRAY16_TYPE, FWPM_DISPLAY_DATA0};
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{FWP_ACTION_BLOCK, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FwpmFilterAdd0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0, FWP_V4_ADDR_AND_MASK, FWP_V6_ADDR_AND_MASK, FWP_V6_ADDR_MASK, FWP_V4_ADDR_MASK, FWPM_DISPLAY_DATA0};
 use windows_sys::{
     Win32::NetworkManagement::{
         Ndis::NET_LUID_LH,
@@ -62,7 +62,13 @@ impl Drop for AppIdBlob {
 
 pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), RoutingError> {
     let mut luid = NET_LUID_LH::default();
-    let mut app_id = None;
+    let app_id = match rule.conditions.as_slice() {
+        [
+        Condition::Application(engine_binary),
+        Condition::RemoteAddress(_),
+        ] => Some(AppIdBlob::from_path(engine_binary)?),
+        _ => None,
+    };
     let mut ipv4 = FWP_V4_ADDR_AND_MASK {
         addr: 0,
         mask: u32::MAX,
@@ -90,10 +96,9 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
             ]);
         }
         [
-            Condition::Application(engine_binary),
-            Condition::RemoteAddress(endpoint),
+        Condition::Application(_),
+        Condition::RemoteAddress(endpoint),
         ] => {
-            app_id = Some(AppIdBlob::from_path(engine_binary)?);
             conditions.push(application_condition(
                 app_id.as_ref().expect("application ID was initialized"),
             ));
@@ -106,16 +111,6 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
         }
         _ => return Err(RoutingError::Unsupported),
     }
-
-    let filter = FWPM_FILTER0 {
-        layerKey: layer_key(rule.family),
-        subLayerKey: sublayer_key(),
-        action: action(rule.action),
-        weight: weight(rule.weight),
-        numFilterConditions: conditions.len() as u32,
-        filterCondition: conditions.as_mut_ptr(),
-        ..Default::default()
-    };
 
     let mut display_name = "Rosetun routing filter"
         .encode_utf16()
