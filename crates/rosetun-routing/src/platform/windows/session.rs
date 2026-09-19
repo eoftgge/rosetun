@@ -9,6 +9,8 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
 };
 use windows_sys::core::GUID;
 
+use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
+
 use super::{
     filters,
     policy::{self, BootstrapPolicy},
@@ -43,20 +45,32 @@ impl DynamicSession {
         };
         let mut handle = ptr::null_mut();
 
-        let status = unsafe { FwpmEngineOpen0(ptr::null(), 0, ptr::null(), &session, &mut handle) };
+        tracing::debug!("opening dynamic WFP engine session");
+        let status = unsafe {
+            FwpmEngineOpen0(
+                ptr::null(),
+                RPC_C_AUTHN_WINNT,
+                ptr::null(),
+                &session,
+                &mut handle,
+            )
+        };
         if status != 0 {
             return Err(wfp_error(status, "opening the dynamic WFP session"));
         }
 
+        tracing::debug!("dynamic WFP engine session opened");
         Ok(Self { handle })
     }
 
     pub(super) fn transaction(&self) -> Result<Transaction<'_>, RoutingError> {
+        tracing::debug!("starting WFP transaction");
         let status = unsafe { FwpmTransactionBegin0(self.handle, 0) };
         if status != 0 {
             return Err(wfp_error(status, "starting a WFP transaction"));
         }
 
+        tracing::debug!("WFP transaction started");
         Ok(Transaction {
             session: self,
             completed: false,
@@ -80,11 +94,14 @@ impl DynamicSession {
             providerData: empty_blob(),
             serviceName: ptr::null_mut(),
         };
+
+        tracing::debug!("adding Rosetun WFP provider");
         let status = unsafe { FwpmProviderAdd0(self.handle, &provider, ptr::null_mut()) };
         if status != 0 {
             return Err(wfp_error(status, "adding the Rosetun WFP provider"));
         }
 
+        tracing::debug!("Rosetun WFP provider added");
         let sublayer = FWPM_SUBLAYER0 {
             subLayerKey: SUBLAYER_KEY,
             displayData: display_data(&sublayer_name, &sublayer_description),
@@ -93,11 +110,14 @@ impl DynamicSession {
             providerData: empty_blob(),
             weight: SUBLAYER_WEIGHT,
         };
+
+        tracing::debug!("adding Rosetun WFP sublayer");
         let status = unsafe { FwpmSubLayerAdd0(self.handle, &sublayer, ptr::null_mut()) };
         if status != 0 {
             return Err(wfp_error(status, "adding the Rosetun WFP sublayer"));
         }
 
+        tracing::debug!("Rosetun WFP sublayer added");
         Ok(())
     }
 }
@@ -196,12 +216,14 @@ pub(super) struct Transaction<'session> {
 
 impl Transaction<'_> {
     pub(super) fn commit(mut self) -> Result<(), RoutingError> {
+        tracing::debug!("committing WFP transaction");
         let status = unsafe { FwpmTransactionCommit0(self.session.handle) };
         if status != 0 {
             return Err(wfp_error(status, "committing the WFP transaction"));
         }
 
         self.completed = true;
+        tracing::debug!("WFP transaction committed");
         Ok(())
     }
 }
