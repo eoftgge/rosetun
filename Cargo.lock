@@ -112,6 +112,7 @@ version = "0.1.0"
 dependencies = [
  "rosetun-config",
  "rosetun-ipc",
+ "serde_json",
  "thiserror",
  "tracing",
  "tracing-subscriber",
