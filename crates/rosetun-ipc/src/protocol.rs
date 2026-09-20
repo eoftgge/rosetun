@@ -1,7 +1,7 @@
 use rosetun_config::{LogLevel, Node, RuleSet, Selection, Settings, Status, Traffic};
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
