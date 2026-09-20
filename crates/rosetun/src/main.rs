@@ -12,6 +12,7 @@ enum Command {
     Status,
     Connect { request_path: String },
     Disconnect,
+    Shutdown,
 }
 
 fn main() -> std::process::ExitCode {
@@ -88,6 +89,16 @@ fn main() -> std::process::ExitCode {
                 std::process::ExitCode::FAILURE
             }
         },
+        Command::Shutdown => match client.shutdown() {
+            Ok(()) => {
+                println!("helper shut down");
+                std::process::ExitCode::SUCCESS
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to shut down helper");
+                std::process::ExitCode::FAILURE
+            }
+        },
     }
 }
 
@@ -108,8 +119,9 @@ fn parse_command() -> Result<Command, String> {
             Ok(Command::Connect { request_path })
         }
         Some("disconnect") if arguments.next().is_none() => Ok(Command::Disconnect),
+        Some("shutdown") if arguments.next().is_none() => Ok(Command::Shutdown),
         Some(command) => Err(format!("unknown or invalid command: {command}")),
-        command => Err(format!("unknown or invalid command: {command:?}"))
+        command => Err(format!("unknown or invalid command: {command:?}")),
     }
 }
 
@@ -123,6 +135,6 @@ fn read_connect_request(path: &Path) -> Result<ConnectRequest, String> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  rosetun [status]\n  rosetun connect <request.json>\n  rosetun disconnect"
+        "Usage:\n  rosetun [status]\n  rosetun connect <request.json>\n  rosetun disconnect\n  rosetun shutdown"
     );
 }

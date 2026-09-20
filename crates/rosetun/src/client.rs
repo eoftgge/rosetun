@@ -66,6 +66,10 @@ impl HelperClient {
         self.expect_ok(Request::Disconnect)
     }
 
+    pub fn shutdown(&mut self) -> Result<(), ClientError> {
+        self.expect_ok(Request::Shutdown)
+    }
+
     fn expect_ok(&mut self, request: Request) -> Result<(), ClientError> {
         match self.request(request)? {
             Response::Ok => Ok(()),
