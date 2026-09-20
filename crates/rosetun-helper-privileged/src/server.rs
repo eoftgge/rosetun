@@ -1,8 +1,8 @@
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
-use rosetun_ipc::{
-    Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request, Response,
-};
+use rosetun_ipc::{connect, Connection, ErrorCode, Frame, HelperError, Listener, Request, Response, PROTOCOL_VERSION};
 
 pub(crate) use crate::state::Helper;
 
@@ -10,7 +10,16 @@ const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn serve(listener: Listener, helper: Arc<Helper>) -> std::io::Result<()> {
     tracing::info!(endpoint = %listener.path().display(), "helper listener started");
+
+    let endpoint = listener.path().to_owned();
+    let (shutdown_tx, shutdown_rx) = channel();
+
     loop {
+        if shutdown_requested(&shutdown_rx) {
+            tracing::info!("helper shutdown completed");
+            return Ok(());
+        }
+
         let connection = match listener.accept() {
             Ok(connection) => connection,
             Err(error) => {
@@ -18,17 +27,31 @@ pub fn serve(listener: Listener, helper: Arc<Helper>) -> std::io::Result<()> {
                 continue;
             }
         };
+
         let helper = Arc::clone(&helper);
+        let shutdown_tx = shutdown_tx.clone();
+        let endpoint = endpoint.clone();
+
         std::thread::spawn(move || {
-            if let Err(error) = handle(connection, helper) {
+            if let Err(error) = handle(connection, helper, shutdown_tx, endpoint) {
                 tracing::warn!(%error, "the connection was closed with an error");
             }
         });
     }
 }
 
-fn handle(mut connection: Connection, helper: Arc<Helper>) -> Result<(), String> {
+fn shutdown_requested(receiver: &Receiver<()>) -> bool {
+    receiver.try_recv().is_ok()
+}
+
+fn handle(
+    mut connection: Connection,
+    helper: Arc<Helper>,
+    shutdown_tx: Sender<()>,
+    endpoint: PathBuf,
+) -> Result<(), String> {
     let mut greeted = false;
+
     loop {
         let frame = match connection.read() {
             Ok(Some(frame)) => frame,
@@ -68,9 +91,19 @@ fn handle(mut connection: Connection, helper: Arc<Helper>) -> Result<(), String>
         if fatal {
             return Err("protocol version mismatch".to_owned());
         }
+
         if shutdown {
             tracing::info!("shutdown requested");
-            std::process::exit(0);
+
+            shutdown_tx
+                .send(())
+                .map_err(|_| "failed to signal helper shutdown".to_owned())?;
+
+            // Wake the blocking accept() call. The connection itself is only
+            // a wake-up mechanism and carries no protocol frame.
+            let _ = connect(&endpoint);
+
+            return Ok(());
         }
     }
 }

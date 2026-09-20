@@ -13,11 +13,14 @@ pub enum ConnectionState {
     Failed {
         reason: String,
     },
+    FailedProtected {
+        reason: String,
+    },
 }
 
 impl ConnectionState {
     pub fn is_active(&self) -> bool {
-        matches!(self, Self::Connected)
+        matches!(self, Self::Connected | Self::FailedProtected { .. })
     }
 
     pub fn is_transitional(&self) -> bool {

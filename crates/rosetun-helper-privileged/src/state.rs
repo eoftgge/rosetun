@@ -45,9 +45,10 @@ impl Helper {
     }
 
     pub fn status(&self) -> Status {
-        if self.with_status(|status| status.state.is_active())
+        if self.with_status(|status| matches!(status.state, ConnectionState::Connected))
             && let Ok(mut session) = self.session.try_lock()
         {
+            let protected = session.guard.is_some();
             let exited = match session.process.as_mut() {
                 Some(process) => match process.is_running() {
                     Ok(true) => None,
@@ -58,9 +59,13 @@ impl Helper {
             };
 
             if let Some(reason) = exited {
-                tracing::warn!(%reason, "the engine terminated itself");
+                tracing::warn!(%reason, protected, "the engine terminated itself");
                 self.with_status(|status| {
-                    status.state = ConnectionState::Failed { reason };
+                    status.state = if protected {
+                        ConnectionState::FailedProtected { reason }
+                    } else {
+                        ConnectionState::Failed { reason }
+                    };
                     status.since_unix = None;
                 });
             }

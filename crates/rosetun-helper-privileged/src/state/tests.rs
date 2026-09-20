@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
-
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use rosetun_config::{
     EngineKind, NodeId, Outbound, RuleId, RuleSetId, RuleTarget, Selection, SubscriptionId,
     Traffic, VlessParams,
@@ -304,6 +304,99 @@ impl EngineBackend for ExitedEngine {
     }
 }
 
+#[derive(Debug)]
+struct RunningThenExitedProcess {
+    running: Arc<AtomicBool>,
+}
+
+impl EngineProcess for RunningThenExitedProcess {
+    fn is_running(&mut self) -> Result<bool, EngineError> {
+        Ok(self.running.load(Ordering::Acquire))
+    }
+
+    fn traffic(&mut self) -> Result<Traffic, EngineError> {
+        Err(EngineError::StatsUnavailable)
+    }
+
+    fn stop(&mut self) -> Result<(), EngineError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct RunningThenExitedEngine {
+    running: Arc<AtomicBool>,
+}
+
+impl EngineBackend for RunningThenExitedEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        Ok(PathBuf::from("sing-box"))
+    }
+
+    fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        Ok(RenderedConfig {
+            file_name: "config.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+        })
+    }
+
+    fn spawn(
+        &self,
+        _binary: &Path,
+        _config: &RenderedConfig,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        Ok(Box::new(RunningThenExitedProcess {
+            running: Arc::clone(&self.running),
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct CountingRouting {
+    reverted: Arc<AtomicUsize>,
+}
+
+impl RoutingBackend for CountingRouting {
+    fn name(&self) -> &'static str {
+        "test-counting"
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binary: &Path,
+    ) -> Result<RoutingGuard, RoutingError> {
+        let reverted = Arc::clone(&self.reverted);
+
+        Ok(RoutingGuard::new_with_authorizer(
+            |_tunnel| Ok(()),
+            move || {
+                reverted.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        ))
+    }
+}
+
 fn connect_request() -> ConnectRequest {
     ConnectRequest {
         selection: Selection {
@@ -530,4 +623,98 @@ fn status_marks_the_session_failed_when_the_engine_returns_not_running() {
         ConnectionState::Failed { ref reason } if reason == "the engine process exited"
     ));
     assert!(status.since_unix.is_none());
+}
+
+#[test]
+fn status_reports_failed_protected_when_connected_engine_exits() {
+    let running = Arc::new(AtomicBool::new(true));
+    let reverted = Arc::new(AtomicUsize::new(0));
+
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(RunningThenExitedEngine {
+        running: Arc::clone(&running),
+    }));
+
+    let helper = Helper::new(
+        engines,
+        Box::new(CountingRouting {
+            reverted: Arc::clone(&reverted),
+        }),
+    );
+
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.tun.name = "rosetun-test".to_owned();
+    request.settings.tun.ipv4 = "172.29.10.1/30".to_owned();
+
+    helper
+        .connect(&request)
+        .expect("connection succeeds while the engine is running");
+
+    running.store(false, Ordering::Release);
+
+    let status = helper.status();
+    assert!(matches!(
+        status.state,
+        ConnectionState::FailedProtected { ref reason }
+            if reason == "the engine process exited"
+    ));
+    assert_eq!(
+        reverted.load(Ordering::Acquire),
+        0,
+        "routing protection must remain active after engine failure"
+    );
+
+    helper
+        .disconnect()
+        .expect("disconnect tears down failed protected state");
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Disconnected
+    ));
+    assert_eq!(
+        reverted.load(Ordering::Acquire),
+        1,
+        "disconnect must revert the routing protection"
+    );
+}
+
+#[test]
+fn disconnect_from_failed_protected_state_returns_to_disconnected() {
+    let running = Arc::new(AtomicBool::new(true));
+
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(RunningThenExitedEngine {
+        running: Arc::clone(&running),
+    }));
+
+    let helper = Helper::new(
+        engines,
+        Box::new(CountingRouting {
+            reverted: Arc::new(AtomicUsize::new(0)),
+        }),
+    );
+
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.tun.name = "rosetun-test".to_owned();
+    request.settings.tun.ipv4 = "172.29.10.1/30".to_owned();
+
+    helper.connect(&request).expect("connection succeeds");
+    running.store(false, Ordering::Release);
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { .. }
+    ));
+
+    helper
+        .disconnect()
+        .expect("disconnect succeeds from failed protected state");
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Disconnected
+    ));
 }
