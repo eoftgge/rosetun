@@ -118,6 +118,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_observed_windows_1_14_1_version_output() {
+        let output = include_str!(
+            "../tests/fixtures/version-1.14.1-windows.txt"
+        );
+
+        assert_eq!(
+            parse_version(output),
+            Some(SUPPORTED_SING_BOX_VERSION),
+            "the installed Windows build must match the pinned version"
+        );
+    }
+
+    #[test]
     fn parses_multiline_output() {
         assert_eq!(
             parse_version("sing-box version 1.14.1\n\nEnvironment: go1.x windows/amd64\n"),
