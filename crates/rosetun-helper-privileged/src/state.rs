@@ -23,6 +23,7 @@ struct Session {
     routing: Box<dyn RoutingBackend>,
     process: Option<Box<dyn EngineProcess>>,
     guard: Option<RoutingGuard>,
+    stopping: bool,
 }
 
 impl std::fmt::Debug for Helper {
@@ -40,6 +41,7 @@ impl Helper {
                 routing,
                 process: None,
                 guard: None,
+                stopping: false,
             }),
         }
     }
@@ -125,18 +127,41 @@ impl Helper {
         Ok(())
     }
 
+    pub fn shutdown(&self) {
+        tracing::info!("starting helper session teardown");
+        let mut session = self
+            .session
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        session.stopping = true;
+        session.teardown();
+        self.with_status(|status| *status = Status::default());
+        tracing::info!("helper session teardown completed");
+    }
+
     fn session(&self) -> Result<MutexGuard<'_, Session>, HelperError> {
-        match self.session.try_lock() {
-            Ok(session) => Ok(session),
-            Err(TryLockError::WouldBlock) => Err(HelperError::new(
-                ErrorCode::Busy,
-                "another tunnel operation is in progress",
-            )),
-            Err(TryLockError::Poisoned(_)) => Err(HelperError::new(
-                ErrorCode::Internal,
-                "helper state poisoned by an earlier panic",
-            )),
+        let session = match self.session.try_lock() {
+            Ok(session) => session,
+            Err(TryLockError::WouldBlock) => {
+                return Err(HelperError::new(
+                    ErrorCode::Busy,
+                    "another tunnel operation is in progress",
+                ));
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(HelperError::new(
+                    ErrorCode::Internal,
+                    "helper state poisoned by an earlier panic",
+                ));
+            }
+        };
+        if session.stopping {
+            return Err(HelperError::new(
+                ErrorCode::InvalidState,
+                "helper is shutting down",
+            ));
         }
+        Ok(session)
     }
 
     fn with_status<T>(&self, apply: impl FnOnce(&mut Status) -> T) -> T {

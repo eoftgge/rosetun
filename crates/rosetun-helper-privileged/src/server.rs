@@ -1,54 +1,67 @@
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Sender, channel};
 
-use rosetun_ipc::{connect, Connection, ErrorCode, Frame, HelperError, Listener, Request, Response, PROTOCOL_VERSION};
+use rosetun_ipc::{Connection, ErrorCode, Frame, HelperError, Listener, Request, Response, PROTOCOL_VERSION};
 
 pub(crate) use crate::state::Helper;
 
 const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+enum ServerEvent {
+    Accepted(Connection),
+    Shutdown,
+}
+
 pub fn serve(listener: Listener, helper: Arc<Helper>) -> std::io::Result<()> {
     tracing::info!(endpoint = %listener.path().display(), "helper listener started");
 
-    let endpoint = listener.path().to_owned();
-    let (shutdown_tx, shutdown_rx) = channel();
+    let (event_tx, event_rx) = channel::<ServerEvent>();
+    let accept_tx = event_tx.clone();
 
-    loop {
-        if shutdown_requested(&shutdown_rx) {
-            tracing::info!("helper shutdown completed");
-            return Ok(());
+    std::thread::Builder::new()
+        .name("rosetun-ipc-accept".to_owned())
+        .spawn(move || {
+            loop {
+                match listener.accept() {
+                    Ok(connection) => {
+                        if accept_tx.send(ServerEvent::Accepted(connection)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "failed to accept connection");
+                    }
+                }
+            }
+        })?;
+
+    while let Ok(event) = event_rx.recv() {
+        match event {
+            ServerEvent::Accepted(connection) => {
+                let helper = Arc::clone(&helper);
+                let event_tx = event_tx.clone();
+                std::thread::spawn(move || {
+                    if let Err(error) = handle(connection, helper, event_tx) {
+                        tracing::warn!(%error, "the connection was closed with an error");
+                    }
+                });
+            }
+            ServerEvent::Shutdown => {
+                helper.shutdown();
+                tracing::info!("helper shutdown completed");
+                return Ok(());
+            }
         }
-
-        let connection = match listener.accept() {
-            Ok(connection) => connection,
-            Err(error) => {
-                tracing::error!(%error, "failed to accept connection");
-                continue;
-            }
-        };
-
-        let helper = Arc::clone(&helper);
-        let shutdown_tx = shutdown_tx.clone();
-        let endpoint = endpoint.clone();
-
-        std::thread::spawn(move || {
-            if let Err(error) = handle(connection, helper, shutdown_tx, endpoint) {
-                tracing::warn!(%error, "the connection was closed with an error");
-            }
-        });
     }
-}
 
-fn shutdown_requested(receiver: &Receiver<()>) -> bool {
-    receiver.try_recv().is_ok()
+    helper.shutdown();
+    Err(std::io::Error::other("helper event channel closed unexpectedly"))
 }
 
 fn handle(
     mut connection: Connection,
     helper: Arc<Helper>,
-    shutdown_tx: Sender<()>,
-    endpoint: PathBuf,
+    event_tx: Sender<ServerEvent>,
 ) -> Result<(), String> {
     let mut greeted = false;
 
@@ -94,15 +107,9 @@ fn handle(
 
         if shutdown {
             tracing::info!("shutdown requested");
-
-            shutdown_tx
-                .send(())
+            event_tx
+                .send(ServerEvent::Shutdown)
                 .map_err(|_| "failed to signal helper shutdown".to_owned())?;
-
-            // Wake the blocking accept() call. The connection itself is only
-            // a wake-up mechanism and carries no protocol frame.
-            let _ = connect(&endpoint);
-
             return Ok(());
         }
     }

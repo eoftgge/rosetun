@@ -95,82 +95,51 @@ impl EngineBackend for SingBoxBackend {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        if let Some(stdout) = child.stdout.take() {
-            spawn_output_drain(stdout, "rosetun.engine.singbox.stdout");
+        if let Some(stdout) = child.stdout.take() &&
+            let Err(error) = spawn_output_drain(stdout, "stdout")
+        {
+            stop_failed_spawn(&mut child);
+            return Err(error.into());
         }
-        if let Some(stderr) = child.stderr.take() {
-            spawn_output_drain(stderr, "rosetun.engine.singbox.stderr");
+        if let Some(stderr) = child.stderr.take() &&
+            let Err(error) = spawn_output_drain(stderr, "stderr")
+        {
+            stop_failed_spawn(&mut child);
+            return Err(error.into());
         }
 
         Ok(Box::new(SingBoxProcess { child }))
     }
 }
 
-fn spawn_output_drain<R>(reader: R, target: &'static str)
+fn stop_failed_spawn(child: &mut Child) {
+    if let Err(error) = child.kill() {
+        tracing::error!(%error, "failed to kill sing-box after output reader startup failed");
+    }
+    if let Err(error) = child.wait() {
+        tracing::error!(%error, "failed to reap sing-box after output reader startup failed");
+    }
+}
+
+fn spawn_output_drain<R>(reader: R, stream: &'static str) -> std::io::Result<()>
 where
     R: Read + Send + 'static,
 {
-    let _ = thread::Builder::new()
-        .name(target.to_owned())
+    thread::Builder::new()
+        .name(format!("sing-box-{stream}"))
         .spawn(move || {
-            let reader = BufReader::new(reader);
-
-            for line in reader.lines() {
+            for line in BufReader::new(reader).lines() {
                 match line {
-                    Ok(line) => match target {
-                        "rosetun.engine.singbox.stdout" => {
-                            tracing::info!(
-                                target: "rosetun.engine.singbox.stdout",
-                                "{line}"
-                            );
-                        }
-                        "rosetun.engine.singbox.stderr" => {
-                            tracing::info!(
-                                target: "rosetun.engine.singbox.stderr",
-                                "{line}"
-                            );
-                        }
-                        _ => unreachable!("unknown sing-box output target"),
-                    },
+                    Ok(line) => tracing::info!(stream, "{line}"),
                     Err(error) => {
-                        match target {
-                            "rosetun.engine.singbox.stdout" => {
-                                tracing::debug!(
-                                    target: "rosetun.engine.singbox.stdout",
-                                    %error,
-                                    "sing-box output stream closed with a read error"
-                                );
-                            }
-                            "rosetun.engine.singbox.stderr" => {
-                                tracing::debug!(
-                                    target: "rosetun.engine.singbox.stderr",
-                                    %error,
-                                    "sing-box output stream closed with a read error"
-                                );
-                            }
-                            _ => unreachable!("unknown sing-box output target"),
-                        }
+                        tracing::debug!(stream, %error, "sing-box output stream closed with a read error");
                         break;
                     }
                 }
             }
-
-            match target {
-                "rosetun.engine.singbox.stdout" => {
-                    tracing::debug!(
-                        target: "rosetun.engine.singbox.stdout",
-                        "sing-box output stream closed"
-                    );
-                }
-                "rosetun.engine.singbox.stderr" => {
-                    tracing::debug!(
-                        target: "rosetun.engine.singbox.stderr",
-                        "sing-box output stream closed"
-                    );
-                }
-                _ => unreachable!("unknown sing-box output target"),
-            }
-        });
+            tracing::debug!(stream, "sing-box output stream closed");
+        })
+        .map(|_| ())
 }
 
 fn find_in_neighbours() -> Option<PathBuf> {
