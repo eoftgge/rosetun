@@ -18,6 +18,11 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
     fn name(&self) -> &'static str;
     fn preflight(&self) -> Result<(), RoutingError>;
 
+    /// Whether an adapter with this alias already exists before engine startup.
+    fn tunnel_alias_exists(&self, _alias: &str) -> Result<bool, RoutingError> {
+        Ok(false)
+    }
+
     /// Installs bootstrap protection before the engine starts. The returned
     /// guard owns the platform protection session until disconnect.
     fn begin_protection(

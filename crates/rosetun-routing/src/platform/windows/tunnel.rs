@@ -5,7 +5,7 @@ use std::{
 };
 
 use windows_sys::Win32::{
-    Foundation::ERROR_BUFFER_OVERFLOW,
+    Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_FILE_NOT_FOUND, ERROR_NOT_FOUND},
     NetworkManagement::{
         IpHelper::{ConvertInterfaceAliasToLuid, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH},
         Ndis::{IfOperStatusUp, NET_LUID_LH},
@@ -40,6 +40,20 @@ impl Eq for TunnelLuid {}
 impl TunnelLuid {
     pub(super) fn value(self) -> u64 {
         unsafe { self.0.Value }
+    }
+}
+
+pub(super) fn alias_exists(alias: &str) -> Result<bool, RoutingError> {
+    let mut luid = NET_LUID_LH::default();
+    let status = unsafe { ConvertInterfaceAliasToLuid(wide(alias).as_ptr(), &mut luid) };
+
+    match status {
+        0 => Ok(true),
+        ERROR_FILE_NOT_FOUND | ERROR_NOT_FOUND => Ok(false),
+        code => Err(RoutingError::Tun {
+            name: alias.to_owned(),
+            reason: format!("could not check whether the adapter exists (Windows error {code})"),
+        }),
     }
 }
 

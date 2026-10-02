@@ -223,6 +223,21 @@ impl Session {
             .transpose()
             .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
 
+        if self
+            .routing
+            .tunnel_alias_exists(&settings.tun.name)
+            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?
+        {
+            return Err(HelperError::new(
+                ErrorCode::EngineFailed,
+                format!(
+                    "tunnel adapter {} already exists before engine startup; \
+                     stop the previous engine and remove the stale adapter before retrying",
+                    settings.tun.name
+                ),
+            ));
+        }
+
         if settings.kill_switch {
             let plan = RoutingPlan {
                 bypass: resolve(&node.server, node.port)?,
@@ -253,6 +268,20 @@ impl Session {
         if let Some(tunnel) = tunnel.as_ref() {
             tracing::debug!(alias = %tunnel.alias, ipv4 = %tunnel.ipv4, "waiting for tunnel readiness");
             self.wait_for_tunnel(tunnel)?;
+
+            let running = self
+                .process
+                .as_mut()
+                .expect("engine process was stored before tunnel readiness")
+                .is_running()
+                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+
+            if !running {
+                return Err(HelperError::new(
+                    ErrorCode::EngineFailed,
+                    "engine exited during tunnel readiness",
+                ));
+            }
         }
 
         Ok(())
