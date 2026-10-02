@@ -453,10 +453,6 @@ fn status_answers_while_connect_holds_the_session() {
         .expect("test routing plan mutex is not poisoned")
         .clone()
         .expect("routing receives a protection plan");
-    assert_eq!(
-        plan.bypass,
-        vec!["127.0.0.1".parse::<IpAddr>().expect("valid test address")]
-    );
     assert!(plan.kill_switch);
 
     assert!(matches!(helper.status().state, ConnectionState::Connecting));

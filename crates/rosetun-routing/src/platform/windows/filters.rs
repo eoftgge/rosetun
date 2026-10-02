@@ -65,13 +65,15 @@ impl Drop for AppIdBlob {
 
 pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), RoutingError> {
     let mut luid = NET_LUID_LH::default();
-    let app_id = match rule.conditions.as_slice() {
-        [
-            Condition::Application(engine_binary),
-            Condition::RemoteAddress(_),
-        ] => Some(AppIdBlob::from_path(engine_binary)?),
-        _ => None,
-    };
+    let app_id = rule
+        .conditions
+        .iter()
+        .find_map(|condition| match condition {
+            Condition::Application(path) => Some(path.as_path()),
+            _ => None,
+        })
+        .map(AppIdBlob::from_path)
+        .transpose()?;
     let mut ipv4 = FWP_V4_ADDR_AND_MASK {
         addr: 0,
         mask: u32::MAX,

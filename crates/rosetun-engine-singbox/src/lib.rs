@@ -70,9 +70,9 @@ impl EngineBackend for SingBoxBackend {
                 return Err(EngineError::BinaryNotFound(binary.display().to_string()));
             }
             None => find_in_neighbours()
-                .or_else(find_in_path)
                 .ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))?,
         };
+        let binary = std::fs::canonicalize(binary)?;
 
         version::check(&binary)?;
         Ok(binary)
@@ -175,13 +175,6 @@ fn find_in_neighbours() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let candidate = exe.parent()?.join(BINARY);
     candidate.is_file().then_some(candidate)
-}
-
-fn find_in_path() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(BINARY))
-        .find(|candidate| candidate.is_file())
 }
 
 #[derive(Debug)]

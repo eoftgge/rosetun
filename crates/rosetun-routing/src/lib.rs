@@ -1,5 +1,3 @@
-use std::net::IpAddr;
-
 pub mod errors;
 pub mod platform;
 
@@ -8,8 +6,6 @@ pub use platform::backend;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutingPlan {
-    /// VPN server addresses that must remain reachable while protection is active.
-    pub bypass: Vec<IpAddr>,
     /// Whether the platform protection layer must prevent direct internet access.
     pub kill_switch: bool,
 }

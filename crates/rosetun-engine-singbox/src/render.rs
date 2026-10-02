@@ -191,10 +191,16 @@ pub(crate) fn route_section(
     rules: &RuleSet,
     capabilities: RuleCapabilities,
 ) -> (Value, Vec<RuleId>) {
-    let mut route_rules = vec![json!({
-        "action": "sniff",
-        "sniffer": ["http", "tls", "quic"],
-    })];
+    let mut route_rules = vec![
+        json!({
+            "action": "sniff",
+            "sniffer": ["http", "tls", "quic", "dns"],
+        }),
+        json!({
+            "protocol": "dns",
+            "action": "hijack-dns",
+        }),
+    ];
     let mut unsupported = Vec::new();
 
     for rule in rules.enabled() {
@@ -204,6 +210,12 @@ pub(crate) fn route_section(
             unsupported.push(rule.id.clone());
         }
     }
+
+    route_rules.push(json!({
+        "ip_is_private": true,
+        "action": "route",
+        "outbound": TAG_DIRECT,
+    }));
 
     let final_outbound = match rules.default_target {
         RuleTarget::Proxy => TAG_PROXY,

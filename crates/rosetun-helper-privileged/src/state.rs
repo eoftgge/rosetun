@@ -187,9 +187,22 @@ impl Session {
             )
         })?;
 
+        let resolved_node = if settings.engine == rosetun_config::EngineKind::SingBox {
+            let addresses = resolve(&node.server, node.port)?;
+            let endpoint = select_endpoint(&addresses)?;
+            tracing::info!(
+                server = %node.server,
+                %endpoint,
+                "selected engine endpoint"
+            );
+            Some(node_with_endpoint(node, endpoint))
+        } else {
+            None
+        };
+
         let config = backend
             .render(&RenderRequest {
-                node,
+                node: resolved_node.as_ref().unwrap_or(node),
                 rules,
                 settings,
             })
@@ -224,15 +237,9 @@ impl Session {
             .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
 
         if settings.kill_switch {
-            let plan = RoutingPlan {
-                bypass: resolve(&node.server, node.port)?,
-                kill_switch: true,
-            };
+            let plan = RoutingPlan { kill_switch: true };
 
-            tracing::info!(
-                endpoint_count = plan.bypass.len(),
-                "preflighting and enabling bootstrap routing protection"
-            );
+            tracing::info!("preflighting and enabling bootstrap routing protection");
             self.routing
                 .preflight()
                 .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
@@ -439,6 +446,46 @@ fn resolve(server: &str, port: u16) -> Result<Vec<IpAddr>, HelperError> {
     }
 
     Ok(addresses)
+}
+
+fn select_endpoint(addresses: &[IpAddr]) -> Result<IpAddr, HelperError> {
+    addresses
+        .iter()
+        .copied()
+        .find(IpAddr::is_ipv4)
+        .or_else(|| addresses.first().copied())
+        .ok_or_else(|| {
+            HelperError::new(
+                ErrorCode::RoutingFailed,
+                "VPN endpoint resolved to no addresses",
+            )
+        })
+}
+
+fn node_with_endpoint(node: &Node, endpoint: IpAddr) -> Node {
+    use rosetun_config::{TlsMode, Transport};
+
+    let mut prepared = node.clone();
+    if node.server.parse::<IpAddr>().is_err() {
+        match &mut prepared.stream.tls {
+            TlsMode::Tls(params) => {
+                params.sni.get_or_insert_with(|| node.server.clone());
+            }
+            TlsMode::Reality(params) => {
+                params.sni.get_or_insert_with(|| node.server.clone());
+            }
+            TlsMode::Plain => {}
+        }
+
+        match &mut prepared.stream.transport {
+            Transport::Ws { host, .. } | Transport::HttpUpgrade { host, .. } => {
+                host.get_or_insert_with(|| node.server.clone());
+            }
+            Transport::Tcp | Transport::Grpc { .. } => {}
+        }
+    }
+    prepared.server = endpoint.to_string();
+    prepared
 }
 
 fn now_unix() -> u64 {

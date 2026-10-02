@@ -57,20 +57,18 @@ pub(super) struct BootstrapPolicy {
 }
 
 impl BootstrapPolicy {
-    /// Builds phase-1 protection, which is installed before spawning the
-    /// engine. The endpoint exception is deliberately restricted to the engine
-    /// executable, so no unrelated application can bypass the kill switch.
-    pub(super) fn from_plan(plan: &RoutingPlan, engine_binary: &Path) -> Self {
-        let mut rules = Vec::with_capacity(plan.bypass.len() + 5);
+    /// Builds phase-1 protection before spawning the engine.
+    ///
+    /// The engine enforces routing policy and may reach any destination.
+    /// WFP identifies the exemption by executable path, not by process ID.
+    pub(super) fn from_plan(_plan: &RoutingPlan, engine_binary: &Path) -> Self {
+        let mut rules = Vec::with_capacity(7);
 
-        for address in &plan.bypass {
+        for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
             rules.push(Rule {
-                family: address_family(*address),
+                family,
                 action: Action::Allow,
-                conditions: vec![
-                    Condition::Application(engine_binary.to_owned()),
-                    Condition::RemoteAddress(*address),
-                ],
+                conditions: vec![Condition::Application(engine_binary.to_owned())],
                 weight: BOOTSTRAP_ALLOW_WEIGHT,
             });
         }
@@ -131,13 +129,6 @@ fn block_rule(family: AddressFamily) -> Rule {
     }
 }
 
-fn address_family(address: IpAddr) -> AddressFamily {
-    match address {
-        IpAddr::V4(_) => AddressFamily::Ipv4,
-        IpAddr::V6(_) => AddressFamily::Ipv6,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -149,13 +140,7 @@ mod tests {
     use crate::RoutingPlan;
 
     fn plan() -> RoutingPlan {
-        RoutingPlan {
-            bypass: vec![
-                IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
-                IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10)),
-            ],
-            kill_switch: true,
-        }
+        RoutingPlan { kill_switch: true }
     }
 
     #[test]
