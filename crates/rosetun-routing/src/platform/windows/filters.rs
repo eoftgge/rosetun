@@ -1,4 +1,4 @@
-use std::{net::IpAddr, path::Path, ptr};
+use std::{path::Path, ptr};
 
 use super::{
     policy::{Action, AddressFamily, Condition, Rule},
@@ -6,8 +6,7 @@ use super::{
 };
 use crate::RoutingError;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FWP_ACTION_BLOCK, FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK,
-    FWP_V6_ADDR_MASK, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FWPM_DISPLAY_DATA0,
+    FWP_ACTION_BLOCK, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FWPM_DISPLAY_DATA0,
     FwpmFilterAdd0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
 };
 use windows_sys::{
@@ -18,7 +17,7 @@ use windows_sys::{
             FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0, FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ALL_SET,
             FWP_UINT8, FWP_UINT16, FWP_UINT32, FWP_UINT64, FWP_VALUE0, FWP_VALUE0_0, FWPM_ACTION0,
             FWPM_CONDITION_IP_LOCAL_INTERFACE, FWPM_CONDITION_IP_LOCAL_PORT,
-            FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_ADDRESS,
+            FWPM_CONDITION_IP_PROTOCOL,
             FWPM_CONDITION_IP_REMOTE_PORT, FWPM_FILTER_CONDITION0, FWPM_FILTER0,
             FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
         },
@@ -65,27 +64,15 @@ impl Drop for AppIdBlob {
 
 pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), RoutingError> {
     let mut luid = NET_LUID_LH::default();
-    let app_id = rule
-        .conditions
-        .iter()
-        .find_map(|condition| match condition {
-            Condition::Application(path) => Some(path.as_path()),
-            _ => None,
-        })
-        .map(AppIdBlob::from_path)
-        .transpose()?;
-    let mut ipv4 = FWP_V4_ADDR_AND_MASK {
-        addr: 0,
-        mask: u32::MAX,
-    };
-    let mut ipv6 = FWP_V6_ADDR_AND_MASK {
-        addr: [0; 16],
-        prefixLength: 128,
-    };
+    let app_id: AppIdBlob;
     let mut conditions = Vec::with_capacity(3);
 
     match rule.conditions.as_slice() {
         [] => {}
+        [Condition::Application(engine_binary)] => {
+            app_id = AppIdBlob::from_path(engine_binary)?;
+            conditions.push(application_condition(&app_id));
+        }
         [Condition::LocalInterface(value)] => {
             luid.Value = *value;
             conditions.push(interface_condition(&mut luid));
@@ -99,20 +86,6 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
                 port_condition(FWPM_CONDITION_IP_LOCAL_PORT, DHCP_CLIENT_PORT),
                 port_condition(FWPM_CONDITION_IP_REMOTE_PORT, DHCP_SERVER_PORT),
             ]);
-        }
-        [
-            Condition::Application(_),
-            Condition::RemoteAddress(endpoint),
-        ] => {
-            conditions.push(application_condition(
-                app_id.as_ref().expect("application ID was initialized"),
-            ));
-            conditions.push(remote_address_condition(
-                rule.family,
-                *endpoint,
-                &mut ipv4,
-                &mut ipv6,
-            )?);
         }
         _ => return Err(RoutingError::Unsupported),
     }
@@ -166,47 +139,6 @@ fn application_condition(app_id: &AppIdBlob) -> FWPM_FILTER_CONDITION0 {
             },
         },
     }
-}
-
-fn remote_address_condition(
-    family: AddressFamily,
-    endpoint: IpAddr,
-    ipv4: &mut FWP_V4_ADDR_AND_MASK,
-    ipv6: &mut FWP_V6_ADDR_AND_MASK,
-) -> Result<FWPM_FILTER_CONDITION0, RoutingError> {
-    let value = match (family, endpoint) {
-        (AddressFamily::Ipv4, IpAddr::V4(address)) => {
-            ipv4.addr = u32::from_be_bytes(address.octets());
-
-            FWP_CONDITION_VALUE0 {
-                r#type: FWP_V4_ADDR_MASK,
-                Anonymous: FWP_CONDITION_VALUE0_0 { v4AddrMask: ipv4 },
-            }
-        }
-        (AddressFamily::Ipv6, IpAddr::V6(address)) => {
-            ipv6.addr = address.octets();
-
-            FWP_CONDITION_VALUE0 {
-                r#type: FWP_V6_ADDR_MASK,
-                Anonymous: FWP_CONDITION_VALUE0_0 { v6AddrMask: ipv6 },
-            }
-        }
-        _ => return Err(RoutingError::Unsupported),
-    };
-
-    tracing::debug!(
-        ipv4_addr = ipv4.addr,
-        ipv4_mask = ipv4.mask,
-        ipv4_addr_hex = format_args!("{:#010x}", ipv4.addr),
-        ipv4_mask_hex = format_args!("{:#010x}", ipv4.mask),
-        "prepared IPv4 WFP address condition"
-    );
-
-    Ok(FWPM_FILTER_CONDITION0 {
-        fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
-        matchType: FWP_MATCH_EQUAL,
-        conditionValue: value,
-    })
 }
 
 fn layer_key(family: AddressFamily) -> GUID {

@@ -1,5 +1,4 @@
 use std::{
-    net::IpAddr,
     path::{Path, PathBuf},
 };
 
@@ -30,8 +29,6 @@ pub(super) enum Action {
 pub(super) enum Condition {
     /// Limits endpoint access to the selected engine executable.
     Application(PathBuf),
-    /// Matches one exact remote IPv4 or IPv6 address.
-    RemoteAddress(IpAddr),
     /// Matches loopback traffic.
     Loopback,
     /// Matches the client side of DHCPv4: UDP port 68 to UDP port 67.
@@ -132,7 +129,6 @@ fn block_rule(family: AddressFamily) -> Rule {
 #[cfg(test)]
 mod tests {
     use std::{
-        net::{IpAddr, Ipv4Addr, Ipv6Addr},
         path::Path,
     };
 
@@ -152,16 +148,12 @@ mod tests {
             policy.rules[0].conditions,
             vec![
                 Condition::Application(engine.to_owned()),
-                Condition::RemoteAddress(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10))),
             ]
         );
         assert_eq!(
             policy.rules[1].conditions,
             vec![
                 Condition::Application(engine.to_owned()),
-                Condition::RemoteAddress(IpAddr::V6(Ipv6Addr::new(
-                    0x2001, 0xdb8, 0, 0, 0, 0, 0, 10
-                ))),
             ]
         );
     }
