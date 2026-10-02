@@ -611,7 +611,7 @@ mod tests {
             rules: &rule_set,
             settings: &settings,
         })
-            .expect("config rendered");
+        .expect("config rendered");
         assert!(rendered.unsupported.is_empty());
 
         let config: Value = serde_json::from_slice(&rendered.body).expect("valid JSON");

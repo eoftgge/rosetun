@@ -1,6 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use crate::RoutingPlan;
 
@@ -128,9 +126,7 @@ fn block_rule(family: AddressFamily) -> Rule {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::Path,
-    };
+    use std::path::Path;
 
     use super::{Action, AddressFamily, BootstrapPolicy, Condition, tunnel_authorization};
     use crate::RoutingPlan;
@@ -146,15 +142,11 @@ mod tests {
 
         assert_eq!(
             policy.rules[0].conditions,
-            vec![
-                Condition::Application(engine.to_owned()),
-            ]
+            vec![Condition::Application(engine.to_owned()),]
         );
         assert_eq!(
             policy.rules[1].conditions,
-            vec![
-                Condition::Application(engine.to_owned()),
-            ]
+            vec![Condition::Application(engine.to_owned()),]
         );
     }
 
