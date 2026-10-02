@@ -414,6 +414,87 @@ mod tests {
     }
 
     #[test]
+    fn sniff_precedes_every_domain_rule() {
+        let mut rule_set = rules();
+        rule_set.rules = vec![
+            Rule {
+                id: RuleId::new("exact"),
+                enabled: true,
+                matcher: RuleMatcher::Domain(DomainMatch::Exact(
+                    "direct.example".to_owned(),
+                )),
+                target: RuleTarget::Direct,
+            },
+            Rule {
+                id: RuleId::new("suffix"),
+                enabled: true,
+                matcher: RuleMatcher::Domain(DomainMatch::Suffix(
+                    "proxy.example".to_owned(),
+                )),
+                target: RuleTarget::Proxy,
+            },
+            Rule {
+                id: RuleId::new("keyword"),
+                enabled: true,
+                matcher: RuleMatcher::Domain(DomainMatch::Keyword(
+                    "blocked".to_owned(),
+                )),
+                target: RuleTarget::Block,
+            },
+        ];
+        rule_set.default_target = RuleTarget::Proxy;
+
+        let node = node();
+        let settings = Settings::default();
+        let rendered = render::render(&RenderRequest {
+            node: &node,
+            rules: &rule_set,
+            settings: &settings,
+        })
+            .expect("config rendered");
+
+        assert!(rendered.unsupported.is_empty());
+
+        let config: Value =
+            serde_json::from_slice(&rendered.body).expect("valid JSON");
+        let route_rules = config["route"]["rules"]
+            .as_array()
+            .expect("route rules array");
+
+        assert_eq!(route_rules.len(), 4);
+        assert_eq!(route_rules[0]["action"], "sniff");
+
+        // Assert the exact user-rule order after the sniff action.
+        assert_eq!(route_rules[1]["domain"][0], "direct.example");
+        assert_eq!(route_rules[1]["action"], "route");
+        assert_eq!(route_rules[1]["outbound"], "direct");
+
+        assert_eq!(route_rules[2]["domain_suffix"][0], "proxy.example");
+        assert_eq!(route_rules[2]["action"], "route");
+        assert_eq!(route_rules[2]["outbound"], "proxy");
+
+        assert_eq!(route_rules[3]["domain_keyword"][0], "blocked");
+        assert_eq!(route_rules[3]["action"], "reject");
+
+        // Every domain matcher must occur strictly after sniff.
+        let domain_fields = ["domain", "domain_suffix", "domain_keyword"];
+        let domain_indices: Vec<usize> = route_rules
+            .iter()
+            .enumerate()
+            .filter_map(|(index, rule)| {
+                domain_fields
+                    .iter()
+                    .any(|field| rule.get(*field).is_some())
+                    .then_some(index)
+            })
+            .collect();
+
+        assert_eq!(domain_indices, vec![1, 2, 3]);
+        assert!(domain_indices.iter().all(|&index| index > 0));
+        assert_eq!(config["route"]["final"], "proxy");
+    }
+
+    #[test]
     fn default_target_becomes_final() {
         let config = rendered();
         assert_eq!(config["route"]["final"], "proxy");

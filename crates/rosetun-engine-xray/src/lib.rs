@@ -63,3 +63,20 @@ impl EngineBackend for XrayBackend {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_advertises_no_capabilities_or_integration() {
+        let backend = XrayBackend::new("unused");
+
+        assert_eq!(backend.integration(), EngineIntegration::Unavailable);
+        assert_eq!(backend.capabilities().rules, RuleCapabilities::NONE);
+        assert!(matches!(
+            backend.locate_binary(),
+            Err(EngineError::Unsupported(_))
+        ));
+    }
+}

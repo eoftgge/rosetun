@@ -605,8 +605,12 @@ fn kill_switch_authorizes_the_configured_tunnel_after_spawning_the_engine() {
 
 #[test]
 fn status_marks_the_session_failed_when_the_engine_returns_not_running() {
+    let running = Arc::new(AtomicBool::new(true));
+
     let mut engines = EngineRegistry::new();
-    engines.register(Box::new(ExitedEngine));
+    engines.register(Box::new(RunningThenExitedEngine {
+        running: Arc::clone(&running),
+    }));
 
     let helper = Helper::new(engines, Box::new(UnusedRouting));
     let mut request = connect_request();
@@ -614,13 +618,45 @@ fn status_marks_the_session_failed_when_the_engine_returns_not_running() {
 
     helper
         .connect(&request)
-        .expect("the process can exit after a successful spawn");
+        .expect("connection succeeds while the engine is running");
+
+    let connected = helper.status();
+    assert!(matches!(connected.state, ConnectionState::Connected));
+    assert!(connected.since_unix.is_some());
+
+    // Exit only after connect has completed its readiness checks.
+    running.store(false, Ordering::Release);
 
     let status = helper.status();
 
     assert!(matches!(
         status.state,
         ConnectionState::Failed { ref reason } if reason == "the engine process exited"
+    ));
+    assert!(status.since_unix.is_none());
+}
+
+#[test]
+fn connect_rejects_an_engine_that_exits_before_startup_readiness() {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ExitedEngine));
+
+    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+
+    let error = helper
+        .connect(&request)
+        .expect_err("an exited process cannot complete startup readiness");
+
+    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert_eq!(error.message, "engine exited before startup readiness");
+
+    let status = helper.status();
+    assert!(matches!(
+        status.state,
+        ConnectionState::Failed { ref reason }
+            if reason == "engine exited before startup readiness"
     ));
     assert!(status.since_unix.is_none());
 }
