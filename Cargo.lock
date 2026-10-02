@@ -164,6 +164,7 @@ dependencies = [
  "rosetun-routing",
  "tracing",
  "tracing-subscriber",
+ "windows-sys",
 ]
 
 [[package]]

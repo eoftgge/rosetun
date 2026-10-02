@@ -1,5 +1,8 @@
 #![allow(unreachable_pub)]
 
+#[cfg(windows)]
+mod process_job;
+
 mod server;
 mod state;
 
@@ -18,6 +21,12 @@ fn main() -> std::process::ExitCode {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+
+    #[cfg(windows)]
+    if let Err(error) = process_job::install() {
+        tracing::error!(%error, "failed to install helper process-lifetime job");
+        return std::process::ExitCode::FAILURE;
+    }
 
     let work_dir = work_dir();
     let mut engines = EngineRegistry::new();
