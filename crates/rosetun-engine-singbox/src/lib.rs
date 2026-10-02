@@ -303,7 +303,11 @@ mod tests {
     fn disabled_rules_are_dropped() {
         let config = rendered();
         let rules = config["route"]["rules"].as_array().expect("rules array");
-        assert_eq!(rules.len(), 3, "sniff plus two enabled user rules");
+        assert_eq!(
+            rules.len(),
+            5,
+            "sniff, DNS hijack, two enabled user rules, and LAN"
+        );
         assert!(
             rules.iter().all(|rule| rule.get("domain").is_none()),
             "the disabled exact-domain rule must be absent"
@@ -326,20 +330,32 @@ mod tests {
 
         assert_eq!(rendered.1, vec![RuleId::new("r2")]);
         let rules = rendered.0["rules"].as_array().expect("rules array");
-        assert_eq!(rules.len(), 2, "sniff plus one supported user rule");
+        assert_eq!(
+            rules.len(),
+            4,
+            "sniff, DNS hijack, one supported user rule, and LAN"
+        );
         assert_eq!(rules[0]["action"], "sniff");
+        assert_eq!(rules[1]["action"], "hijack-dns");
+        assert_eq!(rules[2]["domain_suffix"][0], "google.com");
+        assert_eq!(rules[3]["ip_is_private"], true);
         assert!(rules.iter().all(|rule| rule.get("process_name").is_none()));
     }
 
     #[test]
     fn rule_order_is_preserved() {
         let config = rendered();
-        let rules = &config["route"]["rules"];
+        let rules = config["route"]["rules"].as_array().expect("rules array");
+
+        assert_eq!(rules.len(), 5);
         assert_eq!(rules[0]["action"], "sniff");
-        assert_eq!(rules[1]["domain_suffix"][0], "google.com");
-        assert_eq!(rules[1]["outbound"], "proxy");
-        assert_eq!(rules[2]["process_name"][0], "steam.exe");
-        assert_eq!(rules[2]["outbound"], "direct");
+        assert_eq!(rules[1]["action"], "hijack-dns");
+        assert_eq!(rules[2]["domain_suffix"][0], "google.com");
+        assert_eq!(rules[2]["outbound"], "proxy");
+        assert_eq!(rules[3]["process_name"][0], "steam.exe");
+        assert_eq!(rules[3]["outbound"], "direct");
+        assert_eq!(rules[4]["ip_is_private"], true);
+        assert_eq!(rules[4]["outbound"], "direct");
     }
 
     #[test]
@@ -404,15 +420,21 @@ mod tests {
         assert!(config.unsupported.is_empty());
         let config: Value = serde_json::from_slice(&config.body).expect("json");
         let route = config["route"]["rules"].as_array().expect("rules");
-        assert_eq!(route.len(), cases.len() + 1);
+        assert_eq!(route.len(), cases.len() + 3);
         assert_eq!(route[0]["action"], "sniff");
+        assert_eq!(route[1]["action"], "hijack-dns");
 
         for (index, (matcher, field, expected)) in cases.iter().enumerate() {
             assert!(backend.capabilities().rules.supports(matcher));
-            assert_eq!(route[index + 1][*field][0], *expected);
-            assert_eq!(route[index + 1]["action"], "route");
-            assert_eq!(route[index + 1]["outbound"], "direct");
+            assert_eq!(route[index + 2][*field][0], *expected);
+            assert_eq!(route[index + 2]["action"], "route");
+            assert_eq!(route[index + 2]["outbound"], "direct");
         }
+
+        let lan = route.last().expect("LAN rule");
+        assert_eq!(lan["ip_is_private"], true);
+        assert_eq!(lan["action"], "route");
+        assert_eq!(lan["outbound"], "direct");
     }
 
     #[test]
@@ -425,9 +447,24 @@ mod tests {
 
         assert!(unsupported.is_empty());
         let rules = route["rules"].as_array().expect("rules");
-        assert_eq!(rules[1]["action"], "reject");
-        assert!(rules[1].get("outbound").is_none());
-        assert_eq!(rules.last().expect("fallback")["action"], "reject");
+        assert_eq!(rules.len(), 6);
+
+        assert_eq!(rules[0]["action"], "sniff");
+        assert_eq!(rules[1]["action"], "hijack-dns");
+
+        assert_eq!(rules[2]["domain_suffix"][0], "google.com");
+        assert_eq!(rules[2]["action"], "reject");
+        assert!(rules[2].get("outbound").is_none());
+
+        assert_eq!(rules[3]["process_name"][0], "steam.exe");
+        assert_eq!(rules[3]["outbound"], "direct");
+
+        assert_eq!(rules[4]["ip_is_private"], true);
+        assert_eq!(rules[4]["outbound"], "direct");
+
+        let fallback = rules.last().expect("fallback");
+        assert_eq!(fallback["action"], "reject");
+        assert!(fallback.get("outbound").is_none());
     }
 
     #[test]
@@ -471,22 +508,26 @@ mod tests {
             .as_array()
             .expect("route rules array");
 
-        assert_eq!(route_rules.len(), 4);
+        assert_eq!(route_rules.len(), 6);
         assert_eq!(route_rules[0]["action"], "sniff");
+        assert_eq!(route_rules[1]["action"], "hijack-dns");
 
-        // Assert the exact user-rule order after the sniff action.
-        assert_eq!(route_rules[1]["domain"][0], "direct.example");
-        assert_eq!(route_rules[1]["action"], "route");
-        assert_eq!(route_rules[1]["outbound"], "direct");
-
-        assert_eq!(route_rules[2]["domain_suffix"][0], "proxy.example");
+        // User rules retain their order after sniff and DNS hijack.
+        assert_eq!(route_rules[2]["domain"][0], "direct.example");
         assert_eq!(route_rules[2]["action"], "route");
-        assert_eq!(route_rules[2]["outbound"], "proxy");
+        assert_eq!(route_rules[2]["outbound"], "direct");
 
-        assert_eq!(route_rules[3]["domain_keyword"][0], "blocked");
-        assert_eq!(route_rules[3]["action"], "reject");
+        assert_eq!(route_rules[3]["domain_suffix"][0], "proxy.example");
+        assert_eq!(route_rules[3]["action"], "route");
+        assert_eq!(route_rules[3]["outbound"], "proxy");
 
-        // Every domain matcher must occur strictly after sniff.
+        assert_eq!(route_rules[4]["domain_keyword"][0], "blocked");
+        assert_eq!(route_rules[4]["action"], "reject");
+
+        assert_eq!(route_rules[5]["ip_is_private"], true);
+        assert_eq!(route_rules[5]["action"], "route");
+        assert_eq!(route_rules[5]["outbound"], "direct");
+
         let domain_fields = ["domain", "domain_suffix", "domain_keyword"];
         let domain_indices: Vec<usize> = route_rules
             .iter()
@@ -499,8 +540,8 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(domain_indices, vec![1, 2, 3]);
-        assert!(domain_indices.iter().all(|&index| index > 0));
+        assert_eq!(domain_indices, vec![2, 3, 4]);
+        assert!(domain_indices.iter().all(|&index| index > 1));
         assert_eq!(config["route"]["final"], "proxy");
     }
 
@@ -537,5 +578,75 @@ mod tests {
             render::render(&request),
             Err(EngineError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn dns_uses_one_typed_public_server_through_proxy() {
+        let config = rendered();
+        let servers = config["dns"]["servers"].as_array().expect("DNS servers");
+
+        assert_eq!(servers.len(), 1);
+        assert_eq!(
+            servers[0],
+            serde_json::json!({
+                "type": "udp",
+                "tag": "dns-proxy",
+                "server": "1.1.1.1",
+                "server_port": 53,
+                "detour": "proxy",
+            })
+        );
+        assert!(config["dns"].get("rules").is_none());
+    }
+
+    #[test]
+    fn dns_hijack_precedes_user_rules_and_block_fallback() {
+        let node = node();
+        let settings = Settings::default();
+        let mut rule_set = rules();
+        rule_set.default_target = RuleTarget::Block;
+
+        let rendered = render::render(&RenderRequest {
+            node: &node,
+            rules: &rule_set,
+            settings: &settings,
+        })
+            .expect("config rendered");
+        assert!(rendered.unsupported.is_empty());
+
+        let config: Value = serde_json::from_slice(&rendered.body).expect("valid JSON");
+        let route_rules = config["route"]["rules"].as_array().expect("route rules");
+
+        assert_eq!(
+            route_rules,
+            &vec![
+                serde_json::json!({
+                    "action": "sniff",
+                    "sniffer": ["http", "tls", "quic", "dns"],
+                }),
+                serde_json::json!({
+                    "protocol": "dns",
+                    "action": "hijack-dns",
+                }),
+                serde_json::json!({
+                    "domain_suffix": ["google.com"],
+                    "action": "route",
+                    "outbound": "proxy",
+                }),
+                serde_json::json!({
+                    "process_name": ["steam.exe"],
+                    "action": "route",
+                    "outbound": "direct",
+                }),
+                serde_json::json!({
+                    "ip_is_private": true,
+                    "action": "route",
+                    "outbound": "direct",
+                }),
+                serde_json::json!({
+                    "action": "reject",
+                }),
+            ]
+        );
     }
 }

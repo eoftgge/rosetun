@@ -8,6 +8,8 @@ use serde_json::{Map, Value, json};
 
 const TAG_PROXY: &str = "proxy";
 const TAG_DIRECT: &str = "direct";
+const TAG_DNS_PROXY: &str = "dns-proxy";
+const PUBLIC_DNS_SERVER: &str = "1.1.1.1";
 
 pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
     domain_exact: true,
@@ -22,6 +24,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
     let (route, unsupported) = route_section(request.rules, RULE_CAPABILITIES);
     let config = json!({
         "log": log_section(request.settings),
+        "dns": dns_section(),
         "inbounds": [tun_inbound(request.settings)],
         "outbounds": [
             proxy_outbound(request.node)?,
@@ -36,6 +39,18 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         file_name: "config.json".to_owned(),
         body,
         unsupported,
+    })
+}
+
+fn dns_section() -> Value {
+    json!({
+        "servers": [{
+            "type": "udp",
+            "tag": TAG_DNS_PROXY,
+            "server": PUBLIC_DNS_SERVER,
+            "server_port": 53,
+            "detour": TAG_PROXY,
+        }],
     })
 }
 
