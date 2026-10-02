@@ -103,16 +103,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_observed_startup_message() {
-        assert!(is_startup_message(
-            "+0900 2026-10-02 22:10:26 INFO sing-box started (0.43s)"
-        ));
+    fn accepts_only_final_readiness_line_from_windows_1_14_1_fixture() {
+        let output = include_str!(
+            "../tests/fixtures/startup-1.14.1-windows.txt"
+        );
+        let lines: Vec<&str> = output.lines().collect();
+
+        assert_eq!(lines.len(), 4, "fixture contains the observed startup sequence");
+
+        for (index, line) in lines.iter().enumerate() {
+            assert_eq!(
+                is_startup_message(line),
+                index == 3,
+                "only the final startup message signals readiness; line {index}: {line}"
+            );
+        }
     }
 
     #[test]
     fn accepts_ansi_and_elapsed_time_prefix() {
         assert!(is_startup_message(
             "\x1b[36mINFO\x1b[0m[0000] sing-box started (0.43s)"
+        ));
+    }
+
+    #[test]
+    fn accepts_observed_startup_message() {
+        assert!(is_startup_message(
+            "+0900 2026-10-02 22:10:26 INFO sing-box started (0.43s)"
         ));
     }
 

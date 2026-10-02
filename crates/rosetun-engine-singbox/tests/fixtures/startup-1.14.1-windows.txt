@@ -1,0 +1,4 @@
++0900 2026-10-03 02:24:27 INFO network: updated default interface Ethernet 2, index 24
++0900 2026-10-03 02:24:27 INFO network: updated network environment: gateway 192.168.3.1, gateway_mac 00:00:5e:00:53:01
++0900 2026-10-03 02:24:27 INFO inbound/tun[tun-in]: started at rosetun0
++0900 2026-10-03 02:24:28 INFO sing-box started (0.62s)
