@@ -5,16 +5,15 @@ use std::{
 };
 
 use windows_sys::Win32::{
-    Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_FILE_NOT_FOUND, ERROR_NOT_FOUND},
+    Foundation::{
+        ERROR_BUFFER_OVERFLOW, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER,
+        ERROR_NOT_FOUND,
+    },
     NetworkManagement::{
-<<<<<<< HEAD
         IpHelper::{
             ConvertInterfaceAliasToLuid,
             GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
         },
-=======
-        IpHelper::{ConvertInterfaceAliasToLuid, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH},
->>>>>>> parent of 5972f94 (feat(windows): Enhance tunnel adapter presence checks)
         Ndis::{IfOperStatusUp, NET_LUID_LH},
     },
     Networking::WinSock::{AF_INET, SOCKADDR_IN},
@@ -51,8 +50,15 @@ impl TunnelLuid {
 }
 
 pub(super) fn alias_exists(alias: &str) -> Result<bool, RoutingError> {
+    if alias.is_empty() || alias.contains('\0') {
+        return Err(RoutingError::Tun {
+            name: alias.to_owned(),
+            reason: "adapter alias must be non-empty and contain no NUL characters".to_owned(),
+        });
+    }
+
+    let alias_wide = wide(alias);
     let mut luid = NET_LUID_LH::default();
-<<<<<<< HEAD
     let status = unsafe {
         ConvertInterfaceAliasToLuid(alias_wide.as_ptr(), &mut luid)
     };
@@ -68,16 +74,15 @@ pub(super) fn alias_exists(alias: &str) -> Result<bool, RoutingError> {
         luid = ?resolved_luid,
         "checked tunnel alias before engine startup"
     );
-=======
-    let status = unsafe { ConvertInterfaceAliasToLuid(wide(alias).as_ptr(), &mut luid) };
->>>>>>> parent of 5972f94 (feat(windows): Enhance tunnel adapter presence checks)
 
     match status {
         0 => Ok(true),
-        ERROR_FILE_NOT_FOUND | ERROR_NOT_FOUND => Ok(false),
+        ERROR_FILE_NOT_FOUND | ERROR_NOT_FOUND | ERROR_INVALID_PARAMETER => Ok(false),
         code => Err(RoutingError::Tun {
             name: alias.to_owned(),
-            reason: format!("could not check whether the adapter exists (Windows error {code})"),
+            reason: format!(
+                "could not check whether the adapter exists (Windows error {code})"
+            ),
         }),
     }
 }
