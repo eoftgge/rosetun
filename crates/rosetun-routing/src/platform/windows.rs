@@ -29,10 +29,6 @@ impl RoutingBackend for WfpBackend {
         transaction.commit()
     }
 
-    fn tunnel_alias_exists(&self, alias: &str) -> Result<bool, RoutingError> {
-        tunnel::alias_exists(alias)
-    }
-
     fn begin_protection(
         &mut self,
         plan: &RoutingPlan,

@@ -49,44 +49,6 @@ impl TunnelLuid {
     }
 }
 
-pub(super) fn alias_exists(alias: &str) -> Result<bool, RoutingError> {
-    if alias.is_empty() || alias.contains('\0') {
-        return Err(RoutingError::Tun {
-            name: alias.to_owned(),
-            reason: "adapter alias must be non-empty and contain no NUL characters".to_owned(),
-        });
-    }
-
-    let alias_wide = wide(alias);
-    let mut luid = NET_LUID_LH::default();
-    let status = unsafe {
-        ConvertInterfaceAliasToLuid(alias_wide.as_ptr(), &mut luid)
-    };
-
-    let resolved_luid = if status == 0 {
-        Some(unsafe { luid.Value })
-    } else {
-        None
-    };
-    tracing::debug!(
-        alias,
-        windows_status = status,
-        luid = ?resolved_luid,
-        "checked tunnel alias before engine startup"
-    );
-
-    match status {
-        0 => Ok(true),
-        ERROR_FILE_NOT_FOUND | ERROR_NOT_FOUND | ERROR_INVALID_PARAMETER => Ok(false),
-        code => Err(RoutingError::Tun {
-            name: alias.to_owned(),
-            reason: format!(
-                "could not check whether the adapter exists (Windows error {code})"
-            ),
-        }),
-    }
-}
-
 pub(super) fn resolve_luid(tunnel: &TunnelInterface) -> Result<TunnelLuid, RoutingError> {
     let alias = wide(&tunnel.alias);
     let mut luid = NET_LUID_LH::default();
