@@ -571,29 +571,6 @@ fn connect_rejects_unsupported_rules_before_starting_the_engine() {
 }
 
 #[test]
-fn connect_rejects_existing_tunnel_before_protection_or_engine_spawn() {
-    let (spawned, spawn_rx) = channel();
-    let mut engines = EngineRegistry::new();
-    engines.register(Box::new(SpawnSignalingEngine { spawned }));
-
-    let helper = Helper::new(engines, Box::new(ExistingTunnelRouting));
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-
-    let error = helper
-        .connect(&request)
-        .expect_err("an existing adapter must prevent connection");
-
-    assert_eq!(error.code, ErrorCode::EngineFailed);
-    assert!(error.message.contains(&request.settings.tun.name));
-    assert!(spawn_rx.try_recv().is_err(), "engine must not spawn");
-    assert!(matches!(
-        helper.status().state,
-        ConnectionState::Failed { .. }
-    ));
-}
-
-#[test]
 fn kill_switch_rejects_an_unresolvable_vpn_endpoint_before_routing() {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(StubEngine));

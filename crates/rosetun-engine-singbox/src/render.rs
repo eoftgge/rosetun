@@ -34,9 +34,8 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
 
 fn log_section(settings: &Settings) -> Value {
     let level = match settings.log_level {
-        LogLevel::Error => "error",
-        LogLevel::Warn => "warn",
-        LogLevel::Info => "info",
+        // Startup readiness currently requires the INFO startup message.
+        LogLevel::Error | LogLevel::Warn | LogLevel::Info => "info",
         LogLevel::Debug => "debug",
         LogLevel::Trace => "trace",
     };

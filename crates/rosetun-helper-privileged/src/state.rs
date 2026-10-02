@@ -223,21 +223,6 @@ impl Session {
             .transpose()
             .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
 
-        if self
-            .routing
-            .tunnel_alias_exists(&settings.tun.name)
-            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?
-        {
-            return Err(HelperError::new(
-                ErrorCode::EngineFailed,
-                format!(
-                    "tunnel adapter {} already exists before engine startup; \
-                     stop the previous engine and remove the stale adapter before retrying",
-                    settings.tun.name
-                ),
-            ));
-        }
-
         if settings.kill_switch {
             let plan = RoutingPlan {
                 bypass: resolve(&node.server, node.port)?,
@@ -265,6 +250,8 @@ impl Session {
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
         self.process = Some(process);
 
+        self.wait_for_engine_ready()?;
+
         if let Some(tunnel) = tunnel.as_ref() {
             tracing::debug!(alias = %tunnel.alias, ipv4 = %tunnel.ipv4, "waiting for tunnel readiness");
             self.wait_for_tunnel(tunnel)?;
@@ -285,6 +272,63 @@ impl Session {
         }
 
         Ok(())
+    }
+
+    fn wait_for_engine_ready(&mut self) -> Result<(), HelperError> {
+        let deadline = Instant::now() + TUNNEL_READY_TIMEOUT;
+
+        loop {
+            let process = self.process.as_mut().ok_or_else(|| {
+                HelperError::new(
+                    ErrorCode::EngineFailed,
+                    "engine process disappeared before startup readiness",
+                )
+            })?;
+
+            let running = process
+                .is_running()
+                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+
+            if !running {
+                return Err(HelperError::new(
+                    ErrorCode::EngineFailed,
+                    "engine exited before startup readiness",
+                ));
+            }
+
+            let ready = process
+                .is_ready()
+                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+
+            if ready {
+                // The process may have exited while the signal was being read.
+                let running = process
+                    .is_running()
+                    .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+
+                if !running {
+                    return Err(HelperError::new(
+                        ErrorCode::EngineFailed,
+                        "engine exited during startup readiness",
+                    ));
+                }
+
+                tracing::info!("engine startup readiness confirmed");
+                return Ok(());
+            }
+
+            if Instant::now() >= deadline {
+                return Err(HelperError::new(
+                    ErrorCode::EngineFailed,
+                    format!(
+                        "engine startup readiness was not confirmed within {} seconds",
+                        TUNNEL_READY_TIMEOUT.as_secs()
+                    ),
+                ));
+            }
+
+            std::thread::sleep(TUNNEL_READY_POLL_INTERVAL);
+        }
     }
 
     fn wait_for_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), HelperError> {

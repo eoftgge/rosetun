@@ -104,6 +104,15 @@ impl RenderedConfig {
 
 pub trait EngineProcess: Send + std::fmt::Debug {
     fn is_running(&mut self) -> Result<bool, EngineError>;
+
+    /// Non-blocking startup readiness check.
+    ///
+    /// Backends without a separate startup handshake retain their existing
+    /// behavior. The caller must check process liveness separately.
+    fn is_ready(&mut self) -> Result<bool, EngineError> {
+        Ok(true)
+    }
+
     fn traffic(&mut self) -> Result<Traffic, EngineError>;
     fn stop(&mut self) -> Result<(), EngineError>;
 }

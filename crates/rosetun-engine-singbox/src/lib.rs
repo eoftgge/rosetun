@@ -1,20 +1,23 @@
 #![forbid(unsafe_code)]
 
 mod render;
+mod readiness;
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::Sender;
 use std::thread;
 
+use readiness::Readiness;
 use rosetun_config::{EngineKind, Traffic};
 use rosetun_engine::{
     EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest,
     RenderedConfig, RuleCapabilities,
+    errors::EngineError
 };
 
 pub use render::render;
-use rosetun_engine::errors::EngineError;
 
 const BINARY: &str = if cfg!(windows) {
     "sing-box.exe"
@@ -95,33 +98,46 @@ impl EngineBackend for SingBoxBackend {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        if let Some(stdout) = child.stdout.take() &&
-            let Err(error) = spawn_output_drain(stdout, "stdout")
-        {
-            stop_failed_spawn(&mut child);
-            return Err(error.into());
-        }
-        if let Some(stderr) = child.stderr.take() &&
-            let Err(error) = spawn_output_drain(stderr, "stderr")
+        let (ready_sender, readiness) = Readiness::new();
+
+        if let Some(stdout) = child.stdout.take()
+            && let Err(error) = spawn_output_drain(stdout, "stdout", None)
         {
             stop_failed_spawn(&mut child);
             return Err(error.into());
         }
 
-        Ok(Box::new(SingBoxProcess { child }))
+        let Some(stderr) = child.stderr.take() else {
+            stop_failed_spawn(&mut child);
+            return Err(std::io::Error::other(
+                "sing-box stderr pipe is unavailable",
+            )
+                .into());
+        };
+
+        if let Err(error) = spawn_output_drain(stderr, "stderr", Some(ready_sender)) {
+            stop_failed_spawn(&mut child);
+            return Err(error.into());
+        }
+
+        Ok(Box::new(SingBoxProcess { child, readiness }))
     }
 }
 
 fn stop_failed_spawn(child: &mut Child) {
     if let Err(error) = child.kill() {
-        tracing::error!(%error, "failed to kill sing-box after output reader startup failed");
+        tracing::error!(%error, "failed to kill sing-box after startup setup failed");
     }
     if let Err(error) = child.wait() {
-        tracing::error!(%error, "failed to reap sing-box after output reader startup failed");
+        tracing::error!(%error, "failed to reap sing-box after startup setup failed");
     }
 }
 
-fn spawn_output_drain<R>(reader: R, stream: &'static str) -> std::io::Result<()>
+fn spawn_output_drain<R>(
+    reader: R,
+    stream: &'static str,
+    mut ready_sender: Option<Sender<()>>,
+) -> std::io::Result<()>
 where
     R: Read + Send + 'static,
 {
@@ -130,13 +146,26 @@ where
         .spawn(move || {
             for line in BufReader::new(reader).lines() {
                 match line {
-                    Ok(line) => tracing::info!(stream, "{line}"),
+                    Ok(line) => {
+                        if ready_sender.is_some()
+                            && readiness::is_startup_message(&line)
+                            && let Some(sender) = ready_sender.take()
+                        {
+                            let _ = sender.send(());
+                        }
+                        tracing::info!(stream, "{line}");
+                    }
                     Err(error) => {
-                        tracing::debug!(stream, %error, "sing-box output stream closed with a read error");
+                        tracing::debug!(
+                            stream,
+                            %error,
+                            "sing-box output stream closed with a read error"
+                        );
                         break;
                     }
                 }
             }
+            // Dropping the sender reports EOF if no readiness signal was sent.
             tracing::debug!(stream, "sing-box output stream closed");
         })
         .map(|_| ())
@@ -158,6 +187,7 @@ fn find_in_path() -> Option<PathBuf> {
 #[derive(Debug)]
 struct SingBoxProcess {
     child: Child,
+    readiness: Readiness,
 }
 
 impl EngineProcess for SingBoxProcess {
@@ -168,6 +198,10 @@ impl EngineProcess for SingBoxProcess {
             }),
             None => Ok(true),
         }
+    }
+
+    fn is_ready(&mut self) -> Result<bool, EngineError> {
+        self.readiness.poll().map_err(EngineError::from)
     }
 
     fn traffic(&mut self) -> Result<Traffic, EngineError> {

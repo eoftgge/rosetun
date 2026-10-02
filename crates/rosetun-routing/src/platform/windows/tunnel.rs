@@ -5,18 +5,19 @@ use std::{
 };
 
 use windows_sys::Win32::{
-    Foundation::{
-        ERROR_BUFFER_OVERFLOW, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER,
-        ERROR_NOT_FOUND,
-    },
+    Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_FILE_NOT_FOUND, ERROR_NOT_FOUND},
     NetworkManagement::{
+<<<<<<< HEAD
         IpHelper::{
-            ConvertInterfaceAliasToLuid, GAA_FLAG_INCLUDE_ALL_INTERFACES,
+            ConvertInterfaceAliasToLuid,
             GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
         },
+=======
+        IpHelper::{ConvertInterfaceAliasToLuid, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH},
+>>>>>>> parent of 5972f94 (feat(windows): Enhance tunnel adapter presence checks)
         Ndis::{IfOperStatusUp, NET_LUID_LH},
     },
-    Networking::WinSock::{AF_INET, AF_UNSPEC, SOCKADDR_IN},
+    Networking::WinSock::{AF_INET, SOCKADDR_IN},
 };
 
 use crate::{RoutingError, TunnelInterface};
@@ -50,15 +51,8 @@ impl TunnelLuid {
 }
 
 pub(super) fn alias_exists(alias: &str) -> Result<bool, RoutingError> {
-    if alias.is_empty() || alias.contains('\0') {
-        return Err(RoutingError::Tun {
-            name: alias.to_owned(),
-            reason: "adapter alias must be non-empty and contain no NUL characters".to_owned(),
-        });
-    }
-
-    let alias_wide = wide(alias);
     let mut luid = NET_LUID_LH::default();
+<<<<<<< HEAD
     let status = unsafe {
         ConvertInterfaceAliasToLuid(alias_wide.as_ptr(), &mut luid)
     };
@@ -74,123 +68,18 @@ pub(super) fn alias_exists(alias: &str) -> Result<bool, RoutingError> {
         luid = ?resolved_luid,
         "checked tunnel alias before engine startup"
     );
-
-    if let Some(value) = resolved_luid {
-        diagnose_adapter_presence(alias, value);
-    }
+=======
+    let status = unsafe { ConvertInterfaceAliasToLuid(wide(alias).as_ptr(), &mut luid) };
+>>>>>>> parent of 5972f94 (feat(windows): Enhance tunnel adapter presence checks)
 
     match status {
         0 => Ok(true),
-        ERROR_FILE_NOT_FOUND | ERROR_NOT_FOUND | ERROR_INVALID_PARAMETER => Ok(false),
+        ERROR_FILE_NOT_FOUND | ERROR_NOT_FOUND => Ok(false),
         code => Err(RoutingError::Tun {
             name: alias.to_owned(),
-            reason: format!(
-                "could not check whether the adapter exists (Windows error {code})"
-            ),
+            reason: format!("could not check whether the adapter exists (Windows error {code})"),
         }),
     }
-}
-
-fn diagnose_adapter_presence(alias: &str, expected_luid: u64) {
-    let mut buffer_size = 0_u32;
-
-    let status = unsafe {
-        GetAdaptersAddresses(
-            AF_UNSPEC as u32,
-            GAA_FLAG_INCLUDE_ALL_INTERFACES,
-            ptr::null(),
-            ptr::null_mut(),
-            &mut buffer_size,
-        )
-    };
-
-    tracing::debug!(
-        alias,
-        windows_status = status,
-        buffer_size,
-        "adapter diagnostic: queried buffer size"
-    );
-
-    if status != ERROR_BUFFER_OVERFLOW {
-        tracing::debug!(
-            alias,
-            windows_status = status,
-            "adapter diagnostic: enumeration unavailable"
-        );
-        return;
-    }
-
-    // The interface list can grow between the size query and enumeration.
-    for attempt in 1..=3 {
-        let entries =
-            (buffer_size as usize).div_ceil(size_of::<IP_ADAPTER_ADDRESSES_LH>());
-        let mut buffer = Vec::<MaybeUninit<IP_ADAPTER_ADDRESSES_LH>>::new();
-        buffer.resize_with(entries, MaybeUninit::uninit);
-
-        let status = unsafe {
-            GetAdaptersAddresses(
-                AF_UNSPEC as u32,
-                GAA_FLAG_INCLUDE_ALL_INTERFACES,
-                ptr::null(),
-                buffer.as_mut_ptr().cast(),
-                &mut buffer_size,
-            )
-        };
-
-        tracing::debug!(
-            alias,
-            attempt,
-            windows_status = status,
-            buffer_size,
-            "adapter diagnostic: enumeration result"
-        );
-
-        if status == ERROR_BUFFER_OVERFLOW {
-            continue;
-        }
-        if status != 0 {
-            return;
-        }
-
-        let mut adapter = buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
-        let mut count = 0_usize;
-        let mut found = false;
-
-        while !adapter.is_null() {
-            // Only inspect the linked list after a successful API call.
-            // The backing buffer remains alive throughout traversal.
-            let current = unsafe { &*adapter };
-            let value = unsafe { current.Luid.Value };
-            let matches_alias_luid = value == expected_luid;
-
-            tracing::debug!(
-                alias,
-                adapter_luid = value,
-                if_index = unsafe { current.Anonymous1.Anonymous.IfIndex },
-                oper_status = current.OperStatus,
-                matches_alias_luid,
-                "adapter diagnostic: enumerated interface"
-            );
-
-            count += 1;
-            found |= matches_alias_luid;
-            adapter = current.Next;
-        }
-
-        tracing::debug!(
-            alias,
-            expected_luid,
-            adapter_count = count,
-            found,
-            "adapter diagnostic: presence summary"
-        );
-        return;
-    }
-
-    tracing::debug!(
-        alias,
-        "adapter diagnostic: enumeration kept growing; presence is unknown"
-    );
 }
 
 pub(super) fn resolve_luid(tunnel: &TunnelInterface) -> Result<TunnelLuid, RoutingError> {
