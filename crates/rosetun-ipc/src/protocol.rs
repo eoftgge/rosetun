@@ -1,3 +1,4 @@
+use std::fmt::Formatter;
 use rosetun_config::{LogLevel, Node, RuleSet, Selection, Settings, Status, Traffic};
 use serde::{Deserialize, Serialize};
 
@@ -20,12 +21,27 @@ pub enum Request {
     Shutdown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectRequest {
     pub selection: Selection,
     pub node: Node,
     pub rule_set: RuleSet,
     pub settings: Settings,
+}
+
+impl std::fmt::Debug for ConnectRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectRequest")
+            .field("selection", &self.selection)
+            .field("node_id", &self.node.id)
+            .field("engine", &self.settings.engine)
+            .field("kill_switch", &self.settings.kill_switch)
+            .field("tun_alias", &self.settings.tun.name)
+            .field("auto_route", &self.settings.tun.auto_route)
+            .field("rule_set_id", &self.rule_set.id)
+            .field("rule_count", &self.rule_set.rules.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
