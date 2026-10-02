@@ -69,31 +69,6 @@ impl RoutingBackend for UnusedRouting {
 }
 
 #[derive(Debug)]
-struct ExistingTunnelRouting;
-
-impl RoutingBackend for ExistingTunnelRouting {
-    fn name(&self) -> &'static str {
-        "test-existing-tunnel"
-    }
-
-    fn preflight(&self) -> Result<(), RoutingError> {
-        panic!("preflight must not run with an existing tunnel adapter");
-    }
-
-    fn tunnel_alias_exists(&self, _alias: &str) -> Result<bool, RoutingError> {
-        Ok(true)
-    }
-
-    fn begin_protection(
-        &mut self,
-        _plan: &RoutingPlan,
-        _engine_binary: &Path,
-    ) -> Result<RoutingGuard, RoutingError> {
-        panic!("protection must not start with an existing tunnel adapter");
-    }
-}
-
-#[derive(Debug)]
 struct AuthorizingRouting {
     spawned: Option<Receiver<()>>,
     authorized: Sender<TunnelInterface>,
