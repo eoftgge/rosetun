@@ -5,16 +5,14 @@
 
 use std::io;
 use std::mem::size_of;
-use std::os::windows::io::{
-    AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle,
-};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle};
 use std::ptr;
 
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JobObjectExtendedLimitInformation, SetInformationJobObject,
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject,
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -53,9 +51,8 @@ pub(crate) fn install() -> io::Result<()> {
 
     // SAFETY: job is valid; GetCurrentProcess returns the current process's
     // pseudo-handle. No engine has been started at this point.
-    let assigned = unsafe {
-        AssignProcessToJobObject(job.as_raw_handle() as HANDLE, GetCurrentProcess())
-    };
+    let assigned =
+        unsafe { AssignProcessToJobObject(job.as_raw_handle() as HANDLE, GetCurrentProcess()) };
     if assigned == 0 {
         // No process was assigned to this job, so dropping it is safe.
         return Err(io::Error::last_os_error());
@@ -76,8 +73,8 @@ pub(crate) fn install() -> io::Result<()> {
 mod tests {
     use super::*;
     use windows_sys::Win32::System::JobObjects::{
-        QueryInformationJobObject, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-        JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+        JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+        QueryInformationJobObject,
     };
 
     #[test]
@@ -95,18 +92,12 @@ mod tests {
                 ptr::null_mut(),
             )
         };
-        assert_ne!(
-            queried,
-            0,
-            "query failed: {}",
-            io::Error::last_os_error()
-        );
+        assert_ne!(queried, 0, "query failed: {}", io::Error::last_os_error());
 
         let flags = limits.BasicLimitInformation.LimitFlags;
         assert_ne!(flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, 0);
         assert_eq!(
-            flags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK
-                | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK),
+            flags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK),
             0
         );
     }

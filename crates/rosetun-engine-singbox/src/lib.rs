@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-mod render;
 mod readiness;
+mod render;
 mod version;
 
 use std::io::{BufRead, BufReader, Read};
@@ -14,8 +14,7 @@ use readiness::Readiness;
 use rosetun_config::{EngineKind, Traffic};
 use rosetun_engine::{
     EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest,
-    RenderedConfig,
-    errors::EngineError
+    RenderedConfig, errors::EngineError,
 };
 
 pub use render::render;
@@ -113,10 +112,7 @@ impl EngineBackend for SingBoxBackend {
 
         let Some(stderr) = child.stderr.take() else {
             stop_failed_spawn(&mut child);
-            return Err(std::io::Error::other(
-                "sing-box stderr pipe is unavailable",
-            )
-                .into());
+            return Err(std::io::Error::other("sing-box stderr pipe is unavailable").into());
         };
 
         if let Err(error) = spawn_output_drain(stderr, "stderr", Some(ready_sender)) {
@@ -227,14 +223,14 @@ impl EngineProcess for SingBoxProcess {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rosetun_config::{
         DomainMatch, Node, NodeId, Outbound, ProcessMatch, RealityParams, Rule, RuleId,
         RuleMatcher, RuleSet, RuleSetId, RuleTarget, Settings, StreamSettings, TlsMode,
         VlessParams,
     };
-    use serde_json::Value;
     use rosetun_engine::RuleCapabilities;
-    use super::*;
+    use serde_json::Value;
 
     fn node() -> Node {
         Node {
@@ -356,21 +352,49 @@ mod tests {
     #[test]
     fn every_advertised_matcher_is_rendered_after_sniff() {
         let cases = [
-            (RuleMatcher::Domain(DomainMatch::Exact("exact.test".into())), "domain", "exact.test"),
-            (RuleMatcher::Domain(DomainMatch::Suffix("suffix.test".into())), "domain_suffix", "suffix.test"),
-            (RuleMatcher::Domain(DomainMatch::Keyword("keyword".into())), "domain_keyword", "keyword"),
-            (RuleMatcher::Process(ProcessMatch::Name("app.exe".into())), "process_name", "app.exe"),
-            (RuleMatcher::Process(ProcessMatch::Path(std::path::PathBuf::from("app.exe"))), "process_path", "app.exe"),
-            (RuleMatcher::IpCidr("192.0.2.0/24".into()), "ip_cidr", "192.0.2.0/24"),
+            (
+                RuleMatcher::Domain(DomainMatch::Exact("exact.test".into())),
+                "domain",
+                "exact.test",
+            ),
+            (
+                RuleMatcher::Domain(DomainMatch::Suffix("suffix.test".into())),
+                "domain_suffix",
+                "suffix.test",
+            ),
+            (
+                RuleMatcher::Domain(DomainMatch::Keyword("keyword".into())),
+                "domain_keyword",
+                "keyword",
+            ),
+            (
+                RuleMatcher::Process(ProcessMatch::Name("app.exe".into())),
+                "process_name",
+                "app.exe",
+            ),
+            (
+                RuleMatcher::Process(ProcessMatch::Path(std::path::PathBuf::from("app.exe"))),
+                "process_path",
+                "app.exe",
+            ),
+            (
+                RuleMatcher::IpCidr("192.0.2.0/24".into()),
+                "ip_cidr",
+                "192.0.2.0/24",
+            ),
         ];
 
         let mut rule_set = rules();
-        rule_set.rules = cases.iter().enumerate().map(|(index, (matcher, _, _))| Rule {
-            id: RuleId::new(format!("cap-{index}")),
-            enabled: true,
-            matcher: matcher.clone(),
-            target: RuleTarget::Direct,
-        }).collect();
+        rule_set.rules = cases
+            .iter()
+            .enumerate()
+            .map(|(index, (matcher, _, _))| Rule {
+                id: RuleId::new(format!("cap-{index}")),
+                enabled: true,
+                matcher: matcher.clone(),
+                target: RuleTarget::Direct,
+            })
+            .collect();
 
         let backend = SingBoxBackend::new("unused");
         assert_eq!(backend.capabilities().rules, render::RULE_CAPABILITIES);
@@ -381,7 +405,8 @@ mod tests {
             node: &node,
             rules: &rule_set,
             settings: &settings,
-        }).expect("rendered");
+        })
+        .expect("rendered");
 
         assert!(config.unsupported.is_empty());
         let config: Value = serde_json::from_slice(&config.body).expect("json");
@@ -403,8 +428,7 @@ mod tests {
         rule_set.rules[0].target = RuleTarget::Block;
         rule_set.default_target = RuleTarget::Block;
 
-        let (route, unsupported) =
-            render::route_section(&rule_set, render::RULE_CAPABILITIES);
+        let (route, unsupported) = render::route_section(&rule_set, render::RULE_CAPABILITIES);
 
         assert!(unsupported.is_empty());
         let rules = route["rules"].as_array().expect("rules");
@@ -420,25 +444,19 @@ mod tests {
             Rule {
                 id: RuleId::new("exact"),
                 enabled: true,
-                matcher: RuleMatcher::Domain(DomainMatch::Exact(
-                    "direct.example".to_owned(),
-                )),
+                matcher: RuleMatcher::Domain(DomainMatch::Exact("direct.example".to_owned())),
                 target: RuleTarget::Direct,
             },
             Rule {
                 id: RuleId::new("suffix"),
                 enabled: true,
-                matcher: RuleMatcher::Domain(DomainMatch::Suffix(
-                    "proxy.example".to_owned(),
-                )),
+                matcher: RuleMatcher::Domain(DomainMatch::Suffix("proxy.example".to_owned())),
                 target: RuleTarget::Proxy,
             },
             Rule {
                 id: RuleId::new("keyword"),
                 enabled: true,
-                matcher: RuleMatcher::Domain(DomainMatch::Keyword(
-                    "blocked".to_owned(),
-                )),
+                matcher: RuleMatcher::Domain(DomainMatch::Keyword("blocked".to_owned())),
                 target: RuleTarget::Block,
             },
         ];
@@ -451,12 +469,11 @@ mod tests {
             rules: &rule_set,
             settings: &settings,
         })
-            .expect("config rendered");
+        .expect("config rendered");
 
         assert!(rendered.unsupported.is_empty());
 
-        let config: Value =
-            serde_json::from_slice(&rendered.body).expect("valid JSON");
+        let config: Value = serde_json::from_slice(&rendered.body).expect("valid JSON");
         let route_rules = config["route"]["rules"]
             .as_array()
             .expect("route rules array");

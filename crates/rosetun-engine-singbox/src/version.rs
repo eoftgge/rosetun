@@ -31,7 +31,7 @@ fn failure(binary: &Path, message: impl std::fmt::Display) -> EngineError {
         "sing-box version check failed for {}: {message}",
         binary.display()
     ))
-        .into()
+    .into()
 }
 
 pub(super) fn check(binary: &Path) -> Result<(), EngineError> {
@@ -84,13 +84,19 @@ pub(super) fn check(binary: &Path) -> Result<(), EngineError> {
 
         if Instant::now() >= deadline {
             super::stop_failed_spawn(&mut child);
-            return Err(failure(binary, "sing-box version timed out after 3 seconds"));
+            return Err(failure(
+                binary,
+                "sing-box version timed out after 3 seconds",
+            ));
         }
         thread::sleep(Duration::from_millis(10));
     };
 
     if !status.success() {
-        return Err(failure(binary, format!("sing-box version exited with {status}")));
+        return Err(failure(
+            binary,
+            format!("sing-box version exited with {status}"),
+        ));
     }
 
     let output = receiver
@@ -119,9 +125,7 @@ mod tests {
 
     #[test]
     fn parses_observed_windows_1_14_1_version_output() {
-        let output = include_str!(
-            "../tests/fixtures/version-1.14.1-windows.txt"
-        );
+        let output = include_str!("../tests/fixtures/version-1.14.1-windows.txt");
 
         assert_eq!(
             parse_version(output),

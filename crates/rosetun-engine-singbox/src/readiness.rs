@@ -47,11 +47,11 @@ pub(super) fn is_startup_message(line: &str) -> bool {
     let info_found = words.by_ref().any(|word| {
         word == "INFO"
             || word
-            .strip_prefix("INFO[")
-            .and_then(|value| value.strip_suffix(']'))
-            .is_some_and(|value| {
-                !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
-            })
+                .strip_prefix("INFO[")
+                .and_then(|value| value.strip_suffix(']'))
+                .is_some_and(|value| {
+                    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+                })
     });
 
     if !info_found {
@@ -71,10 +71,12 @@ pub(super) fn is_startup_message(line: &str) -> bool {
     };
 
     !duration.is_empty()
-        && duration.bytes().all(|byte| byte.is_ascii_digit() || byte == b'.')
         && duration
-        .parse::<f64>()
-        .is_ok_and(|value| value.is_finite() && value >= 0.0)
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        && duration
+            .parse::<f64>()
+            .is_ok_and(|value| value.is_finite() && value >= 0.0)
         && words.next().is_none()
 }
 
@@ -104,12 +106,14 @@ mod tests {
 
     #[test]
     fn accepts_only_final_readiness_line_from_windows_1_14_1_fixture() {
-        let output = include_str!(
-            "../tests/fixtures/startup-1.14.1-windows.txt"
-        );
+        let output = include_str!("../tests/fixtures/startup-1.14.1-windows.txt");
         let lines: Vec<&str> = output.lines().collect();
 
-        assert_eq!(lines.len(), 4, "fixture contains the observed startup sequence");
+        assert_eq!(
+            lines.len(),
+            4,
+            "fixture contains the observed startup sequence"
+        );
 
         for (index, line) in lines.iter().enumerate() {
             assert_eq!(
@@ -165,7 +169,10 @@ mod tests {
         drop(sender);
 
         assert_eq!(
-            readiness.poll().expect_err("startup signal is missing").kind(),
+            readiness
+                .poll()
+                .expect_err("startup signal is missing")
+                .kind(),
             io::ErrorKind::UnexpectedEof
         );
     }

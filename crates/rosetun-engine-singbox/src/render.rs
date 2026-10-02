@@ -256,7 +256,7 @@ fn route_rule(rule: &rosetun_config::Rule) -> Value {
                     RuleTarget::Proxy => TAG_PROXY,
                     _ => TAG_DIRECT,
                 }
-                    .into(),
+                .into(),
             );
         }
         RuleTarget::Block => {

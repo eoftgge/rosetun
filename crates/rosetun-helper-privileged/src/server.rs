@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 
-use rosetun_ipc::{Connection, ErrorCode, Frame, HelperError, Listener, Request, Response, PROTOCOL_VERSION};
+use rosetun_ipc::{
+    Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request, Response,
+};
 
 pub(crate) use crate::state::Helper;
 
@@ -55,7 +57,9 @@ pub fn serve(listener: Listener, helper: Arc<Helper>) -> std::io::Result<()> {
     }
 
     helper.shutdown();
-    Err(std::io::Error::other("helper event channel closed unexpectedly"))
+    Err(std::io::Error::other(
+        "helper event channel closed unexpectedly",
+    ))
 }
 
 fn handle(

@@ -5,14 +5,9 @@ use std::{
 };
 
 use windows_sys::Win32::{
-    Foundation::{
-        ERROR_BUFFER_OVERFLOW,
-    },
+    Foundation::ERROR_BUFFER_OVERFLOW,
     NetworkManagement::{
-        IpHelper::{
-            ConvertInterfaceAliasToLuid,
-            GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
-        },
+        IpHelper::{ConvertInterfaceAliasToLuid, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH},
         Ndis::{IfOperStatusUp, NET_LUID_LH},
     },
     Networking::WinSock::{AF_INET, SOCKADDR_IN},

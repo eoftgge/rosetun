@@ -302,9 +302,9 @@ impl Session {
 
             if ready {
                 // The process may have exited while the signal was being read.
-                let running = process
-                    .is_running()
-                    .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+                let running = process.is_running().map_err(|error| {
+                    HelperError::new(ErrorCode::EngineFailed, error.to_string())
+                })?;
 
                 if !running {
                     return Err(HelperError::new(

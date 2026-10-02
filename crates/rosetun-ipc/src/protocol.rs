@@ -1,6 +1,6 @@
-use std::fmt::Formatter;
 use rosetun_config::{LogLevel, Node, RuleSet, Selection, Settings, Status, Traffic};
 use serde::{Deserialize, Serialize};
+use std::fmt::Formatter;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
