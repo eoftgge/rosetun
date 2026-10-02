@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use rosetun_engine::EngineRegistry;
 use rosetun_engine_singbox::SingBoxBackend;
-use rosetun_engine_xray::XrayBackend;
 use rosetun_ipc::Listener;
 
 fn main() -> std::process::ExitCode {
@@ -30,9 +29,7 @@ fn main() -> std::process::ExitCode {
 
     let work_dir = work_dir();
     let mut engines = EngineRegistry::new();
-    engines
-        .register(Box::new(SingBoxBackend::new(work_dir.join("sing-box"))))
-        .register(Box::new(XrayBackend::new(work_dir.join("xray"))));
+    engines.register(Box::new(SingBoxBackend::new(work_dir.join("sing-box"))));
 
     let helper = Arc::new(Helper::new(engines, rosetun_routing::backend()));
     let endpoint = rosetun_ipc::default_endpoint();

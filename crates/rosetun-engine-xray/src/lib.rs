@@ -32,12 +32,12 @@ impl EngineBackend for XrayBackend {
     }
 
     fn integration(&self) -> EngineIntegration {
-        EngineIntegration::EngineManagedTun
+        EngineIntegration::Unavailable
     }
 
     fn capabilities(&self) -> EngineCapabilities {
         EngineCapabilities {
-            rules: RuleCapabilities::ALL,
+            rules: RuleCapabilities::NONE,
         }
     }
 

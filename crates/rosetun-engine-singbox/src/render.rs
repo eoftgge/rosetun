@@ -8,17 +8,24 @@ use serde_json::{Map, Value, json};
 
 const TAG_PROXY: &str = "proxy";
 const TAG_DIRECT: &str = "direct";
-const TAG_BLOCK: &str = "block";
+
+pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
+    domain_exact: true,
+    domain_suffix: true,
+    domain_keyword: true,
+    process_name: true,
+    process_path: true,
+    ip_cidr: true,
+};
 
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
-    let (route, unsupported) = route_section(request.rules, RuleCapabilities::ALL);
+    let (route, unsupported) = route_section(request.rules, RULE_CAPABILITIES);
     let config = json!({
         "log": log_section(request.settings),
         "inbounds": [tun_inbound(request.settings)],
         "outbounds": [
             proxy_outbound(request.node)?,
             json!({ "type": "direct", "tag": TAG_DIRECT }),
-            json!({ "type": "block", "tag": TAG_BLOCK }),
         ],
         "route": route,
     });
@@ -184,7 +191,10 @@ pub(crate) fn route_section(
     rules: &RuleSet,
     capabilities: RuleCapabilities,
 ) -> (Value, Vec<RuleId>) {
-    let mut route_rules = Vec::new();
+    let mut route_rules = vec![json!({
+        "action": "sniff",
+        "sniffer": ["http", "tls", "quic"],
+    })];
     let mut unsupported = Vec::new();
 
     for rule in rules.enabled() {
@@ -195,10 +205,19 @@ pub(crate) fn route_section(
         }
     }
 
+    let final_outbound = match rules.default_target {
+        RuleTarget::Proxy => TAG_PROXY,
+        RuleTarget::Direct => TAG_DIRECT,
+        RuleTarget::Block => {
+            route_rules.push(json!({ "action": "reject" }));
+            TAG_DIRECT
+        }
+    };
+
     (
         json!({
             "rules": route_rules,
-            "final": tag_for(rules.default_target),
+            "final": final_outbound,
             "auto_detect_interface": true,
         }),
         unsupported,
@@ -227,14 +246,23 @@ fn route_rule(rule: &rosetun_config::Rule) -> Value {
             value.insert("ip_cidr".into(), json!([cidr]));
         }
     }
-    value.insert("outbound".into(), tag_for(rule.target).into());
-    Value::Object(value)
-}
 
-fn tag_for(target: RuleTarget) -> &'static str {
-    match target {
-        RuleTarget::Proxy => TAG_PROXY,
-        RuleTarget::Direct => TAG_DIRECT,
-        RuleTarget::Block => TAG_BLOCK,
+    match rule.target {
+        RuleTarget::Proxy | RuleTarget::Direct => {
+            value.insert("action".into(), "route".into());
+            value.insert(
+                "outbound".into(),
+                match rule.target {
+                    RuleTarget::Proxy => TAG_PROXY,
+                    _ => TAG_DIRECT,
+                }
+                    .into(),
+            );
+        }
+        RuleTarget::Block => {
+            value.insert("action".into(), "reject".into());
+        }
     }
+
+    Value::Object(value)
 }

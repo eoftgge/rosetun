@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineIntegration {
     EngineManagedTun,
+    /// The backend is a placeholder and cannot provide network integration.
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +33,15 @@ pub struct RuleCapabilities {
 }
 
 impl RuleCapabilities {
+    pub const NONE: Self = Self {
+        domain_exact: false,
+        domain_suffix: false,
+        domain_keyword: false,
+        process_name: false,
+        process_path: false,
+        ip_cidr: false,
+    };
+
     pub const ALL: Self = Self {
         domain_exact: true,
         domain_suffix: true,

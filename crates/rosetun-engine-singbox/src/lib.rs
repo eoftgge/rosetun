@@ -2,6 +2,7 @@
 
 mod render;
 mod readiness;
+mod version;
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -13,11 +14,12 @@ use readiness::Readiness;
 use rosetun_config::{EngineKind, Traffic};
 use rosetun_engine::{
     EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest,
-    RenderedConfig, RuleCapabilities,
+    RenderedConfig,
     errors::EngineError
 };
 
 pub use render::render;
+pub use version::SUPPORTED_SING_BOX_VERSION;
 
 const BINARY: &str = if cfg!(windows) {
     "sing-box.exe"
@@ -58,21 +60,23 @@ impl EngineBackend for SingBoxBackend {
 
     fn capabilities(&self) -> EngineCapabilities {
         EngineCapabilities {
-            rules: RuleCapabilities::ALL,
+            rules: render::RULE_CAPABILITIES,
         }
     }
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
-        if let Some(binary) = &self.binary {
-            return if binary.is_file() {
-                Ok(binary.clone())
-            } else {
-                Err(EngineError::BinaryNotFound(binary.display().to_string()))
-            };
-        }
-        find_in_neighbours()
-            .or_else(|| find_in_path())
-            .ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))
+        let binary = match &self.binary {
+            Some(binary) if binary.is_file() => binary.clone(),
+            Some(binary) => {
+                return Err(EngineError::BinaryNotFound(binary.display().to_string()));
+            }
+            None => find_in_neighbours()
+                .or_else(find_in_path)
+                .ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))?,
+        };
+
+        version::check(&binary)?;
+        Ok(binary)
     }
 
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
@@ -229,7 +233,7 @@ mod tests {
         VlessParams,
     };
     use serde_json::Value;
-
+    use rosetun_engine::RuleCapabilities;
     use super::*;
 
     fn node() -> Node {
@@ -310,10 +314,10 @@ mod tests {
     fn disabled_rules_are_dropped() {
         let config = rendered();
         let rules = config["route"]["rules"].as_array().expect("rules array");
-        assert_eq!(
-            rules.len(),
-            2,
-            "the disabled rule should not be included in the config"
+        assert_eq!(rules.len(), 3, "sniff plus two enabled user rules");
+        assert!(
+            rules.iter().all(|rule| rule.get("domain").is_none()),
+            "the disabled exact-domain rule must be absent"
         );
     }
 
@@ -332,20 +336,81 @@ mod tests {
         );
 
         assert_eq!(rendered.1, vec![RuleId::new("r2")]);
-        assert_eq!(
-            rendered.0["rules"].as_array().expect("rules array").len(),
-            1
-        );
+        let rules = rendered.0["rules"].as_array().expect("rules array");
+        assert_eq!(rules.len(), 2, "sniff plus one supported user rule");
+        assert_eq!(rules[0]["action"], "sniff");
+        assert!(rules.iter().all(|rule| rule.get("process_name").is_none()));
     }
 
     #[test]
     fn rule_order_is_preserved() {
         let config = rendered();
         let rules = &config["route"]["rules"];
-        assert_eq!(rules[0]["domain_suffix"][0], "google.com");
-        assert_eq!(rules[0]["outbound"], "proxy");
-        assert_eq!(rules[1]["process_name"][0], "steam.exe");
-        assert_eq!(rules[1]["outbound"], "direct");
+        assert_eq!(rules[0]["action"], "sniff");
+        assert_eq!(rules[1]["domain_suffix"][0], "google.com");
+        assert_eq!(rules[1]["outbound"], "proxy");
+        assert_eq!(rules[2]["process_name"][0], "steam.exe");
+        assert_eq!(rules[2]["outbound"], "direct");
+    }
+
+    #[test]
+    fn every_advertised_matcher_is_rendered_after_sniff() {
+        let cases = [
+            (RuleMatcher::Domain(DomainMatch::Exact("exact.test".into())), "domain", "exact.test"),
+            (RuleMatcher::Domain(DomainMatch::Suffix("suffix.test".into())), "domain_suffix", "suffix.test"),
+            (RuleMatcher::Domain(DomainMatch::Keyword("keyword".into())), "domain_keyword", "keyword"),
+            (RuleMatcher::Process(ProcessMatch::Name("app.exe".into())), "process_name", "app.exe"),
+            (RuleMatcher::Process(ProcessMatch::Path(std::path::PathBuf::from("app.exe"))), "process_path", "app.exe"),
+            (RuleMatcher::IpCidr("192.0.2.0/24".into()), "ip_cidr", "192.0.2.0/24"),
+        ];
+
+        let mut rule_set = rules();
+        rule_set.rules = cases.iter().enumerate().map(|(index, (matcher, _, _))| Rule {
+            id: RuleId::new(format!("cap-{index}")),
+            enabled: true,
+            matcher: matcher.clone(),
+            target: RuleTarget::Direct,
+        }).collect();
+
+        let backend = SingBoxBackend::new("unused");
+        assert_eq!(backend.capabilities().rules, render::RULE_CAPABILITIES);
+
+        let node = node();
+        let settings = Settings::default();
+        let config = render::render(&RenderRequest {
+            node: &node,
+            rules: &rule_set,
+            settings: &settings,
+        }).expect("rendered");
+
+        assert!(config.unsupported.is_empty());
+        let config: Value = serde_json::from_slice(&config.body).expect("json");
+        let route = config["route"]["rules"].as_array().expect("rules");
+        assert_eq!(route.len(), cases.len() + 1);
+        assert_eq!(route[0]["action"], "sniff");
+
+        for (index, (matcher, field, expected)) in cases.iter().enumerate() {
+            assert!(backend.capabilities().rules.supports(matcher));
+            assert_eq!(route[index + 1][*field][0], *expected);
+            assert_eq!(route[index + 1]["action"], "route");
+            assert_eq!(route[index + 1]["outbound"], "direct");
+        }
+    }
+
+    #[test]
+    fn block_uses_reject_for_rule_and_default() {
+        let mut rule_set = rules();
+        rule_set.rules[0].target = RuleTarget::Block;
+        rule_set.default_target = RuleTarget::Block;
+
+        let (route, unsupported) =
+            render::route_section(&rule_set, render::RULE_CAPABILITIES);
+
+        assert!(unsupported.is_empty());
+        let rules = route["rules"].as_array().expect("rules");
+        assert_eq!(rules[1]["action"], "reject");
+        assert!(rules[1].get("outbound").is_none());
+        assert_eq!(rules.last().expect("fallback")["action"], "reject");
     }
 
     #[test]
