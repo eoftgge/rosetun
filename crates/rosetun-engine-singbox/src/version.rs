@@ -9,7 +9,7 @@ use rosetun_engine::errors::EngineError;
 
 pub const SUPPORTED_SING_BOX_VERSION: &str = "1.14.1";
 
-const CHECK_TIMEOUT: Duration = Duration::from_secs(3);
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OUTPUT: u64 = 16 * 1024;
 
 fn parse_version(output: &str) -> Option<&str> {
@@ -86,7 +86,7 @@ pub(super) fn check(binary: &Path) -> Result<(), EngineError> {
             super::stop_failed_spawn(&mut child);
             return Err(failure(
                 binary,
-                "sing-box version timed out after 3 seconds",
+                format!("sing-box version timed out after {} seconds", CHECK_TIMEOUT.as_secs()),
             ));
         }
         thread::sleep(Duration::from_millis(10));
