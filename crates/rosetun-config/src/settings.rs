@@ -58,9 +58,25 @@ pub struct Settings {
     #[serde(default)]
     pub kill_switch: bool,
     #[serde(default)]
+    pub allow_lan: bool,
+    #[serde(default)]
     pub autostart: bool,
     #[serde(default)]
     pub tun: TunSettings,
     #[serde(default)]
     pub log_level: LogLevel,
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::Settings;
+
+    #[test]
+    fn old_settings_without_allow_lan_remain_valid() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"kill_switch":true}"#).expect("old settings");
+        assert!(settings.kill_switch);
+        assert!(!settings.allow_lan);
+        assert!(!Settings::default().allow_lan);
+    }
 }

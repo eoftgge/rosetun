@@ -21,7 +21,8 @@ pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
 };
 
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
-    let (route, unsupported) = route_section(request.rules, RULE_CAPABILITIES);
+    let (route, unsupported) =
+        route_section(request.rules, RULE_CAPABILITIES, request.settings.allow_lan);
     let config = json!({
         "log": log_section(request.settings),
         "dns": dns_section(),
@@ -205,6 +206,7 @@ fn transport_section(transport: &Transport) -> Option<Value> {
 pub(crate) fn route_section(
     rules: &RuleSet,
     capabilities: RuleCapabilities,
+    allow_lan: bool,
 ) -> (Value, Vec<RuleId>) {
     let mut route_rules = vec![
         json!({
@@ -226,11 +228,13 @@ pub(crate) fn route_section(
         }
     }
 
-    route_rules.push(json!({
-        "ip_is_private": true,
-        "action": "route",
-        "outbound": TAG_DIRECT,
-    }));
+    if allow_lan {
+        route_rules.push(json!({
+            "ip_is_private": true,
+            "action": "route",
+            "outbound": TAG_DIRECT,
+        }));
+    }
 
     let final_outbound = match rules.default_target {
         RuleTarget::Proxy => TAG_PROXY,

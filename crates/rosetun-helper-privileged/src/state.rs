@@ -18,11 +18,24 @@ pub struct Helper {
     session: Mutex<Session>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartMode {
+    Fresh,
+    ProtectedReconnect,
+}
+
+#[derive(Debug, Clone)]
+struct SuccessfulEndpoint {
+    server: String,
+    address: IpAddr,
+}
+
 struct Session {
     engines: EngineRegistry,
     routing: Box<dyn RoutingBackend>,
     process: Option<Box<dyn EngineProcess>>,
     guard: Option<RoutingGuard>,
+    last_endpoint: Option<SuccessfulEndpoint>,
     stopping: bool,
 }
 
@@ -41,6 +54,7 @@ impl Helper {
                 routing,
                 process: None,
                 guard: None,
+                last_endpoint: None,
                 stopping: false,
             }),
         }
@@ -77,28 +91,31 @@ impl Helper {
 
     pub fn connect(&self, request: &ConnectRequest) -> Result<(), HelperError> {
         let mut session = self.session()?;
-
         let state = self.with_status(|status| status.state.clone());
+
+        let mode = match state {
+            ConnectionState::Disconnected | ConnectionState::Failed { .. } => StartMode::Fresh,
+            ConnectionState::FailedProtected { .. } => StartMode::ProtectedReconnect,
+            _ => {
+                return Err(HelperError::new(
+                    ErrorCode::InvalidState,
+                    format!("tunnel is already {state:?}"),
+                ));
+            }
+        };
+
         tracing::info!(
             node = %request.node.id,
             engine = %request.settings.engine.as_str(),
             kill_switch = request.settings.kill_switch,
+            allow_lan = request.settings.allow_lan,
+            ?mode,
             "starting tunnel connection"
         );
 
-        if !matches!(
-            state,
-            ConnectionState::Disconnected | ConnectionState::Failed { .. }
-        ) {
-            return Err(HelperError::new(
-                ErrorCode::InvalidState,
-                format!("tunnel is already {state:?}"),
-            ));
-        }
-
         self.with_status(|status| status.state = ConnectionState::Connecting);
 
-        match session.start(&request.node, &request.rule_set, &request.settings) {
+        match session.start(&request.node, &request.rule_set, &request.settings, mode) {
             Ok(()) => {
                 self.with_status(|status| {
                     status.state = ConnectionState::Connected;
@@ -109,10 +126,26 @@ impl Helper {
                 Ok(())
             }
             Err(error) => {
-                session.teardown();
+                match mode {
+                    StartMode::Fresh => session.teardown(),
+                    StartMode::ProtectedReconnect => {
+                        if let Err(cleanup_error) = session.stop_engine() {
+                            tracing::error!(
+                                %cleanup_error,
+                                "failed to stop engine after protected reconnect failure"
+                            );
+                        }
+                    }
+                }
+
                 let reason = error.message.clone();
                 self.with_status(|status| {
-                    status.state = ConnectionState::Failed { reason };
+                    status.state = match mode {
+                        StartMode::Fresh => ConnectionState::Failed { reason },
+                        StartMode::ProtectedReconnect => {
+                            ConnectionState::FailedProtected { reason }
+                        }
+                    };
                     status.since_unix = None;
                 });
                 Err(error)
@@ -179,26 +212,42 @@ impl Session {
         node: &Node,
         rules: &RuleSet,
         settings: &Settings,
+        mode: StartMode,
     ) -> Result<(), HelperError> {
+        // Dispose of the old process before borrowing the backend or spawning another.
+        // A stop failure retains its handle and prevents a second engine from starting.
+        self.stop_engine()?;
+
+        if mode == StartMode::ProtectedReconnect {
+            if self.guard.is_none() {
+                return Err(HelperError::new(
+                    ErrorCode::RoutingFailed,
+                    "защищённое переподключение невозможно: routing guard отсутствует",
+                ));
+            }
+            if !settings.kill_switch {
+                return Err(HelperError::new(
+                    ErrorCode::InvalidState,
+                    "для отключения защиты сначала выполните disconnect",
+                ));
+            }
+        }
+
+        let endpoint = if mode == StartMode::ProtectedReconnect {
+            Some(protected_endpoint(node, self.last_endpoint.as_ref())?)
+        } else if settings.engine == rosetun_config::EngineKind::SingBox {
+            Some(select_endpoint(&resolve(&node.server, node.port)?)?)
+        } else {
+            None
+        };
+
+        let resolved_node = endpoint.map(|address| node_with_endpoint(node, address));
         let backend = self.engines.get(settings.engine).ok_or_else(|| {
             HelperError::new(
                 ErrorCode::EngineFailed,
                 format!("engine {} is not registered", settings.engine.as_str()),
             )
         })?;
-
-        let resolved_node = if settings.engine == rosetun_config::EngineKind::SingBox {
-            let addresses = resolve(&node.server, node.port)?;
-            let endpoint = select_endpoint(&addresses)?;
-            tracing::info!(
-                server = %node.server,
-                %endpoint,
-                "selected engine endpoint"
-            );
-            Some(node_with_endpoint(node, endpoint))
-        } else {
-            None
-        };
 
         let config = backend
             .render(&RenderRequest {
@@ -228,7 +277,11 @@ impl Session {
             .locate_binary()
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
-        tracing::debug!(engine = %backend.kind().as_str(), binary = %binary.display(), "engine binary located");
+        tracing::debug!(
+            engine = %backend.kind().as_str(),
+            binary = %binary.display(),
+            "engine binary located"
+        );
 
         let tunnel = settings
             .kill_switch
@@ -237,30 +290,41 @@ impl Session {
             .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
 
         if settings.kill_switch {
-            let plan = RoutingPlan { kill_switch: true };
+            let plan = RoutingPlan {
+                allow_lan: settings.allow_lan,
+            };
 
-            tracing::info!("preflighting and enabling bootstrap routing protection");
-            self.routing
-                .preflight()
-                .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
-
-            let guard = self
-                .routing
-                .begin_protection(&plan, &binary)
-                .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
-            self.guard = Some(guard);
+            match mode {
+                StartMode::Fresh => {
+                    self.routing.preflight().map_err(|error| {
+                        HelperError::new(ErrorCode::RoutingFailed, error.to_string())
+                    })?;
+                    self.guard = Some(self.routing.begin_protection(&plan, &binary).map_err(
+                        |error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()),
+                    )?);
+                }
+                StartMode::ProtectedReconnect => {
+                    self.guard
+                        .as_mut()
+                        .expect("protected reconnect validated the guard")
+                        .prepare_reconnect(&plan, &binary)
+                        .map_err(|error| {
+                            HelperError::new(ErrorCode::RoutingFailed, error.to_string())
+                        })?;
+                }
+            }
         }
 
         tracing::info!(engine = %backend.kind().as_str(), "spawning tunnel engine");
-        let process = backend
-            .spawn(&binary, &config)
-            .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
-        self.process = Some(process);
+        self.process = Some(
+            backend
+                .spawn(&binary, &config)
+                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?,
+        );
 
         self.wait_for_engine_ready()?;
 
         if let Some(tunnel) = tunnel.as_ref() {
-            tracing::debug!(alias = %tunnel.alias, ipv4 = %tunnel.ipv4, "waiting for tunnel readiness");
             self.wait_for_tunnel(tunnel)?;
 
             let running = self
@@ -278,6 +342,11 @@ impl Session {
             }
         }
 
+        // Do not poison the successful endpoint cache with a failed attempt.
+        self.last_endpoint = endpoint.map(|address| SuccessfulEndpoint {
+            server: normalize_server(&node.server),
+            address,
+        });
         Ok(())
     }
 
@@ -405,10 +474,18 @@ impl Session {
         }
     }
 
+    fn stop_engine(&mut self) -> Result<(), HelperError> {
+        if let Some(process) = self.process.as_mut() {
+            process
+                .stop()
+                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+        }
+        self.process.take();
+        Ok(())
+    }
+
     fn teardown(&mut self) {
-        if let Some(mut process) = self.process.take()
-            && let Err(error) = process.stop()
-        {
+        if let Err(error) = self.stop_engine() {
             tracing::error!(%error, "failed to stop the engine");
         }
         if let Some(guard) = self.guard.take()
@@ -423,6 +500,29 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.teardown();
     }
+}
+
+fn normalize_server(server: &str) -> String {
+    server.trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn protected_endpoint(
+    node: &Node,
+    cached: Option<&SuccessfulEndpoint>,
+) -> Result<IpAddr, HelperError> {
+    if let Ok(address) = node.server.parse::<IpAddr>() {
+        return Ok(address);
+    }
+
+    cached
+        .filter(|endpoint| endpoint.server == normalize_server(&node.server))
+        .map(|endpoint| endpoint.address)
+        .ok_or_else(|| {
+            HelperError::new(
+                ErrorCode::RoutingFailed,
+                "нельзя отрезолвить новый сервер при активной защите",
+            )
+        })
 }
 
 fn resolve(server: &str, port: u16) -> Result<Vec<IpAddr>, HelperError> {

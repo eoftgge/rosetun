@@ -137,14 +137,15 @@ impl Drop for DynamicSession {
     }
 }
 
-/// Owns one dynamic WFP session for both kill-switch phases.
-///
 /// Bootstrap policy is installed before the engine starts. Tunnel authorization
 /// is added later to this same session after routing has discovered and
 /// validated the engine-created adapter.
 #[derive(Debug)]
 pub(super) struct WfpProtectionSession {
     session: Option<DynamicSession>,
+    bootstrap_policy: BootstrapPolicy,
+    bootstrap_filter_ids: Vec<u64>,
+    tunnel_filter_ids: Vec<u64>,
     tunnel_authorized: bool,
 }
 
@@ -155,15 +156,19 @@ impl WfpProtectionSession {
 
         session.add_provider_and_sublayer()?;
 
-        let policy = BootstrapPolicy::from_plan(plan, engine_binary);
-        for rule in &policy.rules {
-            filters::add_rule(&session, rule)?;
+        let bootstrap_policy = BootstrapPolicy::from_plan(plan, engine_binary);
+        let mut bootstrap_filter_ids = Vec::with_capacity(bootstrap_policy.rules.len());
+        for rule in &bootstrap_policy.rules {
+            bootstrap_filter_ids.push(filters::add_rule(&session, rule)?);
         }
 
         transaction.commit()?;
 
         Ok(Self {
             session: Some(session),
+            bootstrap_policy,
+            bootstrap_filter_ids,
+            tunnel_filter_ids: Vec::new(),
             tunnel_authorized: false,
         })
     }
@@ -180,6 +185,43 @@ impl WfpProtectionSession {
 unsafe impl Send for WfpProtectionSession {}
 
 impl ProtectionSession for WfpProtectionSession {
+    fn prepare_reconnect(
+        &mut self,
+        plan: &RoutingPlan,
+        engine_binary: &Path,
+    ) -> Result<(), RoutingError> {
+        let policy = BootstrapPolicy::from_plan(plan, engine_binary);
+        let replace_bootstrap = policy != self.bootstrap_policy;
+        let session = self.active_session()?;
+        let transaction = session.transaction()?;
+
+        for &id in &self.tunnel_filter_ids {
+            filters::delete_rule(session, id)?;
+        }
+
+        let mut replacement_ids = Vec::new();
+        if replace_bootstrap {
+            for &id in &self.bootstrap_filter_ids {
+                filters::delete_rule(session, id)?;
+            }
+            replacement_ids.reserve(policy.rules.len());
+            for rule in &policy.rules {
+                replacement_ids.push(filters::add_rule(session, rule)?);
+            }
+        }
+
+        transaction.commit()?;
+
+        // Publish bookkeeping only after the OS has committed the replacement.
+        if replace_bootstrap {
+            self.bootstrap_policy = policy;
+            self.bootstrap_filter_ids = replacement_ids;
+        }
+        self.tunnel_filter_ids.clear();
+        self.tunnel_authorized = false;
+        Ok(())
+    }
+
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError> {
         if self.tunnel_authorized {
             return Ok(());
@@ -188,18 +230,22 @@ impl ProtectionSession for WfpProtectionSession {
         let luid = tunnel::resolve_luid(tunnel)?;
         let session = self.active_session()?;
         let transaction = session.transaction()?;
+        let mut ids = Vec::with_capacity(2);
 
         for rule in policy::tunnel_authorization(luid.value()) {
-            filters::add_rule(session, &rule)?;
+            ids.push(filters::add_rule(session, &rule)?);
         }
 
         transaction.commit()?;
+        self.tunnel_filter_ids = ids;
         self.tunnel_authorized = true;
         Ok(())
     }
 
     fn teardown(&mut self) -> Result<(), RoutingError> {
         self.session.take();
+        self.bootstrap_filter_ids.clear();
+        self.tunnel_filter_ids.clear();
         self.tunnel_authorized = false;
         Ok(())
     }

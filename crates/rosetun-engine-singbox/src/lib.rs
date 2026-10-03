@@ -202,12 +202,22 @@ impl EngineProcess for SingBoxProcess {
     }
 
     fn stop(&mut self) -> Result<(), EngineError> {
+        if self.child.try_wait()?.is_some() {
+            return Ok(());
+        }
+
         // TODO: on Unix, first issue SIGTERM to allow the engine time to remove the routes,
         // and only then kill. It's rough now, but predictable.
         match self.child.kill() {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                // The process can exit between try_wait and kill.
+                if self.child.try_wait()?.is_none() {
+                    return Err(error.into());
+                }
+                return Ok(());
+            }
         }
         self.child.wait()?;
         Ok(())
@@ -279,7 +289,10 @@ mod tests {
     fn rendered() -> Value {
         let node = node();
         let rules = rules();
-        let settings = Settings::default();
+        let settings = Settings {
+            allow_lan: true,
+            ..Settings::default()
+        };
         let request = RenderRequest {
             node: &node,
             rules: &rules,
@@ -326,6 +339,7 @@ mod tests {
                 process_path: false,
                 ip_cidr: true,
             },
+            true,
         );
 
         assert_eq!(rendered.1, vec![RuleId::new("r2")]);
@@ -409,7 +423,10 @@ mod tests {
         assert_eq!(backend.capabilities().rules, render::RULE_CAPABILITIES);
 
         let node = node();
-        let settings = Settings::default();
+        let settings = Settings {
+            allow_lan: true,
+            ..Settings::default()
+        };
         let config = render::render(&RenderRequest {
             node: &node,
             rules: &rule_set,
@@ -443,7 +460,8 @@ mod tests {
         rule_set.rules[0].target = RuleTarget::Block;
         rule_set.default_target = RuleTarget::Block;
 
-        let (route, unsupported) = render::route_section(&rule_set, render::RULE_CAPABILITIES);
+        let (route, unsupported) =
+            render::route_section(&rule_set, render::RULE_CAPABILITIES, true);
 
         assert!(unsupported.is_empty());
         let rules = route["rules"].as_array().expect("rules");
@@ -493,7 +511,10 @@ mod tests {
         rule_set.default_target = RuleTarget::Proxy;
 
         let node = node();
-        let settings = Settings::default();
+        let settings = Settings {
+            allow_lan: true,
+            ..Settings::default()
+        };
         let rendered = render::render(&RenderRequest {
             node: &node,
             rules: &rule_set,
@@ -602,7 +623,10 @@ mod tests {
     #[test]
     fn dns_hijack_precedes_user_rules_and_block_fallback() {
         let node = node();
-        let settings = Settings::default();
+        let settings = Settings {
+            allow_lan: true,
+            ..Settings::default()
+        };
         let mut rule_set = rules();
         rule_set.default_target = RuleTarget::Block;
 
@@ -648,5 +672,37 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    #[test]
+    fn private_direct_is_opt_in_and_follows_dns_hijack() {
+        for allow_lan in [false, true] {
+            let settings = Settings {
+                allow_lan,
+                ..Settings::default()
+            };
+            let node = node();
+            let rules = rules();
+            let rendered = render::render(&RenderRequest {
+                node: &node,
+                rules: &rules,
+                settings: &settings,
+            })
+            .expect("rendered");
+            let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
+            let route = config["route"]["rules"].as_array().expect("rules");
+
+            let dns = route
+                .iter()
+                .position(|rule| rule["action"] == "hijack-dns")
+                .expect("DNS hijack");
+            let private = route.iter().position(|rule| rule["ip_is_private"] == true);
+
+            assert_eq!(private.is_some(), allow_lan);
+            if let Some(private) = private {
+                assert!(dns < private);
+                assert_eq!(route[private]["outbound"], "direct");
+            }
+        }
     }
 }

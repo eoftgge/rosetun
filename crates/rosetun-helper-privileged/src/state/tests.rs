@@ -453,7 +453,7 @@ fn status_answers_while_connect_holds_the_session() {
         .expect("test routing plan mutex is not poisoned")
         .clone()
         .expect("routing receives a protection plan");
-    assert!(plan.kill_switch);
+    assert!(!plan.allow_lan);
 
     assert!(matches!(helper.status().state, ConnectionState::Connecting));
 
@@ -749,4 +749,150 @@ fn disconnect_from_failed_protected_state_returns_to_disconnected() {
         helper.status().state,
         ConnectionState::Disconnected
     ));
+}
+
+fn protected_helper(
+    engine: Box<dyn EngineBackend>,
+) -> (Helper, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let prepared = Arc::new(AtomicUsize::new(0));
+    let authorized = Arc::new(AtomicUsize::new(0));
+    let reverted = Arc::new(AtomicUsize::new(0));
+    let mut engines = EngineRegistry::new();
+    engines.register(engine);
+    let helper = Helper::new(engines, Box::new(UnusedRouting));
+
+    {
+        let mut session = helper.session().expect("session");
+        let prepare_count = Arc::clone(&prepared);
+        let authorize_count = Arc::clone(&authorized);
+        let revert_count = Arc::clone(&reverted);
+        session.guard = Some(RoutingGuard::new_with_reconnector(
+            move |plan, _| {
+                assert!(plan.allow_lan);
+                prepare_count.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+            move |_| {
+                authorize_count.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+            move || {
+                revert_count.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        ));
+        session.last_endpoint = Some(SuccessfulEndpoint {
+            // This domain must never be resolved during reconnect.
+            server: "cached.invalid".to_owned(),
+            address: "203.0.113.10".parse().expect("IP"),
+        });
+        session.process = Some(Box::new(ExitedProcess));
+    }
+    helper.with_status(|status| {
+        status.state = ConnectionState::FailedProtected {
+            reason: "old failure".into(),
+        };
+    });
+    (helper, prepared, authorized, reverted)
+}
+
+fn protected_request() -> ConnectRequest {
+    let mut request = connect_request();
+    request.node.server = "CACHED.INVALID.".to_owned();
+    request.settings.kill_switch = true;
+    request.settings.allow_lan = true;
+    request
+}
+
+#[test]
+fn protected_reconnect_reuses_guard_and_cached_domain_endpoint() {
+    let (helper, prepared, authorized, reverted) = protected_helper(Box::new(StubEngine));
+    helper
+        .connect(&protected_request())
+        .expect("protected reconnect");
+
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(authorized.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+
+    helper.disconnect().expect("disconnect");
+    assert_eq!(reverted.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn failed_protected_reconnect_does_not_revert_guard() {
+    let (helper, prepared, _, reverted) = protected_helper(Box::new(ExitedEngine));
+    helper
+        .connect(&protected_request())
+        .expect_err("new engine exits");
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { .. }
+    ));
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert!(helper.session().expect("session").guard.is_some());
+}
+
+#[test]
+fn protected_reconnect_to_other_domain_fails_without_dns_or_guard_release() {
+    let (helper, prepared, _, reverted) = protected_helper(Box::new(StubEngine));
+    let mut request = protected_request();
+    request.node.server = "another.invalid".into();
+
+    let error = helper.connect(&request).expect_err("different domain");
+    assert_eq!(
+        error.message,
+        "нельзя отрезолвить новый сервер при активной защите"
+    );
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { .. }
+    ));
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn protected_reconnect_cannot_disable_kill_switch() {
+    let (helper, prepared, _, reverted) = protected_helper(Box::new(StubEngine));
+    let mut request = protected_request();
+    request.settings.kill_switch = false;
+
+    helper
+        .connect(&request)
+        .expect_err("explicit disconnect required");
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { .. }
+    ));
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn connect_from_connected_is_still_rejected() {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(StubEngine));
+    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let request = connect_request();
+
+    helper.connect(&request).expect("fresh connect");
+    let error = helper.connect(&request).expect_err("already connected");
+    assert_eq!(error.code, ErrorCode::InvalidState);
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+}
+
+#[test]
+fn protected_endpoint_requires_matching_cache_but_accepts_literal_ip() {
+    let mut request = protected_request();
+    assert!(protected_endpoint(&request.node, None).is_err());
+
+    request.node.server = "198.51.100.7".into();
+    assert_eq!(
+        protected_endpoint(&request.node, None).expect("literal IP"),
+        "198.51.100.7".parse::<IpAddr>().expect("IP"),
+    );
 }

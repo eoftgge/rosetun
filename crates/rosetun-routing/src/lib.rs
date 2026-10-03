@@ -6,8 +6,8 @@ pub use platform::backend;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutingPlan {
-    /// Whether the platform protection layer must prevent direct internet access.
-    pub kill_switch: bool,
+    /// Allows non-engine applications to reach private destinations.
+    pub allow_lan: bool,
 }
 
 pub trait RoutingBackend: std::fmt::Debug + Send {
@@ -58,6 +58,13 @@ impl TryFrom<&rosetun_config::TunSettings> for TunnelInterface {
 }
 
 pub(crate) trait ProtectionSession: std::fmt::Debug + Send {
+    /// Removes stale tunnel authorization and updates bootstrap protection
+    /// atomically, without closing the existing protection session.
+    fn prepare_reconnect(
+        &mut self,
+        plan: &RoutingPlan,
+        engine_binary: &std::path::Path,
+    ) -> Result<(), RoutingError>;
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError>;
     fn teardown(&mut self) -> Result<(), RoutingError>;
 }
@@ -87,8 +94,18 @@ impl RoutingGuard {
         authorize: impl FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send + 'static,
         revert: impl FnOnce() -> Result<(), RoutingError> + Send + 'static,
     ) -> Self {
+        Self::new_with_reconnector(|_, _| Err(RoutingError::Unsupported), authorize, revert)
+    }
+
+    /// Creates a guard with explicit protected-reconnect support.
+    pub fn new_with_reconnector(
+        prepare: impl FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send + 'static,
+        authorize: impl FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send + 'static,
+        revert: impl FnOnce() -> Result<(), RoutingError> + Send + 'static,
+    ) -> Self {
         Self {
             session: Some(Box::new(ClosureSession {
+                prepare: Box::new(prepare),
                 authorize: Box::new(authorize),
                 revert: Some(Box::new(revert)),
             })),
@@ -96,7 +113,7 @@ impl RoutingGuard {
     }
 
     pub fn noop() -> Self {
-        Self::new(|| Ok(()))
+        Self::new_with_reconnector(|_, _| Ok(()), |_| Ok(()), || Ok(()))
     }
 
     pub(crate) fn from_session(session: impl ProtectionSession + 'static) -> Self {
@@ -105,11 +122,24 @@ impl RoutingGuard {
         }
     }
 
+    pub fn prepare_reconnect(
+        &mut self,
+        plan: &RoutingPlan,
+        engine_binary: &std::path::Path,
+    ) -> Result<(), RoutingError> {
+        self.session
+            .as_mut()
+            .ok_or_else(|| RoutingError::Route("routing protection is not active".to_owned()))?
+            .prepare_reconnect(plan, engine_binary)
+    }
+
     /// Adds phase-2 authorization after the engine has created its TUN adapter.
     pub fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError> {
         match self.session.as_mut() {
             Some(session) => session.authorize_tunnel(tunnel),
-            None => Ok(()),
+            None => Err(RoutingError::Route(
+                "routing protection is not active".to_owned(),
+            )),
         }
     }
 
@@ -132,6 +162,7 @@ impl Drop for RoutingGuard {
 }
 
 struct ClosureSession {
+    prepare: Box<dyn FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send>,
     authorize: Box<dyn FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send>,
     revert: Option<Box<dyn FnOnce() -> Result<(), RoutingError> + Send>>,
 }
@@ -145,6 +176,14 @@ impl std::fmt::Debug for ClosureSession {
 }
 
 impl ProtectionSession for ClosureSession {
+    fn prepare_reconnect(
+        &mut self,
+        plan: &RoutingPlan,
+        engine_binary: &std::path::Path,
+    ) -> Result<(), RoutingError> {
+        (self.prepare)(plan, engine_binary)
+    }
+
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError> {
         (self.authorize)(tunnel)
     }

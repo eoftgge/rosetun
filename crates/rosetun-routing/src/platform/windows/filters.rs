@@ -5,9 +5,12 @@ use super::{
     session::DynamicSession,
 };
 use crate::RoutingError;
+use crate::platform::windows::policy::Subnet;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FWP_ACTION_BLOCK, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS, FWPM_DISPLAY_DATA0,
-    FwpmFilterAdd0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
+    FWP_ACTION_BLOCK, FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK,
+    FWP_V6_ADDR_MASK, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_FLAGS,
+    FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_DISPLAY_DATA0, FwpmFilterAdd0, FwpmFilterDeleteById0,
+    FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
 };
 use windows_sys::{
     Win32::NetworkManagement::{
@@ -61,9 +64,11 @@ impl Drop for AppIdBlob {
     }
 }
 
-pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), RoutingError> {
+pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<u64, RoutingError> {
     let mut luid = NET_LUID_LH::default();
     let app_id: AppIdBlob;
+    let mut v4 = FWP_V4_ADDR_AND_MASK::default();
+    let mut v6 = FWP_V6_ADDR_AND_MASK::default();
     let mut conditions = Vec::with_capacity(3);
 
     match rule.conditions.as_slice() {
@@ -84,6 +89,20 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
                 protocol_condition(IPPROTO_UDP as u8),
                 port_condition(FWPM_CONDITION_IP_LOCAL_PORT, DHCP_CLIENT_PORT),
                 port_condition(FWPM_CONDITION_IP_REMOTE_PORT, DHCP_SERVER_PORT),
+            ]);
+        }
+        [Condition::RemoteSubnet(subnet)] => {
+            conditions.push(subnet_condition(rule.family, *subnet, &mut v4, &mut v6)?);
+        }
+        [
+            Condition::RemoteSubnet(subnet),
+            Condition::Protocol(protocol),
+            Condition::RemotePort(port),
+        ] => {
+            conditions.extend([
+                subnet_condition(rule.family, *subnet, &mut v4, &mut v6)?,
+                protocol_condition(*protocol),
+                port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
             ]);
         }
         _ => return Err(RoutingError::Unsupported),
@@ -115,8 +134,8 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
         "adding Rosetun WFP filter"
     );
 
-    let status =
-        unsafe { FwpmFilterAdd0(session.handle(), &filter, ptr::null_mut(), ptr::null_mut()) };
+    let mut id = 0;
+    let status = unsafe { FwpmFilterAdd0(session.handle(), &filter, ptr::null_mut(), &mut id) };
     if status != 0 {
         return Err(RoutingError::Wfp {
             code: status,
@@ -124,7 +143,61 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<(), Rout
         });
     }
 
+    Ok(id)
+}
+
+pub(super) fn delete_rule(session: &DynamicSession, id: u64) -> Result<(), RoutingError> {
+    let status = unsafe { FwpmFilterDeleteById0(session.handle(), id) };
+    if status != 0 {
+        return Err(RoutingError::Wfp {
+            code: status,
+            context: "deleting a Rosetun WFP filter",
+        });
+    }
     Ok(())
+}
+
+fn subnet_condition(
+    family: AddressFamily,
+    subnet: Subnet,
+    v4: &mut FWP_V4_ADDR_AND_MASK,
+    v6: &mut FWP_V6_ADDR_AND_MASK,
+) -> Result<FWPM_FILTER_CONDITION0, RoutingError> {
+    if family != subnet.family() {
+        return Err(RoutingError::Unsupported);
+    }
+
+    let condition_value = match subnet {
+        Subnet::V4 { address, prefix } if prefix <= 32 => {
+            // WFP IPv4 values use host-order integers.
+            v4.addr = u32::from_be_bytes(address);
+            v4.mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            FWP_CONDITION_VALUE0 {
+                r#type: FWP_V4_ADDR_MASK,
+                Anonymous: FWP_CONDITION_VALUE0_0 { v4AddrMask: v4 },
+            }
+        }
+        Subnet::V6 { address, prefix } if prefix <= 128 => {
+            // IPv6 uses raw network-order octets.
+            v6.addr = address;
+            v6.prefixLength = prefix;
+            FWP_CONDITION_VALUE0 {
+                r#type: FWP_V6_ADDR_MASK,
+                Anonymous: FWP_CONDITION_VALUE0_0 { v6AddrMask: v6 },
+            }
+        }
+        _ => return Err(RoutingError::Unsupported),
+    };
+
+    Ok(FWPM_FILTER_CONDITION0 {
+        fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+        matchType: FWP_MATCH_EQUAL,
+        conditionValue: condition_value,
+    })
 }
 
 fn application_condition(app_id: &AppIdBlob) -> FWPM_FILTER_CONDITION0 {
