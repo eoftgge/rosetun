@@ -9,7 +9,8 @@ use serde_json::{Map, Value, json};
 const TAG_PROXY: &str = "proxy";
 const TAG_DIRECT: &str = "direct";
 const TAG_DNS_PROXY: &str = "dns-proxy";
-const PUBLIC_DNS_SERVER: &str = "1.1.1.1";
+const PUBLIC_DNS_SERVER: &str = "8.8.8.8";
+const PUBLIC_DNS_SERVER_NAME: &str = "dns.google";
 
 pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
     domain_exact: true,
@@ -46,10 +47,10 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
 fn dns_section() -> Value {
     json!({
         "servers": [{
-            "type": "udp",
+            "type": "tls",
             "tag": TAG_DNS_PROXY,
             "server": PUBLIC_DNS_SERVER,
-            "server_port": 53,
+            "tls": { "server_name": PUBLIC_DNS_SERVER_NAME },
             "detour": TAG_PROXY,
         }],
     })
@@ -77,6 +78,10 @@ fn tun_inbound(settings: &Settings) -> Value {
         "interface_name": tun.name,
         "address": address,
         "mtu": tun.mtu,
+        // The system stack hands TUN connections back to sing-box through
+        // Windows, so a firewall that blocks inbound traffic to sing-box.exe
+        // silently drops all TCP. gVisor keeps TCP inside the process.
+        "stack": "gvisor",
         "auto_route": tun.auto_route,
         "strict_route": tun.auto_route,
     })

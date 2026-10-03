@@ -94,6 +94,7 @@ impl EngineBackend for SingBoxBackend {
         tracing::info!(binary = %binary.display(), config = %config_path.display(), "starting sing-box");
         let mut child = Command::new(binary)
             .arg("run")
+            .arg("--disable-color")
             .arg("-c")
             .arg(&config_path)
             .stdin(Stdio::null())
@@ -577,6 +578,7 @@ mod tests {
         let config = rendered();
         let inbound = &config["inbounds"][0];
         assert_eq!(inbound["type"], "tun");
+        assert_eq!(inbound["stack"], "gvisor");
         assert_eq!(inbound["interface_name"], "rosetun0");
         assert_eq!(inbound["address"][0], "172.19.0.1/30");
     }
@@ -610,11 +612,13 @@ mod tests {
         assert_eq!(
             servers[0],
             serde_json::json!({
-                "type": "udp",
-                "tag": "dns-proxy",
-                "server": "1.1.1.1",
-                "server_port": 53,
+                "type": "tls",
                 "detour": "proxy",
+                "tag": "dns-proxy",
+                "server": "8.8.8.8",
+                "tls": {
+                    "server_name": "dns.google",
+                }
             })
         );
         assert!(config["dns"].get("rules").is_none());
