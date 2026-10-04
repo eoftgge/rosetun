@@ -86,7 +86,10 @@ pub(super) fn check(binary: &Path) -> Result<(), EngineError> {
             super::stop_failed_spawn(&mut child);
             return Err(failure(
                 binary,
-                format!("sing-box version timed out after {} seconds", CHECK_TIMEOUT.as_secs()),
+                format!(
+                    "sing-box version timed out after {} seconds",
+                    CHECK_TIMEOUT.as_secs()
+                ),
             ));
         }
         thread::sleep(Duration::from_millis(10));

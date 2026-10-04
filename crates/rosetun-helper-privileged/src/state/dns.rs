@@ -35,13 +35,7 @@ impl std::fmt::Display for LastResult {
 fn query(id: u16) -> Vec<u8> {
     let mut packet = Vec::with_capacity(29);
     packet.extend_from_slice(&id.to_be_bytes());
-    packet.extend_from_slice(&[
-        0x01, 0x00,
-        0x00, 0x01,
-        0x00, 0x00,
-        0x00, 0x00,
-        0x00, 0x00,
-    ]);
+    packet.extend_from_slice(&[0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
     packet.extend_from_slice(b"\x07example\x03com\x00");
     packet.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
     packet
@@ -141,7 +135,9 @@ fn failed(message: impl Into<String>) -> HelperError {
 }
 
 fn socket_error(error: io::Error) -> HelperError {
-    failed(format!("DNS through the tunnel could not be checked: {error}"))
+    failed(format!(
+        "DNS through the tunnel could not be checked: {error}"
+    ))
 }
 
 fn ensure_running(
@@ -167,17 +163,19 @@ fn attempt(
         return Ok(LastResult::Timeout);
     }
 
-    socket.set_write_timeout(Some(remaining)).map_err(socket_error)?;
+    socket
+        .set_write_timeout(Some(remaining))
+        .map_err(socket_error)?;
     match socket.send_to(packet, server) {
         Ok(_) => {}
         Err(error)
-        if matches!(
+            if matches!(
                 error.kind(),
                 io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
             ) =>
-            {
-                return Ok(LastResult::Timeout);
-            }
+        {
+            return Ok(LastResult::Timeout);
+        }
         Err(error) => return Err(socket_error(error)),
     }
 
@@ -186,26 +184,26 @@ fn attempt(
         if remaining.is_zero() {
             return Ok(LastResult::Timeout);
         }
-        socket.set_read_timeout(Some(remaining)).map_err(socket_error)?;
+        socket
+            .set_read_timeout(Some(remaining))
+            .map_err(socket_error)?;
 
         match socket.recv_from(buffer) {
-            Ok((length, source)) if source == server => {
-                match parse_reply(&buffer[..length], id) {
-                    Some(Reply::Success) => return Ok(LastResult::Rcode(0)),
-                    Some(Reply::Rcode(code)) => return Ok(LastResult::Rcode(code)),
-                    None => {}
-                }
-            }
+            Ok((length, source)) if source == server => match parse_reply(&buffer[..length], id) {
+                Some(Reply::Success) => return Ok(LastResult::Rcode(0)),
+                Some(Reply::Rcode(code)) => return Ok(LastResult::Rcode(code)),
+                None => {}
+            },
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error)
-            if matches!(
+                if matches!(
                     error.kind(),
                     io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
                 ) =>
-                {
-                    return Ok(LastResult::Timeout);
-                }
+            {
+                return Ok(LastResult::Timeout);
+            }
             Err(error) => return Err(socket_error(error)),
         }
     }
@@ -269,9 +267,7 @@ pub(super) fn check(
         ensure_running(&mut is_running)?;
 
         // Pace immediate negative replies instead of flooding the resolver.
-        std::thread::sleep(
-            attempt_deadline.saturating_duration_since(Instant::now()),
-        );
+        std::thread::sleep(attempt_deadline.saturating_duration_since(Instant::now()));
     }
 
     ensure_running(&mut is_running)?;
@@ -319,15 +315,15 @@ pub(crate) mod test_support {
                     let (length, peer) = match socket.recv_from(&mut buffer) {
                         Ok(received) => received,
                         Err(error)
-                        if matches!(
+                            if matches!(
                                 error.kind(),
                                 io::ErrorKind::TimedOut
                                     | io::ErrorKind::WouldBlock
                                     | io::ErrorKind::Interrupted
                             ) =>
-                            {
-                                continue;
-                            }
+                        {
+                            continue;
+                        }
                         Err(error) => panic!("test DNS receive failed: {error}"),
                     };
 
@@ -368,7 +364,11 @@ pub(crate) mod test_support {
     impl Drop for Server {
         fn drop(&mut self) {
             self.stop.store(true, Ordering::Release);
-            self.worker.take().expect("test worker").join().expect("join DNS");
+            self.worker
+                .take()
+                .expect("test worker")
+                .join()
+                .expect("join DNS");
         }
     }
 }
@@ -409,10 +409,7 @@ mod tests {
 
     #[test]
     fn servfail_preserves_the_rcode() {
-        assert_eq!(
-            parse_reply(&response(123, 2), 123),
-            Some(Reply::Rcode(2)),
-        );
+        assert_eq!(parse_reply(&response(123, 2), 123), Some(Reply::Rcode(2)),);
     }
 
     #[test]
@@ -445,8 +442,7 @@ mod tests {
     #[test]
     fn udp_noerror_succeeds() {
         let server = Server::new(Behavior::Noerror);
-        check(server.address(), TIMEOUT, ATTEMPT_TIMEOUT, || Ok(true))
-            .expect("DNS succeeds");
+        check(server.address(), TIMEOUT, ATTEMPT_TIMEOUT, || Ok(true)).expect("DNS succeeds");
     }
 
     #[test]
@@ -496,7 +492,7 @@ mod tests {
             checks += 1;
             Ok(checks < 3)
         })
-            .expect_err("engine exits after first attempt");
+        .expect_err("engine exits after first attempt");
 
         assert_eq!(error.message, "engine exited during DNS check");
         assert_eq!(checks, 3);

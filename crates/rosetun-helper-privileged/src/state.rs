@@ -1,6 +1,6 @@
+mod dns;
 #[cfg(test)]
 mod tests;
-mod dns;
 
 use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::{Mutex, MutexGuard, TryLockError};
@@ -357,12 +357,9 @@ impl Session {
                     "engine process disappeared before DNS check",
                 )
             })?;
-            dns::check(
-                server,
-                self.dns_timeout,
-                self.dns_attempt_timeout,
-                || process.is_running(),
-            )?;
+            dns::check(server, self.dns_timeout, self.dns_attempt_timeout, || {
+                process.is_running()
+            })?;
         } else {
             tracing::info!(
                 engine = %settings.engine.as_str(),

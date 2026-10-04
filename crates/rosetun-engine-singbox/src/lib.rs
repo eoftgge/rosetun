@@ -82,10 +82,7 @@ impl EngineBackend for SingBoxBackend {
         render::render(request)
     }
 
-    fn tunnel_dns_server(
-        &self,
-        tun: &rosetun_config::TunSettings,
-    ) -> Option<std::net::SocketAddr> {
+    fn tunnel_dns_server(&self, tun: &rosetun_config::TunSettings) -> Option<std::net::SocketAddr> {
         let (address, prefix) = tun.ipv4.split_once('/')?;
         let address = u32::from(address.parse::<std::net::Ipv4Addr>().ok()?);
         let prefix = prefix.parse::<u32>().ok()?;
