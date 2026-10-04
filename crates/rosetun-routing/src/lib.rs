@@ -4,6 +4,9 @@ pub mod platform;
 pub use errors::RoutingError;
 pub use platform::backend;
 
+pub type PrepareClosure = Box<dyn FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send>;
+pub type AuthorizeClosure = Box<dyn FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutingPlan {
     /// Allows non-engine applications to reach private destinations.
@@ -162,8 +165,8 @@ impl Drop for RoutingGuard {
 }
 
 struct ClosureSession {
-    prepare: Box<dyn FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send>,
-    authorize: Box<dyn FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send>,
+    prepare: PrepareClosure,
+    authorize: AuthorizeClosure,
     revert: Option<Box<dyn FnOnce() -> Result<(), RoutingError> + Send>>,
 }
 

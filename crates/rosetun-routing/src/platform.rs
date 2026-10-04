@@ -7,7 +7,7 @@ use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
 pub fn backend() -> Box<dyn crate::RoutingBackend> {
     #[cfg(windows)]
     {
-        return Box::new(windows::WfpBackend::new());
+        Box::new(windows::WfpBackend::new())
     }
 
     #[cfg(not(windows))]

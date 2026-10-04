@@ -1,6 +1,6 @@
 use rosetun_config::{
-    DnsSettings, DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher,
-    RuleSet, RuleTarget, Settings, TlsMode, Transport,
+    DnsSettings, DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher, RuleSet,
+    RuleTarget, Settings, TlsMode, Transport,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{RenderRequest, RenderedConfig, RuleCapabilities};
@@ -43,9 +43,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
 }
 
 fn dns_section(settings: &DnsSettings) -> Result<Value, EngineError> {
-    if settings.server_name.is_empty()
-        || settings.server_name.chars().any(char::is_whitespace)
-    {
+    if settings.server_name.is_empty() || settings.server_name.chars().any(char::is_whitespace) {
         return Err(EngineError::Render(
             "DNS server_name must be non-empty and contain no whitespace".to_owned(),
         ));

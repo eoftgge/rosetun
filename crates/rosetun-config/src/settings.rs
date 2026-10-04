@@ -128,21 +128,16 @@ mod settings_tests {
                 "path": "/custom-dns-query"
             }
         });
-        let settings: Settings =
-            serde_json::from_value(input.clone()).expect("DNS settings");
+        let settings: Settings = serde_json::from_value(input.clone()).expect("DNS settings");
 
-        assert_eq!(
-            settings.dns.server,
-            IpAddr::V4(Ipv4Addr::new(77, 88, 8, 8))
-        );
+        assert_eq!(settings.dns.server, IpAddr::V4(Ipv4Addr::new(77, 88, 8, 8)));
         assert_eq!(settings.dns.server_name, "common.dot.dns.yandex.net");
         assert_eq!(settings.dns.port, Some(8443));
         assert_eq!(settings.dns.path.as_deref(), Some("/custom-dns-query"));
 
         let encoded = serde_json::to_value(&settings).expect("serialized settings");
         assert_eq!(encoded["dns"], input["dns"]);
-        let decoded: Settings =
-            serde_json::from_value(encoded).expect("round-trip settings");
+        let decoded: Settings = serde_json::from_value(encoded).expect("round-trip settings");
         assert_eq!(decoded, settings);
     }
 
@@ -159,7 +154,7 @@ mod settings_tests {
         let settings: Settings = serde_json::from_str(
             r#"{"dns":{"server":"77.88.8.8","server_name":"common.dot.dns.yandex.net"}}"#,
         )
-            .expect("DNS settings without optional fields");
+        .expect("DNS settings without optional fields");
 
         assert_eq!(settings.dns.port, None);
         assert_eq!(settings.dns.path, None);
@@ -179,10 +174,9 @@ mod settings_tests {
 
     #[test]
     fn unknown_settings_fields_remain_valid() {
-        let settings: Settings = serde_json::from_str(
-            r#"{"kill_switch":true,"future_setting":true}"#,
-        )
-            .expect("settings with an unknown field");
+        let settings: Settings =
+            serde_json::from_str(r#"{"kill_switch":true,"future_setting":true}"#)
+                .expect("settings with an unknown field");
         assert!(settings.kill_switch);
         assert_eq!(settings.dns, DnsSettings::default());
     }
