@@ -725,10 +725,10 @@ fn hwid_limit_header_does_not_imply_max_devices() {
     };
     match parse(b"", &header) {
         Err(ParseError::DeviceLimit {
-                max_devices_reached,
-                not_supported,
-                ..
-            }) => {
+            max_devices_reached,
+            not_supported,
+            ..
+        }) => {
             assert!(!max_devices_reached);
             assert!(not_supported);
         }

@@ -1,7 +1,7 @@
 use serde_json::Value;
 
-use crate::common::{Fields, build};
-use crate::{Format, ParseError, Record, SkipReason};
+use crate::common::{Fields, build, clean, is_service_address};
+use crate::{Entry, Format, ParseError, Record, SkipReason};
 
 const PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks"];
 
@@ -54,7 +54,7 @@ pub(crate) fn records(value: &Value, format: Format) -> Vec<Record> {
 
 fn xray(config: &Value) -> Record {
     let Some(outbounds) = config.get("outbounds").and_then(Value::as_array) else {
-        return (None, Err(SkipReason::InvalidRecord));
+        return (None, Entry::Skip(SkipReason::InvalidRecord));
     };
     let supported = |outbound: &&Value| {
         outbound
@@ -69,7 +69,9 @@ fn xray(config: &Value) -> Record {
         .or_else(|| outbounds.iter().find(supported));
 
     let Some(outbound) = outbound else {
-        return (None, Err(SkipReason::UnsupportedProtocol));
+        let entry = service_notice(config, outbounds)
+            .unwrap_or(Entry::Skip(SkipReason::UnsupportedProtocol));
+        return (None, entry);
     };
     let protocol = outbound
         .get("protocol")
@@ -176,15 +178,33 @@ fn xray(config: &Value) -> Record {
         _ => {}
     }
 
-    (Some(scheme.to_owned()), build(scheme, &fields))
+    (Some(scheme.to_owned()), build(scheme, &fields).into())
+}
+
+// 3x-ui sends its expiry and traffic notice as a socks outbound to 127.0.0.1.
+fn service_notice(config: &Value, outbounds: &[Value]) -> Option<Entry> {
+    let address = outbounds
+        .iter()
+        .find(|outbound| outbound.get("tag").and_then(Value::as_str) == Some("proxy"))
+        .and_then(|outbound| {
+            [
+                "/settings/servers/0/address",
+                "/settings/vnext/0/address",
+                "/settings/address",
+            ]
+            .iter()
+            .find_map(|pointer| outbound.pointer(pointer).and_then(Value::as_str))
+        })?;
+    let remarks = config.get("remarks").and_then(Value::as_str).unwrap_or("");
+    is_service_address(address).then(|| Entry::Notice(clean(remarks, 128)))
 }
 
 fn sing_box(outbound: &Value) -> Record {
     let Some(protocol) = outbound.get("type").and_then(Value::as_str) else {
-        return (None, Err(SkipReason::InvalidRecord));
+        return (None, Entry::Skip(SkipReason::InvalidRecord));
     };
     if !PROTOCOLS.contains(&protocol) {
-        return (None, Err(SkipReason::UnsupportedProtocol));
+        return (None, Entry::Skip(SkipReason::UnsupportedProtocol));
     }
     let scheme = normalize_protocol(protocol);
     let mut fields = Fields::new();
@@ -246,7 +266,7 @@ fn sing_box(outbound: &Value) -> Record {
             .or_else(|| transport.pointer("/headers/Host")),
     );
 
-    (Some(scheme.to_owned()), build(scheme, &fields))
+    (Some(scheme.to_owned()), build(scheme, &fields).into())
 }
 
 fn normalize_protocol(protocol: &str) -> &str {

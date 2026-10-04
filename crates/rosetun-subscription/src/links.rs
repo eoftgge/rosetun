@@ -1,15 +1,20 @@
 use serde_json::Value;
 use url::{Host, Url};
 
-use crate::common::{Fields, build, decode_base64, percent_decode, truth};
-use crate::{Record, SkipReason};
+use crate::common::{
+    Fields, build, clean, decode_base64, is_service_address, percent_decode, truth,
+};
+use crate::{Entry, Record, SkipReason};
 
 pub(crate) fn parse(line: &str) -> Record {
     let Some((scheme, rest)) = line.split_once("://") else {
-        return (None, Err(SkipReason::InvalidRecord));
+        return (None, Entry::Skip(SkipReason::InvalidRecord));
     };
     let scheme = scheme.to_ascii_lowercase();
     let safe_scheme = known_scheme(&scheme).map(str::to_owned);
+    if let Some(notice) = service_notice(line) {
+        return (safe_scheme, Entry::Notice(notice));
+    }
     let result = match scheme.as_str() {
         "vless" | "trojan" => ordinary(line, &scheme),
         "vmess" => vmess(rest),
@@ -19,7 +24,13 @@ pub(crate) fn parse(line: &str) -> Record {
         }
         _ => Err(SkipReason::UnsupportedProtocol),
     };
-    (safe_scheme, result)
+    (safe_scheme, result.into())
+}
+
+fn service_notice(line: &str) -> Option<String> {
+    let url = Url::parse(line).ok()?;
+    is_service_address(url.host_str()?)
+        .then(|| clean(&percent_decode(url.fragment().unwrap_or("")), 128))
 }
 
 fn known_scheme(scheme: &str) -> Option<&'static str> {

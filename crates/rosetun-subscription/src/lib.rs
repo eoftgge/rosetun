@@ -340,18 +340,13 @@ fn parse_text(
         }
     };
 
-    for (offset, (scheme, result)) in records.into_iter().enumerate() {
-        match result {
-            Ok(mut node) => {
-                if common::is_service(&node) {
-                    metadata.notices.push(node.name);
-                    skipped.push(Skipped {
-                        index: offset + 1,
-                        scheme,
-                        reason: SkipReason::ServiceRecord,
-                    });
-                    continue;
-                }
+    for (offset, (scheme, entry)) in records.into_iter().enumerate() {
+        let entry = match entry {
+            Entry::Node(node) if common::is_service(&node) => Entry::Notice(node.name),
+            entry => entry,
+        };
+        match entry {
+            Entry::Node(mut node) => {
                 let base = common::stable_id(&node);
                 let count = ids.entry(base.clone()).or_default();
                 *count += 1;
@@ -360,9 +355,19 @@ fn parse_text(
                 } else {
                     format!("{base}-{count}").into()
                 };
-                nodes.push(node);
+                nodes.push(*node);
             }
-            Err(reason) => skipped.push(Skipped {
+            Entry::Notice(text) => {
+                if !text.is_empty() {
+                    metadata.notices.push(text);
+                }
+                skipped.push(Skipped {
+                    index: offset + 1,
+                    scheme,
+                    reason: SkipReason::ServiceRecord,
+                });
+            }
+            Entry::Skip(reason) => skipped.push(Skipped {
                 index: offset + 1,
                 scheme,
                 reason,
@@ -385,4 +390,19 @@ fn parse_text(
     })
 }
 
-type Record = (Option<String>, Result<Node, SkipReason>);
+pub(crate) enum Entry {
+    Node(Box<Node>),
+    Notice(String),
+    Skip(SkipReason),
+}
+
+impl From<Result<Node, SkipReason>> for Entry {
+    fn from(result: Result<Node, SkipReason>) -> Self {
+        match result {
+            Ok(node) => Self::Node(Box::new(node)),
+            Err(reason) => Self::Skip(reason),
+        }
+    }
+}
+
+type Record = (Option<String>, Entry);

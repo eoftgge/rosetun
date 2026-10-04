@@ -220,11 +220,15 @@ fn endpoint(server: &str, port: u16) -> String {
     }
 }
 
-pub(crate) fn is_service(node: &Node) -> bool {
-    let server = node.server.trim_matches(['[', ']']);
-    let unspecified = server
+// Panels deliver notices such as "subscription expired" as records whose address
+// can never be a real node: 0.0.0.0 or :: (Remnawave), 127.0.0.1 (3x-ui).
+pub(crate) fn is_service_address(host: &str) -> bool {
+    host.trim_matches(['[', ']'])
         .parse::<IpAddr>()
-        .is_ok_and(|address| address.is_unspecified());
+        .is_ok_and(|address| address.is_unspecified() || address.is_loopback())
+}
+
+pub(crate) fn is_service(node: &Node) -> bool {
     let uuid = match &node.outbound {
         Outbound::Vless(params) => Some(params.uuid.as_str()),
         Outbound::Vmess(params) => Some(params.uuid.as_str()),
@@ -233,7 +237,7 @@ pub(crate) fn is_service(node: &Node) -> bool {
     let zero_uuid = uuid.is_some_and(|uuid| {
         uuid == "00000000-0000-0000-0000-000000000000" || uuid == "00000000000000000000000000000000"
     });
-    unspecified || zero_uuid
+    is_service_address(&node.server) || zero_uuid
 }
 
 pub(crate) fn stable_id(node: &Node) -> String {
