@@ -47,7 +47,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
 fn dns_section() -> Value {
     json!({
         "servers": [{
-            "type": "tls",
+            "type": "https",
             "tag": TAG_DNS_PROXY,
             "server": PUBLIC_DNS_SERVER,
             "tls": { "server_name": PUBLIC_DNS_SERVER_NAME },
