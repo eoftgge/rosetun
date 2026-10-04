@@ -17,6 +17,7 @@ enum Reply {
 enum LastResult {
     Timeout,
     Rcode(u8),
+    Unreachable,
 }
 
 impl std::fmt::Display for LastResult {
@@ -28,6 +29,7 @@ impl std::fmt::Display for LastResult {
             Self::Rcode(4) => formatter.write_str("NOTIMP"),
             Self::Rcode(5) => formatter.write_str("REFUSED"),
             Self::Rcode(code) => write!(formatter, "RCODE {code}"),
+            Self::Unreachable => formatter.write_str("port unreachable"),
         }
     }
 }
@@ -204,6 +206,11 @@ fn attempt(
             {
                 return Ok(LastResult::Timeout);
             }
+            // Windows reports an ICMP port unreachable for an earlier datagram
+            // as a reset on the next receive.
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset => {
+                return Ok(LastResult::Unreachable);
+            }
             Err(error) => return Err(socket_error(error)),
         }
     }
@@ -223,7 +230,12 @@ pub(super) fn check(
     let deadline = started + timeout;
     ensure_running(&mut is_running)?;
 
-    let socket = UdpSocket::bind(("0.0.0.0", 0)).map_err(socket_error)?;
+    let local: SocketAddr = if server.is_ipv4() {
+        (std::net::Ipv4Addr::UNSPECIFIED, 0).into()
+    } else {
+        (std::net::Ipv6Addr::UNSPECIFIED, 0).into()
+    };
+    let socket = UdpSocket::bind(local).map_err(socket_error)?;
     let mut buffer = vec![0u8; 65_535];
     let mut attempts = 0usize;
     let mut last = LastResult::Timeout;
