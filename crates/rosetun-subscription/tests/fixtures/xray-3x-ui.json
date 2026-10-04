@@ -1,0 +1,196 @@
+[
+  {
+    "remarks": "⏳ 12 days left · 34.5 GB remaining",
+    "log": { "loglevel": "warning" },
+    "dns": { "tag": "dns_out", "queryStrategy": "UseIP", "servers": [{ "address": "8.8.8.8", "skipFallback": false }] },
+    "inbounds": [
+      { "listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": { "auth": "noauth", "udp": true, "userLevel": 8 }, "tag": "mixed" }
+    ],
+    "outbounds": [
+      {
+        "protocol": "socks",
+        "tag": "proxy",
+        "settings": { "servers": [{ "address": "127.0.0.1", "port": 1080 }] }
+      },
+      { "tag": "direct", "protocol": "freedom", "settings": { "redirect": "", "noises": [] } },
+      { "tag": "block", "protocol": "blackhole", "settings": { "response": { "type": "http" } } }
+    ],
+    "routing": { "domainStrategy": "AsIs", "rules": [] }
+  },
+  {
+    "remarks": "🇩🇪 Reality-test@example.com",
+    "log": { "loglevel": "warning" },
+    "inbounds": [
+      { "listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": { "auth": "noauth", "udp": true, "userLevel": 8 }, "tag": "mixed" }
+    ],
+    "outbounds": [
+      {
+        "protocol": "vless",
+        "tag": "proxy",
+        "mux": { "enabled": true, "concurrency": -1, "xudpConcurrency": 16, "xudpProxyUDP443": "reject" },
+        "settings": {
+          "address": "reality.example.com",
+          "port": 443,
+          "id": "11111111-1111-1111-1111-111111111111",
+          "encryption": "none",
+          "flow": "xtls-rprx-vision",
+          "level": 8
+        },
+        "streamSettings": {
+          "network": "tcp",
+          "security": "reality",
+          "tcpSettings": { "header": { "type": "none" } },
+          "realitySettings": {
+            "show": false,
+            "publicKey": "dGVzdC1yZWFsaXR5LXB1YmxpYy1rZXktZm9yLXRlc3Q",
+            "fingerprint": "chrome",
+            "mldsa65Verify": "",
+            "spiderX": "/test",
+            "shortId": "6ba85179e30d4fc2",
+            "serverName": "www.example.com"
+          }
+        }
+      },
+      { "tag": "direct", "protocol": "freedom", "settings": { "redirect": "", "noises": [] } },
+      { "tag": "block", "protocol": "blackhole", "settings": { "response": { "type": "http" } } }
+    ],
+    "routing": { "domainStrategy": "AsIs", "rules": [] }
+  },
+  {
+    "remarks": "🇳🇱 VMess WS-test@example.com",
+    "log": { "loglevel": "warning" },
+    "outbounds": [
+      {
+        "protocol": "vmess",
+        "tag": "proxy",
+        "settings": {
+          "address": "vmess.example.com",
+          "port": 8443,
+          "id": "22222222-2222-2222-2222-222222222222",
+          "security": "auto",
+          "level": 8
+        },
+        "streamSettings": {
+          "network": "ws",
+          "security": "tls",
+          "tlsSettings": {
+            "serverName": "cdn.example.com",
+            "alpn": ["h2", "http/1.1"],
+            "fingerprint": "chrome"
+          },
+          "wsSettings": { "path": "/ws?ed=2048", "host": "cdn.example.com", "headers": {} }
+        }
+      },
+      { "tag": "direct", "protocol": "freedom", "settings": { "redirect": "", "noises": [] } },
+      { "tag": "block", "protocol": "blackhole", "settings": { "response": { "type": "http" } } }
+    ],
+    "routing": { "domainStrategy": "AsIs", "rules": [] }
+  },
+  {
+    "remarks": "🇫🇮 Trojan gRPC-test@example.com",
+    "log": { "loglevel": "warning" },
+    "outbounds": [
+      {
+        "protocol": "trojan",
+        "tag": "proxy",
+        "settings": {
+          "servers": [{ "address": "trojan.example.com", "port": 2053, "password": "test-password", "level": 8 }]
+        },
+        "streamSettings": {
+          "network": "grpc",
+          "security": "tls",
+          "tlsSettings": { "serverName": "grpc.example.com", "alpn": ["h2"], "fingerprint": "firefox" },
+          "grpcSettings": { "serviceName": "grpc-service", "authority": "", "multiMode": false }
+        }
+      },
+      { "tag": "direct", "protocol": "freedom", "settings": { "redirect": "", "noises": [] } },
+      { "tag": "block", "protocol": "blackhole", "settings": { "response": { "type": "http" } } }
+    ],
+    "routing": { "domainStrategy": "AsIs", "rules": [] }
+  },
+  {
+    "remarks": "🇸🇪 SS2022-test@example.com",
+    "log": { "loglevel": "warning" },
+    "outbounds": [
+      {
+        "protocol": "shadowsocks",
+        "tag": "proxy",
+        "settings": {
+          "servers": [{
+            "address": "ss.example.com",
+            "port": 8388,
+            "password": "dGVzdC1zZXJ2ZXIta2V5IQ==:dGVzdC11c2VyLWtleS0wMQ==",
+            "level": 8,
+            "method": "2022-blake3-aes-128-gcm"
+          }]
+        },
+        "streamSettings": {
+          "network": "tcp",
+          "security": "none",
+          "tcpSettings": { "header": { "type": "none" } }
+        }
+      },
+      { "tag": "direct", "protocol": "freedom", "settings": { "redirect": "", "noises": [] } },
+      { "tag": "block", "protocol": "blackhole", "settings": { "response": { "type": "http" } } }
+    ],
+    "routing": { "domainStrategy": "AsIs", "rules": [] }
+  },
+  {
+    "remarks": "🇩🇪 XHTTP-test@example.com",
+    "log": { "loglevel": "warning" },
+    "outbounds": [
+      {
+        "protocol": "vless",
+        "tag": "proxy",
+        "settings": {
+          "address": "xhttp.example.com",
+          "port": 443,
+          "id": "33333333-3333-3333-3333-333333333333",
+          "encryption": "none",
+          "level": 8
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "security": "reality",
+          "xhttpSettings": { "path": "/xhttp", "host": "", "mode": "auto" },
+          "realitySettings": {
+            "show": false,
+            "publicKey": "dGVzdC1yZWFsaXR5LXB1YmxpYy1rZXktZm9yLXRlc3Q",
+            "fingerprint": "chrome",
+            "spiderX": "/test",
+            "shortId": "6ba85179e30d4fc2",
+            "serverName": "www.example.com"
+          }
+        }
+      },
+      { "tag": "direct", "protocol": "freedom", "settings": { "redirect": "", "noises": [] } },
+      { "tag": "block", "protocol": "blackhole", "settings": { "response": { "type": "http" } } }
+    ],
+    "routing": { "domainStrategy": "AsIs", "rules": [] }
+  },
+  {
+    "remarks": "🇩🇪 VLESS ML-KEM-test@example.com",
+    "log": { "loglevel": "warning" },
+    "outbounds": [
+      {
+        "protocol": "vless",
+        "tag": "proxy",
+        "settings": {
+          "address": "mlkem.example.com",
+          "port": 443,
+          "id": "44444444-4444-4444-4444-444444444444",
+          "encryption": "mlkem768x25519plus.native.0rtt.dGVzdC1tbGtlbS1rZXk",
+          "level": 8
+        },
+        "streamSettings": {
+          "network": "tcp",
+          "security": "none",
+          "tcpSettings": { "header": { "type": "none" } }
+        }
+      },
+      { "tag": "direct", "protocol": "freedom", "settings": { "redirect": "", "noises": [] } },
+      { "tag": "block", "protocol": "blackhole", "settings": { "response": { "type": "http" } } }
+    ],
+    "routing": { "domainStrategy": "AsIs", "rules": [] }
+  }
+]
