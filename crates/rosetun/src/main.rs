@@ -65,7 +65,7 @@ fn main() -> ExitCode {
     };
 
     let endpoint = rosetun_ipc::default_endpoint();
-    let mut client = match HelperClient::connect(&endpoint) {
+    let client = match HelperClient::connect(&endpoint) {
         Ok(client) => client,
         Err(error) => {
             tracing::error!(endpoint = %endpoint.display(), %error, "helper unavailable");
