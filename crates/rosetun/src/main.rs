@@ -42,17 +42,6 @@ fn main() -> ExitCode {
         }
     };
 
-    let endpoint = rosetun_ipc::default_endpoint();
-    let client = match HelperClient::connect(&endpoint) {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::error!(endpoint = %endpoint.display(), %error, "helper unavailable");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    tracing::info!(helper = client.helper_version(), "connection established");
-
     match command {
         Command::Select {
             subscription_id,

@@ -117,7 +117,8 @@ pub(crate) fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
     temporary_name.push(".tmp");
     let temporary_path = parent.join(temporary_name);
 
-    // A fixed temporary name is safe because only one writer is supported.
+    // One writer at a time is assumed, so a fixed temporary name is fine; a file
+    // left behind by a crashed save is simply overwritten.
     let result = (|| {
         fs::create_dir_all(parent).map_err(|source| StoreError::Io {
             path: parent.to_owned(),
@@ -125,7 +126,7 @@ pub(crate) fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
         })?;
 
         let mut options = OpenOptions::new();
-        options.write(true).create_new(true).truncate(true);
+        options.write(true).create(true).truncate(true);
 
         #[cfg(unix)]
         {
