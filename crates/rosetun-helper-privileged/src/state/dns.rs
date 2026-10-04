@@ -251,14 +251,7 @@ pub(super) fn check(
         let attempt_deadline = (Instant::now() + attempt_timeout).min(deadline);
 
         attempts += 1;
-        last = attempt(
-            &socket,
-            server,
-            &packet,
-            id,
-            attempt_deadline,
-            &mut buffer,
-        )?;
+        last = attempt(&socket, server, &packet, id, attempt_deadline, &mut buffer)?;
 
         if matches!(last, LastResult::Rcode(0)) {
             ensure_running(&mut is_running)?;

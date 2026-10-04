@@ -118,9 +118,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
         ["connect"] => Err("missing path to connect request JSON".to_owned()),
-        ["connect", ..] => {
-            Err("connect accepts exactly one request JSON path".to_owned())
-        }
+        ["connect", ..] => Err("connect accepts exactly one request JSON path".to_owned()),
         ["status", ..] => Err("status does not accept arguments".to_owned()),
         ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),
         ["shutdown", ..] => Err("shutdown does not accept arguments".to_owned()),
@@ -189,10 +187,7 @@ mod tests {
     #[test]
     fn commands_without_parameters_reject_extra_arguments() {
         for command in ["status", "disconnect", "shutdown"] {
-            for arguments in [
-                vec![command, "extra"],
-                vec![command, "extra", "another"],
-            ] {
+            for arguments in [vec![command, "extra"], vec![command, "extra", "another"]] {
                 assert_eq!(
                     parse(&arguments),
                     Err(format!("{command} does not accept arguments"))

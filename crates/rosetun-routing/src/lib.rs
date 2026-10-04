@@ -4,7 +4,8 @@ pub mod platform;
 pub use errors::RoutingError;
 pub use platform::backend;
 
-pub type PrepareClosure = Box<dyn FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send>;
+pub type PrepareClosure =
+    Box<dyn FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send>;
 pub type AuthorizeClosure = Box<dyn FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
