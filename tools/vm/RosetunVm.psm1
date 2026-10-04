@@ -18,6 +18,11 @@ $script:Config = @{
     # Must be reachable from the guest without the tunnel; the baseline check
     # in the matrix fails loudly if it is not.
     ProbeUrl = 'https://1.1.1.1'
+    # Fetched through the tunnel, so it must be reachable from the test node's
+    # exit, which is the developer's own network. Cloudflare-hosted sites such as
+    # www.example.com fail the TLS handshake there when the node bypasses the
+    # host VPN.
+    TunnelProbeUrl = 'https://ya.ru'
 }
 $script:Session = $null
 
@@ -461,7 +466,7 @@ function Test-RosetunDirectEgress {
 
 function Test-RosetunTunnelEgress {
     param(
-        [string]$Url = 'https://www.example.com',
+        [string]$Url = $script:Config.TunnelProbeUrl,
         [switch]$Detailed
     )
     # A hostname on purpose: this also exercises the hijacked DNS path. The
@@ -494,7 +499,7 @@ function Wait-RosetunTunnelEgress {
     # Reports how long the first request took to get through, so a tunnel
     # that needs time after Connected shows up as a number, not a failure.
     param(
-        [string]$Url = 'https://www.example.com',
+        [string]$Url = $script:Config.TunnelProbeUrl,
         [int]$TimeoutSeconds = 30
     )
     $watch = [Diagnostics.Stopwatch]::StartNew()

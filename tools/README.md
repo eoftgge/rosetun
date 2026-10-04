@@ -258,7 +258,9 @@ re-registers the task and starts the helper again.
 
 "Direct egress" is a curl bound to the guest's physical adapter address. "Through
 the TUN" is checked by curl's local address, not just by success, so a request
-that bypasses the tunnel does not count.
+that bypasses the tunnel does not count. The tunnel probe fetches
+`TunnelProbeUrl` from the module configuration (`https://ya.ru`): it has to be
+reachable from the test node's exit, which is the developer's own network.
 
 The unreachable node is the same request with the server replaced by
 `192.0.2.1` (TEST-NET-1, reserved and unroutable). `Publish-Rosetun` writes it to
@@ -334,6 +336,11 @@ Windows rules.
   the host instead of a real one, and why the node is bound to the physical
   adapter: through FlClashX, the node's DoH connections to 8.8.8.8 now and then
   stayed open without data and failed the helper's DNS check.
+- **The tunnel probe must be reachable from the node's exit.** With the node
+  bound to the physical adapter, Cloudflare-hosted sites such as
+  `www.example.com` failed the TLS handshake from the developer's network, and
+  the traffic check failed although the tunnel worked. Change `TunnelProbeUrl`
+  if the node exits somewhere else.
 - **Host-side reachability checks test the host VPN, not the network.** With a
   VPN client in TUN mode on the host, a plain `curl.exe` from the host goes
   through that client; an "Empty reply from server" then says nothing about the

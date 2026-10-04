@@ -24,23 +24,25 @@ function Test-Step {
     param(
         [Parameter(Mandatory)][string]$Scenario,
         [Parameter(Mandatory)][string]$Expectation,
-        [Parameter(Mandatory)][scriptblock]$Condition
+        [Parameter(Mandatory)][scriptblock]$Condition,
+        [string]$Note = ''
     )
-    $detail = ''
     try {
         $passed = [bool](& $Condition)
     }
     catch {
         $passed = $false
-        $detail = " ($_)"
+        $Note = "$_"
     }
     $results.Add([pscustomobject]@{
+        Result   = if ($passed) { 'PASS' } else { 'FAIL' }
         Scenario = $Scenario
         Check    = $Expectation
-        Result   = if ($passed) { 'PASS' } else { 'FAIL' }
+        Note     = $Note
     })
     if (-not $passed) {
-        Write-Host "FAIL  $Scenario - $Expectation$detail" -ForegroundColor Red
+        $suffix = if ($Note) { " ($Note)" } else { '' }
+        Write-Host "FAIL  $Scenario - $Expectation$suffix" -ForegroundColor Red
     }
 }
 
@@ -80,7 +82,7 @@ else {
 }
 # Connected must mean usable: a tunnel that needs seconds before the first
 # request gets through looks broken to the user.
-Test-Step 'connect' "tunnel carries traffic within 5 s, DNS included ($detail)" {
+Test-Step 'connect' 'tunnel carries traffic within 5 s, DNS included' -Note $detail {
     $egress.Ok -and $egress.Seconds -le 5
 }
 Test-Step 'connect' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
@@ -169,7 +171,8 @@ Connect-RosetunTunnel | Out-Null
 Test-Step 'restart' 'connect succeeds, no stale adapter' { Wait-RosetunState 'Connected' }
 Disconnect-RosetunTunnel | Out-Null
 
-$results | Format-Table -AutoSize
+# Result first, so a long note cannot push it off the screen.
+$results | Format-Table Result, Scenario, Check, Note -AutoSize
 
 if ($results.Result -contains 'FAIL') {
     Write-Host '--- helper log (tail) ---'
