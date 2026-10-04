@@ -261,9 +261,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
         ["connect", ..] => Err("connect accepts zero or one request JSON path".to_owned()),
-        ["select", ..] => {
-            Err("select requires exactly a subscription ID and a node ID".to_owned())
-        }
+        ["select", ..] => Err("select requires exactly a subscription ID and a node ID".to_owned()),
         ["config", ..] => Err("config does not accept arguments".to_owned()),
         ["status", ..] => Err("status does not accept arguments".to_owned()),
         ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),

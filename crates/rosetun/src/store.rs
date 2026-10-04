@@ -72,9 +72,7 @@ pub(crate) fn load(path: &Path) -> Result<AppConfig, StoreError> {
         }
     };
 
-    let contents = contents
-        .strip_prefix(b"\xef\xbb\xbf")
-        .unwrap_or(&contents);
+    let contents = contents.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&contents);
     let config: AppConfig =
         serde_json::from_slice(contents).map_err(|source| StoreError::Parse {
             path: path.to_owned(),
@@ -163,13 +161,12 @@ pub(crate) fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
 }
 
 pub(crate) fn connect_request(config: &AppConfig) -> Result<ConnectRequest, String> {
-    let (_, node) = config
-        .active_node()
-        .ok_or_else(|| "select an existing node with rosetun select <subscription-id> <node-id>".to_owned())?;
-    let selection = config
-        .active
-        .as_ref()
-        .ok_or_else(|| "select a node with rosetun select <subscription-id> <node-id>".to_owned())?;
+    let (_, node) = config.active_node().ok_or_else(|| {
+        "select an existing node with rosetun select <subscription-id> <node-id>".to_owned()
+    })?;
+    let selection = config.active.as_ref().ok_or_else(|| {
+        "select a node with rosetun select <subscription-id> <node-id>".to_owned()
+    })?;
 
     let rule_set = match &config.active_rule_set {
         Some(_) => config
@@ -195,9 +192,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use rosetun_config::{
-        AppConfig, CONFIG_VERSION, ConfigError, Node, NodeId, Outbound, Rule, RuleId,
-        RuleMatcher, RuleSet, RuleSetId, RuleTarget, Selection, StreamSettings,
-        Subscription, SubscriptionId, TrojanParams,
+        AppConfig, CONFIG_VERSION, ConfigError, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher,
+        RuleSet, RuleSetId, RuleTarget, Selection, StreamSettings, Subscription, SubscriptionId,
+        TrojanParams,
     };
 
     use super::{StoreError, config_path_with, connect_request, load, save};
@@ -213,10 +210,8 @@ mod tests {
         fn new() -> Self {
             loop {
                 let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-                let path = std::env::temp_dir().join(format!(
-                    "rosetun-store-{}-{sequence}",
-                    std::process::id()
-                ));
+                let path = std::env::temp_dir()
+                    .join(format!("rosetun-store-{}-{sequence}", std::process::id()));
 
                 match fs::create_dir(&path) {
                     Ok(()) => return Self { path },
@@ -355,12 +350,13 @@ mod tests {
 
         match load(&path) {
             Err(StoreError::Invalid {
-                    path: error_path,
-                    source: ConfigError::UnsupportedVersion {
+                path: error_path,
+                source:
+                    ConfigError::UnsupportedVersion {
                         found: actual_found,
                         expected,
                     },
-                }) => {
+            }) => {
                 assert_eq!(error_path, path);
                 assert_eq!(actual_found, found);
                 assert_eq!(expected, CONFIG_VERSION);
@@ -462,7 +458,11 @@ mod tests {
     #[test]
     fn save_creates_missing_parent_directories() {
         let directory = TestDirectory::new();
-        let path = directory.path.join("nested").join("rosetun").join("config.json");
+        let path = directory
+            .path
+            .join("nested")
+            .join("rosetun")
+            .join("config.json");
 
         save(&path, &selected_config()).unwrap();
 
