@@ -1,6 +1,5 @@
 /target
 /.idea
-/.aiassistant
 /tools/*.exe
 /tools/vm/logs/
 design/rosetun-vpn-client.html
