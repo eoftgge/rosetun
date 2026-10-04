@@ -2,6 +2,7 @@
 
 mod client;
 mod store;
+mod update;
 
 use std::path::Path;
 use std::process::ExitCode;

@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 rosetun-config.workspace = true
 rosetun-ipc.workspace = true
+rosetun-subscription.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

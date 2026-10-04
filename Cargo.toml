@@ -16,6 +16,7 @@ rosetun-engine-xray = { path = "crates/rosetun-engine-xray" }
 rosetun-hwid = { path = "crates/rosetun-hwid" }
 rosetun-ipc = { path = "crates/rosetun-ipc" }
 rosetun-routing = { path = "crates/rosetun-routing" }
+rosetun-subscription = { path = "crates/rosetun-subscription" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
