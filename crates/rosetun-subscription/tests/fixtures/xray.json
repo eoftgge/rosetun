@@ -1,0 +1,70 @@
+[
+  {
+    "remarks": "Xray Reality",
+    "outbounds": [
+      {
+        "protocol": "vless",
+        "tag": "other",
+        "settings": {
+          "vnext": [{
+            "address": "other.example.com",
+            "port": 443,
+            "users": [{
+              "id": "11111111-1111-1111-1111-111111111111"
+            }]
+          }]
+        }
+      },
+      {
+        "protocol": "vless",
+        "tag": "proxy",
+        "settings": {
+          "vnext": [{
+            "address": "reality.example.com",
+            "port": 443,
+            "users": [{
+              "id": "11111111-1111-1111-1111-111111111111",
+              "encryption": "none",
+              "flow": "xtls-rprx-vision"
+            }]
+          }]
+        },
+        "streamSettings": {
+          "network": "raw",
+          "security": "reality",
+          "realitySettings": {
+            "serverName": "example.com",
+            "password": "test-public-key",
+            "shortId": "abcd",
+            "fingerprint": "chrome"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "remarks": "Xray Trojan",
+    "outbounds": [{
+      "protocol": "trojan",
+      "settings": {
+        "servers": [{
+          "address": "trojan.example.com",
+          "port": 443,
+          "password": "test-password"
+        }]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "example.com",
+          "alpn": ["h2", "http/1.1"]
+        },
+        "wsSettings": {
+          "path": "/test",
+          "headers": {"Host": "cdn.example.com"}
+        }
+      }
+    }]
+  }
+]

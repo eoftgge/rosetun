@@ -15,7 +15,7 @@ pub use node::{
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
 pub use runtime::{ConnectionState, Status, Traffic};
 pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings};
-pub use subscription::{Selection, Subscription};
+pub use subscription::{Selection, Subscription, SubscriptionInfo};
 
 use serde::{Deserialize, Serialize};
 
