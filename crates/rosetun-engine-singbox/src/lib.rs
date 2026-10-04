@@ -327,6 +327,133 @@ mod tests {
         serde_json::from_slice(&config.body).expect("config is valid json")
     }
 
+    fn render_with_dns(dns: rosetun_config::DnsSettings) -> Result<Value, EngineError> {
+        let node = node();
+        let rules = rules();
+        let settings = Settings {
+            dns,
+            ..Settings::default()
+        };
+        let config = render::render(&RenderRequest {
+            node: &node,
+            rules: &rules,
+            settings: &settings,
+        })?;
+        Ok(serde_json::from_slice(&config.body).expect("valid JSON"))
+    }
+
+    #[test]
+    fn dns_uses_one_typed_public_server_through_proxy() {
+        let config = rendered();
+        let servers = config["dns"]["servers"].as_array().expect("DNS servers");
+
+        assert_eq!(servers.len(), 1);
+        assert_eq!(
+            servers[0],
+            serde_json::json!({
+                "type": "https",
+                "detour": "proxy",
+                "tag": "dns-proxy",
+                "server": "8.8.8.8",
+                "tls": {
+                    "server_name": "dns.google",
+                }
+            })
+        );
+        assert!(servers[0].get("server_port").is_none());
+        assert!(servers[0].get("path").is_none());
+        assert!(config["dns"].get("rules").is_none());
+    }
+
+    #[test]
+    fn configured_dns_resolver_reaches_the_config() {
+        let dns = rosetun_config::DnsSettings {
+            server: "77.88.8.8".parse().expect("DNS IP"),
+            server_name: "common.dot.dns.yandex.net".to_owned(),
+            ..Default::default()
+        };
+        let config = render_with_dns(dns).expect("rendered");
+        assert_eq!(
+            config["dns"]["servers"],
+            serde_json::json!([{
+                "type": "https",
+                "tag": "dns-proxy",
+                "server": "77.88.8.8",
+                "tls": { "server_name": "common.dot.dns.yandex.net" },
+                "detour": "proxy"
+            }])
+        );
+    }
+
+    #[test]
+    fn configured_dns_port_and_path_reach_the_config() {
+        let dns = rosetun_config::DnsSettings {
+            port: Some(8443),
+            path: Some("/custom-dns-query".to_owned()),
+            ..Default::default()
+        };
+        let config = render_with_dns(dns).expect("rendered");
+        let server = &config["dns"]["servers"][0];
+        assert_eq!(server["server_port"], 8443);
+        assert_eq!(server["path"], "/custom-dns-query");
+    }
+
+    #[test]
+    fn ipv6_dns_server_is_rendered_without_brackets() {
+        let dns = rosetun_config::DnsSettings {
+            server: "2001:4860:4860::8888".parse().expect("DNS IPv6"),
+            ..Default::default()
+        };
+        let config = render_with_dns(dns).expect("rendered");
+        assert_eq!(
+            config["dns"]["servers"][0]["server"],
+            "2001:4860:4860::8888"
+        );
+    }
+
+    #[test]
+    fn invalid_dns_server_names_are_rejected() {
+        for server_name in ["", "dns google", " dns.google", "dns.google\t"] {
+            let dns = rosetun_config::DnsSettings {
+                server_name: server_name.to_owned(),
+                ..Default::default()
+            };
+            assert!(matches!(
+                render_with_dns(dns),
+                Err(EngineError::Render(message))
+                    if message.contains("server_name")
+            ));
+        }
+    }
+
+    #[test]
+    fn invalid_dns_paths_are_rejected() {
+        for path in ["", "dns-query"] {
+            let dns = rosetun_config::DnsSettings {
+                path: Some(path.to_owned()),
+                ..Default::default()
+            };
+            assert!(matches!(
+                render_with_dns(dns),
+                Err(EngineError::Render(message))
+                    if message.contains("path")
+            ));
+        }
+    }
+
+    #[test]
+    fn zero_dns_port_is_rejected() {
+        let dns = rosetun_config::DnsSettings {
+            port: Some(0),
+            ..Default::default()
+        };
+        assert!(matches!(
+            render_with_dns(dns),
+            Err(EngineError::Render(message))
+                if message.contains("port")
+        ));
+    }
+
     #[test]
     fn tunnel_dns_server_uses_the_next_tun_address() {
         let backend = SingBoxBackend::new("unused");
@@ -655,27 +782,6 @@ mod tests {
             render::render(&request),
             Err(EngineError::Unsupported(_))
         ));
-    }
-
-    #[test]
-    fn dns_uses_one_typed_public_server_through_proxy() {
-        let config = rendered();
-        let servers = config["dns"]["servers"].as_array().expect("DNS servers");
-
-        assert_eq!(servers.len(), 1);
-        assert_eq!(
-            servers[0],
-            serde_json::json!({
-                "type": "https",
-                "detour": "proxy",
-                "tag": "dns-proxy",
-                "server": "8.8.8.8",
-                "tls": {
-                    "server_name": "dns.google",
-                }
-            })
-        );
-        assert!(config["dns"].get("rules").is_none());
     }
 
     #[test]

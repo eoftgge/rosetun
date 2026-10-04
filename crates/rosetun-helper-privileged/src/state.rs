@@ -116,6 +116,8 @@ impl Helper {
             engine = %request.settings.engine.as_str(),
             kill_switch = request.settings.kill_switch,
             allow_lan = request.settings.allow_lan,
+            dns_server = %request.settings.dns.server,
+            dns_server_name = %request.settings.dns.server_name,
             ?mode,
             "starting tunnel connection"
         );

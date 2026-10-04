@@ -1,3 +1,5 @@
+use std::net::{IpAddr, Ipv4Addr};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -51,6 +53,29 @@ impl Default for TunSettings {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsSettings {
+    // A hostname would require DNS through the tunnel being built, creating a
+    // resolver cycle; the helper cannot resolve new names under the kill switch.
+    pub server: IpAddr,
+    pub server_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+impl Default for DnsSettings {
+    fn default() -> Self {
+        Self {
+            server: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+            server_name: "dns.google".to_owned(),
+            port: None,
+            path: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -64,12 +89,15 @@ pub struct Settings {
     #[serde(default)]
     pub tun: TunSettings,
     #[serde(default)]
+    pub dns: DnsSettings,
+    #[serde(default)]
     pub log_level: LogLevel,
 }
 
 #[cfg(test)]
 mod settings_tests {
-    use super::Settings;
+    use super::{DnsSettings, Settings};
+    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     fn old_settings_without_allow_lan_remain_valid() {
@@ -78,5 +106,84 @@ mod settings_tests {
         assert!(settings.kill_switch);
         assert!(!settings.allow_lan);
         assert!(!Settings::default().allow_lan);
+    }
+
+    #[test]
+    fn dns_defaults_preserve_the_public_resolver() {
+        let dns = DnsSettings::default();
+        assert_eq!(dns.server, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
+        assert_eq!(dns.server_name, "dns.google");
+        assert_eq!(dns.port, None);
+        assert_eq!(dns.path, None);
+        assert_eq!(Settings::default().dns, dns);
+    }
+
+    #[test]
+    fn dns_settings_round_trip_with_all_fields() {
+        let input = serde_json::json!({
+            "dns": {
+                "server": "77.88.8.8",
+                "server_name": "common.dot.dns.yandex.net",
+                "port": 8443,
+                "path": "/custom-dns-query"
+            }
+        });
+        let settings: Settings =
+            serde_json::from_value(input.clone()).expect("DNS settings");
+
+        assert_eq!(
+            settings.dns.server,
+            IpAddr::V4(Ipv4Addr::new(77, 88, 8, 8))
+        );
+        assert_eq!(settings.dns.server_name, "common.dot.dns.yandex.net");
+        assert_eq!(settings.dns.port, Some(8443));
+        assert_eq!(settings.dns.path.as_deref(), Some("/custom-dns-query"));
+
+        let encoded = serde_json::to_value(&settings).expect("serialized settings");
+        assert_eq!(encoded["dns"], input["dns"]);
+        let decoded: Settings =
+            serde_json::from_value(encoded).expect("round-trip settings");
+        assert_eq!(decoded, settings);
+    }
+
+    #[test]
+    fn old_settings_without_dns_remain_valid() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"kill_switch":true}"#).expect("old settings");
+        assert!(settings.kill_switch);
+        assert_eq!(settings.dns, DnsSettings::default());
+    }
+
+    #[test]
+    fn omitted_dns_port_and_path_remain_absent() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"dns":{"server":"77.88.8.8","server_name":"common.dot.dns.yandex.net"}}"#,
+        )
+            .expect("DNS settings without optional fields");
+
+        assert_eq!(settings.dns.port, None);
+        assert_eq!(settings.dns.path, None);
+
+        let encoded = serde_json::to_value(&settings).expect("serialized settings");
+        assert!(encoded["dns"].get("port").is_none());
+        assert!(encoded["dns"].get("path").is_none());
+    }
+
+    #[test]
+    fn dns_server_hostname_is_rejected() {
+        let result = serde_json::from_str::<Settings>(
+            r#"{"dns":{"server":"dns.google","server_name":"dns.google"}}"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unknown_settings_fields_remain_valid() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"kill_switch":true,"future_setting":true}"#,
+        )
+            .expect("settings with an unknown field");
+        assert!(settings.kill_switch);
+        assert_eq!(settings.dns, DnsSettings::default());
     }
 }

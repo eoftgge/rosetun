@@ -1,6 +1,6 @@
 use rosetun_config::{
-    DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher, RuleSet, RuleTarget,
-    Settings, TlsMode, Transport,
+    DnsSettings, DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher,
+    RuleSet, RuleTarget, Settings, TlsMode, Transport,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{RenderRequest, RenderedConfig, RuleCapabilities};
@@ -9,8 +9,6 @@ use serde_json::{Map, Value, json};
 const TAG_PROXY: &str = "proxy";
 const TAG_DIRECT: &str = "direct";
 const TAG_DNS_PROXY: &str = "dns-proxy";
-const PUBLIC_DNS_SERVER: &str = "8.8.8.8";
-const PUBLIC_DNS_SERVER_NAME: &str = "dns.google";
 
 pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
     domain_exact: true,
@@ -26,7 +24,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         route_section(request.rules, RULE_CAPABILITIES, request.settings.allow_lan);
     let config = json!({
         "log": log_section(request.settings),
-        "dns": dns_section(),
+        "dns": dns_section(&request.settings.dns)?,
         "inbounds": [tun_inbound(request.settings)],
         "outbounds": [
             proxy_outbound(request.node)?,
@@ -44,16 +42,42 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
     })
 }
 
-fn dns_section() -> Value {
-    json!({
-        "servers": [{
-            "type": "https",
-            "tag": TAG_DNS_PROXY,
-            "server": PUBLIC_DNS_SERVER,
-            "tls": { "server_name": PUBLIC_DNS_SERVER_NAME },
-            "detour": TAG_PROXY,
-        }],
-    })
+fn dns_section(settings: &DnsSettings) -> Result<Value, EngineError> {
+    if settings.server_name.is_empty()
+        || settings.server_name.chars().any(char::is_whitespace)
+    {
+        return Err(EngineError::Render(
+            "DNS server_name must be non-empty and contain no whitespace".to_owned(),
+        ));
+    }
+    if let Some(path) = &settings.path
+        && !path.starts_with('/')
+    {
+        return Err(EngineError::Render(
+            "DNS path must start with '/'".to_owned(),
+        ));
+    }
+    if settings.port == Some(0) {
+        return Err(EngineError::Render(
+            "DNS port must be greater than zero".to_owned(),
+        ));
+    }
+
+    let mut server = json!({
+        "type": "https",
+        "tag": TAG_DNS_PROXY,
+        "server": settings.server.to_string(),
+        "tls": { "server_name": settings.server_name },
+        "detour": TAG_PROXY,
+    });
+    if let Some(port) = settings.port {
+        server["server_port"] = port.into();
+    }
+    if let Some(path) = &settings.path {
+        server["path"] = path.clone().into();
+    }
+
+    Ok(json!({ "servers": [server] }))
 }
 
 fn log_section(settings: &Settings) -> Value {

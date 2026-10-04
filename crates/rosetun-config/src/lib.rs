@@ -14,7 +14,7 @@ pub use node::{
 };
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
 pub use runtime::{ConnectionState, Status, Traffic};
-pub use settings::{EngineKind, LogLevel, Settings, TunSettings};
+pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings};
 pub use subscription::{Selection, Subscription};
 
 use serde::{Deserialize, Serialize};
