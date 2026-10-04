@@ -45,6 +45,10 @@
     "engine": "sing_box",
     "kill_switch": true,
     "log_level": "debug",
+    "dns": {
+      "server": "77.88.8.8",
+      "server_name": "common.dot.dns.yandex.net"
+    },
     "tun": {
       "name": "rosetun0",
       "mtu": 1500,

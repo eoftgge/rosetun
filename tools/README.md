@@ -101,7 +101,11 @@ shape, if you need another one:
     "outbound": { "shadowsocks": { "method": "aes-128-gcm", "password": "rosetun-test" } }
   },
   "rule_set": { "id": "base", "name": "Base", "default_target": "proxy" },
-  "settings": { "kill_switch": true, "log_level": "debug" }
+  "settings": {
+    "kill_switch": true,
+    "log_level": "debug",
+    "dns": { "server": "77.88.8.8", "server_name": "common.dot.dns.yandex.net" }
+  }
 }
 ```
 
@@ -109,6 +113,12 @@ shape, if you need another one:
 in the copy sent to the guest. The address changes with every host reboot.
 Keep `default_target` at `proxy`: with `block`, sing-box rejects everything but
 DNS and the tunnel looks broken.
+
+The resolver is set to Yandex DoH because the test node exits through the
+developer's own network, where DPI drops TLS connections to `dns.google` now
+and then. Without `dns`, the default is Google (`8.8.8.8`, `dns.google`). The
+resolver is contacted from the node's exit, so it has to be reachable from
+there, not from the guest.
 
 ### 5. Prepare the clean checkpoint
 
@@ -324,6 +334,11 @@ Windows rules.
   the host instead of a real one, and why the node is bound to the physical
   adapter: through FlClashX, the node's DoH connections to 8.8.8.8 now and then
   stayed open without data and failed the helper's DNS check.
+- **Host-side reachability checks test the host VPN, not the network.** With a
+  VPN client in TUN mode on the host, a plain `curl.exe` from the host goes
+  through that client; an "Empty reply from server" then says nothing about the
+  target. Bind curl to the physical adapter instead:
+  `curl.exe --interface (Get-NetIPAddress -InterfaceAlias 'Ethernet 2' -AddressFamily IPv4).IPAddress ...`
 - **Release builds link the CRT statically** (`.cargo/config.toml`). A clean
   Windows has no `vcruntime140.dll`, and a dynamically linked helper dies
   before writing a single log line.
