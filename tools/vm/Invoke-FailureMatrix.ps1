@@ -9,7 +9,9 @@ param(
     [Parameter(Mandatory)][string]$RequestPath,
     [string]$BuildDir = (Join-Path $PSScriptRoot '..\..\target\release'),
     [switch]$RestoreCheckpoint,
-    [switch]$UseHostNode
+    [switch]$UseHostNode,
+    # Builds the workspace first, so a forgotten build cannot deploy stale binaries.
+    [switch]$Build
 )
 
 Set-StrictMode -Version Latest
@@ -39,6 +41,14 @@ function Test-Step {
     })
     if (-not $passed) {
         Write-Host "FAIL  $Scenario - $Expectation$detail" -ForegroundColor Red
+    }
+}
+
+if ($Build) {
+    Write-Host 'Building...'
+    & cargo build --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo build failed with exit code $LASTEXITCODE."
     }
 }
 
@@ -94,18 +104,40 @@ Write-Host 'Failed reconnect...'
 Stop-RosetunEngine
 Wait-RosetunState 'FailedProtected' | Out-Null
 Set-RosetunEngineAvailable $false
-Connect-RosetunTunnel | Out-Null
+Connect-RosetunTunnel -Quiet | Out-Null
 Test-Step 'failed reconnect' 'state stays FailedProtected' {
     Wait-RosetunState 'FailedProtected' -TimeoutSeconds 10
 }
 Test-Step 'failed reconnect' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
 Set-RosetunEngineAvailable $true
 
+# The engine starts and the tunnel comes up, but nothing behind it answers.
+Write-Host 'Reconnect to an unreachable node...'
+$attempt = Connect-RosetunTunnel -RequestName 'request-unreachable.json' -Quiet
+Test-Step 'unreachable reconnect' 'connect fails on the DNS check' {
+    $attempt.ExitCode -ne 0 -and $attempt.Output -match 'DNS through the tunnel'
+}
+Test-Step 'unreachable reconnect' 'state stays FailedProtected' {
+    Wait-RosetunState 'FailedProtected' -TimeoutSeconds 10
+}
+Test-Step 'unreachable reconnect' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+
 Write-Host 'Disconnect...'
 Disconnect-RosetunTunnel | Out-Null
 Test-Step 'disconnect' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
 Test-Step 'disconnect' 'direct egress works again' { Test-RosetunDirectEgress }
 Test-Step 'disconnect' 'tunnel adapter is gone' {
+    Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
+}
+
+Write-Host 'Connect to an unreachable node...'
+$attempt = Connect-RosetunTunnel -RequestName 'request-unreachable.json' -Quiet
+Test-Step 'unreachable connect' 'connect fails on the DNS check' {
+    $attempt.ExitCode -ne 0 -and $attempt.Output -match 'DNS through the tunnel'
+}
+Test-Step 'unreachable connect' 'state is Failed' { Wait-RosetunState 'Failed' -TimeoutSeconds 10 }
+Test-Step 'unreachable connect' 'direct egress works again' { Test-RosetunDirectEgress }
+Test-Step 'unreachable connect' 'tunnel adapter is gone' {
     Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
 }
 
@@ -142,5 +174,6 @@ $results | Format-Table -AutoSize
 if ($results.Result -contains 'FAIL') {
     Write-Host '--- helper log (tail) ---'
     Get-RosetunHelperLog -Tail 60
+    Write-Host "All helper logs of this run: $(Save-RosetunLogs)"
     exit 1
 }

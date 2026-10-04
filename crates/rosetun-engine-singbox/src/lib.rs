@@ -63,25 +63,6 @@ impl EngineBackend for SingBoxBackend {
         }
     }
 
-    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
-        let binary = match &self.binary {
-            Some(binary) if binary.is_file() => binary.clone(),
-            Some(binary) => {
-                return Err(EngineError::BinaryNotFound(binary.display().to_string()));
-            }
-            None => find_in_neighbours()
-                .ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))?,
-        };
-        let binary = std::fs::canonicalize(binary)?;
-
-        version::check(&binary)?;
-        Ok(binary)
-    }
-
-    fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
-        render::render(request)
-    }
-
     fn tunnel_dns_server(&self, tun: &rosetun_config::TunSettings) -> Option<std::net::SocketAddr> {
         let (address, prefix) = tun.ipv4.split_once('/')?;
         let address = u32::from(address.parse::<std::net::Ipv4Addr>().ok()?);
@@ -104,6 +85,25 @@ impl EngineBackend for SingBoxBackend {
             std::net::Ipv4Addr::from(next),
             53,
         )))
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        let binary = match &self.binary {
+            Some(binary) if binary.is_file() => binary.clone(),
+            Some(binary) => {
+                return Err(EngineError::BinaryNotFound(binary.display().to_string()));
+            }
+            None => find_in_neighbours()
+                .ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))?,
+        };
+        let binary = std::fs::canonicalize(binary)?;
+
+        version::check(&binary)?;
+        Ok(binary)
+    }
+
+    fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        render::render(request)
     }
 
     fn spawn(

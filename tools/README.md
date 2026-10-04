@@ -12,11 +12,11 @@ walks through the kill-switch failure scenarios, printing a PASS/FAIL table.
 
 | File | Purpose |
 |---|---|
-| `RosetunVm.psm1` | Module with every building block: VM session, deploy, helper task, CLI, probes |
-| `Invoke-FailureMatrix.ps1` | The failure matrix |
-| `test-node.json` | sing-box config for a Shadowsocks test node running on the host |
-| `request-local.json` | `ConnectRequest` pointing at the test node (you create it, see below) |
-| `..\sing-box.exe` | The pinned sing-box build (currently 1.14.1) |
+| `vm/RosetunVm.psm1` | Module with every building block: VM session, deploy, helper task, CLI, probes |
+| `vm/Invoke-FailureMatrix.ps1` | The failure matrix |
+| `vm/test-node.json` | sing-box config for a Shadowsocks test node running on the host |
+| `vm/request-local.json` | `ConnectRequest` pointing at the test node, with the test password |
+| `sing-box.exe` | The pinned sing-box build (currently 1.14.1). Not committed: `Install-RosetunSingBox` downloads it from the sing-box GitHub releases and checks its SHA-256 |
 
 ## Topology
 
@@ -87,7 +87,8 @@ New-NetFirewallRule -DisplayName 'rosetun test node' -Direction Inbound -Protoco
 
 ### 4. Connect request
 
-Create `request-local.json` next to this README:
+`vm/request-local.json` is committed and points at the test node. Its minimal
+shape, if you need another one:
 
 ```json
 {
@@ -172,22 +173,62 @@ right after a restore happens in every run. Prepare it so the guest is quiet:
    The scripts are unsigned and files downloaded from the web carry the Mark of
    the Web; `Get-ChildItem .\tools\vm | Unblock-File` is the permanent fix.
 
-2. Start the test node in a separate window and leave it open:
+2. Make sure the pinned sing-box is in place. This downloads it once and does
+   nothing when the checksum already matches:
 
    ```powershell
-   & .\tools\sing-box.exe run --disable-color -c .\tools\vm\test-node.json
+   Install-RosetunSingBox
    ```
 
-3. Build and run the matrix:
+   When the pinned version changes, update the version and SHA-256 in
+   `Install-RosetunSingBox` together with `SUPPORTED_SING_BOX_VERSION`.
+
+3. Start the test node. It runs hidden in the background and logs at debug
+   level to `vm\logs\test-node.log`, which a failed matrix run collects
+   together with the helper logs:
 
    ```powershell
-   cargo build --release
+   Start-RosetunTestNode -BindInterface 'Ethernet 2'
+   ```
+
+   `-BindInterface` sends the node's own traffic out of the named physical
+   adapter. Use it when a VPN client runs in TUN mode on the host: such a client
+   accepts the node's TCP connections itself and now and then leaves them open
+   without data, which shows up as DNS through the tunnel never answering.
+   `Get-NetAdapter` lists the adapter names. `Stop-RosetunTestNode` stops the
+   node. Running it by hand in a window still works
+   (`& .\tools\sing-box.exe run --disable-color -c .\tools\vm\test-node.json`),
+   but then its log stays in that window.
+
+4. Build and run the matrix:
+
+   ```powershell
    .\tools\vm\Invoke-FailureMatrix.ps1 -SingBoxPath 'tools\sing-box.exe' `
-       -RequestPath .\tools\vm\request-local.json -RestoreCheckpoint -UseHostNode
+       -RequestPath .\tools\vm\request-local.json -RestoreCheckpoint -UseHostNode -Build
    ```
+
+   Every run copies the helper and the CLI from `target\release` into the
+   guest. `-Build` runs `cargo build --release` first; without it, whatever is
+   in `target\release` is deployed, stale or not.
 
 Without `-RestoreCheckpoint` the matrix runs against the current guest state,
 which is faster when iterating but not reproducible.
+
+### Iterating on one scenario
+
+To try a change by hand without the whole matrix, redeploy into the running
+guest and drive it with the module functions:
+
+```powershell
+Update-Rosetun -SingBoxPath 'tools\sing-box.exe' -RequestPath .\tools\vm\request-local.json -UseHostNode -Build
+Connect-RosetunTunnel
+Wait-RosetunState Connected
+Test-RosetunTunnelEgress
+Get-RosetunHelperLog -Tail 50
+```
+
+`Update-Rosetun` stops the helper, copies the new binaries and the request,
+re-registers the task and starts the helper again.
 
 ## The matrix
 
@@ -202,13 +243,18 @@ which is faster when iterating but not reproducible.
 | shutdown | With the tunnel up, a shutdown request stops the engine, removes the adapter and restores egress |
 | helper killed | Known fail-open: the engine dies with the helper and the adapter disappears |
 | restart | A new helper connects cleanly after a killed one |
+| unreachable reconnect | From `FailedProtected`, a node that never answers fails the helper's DNS check; the state stays `FailedProtected` and egress stays blocked |
+| unreachable connect | From `Disconnected`, the same node fails the DNS check; the state is `Failed`, protection is released and the adapter is gone |
 
 "Direct egress" is a curl bound to the guest's physical adapter address. "Through
 the TUN" is checked by curl's local address, not just by success, so a request
 that bypasses the tunnel does not count.
 
-The "engine binary sing-box.exe not found" warning during "failed reconnect" is
-expected: that scenario hides the binary on purpose.
+The unreachable node is the same request with the server replaced by
+`192.0.2.1` (TEST-NET-1, reserved and unroutable). `Publish-Rosetun` writes it to
+the guest as `request-unreachable.json`. In the script, "unreachable reconnect"
+runs right after "failed reconnect", and "unreachable connect" right after
+"disconnect".
 
 ## Guest layout
 
@@ -216,12 +262,16 @@ expected: that scenario hides the binary on purpose.
 |---|---|
 | `C:\rosetun\` | Helper, CLI, `sing-box.exe`, `request.json` |
 | `C:\rosetun\helper.log` | Log of the current helper run (`ROSETUN_LOG=debug`), sing-box output included |
-| `C:\rosetun\helper.prev.log` | Log of the previous run; after a killed helper it is the evidence |
+| `C:\rosetun\helper-<time>.log` | Logs of earlier helper runs, kept on every restart; after a killed helper or a failed scenario they are the evidence |
 | `C:\ProgramData\Rosetun\run\sing-box\config.json` | The config sing-box actually received |
 
 The helper runs as SYSTEM from the scheduled task `RosetunHelper`.
 
 ## Diagnostics
+
+When the matrix fails it copies every helper log of the run, and the test
+node log, to `vm\logs\<time>\` on the host; `Save-RosetunLogs` does the same
+by hand. Add `/tools/vm/logs/` to `.gitignore`.
 
 ```powershell
 Get-RosetunState
@@ -270,7 +320,10 @@ Windows rules.
   sing-box and serde_json reject. The module writes JSON with
   `[IO.File]::WriteAllText`.
 - **A VPN client running in TUN mode on the host also captures the guest's NAT
-  traffic.** That is why the rig uses a node on the host instead of a real one.
+  traffic** and the test node's own traffic. That is why the rig uses a node on
+  the host instead of a real one, and why the node is bound to the physical
+  adapter: through FlClashX, the node's DoH connections to 8.8.8.8 now and then
+  stayed open without data and failed the helper's DNS check.
 - **Release builds link the CRT statically** (`.cargo/config.toml`). A clean
   Windows has no `vcruntime140.dll`, and a dynamically linked helper dies
   before writing a single log line.

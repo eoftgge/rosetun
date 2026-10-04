@@ -21,6 +21,96 @@ $script:Config = @{
 }
 $script:Session = $null
 
+function Install-RosetunSingBox {
+    # Downloads the pinned sing-box build into tools\ and checks it, so the
+    # 80 MB binary does not have to live in git. Update both values together
+    # with SUPPORTED_SING_BOX_VERSION in rosetun-engine-singbox.
+    param([string]$Destination = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\sing-box.exe')))
+
+    $version = '1.14.1'
+    $expectedHash = 'B838DE45BD0B2E6DDBED1977E4745622F7DFFAB3B293807FF4C6B1B640FED909'
+
+    if ((Test-Path -Path $Destination) -and
+        (Get-FileHash -Path $Destination -Algorithm SHA256).Hash -eq $expectedHash) {
+        Write-Host "sing-box $version is already at $Destination"
+        return
+    }
+
+    $name = "sing-box-$version-windows-amd64"
+    $url = "https://github.com/SagerNet/sing-box/releases/download/v$version/$name.zip"
+    $zip = Join-Path $env:TEMP "$name.zip"
+    $unpacked = Join-Path $env:TEMP $name
+
+    & curl.exe --fail --silent --show-error --location --output $zip $url
+    if ($LASTEXITCODE -ne 0) {
+        throw "Downloading $url failed with curl exit code $LASTEXITCODE."
+    }
+    try {
+        Expand-Archive -Path $zip -DestinationPath $env:TEMP -Force
+        $binary = Join-Path $unpacked 'sing-box.exe'
+        $hash = (Get-FileHash -Path $binary -Algorithm SHA256).Hash
+        if ($hash -ne $expectedHash) {
+            throw "sing-box.exe from $url has SHA-256 $hash, expected $expectedHash."
+        }
+        Copy-Item -Path $binary -Destination $Destination -Force
+    }
+    finally {
+        Remove-Item -Path $zip, $unpacked -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "sing-box $version installed to $Destination"
+}
+
+function Start-RosetunTestNode {
+    # Runs the Shadowsocks test node on the host in the background with a
+    # debug log in vm\logs, so a failed run keeps the node's side as well.
+    param(
+        [string]$SingBoxPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\sing-box.exe')),
+        # Sends the node's own traffic out of this adapter, past a VPN client
+        # running in TUN mode on the host. Such a client accepts TCP itself and
+        # can leave the node with open connections that never carry data.
+        [string]$BindInterface
+    )
+
+    $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
+    $port = $config.inbounds[0].listen_port
+    if ($BindInterface) {
+        $config.outbounds | Where-Object { $_.type -eq 'direct' } | ForEach-Object {
+            $_ | Add-Member -NotePropertyName bind_interface -NotePropertyValue $BindInterface -Force
+        }
+    }
+    if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+        Write-Host "Something already listens on port $port; leaving it running."
+        return
+    }
+
+    $logDir = Join-Path $PSScriptRoot 'logs'
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $config.log = [pscustomobject]@{
+        level     = 'debug'
+        timestamp = $true
+        output    = Join-Path $logDir 'test-node.log'
+    }
+    $configPath = Join-Path $env:TEMP 'rosetun-test-node.json'
+    [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 10))
+
+    $node = Start-Process -FilePath $SingBoxPath -ArgumentList 'run', '--disable-color', '-c', $configPath `
+        -WindowStyle Hidden -PassThru
+    $deadline = (Get-Date).AddSeconds(15)
+    while (-not (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+        if ($node.HasExited -or (Get-Date) -gt $deadline) {
+            throw "The test node did not start listening on port $port; see $logDir\test-node.log."
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    Write-Host "Test node listening on port $port, log: $logDir\test-node.log"
+}
+
+function Stop-RosetunTestNode {
+    $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
+    Get-NetTCPConnection -LocalPort $config.inbounds[0].listen_port -State Listen -ErrorAction SilentlyContinue |
+        ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+}
+
 function Connect-RosetunVm {
     if ($null -ne $script:Session -and $script:Session.State -eq 'Opened') {
         return $script:Session
@@ -120,6 +210,14 @@ function Publish-Rosetun {
         $RequestPath = $temporaryRequest
         Write-Host "Node server set to $hostIp"
     }
+    # The same request with a node that never answers: 192.0.2.1 is TEST-NET-1,
+    # reserved and unroutable. The engine starts, but DNS through the tunnel
+    # cannot work, so the helper's DNS check must fail the connect.
+    $unreachable = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+    $unreachable.node.server = '192.0.2.1'
+    $unreachableRequest = Join-Path $env:TEMP 'rosetun-request-unreachable.json'
+    [IO.File]::WriteAllText($unreachableRequest, ($unreachable | ConvertTo-Json -Depth 20))
+
     Invoke-RosetunGuest -ScriptBlock {
         param($dir)
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -131,10 +229,12 @@ function Publish-Rosetun {
         (Join-Path $BuildDir 'rosetun.exe')                   = 'rosetun.exe'
         $SingBoxPath                                          = 'sing-box.exe'
         $RequestPath                                          = 'request.json'
+        $unreachableRequest                                   = 'request-unreachable.json'
     }
     foreach ($source in $copies.Keys) {
         Copy-Item -ToSession $session -Path $source -Destination (Join-Path $dir $copies[$source]) -Force
     }
+    Remove-Item -Path $unreachableRequest
     if ($null -ne $temporaryRequest) {
         Remove-Item -Path $temporaryRequest
     }
@@ -149,6 +249,29 @@ function Publish-Rosetun {
         [int]$watch.Elapsed.TotalSeconds
     } -ArgumentList $dir
     Write-Host "sing-box first launch took $seconds s"
+}
+
+function Update-Rosetun {
+    # Redeploys a build into the running guest without restoring the
+    # checkpoint: faster than the matrix when iterating on one scenario.
+    param(
+        [Parameter(Mandatory)][string]$SingBoxPath,
+        [Parameter(Mandatory)][string]$RequestPath,
+        [string]$BuildDir = (Join-Path $PSScriptRoot '..\..\target\release'),
+        [switch]$UseHostNode,
+        [switch]$Build
+    )
+    if ($Build) {
+        & cargo build --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo build failed with exit code $LASTEXITCODE."
+        }
+    }
+    # A running helper keeps its executable locked.
+    Stop-RosetunHelper
+    Publish-Rosetun -BuildDir $BuildDir -SingBoxPath $SingBoxPath -RequestPath $RequestPath -UseHostNode:$UseHostNode
+    Register-RosetunHelper
+    Start-RosetunHelper
 }
 
 function Register-RosetunHelper {
@@ -183,8 +306,12 @@ function Start-RosetunHelper {
             Start-Sleep -Milliseconds 200
         }
 
-        # Keep the previous run's log: after a killed helper it is the evidence.
-        Move-Item -Path "$dir\helper.log" -Destination "$dir\helper.prev.log" -Force -ErrorAction SilentlyContinue
+        # Keep every earlier run's log: after a killed helper or a failed
+        # scenario it is the evidence, and the matrix restarts the helper.
+        if (Test-Path -Path "$dir\helper.log") {
+            $stamp = (Get-Item -Path "$dir\helper.log").LastWriteTime.ToString('yyyyMMdd-HHmmss-fff')
+            Move-Item -Path "$dir\helper.log" -Destination "$dir\helper-$stamp.log" -Force
+        }
         Start-ScheduledTask -TaskName $task
 
         # Enumerating the pipe directory does not connect to the pipe, unlike
@@ -249,7 +376,12 @@ function Invoke-RosetunCli {
 }
 
 function Connect-RosetunTunnel {
-    Invoke-RosetunCli 'connect' (Join-Path $script:Config.GuestDir 'request.json')
+    param(
+        [string]$RequestName = 'request.json',
+        # For connects that are expected to fail; the caller checks the result.
+        [switch]$Quiet
+    )
+    Invoke-RosetunCli -Quiet:$Quiet 'connect' (Join-Path $script:Config.GuestDir $RequestName)
 }
 
 function Disconnect-RosetunTunnel {
@@ -544,6 +676,19 @@ function Test-RosetunProxyPath {
             Log      = (Get-Content -Path $logPath -Tail 30 -ErrorAction SilentlyContinue) -join "`n"
         }
     } -ArgumentList $script:Config.GuestDir, $Url, $WriteOut, $Port
+}
+
+function Save-RosetunLogs {
+    # Copies every helper log from the guest, the current one and those of
+    # earlier helper runs, into a fresh folder on the host.
+    param([string]$Destination = (Join-Path $PSScriptRoot ("logs\" + (Get-Date -Format 'yyyyMMdd-HHmmss'))))
+
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    Copy-Item -FromSession (Connect-RosetunVm) -Path (Join-Path $script:Config.GuestDir 'helper*.log') `
+        -Destination $Destination
+    # The host-side node log, written when the node runs via Start-RosetunTestNode.
+    Copy-Item -Path (Join-Path $PSScriptRoot 'logs\test-node.log') -Destination $Destination -ErrorAction SilentlyContinue
+    return $Destination
 }
 
 function Get-RosetunHelperLog {
