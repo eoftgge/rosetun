@@ -85,6 +85,10 @@ New-NetFirewallRule -DisplayName 'rosetun test node' -Direction Inbound -Protoco
     -InterfaceAlias 'vEthernet (Default Switch)' -Action Allow
 ```
 
+The node listens on `::`, which takes both IPv4 and IPv6. The guest reaches it
+over IPv4 for the tunnel and over the host's link-local IPv6 address for the
+IPv6 leak probe. The rule above covers both.
+
 ### 4. Connect request
 
 `vm/request-local.json` is committed and points at the test node. Its minimal
@@ -206,7 +210,9 @@ right after a restore happens in every run. Prepare it so the guest is quiet:
    accepts the node's TCP connections itself and now and then leaves them open
    without data, which shows up as DNS through the tunnel never answering.
    `Get-NetAdapter` lists the adapter names. `Stop-RosetunTestNode` stops the
-   node. Running it by hand in a window still works
+   node; restart it after changing `test-node.json`, because
+   `Start-RosetunTestNode` leaves a running node alone. Running it by hand in a
+   window still works
    (`& .\tools\sing-box.exe run --disable-color -c .\tools\vm\test-node.json`),
    but then its log stays in that window.
 
@@ -242,19 +248,23 @@ re-registers the task and starts the helper again.
 
 ## The matrix
 
+In the order the script runs them:
+
 | Scenario | What must hold |
 |---|---|
-| baseline | Direct egress from the guest works before connecting, so the probes themselves work |
-| connect | State is `Connected`; traffic, DNS included, goes through the TUN within 5 s; direct egress is blocked |
-| engine killed | State becomes `FailedProtected`; direct egress stays blocked |
+| baseline | Direct egress and IPv6 to the host work before connecting, so the probes themselves work |
+| connect | State is `Connected`; traffic, DNS included, goes through the TUN within 5 s; direct egress and IPv6 are blocked |
+| network change | With the tunnel up, the physical adapter goes down for 5 s and comes back: DHCP assigns its address again under the kill switch, the tunnel carries traffic again within 15 s, nothing leaks meanwhile, the state stays `Connected` |
+| engine killed | State becomes `FailedProtected`; direct egress and IPv6 stay blocked |
 | reconnect | Connecting from `FailedProtected` reaches `Connected` with no leak while it happens |
 | failed reconnect | With the engine binary hidden, the state stays `FailedProtected` and direct egress stays blocked |
-| disconnect | State is `Disconnected`, direct egress works again, the adapter is gone |
+| unreachable reconnect | From `FailedProtected`, a node that never answers fails the helper's DNS check; the state stays `FailedProtected` and egress stays blocked |
+| disconnect | State is `Disconnected`, direct egress and IPv6 work again, the adapter is gone |
+| process rules | With `curl.exe → direct` and the default target `block`, curl gets through, a copy of curl under another name does not, and direct egress stays blocked |
+| unreachable connect | From `Disconnected`, the unreachable node fails the DNS check; the state is `Failed`, protection is released and the adapter is gone |
 | shutdown | With the tunnel up, a shutdown request stops the engine, removes the adapter and restores egress |
 | helper killed | Known fail-open: the engine dies with the helper and the adapter disappears |
 | restart | A new helper connects cleanly after a killed one |
-| unreachable reconnect | From `FailedProtected`, a node that never answers fails the helper's DNS check; the state stays `FailedProtected` and egress stays blocked |
-| unreachable connect | From `Disconnected`, the same node fails the DNS check; the state is `Failed`, protection is released and the adapter is gone |
 
 "Direct egress" is a curl bound to the guest's physical adapter address. "Through
 the TUN" is checked by curl's local address, not just by success, so a request
@@ -262,17 +272,35 @@ that bypasses the tunnel does not count. The tunnel probe fetches
 `TunnelProbeUrl` from the module configuration (`https://ya.ru`): it has to be
 reachable from the test node's exit, which is the developer's own network.
 
-The unreachable node is the same request with the server replaced by
-`192.0.2.1` (TEST-NET-1, reserved and unroutable). `Publish-Rosetun` writes it to
-the guest as `request-unreachable.json`. In the script, "unreachable reconnect"
-runs right after "failed reconnect", and "unreachable connect" right after
-"disconnect".
+"IPv6" is a TCP connect from the guest to the test node on the host's
+link-local address on the Default Switch. Neither the guest nor the
+developer's network has global IPv6, but the connect passes the same WFP IPv6
+layer a real leak would. While sing-box runs, its strict route blocks all IPv6
+too, because the TUN has no IPv6 address. Only the "engine killed" check tests
+Rosetun's own IPv6 filter alone.
+
+`Publish-Rosetun` derives two more requests from the one you pass and writes
+them to the guest:
+
+- `request-unreachable.json`: the server is replaced by `192.0.2.1`
+  (TEST-NET-1, reserved and unroutable).
+- `request-process-rules.json`: a single rule `process_name: curl.exe →
+  direct` with the default target `block`. Since everything but the rule is
+  blocked, a request from curl that gets through proves that the rule matched
+  and that direct traffic from the engine passes the kill switch.
+  `curl-other.exe`, a copy of the system curl, is the process the rule must not
+  match.
+
+A failed "network change" check is not necessarily a Rosetun bug. sing-box has
+to notice the new network by itself, and its DoH resolver keeps a single
+HTTP/2 connection without a health check, which can stay dead after the
+network comes back. The note column shows how long recovery took.
 
 ## Guest layout
 
 | Path | Content |
 |---|---|
-| `C:\rosetun\` | Helper, CLI, `sing-box.exe`, `request.json` |
+| `C:\rosetun\` | Helper, CLI, `sing-box.exe`, `request.json` and the two derived requests, `curl-other.exe` |
 | `C:\rosetun\helper.log` | Log of the current helper run (`ROSETUN_LOG=debug`), sing-box output included |
 | `C:\rosetun\helper-<time>.log` | Logs of earlier helper runs, kept on every restart; after a killed helper or a failed scenario they are the evidence |
 | `C:\ProgramData\Rosetun\run\sing-box\config.json` | The config sing-box actually received |

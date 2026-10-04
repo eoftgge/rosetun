@@ -215,17 +215,43 @@ function Publish-Rosetun {
         $RequestPath = $temporaryRequest
         Write-Host "Node server set to $hostIp"
     }
+    $derived = [ordered]@{}
+
     # The same request with a node that never answers: 192.0.2.1 is TEST-NET-1,
     # reserved and unroutable. The engine starts, but DNS through the tunnel
     # cannot work, so the helper's DNS check must fail the connect.
     $unreachable = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
     $unreachable.node.server = '192.0.2.1'
-    $unreachableRequest = Join-Path $env:TEMP 'rosetun-request-unreachable.json'
-    [IO.File]::WriteAllText($unreachableRequest, ($unreachable | ConvertTo-Json -Depth 20))
+    $derived['request-unreachable.json'] = $unreachable
+
+    # The same request with a single process rule: curl.exe goes direct and
+    # everything else hits the default block. A request that gets through then
+    # proves both that the rule matched and that direct traffic from the
+    # engine passes the kill switch.
+    $processRules = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+    $processRules.rule_set = [pscustomobject]@{
+        id             = $processRules.rule_set.id
+        name           = 'Process rule test'
+        rules          = @(
+            [pscustomobject]@{
+                id      = 'curl-direct'
+                enabled = $true
+                matcher = [pscustomobject]@{ process = [pscustomobject]@{ name = 'curl.exe' } }
+                target  = 'direct'
+            }
+        )
+        default_target = 'block'
+    }
+    $derived['request-process-rules.json'] = $processRules
+
+    $derivedDir = Join-Path $env:TEMP 'rosetun-derived-requests'
+    New-Item -ItemType Directory -Force -Path $derivedDir | Out-Null
 
     Invoke-RosetunGuest -ScriptBlock {
         param($dir)
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        # The process rule scenario needs the same curl under another process name.
+        Copy-Item -Path "$env:SystemRoot\System32\curl.exe" -Destination "$dir\curl-other.exe" -Force
     } -ArgumentList $dir
 
     # The helper looks for sing-box.exe next to itself, so names are fixed here.
@@ -234,14 +260,22 @@ function Publish-Rosetun {
         (Join-Path $BuildDir 'rosetun.exe')                   = 'rosetun.exe'
         $SingBoxPath                                          = 'sing-box.exe'
         $RequestPath                                          = 'request.json'
-        $unreachableRequest                                   = 'request-unreachable.json'
     }
-    foreach ($source in $copies.Keys) {
-        Copy-Item -ToSession $session -Path $source -Destination (Join-Path $dir $copies[$source]) -Force
+    foreach ($name in $derived.Keys) {
+        $path = Join-Path $derivedDir $name
+        [IO.File]::WriteAllText($path, ($derived[$name] | ConvertTo-Json -Depth 20))
+        $copies[$path] = $name
     }
-    Remove-Item -Path $unreachableRequest
-    if ($null -ne $temporaryRequest) {
-        Remove-Item -Path $temporaryRequest
+    try {
+        foreach ($source in $copies.Keys) {
+            Copy-Item -ToSession $session -Path $source -Destination (Join-Path $dir $copies[$source]) -Force
+        }
+    }
+    finally {
+        Remove-Item -Path $derivedDir -Recurse -Force
+        if ($null -ne $temporaryRequest) {
+            Remove-Item -Path $temporaryRequest
+        }
     }
 
     # Defender scans a new executable on its first launch, which in a fresh
@@ -436,9 +470,9 @@ function Wait-RosetunCondition {
     return $false
 }
 
-function Get-RosetunEgressAddress {
-    # IPv4 address of the physical adapter that carries the default route
-    # outside the tunnel.
+function Get-RosetunEgressInterface {
+    # Interface index and IPv4 address of the physical adapter that carries
+    # the default route outside the tunnel.
     Invoke-RosetunGuest -ScriptBlock {
         param($tunAlias)
         $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
@@ -448,9 +482,16 @@ function Get-RosetunEgressAddress {
         if ($null -eq $route) {
             throw 'No default route outside the tunnel.'
         }
-        (Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 |
-            Select-Object -First 1).IPAddress
+        [pscustomobject]@{
+            Index   = $route.InterfaceIndex
+            Address = (Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 |
+                Select-Object -First 1).IPAddress
+        }
     } -ArgumentList $script:Config.TunAlias
+}
+
+function Get-RosetunEgressAddress {
+    (Get-RosetunEgressInterface).Address
 }
 
 function Test-RosetunDirectEgress {
@@ -464,19 +505,60 @@ function Test-RosetunDirectEgress {
     } -ArgumentList $address, $script:Config.ProbeUrl
 }
 
+function Test-RosetunIpv6Egress {
+    # True when a guest process opens a TCP connection over IPv6 outside the
+    # tunnel. Neither the guest nor the developer's network has global IPv6, so
+    # the target is the test node on the host's link-local address. The connect
+    # passes the same WFP IPv6 layer a real leak would.
+    $hostAddress = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -like 'fe80::*' } |
+        Select-Object -First 1
+    if ($null -eq $hostAddress) {
+        throw 'The host has no link-local IPv6 address on the Default Switch.'
+    }
+    $port = (Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json).inbounds[0].listen_port
+    # Without a listener every "blocked" check would pass with a broken probe.
+    if (-not (Get-NetTCPConnection -LocalAddress '::' -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+        throw "The test node does not listen on IPv6 port $port. Restart it with Stop-RosetunTestNode and Start-RosetunTestNode."
+    }
+    $egress = Get-RosetunEgressInterface
+
+    Invoke-RosetunGuest -ScriptBlock {
+        param($address, $index, $port)
+        $client = [Net.Sockets.TcpClient]::new([Net.Sockets.AddressFamily]::InterNetworkV6)
+        try {
+            $client.ConnectAsync([Net.IPAddress]::Parse("$address%$index"), $port).Wait(3000)
+        }
+        catch {
+            $false
+        }
+        finally {
+            $client.Dispose()
+        }
+    } -ArgumentList ($hostAddress.IPAddress -replace '%.*$', ''), $egress.Index, $port
+}
+
 function Test-RosetunTunnelEgress {
     param(
         [string]$Url = $script:Config.TunnelProbeUrl,
+        # Runs the probe from a copy of curl under another process name, for
+        # checking process rules.
+        [switch]$OtherProcess,
         [switch]$Detailed
     )
+    $curl = if ($OtherProcess) { Join-Path $script:Config.GuestDir 'curl-other.exe' } else { 'curl.exe' }
     # A hostname on purpose: this also exercises the hijacked DNS path. The
     # local address proves the connection went through the tunnel; without the
     # kill switch a connection that bypasses it succeeds as well.
     $result = Invoke-RosetunGuest -ScriptBlock {
-        param($url, $tunAlias)
+        param($url, $tunAlias, $curl)
+        # A missing binary would fail the probe and pass a "blocked" check.
+        if (-not (Get-Command -Name $curl -ErrorAction SilentlyContinue)) {
+            throw "$curl was not found in the guest."
+        }
         $tunAddresses = @(Get-NetIPAddress -InterfaceAlias $tunAlias -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             ForEach-Object { $_.IPAddress })
-        $output = @(& curl.exe --max-time 10 --silent --show-error --output NUL --write-out 'local=%{local_ip}' $url 2>&1 |
+        $output = @(& $curl --max-time 10 --silent --show-error --output NUL --write-out 'local=%{local_ip}' $url 2>&1 |
             ForEach-Object { "$_" })
         $exitCode = $LASTEXITCODE
         $localIp = ($output | Where-Object { $_ -like 'local=*' } | Select-Object -First 1) -replace '^local=', ''
@@ -487,7 +569,7 @@ function Test-RosetunTunnelEgress {
             TunAddresses = $tunAddresses -join ','
             Error        = ($output | Where-Object { $_ -notlike 'local=*' -and $_ }) -join ' '
         }
-    } -ArgumentList $Url, $script:Config.TunAlias
+    } -ArgumentList $Url, $script:Config.TunAlias, $curl
 
     if ($Detailed) {
         return $result
@@ -587,6 +669,43 @@ function Stop-RosetunEgressWatch {
         }
         [pscustomobject]@{ Probes = [int]$counts[0]; Leaks = [int]$counts[1] }
     }
+}
+
+function Restart-RosetunEgressAdapter {
+    # Takes the guest's physical adapter down and up again, like a Wi-Fi
+    # reconnect, and waits for DHCP to assign its IPv4 address again. Under the
+    # kill switch that needs the DHCP permit to work.
+    param(
+        [int]$DownSeconds = 5,
+        [int]$TimeoutSeconds = 60
+    )
+    $egress = Get-RosetunEgressInterface
+    Invoke-RosetunGuest -ScriptBlock {
+        param($index, $downSeconds, $timeout)
+        Get-NetAdapter -InterfaceIndex $index | Disable-NetAdapter -Confirm:$false
+        Start-Sleep -Seconds $downSeconds
+        Get-NetAdapter -InterfaceIndex $index | Enable-NetAdapter -Confirm:$false
+
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        do {
+            # An APIPA address (169.254.x.x) has the WellKnown origin, not Dhcp.
+            $address = Get-NetIPAddress -InterfaceIndex $index -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.PrefixOrigin -eq 'Dhcp' -and $_.AddressState -eq 'Preferred' } |
+                Select-Object -First 1
+            if ($null -ne $address) {
+                break
+            }
+            Start-Sleep -Milliseconds 500
+        } while ($watch.Elapsed.TotalSeconds -lt $timeout)
+
+        $current = @(Get-NetIPAddress -InterfaceIndex $index -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            ForEach-Object { "$($_.IPAddress) ($($_.PrefixOrigin), $($_.AddressState))" })
+        [pscustomobject]@{
+            Ok        = $null -ne $address
+            Seconds   = [int]$watch.Elapsed.TotalSeconds
+            Addresses = $current -join ', '
+        }
+    } -ArgumentList $egress.Index, $DownSeconds, $TimeoutSeconds
 }
 
 function Stop-RosetunEngine {

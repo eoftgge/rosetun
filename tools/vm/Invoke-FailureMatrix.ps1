@@ -46,6 +46,14 @@ function Test-Step {
     }
 }
 
+function Format-Egress {
+    param([Parameter(Mandatory)]$Egress)
+    if ($Egress.Ok) {
+        return "after $($Egress.Seconds) s"
+    }
+    "curl $($Egress.CurlExit), local '$($Egress.LocalIp)', tun '$($Egress.TunAddresses)': $($Egress.Error)"
+}
+
 if ($Build) {
     Write-Host 'Building...'
     & cargo build --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
@@ -69,28 +77,44 @@ Start-RosetunHelper
 # Proves the probe itself works. Without it, every "blocked" check below would
 # pass even if the probe were broken or the probe URL unreachable.
 Test-Step 'baseline' 'direct egress works before connect' { Test-RosetunDirectEgress }
+Test-Step 'baseline' 'IPv6 to the host works before connect' { Test-RosetunIpv6Egress }
 
 Write-Host 'Connect...'
 Connect-RosetunTunnel | Out-Null
 Test-Step 'connect' 'state is Connected' { Wait-RosetunState 'Connected' }
 $egress = Wait-RosetunTunnelEgress
-$detail = if ($egress.Ok) {
-    "after $($egress.Seconds) s"
-}
-else {
-    "curl $($egress.CurlExit), local '$($egress.LocalIp)', tun '$($egress.TunAddresses)': $($egress.Error)"
-}
 # Connected must mean usable: a tunnel that needs seconds before the first
 # request gets through looks broken to the user.
-Test-Step 'connect' 'tunnel carries traffic within 5 s, DNS included' -Note $detail {
+Test-Step 'connect' 'tunnel carries traffic within 5 s, DNS included' -Note (Format-Egress $egress) {
     $egress.Ok -and $egress.Seconds -le 5
 }
 Test-Step 'connect' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+Test-Step 'connect' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
+
+# Like a Wi-Fi reconnect: the engine has to follow the network on its own,
+# and the helper notices nothing.
+Write-Host 'Network change with the tunnel up...'
+Start-RosetunEgressWatch
+$adapter = Restart-RosetunEgressAdapter
+$egress = Wait-RosetunTunnelEgress -TimeoutSeconds 60
+$watch = Stop-RosetunEgressWatch
+Test-Step 'network change' 'adapter gets its address from DHCP again' `
+    -Note "after $($adapter.Seconds) s: $($adapter.Addresses)" { $adapter.Ok }
+Test-Step 'network change' 'tunnel carries traffic again within 15 s' -Note (Format-Egress $egress) {
+    $egress.Ok -and $egress.Seconds -le 15
+}
+Test-Step 'network change' "no leak while the network changes ($($watch.Probes) probes)" {
+    $watch.Probes -gt 0 -and $watch.Leaks -eq 0
+}
+Test-Step 'network change' 'state is still Connected' { (Get-RosetunState) -eq 'Connected' }
 
 Write-Host 'Engine killed...'
 Stop-RosetunEngine
 Test-Step 'engine killed' 'state is FailedProtected' { Wait-RosetunState 'FailedProtected' }
 Test-Step 'engine killed' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+# While sing-box runs, its strict route blocks IPv6 as well. Its filters die
+# with it, so only here is Rosetun's own IPv6 block the one being tested.
+Test-Step 'engine killed' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
 
 Write-Host 'Reconnect inside protection...'
 Start-RosetunEgressWatch
@@ -128,9 +152,23 @@ Write-Host 'Disconnect...'
 Disconnect-RosetunTunnel | Out-Null
 Test-Step 'disconnect' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
 Test-Step 'disconnect' 'direct egress works again' { Test-RosetunDirectEgress }
+Test-Step 'disconnect' 'IPv6 works again' { Test-RosetunIpv6Egress }
 Test-Step 'disconnect' 'tunnel adapter is gone' {
     Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
 }
+
+Write-Host 'Process rules...'
+Connect-RosetunTunnel -RequestName 'request-process-rules.json' | Out-Null
+Test-Step 'process rules' 'state is Connected' { Wait-RosetunState 'Connected' }
+$egress = Wait-RosetunTunnelEgress -TimeoutSeconds 15
+# The default target is block, so only the rule can let this request through.
+Test-Step 'process rules' 'curl.exe goes direct by its rule' -Note (Format-Egress $egress) { $egress.Ok }
+Test-Step 'process rules' 'another process hits the default block' {
+    -not (Test-RosetunTunnelEgress -OtherProcess)
+}
+Test-Step 'process rules' 'direct egress is still blocked' { -not (Test-RosetunDirectEgress) }
+Disconnect-RosetunTunnel | Out-Null
+Wait-RosetunState 'Disconnected' | Out-Null
 
 Write-Host 'Connect to an unreachable node...'
 $attempt = Connect-RosetunTunnel -RequestName 'request-unreachable.json' -Quiet
