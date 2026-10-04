@@ -211,13 +211,6 @@ fn print_config() -> Result<(), String> {
             println!("active node: unavailable");
             println!("active rule set: unavailable");
 
-            let reason = match error {
-                store::StoreError::Parse { .. } => "invalid JSON",
-                store::StoreError::Invalid { .. } => "invalid configuration",
-                store::StoreError::Io { .. } => "could not read configuration",
-                store::StoreError::NoConfigDir => "configuration directory unavailable",
-            };
-
             return Err(error.to_string());
         }
     };
