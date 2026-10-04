@@ -230,12 +230,11 @@ impl fmt::Debug for ParseError {
 impl std::error::Error for ParseError {}
 
 pub fn parse(body: &[u8], header: &dyn Fn(&str) -> Option<String>) -> Result<Parsed, ParseError> {
-    let max_devices_reached = ["x-hwid-max-devices-reached", "x-hwid-limit"]
-        .iter()
-        .any(|key| header_true(header, key));
+    let max_devices_reached = header_true(header, "x-hwid-max-devices-reached");
     let not_supported = header_true(header, "x-hwid-not-supported");
+    let limited = header_true(header, "x-hwid-limit");
 
-    if max_devices_reached || not_supported {
+    if max_devices_reached || not_supported || limited {
         let announce = header("announce").and_then(|value| meta::display_text(&value, 1000));
         return Err(ParseError::DeviceLimit {
             max_devices_reached,
