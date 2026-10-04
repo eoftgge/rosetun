@@ -82,8 +82,8 @@ fn xray(config: &Value) -> Record {
     let settings = &outbound["settings"];
     match protocol {
         "vless" | "vmess" => {
-            let server = &settings["vnext"][0];
-            let user = &server["users"][0];
+            let server = settings.pointer("/vnext/0").unwrap_or(settings);
+            let user = server.pointer("/users/0").unwrap_or(server);
             put(&mut fields, "server", server.get("address"));
             put(&mut fields, "port", server.get("port"));
             for (source, target) in [
@@ -97,7 +97,7 @@ fn xray(config: &Value) -> Record {
             }
         }
         "trojan" | "shadowsocks" => {
-            let server = &settings["servers"][0];
+            let server = settings.pointer("/servers/0").unwrap_or(settings);
             for (source, target) in [
                 ("address", "server"),
                 ("port", "port"),

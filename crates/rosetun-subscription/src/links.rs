@@ -120,7 +120,8 @@ fn vmess(rest: &str) -> Result<rosetun_config::Node, SkipReason> {
     let bytes = decode_base64(rest).ok_or(SkipReason::UnsupportedVmessFormat)?;
     if bytes
         .iter()
-        .find(|byte| !byte.is_ascii_whitespace()).is_none_or(|byte| *byte != b'{')
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_none_or(|byte| *byte != b'{')
     {
         return Err(SkipReason::UnsupportedVmessFormat);
     }

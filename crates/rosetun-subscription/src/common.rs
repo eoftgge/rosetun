@@ -20,12 +20,9 @@ pub(crate) fn decode_base64(value: &str) -> Option<Vec<u8>> {
 }
 
 pub(crate) fn percent_decode(value: &str) -> String {
-    // Form decoding treats '+' as a space, unlike URI userinfo and fragments.
-    let encoded = format!("value={}", value.replace('+', "%2B"));
-    url::form_urlencoded::parse(encoded.as_bytes())
-        .next()
-        .map(|(_, value)| value.into_owned())
-        .unwrap_or_default()
+    percent_encoding::percent_decode_str(value)
+        .decode_utf8_lossy()
+        .into_owned()
 }
 
 pub(crate) fn clean(value: &str, limit: usize) -> String {

@@ -350,6 +350,7 @@ name = "rosetun-subscription"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "percent-encoding",
  "rosetun-config",
  "serde",
  "serde_json",
