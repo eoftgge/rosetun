@@ -42,28 +42,6 @@ fn main() -> ExitCode {
         }
     };
 
-    match &command {
-        Command::Select {
-            subscription_id,
-            node_id,
-        } => return local_result(select_node(subscription_id, node_id)),
-        Command::Config => return local_result(print_config()),
-        _ => {}
-    }
-
-    let request = match &command {
-        Command::Connect { request_path } => {
-            match prepare_connect_request(request_path.as_deref()) {
-                Ok(request) => Some(request),
-                Err(message) => {
-                    eprintln!("{message}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-        _ => None,
-    };
-
     let endpoint = rosetun_ipc::default_endpoint();
     let client = match HelperClient::connect(&endpoint) {
         Ok(client) => client,
@@ -240,7 +218,6 @@ fn print_config() -> Result<(), String> {
                 store::StoreError::NoConfigDir => "configuration directory unavailable",
             };
 
-            // Parser diagnostics can contain input values, including credentials.
             return Err(error.to_string());
         }
     };
