@@ -16,7 +16,9 @@ pub(crate) enum StoreError {
         #[source]
         source: io::Error,
     },
-    #[error("could not process JSON in {}: {source}", path.display())]
+    // serde_json's message can quote input values, credentials included, so
+    // only the position is shown.
+    #[error("invalid JSON in {} at line {}, column {}", path.display(), source.line(), source.column())]
     Parse {
         path: PathBuf,
         #[source]
@@ -123,7 +125,7 @@ pub(crate) fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
         })?;
 
         let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
+        options.write(true).create_new(true).truncate(true);
 
         #[cfg(unix)]
         {

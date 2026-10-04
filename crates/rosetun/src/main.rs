@@ -76,60 +76,88 @@ fn main() -> ExitCode {
     tracing::info!(helper = client.helper_version(), "connection established");
 
     match command {
-        Command::Status => match client.status() {
-            Ok(status) => {
-                println!("state: {:?}", status.state);
-                println!("engine:      {:?}", status.engine);
-                println!(
-                    "traffic: up {} B/s down {} B/s",
-                    status.traffic.up_bps, status.traffic.down_bps
-                );
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                tracing::error!(%error, "failed to get status");
-                ExitCode::FAILURE
-            }
+        Command::Select {
+            subscription_id,
+            node_id,
+        } => local_result(select_node(&subscription_id, &node_id)),
+        Command::Config => local_result(print_config()),
+        Command::Connect { request_path } => match prepare_connect_request(request_path.as_deref())
+        {
+            Ok(request) => with_helper(|client| connect(client, request)),
+            Err(message) => local_result(Err(message)),
         },
-        Command::Connect { .. } => {
-            let Some(request) = request else {
-                eprintln!("connect request was not prepared");
-                return ExitCode::FAILURE;
-            };
+        Command::Status => with_helper(status),
+        Command::Disconnect => with_helper(disconnect),
+        Command::Shutdown => with_helper(shutdown),
+    }
+}
 
-            match client.connect_tunnel(request) {
-                Ok(()) => {
-                    println!("tunnel connection started");
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    tracing::error!(%error, "failed to connect tunnel");
-                    ExitCode::FAILURE
-                }
-            }
+fn connect(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
+    match client.connect_tunnel(request) {
+        Ok(()) => {
+            println!("tunnel connection started");
+            ExitCode::SUCCESS
         }
-        Command::Disconnect => match client.disconnect_tunnel() {
-            Ok(()) => {
-                println!("tunnel disconnected");
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                tracing::error!(%error, "failed to disconnect tunnel");
-                ExitCode::FAILURE
-            }
-        },
-        Command::Shutdown => match client.shutdown() {
-            Ok(()) => {
-                println!("helper shut down");
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                tracing::error!(%error, "failed to shut down helper");
-                ExitCode::FAILURE
-            }
-        },
-        Command::Select { .. } | Command::Config => {
-            eprintln!("local command was not handled");
+        Err(error) => {
+            tracing::error!(%error, "failed to connect tunnel");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn status(client: &mut HelperClient) -> ExitCode {
+    match client.status() {
+        Ok(status) => {
+            println!("state: {:?}", status.state);
+            println!("engine:      {:?}", status.engine);
+            println!(
+                "traffic: up {} B/s down {} B/s",
+                status.traffic.up_bps, status.traffic.down_bps
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to get status");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn disconnect(client: &mut HelperClient) -> ExitCode {
+    match client.disconnect_tunnel() {
+        Ok(()) => {
+            println!("tunnel disconnected");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to disconnect tunnel");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn shutdown(client: &mut HelperClient) -> ExitCode {
+    match client.shutdown() {
+        Ok(()) => {
+            println!("helper shut down");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to shut down helper");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn with_helper(run: impl FnOnce(&mut HelperClient) -> ExitCode) -> ExitCode {
+    let endpoint = rosetun_ipc::default_endpoint();
+    match HelperClient::connect(&endpoint) {
+        Ok(mut client) => {
+            tracing::info!(helper = client.helper_version(), "connection established");
+            run(&mut client)
+        }
+        Err(error) => {
+            tracing::error!(endpoint = %endpoint.display(), %error, "helper unavailable");
             ExitCode::FAILURE
         }
     }
@@ -213,7 +241,7 @@ fn print_config() -> Result<(), String> {
             };
 
             // Parser diagnostics can contain input values, including credentials.
-            return Err(format!("{reason} in {}", path.display()));
+            return Err(error.to_string());
         }
     };
 
