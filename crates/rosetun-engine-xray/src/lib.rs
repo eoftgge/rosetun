@@ -53,6 +53,13 @@ impl EngineBackend for XrayBackend {
         ))
     }
 
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        None
+    }
+
     fn spawn(
         &self,
         _binary: &Path,

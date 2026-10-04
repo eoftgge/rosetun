@@ -82,6 +82,33 @@ impl EngineBackend for SingBoxBackend {
         render::render(request)
     }
 
+    fn tunnel_dns_server(
+        &self,
+        tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        let (address, prefix) = tun.ipv4.split_once('/')?;
+        let address = u32::from(address.parse::<std::net::Ipv4Addr>().ok()?);
+        let prefix = prefix.parse::<u32>().ok()?;
+        if prefix > 32 {
+            return None;
+        }
+
+        let mask = u32::MAX.checked_shl(32 - prefix).unwrap_or(0);
+        let next = address.checked_add(1)?;
+        let network = address & mask;
+        let broadcast = network | !mask;
+
+        if next & mask != network || next == broadcast {
+            return None;
+        }
+
+        // sing-tun intercepts DNS sent to the address immediately after the TUN address.
+        Some(std::net::SocketAddr::from((
+            std::net::Ipv4Addr::from(next),
+            53,
+        )))
+    }
+
     fn spawn(
         &self,
         binary: &Path,
@@ -301,6 +328,36 @@ mod tests {
         };
         let config = render::render(&request).expect("config built");
         serde_json::from_slice(&config.body).expect("config is valid json")
+    }
+
+    #[test]
+    fn tunnel_dns_server_uses_the_next_tun_address() {
+        let backend = SingBoxBackend::new("unused");
+        assert_eq!(
+            backend.tunnel_dns_server(&rosetun_config::TunSettings::default()),
+            Some("172.19.0.2:53".parse().expect("DNS address")),
+        );
+    }
+
+    #[test]
+    fn tunnel_dns_server_rejects_unusable_next_addresses() {
+        let backend = SingBoxBackend::new("unused");
+
+        for ipv4 in [
+            "172.19.0.1/32",
+            "172.19.0.1/31",
+            "172.19.0.2/30",
+            "172.19.0.3/30",
+            "255.255.255.255/0",
+            "172.19.0.1/33",
+            "invalid",
+        ] {
+            let tun = rosetun_config::TunSettings {
+                ipv4: ipv4.to_owned(),
+                ..Default::default()
+            };
+            assert_eq!(backend.tunnel_dns_server(&tun), None, "{ipv4}");
+        }
     }
 
     #[test]
@@ -612,7 +669,7 @@ mod tests {
         assert_eq!(
             servers[0],
             serde_json::json!({
-                "type": "tls",
+                "type": "https",
                 "detour": "proxy",
                 "tag": "dns-proxy",
                 "server": "8.8.8.8",

@@ -130,6 +130,13 @@ impl EngineBackend for UnsupportedRuleEngine {
         }
     }
 
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        None
+    }
+
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
         panic!("the helper must reject unsupported rules before locating the engine binary");
     }
@@ -168,6 +175,13 @@ impl EngineBackend for StubEngine {
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
         Ok(PathBuf::from("sing-box"))
+    }
+
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        None
     }
 
     fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
@@ -222,6 +236,13 @@ impl EngineBackend for SpawnSignalingEngine {
         EngineCapabilities {
             rules: RuleCapabilities::ALL,
         }
+    }
+
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        None
     }
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
@@ -281,6 +302,13 @@ impl EngineBackend for ExitedEngine {
         EngineCapabilities {
             rules: RuleCapabilities::ALL,
         }
+    }
+
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        None
     }
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
@@ -343,6 +371,13 @@ impl EngineBackend for RunningThenExitedEngine {
         }
     }
 
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        None
+    }
+
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
         Ok(PathBuf::from("sing-box"))
     }
@@ -397,27 +432,218 @@ impl RoutingBackend for CountingRouting {
     }
 }
 
-fn connect_request() -> ConnectRequest {
-    ConnectRequest {
-        selection: Selection {
-            subscription: SubscriptionId::new("sub"),
-            node: NodeId::new("node"),
-        },
-        node: Node {
-            id: NodeId::new("node"),
-            name: "test".to_owned(),
-            server: "127.0.0.1".to_owned(),
-            port: 443,
-            outbound: Outbound::Vless(VlessParams {
-                uuid: "00000000-0000-0000-0000-000000000000".to_owned(),
-                flow: None,
-            }),
-            stream: Default::default(),
-            raw: None,
-        },
-        rule_set: RuleSet::new(RuleSetId::new("base"), "base", RuleTarget::Proxy),
-        settings: Settings::default(),
+#[derive(Debug)]
+struct DnsEngine {
+    server: Option<std::net::SocketAddr>,
+    stopped: Arc<AtomicUsize>,
+}
+
+impl EngineBackend for DnsEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
     }
+
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
+    }
+
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        self.server
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        Ok(PathBuf::from("sing-box"))
+    }
+
+    fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        Ok(RenderedConfig {
+            file_name: "config.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+        })
+    }
+
+    fn spawn(
+        &self,
+        _binary: &Path,
+        _config: &RenderedConfig,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        Ok(Box::new(DnsProcess {
+            stopped: Arc::clone(&self.stopped),
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct DnsProcess {
+    stopped: Arc<AtomicUsize>,
+}
+
+impl EngineProcess for DnsProcess {
+    fn is_running(&mut self) -> Result<bool, EngineError> {
+        Ok(true)
+    }
+
+    fn traffic(&mut self) -> Result<Traffic, EngineError> {
+        Err(EngineError::StatsUnavailable)
+    }
+
+    fn stop(&mut self) -> Result<(), EngineError> {
+        self.stopped.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+}
+
+fn shorten_dns_timeouts(helper: &Helper) {
+    let mut session = helper.session().expect("session");
+    session.dns_timeout = Duration::from_millis(80);
+    session.dns_attempt_timeout = Duration::from_millis(20);
+}
+
+#[test]
+fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
+    use super::dns::test_support::{Behavior, Server};
+
+    for kill_switch in [false, true] {
+        let server = Server::new(Behavior::Noerror);
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let reverted = Arc::new(AtomicUsize::new(0));
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(DnsEngine {
+            server: Some(server.address()),
+            stopped: Arc::clone(&stopped),
+        }));
+
+        let routing: Box<dyn RoutingBackend> = if kill_switch {
+            Box::new(CountingRouting {
+                reverted: Arc::clone(&reverted),
+            })
+        } else {
+            Box::new(UnusedRouting)
+        };
+        let helper = Helper::new(engines, routing);
+        shorten_dns_timeouts(&helper);
+
+        let mut request = connect_request();
+        request.settings.kill_switch = kill_switch;
+        helper.connect(&request).expect("DNS responds");
+
+        assert!(matches!(helper.status().state, ConnectionState::Connected));
+        assert_eq!(stopped.load(Ordering::Acquire), 0);
+        assert_eq!(reverted.load(Ordering::Acquire), 0);
+        assert!(helper.session().expect("session").last_endpoint.is_some());
+    }
+}
+
+#[test]
+fn fresh_dns_timeout_stops_engine_and_releases_protection() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Silent);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let reverted = Arc::new(AtomicUsize::new(0));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(DnsEngine {
+        server: Some(server.address()),
+        stopped: Arc::clone(&stopped),
+    }));
+
+    let helper = Helper::new(
+        engines,
+        Box::new(CountingRouting {
+            reverted: Arc::clone(&reverted),
+        }),
+    );
+    shorten_dns_timeouts(&helper);
+
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let error = helper.connect(&request).expect_err("DNS is silent");
+
+    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert!(error.message.contains("last: timeout"));
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed { ref reason } if reason == &error.message
+    ));
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 1);
+
+    let session = helper.session().expect("session");
+    assert!(session.guard.is_none());
+    assert!(session.process.is_none());
+    assert!(session.last_endpoint.is_none());
+}
+
+#[test]
+fn protected_dns_timeout_stops_engine_but_retains_guard_and_cache() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Silent);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let (helper, prepared, authorized, reverted) = protected_helper(Box::new(DnsEngine {
+        server: Some(server.address()),
+        stopped: Arc::clone(&stopped),
+    }));
+    shorten_dns_timeouts(&helper);
+
+    let error = helper
+        .connect(&protected_request())
+        .expect_err("DNS is silent");
+
+    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert!(error.message.contains("last: timeout"));
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { ref reason } if reason == &error.message
+    ));
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(authorized.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+
+    let session = helper.session().expect("session");
+    assert!(session.guard.is_some());
+    assert!(session.process.is_none());
+    let cached = session.last_endpoint.as_ref().expect("retained cache");
+    assert_eq!(cached.server, "cached.invalid");
+    assert_eq!(
+        cached.address,
+        "203.0.113.10".parse::<IpAddr>().expect("cached address"),
+    );
+}
+
+#[test]
+fn backend_without_dns_server_connects_without_checking_dns() {
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(DnsEngine {
+        server: None,
+        stopped: Arc::clone(&stopped),
+    }));
+
+    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    {
+        let mut session = helper.session().expect("session");
+        session.dns_timeout = Duration::ZERO;
+        session.dns_attempt_timeout = Duration::ZERO;
+    }
+
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).expect("DNS check is skipped");
+
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(stopped.load(Ordering::Acquire), 0);
 }
 
 #[test]
@@ -895,4 +1121,27 @@ fn protected_endpoint_requires_matching_cache_but_accepts_literal_ip() {
         protected_endpoint(&request.node, None).expect("literal IP"),
         "198.51.100.7".parse::<IpAddr>().expect("IP"),
     );
+}
+
+fn connect_request() -> ConnectRequest {
+    ConnectRequest {
+        selection: Selection {
+            subscription: SubscriptionId::new("sub"),
+            node: NodeId::new("node"),
+        },
+        node: Node {
+            id: NodeId::new("node"),
+            name: "test".to_owned(),
+            server: "127.0.0.1".to_owned(),
+            port: 443,
+            outbound: Outbound::Vless(VlessParams {
+                uuid: "00000000-0000-0000-0000-000000000000".to_owned(),
+                flow: None,
+            }),
+            stream: Default::default(),
+            raw: None,
+        },
+        rule_set: RuleSet::new(RuleSetId::new("base"), "base", RuleTarget::Proxy),
+        settings: Settings::default(),
+    }
 }

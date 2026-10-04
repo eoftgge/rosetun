@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests;
+mod dns;
 
 use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::{Mutex, MutexGuard, TryLockError};
@@ -12,6 +13,8 @@ use rosetun_routing::{RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface
 
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
+const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub struct Helper {
     status: Mutex<Status>,
@@ -37,6 +40,8 @@ struct Session {
     guard: Option<RoutingGuard>,
     last_endpoint: Option<SuccessfulEndpoint>,
     stopping: bool,
+    dns_timeout: Duration,
+    dns_attempt_timeout: Duration,
 }
 
 impl std::fmt::Debug for Helper {
@@ -56,6 +61,8 @@ impl Helper {
                 guard: None,
                 last_endpoint: None,
                 stopping: false,
+                dns_timeout: TUNNEL_DNS_TIMEOUT,
+                dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
             }),
         }
     }
@@ -248,6 +255,7 @@ impl Session {
                 format!("engine {} is not registered", settings.engine.as_str()),
             )
         })?;
+        let dns_server = backend.tunnel_dns_server(&settings.tun);
 
         let config = backend
             .render(&RenderRequest {
@@ -340,6 +348,26 @@ impl Session {
                     "engine exited during tunnel readiness",
                 ));
             }
+        }
+
+        if let Some(server) = dns_server {
+            let process = self.process.as_mut().ok_or_else(|| {
+                HelperError::new(
+                    ErrorCode::EngineFailed,
+                    "engine process disappeared before DNS check",
+                )
+            })?;
+            dns::check(
+                server,
+                self.dns_timeout,
+                self.dns_attempt_timeout,
+                || process.is_running(),
+            )?;
+        } else {
+            tracing::info!(
+                engine = %settings.engine.as_str(),
+                "backend does not provide a tunnel DNS server; skipping DNS check"
+            );
         }
 
         // Do not poison the successful endpoint cache with a failed attempt.

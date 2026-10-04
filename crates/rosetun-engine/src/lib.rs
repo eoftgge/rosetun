@@ -82,6 +82,10 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     fn kind(&self) -> EngineKind;
     fn integration(&self) -> EngineIntegration;
     fn capabilities(&self) -> EngineCapabilities;
+    fn tunnel_dns_server(
+        &self,
+        tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr>;
     fn locate_binary(&self) -> Result<PathBuf, EngineError>;
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError>;
 
