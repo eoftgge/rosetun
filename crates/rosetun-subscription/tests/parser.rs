@@ -446,3 +446,145 @@ fn only_unsupported_records_fail() {
         Err(ParseError::NoUsableNodes { .. }),
     ));
 }
+
+#[test]
+fn invalid_body_metadata_preserves_valid_headers() {
+    let headers = [
+        ("profile-title", "Header title"),
+        ("announce", "Header announcement"),
+        ("support-url", "https://example.com/support"),
+        ("profile-web-page-url", "https://example.com/profile"),
+        ("profile-update-interval", "24"),
+        (
+            "subscription-userinfo",
+            "upload=10; download=20; total=100; expire=200",
+        ),
+    ];
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| (*value).to_owned())
+    };
+    let body = format!(
+        "#profile-title: base64:!\n\
+         #announce: base64:!\n\
+         #support-url: javascript:test\n\
+         #profile-web-page-url: not a URL\n\
+         #profile-update-interval: invalid\n\
+         #subscription-userinfo: upload=invalid; unknown=42; junk\n\
+         {}",
+        vless("", "Test"),
+    );
+
+    let result = parse(body.as_bytes(), &header).unwrap();
+
+    assert_eq!(result.meta.title.as_deref(), Some("Header title"));
+    assert_eq!(result.meta.announce.as_deref(), Some("Header announcement"));
+    assert_eq!(
+        result.meta.support_url.as_deref(),
+        Some("https://example.com/support"),
+    );
+    assert_eq!(
+        result.meta.web_page_url.as_deref(),
+        Some("https://example.com/profile"),
+    );
+    assert_eq!(result.meta.update_interval_hours, Some(24));
+
+    let info = result.meta.info.unwrap();
+    assert_eq!(info.upload, 10);
+    assert_eq!(info.download, 20);
+    assert_eq!(info.total, Some(100));
+    assert_eq!(info.expire_unix, Some(200));
+}
+
+#[test]
+fn userinfo_requires_a_valid_known_field() {
+    for value in ["", "junk", "unknown=42", "upload=invalid; download=-1"] {
+        let header = |name: &str| (name == "subscription-userinfo").then(|| value.to_owned());
+        let result = parse(vless("", "Test").as_bytes(), &header).unwrap();
+        assert!(result.meta.info.is_none());
+
+        let body = format!("#subscription-userinfo: {value}\n{}", vless("", "Test"));
+        assert!(parsed(&body).meta.info.is_none());
+    }
+
+    let body = format!(
+        "#subscription-userinfo: upload=0; download=0; total=0; expire=0\n{}",
+        vless("", "Test"),
+    );
+    let info = parsed(&body).meta.info.unwrap();
+    assert_eq!(info.upload, 0);
+    assert_eq!(info.download, 0);
+    assert_eq!(info.total, None);
+    assert_eq!(info.expire_unix, None);
+}
+
+#[test]
+fn xray_trojan_defaults_to_plain_but_links_default_to_tls() {
+    for stream in [
+        None,
+        Some(serde_json::json!({})),
+        Some(serde_json::json!({"network": "tcp"})),
+        Some(serde_json::json!({"security": "none"})),
+        Some(serde_json::json!({"security": "tls"})),
+    ] {
+        let expects_tls = stream
+            .as_ref()
+            .and_then(|value| value.get("security"))
+            .and_then(serde_json::Value::as_str)
+            == Some("tls");
+        let mut outbound = serde_json::json!({
+            "protocol": "trojan",
+            "settings": {
+                "servers": [{
+                    "address": "example.com",
+                    "port": 443,
+                    "password": "test-password"
+                }]
+            }
+        });
+        if let Some(stream) = stream {
+            outbound["streamSettings"] = stream;
+        }
+        let config = serde_json::json!({"outbounds": [outbound]});
+        let result = parsed(&config.to_string());
+
+        if expects_tls {
+            assert!(matches!(result.nodes[0].stream.tls, TlsMode::Tls(_)));
+        } else {
+            assert_eq!(result.nodes[0].stream.tls, TlsMode::Plain);
+        }
+    }
+
+    let result = parsed("trojan://test-password@example.com:443");
+    assert!(matches!(result.nodes[0].stream.tls, TlsMode::Tls(_)));
+}
+
+#[test]
+fn unicode_link_hosts_are_normalized_to_punycode() {
+    let userinfo = URL_SAFE_NO_PAD.encode("aes-256-gcm:test-password");
+    let legacy = STANDARD.encode("aes-256-gcm:test-password@пример.example.com:443");
+
+    for host in [
+        "пример.example.com",
+        "%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%80.example.com",
+        "xn--e1afmkfd.example.com",
+    ] {
+        for link in [
+            format!("vless://{UUID}@{host}:443"),
+            format!("trojan://test-password@{host}:443"),
+            format!("ss://{userinfo}@{host}:443"),
+        ] {
+            let result = parsed(&link);
+            assert_eq!(result.nodes[0].server, "xn--e1afmkfd.example.com");
+        }
+    }
+
+    let result = parsed(&format!("ss://{legacy}"));
+    assert_eq!(result.nodes[0].server, "xn--e1afmkfd.example.com");
+
+    let unicode = parsed(&format!("vless://{UUID}@пример.example.com:443"));
+    let ascii = parsed(&format!("vless://{UUID}@xn--e1afmkfd.example.com:443"));
+    assert_eq!(unicode.nodes[0].id, ascii.nodes[0].id);
+}

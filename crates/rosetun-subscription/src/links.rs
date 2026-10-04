@@ -101,7 +101,14 @@ fn ordinary(line: &str, protocol: &str) -> Result<rosetun_config::Node, SkipReas
 
 fn endpoint_fields(url: &Url) -> Result<Fields, SkipReason> {
     let server = match url.host().ok_or(SkipReason::MissingField)? {
-        Host::Domain(value) => value.to_owned(),
+        Host::Domain(value) => {
+            let decoded = percent_decode(value);
+            match Host::parse(&decoded).map_err(|_| SkipReason::InvalidRecord)? {
+                Host::Domain(value) => value,
+                Host::Ipv4(value) => value.to_string(),
+                Host::Ipv6(value) => value.to_string(),
+            }
+        }
         Host::Ipv4(value) => value.to_string(),
         Host::Ipv6(value) => value.to_string(),
     };

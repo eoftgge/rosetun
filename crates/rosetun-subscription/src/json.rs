@@ -112,6 +112,7 @@ fn xray(config: &Value) -> Record {
 
     let stream = &outbound["streamSettings"];
     put(&mut fields, "transport", stream.get("network"));
+    fields.insert("security".to_owned(), "none".to_owned());
     put(&mut fields, "security", stream.get("security"));
 
     let tls = &stream["tlsSettings"];

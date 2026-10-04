@@ -49,23 +49,31 @@ pub(crate) fn display_text(value: &str, limit: usize) -> Option<String> {
 
 fn apply(meta: &mut SubscriptionMeta, key: &str, value: &str) {
     match key {
-        "profile-title" => meta.title = display_text(value, 128),
-        "announce" => meta.announce = display_text(value, 1000),
-        "subscription-userinfo" => meta.info = Some(userinfo(value)),
+        "profile-title" => replace_if_some(&mut meta.title, display_text(value, 128)),
+        "announce" => replace_if_some(&mut meta.announce, display_text(value, 1000)),
+        "subscription-userinfo" => replace_if_some(&mut meta.info, userinfo(value)),
         "profile-update-interval" => {
-            meta.update_interval_hours = value.trim().parse().ok();
+            replace_if_some(&mut meta.update_interval_hours, value.trim().parse().ok());
         }
-        "support-url" => meta.support_url = http_url(value),
-        "profile-web-page-url" => meta.web_page_url = http_url(value),
+        "support-url" => replace_if_some(&mut meta.support_url, http_url(value)),
+        "profile-web-page-url" => replace_if_some(&mut meta.web_page_url, http_url(value)),
         "content-disposition" if meta.title.is_none() => {
-            meta.title = filename(value);
+            replace_if_some(&mut meta.title, filename(value));
         }
         _ => {}
     }
 }
 
-fn userinfo(value: &str) -> SubscriptionInfo {
+fn replace_if_some<T>(target: &mut Option<T>, value: Option<T>) {
+    if let Some(value) = value {
+        *target = Some(value);
+    }
+}
+
+fn userinfo(value: &str) -> Option<SubscriptionInfo> {
     let mut info = SubscriptionInfo::default();
+    let mut recognized = false;
+
     for part in value.split(';') {
         let Some((key, value)) = part.split_once('=') else {
             continue;
@@ -78,10 +86,12 @@ fn userinfo(value: &str) -> SubscriptionInfo {
             "download" => info.download = value,
             "total" => info.total = (value != 0).then_some(value),
             "expire" => info.expire_unix = (value != 0).then_some(value),
-            _ => {}
+            _ => continue,
         }
+        recognized = true;
     }
-    info
+
+    recognized.then_some(info)
 }
 
 fn http_url(value: &str) -> Option<String> {
