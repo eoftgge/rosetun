@@ -2,6 +2,7 @@
 
 mod client;
 mod store;
+mod subscription_url;
 mod update;
 
 use std::path::Path;

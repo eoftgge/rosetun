@@ -90,8 +90,9 @@ fn debug_host(value: &str) -> &str {
         };
         if address.parse::<std::net::Ipv6Addr>().is_err()
             || (!suffix.is_empty()
-            && suffix
-            .strip_prefix(':').is_none_or(|port| port.parse::<u16>().is_err()))
+                && suffix
+                    .strip_prefix(':')
+                    .is_none_or(|port| port.parse::<u16>().is_err()))
         {
             return "<redacted>";
         }
@@ -101,8 +102,8 @@ fn debug_host(value: &str) -> &str {
     let host = authority.split(':').next().unwrap_or_default();
     if host.is_empty()
         || !host
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
     {
         return "<redacted>";
     }
@@ -120,7 +121,7 @@ mod tests {
             "name": "Example",
             "url": "https://sub.example.com/private?token=secret"
         }))
-            .unwrap();
+        .unwrap();
 
         assert!(subscription.send_hwid);
         assert!(subscription.user_agent.is_none());
@@ -140,7 +141,7 @@ mod tests {
             "url": "https://sub.example.com/private",
             "send_hwid": false
         }))
-            .unwrap();
+        .unwrap();
 
         let encoded = serde_json::to_vec(&subscription).unwrap();
         let decoded: Subscription = serde_json::from_slice(&encoded).unwrap();
@@ -167,7 +168,7 @@ mod tests {
                 }
             }]
         }))
-            .unwrap();
+        .unwrap();
 
         let debug = format!("{subscription:?}");
 
