@@ -2,7 +2,7 @@ use std::{path::Path, ptr};
 
 use super::{
     policy::{Action, AddressFamily, Condition, Rule},
-    session::DynamicSession,
+    session::{DynamicSession, PROVIDER_KEY, SUBLAYER_KEY},
 };
 use crate::RoutingError;
 use crate::platform::windows::policy::Subnet;
@@ -118,8 +118,9 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<u64, Rou
             name: display_name.as_mut_ptr(),
             description: ptr::null_mut(),
         },
+        providerKey: (&PROVIDER_KEY as *const GUID).cast_mut(),
         layerKey: layer_key(rule.family),
-        subLayerKey: sublayer_key(),
+        subLayerKey: SUBLAYER_KEY,
         action: action(rule.action),
         weight: weight(rule.weight),
         numFilterConditions: conditions.len() as u32,
@@ -282,15 +283,6 @@ fn interface_condition(luid: &mut NET_LUID_LH) -> FWPM_FILTER_CONDITION0 {
                 uint64: unsafe { &mut luid.Value },
             },
         },
-    }
-}
-
-fn sublayer_key() -> GUID {
-    GUID {
-        data1: 0x0c03_5ef5,
-        data2: 0x4c5c,
-        data3: 0x4583,
-        data4: [0xad, 0x9c, 0x17, 0x97, 0x91, 0x36, 0x0f, 0x5e],
     }
 }
 

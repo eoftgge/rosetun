@@ -294,7 +294,7 @@ pub(crate) const PROVIDER_KEY: GUID = GUID {
     data3: 0x4b84,
     data4: [0x88, 0x54, 0x07, 0x5e, 0x15, 0x76, 0xe7, 0xf9],
 };
-const SUBLAYER_KEY: GUID = GUID {
+pub(super) const SUBLAYER_KEY: GUID = GUID {
     data1: 0x0c03_5ef5,
     data2: 0x4c5c,
     data3: 0x4583,

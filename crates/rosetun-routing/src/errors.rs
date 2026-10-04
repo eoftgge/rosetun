@@ -12,8 +12,6 @@ pub enum RoutingError {
     Route(String),
     #[error("failed to configure dns: {0}")]
     Dns(String),
-    #[error("could not resolve a VPN endpoint address")]
-    EndpointUnresolved,
     #[error("Windows Filtering Platform error {code}: {context}")]
     Wfp { code: u32, context: &'static str },
     #[error("routing for this platform is not yet implemented")]

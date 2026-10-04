@@ -231,13 +231,13 @@ impl Session {
             if self.guard.is_none() {
                 return Err(HelperError::new(
                     ErrorCode::RoutingFailed,
-                    "защищённое переподключение невозможно: routing guard отсутствует",
+                    "protected reconnect is impossible: the routing guard is missing",
                 ));
             }
             if !settings.kill_switch {
                 return Err(HelperError::new(
                     ErrorCode::InvalidState,
-                    "для отключения защиты сначала выполните disconnect",
+                    "disconnect first to turn protection off",
                 ));
             }
         }
@@ -547,7 +547,7 @@ fn protected_endpoint(
         .ok_or_else(|| {
             HelperError::new(
                 ErrorCode::RoutingFailed,
-                "нельзя отрезолвить новый сервер при активной защите",
+                "cannot resolve a new server name while protection is active; use an IP address or the last connected server",
             )
         })
 }

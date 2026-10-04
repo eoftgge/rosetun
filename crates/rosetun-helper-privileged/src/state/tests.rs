@@ -1071,7 +1071,7 @@ fn protected_reconnect_to_other_domain_fails_without_dns_or_guard_release() {
     let error = helper.connect(&request).expect_err("different domain");
     assert_eq!(
         error.message,
-        "нельзя отрезолвить новый сервер при активной защите"
+        "cannot resolve a new server name while protection is active; use an IP address or the last connected server",
     );
     assert!(matches!(
         helper.status().state,

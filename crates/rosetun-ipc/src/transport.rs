@@ -300,21 +300,53 @@ mod platform {
         }
 
         pub fn accept(&self) -> io::Result<Connection> {
-            let pending = self
-                .pending
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .take()
-                .unwrap_or(create_instance(&self.name, false)?);
+            let pending = {
+                let mut slot = self
+                    .pending
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
 
-            wait_for_connection(&pending)?;
+                match slot.take() {
+                    Some(pending) => pending,
+                    None => create_instance(&self.name, false)?,
+                }
+            };
 
-            let replacement = create_instance(&self.name, false)?;
+            if let Err(error) = wait_for_connection(&pending) {
+                let replacement = create_instance(&self.name, false);
+                let mut slot = self
+                    .pending
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+
+                match replacement {
+                    Ok(replacement) => *slot = Some(replacement),
+                    Err(replacement_error) => {
+                        tracing::warn!(
+                            %replacement_error,
+                            "failed to restore the pending named pipe instance"
+                        );
+                    }
+                }
+
+                return Err(error);
+            }
+
+            let replacement = create_instance(&self.name, false);
             let mut slot = self
                 .pending
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            *slot = Some(replacement);
+
+            match replacement {
+                Ok(replacement) => *slot = Some(replacement),
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "failed to create the next named pipe instance"
+                    );
+                }
+            }
             drop(slot);
 
             connection_from_handle(pending)
@@ -351,7 +383,7 @@ mod tests {
             id,
             body: Request::Hello {
                 client: "rosetun-ipc-test".to_owned(),
-                protocol_version: 1,
+                protocol_version: crate::PROTOCOL_VERSION,
             },
         };
         connection.write(&request).expect("request is written");
@@ -362,7 +394,7 @@ mod tests {
                 id,
                 body: Response::Hello {
                     helper_version: "test".to_owned(),
-                    protocol_version: 1,
+                    protocol_version: crate::PROTOCOL_VERSION,
                 },
             })
         );
@@ -374,7 +406,7 @@ mod tests {
         let listener = Listener::bind(&endpoint).expect("listener is bound");
 
         let server = std::thread::spawn(move || {
-            for id in [1, 2] {
+            for id in 1..=32 {
                 let mut connection = listener.accept().expect("client is accepted");
 
                 assert_eq!(
@@ -383,7 +415,7 @@ mod tests {
                         id,
                         body: Request::Hello {
                             client: "rosetun-ipc-test".to_owned(),
-                            protocol_version: 1,
+                            protocol_version: crate::PROTOCOL_VERSION,
                         },
                     })
                 );
@@ -393,20 +425,17 @@ mod tests {
                         id,
                         body: Response::Hello {
                             helper_version: "test".to_owned(),
-                            protocol_version: 1,
+                            protocol_version: crate::PROTOCOL_VERSION,
                         },
                     })
                     .expect("response is written");
             }
         });
 
-        let mut first = connect(&endpoint).expect("first client connects");
-        roundtrip(&mut first, 1);
-        drop(first);
-
-        let mut second = connect(&endpoint).expect("second client connects");
-        roundtrip(&mut second, 2);
-        drop(second);
+        for id in 1..=32 {
+            let mut connection = connect(&endpoint).expect("client connects");
+            roundtrip(&mut connection, id);
+        }
 
         server.join().expect("server thread completes");
     }
@@ -433,7 +462,7 @@ mod tests {
                     id: 2,
                     body: Request::Hello {
                         client: "rosetun-ipc-test".to_owned(),
-                        protocol_version: 1,
+                        protocol_version: crate::PROTOCOL_VERSION,
                     },
                 })
             );
@@ -442,7 +471,7 @@ mod tests {
                     id: 2,
                     body: Response::Hello {
                         helper_version: "test".to_owned(),
-                        protocol_version: 1,
+                        protocol_version: crate::PROTOCOL_VERSION,
                     },
                 })
                 .expect("second response is written");

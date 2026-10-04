@@ -240,19 +240,21 @@ pub(super) fn check(
     let mut attempts = 0usize;
     let mut last = LastResult::Timeout;
 
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_usize(0);
+    let id = hasher.finish() as u16;
+    let packet = query(id);
+
     while Instant::now() < deadline {
         ensure_running(&mut is_running)?;
 
         let attempt_deadline = (Instant::now() + attempt_timeout).min(deadline);
-        let mut hasher = RandomState::new().build_hasher();
-        hasher.write_usize(attempts);
-        let id = hasher.finish() as u16;
 
         attempts += 1;
         last = attempt(
             &socket,
             server,
-            &query(id),
+            &packet,
             id,
             attempt_deadline,
             &mut buffer,
@@ -455,6 +457,46 @@ mod tests {
     fn udp_noerror_succeeds() {
         let server = Server::new(Behavior::Noerror);
         check(server.address(), TIMEOUT, ATTEMPT_TIMEOUT, || Ok(true)).expect("DNS succeeds");
+    }
+
+    #[test]
+    fn first_attempt_reply_is_accepted_during_the_second_attempt() {
+        let socket = UdpSocket::bind(("127.0.0.1", 0)).expect("bind test DNS");
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set test DNS timeout");
+        let address = socket.local_addr().expect("test DNS address");
+
+        let server = std::thread::spawn(move || {
+            let mut buffer = [0u8; 512];
+            let (length, peer) = socket.recv_from(&mut buffer).expect("receive first query");
+            let first_query = buffer[..length].to_vec();
+
+            let (length, second_peer) =
+                socket.recv_from(&mut buffer).expect("receive second query");
+            let second_query = buffer[..length].to_vec();
+
+            let mut reply = first_query.clone();
+            reply[2] = 0x81;
+            reply[3] = 0x80;
+            socket.send_to(&reply, peer).expect("reply to first query");
+
+            (first_query, second_query, peer, second_peer)
+        });
+
+        let result = check(
+            address,
+            Duration::from_secs(3),
+            Duration::from_millis(100),
+            || Ok(true),
+        );
+
+        let (first_query, second_query, peer, second_peer) =
+            server.join().expect("test DNS worker completes");
+
+        result.expect("late first reply succeeds during the second attempt");
+        assert_eq!(peer, second_peer);
+        assert_eq!(first_query, second_query);
     }
 
     #[test]

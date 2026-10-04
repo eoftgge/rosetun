@@ -7,7 +7,7 @@ use std::path::Path;
 use client::HelperClient;
 use rosetun_ipc::ConnectRequest;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum Command {
     Status,
     Connect { request_path: String },
@@ -103,25 +103,28 @@ fn main() -> std::process::ExitCode {
 }
 
 fn parse_command() -> Result<Command, String> {
-    let mut arguments = std::env::args().skip(1);
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    parse_command_arguments(&arguments)
+}
 
-    match arguments.next().as_deref() {
-        None | Some("status") if arguments.next().is_none() => Ok(Command::Status),
-        Some("connect") => {
-            let request_path = arguments
-                .next()
-                .ok_or_else(|| "missing path to connect request JSON".to_owned())?;
+fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
 
-            if arguments.next().is_some() {
-                return Err("connect accepts exactly one request JSON path".to_owned());
-            }
-
-            Ok(Command::Connect { request_path })
+    match arguments.as_slice() {
+        [] | ["status"] => Ok(Command::Status),
+        ["connect", path] => Ok(Command::Connect {
+            request_path: (*path).to_owned(),
+        }),
+        ["disconnect"] => Ok(Command::Disconnect),
+        ["shutdown"] => Ok(Command::Shutdown),
+        ["connect"] => Err("missing path to connect request JSON".to_owned()),
+        ["connect", ..] => {
+            Err("connect accepts exactly one request JSON path".to_owned())
         }
-        Some("disconnect") if arguments.next().is_none() => Ok(Command::Disconnect),
-        Some("shutdown") if arguments.next().is_none() => Ok(Command::Shutdown),
-        Some(command) => Err(format!("unknown or invalid command: {command}")),
-        command => Err(format!("unknown or invalid command: {command:?}")),
+        ["status", ..] => Err("status does not accept arguments".to_owned()),
+        ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),
+        ["shutdown", ..] => Err("shutdown does not accept arguments".to_owned()),
+        [command, ..] => Err(format!("unknown command: {command}")),
     }
 }
 
@@ -137,4 +140,76 @@ fn print_usage() {
     eprintln!(
         "Usage:\n  rosetun [status]\n  rosetun connect <request.json>\n  rosetun disconnect\n  rosetun shutdown"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, parse_command_arguments};
+
+    fn parse(arguments: &[&str]) -> Result<Command, String> {
+        let arguments: Vec<String> = arguments
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect();
+        parse_command_arguments(&arguments)
+    }
+
+    #[test]
+    fn valid_commands_are_parsed() {
+        assert_eq!(parse(&[]), Ok(Command::Status));
+        assert_eq!(parse(&["status"]), Ok(Command::Status));
+        assert_eq!(
+            parse(&["connect", "request.json"]),
+            Ok(Command::Connect {
+                request_path: "request.json".to_owned(),
+            })
+        );
+        assert_eq!(parse(&["disconnect"]), Ok(Command::Disconnect));
+        assert_eq!(parse(&["shutdown"]), Ok(Command::Shutdown));
+    }
+
+    #[test]
+    fn connect_requires_exactly_one_path() {
+        assert_eq!(
+            parse(&["connect"]),
+            Err("missing path to connect request JSON".to_owned())
+        );
+
+        for arguments in [
+            vec!["connect", "request.json", "extra"],
+            vec!["connect", "request.json", "extra", "another"],
+        ] {
+            assert_eq!(
+                parse(&arguments),
+                Err("connect accepts exactly one request JSON path".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn commands_without_parameters_reject_extra_arguments() {
+        for command in ["status", "disconnect", "shutdown"] {
+            for arguments in [
+                vec![command, "extra"],
+                vec![command, "extra", "another"],
+            ] {
+                assert_eq!(
+                    parse(&arguments),
+                    Err(format!("{command} does not accept arguments"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_commands_are_rejected() {
+        assert_eq!(
+            parse(&["unknown"]),
+            Err("unknown command: unknown".to_owned())
+        );
+        assert_eq!(
+            parse(&["unknown", "extra"]),
+            Err("unknown command: unknown".to_owned())
+        );
+    }
 }
