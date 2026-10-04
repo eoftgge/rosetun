@@ -1,0 +1,557 @@
+# Drives the Hyper-V test VM over PowerShell Direct. The channel is VMBus, not
+# the network, so it keeps working while the guest kill switch blocks traffic.
+
+Set-StrictMode -Version Latest
+
+# Preference variables of the calling script do not reach into a module, so
+# without this a failed cmdlet here would continue silently and the next step
+# would fail with a misleading error instead.
+$ErrorActionPreference = 'Stop'
+
+$script:Config = @{
+    VmName   = 'rosetun-test'
+    CredPath = Join-Path $env:USERPROFILE '.rosetun-vm-credential.xml'
+    GuestDir = 'C:\rosetun'
+    TaskName = 'RosetunHelper'
+    TunAlias = 'rosetun0'
+    PipeName = 'rosetun-helper'
+    # Must be reachable from the guest without the tunnel; the baseline check
+    # in the matrix fails loudly if it is not.
+    ProbeUrl = 'https://1.1.1.1'
+}
+$script:Session = $null
+
+function Connect-RosetunVm {
+    if ($null -ne $script:Session -and $script:Session.State -eq 'Opened') {
+        return $script:Session
+    }
+
+    $credential = Import-Clixml -Path $script:Config.CredPath
+    $script:Session = New-PSSession -VMName $script:Config.VmName -Credential $credential
+
+    # Registering a SYSTEM task and running the helper need a full admin token.
+    $elevated = Invoke-Command -Session $script:Session -ScriptBlock {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        ([Security.Principal.WindowsPrincipal]$identity).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    if (-not $elevated) {
+        Disconnect-RosetunVm
+        throw 'The guest session is not elevated. See LocalAccountTokenFilterPolicy in the setup notes.'
+    }
+
+    return $script:Session
+}
+
+function Disconnect-RosetunVm {
+    if ($null -ne $script:Session) {
+        Remove-PSSession -Session $script:Session
+        $script:Session = $null
+    }
+}
+
+function Invoke-RosetunGuest {
+    param(
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock,
+        [object[]]$ArgumentList = @()
+    )
+    Invoke-Command -Session (Connect-RosetunVm) -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
+}
+
+function Restore-RosetunVm {
+    param([string]$CheckpointName = 'clean')
+
+    # The checkpoint resets the guest, so any open session is dead afterwards.
+    Disconnect-RosetunVm
+
+    # Several checkpoints may share a name; the newest is the one that counts.
+    $checkpoint = Get-VMCheckpoint -VMName $script:Config.VmName -Name $CheckpointName |
+        Sort-Object -Property CreationTime -Descending |
+        Select-Object -First 1
+    if ($null -eq $checkpoint) {
+        throw "Checkpoint '$CheckpointName' was not found for $($script:Config.VmName)."
+    }
+    $checkpoint | Restore-VMCheckpoint -Confirm:$false
+    if ((Get-VM -Name $script:Config.VmName).State -ne 'Running') {
+        Start-VM -Name $script:Config.VmName
+    }
+
+    $deadline = (Get-Date).AddMinutes(3)
+    while ($true) {
+        try {
+            Connect-RosetunVm | Out-Null
+            return
+        }
+        catch {
+            if ((Get-Date) -gt $deadline) {
+                throw "The guest did not accept PowerShell Direct within 3 minutes: $_"
+            }
+            Start-Sleep -Seconds 3
+        }
+    }
+}
+
+function Publish-Rosetun {
+    param(
+        [Parameter(Mandatory)][string]$BuildDir,
+        [Parameter(Mandatory)][string]$SingBoxPath,
+        [Parameter(Mandatory)][string]$RequestPath,
+        # Points the node at the test node on the host. The Default Switch
+        # subnet changes with every host reboot, and the address with it.
+        [switch]$UseHostNode
+    )
+
+    $session = Connect-RosetunVm
+    $dir = $script:Config.GuestDir
+
+    $temporaryRequest = $null
+    if ($UseHostNode) {
+        $hostIp = (Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4).IPAddress
+        $request = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+        # Without the node the tunnel still comes up, and only the traffic
+        # check fails, with nothing in the logs to say why.
+        if (-not (Get-NetTCPConnection -LocalPort $request.node.port -State Listen -ErrorAction SilentlyContinue)) {
+            throw "Nothing listens on port $($request.node.port) on the host. Start the test node first."
+        }
+        $request.node.server = $hostIp
+        $temporaryRequest = Join-Path $env:TEMP 'rosetun-request.json'
+        # Set-Content -Encoding utf8 on Windows PowerShell writes a BOM, which serde_json rejects.
+        [IO.File]::WriteAllText($temporaryRequest, ($request | ConvertTo-Json -Depth 20))
+        $RequestPath = $temporaryRequest
+        Write-Host "Node server set to $hostIp"
+    }
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    } -ArgumentList $dir
+
+    # The helper looks for sing-box.exe next to itself, so names are fixed here.
+    $copies = [ordered]@{
+        (Join-Path $BuildDir 'rosetun-helper-privileged.exe') = 'rosetun-helper-privileged.exe'
+        (Join-Path $BuildDir 'rosetun.exe')                   = 'rosetun.exe'
+        $SingBoxPath                                          = 'sing-box.exe'
+        $RequestPath                                          = 'request.json'
+    }
+    foreach ($source in $copies.Keys) {
+        Copy-Item -ToSession $session -Path $source -Destination (Join-Path $dir $copies[$source]) -Force
+    }
+    if ($null -ne $temporaryRequest) {
+        Remove-Item -Path $temporaryRequest
+    }
+
+    # Defender scans a new executable on its first launch, which in a fresh
+    # guest outlasts the helper's version-check timeout. One untimed launch
+    # here keeps that scan out of the scenarios.
+    $seconds = Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        & "$dir\sing-box.exe" version | Out-Null
+        [int]$watch.Elapsed.TotalSeconds
+    } -ArgumentList $dir
+    Write-Host "sing-box first launch took $seconds s"
+}
+
+function Register-RosetunHelper {
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $task)
+        # SYSTEM is closest to how the helper will run as a service. Stdout and
+        # stderr go to a file so the log survives the session.
+        $command = "set ROSETUN_LOG=debug&& `"$dir\rosetun-helper-privileged.exe`" > `"$dir\helper.log`" 2>&1"
+        $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c $command" -WorkingDirectory $dir
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        Register-ScheduledTask -TaskName $task -Action $action -Principal $principal `
+            -Settings $settings -Force | Out-Null
+    } -ArgumentList $script:Config.GuestDir, $script:Config.TaskName
+}
+
+function Start-RosetunHelper {
+    # The first start after a deploy waits for Defender to scan the new
+    # binary, which takes well over 15 seconds in a freshly restored guest.
+    param([int]$TimeoutSeconds = 60)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $task, $pipeName, $timeout)
+
+        # The default IgnoreNew policy silently drops a start issued while a
+        # previous instance is still winding down, so wait it out first.
+        $deadline = (Get-Date).AddSeconds($timeout)
+        while ((Get-ScheduledTask -TaskName $task).State -eq 'Running') {
+            if ((Get-Date) -gt $deadline) {
+                throw 'A previous helper task instance is still running.'
+            }
+            Start-Sleep -Milliseconds 200
+        }
+
+        # Keep the previous run's log: after a killed helper it is the evidence.
+        Move-Item -Path "$dir\helper.log" -Destination "$dir\helper.prev.log" -Force -ErrorAction SilentlyContinue
+        Start-ScheduledTask -TaskName $task
+
+        # Enumerating the pipe directory does not connect to the pipe, unlike
+        # Test-Path, so it never consumes a listener instance.
+        $deadline = (Get-Date).AddSeconds($timeout)
+        while (-not ([IO.Directory]::GetFiles('\\.\pipe\') -contains "\\.\pipe\$pipeName")) {
+            if ((Get-Date) -gt $deadline) {
+                $state = (Get-ScheduledTask -TaskName $task).State
+                $result = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
+                $running = [bool](Get-Process -Name 'rosetun-helper-privileged' -ErrorAction SilentlyContinue)
+                $message = ('The helper did not open its pipe within {3} seconds. ' +
+                    'Task state: {0}; last result: 0x{1:X8}; helper process running: {2}.') -f $state, $result, $running, $timeout
+                $tail = Get-Content -Path "$dir\helper.log" -Tail 20 -ErrorAction SilentlyContinue
+                if ($tail) {
+                    $message += "`n" + ($tail -join "`n")
+                }
+                throw $message
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    } -ArgumentList $script:Config.GuestDir, $script:Config.TaskName, $script:Config.PipeName, $TimeoutSeconds
+}
+
+function Stop-RosetunHelper {
+    # A hard kill on purpose: it simulates a helper crash. Stopping only the
+    # task could leave the helper running as a child of cmd.exe.
+    Invoke-RosetunGuest -ScriptBlock {
+        param($task)
+        Stop-Process -Name 'rosetun-helper-privileged' -Force -ErrorAction SilentlyContinue
+        Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+
+        # Stop-ScheduledTask returns before the instance is gone.
+        $deadline = (Get-Date).AddSeconds(15)
+        # The task does not exist yet on a fresh guest.
+        while ((Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue).State -eq 'Running' -or
+            (Get-Process -Name 'rosetun-helper-privileged' -ErrorAction SilentlyContinue)) {
+            if ((Get-Date) -gt $deadline) {
+                throw 'The helper did not stop within 15 seconds.'
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    } -ArgumentList $script:Config.TaskName
+}
+
+function Invoke-RosetunCli {
+    param(
+        # Status is polled in loops where failures are expected; keep it silent.
+        [switch]$Quiet,
+        [Parameter(Mandatory, ValueFromRemainingArguments)][string[]]$Arguments
+    )
+    $result = Invoke-RosetunGuest -ScriptBlock {
+        param($dir, [string[]]$cliArgs)
+        $output = & "$dir\rosetun.exe" @cliArgs 2>&1 | ForEach-Object { "$_" }
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
+    } -ArgumentList $script:Config.GuestDir, $Arguments
+
+    # Callers usually discard the result, so a failure must be visible here.
+    if (-not $Quiet -and $result.ExitCode -ne 0) {
+        Write-Warning "rosetun $($Arguments -join ' ') exited with $($result.ExitCode):`n$($result.Output)"
+    }
+    return $result
+}
+
+function Connect-RosetunTunnel {
+    Invoke-RosetunCli 'connect' (Join-Path $script:Config.GuestDir 'request.json')
+}
+
+function Disconnect-RosetunTunnel {
+    Invoke-RosetunCli 'disconnect'
+}
+
+function Request-RosetunShutdown {
+    Invoke-RosetunCli 'shutdown'
+}
+
+function Get-RosetunState {
+    $result = Invoke-RosetunCli -Quiet 'status'
+    if ($result.Output -match '(?m)^state: (\w+)') {
+        return $Matches[1]
+    }
+    return "unknown (exit $($result.ExitCode))"
+}
+
+function Wait-RosetunState {
+    param(
+        [Parameter(Mandatory)][string]$Expected,
+        [int]$TimeoutSeconds = 30
+    )
+    # Polling status is also what makes the helper notice a dead engine.
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if ((Get-RosetunState) -eq $Expected) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
+function Wait-RosetunCondition {
+    param(
+        [Parameter(Mandatory)][scriptblock]$Condition,
+        [int]$TimeoutSeconds = 10
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if (& $Condition) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
+function Get-RosetunEgressAddress {
+    # IPv4 address of the physical adapter that carries the default route
+    # outside the tunnel.
+    Invoke-RosetunGuest -ScriptBlock {
+        param($tunAlias)
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+            Where-Object { $_.InterfaceAlias -ne $tunAlias } |
+            Sort-Object -Property RouteMetric |
+            Select-Object -First 1
+        if ($null -eq $route) {
+            throw 'No default route outside the tunnel.'
+        }
+        (Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 |
+            Select-Object -First 1).IPAddress
+    } -ArgumentList $script:Config.TunAlias
+}
+
+function Test-RosetunDirectEgress {
+    # True when a process other than the engine reaches the internet through
+    # the physical adapter. Under an active kill switch this must be false.
+    $address = Get-RosetunEgressAddress
+    Invoke-RosetunGuest -ScriptBlock {
+        param($address, $url)
+        & curl.exe --interface $address --max-time 5 --silent --output NUL $url 2>$null
+        $LASTEXITCODE -eq 0
+    } -ArgumentList $address, $script:Config.ProbeUrl
+}
+
+function Test-RosetunTunnelEgress {
+    param(
+        [string]$Url = 'https://www.example.com',
+        [switch]$Detailed
+    )
+    # A hostname on purpose: this also exercises the hijacked DNS path. The
+    # local address proves the connection went through the tunnel; without the
+    # kill switch a connection that bypasses it succeeds as well.
+    $result = Invoke-RosetunGuest -ScriptBlock {
+        param($url, $tunAlias)
+        $tunAddresses = @(Get-NetIPAddress -InterfaceAlias $tunAlias -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.IPAddress })
+        $output = @(& curl.exe --max-time 10 --silent --show-error --output NUL --write-out 'local=%{local_ip}' $url 2>&1 |
+            ForEach-Object { "$_" })
+        $exitCode = $LASTEXITCODE
+        $localIp = ($output | Where-Object { $_ -like 'local=*' } | Select-Object -First 1) -replace '^local=', ''
+        [pscustomobject]@{
+            Ok           = $exitCode -eq 0 -and $tunAddresses -contains $localIp
+            CurlExit     = $exitCode
+            LocalIp      = $localIp
+            TunAddresses = $tunAddresses -join ','
+            Error        = ($output | Where-Object { $_ -notlike 'local=*' -and $_ }) -join ' '
+        }
+    } -ArgumentList $Url, $script:Config.TunAlias
+
+    if ($Detailed) {
+        return $result
+    }
+    return $result.Ok
+}
+
+function Wait-RosetunTunnelEgress {
+    # Reports how long the first request took to get through, so a tunnel
+    # that needs time after Connected shows up as a number, not a failure.
+    param(
+        [string]$Url = 'https://www.example.com',
+        [int]$TimeoutSeconds = 30
+    )
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $last = Test-RosetunTunnelEgress -Url $Url -Detailed
+        if ($last.Ok) {
+            break
+        }
+        Start-Sleep -Milliseconds 500
+    } while ($watch.Elapsed.TotalSeconds -lt $TimeoutSeconds)
+    $last | Add-Member -NotePropertyName Seconds -NotePropertyValue ([int]$watch.Elapsed.TotalSeconds) -PassThru
+}
+
+function Measure-RosetunTunnelWarmup {
+    # Probes from inside the guest right after Connected, to show which part
+    # of the tunnel comes up late: TCP without DNS, the tunnel's own DNS
+    # server, or DNS through the Windows resolver.
+    param(
+        [int]$Seconds = 30,
+        [string]$HostName = 'www.example.com',
+        # An address of $HostName, so the TCP probe needs no DNS.
+        [string]$Address = '8.47.69.6'
+    )
+    Invoke-RosetunGuest -ScriptBlock {
+        param($seconds, $hostName, $address, $tunAlias)
+        $tunDns = (Get-DnsClientServerAddress -InterfaceAlias $tunAlias -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses |
+            Select-Object -First 1
+        if (-not $tunDns) {
+            $tunDns = '172.19.0.2'
+        }
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        while ($watch.Elapsed.TotalSeconds -lt $seconds) {
+            $at = [int]$watch.Elapsed.TotalSeconds
+            & curl.exe --max-time 2 --silent --output NUL --resolve "${hostName}:443:$address" "https://$hostName" 2>$null
+            $tcp = $LASTEXITCODE -eq 0
+            $tunnelDns = [bool](Resolve-DnsName $hostName -Type A -Server $tunDns -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue |
+                Where-Object { $_.Type -eq 'A' })
+            $systemDns = [bool](Resolve-DnsName $hostName -Type A -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue |
+                Where-Object { $_.Type -eq 'A' })
+            '{0,3}s  tcp={1}  tunnel-dns={2}  system-dns={3}' -f $at, $tcp, $tunnelDns, $systemDns
+            Start-Sleep -Milliseconds 500
+        }
+    } -ArgumentList $Seconds, $HostName, $Address, $script:Config.TunAlias
+}
+
+function Start-RosetunEgressWatch {
+    # Probes direct egress every 200 ms in the background, to catch leaks that
+    # last only a fraction of a second, such as during a reconnect.
+    $address = Get-RosetunEgressAddress
+    Invoke-RosetunGuest -ScriptBlock {
+        param($address, $url)
+        Remove-Item -Path "$env:TEMP\rosetun-egress-watch.txt" -ErrorAction SilentlyContinue
+        Start-Job -Name 'rosetun-egress-watch' -ArgumentList $address, $url -ScriptBlock {
+            param($address, $url)
+            $probes = 0
+            $leaks = 0
+            while ($true) {
+                & curl.exe --interface $address --max-time 2 --silent --output NUL $url 2>$null
+                $probes++
+                if ($LASTEXITCODE -eq 0) { $leaks++ }
+                Set-Content -Path "$env:TEMP\rosetun-egress-watch.txt" -Value "$probes $leaks"
+                Start-Sleep -Milliseconds 200
+            }
+        } | Out-Null
+
+        # A job takes seconds to start, longer than a reconnect now lasts.
+        # Without this wait the watch can miss the whole reconnect.
+        $deadline = (Get-Date).AddSeconds(30)
+        while (-not (Test-Path -Path "$env:TEMP\rosetun-egress-watch.txt")) {
+            if ((Get-Date) -gt $deadline) {
+                throw 'The egress watch did not record a probe within 30 seconds.'
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    } -ArgumentList $address, $script:Config.ProbeUrl
+}
+
+function Stop-RosetunEgressWatch {
+    Invoke-RosetunGuest -ScriptBlock {
+        Stop-Job -Name 'rosetun-egress-watch'
+        Remove-Job -Name 'rosetun-egress-watch'
+        $counts = (Get-Content -Path "$env:TEMP\rosetun-egress-watch.txt" -ErrorAction SilentlyContinue) -split ' '
+        if ($counts.Count -lt 2) {
+            return [pscustomobject]@{ Probes = 0; Leaks = 0 }
+        }
+        [pscustomobject]@{ Probes = [int]$counts[0]; Leaks = [int]$counts[1] }
+    }
+}
+
+function Stop-RosetunEngine {
+    Invoke-RosetunGuest -ScriptBlock {
+        Stop-Process -Name 'sing-box' -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Set-RosetunEngineAvailable {
+    param([Parameter(Mandatory)][bool]$Available)
+    # Hiding the binary is the simplest way to make the next engine start fail.
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $available)
+        if ($available) {
+            if (Test-Path "$dir\sing-box.exe.off") { Rename-Item "$dir\sing-box.exe.off" 'sing-box.exe' }
+        }
+        elseif (Test-Path "$dir\sing-box.exe") {
+            Rename-Item "$dir\sing-box.exe" 'sing-box.exe.off'
+        }
+    } -ArgumentList $script:Config.GuestDir, $Available
+}
+
+function Test-RosetunEngineRunning {
+    Invoke-RosetunGuest -ScriptBlock {
+        [bool](Get-Process -Name 'sing-box' -ErrorAction SilentlyContinue)
+    }
+}
+
+function Test-RosetunTunAdapter {
+    Invoke-RosetunGuest -ScriptBlock {
+        param($alias)
+        [bool](Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue)
+    } -ArgumentList $script:Config.TunAlias
+}
+
+function Test-RosetunProxyPath {
+    # Runs the proxy outbound from the helper's last rendered config in a
+    # standalone sing-box: no TUN, no WFP, no DNS hijack. Run it while
+    # disconnected, otherwise the tunnel captures this traffic as well.
+    param(
+        [string]$Url = 'http://www.example.com',
+        [string]$WriteOut = 'HTTP %{http_code}',
+        [int]$Port = 2080
+    )
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $url, $writeOut, $port)
+        $rendered = 'C:\ProgramData\Rosetun\run\sing-box\config.json'
+        $proxy = (Get-Content -Path $rendered -Raw | ConvertFrom-Json).outbounds |
+            Where-Object { $_.tag -eq 'proxy' }
+        $config = [ordered]@{
+            log       = [ordered]@{ level = 'debug'; timestamp = $true }
+            inbounds  = @([ordered]@{ type = 'mixed'; listen = '127.0.0.1'; listen_port = $port })
+            outbounds = @($proxy)
+            route     = @{ final = 'proxy' }
+        }
+        $configPath = "$dir\proxy-test.json"
+        $logPath = "$dir\proxy-test.log"
+        # Set-Content -Encoding utf8 on PowerShell 5.1 writes a BOM, which sing-box rejects.
+        [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 20))
+
+        $engine = Start-Process -FilePath "$dir\sing-box.exe" -PassThru -NoNewWindow `
+            -ArgumentList 'run', '--disable-color', '-c', $configPath `
+            -RedirectStandardError $logPath -RedirectStandardOutput "$dir\proxy-test.out"
+        try {
+            $deadline = (Get-Date).AddSeconds(15)
+            while (-not (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+                if ($engine.HasExited -or (Get-Date) -gt $deadline) {
+                    break
+                }
+                Start-Sleep -Milliseconds 200
+            }
+            $curl = 'sing-box did not start'
+            $curlExit = $null
+            if (-not $engine.HasExited) {
+                # A reachability probe, not a certificate check.
+                $curl = & curl.exe --max-time 15 --silent --show-error --insecure --output NUL `
+                    --write-out $writeOut --proxy "socks5h://127.0.0.1:$port" $url 2>&1 |
+                    ForEach-Object { "$_" }
+                $curlExit = $LASTEXITCODE
+            }
+        }
+        finally {
+            # Lets sing-box log why the connection failed before it is killed.
+            Start-Sleep -Seconds 1
+            Stop-Process -Id $engine.Id -Force -ErrorAction SilentlyContinue
+            $engine.WaitForExit(5000) | Out-Null
+            Remove-Item -Path $configPath -ErrorAction SilentlyContinue
+        }
+        [pscustomobject]@{
+            CurlExit = $curlExit
+            Curl     = $curl -join "`n"
+            Log      = (Get-Content -Path $logPath -Tail 30 -ErrorAction SilentlyContinue) -join "`n"
+        }
+    } -ArgumentList $script:Config.GuestDir, $Url, $WriteOut, $Port
+}
+
+function Get-RosetunHelperLog {
+    param([int]$Tail = 40)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $tail)
+        Get-Content -Path "$dir\helper.log" -Tail $tail -ErrorAction SilentlyContinue
+    } -ArgumentList $script:Config.GuestDir, $Tail
+}
+
+Export-ModuleMember -Function *-Rosetun*

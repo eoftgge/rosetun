@@ -1,0 +1,54 @@
+{
+  "selection": {
+    "subscription": "smoke",
+    "node": "home-server"
+  },
+  "node": {
+    "id": "home-server",
+    "name": "Home server",
+    "server": "172.30.48.1",
+    "port": 8388,
+    "outbound": { "shadowsocks": { "method": "aes-128-gcm", "password": "rosetun-test" } },
+    "stream": {
+      "transport": "tcp",
+      "tls": "plain"
+    }
+  },
+  "rule_set": {
+    "id": "base",
+    "name": "Domain routing test",
+    "rules": [
+      {
+        "id": "direct-domain",
+        "enabled": true,
+        "matcher": {
+          "domain": {
+            "exact": "2ip.io"
+          }
+        },
+        "target": "direct"
+      },
+      {
+        "id": "proxy-domain",
+        "enabled": true,
+        "matcher": {
+          "domain": {
+            "exact": "whatismyipaddress.com"
+          }
+        },
+        "target": "proxy"
+      }
+    ],
+    "default_target": "proxy"
+  },
+  "settings": {
+    "engine": "sing_box",
+    "kill_switch": true,
+    "tun": {
+      "name": "rosetun0",
+      "mtu": 1500,
+      "ipv4": "172.19.0.1/30",
+      "auto_route": true
+    }
+  }
+}
