@@ -66,7 +66,13 @@ impl App {
 }
 
 fn next_scale(applied: Option<u16>, configured: u16) -> Option<u16> {
-    (applied != Some(configured)).then_some(configured)
+    // The file can be edited by hand; an unknown scale must not make the window unusable.
+    let percent = if rosetun_core::INTERFACE_SCALES.contains(&configured) {
+        configured
+    } else {
+        rosetun_config::InterfaceSettings::default().scale_percent
+    };
+    (applied != Some(percent)).then_some(percent)
 }
 
 impl eframe::App for App {
@@ -106,5 +112,12 @@ mod tests {
         assert_eq!(next_scale(Some(100), 100), None);
         assert_eq!(next_scale(Some(100), 125), Some(125));
         assert_eq!(next_scale(Some(125), 125), None);
+    }
+
+    #[test]
+    fn unsupported_scale_falls_back_to_default() {
+        assert_eq!(next_scale(None, 1000), Some(100));
+        assert_eq!(next_scale(Some(100), 0), None);
+        assert_eq!(next_scale(Some(125), 95), Some(100));
     }
 }
