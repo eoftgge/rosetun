@@ -1,12 +1,18 @@
 #![allow(unreachable_pub)]
 
 mod client;
+mod fetch;
 mod store;
+mod subcommands;
 mod subscription_url;
+mod subscriptions;
 mod update;
 
 use std::path::Path;
 use std::process::ExitCode;
+
+use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::prelude::*;
 
 use client::HelperClient;
 use rosetun_config::{NodeId, Selection, SubscriptionId};
@@ -22,17 +28,36 @@ enum Command {
         subscription_id: String,
         node_id: String,
     },
+    Sub(subcommands::SubCommand),
+    Nodes {
+        subscription_id: Option<String>,
+    },
     Config,
     Disconnect,
     Shutdown,
 }
 
 fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+    let env_filter = tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    // HTTP-library diagnostics can contain subscription URIs, so an environment
+    // log filter must never be able to enable their terminal output.
+    let safe_targets = filter_fn(|metadata| {
+        let target = metadata.target();
+        !["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"]
+            .iter()
+            .any(|prefix| {
+                target == *prefix
+                    || target
+                        .strip_prefix(prefix)
+                        .is_some_and(|suffix| suffix.starts_with("::"))
+            })
+    });
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().with_filter(safe_targets))
         .init();
 
     let command = match parse_command() {
@@ -49,6 +74,10 @@ fn main() -> ExitCode {
             subscription_id,
             node_id,
         } => local_result(select_node(&subscription_id, &node_id)),
+        Command::Sub(command) => local_result(subscriptions::run(command)),
+        Command::Nodes { subscription_id } => {
+            local_result(subscriptions::nodes(subscription_id.as_deref()))
+        }
         Command::Config => local_result(print_config()),
         Command::Connect { request_path } => match prepare_connect_request(request_path.as_deref())
         {
@@ -246,6 +275,9 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
             subscription_id: (*subscription_id).to_owned(),
             node_id: (*node_id).to_owned(),
         }),
+        ["sub", arguments @ ..] => subcommands::parse(arguments).map(Command::Sub),
+        ["nodes", arguments @ ..] => subcommands::parse_nodes(arguments)
+            .map(|subscription_id| Command::Nodes { subscription_id }),
         ["config"] => Ok(Command::Config),
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
@@ -255,7 +287,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["status", ..] => Err("status does not accept arguments".to_owned()),
         ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),
         ["shutdown", ..] => Err("shutdown does not accept arguments".to_owned()),
-        [command, ..] => Err(format!("unknown command: {command}")),
+        [_, ..] => Err("unknown command".to_owned()),
     }
 }
 
@@ -269,7 +301,22 @@ fn read_connect_request(path: &Path) -> Result<ConnectRequest, String> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  rosetun [status]\n  rosetun connect [request.json]\n  rosetun select <subscription-id> <node-id>\n  rosetun config\n  rosetun disconnect\n  rosetun shutdown"
+        "\
+Usage:
+  rosetun [status]
+  rosetun connect [request.json]
+  rosetun select <subscription-id> <node-id>
+  rosetun sub add <url> [--name <name>] [--user-agent <ua>] [--no-hwid]
+  rosetun sub update [<id>]
+  rosetun sub list
+  rosetun sub remove <id>
+  rosetun nodes [<sub-id>]
+  rosetun config
+  rosetun disconnect
+  rosetun shutdown
+
+Subscription and node commands are local and do not require the helper.
+Options for sub add may appear in any order after the URL."
     );
 }
 
@@ -354,11 +401,112 @@ mod tests {
     fn unknown_commands_are_rejected() {
         assert_eq!(
             parse(&["unknown"]),
-            Err("unknown command: unknown".to_owned())
+            Err("unknown command".to_owned())
         );
         assert_eq!(
             parse(&["unknown", "extra"]),
-            Err("unknown command: unknown".to_owned())
+            Err("unknown command".to_owned())
         );
+    }
+
+    #[test]
+    fn subscription_commands_are_parsed() {
+        use crate::subcommands::SubCommand;
+
+        assert_eq!(
+            parse(&["sub", "add", "https://sub.example.com/token"]),
+            Ok(Command::Sub(SubCommand::Add {
+                url: "https://sub.example.com/token".to_owned(),
+                name: None,
+                user_agent: None,
+                send_hwid: true,
+            }))
+        );
+        assert_eq!(
+            parse(&[
+                "sub",
+                "add",
+                "https://sub.example.com/token",
+                "--no-hwid",
+                "--user-agent",
+                "Client/1",
+                "--name",
+                "Example",
+            ]),
+            Ok(Command::Sub(SubCommand::Add {
+                url: "https://sub.example.com/token".to_owned(),
+                name: Some("Example".to_owned()),
+                user_agent: Some("Client/1".to_owned()),
+                send_hwid: false,
+            }))
+        );
+        assert_eq!(
+            parse(&["sub", "update"]),
+            Ok(Command::Sub(SubCommand::Update { id: None }))
+        );
+        assert_eq!(
+            parse(&["sub", "update", "1"]),
+            Ok(Command::Sub(SubCommand::Update {
+                id: Some("1".to_owned()),
+            }))
+        );
+        assert_eq!(parse(&["sub", "list"]), Ok(Command::Sub(SubCommand::List)));
+        assert_eq!(
+            parse(&["sub", "remove", "1"]),
+            Ok(Command::Sub(SubCommand::Remove { id: "1".to_owned() }))
+        );
+        assert_eq!(
+            parse(&["nodes"]),
+            Ok(Command::Nodes {
+                subscription_id: None,
+            })
+        );
+        assert_eq!(
+            parse(&["nodes", "1"]),
+            Ok(Command::Nodes {
+                subscription_id: Some("1".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_subscription_commands_are_rejected() {
+        let invalid: &[&[&str]] = &[
+            &["sub"],
+            &["sub", "unknown"],
+            &["sub", "add"],
+            &["sub", "add", "https://example.com/token", "--unknown"],
+            &["sub", "add", "https://example.com/token", "--name"],
+            &["sub", "update", "1", "2"],
+            &["sub", "list", "extra"],
+            &["sub", "remove"],
+            &["sub", "remove", "1", "2"],
+            &["nodes", "1", "2"],
+            &["nodes", "--unknown"],
+        ];
+
+        for arguments in invalid {
+            assert!(parse(arguments).is_err(), "accepted {arguments:?}");
+        }
+    }
+
+    #[test]
+    fn command_errors_and_add_debug_do_not_expose_subscription_url() {
+        let secret = "https://sub.example.com/private-token?key=query-secret";
+        for arguments in [
+            vec![secret],
+            vec!["sub", secret],
+            vec!["sub", "add", secret, secret],
+        ] {
+            let error = parse(&arguments).unwrap_err();
+            assert!(!error.contains("private-token"));
+            assert!(!error.contains("query-secret"));
+        }
+
+        let command = parse(&["sub", "add", secret]).unwrap();
+        let debug = format!("{command:?}");
+        assert!(debug.contains("https://sub.example.com/…"));
+        assert!(!debug.contains("private-token"));
+        assert!(!debug.contains("query-secret"));
     }
 }

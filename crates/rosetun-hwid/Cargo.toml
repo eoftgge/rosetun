@@ -6,6 +6,11 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+sha2 = "=0.10.9"
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Registry"] }
 
 [lints]
 workspace = true
