@@ -51,6 +51,7 @@ impl App {
             Job::Update(id) => self.workers.update(id),
             Job::UpdateAll => self.workers.update_all(),
             Job::Remove(id) => self.workers.remove(id),
+            Job::MoveSubscription(id, to_index) => self.workers.move_subscription(id, to_index),
         }
     }
 }

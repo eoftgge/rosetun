@@ -60,6 +60,7 @@ pub(crate) const REMOVE_SELECTED_WARNING: &str = "This subscription contains the
 pub(crate) const UPDATE: &str = "Update";
 pub(crate) const UPDATE_ALL: &str = "Update all";
 pub(crate) const UPDATING: &str = "Updating…";
+pub(crate) const SUBSCRIPTION_REORDER_DISABLED: &str = "Wait for the current update to finish.";
 pub(crate) const NEVER_UPDATED: &str = "Not updated yet";
 pub(crate) const NO_SUBSCRIPTIONS: &str = "No subscriptions yet";
 pub(crate) const EMPTY_SUBSCRIPTIONS: &str =
@@ -146,6 +147,10 @@ pub(crate) fn process_copies(name: &str, count: usize) -> String {
 
 pub(crate) fn will_match(value: &str) -> String {
     format!("Will match: {value}")
+}
+
+pub(crate) fn stored_as(ascii: &str) -> String {
+    format!("Stored as {ascii}")
 }
 
 pub(crate) fn filter_count(label: &str, count: usize) -> String {

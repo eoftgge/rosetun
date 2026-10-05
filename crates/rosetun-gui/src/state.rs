@@ -9,9 +9,8 @@ use rosetun_ipc::ClientError;
 
 use crate::actions::{self, PrimaryAction};
 use crate::display;
-use crate::rules::{
-    ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, drop_target, group_processes,
-};
+use crate::reorder::drop_target;
+use crate::rules::{ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes};
 use crate::strings;
 use crate::worker::{ConfigWorkerError, HelperCommandError, WorkerEvent};
 
@@ -25,6 +24,7 @@ pub(crate) struct Operations {
     pub(crate) updating: BTreeSet<SubscriptionId>,
     pub(crate) update_all: bool,
     pub(crate) removing: bool,
+    pub(crate) moving_subscription: bool,
 }
 
 pub(crate) struct AddDialog {
@@ -194,6 +194,7 @@ pub(crate) enum Action {
     SelectRuleSet(Option<RuleSetId>),
     SetKillSwitch(bool),
     ToggleExpanded(SubscriptionId),
+    DropSubscription(SubscriptionId, usize),
     OpenAdd,
     CancelAdd,
     SubmitAdd,
@@ -227,6 +228,7 @@ pub(crate) enum Job {
     Update(SubscriptionId),
     UpdateAll,
     Remove(SubscriptionId),
+    MoveSubscription(SubscriptionId, usize),
 }
 
 impl State {
@@ -251,6 +253,15 @@ impl State {
             || self.operations.updating.contains(id)
             || (self.operations.removing
                 && self.remove.as_ref().is_some_and(|dialog| &dialog.id == id))
+    }
+
+    pub(crate) fn can_reorder_subscriptions(&self) -> bool {
+        self.config_ready
+            && !self.operations.update_all
+            && self.operations.updating.is_empty()
+            && !self.add.as_ref().is_some_and(|dialog| dialog.busy)
+            && !self.operations.removing
+            && !self.operations.moving_subscription
     }
 
     pub(crate) fn text(&self, value: &str) -> String {
@@ -457,6 +468,10 @@ impl State {
                         }
                     }
                 }
+            }
+            WorkerEvent::MoveSubscription(result) => {
+                self.operations.moving_subscription = false;
+                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
             }
         }
     }
@@ -795,6 +810,20 @@ impl State {
                     self.expanded.insert(id);
                 }
             }
+            Action::DropSubscription(id, slot) => {
+                if self.can_reorder_subscriptions()
+                    && let Some(from) = self
+                        .config
+                        .subscriptions
+                        .iter()
+                        .position(|subscription| subscription.id == id)
+                    && let Some(to) = drop_target(from, slot, self.config.subscriptions.len())
+                {
+                    self.operations.moving_subscription = true;
+                    self.operation_error = None;
+                    return Some(Job::MoveSubscription(id, to));
+                }
+            }
             Action::OpenAdd => {
                 if self.add.is_none() {
                     self.add = Some(AddDialog::default());
@@ -962,6 +991,17 @@ mod tests {
         set
     }
 
+    fn state_with_subscriptions() -> State {
+        State {
+            config_ready: true,
+            config: AppConfig {
+                subscriptions: ["1", "2", "3"].map(subscription).to_vec(),
+                ..AppConfig::default()
+            },
+            ..State::default()
+        }
+    }
+
     fn state_with_rules() -> State {
         State {
             config_ready: true,
@@ -972,6 +1012,89 @@ mod tests {
             },
             ..State::default()
         }
+    }
+
+    #[test]
+    fn subscription_drops_resolve_gaps_and_reject_no_op_or_missing_ids() {
+        for (id, slot, to_index) in [("3", 0, 0), ("1", 3, 2), ("2", 3, 2)] {
+            let mut state = state_with_subscriptions();
+            assert!(matches!(
+                state.act(Action::DropSubscription(SubscriptionId::new(id), slot)),
+                Some(Job::MoveSubscription(moved, to))
+                    if moved == SubscriptionId::new(id) && to == to_index
+            ));
+            assert!(state.operations.moving_subscription);
+            state.reduce(WorkerEvent::MoveSubscription(Ok(())));
+            assert!(!state.operations.moving_subscription);
+        }
+
+        let mut state = state_with_subscriptions();
+        let id = SubscriptionId::new("2");
+        assert!(state.act(Action::DropSubscription(id.clone(), 1)).is_none());
+        assert!(state.act(Action::DropSubscription(id.clone(), 2)).is_none());
+        assert!(state.act(Action::DropSubscription(id, 4)).is_none());
+        assert!(
+            state
+                .act(Action::DropSubscription(SubscriptionId::new("missing"), 0))
+                .is_none()
+        );
+        assert!(!state.operations.moving_subscription);
+    }
+
+    #[test]
+    fn subscription_drops_wait_for_other_subscription_operations() {
+        let mut state = state_with_subscriptions();
+        let drop = || Action::DropSubscription(SubscriptionId::new("2"), 0);
+        state.config_ready = false;
+        assert!(state.act(drop()).is_none());
+        state.config_ready = true;
+        state.operations.updating.insert(SubscriptionId::new("3"));
+        assert!(state.act(drop()).is_none());
+        state.operations.updating.clear();
+        state.operations.update_all = true;
+        assert!(state.act(drop()).is_none());
+        state.operations.update_all = false;
+        state.add = Some(AddDialog {
+            busy: true,
+            ..AddDialog::default()
+        });
+        assert!(state.act(drop()).is_none());
+        state.add = None;
+        state.operations.removing = true;
+        assert!(state.act(drop()).is_none());
+        state.operations.removing = false;
+        assert!(matches!(
+            state.act(drop()),
+            Some(Job::MoveSubscription(_, 0))
+        ));
+        assert!(state.act(drop()).is_none());
+    }
+
+    #[test]
+    fn subscription_move_completion_clears_busy_and_reports_errors() {
+        let mut state = state_with_subscriptions();
+        assert!(
+            state
+                .act(Action::DropSubscription(SubscriptionId::new("2"), 0))
+                .is_some()
+        );
+        state.reduce(WorkerEvent::MoveSubscription(Err(
+            rosetun_core::MoveSubscriptionError::NotFound,
+        )));
+        assert!(!state.operations.moving_subscription);
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("subscription does not exist")
+        );
+        assert!(
+            state
+                .act(Action::DropSubscription(SubscriptionId::new("2"), 0))
+                .is_some()
+        );
+        assert!(state.operation_error.is_none());
+        state.reduce(WorkerEvent::MoveSubscription(Ok(())));
+        assert!(!state.operations.moving_subscription);
+        assert!(state.operation_error.is_none());
     }
 
     #[test]

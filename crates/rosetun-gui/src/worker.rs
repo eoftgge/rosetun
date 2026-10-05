@@ -10,12 +10,12 @@ use rosetun_config::{
     Subscription, SubscriptionId,
 };
 use rosetun_core::{
-    AddFromUrlError, AddOptions, RemoveSubscriptionError, RuleSetError, SelectNodeError,
-    SelectRuleSetError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateReport,
-    UpdateSubscriptionError, add_prepared_subscription, add_rule, create_rule_set, delete_rule_set,
-    move_rule, prepare_subscription, remove_rule, remove_subscription, rename_rule_set,
-    select_node, select_rule_set, set_default_target, set_kill_switch, set_rule_enabled,
-    set_rule_target, update_all, update_subscription,
+    AddFromUrlError, AddOptions, MoveSubscriptionError, RemoveSubscriptionError, RuleSetError,
+    SelectNodeError, SelectRuleSetError, Store, StoreError, SubscriptionUpdateResult, Timeouts,
+    UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule, create_rule_set,
+    delete_rule_set, move_rule, move_subscription, prepare_subscription, remove_rule,
+    remove_subscription, rename_rule_set, select_node, select_rule_set, set_default_target,
+    set_kill_switch, set_rule_enabled, set_rule_target, update_all, update_subscription,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
@@ -79,6 +79,7 @@ pub(crate) enum WorkerEvent {
         id: SubscriptionId,
         result: Result<(), RemoveSubscriptionError>,
     },
+    MoveSubscription(Result<(), MoveSubscriptionError>),
 }
 
 #[derive(Clone)]
@@ -322,6 +323,17 @@ impl WorkerDispatcher {
                 log_subscription_error("remove", error);
             }
             publisher.complete(WorkerEvent::Remove { id, result });
+        });
+    }
+
+    pub(crate) fn move_subscription(&self, id: SubscriptionId, to_index: usize) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = move_subscription(&publisher.store, &id, to_index);
+            if let Err(error) = &result {
+                log_subscription_error("move", error);
+            }
+            publisher.complete(WorkerEvent::MoveSubscription(result));
         });
     }
 }

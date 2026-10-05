@@ -1,6 +1,8 @@
-use eframe::egui::{self, RichText, Stroke};
-use rosetun_config::Subscription;
+use eframe::egui::{self, Color32, RichText, Stroke};
+use rosetun_config::{Subscription, SubscriptionId};
 
+use crate::icons::{self, Icon};
+use crate::reorder::drop_target;
 use crate::state::{Action, State, UpdateOutcome};
 use crate::{display, strings, theme};
 
@@ -31,12 +33,47 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     .wrap(),
                 );
             }
-            for subscription in &state.config.subscriptions {
-                ui.push_id(subscription.id.as_str(), |ui| {
-                    subscription_card(ui, state, subscription, actions)
-                });
-                ui.add_space(8.0);
-            }
+            ui.scope(|ui| {
+                let item_spacing = ui.spacing().item_spacing.y;
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (index, subscription) in state.config.subscriptions.iter().enumerate() {
+                    ui.push_id(subscription.id.as_str(), |ui| {
+                        let response = egui::Frame::new()
+                            .inner_margin(egui::Margin::symmetric(0, 4))
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = item_spacing;
+                                subscription_card(ui, state, subscription, actions)
+                            });
+                        if state.can_reorder_subscriptions()
+                            && let Some(dragged_id) =
+                                response.response.dnd_hover_payload::<SubscriptionId>()
+                            && let Some(from) = state
+                                .config
+                                .subscriptions
+                                .iter()
+                                .position(|item| item.id == *dragged_id)
+                            && let Some(pointer) = ui.ctx().pointer_hover_pos()
+                        {
+                            let above = pointer.y < response.inner.rect.center().y;
+                            let slot = index + usize::from(!above);
+                            if drop_target(from, slot, state.config.subscriptions.len()).is_some() {
+                                let rect = response.response.rect;
+                                let y = if above { rect.top() } else { rect.bottom() };
+                                ui.painter().line_segment(
+                                    [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                                    Stroke::new(2.0, theme::ROSE),
+                                );
+                                if let Some(payload) =
+                                    response.response.dnd_release_payload::<SubscriptionId>()
+                                {
+                                    actions
+                                        .push(Action::DropSubscription((*payload).clone(), slot));
+                                }
+                            }
+                        }
+                    });
+                }
+            });
         });
     ui.separator();
     let enabled = state.config_ready
@@ -64,14 +101,18 @@ fn subscription_card(
     state: &State,
     subscription: &Subscription,
     actions: &mut Vec<Action>,
-) {
+) -> egui::Response {
+    let reorder = state.can_reorder_subscriptions();
+    let dragged = reorder
+        && egui::DragAndDrop::payload::<SubscriptionId>(ui.ctx())
+            .is_some_and(|id| *id == subscription.id);
     let expanded = state.expanded.contains(&subscription.id);
     let selected = state
         .config
         .active
         .as_ref()
         .is_some_and(|selection| selection.subscription == subscription.id);
-    let frame = theme::card_frame().inner_margin(12).stroke(Stroke::new(
+    let mut frame = theme::card_frame().inner_margin(12).stroke(Stroke::new(
         1.0,
         if selected {
             theme::ROSE_DARK
@@ -79,9 +120,28 @@ fn subscription_card(
             theme::BORDER
         },
     ));
+    if dragged {
+        frame = frame.fill(Color32::from_rgba_unmultiplied(
+            theme::CARD.r(),
+            theme::CARD.g(),
+            theme::CARD.b(),
+            128,
+        ));
+    }
     let response = frame.show(ui, |ui| {
         ui.set_min_width(ui.available_width());
+        if dragged {
+            ui.multiply_opacity(0.5);
+        }
         ui.horizontal(|ui| {
+            if reorder {
+                ui.dnd_drag_source(ui.id().with("handle"), subscription.id.clone(), |ui| {
+                    icons::icon_button(ui, Icon::Grip, true);
+                });
+            } else {
+                icons::icon_button(ui, Icon::Grip, false)
+                    .on_hover_text(strings::SUBSCRIPTION_REORDER_DISABLED);
+            }
             if ui
                 .button(if expanded {
                     strings::COLLAPSE
@@ -253,6 +313,7 @@ fn subscription_card(
             theme::ROSE,
         );
     }
+    response.response
 }
 
 fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, value: &str) {

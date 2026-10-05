@@ -134,7 +134,7 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
                 )
                 .on_hover_text(preview);
                 if let Some(ascii) = rosetun_core::rule_value_ascii(&matcher) {
-                    let stored = format!("Stored as {ascii}");
+                    let stored = strings::stored_as(&ascii);
                     ui.add(
                         egui::Label::new(RichText::new(&stored).small().color(theme::TEXT_DIM))
                             .truncate(),

@@ -2,7 +2,8 @@ use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget};
 
 use crate::icons::{self, Icon};
-use crate::rules::{RuleFilter, TypeFilter, drop_target, rule_counts, visible_rules};
+use crate::reorder::drop_target;
+use crate::rules::{RuleFilter, TypeFilter, rule_counts, visible_rules};
 use crate::state::{Action, DeleteDialog, NameDialogKind, State};
 use crate::{strings, theme};
 
@@ -407,7 +408,7 @@ fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
     } else {
         let value = state.text(&rosetun_core::rule_value_text(&rule.matcher));
         let tooltip = rosetun_core::rule_value_ascii(&rule.matcher)
-            .map(|ascii| format!("{value}\nStored as {ascii}"))
+            .map(|ascii| format!("{value}\n{}", strings::stored_as(&state.text(&ascii))))
             .unwrap_or_else(|| value.clone());
         ui.add(egui::Label::new(&value).truncate())
             .on_hover_text(tooltip);

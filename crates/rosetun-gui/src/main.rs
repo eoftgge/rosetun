@@ -8,6 +8,7 @@ mod actions;
 mod app;
 mod display;
 mod icons;
+mod reorder;
 mod rules;
 mod state;
 mod strings;
