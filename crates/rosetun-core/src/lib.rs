@@ -5,6 +5,7 @@ mod selection;
 pub(crate) mod store;
 mod subscription_url;
 mod subscriptions;
+mod text;
 mod update;
 
 pub use fetch::{FetchError, Timeouts, fetch};
@@ -18,6 +19,7 @@ pub use subscriptions::{
     UpdateSubscriptionError, add_subscription, commit_subscription_update, remove_subscription,
     update_all, update_subscription,
 };
+pub use text::{provider_text, terminal_text};
 pub use update::{UpdateReport, group_skipped};
 
 pub fn is_sensitive_log_target(target: &str) -> bool {

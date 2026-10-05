@@ -216,3 +216,6 @@ pub fn add_subscription(
         Ok((config.subscriptions[index].clone(), report))
     })
 }
+
+#[cfg(test)]
+mod tests;

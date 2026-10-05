@@ -27,7 +27,7 @@ impl fmt::Debug for SubCommand {
                 send_hwid,
             } => f
                 .debug_struct("Add")
-                .field("url", &crate::subscription_url::redacted(url))
+                .field("url", &rosetun_core::redacted_subscription_url(url))
                 .field("has_name", &name.is_some())
                 .field("has_user_agent", &user_agent.is_some())
                 .field("send_hwid", send_hwid)

@@ -1,10 +1,7 @@
 #![allow(unreachable_pub)]
 
-mod fetch;
 mod subcommands;
-mod subscription_url;
 mod subscriptions;
-mod update;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -13,6 +10,7 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
 use rosetun_config::{NodeId, SubscriptionId};
+use rosetun_core::terminal_text;
 use rosetun_ipc::{ConnectRequest, HelperClient};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -171,7 +169,13 @@ fn prepare_connect_request(request_path: Option<&str>) -> Result<ConnectRequest,
 
     let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = current_store.load().map_err(|error| error.to_string())?;
-    ConnectRequest::from_config(&config).map_err(|error| error.to_string())
+    ConnectRequest::from_config(&config).map_err(|error| match error {
+        rosetun_ipc::ConnectRequestError::NodeNotSelected
+        | rosetun_ipc::ConnectRequestError::SelectionMissing => {
+            "select an existing node with rosetun select <subscription-id> <node-id>".to_owned()
+        }
+        rosetun_ipc::ConnectRequestError::RuleSetNotFound => error.to_string(),
+    })
 }
 
 fn select_node(subscription_id: &str, node_id: &str) -> Result<(), String> {
@@ -184,10 +188,7 @@ fn select_node(subscription_id: &str, node_id: &str) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
 
-    println!(
-        "selected node: {}",
-        subscriptions::terminal_text(&node_name)
-    );
+    println!("selected node: {}", terminal_text(&node_name));
 
     Ok(())
 }
@@ -225,16 +226,10 @@ fn print_config() -> Result<(), String> {
         Some((subscription, node)) => {
             println!(
                 "active subscription: {}",
-                subscriptions::terminal_text(subscription.id.as_str())
+                terminal_text(subscription.id.as_str())
             );
-            println!(
-                "active node id: {}",
-                subscriptions::terminal_text(node.id.as_str())
-            );
-            println!(
-                "active node name: {}",
-                subscriptions::terminal_text(&node.name)
-            );
+            println!("active node id: {}", terminal_text(node.id.as_str()));
+            println!("active node name: {}", terminal_text(&node.name));
         }
         None => println!("active node: none"),
     }
@@ -243,12 +238,9 @@ fn print_config() -> Result<(), String> {
         Some(rule_set) => {
             println!(
                 "active rule set id: {}",
-                subscriptions::terminal_text(rule_set.id.as_str())
+                terminal_text(rule_set.id.as_str())
             );
-            println!(
-                "active rule set name: {}",
-                subscriptions::terminal_text(&rule_set.name)
-            );
+            println!("active rule set name: {}", terminal_text(&rule_set.name));
         }
         None => println!("active rule set: none (connect uses Default, proxy)"),
     }

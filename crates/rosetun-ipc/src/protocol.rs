@@ -25,9 +25,9 @@ pub enum Request {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectRequestError {
-    #[error("select an existing node with rosetun select <subscription-id> <node-id>")]
+    #[error("the selected node does not exist")]
     NodeNotSelected,
-    #[error("select a node with rosetun select <subscription-id> <node-id>")]
+    #[error("no node is selected")]
     SelectionMissing,
     #[error("the selected rule set does not exist")]
     RuleSetNotFound,
@@ -58,13 +58,13 @@ impl std::fmt::Debug for ConnectRequest {
 
 impl ConnectRequest {
     pub fn from_config(config: &AppConfig) -> Result<Self, ConnectRequestError> {
-        let (_, node) = config
-            .active_node()
-            .ok_or(ConnectRequestError::NodeNotSelected)?;
         let selection = config
             .active
             .as_ref()
             .ok_or(ConnectRequestError::SelectionMissing)?;
+        let (_, node) = config
+            .active_node()
+            .ok_or(ConnectRequestError::NodeNotSelected)?;
 
         let rule_set = match &config.active_rule_set {
             Some(_) => config
@@ -237,11 +237,24 @@ mod tests {
 
     #[test]
     fn request_requires_an_existing_selected_node() {
-        for config in [AppConfig::default(), dangling_node_config()] {
+        let cases = [
+            (
+                AppConfig::default(),
+                ConnectRequestError::SelectionMissing,
+                "no node is selected",
+            ),
+            (
+                dangling_node_config(),
+                ConnectRequestError::NodeNotSelected,
+                "the selected node does not exist",
+            ),
+        ];
+
+        for (config, expected, message) in cases {
             let error = ConnectRequest::from_config(&config).unwrap_err();
 
-            assert_eq!(error, ConnectRequestError::NodeNotSelected);
-            assert!(error.to_string().contains("rosetun select"));
+            assert_eq!(error, expected);
+            assert_eq!(error.to_string(), message);
         }
     }
 
