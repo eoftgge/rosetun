@@ -16,6 +16,7 @@ rosetun-engine-singbox = { path = "crates/rosetun-engine-singbox" }
 rosetun-engine-xray = { path = "crates/rosetun-engine-xray" }
 rosetun-hwid = { path = "crates/rosetun-hwid" }
 rosetun-ipc = { path = "crates/rosetun-ipc" }
+rosetun-instance = { path = "crates/rosetun-instance" }
 rosetun-processes = { path = "crates/rosetun-processes" }
 rosetun-routing = { path = "crates/rosetun-routing" }
 rosetun-subscription = { path = "crates/rosetun-subscription" }
