@@ -1,7 +1,6 @@
 #![allow(unreachable_pub)]
 
 mod fetch;
-mod store;
 mod subcommands;
 mod subscription_url;
 mod subscriptions;
@@ -13,7 +12,7 @@ use std::process::ExitCode;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
-use rosetun_config::{NodeId, Selection, SubscriptionId};
+use rosetun_config::{NodeId, SubscriptionId};
 use rosetun_ipc::{ConnectRequest, HelperClient};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -166,34 +165,25 @@ fn prepare_connect_request(request_path: Option<&str>) -> Result<ConnectRequest,
         return read_connect_request(Path::new(path));
     }
 
-    let path = store::config_path().map_err(|error| error.to_string())?;
-    let config = store::load(&path).map_err(|error| error.to_string())?;
+    if let Some(path) = request_path {
+        return read_connect_request(Path::new(path));
+    }
+
+    let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
+    let config = current_store.load().map_err(|error| error.to_string())?;
     ConnectRequest::from_config(&config).map_err(|error| error.to_string())
 }
 
 fn select_node(subscription_id: &str, node_id: &str) -> Result<(), String> {
-    let path = store::config_path().map_err(|error| error.to_string())?;
-    let mut config = store::load(&path).map_err(|error| error.to_string())?;
+    let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
 
-    let subscription_id = SubscriptionId::new(subscription_id);
-    let node_id = NodeId::new(node_id);
-    let subscription = config
-        .subscriptions
-        .iter()
-        .find(|subscription| subscription.id == subscription_id)
-        .ok_or_else(|| "subscription does not exist".to_owned())?;
-    let node_name = subscription
-        .node(&node_id)
-        .ok_or_else(|| "node is not in the specified subscription".to_owned())?
-        .name
-        .clone();
+    let node_name = rosetun_core::select_node(
+        &current_store,
+        &SubscriptionId::new(subscription_id),
+        &NodeId::new(node_id),
+    )
+    .map_err(|error| error.to_string())?;
 
-    config.active = Some(Selection {
-        subscription: subscription_id,
-        node: node_id,
-    });
-
-    store::save(&path, &config).map_err(|error| error.to_string())?;
     println!(
         "selected node: {}",
         subscriptions::terminal_text(&node_name)
@@ -203,10 +193,11 @@ fn select_node(subscription_id: &str, node_id: &str) -> Result<(), String> {
 }
 
 fn print_config() -> Result<(), String> {
-    let path = store::config_path().map_err(|error| error.to_string())?;
+    let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
+    let path = current_store.path();
     println!("configuration path: {}", path.display());
 
-    match std::fs::metadata(&path) {
+    match std::fs::metadata(path) {
         Ok(_) => println!("file exists: yes"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             println!("file exists: no");
@@ -217,7 +208,7 @@ fn print_config() -> Result<(), String> {
         }
     }
 
-    let config = match store::load(&path) {
+    let config = match current_store.load() {
         Ok(config) => config,
         Err(error) => {
             println!("validation: failed");

@@ -321,6 +321,307 @@ mod tests {
     }
 
     #[test]
+    fn adding_duplicate_url_preserves_existing_bytes() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let initial = selected_config();
+        let prepared = initial.subscriptions[0].clone();
+
+        save(store.path(), &AppConfig::default()).unwrap();
+        assert!(store.load().unwrap().subscriptions.is_empty());
+
+        save(store.path(), &initial).unwrap();
+        let before = fs::read(store.path()).unwrap();
+
+        let result = crate::add_subscription(&store, prepared);
+
+        assert!(matches!(
+            result,
+            Err(crate::AddSubscriptionError::AlreadyExists)
+        ));
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+        assert_eq!(store.load().unwrap(), initial);
+    }
+
+    #[test]
+    fn adding_subscription_allocates_smallest_free_positive_id() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let mut initial = selected_config();
+        let mut prepared = initial.subscriptions[0].clone();
+
+        for id in ["1", "3", "01", "custom"] {
+            let mut subscription = prepared.clone();
+            subscription.id = SubscriptionId::new(id);
+            initial.subscriptions.push(subscription);
+        }
+        save(store.path(), &initial).unwrap();
+
+        prepared.url = "https://new.example.com/subscription".into();
+        let added = crate::add_subscription(&store, prepared.clone()).unwrap();
+
+        assert_eq!(added.id, SubscriptionId::new("2"));
+        let mut expected_added = prepared;
+        expected_added.id = SubscriptionId::new("2");
+        assert_eq!(added, expected_added);
+
+        let saved = store.load().unwrap();
+        initial.subscriptions.push(added);
+        assert_eq!(saved, initial);
+    }
+
+    #[test]
+    fn adding_subscription_uses_configuration_changed_before_commit() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let initial = selected_config();
+        save(store.path(), &initial).unwrap();
+        let mut prepared = initial.subscriptions[0].clone();
+
+        store
+            .modify(|current| {
+                let mut external = prepared.clone();
+                external.id = SubscriptionId::new("1");
+                external.name = "Added during fetch".to_owned();
+                current.subscriptions.push(external);
+                current.subscriptions[0].name = "Renamed during fetch".to_owned();
+                current.active = None;
+                Ok::<_, StoreError>(())
+            })
+            .unwrap();
+        let before = store.load().unwrap();
+
+        prepared.url = "https://new.example.com/subscription".into();
+        let added = crate::add_subscription(&store, prepared).unwrap();
+
+        assert_eq!(added.id, SubscriptionId::new("2"));
+        let mut expected = before;
+        expected.subscriptions.push(added);
+        assert_eq!(store.load().unwrap(), expected);
+    }
+
+    #[test]
+    fn adding_first_subscription_creates_configuration_without_selecting_node() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let prepared = selected_config().subscriptions.remove(0);
+
+        let added = crate::add_subscription(&store, prepared).unwrap();
+
+        assert_eq!(added.id, SubscriptionId::new("1"));
+        let saved = store.load().unwrap();
+        let mut expected = AppConfig::default();
+        expected.subscriptions.push(added);
+        assert_eq!(saved, expected);
+    }
+
+    #[test]
+    fn failed_addition_save_preserves_existing_configuration() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let initial = selected_config();
+        save(store.path(), &initial).unwrap();
+        let before = fs::read(store.path()).unwrap();
+        fs::create_dir(directory.path.join("config.json.tmp")).unwrap();
+
+        let mut prepared = initial.subscriptions[0].clone();
+        prepared.url = "https://new.example.com/subscription".into();
+        let result = crate::add_subscription(&store, prepared);
+
+        assert!(matches!(
+            result,
+            Err(crate::AddSubscriptionError::Store(StoreError::Io { .. }))
+        ));
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+        assert_eq!(store.load().unwrap(), initial);
+    }
+
+    #[test]
+    fn removing_selected_subscription_preserves_rules() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let initial = selected_config();
+        save(store.path(), &initial).unwrap();
+
+        crate::remove_subscription(&store, &SubscriptionId::new("subscription")).unwrap();
+
+        let saved = store.load().unwrap();
+        let mut expected = initial;
+        expected.subscriptions.clear();
+        expected.active = None;
+        assert_eq!(saved, expected);
+        assert!(!saved.rule_sets.is_empty());
+        assert!(saved.active_rule_set.is_some());
+    }
+
+    #[test]
+    fn removing_other_subscription_preserves_active_selection() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let mut initial = selected_config();
+        let mut other = initial.subscriptions[0].clone();
+        other.id = SubscriptionId::new("other");
+        initial.subscriptions.push(other);
+        save(store.path(), &initial).unwrap();
+
+        crate::remove_subscription(&store, &SubscriptionId::new("other")).unwrap();
+
+        let saved = store.load().unwrap();
+        let mut expected = initial;
+        expected.subscriptions.pop();
+        assert_eq!(saved, expected);
+        assert!(saved.active.is_some());
+    }
+
+    #[test]
+    fn removing_unknown_subscription_preserves_existing_bytes() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        save(store.path(), &selected_config()).unwrap();
+        let before = fs::read(store.path()).unwrap();
+
+        let result = crate::remove_subscription(&store, &SubscriptionId::new("missing"));
+
+        assert!(matches!(
+            result,
+            Err(crate::RemoveSubscriptionError::SubscriptionNotFound)
+        ));
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+    }
+
+    #[test]
+    fn removing_unknown_subscription_does_not_create_configuration() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+
+        let result = crate::remove_subscription(&store, &SubscriptionId::new("missing"));
+
+        assert!(matches!(
+            result,
+            Err(crate::RemoveSubscriptionError::SubscriptionNotFound)
+        ));
+        assert!(!store.path().exists());
+    }
+
+    #[test]
+    fn failed_removal_save_preserves_subscription_selection_and_rules() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let initial = selected_config();
+        save(store.path(), &initial).unwrap();
+        let before = fs::read(store.path()).unwrap();
+        fs::create_dir(directory.path.join("config.json.tmp")).unwrap();
+
+        let result = crate::remove_subscription(&store, &SubscriptionId::new("subscription"));
+
+        assert!(matches!(
+            result,
+            Err(crate::RemoveSubscriptionError::Store(StoreError::Io { .. }))
+        ));
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+        assert_eq!(store.load().unwrap(), initial);
+    }
+
+    #[test]
+    fn selecting_node_preserves_rules_and_local_preferences() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let mut initial = selected_config();
+        initial.active = None;
+        save(store.path(), &initial).unwrap();
+
+        let name = crate::select_node(
+            &store,
+            &SubscriptionId::new("subscription"),
+            &NodeId::new("node"),
+        )
+        .unwrap();
+
+        let saved = store.load().unwrap();
+        assert_eq!(name, "Test node");
+        assert_eq!(
+            saved.active,
+            Some(Selection {
+                subscription: SubscriptionId::new("subscription"),
+                node: NodeId::new("node"),
+            })
+        );
+
+        let mut expected = initial;
+        expected.active = saved.active.clone();
+        assert_eq!(saved, expected);
+    }
+
+    #[test]
+    fn invalid_selection_preserves_existing_bytes() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        save(store.path(), &selected_config()).unwrap();
+        let before = fs::read(store.path()).unwrap();
+
+        let result = crate::select_node(
+            &store,
+            &SubscriptionId::new("missing"),
+            &NodeId::new("node"),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::SelectNodeError::SubscriptionNotFound)
+        ));
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+
+        let result = crate::select_node(
+            &store,
+            &SubscriptionId::new("subscription"),
+            &NodeId::new("missing"),
+        );
+        assert!(matches!(result, Err(crate::SelectNodeError::NodeNotFound)));
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+    }
+
+    #[test]
+    fn selecting_missing_subscription_does_not_create_configuration() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+
+        let result = crate::select_node(
+            &store,
+            &SubscriptionId::new("missing"),
+            &NodeId::new("missing"),
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::SelectNodeError::SubscriptionNotFound)
+        ));
+        assert!(!store.path().exists());
+    }
+
+    #[test]
+    fn failed_selection_save_preserves_previous_configuration() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let mut initial = selected_config();
+        initial.active = None;
+        save(store.path(), &initial).unwrap();
+        let before = fs::read(store.path()).unwrap();
+        fs::create_dir(directory.path.join("config.json.tmp")).unwrap();
+
+        let result = crate::select_node(
+            &store,
+            &SubscriptionId::new("subscription"),
+            &NodeId::new("node"),
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::SelectNodeError::Store(StoreError::Io { .. }))
+        ));
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+        assert_eq!(store.load().unwrap(), initial);
+    }
+
+    #[test]
     fn modify_reloads_configuration_before_applying_change() {
         let directory = TestDirectory::new();
         let store = Store::at(directory.config_path());

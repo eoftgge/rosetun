@@ -1,18 +1,23 @@
 #![forbid(unsafe_code)]
 
 mod fetch;
+mod selection;
 pub(crate) mod store;
 mod subscription_url;
 mod subscriptions;
 mod update;
 
 pub use fetch::{FetchError, Timeouts, fetch};
+pub use selection::{SelectNodeError, select_node};
 pub use store::{Store, StoreError};
 pub use subscription_url::{
     normalize as normalize_subscription_url, redacted as redacted_subscription_url,
 };
-pub use subscriptions::{CommitUpdateError, commit_subscription_update};
-pub use update::{UpdateReport, group_skipped};
+pub use subscriptions::{
+    AddSubscriptionError, CommitUpdateError, RemoveSubscriptionError, add_subscription,
+    commit_subscription_update, remove_subscription,
+};
+pub use update::{UpdateReport, apply_update, group_skipped};
 
 pub fn is_sensitive_log_target(target: &str) -> bool {
     ["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"]

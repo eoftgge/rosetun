@@ -6,7 +6,7 @@ use rosetun_subscription::ParseError;
 
 use crate::fetch::{self, FetchError, Timeouts};
 use crate::subcommands::SubCommand;
-use crate::{store, subscription_url, update};
+use crate::{subscription_url, update};
 
 pub(crate) fn run(command: SubCommand) -> Result<(), String> {
     match command {
@@ -29,19 +29,6 @@ fn now_unix() -> Result<u64, String> {
         .map_err(|_| "system clock is before the Unix epoch".to_owned())
 }
 
-fn next_id(config: &AppConfig) -> Result<SubscriptionId, String> {
-    let mut candidate = 1u64;
-    loop {
-        let id = SubscriptionId::new(candidate.to_string());
-        if !config.subscriptions.iter().any(|sub| sub.id == id) {
-            return Ok(id);
-        }
-        candidate = candidate
-            .checked_add(1)
-            .ok_or_else(|| "no subscription IDs are available".to_owned())?;
-    }
-}
-
 fn add(
     input: &str,
     name: Option<String>,
@@ -49,8 +36,8 @@ fn add(
     send_hwid: bool,
 ) -> Result<(), String> {
     let url = subscription_url::normalize(input)?;
-    let path = store::config_path().map_err(|error| error.to_string())?;
-    let mut config = store::load(&path).map_err(|error| error.to_string())?;
+    let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
+    let config = current_store.load().map_err(|error| error.to_string())?;
 
     if let Some(existing) = config.subscriptions.iter().find(|sub| sub.url == url) {
         return Err(format!(
@@ -71,9 +58,8 @@ fn add(
         );
     }
 
-    let id = next_id(&config)?;
     let mut subscription = Subscription {
-        id: id.clone(),
+        id: SubscriptionId::new("pending"),
         name: host.clone(),
         url,
         nodes: Vec::new(),
@@ -92,22 +78,27 @@ fn add(
     let parsed = fetch::fetch(&subscription, Timeouts::default())
         .map_err(|error| fetch_error_message(&error, &subscription.url))?;
 
+    let skipped = update::group_skipped(&parsed.skipped);
+
     // The parser already applies profile-title and Content-Disposition priority.
-    subscription.name = name.or_else(|| parsed.meta.title.clone()).unwrap_or(host);
+    subscription.name = name.or(parsed.meta.title).unwrap_or(host);
 
     let now = now_unix()?;
-    config.subscriptions.push(subscription);
-    let report = update::apply_update(&mut config, &id, parsed, now);
+    subscription.nodes = parsed.nodes;
+    subscription.info = parsed.meta.info;
+    subscription.update_interval_hours = parsed.meta.update_interval_hours;
+    subscription.support_url = parsed.meta.support_url;
+    subscription.web_page_url = parsed.meta.web_page_url;
+    subscription.announce = parsed.meta.announce;
+    subscription.notices = parsed.meta.notices;
+    subscription.updated_at_unix = Some(now);
 
-    store::save(&path, &config).map_err(|error| error.to_string())?;
+    let subscription = rosetun_core::add_subscription(&current_store, subscription)
+        .map_err(|error| error.to_string())?;
 
-    let subscription = config
-        .subscriptions
-        .last()
-        .expect("the newly added subscription is present");
     println!("subscription added:");
-    print_subscription(subscription, now);
-    print_details(&report.skipped, &report.notices, &subscription.url);
+    print_subscription(&subscription, now);
+    print_details(&skipped, &subscription.notices, &subscription.url);
 
     Ok(())
 }
@@ -119,25 +110,32 @@ fn commit_update(
     fetched: Result<rosetun_subscription::Parsed, FetchError>,
     now: u64,
 ) -> Result<update::UpdateReport, String> {
-    let subscription = config
+    let requested = config
         .subscriptions
         .iter()
         .find(|subscription| &subscription.id == id)
         .ok_or_else(|| "subscription does not exist".to_owned())?;
-    let parsed = fetched.map_err(|error| fetch_error_message(&error, &subscription.url))?;
 
-    // Publish in-memory changes only after the replacement is persisted.
-    let mut candidate = config.clone();
-    let report = update::apply_update(&mut candidate, id, parsed, now);
-    store::save(path, &candidate).map_err(|error| error.to_string())?;
-    *config = candidate;
+    let parsed = fetched.map_err(|error| fetch_error_message(&error, &requested.url))?;
+    let current_store = rosetun_core::Store::at(path);
+    let report = rosetun_core::commit_subscription_update(&current_store, requested, parsed, now)
+        .map_err(|error| error.to_string())?;
+
+    *config = current_store.load().map_err(|error| {
+        format!("subscription update was saved, but configuration could not be reloaded: {error}")
+    })?;
 
     Ok(report)
 }
 
 fn update_subscriptions(id: Option<&str>) -> Result<(), String> {
-    let path = store::config_path().map_err(|error| error.to_string())?;
-    let mut config = store::load(&path).map_err(|error| error.to_string())?;
+    let path = rosetun_core::Store::open_default()
+        .map_err(|error| error.to_string())?
+        .path()
+        .to_owned();
+    let mut config = rosetun_core::Store::at(&path)
+        .load()
+        .map_err(|error| error.to_string())?;
 
     let ids: Vec<_> = match id {
         Some(id) => {
@@ -203,8 +201,13 @@ fn update_subscriptions(id: Option<&str>) -> Result<(), String> {
 }
 
 fn list() -> Result<(), String> {
-    let path = store::config_path().map_err(|error| error.to_string())?;
-    let config = store::load(&path).map_err(|error| error.to_string())?;
+    let path = rosetun_core::Store::open_default()
+        .map_err(|error| error.to_string())?
+        .path()
+        .to_owned();
+    let config = rosetun_core::Store::at(&path)
+        .load()
+        .map_err(|error| error.to_string())?;
     let now = now_unix()?;
 
     if config.subscriptions.is_empty() {
@@ -217,36 +220,24 @@ fn list() -> Result<(), String> {
 }
 
 fn remove(id: &str) -> Result<(), String> {
-    let path = store::config_path().map_err(|error| error.to_string())?;
-    let mut config = store::load(&path).map_err(|error| error.to_string())?;
-    let id = SubscriptionId::new(id);
-    let index = config
-        .subscriptions
-        .iter()
-        .position(|sub| sub.id == id)
-        .ok_or_else(|| "subscription does not exist".to_owned())?;
+    let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
 
-    let selection_cleared = config
-        .active
-        .as_ref()
-        .is_some_and(|selection| selection.subscription == id);
+    rosetun_core::remove_subscription(&current_store, &SubscriptionId::new(id))
+        .map_err(|error| error.to_string())?;
 
-    config.subscriptions.remove(index);
-    if selection_cleared {
-        config.active = None;
-    }
+    println!("removed subscription: {}", terminal_text(id));
 
-    store::save(&path, &config).map_err(|error| error.to_string())?;
-    println!("subscription {} removed", terminal_text(id.as_str()));
-    if selection_cleared {
-        println!("active node selection cleared");
-    }
     Ok(())
 }
 
 pub(crate) fn nodes(id: Option<&str>) -> Result<(), String> {
-    let path = store::config_path().map_err(|error| error.to_string())?;
-    let config = store::load(&path).map_err(|error| error.to_string())?;
+    let path = rosetun_core::Store::open_default()
+        .map_err(|error| error.to_string())?
+        .path()
+        .to_owned();
+    let config = rosetun_core::Store::at(&path)
+        .load()
+        .map_err(|error| error.to_string())?;
 
     if let Some(id) = id
         && !config.subscriptions.iter().any(|sub| sub.id.as_str() == id)
@@ -486,6 +477,16 @@ mod tests {
         }
     }
 
+    fn save_config(
+        path: &std::path::Path,
+        config: &AppConfig,
+    ) -> Result<(), rosetun_core::StoreError> {
+        rosetun_core::Store::at(path).modify(|current| {
+            *current = config.clone();
+            Ok::<_, rosetun_core::StoreError>(())
+        })
+    }
+
     fn test_subscription(id: &str) -> Subscription {
         serde_json::from_value(serde_json::json!({
             "id": id,
@@ -533,22 +534,34 @@ mod tests {
     }
 
     #[test]
-    fn minimum_free_positive_id_is_allocated() {
-        let config = AppConfig {
-            subscriptions: vec![
-                test_subscription("3"),
-                test_subscription("1"),
-                test_subscription("01"),
-                test_subscription("legacy"),
-            ],
-            ..AppConfig::default()
-        };
+    fn commit_reloads_preferences_changed_during_fetch() {
+        let directory = TestDirectory::new();
+        let path = directory.config_path();
+        let mut config = test_config();
+        save_config(&path, &config).unwrap();
 
-        assert_eq!(next_id(&config).unwrap(), SubscriptionId::new("2"));
+        let mut external = config.clone();
+        external.subscriptions[0].name = "Renamed during fetch".to_owned();
+        external.subscriptions[0].auto_update = true;
+        external.active = None;
+        save_config(&path, &external).unwrap();
 
-        let mut config = config;
-        config.subscriptions.push(test_subscription("2"));
-        assert_eq!(next_id(&config).unwrap(), SubscriptionId::new("4"));
+        commit_update(
+            &path,
+            &mut config,
+            &SubscriptionId::new("1"),
+            Ok(successful_update()),
+            42,
+        )
+        .unwrap();
+
+        let saved = rosetun_core::Store::at(&path).load().unwrap();
+        assert_eq!(config, saved);
+        assert_eq!(saved.subscriptions[0].name, "Renamed during fetch");
+        assert!(saved.subscriptions[0].auto_update);
+        assert!(saved.active.is_none());
+        assert_eq!(saved.rule_sets, external.rule_sets);
+        assert_eq!(saved.active_rule_set, external.active_rule_set);
     }
 
     #[test]
@@ -556,7 +569,7 @@ mod tests {
         let directory = TestDirectory::new();
         let path = directory.config_path();
         let mut config = test_config();
-        store::save(&path, &config).unwrap();
+        save_config(&path, &config).unwrap();
 
         let report = commit_update(
             &path,
@@ -573,7 +586,7 @@ mod tests {
         assert_eq!(report.retained, 0);
         assert!(config.active.is_none());
 
-        let saved = store::load(&path).unwrap();
+        let saved = rosetun_core::Store::at(&path).load().unwrap();
         assert_eq!(saved, config);
         assert_eq!(saved.subscriptions[0].name, "Chosen name");
         assert_eq!(saved.subscriptions[0].updated_at_unix, Some(42));
@@ -587,7 +600,7 @@ mod tests {
         let directory = TestDirectory::new();
         let path = directory.config_path();
         let original = test_config();
-        store::save(&path, &original).unwrap();
+        save_config(&path, &original).unwrap();
         let original_bytes = std::fs::read(&path).unwrap();
 
         let errors = [
@@ -628,7 +641,7 @@ mod tests {
         let directory = TestDirectory::new();
         let path = directory.config_path();
         let mut config = test_config();
-        store::save(&path, &config).unwrap();
+        save_config(&path, &config).unwrap();
 
         let original = config.clone();
         let original_bytes = std::fs::read(&path).unwrap();
@@ -654,7 +667,7 @@ mod tests {
         let path = directory.config_path();
         let mut config = test_config();
         config.subscriptions.push(test_subscription("2"));
-        store::save(&path, &config).unwrap();
+        save_config(&path, &config).unwrap();
         let first = config.subscriptions[0].clone();
 
         assert!(
@@ -678,7 +691,7 @@ mod tests {
 
         assert_eq!(config.subscriptions[0], first);
         assert_eq!(config.subscriptions[1].updated_at_unix, Some(43));
-        assert_eq!(store::load(&path).unwrap(), config);
+        assert_eq!(rosetun_core::Store::at(&path).load().unwrap(), config);
         assert!(config.active.is_some());
     }
 
@@ -867,13 +880,5 @@ mod tests {
         );
         assert!(message.contains("notice: Subscription expired"));
         assert!(message.contains("skipped 2: record contains a provider notice"));
-    }
-
-    #[test]
-    fn empty_configuration_allocates_id_one() {
-        assert_eq!(
-            next_id(&AppConfig::default()).unwrap(),
-            SubscriptionId::new("1")
-        );
     }
 }

@@ -21,7 +21,7 @@ pub fn group_skipped(skipped: &[Skipped]) -> BTreeMap<String, usize> {
     grouped
 }
 
-pub(crate) fn apply_update(
+pub fn apply_update(
     config: &mut AppConfig,
     id: &SubscriptionId,
     parsed: Parsed,
