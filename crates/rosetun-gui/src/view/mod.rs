@@ -1,10 +1,11 @@
 pub(crate) mod add_subscription;
 pub(crate) mod connection;
+pub(crate) mod rules;
 pub(crate) mod subscriptions;
 
 use eframe::egui::{self, RichText, Stroke};
 
-use crate::state::{Action, State};
+use crate::state::{Action, Screen, State};
 use crate::{strings, theme};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
@@ -20,9 +21,16 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             ui.horizontal_centered(|ui| {
                 ui.label(RichText::new(strings::BRAND).size(23.0).strong());
                 ui.add_space(32.0);
-                ui.colored_label(theme::ROSE_LIGHT, strings::CONNECTION);
-                ui.add_enabled(false, egui::Button::new(strings::RULES).frame(false))
-                    .on_disabled_hover_text(strings::COMING_LATER);
+                if state.screen == Screen::Connection {
+                    ui.colored_label(theme::ROSE_LIGHT, strings::CONNECTION);
+                } else if ui.button(strings::CONNECTION).clicked() {
+                    actions.push(Action::ShowConnection);
+                }
+                if state.screen == Screen::Rules {
+                    ui.colored_label(theme::ROSE_LIGHT, strings::RULES);
+                } else if ui.button(strings::RULES).clicked() {
+                    actions.push(Action::OpenRules);
+                }
                 ui.add_enabled(false, egui::Button::new(strings::SETTINGS).frame(false))
                     .on_disabled_hover_text(strings::COMING_LATER);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -37,16 +45,18 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                 });
             });
         });
-    egui::Panel::left("subscriptions")
-        .exact_size(316.0)
-        .resizable(false)
-        .frame(
-            egui::Frame::new()
-                .fill(theme::PANEL)
-                .stroke(Stroke::new(1.0, theme::BORDER))
-                .inner_margin(16),
-        )
-        .show(ui, |ui| subscriptions::show(ui, state, &mut actions));
+    if state.screen == Screen::Connection {
+        egui::Panel::left("subscriptions")
+            .exact_size(316.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::PANEL)
+                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .inner_margin(16),
+            )
+            .show(ui, |ui| subscriptions::show(ui, state, &mut actions));
+    }
     egui::CentralPanel::default()
         .frame(
             egui::Frame::new()
@@ -67,7 +77,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                     {
                         actions.push(Action::DismissOperationError);
                     }
-                    connection::show(ui, state, &mut actions);
+                    match state.screen {
+                        Screen::Connection => connection::show(ui, state, &mut actions),
+                        Screen::Rules => rules::show(ui, state, &mut actions),
+                    }
                 });
         });
 
@@ -78,8 +91,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     if state.remove.is_some() {
         subscriptions::remove_dialog(ctx, state, &mut actions);
     }
-    if state.protection_confirmation {
+    if state.protection_confirmation && state.screen == Screen::Connection {
         connection::protection_dialog(ctx, state, &mut actions);
+    }
+    if state.screen == Screen::Rules {
+        rules::name_dialog(ctx, state, &mut actions);
+        rules::delete_dialog(ctx, state, &mut actions);
     }
     actions
 }

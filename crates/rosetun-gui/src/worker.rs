@@ -5,12 +5,17 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use eframe::egui;
-use rosetun_config::{AppConfig, NodeId, RuleSetId, Status, Subscription, SubscriptionId};
+use rosetun_config::{
+    AppConfig, NodeId, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status,
+    Subscription, SubscriptionId,
+};
 use rosetun_core::{
-    AddFromUrlError, AddOptions, RemoveSubscriptionError, SelectNodeError, SelectRuleSetError,
-    Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateReport, UpdateSubscriptionError,
-    add_prepared_subscription, prepare_subscription, remove_subscription, select_node,
-    select_rule_set, set_kill_switch, update_all, update_subscription,
+    AddFromUrlError, AddOptions, RemoveSubscriptionError, RuleSetError, SelectNodeError,
+    SelectRuleSetError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateReport,
+    UpdateSubscriptionError, add_prepared_subscription, add_rule, create_rule_set, delete_rule_set,
+    move_rule, prepare_subscription, remove_rule, remove_subscription, rename_rule_set,
+    select_node, select_rule_set, set_default_target, set_kill_switch, set_rule_enabled,
+    set_rule_target, update_all, update_subscription,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
 
@@ -49,6 +54,15 @@ pub(crate) enum WorkerEvent {
     Disconnect(Result<(), HelperCommandError>),
     SelectNode(Result<String, SelectNodeError>),
     SelectRuleSet(Result<(), SelectRuleSetError>),
+    CreateRuleSet(Result<RuleSet, RuleSetError>),
+    RenameRuleSet(Result<(), RuleSetError>),
+    DeleteRuleSet(Result<(), RuleSetError>),
+    SetDefaultTarget(Result<(), RuleSetError>),
+    AddRule(Result<Rule, RuleSetError>),
+    SetRuleTarget(Result<(), RuleSetError>),
+    SetRuleEnabled(Result<(), RuleSetError>),
+    MoveRule(Result<(), RuleSetError>),
+    RemoveRule(Result<(), RuleSetError>),
     SetKillSwitch(Result<(), StoreError>),
     Add(Result<(Subscription, UpdateReport), AddFromUrlError>),
     Update {
@@ -127,8 +141,8 @@ impl WorkerDispatcher {
             tracing::info!("Disconnect command started");
             let result = with_helper(|client| client.disconnect_tunnel());
             match &result {
-                Ok(()) => tracing::info!("Connect command succeeded"),
-                Err(error) => tracing::warn!(%error, "Connect command failed"),
+                Ok(()) => tracing::info!("Disconnect command succeeded"),
+                Err(error) => tracing::warn!(%error, "Disconnect command failed"),
             }
             emit(
                 &publisher.tx,
@@ -151,6 +165,78 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             let result = select_rule_set(&publisher.store, id.as_ref());
             publisher.complete(WorkerEvent::SelectRuleSet(result));
+        });
+    }
+
+    pub(crate) fn create_rule_set(&self, name: String) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = create_rule_set(&publisher.store, &name, RuleTarget::Proxy);
+            publisher.complete(WorkerEvent::CreateRuleSet(result));
+        });
+    }
+
+    pub(crate) fn rename_rule_set(&self, id: RuleSetId, name: String) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = rename_rule_set(&publisher.store, &id, &name);
+            publisher.complete(WorkerEvent::RenameRuleSet(result));
+        });
+    }
+
+    pub(crate) fn delete_rule_set(&self, id: RuleSetId) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = delete_rule_set(&publisher.store, &id);
+            publisher.complete(WorkerEvent::DeleteRuleSet(result));
+        });
+    }
+
+    pub(crate) fn set_default_target(&self, id: RuleSetId, target: RuleTarget) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = set_default_target(&publisher.store, &id, target);
+            publisher.complete(WorkerEvent::SetDefaultTarget(result));
+        });
+    }
+
+    pub(crate) fn add_rule(&self, set: RuleSetId, matcher: RuleMatcher, target: RuleTarget) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = add_rule(&publisher.store, &set, matcher, target);
+            publisher.complete(WorkerEvent::AddRule(result));
+        });
+    }
+
+    pub(crate) fn set_rule_target(&self, set: RuleSetId, rule: RuleId, target: RuleTarget) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = set_rule_target(&publisher.store, &set, &rule, target);
+            publisher.complete(WorkerEvent::SetRuleTarget(result));
+        });
+    }
+
+    pub(crate) fn set_rule_enabled(&self, set: RuleSetId, rule: RuleId, enabled: bool) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = set_rule_enabled(&publisher.store, &set, &rule, enabled);
+            publisher.complete(WorkerEvent::SetRuleEnabled(result));
+        });
+    }
+
+    pub(crate) fn move_rule(&self, set: RuleSetId, rule: RuleId, to_index: usize) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = move_rule(&publisher.store, &set, &rule, to_index);
+            publisher.complete(WorkerEvent::MoveRule(result));
+        });
+    }
+
+    pub(crate) fn remove_rule(&self, set: RuleSetId, rule: RuleId) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = remove_rule(&publisher.store, &set, &rule);
+            publisher.complete(WorkerEvent::RemoveRule(result));
         });
     }
 

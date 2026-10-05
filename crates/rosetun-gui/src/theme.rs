@@ -31,7 +31,7 @@ pub(crate) fn apply(ctx: &egui::Context) {
     visuals.window_stroke = Stroke::new(1.0, BORDER_STRONG);
     visuals.widgets.noninteractive.bg_fill = CARD;
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT_MUTED);
-    visuals.widgets.inactive.bg_fill = CARD;
+    visuals.widgets.inactive.bg_fill = INPUT;
     visuals.widgets.inactive.weak_bg_fill = CARD;
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT_MUTED);
     visuals.widgets.hovered.bg_fill = BORDER;

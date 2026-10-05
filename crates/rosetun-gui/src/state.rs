@@ -1,11 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use rosetun_config::{AppConfig, ConnectionState, NodeId, RuleSetId, Status, SubscriptionId};
+use rosetun_config::{
+    AppConfig, ConnectionState, NodeId, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget,
+    Status, SubscriptionId,
+};
 use rosetun_core::{AddFromUrlError, AddOptions, UpdateReport, UpdateSubscriptionError};
 use rosetun_ipc::ClientError;
 
 use crate::actions::{self, PrimaryAction};
 use crate::display;
+use crate::rules::{RuleFilter, TypeFilter, drop_target};
 use crate::strings;
 use crate::worker::{ConfigWorkerError, HelperCommandError, WorkerEvent};
 
@@ -14,6 +18,7 @@ pub(crate) struct Operations {
     pub(crate) helper: bool,
     pub(crate) selection: bool,
     pub(crate) rules: bool,
+    pub(crate) rules_edit: bool,
     pub(crate) kill_switch: bool,
     pub(crate) updating: BTreeSet<SubscriptionId>,
     pub(crate) update_all: bool,
@@ -52,6 +57,39 @@ pub(crate) enum UpdateOutcome {
     Error(UpdateSubscriptionError),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Screen {
+    #[default]
+    Connection,
+    Rules,
+}
+
+pub(crate) enum NameDialogKind {
+    Create,
+    Rename(RuleSetId),
+}
+
+pub(crate) struct NameDialog {
+    pub(crate) kind: NameDialogKind,
+    pub(crate) name: String,
+    pub(crate) error: Option<String>,
+    pub(crate) focus: bool,
+}
+
+pub(crate) enum DeleteDialog {
+    Set(RuleSetId),
+    Rule { set: RuleSetId, rule: RuleId },
+}
+
+#[derive(Default)]
+pub(crate) struct RuleScreen {
+    pub(crate) selected_set: Option<RuleSetId>,
+    pub(crate) filter: RuleFilter,
+    pub(crate) name: Option<NameDialog>,
+    pub(crate) delete: Option<DeleteDialog>,
+    opened: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) config: AppConfig,
@@ -63,6 +101,8 @@ pub(crate) struct State {
     pub(crate) helper_version: Option<String>,
     pub(crate) helper_error: Option<ClientError>,
     pub(crate) operation_error: Option<String>,
+    pub(crate) screen: Screen,
+    pub(crate) rule_screen: RuleScreen,
     pub(crate) expanded: BTreeSet<SubscriptionId>,
     pub(crate) outcomes: BTreeMap<SubscriptionId, UpdateOutcome>,
     pub(crate) operations: Operations,
@@ -72,6 +112,28 @@ pub(crate) struct State {
 }
 
 pub(crate) enum Action {
+    ShowConnection,
+    OpenRules,
+    OpenActiveRules,
+    ChooseRuleSet(RuleSetId),
+    SetRuleTypeFilter(TypeFilter),
+    ToggleRuleTargetFilter(RuleTarget),
+    OpenCreateSet,
+    OpenRenameSet,
+    CancelSetName,
+    SubmitSetName,
+    RequestDeleteSet,
+    RequestDeleteRule(RuleId),
+    CancelRuleDelete,
+    ConfirmRuleDelete,
+    SetDefaultTarget(RuleTarget),
+    // The add-rule dialog will construct this action in stage 12b-3.
+    #[allow(dead_code)]
+    AddRule(RuleMatcher, RuleTarget),
+    SetRuleTarget(RuleId, RuleTarget),
+    SetRuleEnabled(RuleId, bool),
+    MoveRule(RuleId, usize),
+    DropRule(RuleId, usize),
     Primary,
     RequestProtectionOff,
     KeepBlocked,
@@ -98,6 +160,15 @@ pub(crate) enum Job {
     Disconnect,
     SelectNode(SubscriptionId, NodeId),
     SelectRuleSet(Option<RuleSetId>),
+    CreateRuleSet(String),
+    RenameRuleSet(RuleSetId, String),
+    DeleteRuleSet(RuleSetId),
+    SetDefaultTarget(RuleSetId, RuleTarget),
+    AddRule(RuleSetId, RuleMatcher, RuleTarget),
+    SetRuleTarget(RuleSetId, RuleId, RuleTarget),
+    SetRuleEnabled(RuleSetId, RuleId, bool),
+    MoveRule(RuleSetId, RuleId, usize),
+    RemoveRule(RuleSetId, RuleId),
     SetKillSwitch(bool),
     Add { input: String, options: AddOptions },
     Update(SubscriptionId),
@@ -133,6 +204,31 @@ impl State {
         redact(&self.config, value)
     }
 
+    pub(crate) fn selected_rules(&self) -> Option<&RuleSet> {
+        let id = self.rule_screen.selected_set.as_ref()?;
+        self.config.rule_sets.iter().find(|set| &set.id == id)
+    }
+
+    pub(crate) fn can_edit_rules(&self) -> bool {
+        self.config_ready
+            && !self.operations.rules_edit
+            && !self.operations.rules
+            && !self.operations.helper
+    }
+
+    fn preferred_set(&self) -> Option<RuleSetId> {
+        self.config
+            .active_rules()
+            .or_else(|| self.config.rule_sets.first())
+            .map(|set| set.id.clone())
+    }
+
+    fn reconcile_selected_set(&mut self) {
+        if self.rule_screen.opened && self.selected_rules().is_none() {
+            self.rule_screen.selected_set = self.preferred_set();
+        }
+    }
+
     pub(crate) fn reduce(&mut self, event: WorkerEvent) {
         match event {
             WorkerEvent::Config { generation, config } => {
@@ -147,6 +243,7 @@ impl State {
                     .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));
                 self.outcomes
                     .retain(|id, _| self.config.subscriptions.iter().any(|sub| &sub.id == id));
+                self.reconcile_selected_set();
             }
             WorkerEvent::ConfigError(error) => self.config_error = Some(error),
             WorkerEvent::HelperAvailable { version } => {
@@ -185,6 +282,36 @@ impl State {
             WorkerEvent::SelectRuleSet(result) => {
                 self.operations.rules = false;
                 self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+            }
+            WorkerEvent::CreateRuleSet(result) => {
+                self.operations.rules_edit = false;
+                match result {
+                    Ok(set) => {
+                        self.rule_screen.selected_set = Some(set.id);
+                        self.rule_screen.name = None;
+                    }
+                    Err(error) => self.name_error(error.to_string()),
+                }
+            }
+            WorkerEvent::RenameRuleSet(result) => {
+                self.operations.rules_edit = false;
+                match result {
+                    Ok(()) => self.rule_screen.name = None,
+                    Err(error) => self.name_error(error.to_string()),
+                }
+            }
+            WorkerEvent::DeleteRuleSet(result) => {
+                self.rule_screen.delete = None;
+                self.finish_rule_edit(result);
+            }
+            WorkerEvent::SetDefaultTarget(result) => self.finish_rule_edit(result),
+            WorkerEvent::AddRule(result) => self.finish_rule_edit(result.map(|_| ())),
+            WorkerEvent::SetRuleTarget(result) => self.finish_rule_edit(result),
+            WorkerEvent::SetRuleEnabled(result) => self.finish_rule_edit(result),
+            WorkerEvent::MoveRule(result) => self.finish_rule_edit(result),
+            WorkerEvent::RemoveRule(result) => {
+                self.rule_screen.delete = None;
+                self.finish_rule_edit(result);
             }
             WorkerEvent::SetKillSwitch(result) => {
                 self.operations.kill_switch = false;
@@ -238,6 +365,26 @@ impl State {
         }
     }
 
+    fn name_error(&mut self, error: String) {
+        let message = self.text(&error);
+        if let Some(dialog) = &mut self.rule_screen.name {
+            dialog.error = Some(message);
+        } else {
+            self.operation_error = Some(message);
+        }
+    }
+
+    fn finish_rule_edit(&mut self, result: Result<(), rosetun_core::RuleSetError>) {
+        self.operations.rules_edit = false;
+        self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+    }
+
+    fn start_rule_edit(&mut self, job: Job) -> Option<Job> {
+        self.operations.rules_edit = true;
+        self.operation_error = None;
+        Some(job)
+    }
+
     fn helper_result(&mut self, result: Result<(), HelperCommandError>) {
         self.operation_error = result.err().map(|error| {
             let message = match error {
@@ -263,6 +410,178 @@ impl State {
 
     pub(crate) fn act(&mut self, action: Action) -> Option<Job> {
         match action {
+            Action::ShowConnection => self.screen = Screen::Connection,
+            Action::OpenRules => {
+                if !self.rule_screen.opened {
+                    self.rule_screen.selected_set = self.preferred_set();
+                }
+                self.rule_screen.opened = true;
+                self.screen = Screen::Rules;
+            }
+            Action::OpenActiveRules => {
+                self.rule_screen.selected_set = self.preferred_set();
+                self.rule_screen.opened = true;
+                self.screen = Screen::Rules;
+            }
+            Action::ChooseRuleSet(id) => {
+                if self.config.rule_sets.iter().any(|set| set.id == id) {
+                    self.rule_screen.selected_set = Some(id);
+                }
+            }
+            Action::SetRuleTypeFilter(kind) => self.rule_screen.filter.kind = kind,
+            Action::ToggleRuleTargetFilter(target) => {
+                let filter = &mut self.rule_screen.filter.target;
+                *filter = if *filter == Some(target) {
+                    None
+                } else {
+                    Some(target)
+                };
+            }
+            Action::OpenCreateSet => {
+                if self.can_edit_rules() && self.rule_screen.name.is_none() {
+                    self.rule_screen.name = Some(NameDialog {
+                        kind: NameDialogKind::Create,
+                        name: strings::BASIC.to_owned(),
+                        error: None,
+                        focus: true,
+                    });
+                }
+            }
+            Action::OpenRenameSet => {
+                if self.can_edit_rules()
+                    && self.rule_screen.name.is_none()
+                    && let Some(set) = self.selected_rules()
+                {
+                    self.rule_screen.name = Some(NameDialog {
+                        kind: NameDialogKind::Rename(set.id.clone()),
+                        name: set.name.clone(),
+                        error: None,
+                        focus: true,
+                    });
+                }
+            }
+            Action::CancelSetName => {
+                if !self.operations.rules_edit {
+                    self.rule_screen.name = None;
+                }
+            }
+            Action::SubmitSetName => {
+                if self.can_edit_rules()
+                    && let Some(dialog) = &self.rule_screen.name
+                    && !dialog.name.trim().is_empty()
+                {
+                    let name = dialog.name.trim().to_owned();
+                    let job = match &dialog.kind {
+                        NameDialogKind::Create => Job::CreateRuleSet(name),
+                        NameDialogKind::Rename(id) => Job::RenameRuleSet(id.clone(), name),
+                    };
+                    if let Some(dialog) = &mut self.rule_screen.name {
+                        dialog.error = None;
+                    }
+                    return self.start_rule_edit(job);
+                }
+            }
+            Action::RequestDeleteSet => {
+                if self.can_edit_rules()
+                    && self.rule_screen.delete.is_none()
+                    && let Some(set) = self.selected_rules()
+                {
+                    self.rule_screen.delete = Some(DeleteDialog::Set(set.id.clone()));
+                }
+            }
+            Action::RequestDeleteRule(rule) => {
+                if self.can_edit_rules()
+                    && self.rule_screen.delete.is_none()
+                    && let Some(set) = self.selected_rules()
+                    && set.rules.iter().any(|item| item.id == rule)
+                {
+                    self.rule_screen.delete = Some(DeleteDialog::Rule {
+                        set: set.id.clone(),
+                        rule,
+                    });
+                }
+            }
+            Action::CancelRuleDelete => {
+                if !self.operations.rules_edit {
+                    self.rule_screen.delete = None;
+                }
+            }
+            Action::ConfirmRuleDelete => {
+                if self.can_edit_rules()
+                    && let Some(dialog) = &self.rule_screen.delete
+                {
+                    let job = match dialog {
+                        DeleteDialog::Set(id) => Job::DeleteRuleSet(id.clone()),
+                        DeleteDialog::Rule { set, rule } => {
+                            Job::RemoveRule(set.clone(), rule.clone())
+                        }
+                    };
+                    return self.start_rule_edit(job);
+                }
+            }
+            Action::SetDefaultTarget(target) => {
+                if self.can_edit_rules()
+                    && matches!(target, RuleTarget::Proxy | RuleTarget::Direct)
+                    && let Some(set) = self.selected_rules()
+                    && set.default_target != target
+                {
+                    return self.start_rule_edit(Job::SetDefaultTarget(set.id.clone(), target));
+                }
+            }
+            Action::AddRule(matcher, target) => {
+                if self.can_edit_rules()
+                    && let Some(set) = self.selected_rules()
+                {
+                    return self.start_rule_edit(Job::AddRule(set.id.clone(), matcher, target));
+                }
+            }
+            Action::SetRuleTarget(rule, target) => {
+                if self.can_edit_rules()
+                    && let Some(set) = self.selected_rules()
+                    && set
+                        .rules
+                        .iter()
+                        .any(|item| item.id == rule && item.target != target)
+                {
+                    return self.start_rule_edit(Job::SetRuleTarget(set.id.clone(), rule, target));
+                }
+            }
+            Action::SetRuleEnabled(rule, enabled) => {
+                if self.can_edit_rules()
+                    && let Some(set) = self.selected_rules()
+                    && set
+                        .rules
+                        .iter()
+                        .any(|item| item.id == rule && item.enabled != enabled)
+                {
+                    return self.start_rule_edit(Job::SetRuleEnabled(
+                        set.id.clone(),
+                        rule,
+                        enabled,
+                    ));
+                }
+            }
+            Action::MoveRule(rule, to_index) => {
+                if self.can_edit_rules()
+                    && !self.rule_screen.filter.is_active()
+                    && let Some(set) = self.selected_rules()
+                    && let Some(from) = set.rules.iter().position(|item| item.id == rule)
+                    && to_index < set.rules.len()
+                    && from != to_index
+                {
+                    return self.start_rule_edit(Job::MoveRule(set.id.clone(), rule, to_index));
+                }
+            }
+            Action::DropRule(rule, slot) => {
+                if self.can_edit_rules()
+                    && !self.rule_screen.filter.is_active()
+                    && let Some(set) = self.selected_rules()
+                    && let Some(from) = set.rules.iter().position(|item| item.id == rule)
+                    && let Some(to) = drop_target(from, slot, set.rules.len())
+                {
+                    return self.start_rule_edit(Job::MoveRule(set.id.clone(), rule, to));
+                }
+            }
             Action::Primary => {
                 let job = match self.primary_action() {
                     PrimaryAction::Connect | PrimaryAction::Retry | PrimaryAction::Reconnect => {
@@ -307,7 +626,11 @@ impl State {
                 }
             }
             Action::SelectRuleSet(id) => {
-                if self.config_ready && !self.operations.rules && !self.operations.helper {
+                if self.config_ready
+                    && !self.operations.rules
+                    && !self.operations.rules_edit
+                    && !self.operations.helper
+                {
                     self.operations.rules = true;
                     self.operation_error = None;
                     return Some(Job::SelectRuleSet(id));
@@ -441,7 +764,8 @@ pub(crate) fn primary_label(state: &State) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rosetun_core::{RemoveSubscriptionError, StoreError};
+    use rosetun_config::{DomainMatch, Rule, RuleMatcher};
+    use rosetun_core::{RemoveSubscriptionError, RuleSetError, StoreError};
     use rosetun_ipc::ConnectRequestError;
 
     fn report() -> UpdateReport {
@@ -471,6 +795,34 @@ mod tests {
             web_page_url: None,
             announce: None,
             notices: vec![],
+        }
+    }
+
+    fn rule_set(id: &str) -> RuleSet {
+        let mut set = RuleSet::new(RuleSetId::new(id), id, RuleTarget::Proxy);
+        for (index, domain) in ["first.example", "second.example", "third.example"]
+            .into_iter()
+            .enumerate()
+        {
+            set.rules.push(Rule {
+                id: RuleId::new(index.to_string()),
+                enabled: true,
+                matcher: RuleMatcher::Domain(DomainMatch::Exact(domain.into())),
+                target: RuleTarget::Proxy,
+            });
+        }
+        set
+    }
+
+    fn state_with_rules() -> State {
+        State {
+            config_ready: true,
+            config: AppConfig {
+                rule_sets: vec![rule_set("1"), rule_set("2")],
+                active_rule_set: Some(RuleSetId::new("2")),
+                ..AppConfig::default()
+            },
+            ..State::default()
         }
     }
 
@@ -667,5 +1019,239 @@ mod tests {
             state.text("🇩🇪 https://example.com/secret-path\nnext"),
             "[DE] https://example.com/…\nnext"
         );
+    }
+
+    #[test]
+    fn opening_and_reloading_rules_selects_active_then_first_if_missing() {
+        let mut state = state_with_rules();
+        assert_eq!(state.screen, Screen::Connection);
+        state.act(Action::OpenRules);
+        assert_eq!(state.screen, Screen::Rules);
+        assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("2")));
+        state.act(Action::ChooseRuleSet(RuleSetId::new("1")));
+        state.act(Action::ShowConnection);
+        state.act(Action::OpenRules);
+        assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("1")));
+        state.act(Action::OpenActiveRules);
+        assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("2")));
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: AppConfig {
+                rule_sets: vec![rule_set("1")],
+                ..AppConfig::default()
+            },
+        });
+        assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("1")));
+        state.reduce(WorkerEvent::Config {
+            generation: 2,
+            config: AppConfig::default(),
+        });
+        assert!(state.rule_screen.selected_set.is_none());
+        state.reduce(WorkerEvent::Config {
+            generation: 3,
+            config: AppConfig {
+                rule_sets: vec![rule_set("3"), rule_set("4")],
+                ..AppConfig::default()
+            },
+        });
+        assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("3")));
+
+        let mut before_load = State::default();
+        before_load.act(Action::OpenRules);
+        before_load.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: state_with_rules().config,
+        });
+        assert_eq!(
+            before_load.rule_screen.selected_set,
+            Some(RuleSetId::new("2"))
+        );
+        let mut no_active = state_with_rules();
+        no_active.config.active_rule_set = None;
+        no_active.act(Action::OpenRules);
+        assert_eq!(
+            no_active.rule_screen.selected_set,
+            Some(RuleSetId::new("1"))
+        );
+        no_active.act(Action::ChooseRuleSet(RuleSetId::new("2")));
+        no_active.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: AppConfig {
+                rule_sets: vec![rule_set("1")],
+                active_rule_set: Some(RuleSetId::new("1")),
+                ..AppConfig::default()
+            },
+        });
+        assert_eq!(
+            no_active.rule_screen.selected_set,
+            Some(RuleSetId::new("1"))
+        );
+    }
+
+    #[test]
+    fn set_name_dialog_keeps_errors_and_success_selects_created_set() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenCreateSet);
+        assert_eq!(
+            state.rule_screen.name.as_ref().unwrap().name,
+            strings::BASIC
+        );
+        state.rule_screen.name.as_mut().unwrap().name = "   ".into();
+        assert!(state.act(Action::SubmitSetName).is_none());
+        state.rule_screen.name.as_mut().unwrap().name = "  Work  ".into();
+        assert!(matches!(
+            state.act(Action::SubmitSetName),
+            Some(Job::CreateRuleSet(name)) if name == "Work"
+        ));
+        assert!(state.operations.rules_edit);
+        assert!(state.act(Action::CancelSetName).is_none());
+        assert!(state.rule_screen.name.is_some());
+        state.reduce(WorkerEvent::CreateRuleSet(Err(RuleSetError::EmptyName)));
+        assert!(!state.operations.rules_edit);
+        assert!(state.operation_error.is_none());
+        assert_eq!(
+            state.rule_screen.name.as_ref().unwrap().error.as_deref(),
+            Some("rule set name must not be empty")
+        );
+        state.reduce(WorkerEvent::CreateRuleSet(Ok(rule_set("3"))));
+        assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("3")));
+        assert!(state.rule_screen.name.is_none());
+
+        state.act(Action::ChooseRuleSet(RuleSetId::new("1")));
+        state.act(Action::OpenRenameSet);
+        assert!(matches!(
+            state.act(Action::SubmitSetName),
+            Some(Job::RenameRuleSet(_, _))
+        ));
+        state.reduce(WorkerEvent::RenameRuleSet(Err(RuleSetError::SetNotFound)));
+        assert!(!state.operations.rules_edit);
+        assert!(state.operation_error.is_none());
+        assert!(state.rule_screen.name.as_ref().unwrap().error.is_some());
+        state.reduce(WorkerEvent::RenameRuleSet(Ok(())));
+        assert!(state.rule_screen.name.is_none());
+    }
+
+    #[test]
+    fn all_rule_operation_errors_clear_busy_and_use_shared_error() {
+        let events = [
+            WorkerEvent::DeleteRuleSet(Err(RuleSetError::SetNotFound)),
+            WorkerEvent::SetDefaultTarget(Err(RuleSetError::SetNotFound)),
+            WorkerEvent::AddRule(Err(RuleSetError::DuplicateRule)),
+            WorkerEvent::SetRuleTarget(Err(RuleSetError::RuleNotFound)),
+            WorkerEvent::SetRuleEnabled(Err(RuleSetError::RuleNotFound)),
+            WorkerEvent::MoveRule(Err(RuleSetError::RuleNotFound)),
+            WorkerEvent::RemoveRule(Err(RuleSetError::RuleNotFound)),
+        ];
+        for event in events {
+            let mut state = state_with_rules();
+            state.operations.rules_edit = true;
+            state.reduce(event);
+            assert!(!state.operations.rules_edit);
+            assert!(state.operation_error.is_some());
+        }
+        let events = [
+            WorkerEvent::DeleteRuleSet(Ok(())),
+            WorkerEvent::SetDefaultTarget(Ok(())),
+            WorkerEvent::AddRule(Ok(rule_set("1").rules[0].clone())),
+            WorkerEvent::SetRuleTarget(Ok(())),
+            WorkerEvent::SetRuleEnabled(Ok(())),
+            WorkerEvent::MoveRule(Ok(())),
+            WorkerEvent::RemoveRule(Ok(())),
+        ];
+        for event in events {
+            let mut state = state_with_rules();
+            state.operations.rules_edit = true;
+            state.operation_error = Some("old error".into());
+            state.reduce(event);
+            assert!(!state.operations.rules_edit);
+            assert!(state.operation_error.is_none());
+        }
+    }
+
+    #[test]
+    fn set_deletion_requires_confirmation_and_reports_errors_outside_dialog() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        assert!(state.act(Action::ConfirmRuleDelete).is_none());
+        state.act(Action::RequestDeleteSet);
+        assert!(matches!(
+            state.rule_screen.delete,
+            Some(DeleteDialog::Set(_))
+        ));
+        assert!(matches!(
+            state.act(Action::ConfirmRuleDelete),
+            Some(Job::DeleteRuleSet(id)) if id == RuleSetId::new("2")
+        ));
+        assert!(state.act(Action::CancelRuleDelete).is_none());
+        state.reduce(WorkerEvent::DeleteRuleSet(Err(RuleSetError::SetNotFound)));
+        assert!(state.rule_screen.delete.is_none());
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("rule set does not exist")
+        );
+    }
+
+    #[test]
+    fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        let rule = RuleId::new("1");
+        assert!(matches!(
+            state.act(Action::MoveRule(rule.clone(), 0)),
+            Some(Job::MoveRule(_, _, 0))
+        ));
+        assert!(state.act(Action::MoveRule(rule.clone(), 2)).is_none());
+        assert!(
+            state
+                .act(Action::SetRuleEnabled(rule.clone(), false))
+                .is_none()
+        );
+        assert!(state.act(Action::SelectRuleSet(None)).is_none());
+        state.reduce(WorkerEvent::MoveRule(Ok(())));
+        state.rule_screen.filter.search = "second".into();
+        assert!(state.act(Action::MoveRule(rule.clone(), 2)).is_none());
+        assert!(state.act(Action::DropRule(rule.clone(), 3)).is_none());
+        state.rule_screen.filter.search.clear();
+        assert!(state.act(Action::DropRule(rule.clone(), 2)).is_none());
+        assert!(matches!(
+            state.act(Action::DropRule(rule.clone(), 3)),
+            Some(Job::MoveRule(_, _, 2))
+        ));
+        state.reduce(WorkerEvent::MoveRule(Ok(())));
+        assert!(matches!(
+            state.act(Action::SetRuleTarget(rule.clone(), RuleTarget::Direct)),
+            Some(Job::SetRuleTarget(_, _, RuleTarget::Direct))
+        ));
+        state.reduce(WorkerEvent::SetRuleTarget(Ok(())));
+        assert!(matches!(
+            state.act(Action::SetRuleEnabled(rule.clone(), false)),
+            Some(Job::SetRuleEnabled(_, _, false))
+        ));
+        state.reduce(WorkerEvent::SetRuleEnabled(Ok(())));
+        assert!(matches!(
+            state.act(Action::SetDefaultTarget(RuleTarget::Direct)),
+            Some(Job::SetDefaultTarget(_, RuleTarget::Direct))
+        ));
+        state.reduce(WorkerEvent::SetDefaultTarget(Ok(())));
+        assert!(
+            state
+                .act(Action::SetDefaultTarget(RuleTarget::Block))
+                .is_none()
+        );
+        assert!(matches!(
+            state.act(Action::AddRule(
+                RuleMatcher::Domain(DomainMatch::Exact("new.example".into())),
+                RuleTarget::Block,
+            )),
+            Some(Job::AddRule(_, _, RuleTarget::Block))
+        ));
+        state.reduce(WorkerEvent::AddRule(Ok(rule_set("1").rules[0].clone())));
+        state.act(Action::RequestDeleteRule(rule));
+        assert!(matches!(
+            state.act(Action::ConfirmRuleDelete),
+            Some(Job::RemoveRule(_, _))
+        ));
+        state.reduce(WorkerEvent::RemoveRule(Ok(())));
+        assert!(state.rule_screen.delete.is_none());
     }
 }

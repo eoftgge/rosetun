@@ -170,28 +170,28 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             .active_rules()
             .map(|rules| state.text(&rules.name))
             .unwrap_or_else(|| strings::DEFAULT_RULES.to_owned());
-        ui.add_enabled_ui(
-            state.config_ready && !state.operations.rules && !state.operations.helper,
-            |ui| {
-                egui::ComboBox::from_id_salt("active_rule_set")
-                    .selected_text(current_name)
-                    .width(ui.available_width())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut selected, None, strings::DEFAULT_RULES);
-                        for rules in &state.config.rule_sets {
-                            ui.selectable_value(
-                                &mut selected,
-                                Some(rules.id.clone()),
-                                state.text(&rules.name),
-                            );
-                        }
-                    });
-            },
-        );
+        ui.add_enabled_ui(state.can_edit_rules(), |ui| {
+            egui::ComboBox::from_id_salt("active_rule_set")
+                .selected_text(current_name)
+                .width(ui.available_width())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut selected, None, strings::DEFAULT_RULES);
+                    for rules in &state.config.rule_sets {
+                        ui.selectable_value(
+                            &mut selected,
+                            Some(rules.id.clone()),
+                            state.text(&rules.name),
+                        );
+                    }
+                });
+        });
         if selected != previous {
             actions.push(Action::SelectRuleSet(selected));
         }
         ui.colored_label(theme::TEXT_DIM, strings::NEXT_CONNECT);
+        if theme::outline_button(ui, strings::OPEN_RULES, true).clicked() {
+            actions.push(Action::OpenActiveRules);
+        }
     });
 }
 

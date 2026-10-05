@@ -71,6 +71,64 @@ pub(crate) const SELECTION_CLEARED: &str = "Selected server removed · choose an
 pub(crate) const DISMISS: &str = "Dismiss";
 pub(crate) const EXPAND: &str = "+";
 pub(crate) const COLLAPSE: &str = "−";
+pub(crate) const RULES_TITLE: &str = "Routing rules";
+pub(crate) const RULES_SUBTITLE: &str =
+    "Independent of subscriptions — the active set applies to every server.";
+pub(crate) const OPEN_RULES: &str = "Open rules";
+pub(crate) const ACTIVE: &str = "Active";
+pub(crate) const USE_FOR_CONNECTIONS: &str = "Use for connections";
+pub(crate) const NEW_SET: &str = "New set";
+pub(crate) const CREATE_RULE_SET: &str = "Create rule set";
+pub(crate) const RENAME: &str = "Rename";
+pub(crate) const DELETE: &str = "Delete";
+pub(crate) const BASIC: &str = "Basic";
+pub(crate) const SET_NAME: &str = "Set name";
+pub(crate) const RENAME_RULE_SET: &str = "Rename rule set";
+pub(crate) const DELETE_RULE_SET: &str = "Delete rule set?";
+pub(crate) const DELETE_RULE_SET_DETAIL: &str = "This set and all its rules will be removed.";
+pub(crate) const DELETE_ACTIVE_RULE_SET_WARNING: &str = "Connections will use Default · proxy all.";
+pub(crate) const DELETE_RULE: &str = "Delete rule?";
+pub(crate) const DELETE_RULE_DETAIL: &str = "This rule will be removed from the set.";
+pub(crate) const SEARCH_RULES: &str = "Search rules";
+pub(crate) const ALL: &str = "All";
+pub(crate) const DOMAINS: &str = "Domains";
+pub(crate) const PROCESSES: &str = "Processes";
+pub(crate) const OTHER: &str = "Other";
+pub(crate) const PROXY: &str = "Proxy";
+pub(crate) const DIRECT: &str = "Direct";
+pub(crate) const BLOCK: &str = "Block";
+pub(crate) const DOMAIN: &str = "Domain";
+pub(crate) const PROCESS: &str = "Process";
+pub(crate) const KEYWORD: &str = "Keyword";
+pub(crate) const IP: &str = "IP";
+pub(crate) const TYPE: &str = "Type";
+pub(crate) const VALUE: &str = "Value";
+pub(crate) const TARGET: &str = "Target";
+pub(crate) const ENABLED: &str = "Enabled";
+pub(crate) const ACTIONS: &str = "Actions";
+pub(crate) const ORDER_HINT: &str = "Order from top to bottom sets priority.";
+pub(crate) const DRAG_HANDLE: &str = "⠿";
+pub(crate) const MOVE_UP: &str = "↑";
+pub(crate) const MOVE_DOWN: &str = "↓";
+pub(crate) const REMOVE_RULE: &str = "×";
+pub(crate) const RULE_DISABLED: &str = "rule disabled";
+pub(crate) const REORDER_DISABLED: &str = "Clear the search and filters to reorder.";
+pub(crate) const ALL_OTHER_TRAFFIC: &str = "All other traffic";
+pub(crate) const DEFAULT_RULE_DETAIL: &str = "Default rule, cannot be removed.";
+pub(crate) const NO_RULE_SETS: &str = "No rule sets yet. Connections use Default · proxy all.";
+pub(crate) const NO_RULES_MATCH: &str = "No rules match the filter.";
+pub(crate) const RULES_NEXT_CONNECT: &str = "Changes apply on next connect.";
+
+pub(crate) fn filter_count(label: &str, count: usize) -> String {
+    format!("{label} {count}")
+}
+
+pub(crate) fn no_rules(target: &str) -> String {
+    format!(
+        "No rules yet. All traffic goes to {}.",
+        target.to_lowercase()
+    )
+}
 
 pub(crate) fn subscriptions(count: usize) -> String {
     format!("Subscriptions · {count}")

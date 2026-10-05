@@ -32,6 +32,19 @@ impl App {
             Job::Disconnect => self.workers.disconnect(),
             Job::SelectNode(subscription, node) => self.workers.select_node(subscription, node),
             Job::SelectRuleSet(id) => self.workers.select_rule_set(id),
+            Job::CreateRuleSet(name) => self.workers.create_rule_set(name),
+            Job::RenameRuleSet(id, name) => self.workers.rename_rule_set(id, name),
+            Job::DeleteRuleSet(id) => self.workers.delete_rule_set(id),
+            Job::SetDefaultTarget(id, target) => self.workers.set_default_target(id, target),
+            Job::AddRule(set, matcher, target) => self.workers.add_rule(set, matcher, target),
+            Job::SetRuleTarget(set, rule, target) => {
+                self.workers.set_rule_target(set, rule, target)
+            }
+            Job::SetRuleEnabled(set, rule, enabled) => {
+                self.workers.set_rule_enabled(set, rule, enabled);
+            }
+            Job::MoveRule(set, rule, to_index) => self.workers.move_rule(set, rule, to_index),
+            Job::RemoveRule(set, rule) => self.workers.remove_rule(set, rule),
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
             Job::Add { input, options } => self.workers.add(input, options),
             Job::Update(id) => self.workers.update(id),
