@@ -113,50 +113,35 @@ fn update_subscriptions(id: Option<&str>) -> Result<(), String> {
         None => rosetun_core::update_all(&store, timeouts).map_err(|error| error.to_string())?,
     };
 
+    let now = now_unix()?;
     let mut failed = false;
     for (id, result) in results {
-        let original = initial
-            .subscriptions
-            .iter()
-            .find(|subscription| subscription.id == id);
-
-        let label = match original {
-            Some(subscription) => format!(
-                "{} ({})",
-                terminal_text(id.as_str()),
-                terminal_text(&subscription.name)
-            ),
-            None => terminal_text(id.as_str()),
-        };
-        let subscription_url = original
-            .map(|subscription| subscription.url.as_str())
-            .unwrap_or_default();
-
-        let report = match result {
-            Ok(report) => report,
+        let (subscription, report) = match result {
+            Ok(updated) => updated,
             Err(error) => {
-                let message = error.to_string();
-                eprintln!("{label}: {message}");
+                let original = initial
+                    .subscriptions
+                    .iter()
+                    .find(|subscription| subscription.id == id);
+                let label = match original {
+                    Some(subscription) => format!(
+                        "{} ({})",
+                        terminal_text(id.as_str()),
+                        terminal_text(&subscription.name)
+                    ),
+                    None => terminal_text(id.as_str()),
+                };
+                eprintln!("{label}: {error}");
                 failed = true;
                 continue;
             }
         };
 
-        let current = match store.load() {
-            Ok(config) => config,
-            Err(error) => {
-                eprintln!(
-                    "{label}: subscription update was saved, but configuration could not be reloaded: {error}"
-                );
-                failed = true;
-                continue;
-            }
-        };
-        let subscription = current
-            .subscriptions
-            .iter()
-            .find(|subscription| subscription.id == id);
-
+        let label = format!(
+            "{} ({})",
+            terminal_text(id.as_str()),
+            terminal_text(&subscription.name)
+        );
         println!(
             "{label}: updated; {} added, {} removed, {} retained",
             report.added, report.removed, report.retained
@@ -164,10 +149,8 @@ fn update_subscriptions(id: Option<&str>) -> Result<(), String> {
         if report.selection_cleared {
             println!("active node selection cleared: the selected node was removed");
         }
-        print_details(&report.skipped, &report.notices, subscription_url);
-        if let Some(subscription) = subscription {
-            print_info(subscription, now_unix()?);
-        }
+        print_details(&report.skipped, &report.notices, &subscription.url);
+        print_info(&subscription, now);
     }
 
     if failed {
@@ -178,11 +161,8 @@ fn update_subscriptions(id: Option<&str>) -> Result<(), String> {
 }
 
 fn list() -> Result<(), String> {
-    let path = rosetun_core::Store::open_default()
+    let config = rosetun_core::Store::open_default()
         .map_err(|error| error.to_string())?
-        .path()
-        .to_owned();
-    let config = rosetun_core::Store::at(&path)
         .load()
         .map_err(|error| error.to_string())?;
     let now = now_unix()?;
@@ -307,22 +287,30 @@ fn print_info(subscription: &Subscription, now: u64) {
     }
 }
 
+fn count_text(count: u64, unit: &str) -> String {
+    if count == 1 {
+        format!("1 {unit}")
+    } else {
+        format!("{count} {unit}s")
+    }
+}
+
 fn updated_text(timestamp: u64, now: u64) -> String {
     let elapsed = now.saturating_sub(timestamp);
     match elapsed {
         0..60 => "just now".to_owned(),
-        60..3600 => format!("{} minutes ago", elapsed / 60),
-        3600..86400 => format!("{} hours ago", elapsed / 3600),
-        _ => format!("{} days ago", elapsed / 86400),
+        60..3600 => format!("{} ago", count_text(elapsed / 60, "minute")),
+        3600..86400 => format!("{} ago", count_text(elapsed / 3600, "hour")),
+        _ => format!("{} ago", count_text(elapsed / 86400, "day")),
     }
 }
 
 fn expiry_text(expiry: u64, now: u64) -> String {
     const DAY: u64 = 24 * 60 * 60;
     if expiry >= now {
-        format!("expires in {} days", (expiry - now) / DAY)
+        format!("expires in {}", count_text((expiry - now) / DAY, "day"))
     } else {
-        format!("expired {} days ago", (now - expiry) / DAY)
+        format!("expired {} ago", count_text((now - expiry) / DAY, "day"))
     }
 }
 
@@ -363,11 +351,13 @@ mod tests {
         for (elapsed, expected) in [
             (0, "just now"),
             (59, "just now"),
-            (60, "1 minutes ago"),
+            (60, "1 minute ago"),
+            (120, "2 minutes ago"),
             (3599, "59 minutes ago"),
-            (3600, "1 hours ago"),
+            (3600, "1 hour ago"),
+            (7200, "2 hours ago"),
             (86399, "23 hours ago"),
-            (86400, "1 days ago"),
+            (86400, "1 day ago"),
             (172800, "2 days ago"),
         ] {
             assert_eq!(updated_text(0, elapsed), expected);
@@ -378,6 +368,8 @@ mod tests {
 
     #[test]
     fn expiry_uses_signed_direction_without_unsigned_underflow() {
+        assert_eq!(expiry_text(86_400, 0), "expires in 1 day");
+        assert_eq!(expiry_text(0, 86_400), "expired 1 day ago");
         assert_eq!(expiry_text(172_800, 0), "expires in 2 days");
         assert_eq!(expiry_text(0, 172_800), "expired 2 days ago");
         assert_eq!(expiry_text(100, 100), "expires in 0 days");

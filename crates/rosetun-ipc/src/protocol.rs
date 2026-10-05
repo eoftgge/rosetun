@@ -26,7 +26,7 @@ pub enum Request {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectRequestError {
     #[error("the selected node does not exist")]
-    NodeNotSelected,
+    NodeNotFound,
     #[error("no node is selected")]
     SelectionMissing,
     #[error("the selected rule set does not exist")]
@@ -64,7 +64,7 @@ impl ConnectRequest {
             .ok_or(ConnectRequestError::SelectionMissing)?;
         let (_, node) = config
             .active_node()
-            .ok_or(ConnectRequestError::NodeNotSelected)?;
+            .ok_or(ConnectRequestError::NodeNotFound)?;
 
         let rule_set = match &config.active_rule_set {
             Some(_) => config
@@ -245,7 +245,7 @@ mod tests {
             ),
             (
                 dangling_node_config(),
-                ConnectRequestError::NodeNotSelected,
+                ConnectRequestError::NodeNotFound,
                 "the selected node does not exist",
             ),
         ];

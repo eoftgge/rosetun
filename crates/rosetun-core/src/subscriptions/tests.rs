@@ -103,9 +103,11 @@ fn commit_reloads_preferences_changed_during_fetch() {
     external.active = None;
     save_config(&path, &external).unwrap();
 
-    commit_subscription_update(&store, &requested, successful_update(), 42).unwrap();
+    let (subscription, _) =
+        commit_subscription_update(&store, &requested, successful_update(), 42).unwrap();
 
     let saved = store.load().unwrap();
+    assert_eq!(subscription, saved.subscriptions[0]);
     assert_eq!(saved.subscriptions[0].name, "Renamed during fetch");
     assert!(saved.subscriptions[0].auto_update);
     assert!(saved.active.is_none());
@@ -124,7 +126,7 @@ fn successful_update_is_persisted_and_dangling_selection_is_cleared() {
     let original = test_config();
     save_config(&path, &original).unwrap();
 
-    let report =
+    let (subscription, report) =
         commit_subscription_update(&store, &original.subscriptions[0], successful_update(), 42)
             .unwrap();
 
@@ -134,6 +136,7 @@ fn successful_update_is_persisted_and_dangling_selection_is_cleared() {
     assert_eq!(report.retained, 0);
 
     let saved = store.load().unwrap();
+    assert_eq!(subscription, saved.subscriptions[0]);
     assert!(saved.active.is_none());
     assert_eq!(saved.subscriptions[0].name, "Chosen name");
     assert_eq!(saved.subscriptions[0].updated_at_unix, Some(42));
@@ -249,7 +252,8 @@ fn failed_subscription_does_not_prevent_a_later_successful_commit() {
         })
     ));
     assert_eq!(results[1].0, SubscriptionId::new("2"));
-    let report = results[1].1.as_ref().unwrap();
+    let (subscription, report) = results[1].1.as_ref().unwrap();
+    assert_eq!(subscription.id, SubscriptionId::new("2"));
     assert_eq!(report.added, 1);
     assert_eq!(report.removed, 1);
     assert!(!report.selection_cleared);

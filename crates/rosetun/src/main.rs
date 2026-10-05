@@ -170,7 +170,7 @@ fn prepare_connect_request(request_path: Option<&str>) -> Result<ConnectRequest,
     let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = current_store.load().map_err(|error| error.to_string())?;
     ConnectRequest::from_config(&config).map_err(|error| match error {
-        rosetun_ipc::ConnectRequestError::NodeNotSelected
+        rosetun_ipc::ConnectRequestError::NodeNotFound
         | rosetun_ipc::ConnectRequestError::SelectionMissing => {
             "select an existing node with rosetun select <subscription-id> <node-id>".to_owned()
         }

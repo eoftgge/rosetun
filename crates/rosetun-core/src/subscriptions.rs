@@ -38,7 +38,7 @@ pub fn update_subscription(
     store: &Store,
     id: &SubscriptionId,
     timeouts: Timeouts,
-) -> Result<UpdateReport, UpdateSubscriptionError> {
+) -> Result<(Subscription, UpdateReport), UpdateSubscriptionError> {
     update_subscription_with(store, id, timeouts, &mut fetch)
 }
 
@@ -47,7 +47,7 @@ fn update_subscription_with(
     id: &SubscriptionId,
     timeouts: Timeouts,
     fetch_subscription: &mut impl FnMut(&Subscription, Timeouts) -> Result<Parsed, FetchError>,
-) -> Result<UpdateReport, UpdateSubscriptionError> {
+) -> Result<(Subscription, UpdateReport), UpdateSubscriptionError> {
     let config = store.load()?;
     let requested = config
         .subscriptions
@@ -68,7 +68,7 @@ fn update_subscription_with(
 
 pub type SubscriptionUpdateResult = (
     SubscriptionId,
-    Result<UpdateReport, UpdateSubscriptionError>,
+    Result<(Subscription, UpdateReport), UpdateSubscriptionError>,
 );
 
 pub fn update_all(
@@ -118,13 +118,14 @@ pub fn commit_subscription_update(
     requested: &Subscription,
     parsed: Parsed,
     now_unix: u64,
-) -> Result<UpdateReport, CommitUpdateError> {
+) -> Result<(Subscription, UpdateReport), CommitUpdateError> {
     store.modify(|config| {
-        let current = config
+        let index = config
             .subscriptions
             .iter()
-            .find(|subscription| subscription.id == requested.id)
+            .position(|subscription| subscription.id == requested.id)
             .ok_or(CommitUpdateError::SubscriptionNotFound)?;
+        let current = &config.subscriptions[index];
 
         if current.url != requested.url
             || current.user_agent != requested.user_agent
@@ -133,7 +134,8 @@ pub fn commit_subscription_update(
             return Err(CommitUpdateError::RequestSettingsChanged);
         }
 
-        Ok(apply_update(config, &requested.id, parsed, now_unix))
+        let report = apply_update(config, &requested.id, parsed, now_unix);
+        Ok((config.subscriptions[index].clone(), report))
     })
 }
 

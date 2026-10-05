@@ -169,6 +169,64 @@ mod tests {
     }
 
     #[test]
+    fn update_all_returns_replacement_subscription_after_id_reuse() {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let other_store = Store::at(store.path().to_path_buf());
+        let replacement_url = "https://other.example.com/new-private-token?key=new-secret";
+
+        let mut initial = config(None);
+        let mut second = initial.subscriptions[0].clone();
+        second.id = SubscriptionId::new("2");
+        second.url = "https://other.example.com/old-private-token?key=old-secret".to_owned();
+        let mut replacement = second.clone();
+        replacement.name = "Replacement name".to_owned();
+        replacement.url = replacement_url.to_owned();
+        initial.subscriptions.push(second);
+        initialize(&store, initial);
+
+        let mut fetched_ids = Vec::new();
+        let results = crate::subscriptions::update_all_with(
+            &store,
+            crate::Timeouts::default(),
+            |subscription, _| {
+                fetched_ids.push(subscription.id.clone());
+                if subscription.id == SubscriptionId::new("1") {
+                    crate::remove_subscription(&other_store, &SubscriptionId::new("2")).unwrap();
+                    let (added, _) =
+                        crate::add_subscription(&other_store, replacement.clone(), parsed(), 20)
+                            .unwrap();
+                    assert_eq!(added.id, SubscriptionId::new("2"));
+                    Ok(parsed())
+                } else {
+                    assert_eq!(subscription.id, SubscriptionId::new("2"));
+                    assert_eq!(subscription.url, replacement_url);
+                    let mut response = parsed();
+                    response.meta.notices = vec![format!("Visit {replacement_url}")];
+                    Ok(response)
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            fetched_ids,
+            vec![SubscriptionId::new("1"), SubscriptionId::new("2")]
+        );
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[1].0, SubscriptionId::new("2"));
+        let (subscription, report) = results[1].1.as_ref().unwrap();
+        assert_eq!(subscription.name, "Replacement name");
+        assert_eq!(subscription.url, replacement_url);
+        assert_eq!(*subscription, store.load().unwrap().subscriptions[1]);
+        let notice = &report.notices[0];
+        assert_eq!(notice, &format!("Visit {replacement_url}"));
+        let safe_notice = crate::provider_text(notice, &subscription.url);
+        assert!(!safe_notice.contains("/new-private-token"));
+        assert!(!safe_notice.contains("new-secret"));
+    }
+
+    #[test]
     fn commit_preserves_selection_and_preferences_changed_during_fetch() {
         let directory = TestDirectory::new();
         let store = directory.store();
@@ -185,9 +243,11 @@ mod tests {
             .unwrap();
         let before = store.load().unwrap();
 
-        let report = commit_subscription_update(&store, &requested, parsed(), 42).unwrap();
+        let (subscription, report) =
+            commit_subscription_update(&store, &requested, parsed(), 42).unwrap();
         let saved = store.load().unwrap();
 
+        assert_eq!(subscription, saved.subscriptions[0]);
         assert_eq!(saved.active, before.active);
         assert_eq!(saved.rule_sets, before.rule_sets);
         assert_eq!(saved.active_rule_set, before.active_rule_set);
