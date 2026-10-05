@@ -183,7 +183,7 @@ fn fetch_and_parse_errors_preserve_disk_and_snapshot() {
             },
         );
 
-        assert!(matches!(result, Err(UpdateSubscriptionError::Fetch(_))));
+        assert!(matches!(result, Err(UpdateSubscriptionError::Fetch { .. })));
         assert_eq!(calls, 1);
         assert_eq!(snapshot, original);
         assert_eq!(store.load().unwrap(), original);
@@ -243,7 +243,10 @@ fn failed_subscription_does_not_prevent_a_later_successful_commit() {
     assert_eq!(results[0].0, SubscriptionId::new("1"));
     assert!(matches!(
         &results[0].1,
-        Err(UpdateSubscriptionError::Fetch(FetchError::AccessDenied))
+        Err(UpdateSubscriptionError::Fetch {
+            source: FetchError::AccessDenied,
+            ..
+        })
     ));
     assert_eq!(results[1].0, SubscriptionId::new("2"));
     let report = results[1].1.as_ref().unwrap();
@@ -278,4 +281,46 @@ fn unknown_update_target_does_not_create_configuration() {
     assert_eq!(store.load().unwrap(), AppConfig::default());
     assert!(!path.exists());
     assert!(!directory.0.join("config.json.tmp").exists());
+}
+
+#[test]
+fn update_error_display_preserves_details_and_redacts_requested_url() {
+    let directory = TestDirectory::new();
+    let path = directory.config_path();
+    let store = Store::at(&path);
+    let config = test_config();
+    save_config(&path, &config).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let requested_url = config.subscriptions[0].url.clone();
+
+    let error = update_subscription_with(
+        &store,
+        &SubscriptionId::new("1"),
+        Timeouts::default(),
+        &mut |_, _| {
+            Err(FetchError::Parse(ParseError::DeviceLimit {
+                max_devices_reached: true,
+                not_supported: false,
+                announce: Some(format!("Visit {requested_url}")),
+            }))
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "device limit reached for this subscription; remove an old device in your provider's panel\n  announce: Visit https://sub.example.com/…"
+    );
+    assert!(!error.to_string().contains("private-token"));
+    assert!(matches!(
+        &error,
+        UpdateSubscriptionError::Fetch {
+            source: FetchError::Parse(ParseError::DeviceLimit {
+                max_devices_reached: true,
+                ..
+            }),
+            ..
+        }
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
 }

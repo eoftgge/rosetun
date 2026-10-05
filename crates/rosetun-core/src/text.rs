@@ -1,3 +1,6 @@
+use crate::FetchError;
+use rosetun_subscription::ParseError;
+
 pub fn terminal_text(input: &str) -> String {
     input
         .chars()
@@ -41,4 +44,41 @@ pub fn provider_text(text: &str, subscription_url: &str) -> String {
     }
 
     output
+}
+
+pub fn fetch_error_message(error: &FetchError, subscription_url: &str) -> String {
+    match error {
+        FetchError::Parse(ParseError::DeviceLimit {
+            max_devices_reached,
+            not_supported,
+            announce,
+        }) => {
+            let message = if *max_devices_reached {
+                "device limit reached for this subscription; remove an old device in your provider's panel"
+            } else if *not_supported {
+                "the panel did not accept this device ID"
+            } else {
+                "subscription access was refused by the device policy"
+            };
+
+            let mut output = message.to_owned();
+            if let Some(announce) = announce {
+                output.push_str("\n  announce: ");
+                output.push_str(&provider_text(announce, subscription_url));
+            }
+            output
+        }
+        FetchError::Parse(ParseError::NoUsableNodes { skipped, notices }) => {
+            let mut output = error.to_string();
+            for notice in notices {
+                output.push_str("\n  notice: ");
+                output.push_str(&provider_text(notice, subscription_url));
+            }
+            for (reason, count) in crate::group_skipped(skipped) {
+                output.push_str(&format!("\n  skipped {count}: {}", terminal_text(&reason)));
+            }
+            output
+        }
+        _ => terminal_text(&error.to_string()),
+    }
 }

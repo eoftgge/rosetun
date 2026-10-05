@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{Outbound, Subscription, SubscriptionId, TlsMode, Transport};
-use rosetun_core::{FetchError, Timeouts, provider_text, terminal_text};
-use rosetun_subscription::ParseError;
+use rosetun_core::{Timeouts, fetch_error_message, provider_text, terminal_text};
 
 use crate::subcommands::SubCommand;
 
@@ -136,12 +135,7 @@ fn update_subscriptions(id: Option<&str>) -> Result<(), String> {
         let report = match result {
             Ok(report) => report,
             Err(error) => {
-                let message = match &error {
-                    rosetun_core::UpdateSubscriptionError::Fetch(error) => {
-                        fetch_error_message(error, subscription_url)
-                    }
-                    _ => terminal_text(&error.to_string()),
-                };
+                let message = error.to_string();
                 eprintln!("{label}: {message}");
                 failed = true;
                 continue;
@@ -341,48 +335,11 @@ fn print_details(skipped: &BTreeMap<String, usize>, notices: &[String], subscrip
     }
 }
 
-fn fetch_error_message(error: &FetchError, subscription_url: &str) -> String {
-    match error {
-        FetchError::Parse(ParseError::DeviceLimit {
-            max_devices_reached,
-            not_supported,
-            announce,
-        }) => {
-            let message = if *max_devices_reached {
-                "device limit reached for this subscription; remove an old device in your provider's panel"
-            } else if *not_supported {
-                "the panel did not accept this device ID"
-            } else {
-                "subscription access was refused by the device policy"
-            };
-
-            let mut output = message.to_owned();
-            if let Some(announce) = announce {
-                output.push_str("\n  announce: ");
-                output.push_str(&provider_text(announce, subscription_url));
-            }
-            output
-        }
-        FetchError::Parse(ParseError::NoUsableNodes { skipped, notices }) => {
-            let mut output = error.to_string();
-            for notice in notices {
-                output.push_str("\n  notice: ");
-                output.push_str(&provider_text(notice, subscription_url));
-            }
-            for (reason, count) in rosetun_core::group_skipped(skipped) {
-                output.push_str(&format!("\n  skipped {count}: {}", terminal_text(&reason)));
-            }
-            output
-        }
-        _ => terminal_text(&error.to_string()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use rosetun_subscription::{SkipReason, Skipped};
-
     use super::*;
+    use rosetun_core::FetchError;
+    use rosetun_subscription::{ParseError, SkipReason, Skipped};
 
     #[test]
     fn generic_device_policy_refusal_has_a_message() {

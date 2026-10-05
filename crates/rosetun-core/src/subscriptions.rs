@@ -10,8 +10,12 @@ pub enum UpdateSubscriptionError {
     Store(#[from] StoreError),
     #[error("subscription does not exist")]
     NotFound,
-    #[error(transparent)]
-    Fetch(#[from] FetchError),
+    #[error("{message}")]
+    Fetch {
+        #[source]
+        source: FetchError,
+        message: String,
+    },
     #[error(
         "subscription request settings changed while the update was being fetched; retry the update"
     )]
@@ -51,7 +55,10 @@ fn update_subscription_with(
         .find(|subscription| &subscription.id == id)
         .ok_or(UpdateSubscriptionError::NotFound)?;
 
-    let parsed = fetch_subscription(requested, timeouts)?;
+    let parsed = fetch_subscription(requested, timeouts).map_err(|source| {
+        let message = crate::fetch_error_message(&source, &requested.url);
+        UpdateSubscriptionError::Fetch { source, message }
+    })?;
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
