@@ -111,6 +111,16 @@ pub fn set_default_target(
     })
 }
 
+fn same_matcher(a: &RuleMatcher, b: &RuleMatcher, names_ignore_case: bool) -> bool {
+    match (a, b) {
+        (
+            RuleMatcher::Process(ProcessMatch::Name(a)),
+            RuleMatcher::Process(ProcessMatch::Name(b)),
+        ) if names_ignore_case => a.to_lowercase() == b.to_lowercase(),
+        _ => a == b,
+    }
+}
+
 pub fn add_rule(
     store: &Store,
     set: &RuleSetId,
@@ -119,7 +129,11 @@ pub fn add_rule(
 ) -> Result<Rule, RuleSetError> {
     store.modify(|config| {
         let set = rule_set_mut(config, set)?;
-        if set.rules.iter().any(|rule| rule.matcher == matcher) {
+        if set
+            .rules
+            .iter()
+            .any(|rule| same_matcher(&rule.matcher, &matcher, cfg!(windows)))
+        {
             return Err(RuleSetError::DuplicateRule);
         }
 
@@ -288,6 +302,40 @@ pub fn rule_value_text(matcher: &RuleMatcher) -> String {
         RuleMatcher::Process(ProcessMatch::Name(name)) => name.clone(),
         RuleMatcher::Process(ProcessMatch::Path(path)) => path.to_string_lossy().into_owned(),
         RuleMatcher::IpCidr(cidr) => cidr.clone(),
+    }
+}
+
+#[cfg(test)]
+mod matcher_tests {
+    use super::*;
+
+    #[test]
+    fn process_names_match_without_case_only_when_requested() {
+        let upper = RuleMatcher::Process(ProcessMatch::Name("CURL.EXE".into()));
+        let lower = RuleMatcher::Process(ProcessMatch::Name("curl.exe".into()));
+        assert!(!same_matcher(&upper, &lower, false));
+        assert!(same_matcher(&upper, &lower, true));
+        assert!(same_matcher(&upper, &upper, false));
+        assert!(same_matcher(
+            &RuleMatcher::Process(ProcessMatch::Name("Программа.EXE".into())),
+            &RuleMatcher::Process(ProcessMatch::Name("программа.exe".into())),
+            true,
+        ));
+    }
+
+    #[test]
+    fn paths_and_other_matchers_keep_exact_equality() {
+        let upper = RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(r"C:\Apps\CURL.EXE")));
+        let lower = RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(r"C:\Apps\curl.exe")));
+        let name = RuleMatcher::Process(ProcessMatch::Name("CURL.EXE".into()));
+        let domain = RuleMatcher::Domain(DomainMatch::Exact("EXAMPLE.COM".into()));
+        let other_domain = RuleMatcher::Domain(DomainMatch::Exact("example.com".into()));
+        for ignore_case in [false, true] {
+            assert!(!same_matcher(&upper, &lower, ignore_case));
+            assert!(same_matcher(&upper, &upper, ignore_case));
+            assert!(!same_matcher(&name, &upper, ignore_case));
+            assert!(!same_matcher(&domain, &other_domain, ignore_case));
+        }
     }
 }
 
