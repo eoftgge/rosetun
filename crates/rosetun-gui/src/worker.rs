@@ -113,10 +113,9 @@ impl WorkerDispatcher {
                 .map_err(HelperCommandError::Store)
                 .and_then(|config| ConnectRequest::from_config(&config).map_err(Into::into))
                 .and_then(|request| with_helper(|client| client.connect_tunnel(request)));
-            if result.is_ok() {
-                tracing::info!("Connect command succeeded");
-            } else {
-                tracing::warn!("Connect command failed");
+            match &result {
+                Ok(()) => tracing::info!("Connect command succeeded"),
+                Err(error) => tracing::warn!(%error, "Connect command failed"),
             }
             publisher.complete(WorkerEvent::Connect(result));
         });
