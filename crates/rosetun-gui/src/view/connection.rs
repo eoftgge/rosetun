@@ -141,7 +141,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 ui.set_min_width(ui.available_width());
                 ui.colored_label(theme::TEXT_DIM, strings::PROTECTION);
                 ui.horizontal(|ui| {
+                    let text_width =
+                        ui.available_width() - theme::TOGGLE_SIZE.x - ui.spacing().item_spacing.x;
                     ui.vertical(|ui| {
+                        ui.set_max_width(text_width);
                         ui.label(strings::KILL_SWITCH);
                         ui.add(
                             egui::Label::new(

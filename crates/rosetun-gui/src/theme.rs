@@ -120,12 +120,14 @@ pub(crate) fn outline_button(
     ui.add_enabled(enabled, button)
 }
 
+pub(crate) const TOGGLE_SIZE: egui::Vec2 = egui::vec2(38.0, 22.0);
+
 /// An on/off switch in the brand colours. Returns a response that is
 /// `changed()` when the user flips it.
 pub(crate) fn toggle(ui: &mut egui::Ui, on: &mut bool, enabled: bool) -> egui::Response {
     let enabled = enabled && ui.is_enabled();
     let (rect, mut response) = ui.allocate_exact_size(
-        egui::vec2(38.0, 22.0),
+        TOGGLE_SIZE,
         if enabled {
             egui::Sense::click()
         } else {
@@ -179,13 +181,19 @@ fn toggled_value(on: bool, clicked: bool, enabled: bool) -> bool {
 pub(crate) fn dismissible_error(ui: &mut egui::Ui, message: &str) -> bool {
     card_frame()
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.colored_label(ERROR, crate::strings::ERROR_MARK);
-                ui.add(egui::Label::new(message).wrap());
-                ui.add_space(8.0);
-                ui.button(crate::strings::DISMISS).clicked()
-            })
-            .inner
+            egui::Sides::new()
+                .shrink_left()
+                .wrap()
+                .spacing(16.0)
+                .show(
+                    ui,
+                    |ui| {
+                        ui.colored_label(ERROR, crate::strings::ERROR_MARK);
+                        ui.add(egui::Label::new(message).wrap());
+                    },
+                    |ui| ui.button(crate::strings::DISMISS).clicked(),
+                )
+                .1
         })
         .inner
 }
