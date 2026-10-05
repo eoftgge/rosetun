@@ -406,8 +406,11 @@ fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
         }
     } else {
         let value = state.text(&rosetun_core::rule_value_text(&rule.matcher));
+        let tooltip = rosetun_core::rule_value_ascii(&rule.matcher)
+            .map(|ascii| format!("{value}\nStored as {ascii}"))
+            .unwrap_or_else(|| value.clone());
         ui.add(egui::Label::new(&value).truncate())
-            .on_hover_text(value);
+            .on_hover_text(tooltip);
     }
 }
 

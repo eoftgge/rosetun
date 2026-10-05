@@ -7,6 +7,7 @@ use crate::{strings, theme};
 
 const DIALOG_WIDTH: f32 = 640.0;
 const BODY_HEIGHT: f32 = 380.0;
+const BUTTON_ROW_HEIGHT: f32 = 40.0;
 const PROCESS_FOOTER_HEIGHT: f32 = 180.0;
 
 pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) {
@@ -59,6 +60,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                     egui::vec2(DIALOG_WIDTH, BODY_HEIGHT),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
+                        ui.set_min_size(egui::vec2(DIALOG_WIDTH, BODY_HEIGHT));
                         let valid = match dialog.kind {
                             RuleInputKind::Domain => domain_input(ui, dialog),
                             RuleInputKind::Process => process_input(ui, dialog, actions),
@@ -76,24 +78,29 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
             ui.add_space(18.0);
             ui.colored_label(theme::TEXT_DIM, strings::RULE_PRIORITY);
             ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if theme::button_fill(
-                    ui,
-                    if dialog.busy {
-                        strings::ADDING_RULE
-                    } else {
-                        strings::ADD_RULE
-                    },
-                    !dialog.busy && valid,
-                )
-                .clicked()
-                {
-                    actions.push(Action::SubmitAddRule);
-                }
-                if theme::outline_button(ui, strings::CANCEL, !dialog.busy).clicked() {
-                    actions.push(Action::CancelAddRule);
-                }
-            });
+            ui.allocate_ui_with_layout(
+                egui::vec2(DIALOG_WIDTH, BUTTON_ROW_HEIGHT),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.set_min_size(egui::vec2(DIALOG_WIDTH, BUTTON_ROW_HEIGHT));
+                    if theme::button_fill(
+                        ui,
+                        if dialog.busy {
+                            strings::ADDING_RULE
+                        } else {
+                            strings::ADD_RULE
+                        },
+                        !dialog.busy && valid,
+                    )
+                    .clicked()
+                    {
+                        actions.push(Action::SubmitAddRule);
+                    }
+                    if theme::outline_button(ui, strings::CANCEL, !dialog.busy).clicked() {
+                        actions.push(Action::CancelAddRule);
+                    }
+                },
+            );
         });
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAddRule);
@@ -120,15 +127,24 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     if !dialog.domain.trim().is_empty() {
         match &parsed {
             Ok(domain) => {
-                let preview = strings::will_match(&rosetun_core::rule_value_text(
-                    &RuleMatcher::Domain(domain.clone()),
-                ));
+                let matcher = RuleMatcher::Domain(domain.clone());
+                let preview = strings::will_match(&rosetun_core::rule_value_text(&matcher));
                 ui.add(
                     egui::Label::new(RichText::new(&preview).color(theme::ROSE_LIGHT)).truncate(),
                 )
-                .on_hover_text(preview)
+                .on_hover_text(preview);
+                if let Some(ascii) = rosetun_core::rule_value_ascii(&matcher) {
+                    let stored = format!("Stored as {ascii}");
+                    ui.add(
+                        egui::Label::new(RichText::new(&stored).small().color(theme::TEXT_DIM))
+                            .truncate(),
+                    )
+                    .on_hover_text(stored);
+                }
             }
-            Err(error) => ui.colored_label(theme::ERROR, error.to_string()),
+            Err(error) => {
+                ui.colored_label(theme::ERROR, error.to_string());
+            }
         };
     }
     parsed.is_ok()
