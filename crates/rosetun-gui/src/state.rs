@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use rosetun_config::{
-    AppConfig, ConnectionState, NodeId, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget,
-    Status, SubscriptionId,
+    AppConfig, ConnectionState, DnsSettings, LogLevel, NodeId, RuleId, RuleMatcher, RuleSet,
+    RuleSetId, RuleTarget, Status, SubscriptionId,
 };
 use rosetun_core::{AddFromUrlError, AddOptions, UpdateReport, UpdateSubscriptionError};
 use rosetun_ipc::ClientError;
@@ -21,6 +22,7 @@ pub(crate) struct Operations {
     pub(crate) rules: bool,
     pub(crate) rules_edit: bool,
     pub(crate) kill_switch: bool,
+    pub(crate) settings: bool,
     pub(crate) updating: BTreeSet<SubscriptionId>,
     pub(crate) update_all: bool,
     pub(crate) removing: bool,
@@ -64,6 +66,7 @@ pub(crate) enum Screen {
     #[default]
     Connection,
     Rules,
+    Settings,
 }
 
 pub(crate) enum NameDialogKind {
@@ -141,6 +144,30 @@ pub(crate) struct RuleScreen {
 }
 
 #[derive(Default)]
+pub(crate) struct SettingsScreen {
+    pub(crate) server: String,
+    pub(crate) server_name: String,
+    pub(crate) port: String,
+    pub(crate) path: String,
+    pub(crate) dirty: bool,
+    pub(crate) config_folder: Option<PathBuf>,
+    opened: bool,
+}
+
+impl SettingsScreen {
+    fn sync_dns(&mut self, dns: &DnsSettings) {
+        self.server = dns.server.to_string();
+        self.server_name = dns.server_name.clone();
+        self.port = dns.port.map_or_else(String::new, |port| port.to_string());
+        self.path = dns.path.clone().unwrap_or_default();
+    }
+
+    pub(crate) fn parsed_dns(&self) -> Result<DnsSettings, rosetun_core::DnsInputError> {
+        rosetun_core::parse_dns_input(&self.server, &self.server_name, &self.port, &self.path)
+    }
+}
+
+#[derive(Default)]
 pub(crate) struct State {
     pub(crate) config: AppConfig,
     pub(crate) config_ready: bool,
@@ -153,6 +180,7 @@ pub(crate) struct State {
     pub(crate) operation_error: Option<String>,
     pub(crate) screen: Screen,
     pub(crate) rule_screen: RuleScreen,
+    pub(crate) settings_screen: SettingsScreen,
     next_process_request: u64,
     pub(crate) expanded: BTreeSet<SubscriptionId>,
     pub(crate) outcomes: BTreeMap<SubscriptionId, UpdateOutcome>,
@@ -164,6 +192,13 @@ pub(crate) struct State {
 
 pub(crate) enum Action {
     ShowConnection,
+    OpenSettings,
+    SetInterfaceScale(u16),
+    SaveDns,
+    ResetDns,
+    SetEngineLogLevel(LogLevel),
+    #[cfg(windows)]
+    OpenConfigFolder,
     OpenRules,
     OpenActiveRules,
     ChooseRuleSet(RuleSetId),
@@ -211,6 +246,11 @@ pub(crate) enum Action {
 pub(crate) enum Job {
     Connect,
     Disconnect,
+    SetInterfaceScale(u16),
+    SetDns(DnsSettings),
+    SetEngineLogLevel(LogLevel),
+    #[cfg(windows)]
+    OpenConfigFolder(PathBuf),
     SelectNode(SubscriptionId, NodeId),
     SelectRuleSet(Option<RuleSetId>),
     CreateRuleSet(String),
@@ -224,7 +264,10 @@ pub(crate) enum Job {
     MoveRule(RuleSetId, RuleId, usize),
     RemoveRule(RuleSetId, RuleId),
     SetKillSwitch(bool),
-    Add { input: String, options: AddOptions },
+    Add {
+        input: String,
+        options: AddOptions,
+    },
     Update(SubscriptionId),
     UpdateAll,
     Remove(SubscriptionId),
@@ -280,6 +323,16 @@ impl State {
             && !self.operations.helper
     }
 
+    pub(crate) fn can_edit_settings(&self) -> bool {
+        self.config_ready && !self.operations.settings
+    }
+
+    fn start_settings(&mut self, job: Job) -> Option<Job> {
+        self.operations.settings = true;
+        self.operation_error = None;
+        Some(job)
+    }
+
     fn preferred_set(&self) -> Option<RuleSetId> {
         self.config
             .active_rules()
@@ -311,6 +364,9 @@ impl State {
                 self.config = config;
                 self.config_ready = true;
                 self.config_error = None;
+                if self.settings_screen.opened && !self.settings_screen.dirty {
+                    self.settings_screen.sync_dns(&self.config.settings.dns);
+                }
                 self.expanded
                     .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));
                 self.outcomes
@@ -424,6 +480,20 @@ impl State {
                 self.operations.kill_switch = false;
                 self.operation_error = result.err().map(|error| self.text(&error.to_string()));
             }
+            WorkerEvent::SetInterfaceScale(result) => self.finish_settings(result),
+            WorkerEvent::SetDns(result) => {
+                if result.is_ok() {
+                    self.settings_screen.dirty = false;
+                    self.settings_screen.sync_dns(&self.config.settings.dns);
+                }
+                self.finish_settings(result);
+            }
+            WorkerEvent::SetEngineLogLevel(result) => self.finish_settings(result),
+            #[cfg(windows)]
+            WorkerEvent::OpenConfigFolder(result) => {
+                self.operations.settings = false;
+                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+            }
             WorkerEvent::Add(result) => match result {
                 Ok((subscription, report)) => {
                     self.expanded.insert(subscription.id.clone());
@@ -496,6 +566,11 @@ impl State {
         Some(job)
     }
 
+    fn finish_settings(&mut self, result: Result<(), rosetun_core::SettingsError>) {
+        self.operations.settings = false;
+        self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+    }
+
     fn load_processes(&mut self) -> Option<Job> {
         let dialog = self.rule_screen.add.as_mut()?;
         if dialog.kind != RuleInputKind::Process || dialog.load_request.is_some() || dialog.busy {
@@ -533,6 +608,50 @@ impl State {
     pub(crate) fn act(&mut self, action: Action) -> Option<Job> {
         match action {
             Action::ShowConnection => self.screen = Screen::Connection,
+            Action::OpenSettings => {
+                if !self.settings_screen.opened {
+                    self.settings_screen.opened = true;
+                    if self.config_ready {
+                        self.settings_screen.sync_dns(&self.config.settings.dns);
+                    }
+                }
+                self.screen = Screen::Settings;
+            }
+            Action::SetInterfaceScale(percent) => {
+                if self.can_edit_settings()
+                    && self.config.interface.scale_percent != percent
+                    && rosetun_core::INTERFACE_SCALES.contains(&percent)
+                {
+                    return self.start_settings(Job::SetInterfaceScale(percent));
+                }
+            }
+            Action::SaveDns => {
+                if self.can_edit_settings()
+                    && let Ok(dns) = self.settings_screen.parsed_dns()
+                    && dns != self.config.settings.dns
+                {
+                    return self.start_settings(Job::SetDns(dns));
+                }
+            }
+            Action::ResetDns => {
+                if self.can_edit_settings() {
+                    self.settings_screen.sync_dns(&DnsSettings::default());
+                    self.settings_screen.dirty = true;
+                }
+            }
+            Action::SetEngineLogLevel(level) => {
+                if self.can_edit_settings() && self.config.settings.log_level != level {
+                    return self.start_settings(Job::SetEngineLogLevel(level));
+                }
+            }
+            #[cfg(windows)]
+            Action::OpenConfigFolder => {
+                if self.can_edit_settings()
+                    && let Some(folder) = &self.settings_screen.config_folder
+                {
+                    return self.start_settings(Job::OpenConfigFolder(folder.clone()));
+                }
+            }
             Action::OpenRules => {
                 if !self.rule_screen.opened {
                     self.rule_screen.selected_set = self.preferred_set();
@@ -1647,5 +1766,161 @@ mod tests {
         ));
         state.reduce(WorkerEvent::RemoveRule(Ok(())));
         assert!(state.rule_screen.delete.is_none());
+    }
+
+    #[test]
+    fn settings_dns_form_initializes_on_open_and_follows_clean_config() {
+        let mut state = State::default();
+        let mut config = AppConfig::default();
+        config.settings.dns =
+            rosetun_core::parse_dns_input("1.1.1.1", "cloudflare-dns.com", "8443", "/dns-query")
+                .unwrap();
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: config.clone(),
+        });
+        assert!(state.settings_screen.server.is_empty());
+        state.act(Action::OpenSettings);
+        assert_eq!(state.screen, Screen::Settings);
+        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        assert_eq!(state.settings_screen.server_name, "cloudflare-dns.com");
+        assert_eq!(state.settings_screen.port, "8443");
+        assert_eq!(state.settings_screen.path, "/dns-query");
+
+        config.settings.dns = DnsSettings::default();
+        state.reduce(WorkerEvent::Config {
+            generation: 2,
+            config,
+        });
+        assert_eq!(state.settings_screen.server, "8.8.8.8");
+        assert_eq!(state.settings_screen.server_name, "dns.google");
+        assert!(state.settings_screen.port.is_empty());
+        assert!(state.settings_screen.path.is_empty());
+    }
+
+    #[test]
+    fn settings_dns_form_preserves_unsaved_input_across_config_reloads() {
+        let mut state = State::default();
+        state.act(Action::OpenSettings);
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: AppConfig::default(),
+        });
+        assert_eq!(state.settings_screen.server, "8.8.8.8");
+        state.settings_screen.server = "1.1.1.1".into();
+        state.settings_screen.server_name = "cloudflare-dns.com".into();
+        state.settings_screen.dirty = true;
+        let mut config = AppConfig::default();
+        config.settings.kill_switch = true;
+        state.reduce(WorkerEvent::Config {
+            generation: 2,
+            config,
+        });
+        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        assert_eq!(state.settings_screen.server_name, "cloudflare-dns.com");
+        assert!(state.settings_screen.dirty);
+
+        let Some(Job::SetDns(dns)) = state.act(Action::SaveDns) else {
+            panic!("expected DNS save");
+        };
+        assert_eq!(dns.server_name, "cloudflare-dns.com");
+        assert!(state.operations.settings);
+        assert!(state.act(Action::ResetDns).is_none());
+        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        let mut config = state.config.clone();
+        config.settings.dns = dns;
+        state.reduce(WorkerEvent::Config {
+            generation: 3,
+            config,
+        });
+        assert!(state.settings_screen.dirty);
+        state.reduce(WorkerEvent::SetDns(Ok(())));
+        assert!(!state.operations.settings);
+        assert!(!state.settings_screen.dirty);
+        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        assert!(state.act(Action::SaveDns).is_none());
+    }
+
+    #[test]
+    fn settings_operations_clear_busy_and_report_errors() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        assert!(state.act(Action::SetInterfaceScale(95)).is_none());
+        assert!(state.act(Action::SetInterfaceScale(100)).is_none());
+        assert!(matches!(
+            state.act(Action::SetInterfaceScale(125)),
+            Some(Job::SetInterfaceScale(125))
+        ));
+        assert!(state.operations.settings);
+        assert!(
+            state
+                .act(Action::SetEngineLogLevel(LogLevel::Debug))
+                .is_none()
+        );
+        state.reduce(WorkerEvent::SetInterfaceScale(Err(
+            rosetun_core::SettingsError::UnsupportedScale,
+        )));
+        assert!(!state.operations.settings);
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("unsupported interface scale")
+        );
+
+        assert!(matches!(
+            state.act(Action::SetEngineLogLevel(LogLevel::Debug)),
+            Some(Job::SetEngineLogLevel(LogLevel::Debug))
+        ));
+        state.reduce(WorkerEvent::SetEngineLogLevel(Err(
+            rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
+        )));
+        assert!(!state.operations.settings);
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("could not determine the configuration directory")
+        );
+
+        state.act(Action::OpenSettings);
+        state.act(Action::ResetDns);
+        assert!(state.settings_screen.dirty);
+        state.settings_screen.server = "bad".into();
+        assert!(state.act(Action::SaveDns).is_none());
+        state.settings_screen.server = "1.1.1.1".into();
+        assert!(matches!(state.act(Action::SaveDns), Some(Job::SetDns(_))));
+        state.reduce(WorkerEvent::SetDns(Err(
+            rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
+        )));
+        assert!(!state.operations.settings);
+        assert!(state.settings_screen.dirty);
+        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("could not determine the configuration directory")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn folder_launch_uses_the_worker_and_reports_failures() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        state.settings_screen.config_folder = Some(PathBuf::from("C:\\Users\\Test\\Rosetun"));
+        assert!(matches!(
+            state.act(Action::OpenConfigFolder),
+            Some(Job::OpenConfigFolder(_))
+        ));
+        assert!(state.operations.settings);
+        state.reduce(WorkerEvent::OpenConfigFolder(Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "explorer unavailable",
+        ))));
+        assert!(!state.operations.settings);
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("explorer unavailable")
+        );
     }
 }

@@ -2,6 +2,7 @@ pub(crate) mod add_rule;
 pub(crate) mod add_subscription;
 pub(crate) mod connection;
 pub(crate) mod rules;
+pub(crate) mod settings;
 pub(crate) mod subscriptions;
 
 use eframe::egui::{self, RichText, Stroke};
@@ -32,8 +33,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                 } else if ui.button(strings::RULES).clicked() {
                     actions.push(Action::OpenRules);
                 }
-                ui.add_enabled(false, egui::Button::new(strings::SETTINGS).frame(false))
-                    .on_disabled_hover_text(strings::COMING_LATER);
+                if state.screen == Screen::Settings {
+                    ui.colored_label(theme::ROSE_LIGHT, strings::SETTINGS);
+                } else if ui.button(strings::SETTINGS).clicked() {
+                    actions.push(Action::OpenSettings);
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if !state.helper_available {
                         ui.colored_label(theme::ERROR, strings::HELPER_UNAVAILABLE);
@@ -81,6 +85,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                     match state.screen {
                         Screen::Connection => connection::show(ui, state, &mut actions),
                         Screen::Rules => rules::show(ui, state, &mut actions),
+                        Screen::Settings => settings::show(ui, state, &mut actions),
                     }
                 });
         });

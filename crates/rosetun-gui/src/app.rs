@@ -12,17 +12,21 @@ pub(crate) struct App {
     state: State,
     events: Receiver<WorkerEvent>,
     workers: WorkerDispatcher,
+    applied_scale: Option<u16>,
 }
 
 impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>, store: Store) -> Self {
         theme::apply(&cc.egui_ctx);
         let (tx, events) = mpsc::channel();
+        let mut state = State::default();
+        state.settings_screen.config_folder = store.path().parent().map(|path| path.to_owned());
         let workers = worker::start(store, tx, cc.egui_ctx.clone());
         Self {
-            state: State::default(),
+            state,
             events,
             workers,
+            applied_scale: None,
         }
     }
 
@@ -30,6 +34,11 @@ impl App {
         match job {
             Job::Connect => self.workers.connect(),
             Job::Disconnect => self.workers.disconnect(),
+            Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
+            Job::SetDns(dns) => self.workers.set_dns(dns),
+            Job::SetEngineLogLevel(level) => self.workers.set_engine_log_level(level),
+            #[cfg(windows)]
+            Job::OpenConfigFolder(folder) => self.workers.open_config_folder(folder),
             Job::SelectNode(subscription, node) => self.workers.select_node(subscription, node),
             Job::SelectRuleSet(id) => self.workers.select_rule_set(id),
             Job::CreateRuleSet(name) => self.workers.create_rule_set(name),
@@ -56,10 +65,23 @@ impl App {
     }
 }
 
+fn next_scale(applied: Option<u16>, configured: u16) -> Option<u16> {
+    (applied != Some(configured)).then_some(configured)
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         while let Ok(event) = self.events.try_recv() {
             self.state.reduce(event);
+        }
+        if self.state.config_ready
+            && let Some(percent) = next_scale(
+                self.applied_scale,
+                self.state.config.interface.scale_percent,
+            )
+        {
+            ui.ctx().set_zoom_factor(f32::from(percent) / 100.0);
+            self.applied_scale = Some(percent);
         }
         let actions = view::show(ui, &mut self.state);
         if !actions.is_empty() {
@@ -71,5 +93,18 @@ impl eframe::App for App {
             }
         }
         ui.ctx().request_repaint_after(Duration::from_secs(1));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_scale;
+
+    #[test]
+    fn scale_applies_on_first_config_and_on_change_only() {
+        assert_eq!(next_scale(None, 100), Some(100));
+        assert_eq!(next_scale(Some(100), 100), None);
+        assert_eq!(next_scale(Some(100), 125), Some(125));
+        assert_eq!(next_scale(Some(125), 125), None);
     }
 }

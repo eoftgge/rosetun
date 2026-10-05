@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .write(true)
                     .create(true)
                     .truncate(true)
-                    .open(directory.join("rosetun-gui.log"))
+                    .open(directory.join(strings::LOG_FILE_NAME))
             })
             .ok()
     });

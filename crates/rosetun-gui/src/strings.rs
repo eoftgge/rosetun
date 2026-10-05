@@ -3,7 +3,33 @@ pub(crate) const BRAND: &str = "ROSETUN";
 pub(crate) const CONNECTION: &str = "Connection";
 pub(crate) const RULES: &str = "Rules";
 pub(crate) const SETTINGS: &str = "Settings";
-pub(crate) const COMING_LATER: &str = "Coming later";
+pub(crate) const INTERFACE: &str = "Interface";
+pub(crate) const SCALE: &str = "Scale";
+pub(crate) const ZOOM_HINT: &str = "Ctrl+Plus and Ctrl+Minus zoom until the app closes.";
+pub(crate) const DNS_THROUGH_TUNNEL: &str = "DNS through the tunnel";
+pub(crate) const DNS_EXPLANATION: &str = "Name lookups go to this DNS-over-HTTPS resolver through the server. It must be reachable from the server's exit.";
+pub(crate) const RESOLVER_IP: &str = "Resolver IP";
+pub(crate) const TLS_NAME: &str = "TLS name";
+pub(crate) const PORT: &str = "Port";
+pub(crate) const PORT_PLACEHOLDER: &str = "443";
+pub(crate) const DNS_PATH: &str = "Path";
+pub(crate) const DNS_PATH_PLACEHOLDER: &str = "/dns-query";
+pub(crate) const SAVE: &str = "Save";
+pub(crate) const RESET_TO_DEFAULT: &str = "Reset to default";
+pub(crate) const ENGINE_LOG: &str = "Engine log";
+pub(crate) const ENGINE_LOG_DETAIL: &str =
+    "Detail of the sing-box log the helper writes. Applies on next connect.";
+pub(crate) const LOG_ERROR: &str = "Error";
+pub(crate) const LOG_WARN: &str = "Warn";
+pub(crate) const LOG_INFO: &str = "Info";
+pub(crate) const LOG_DEBUG: &str = "Debug";
+pub(crate) const LOG_TRACE: &str = "Trace";
+pub(crate) const ABOUT: &str = "About";
+pub(crate) const HELPER_NOT_RUNNING: &str = "Helper not running";
+pub(crate) const CONFIGURATION_FOLDER: &str = "Configuration folder";
+pub(crate) const LOG_FILE: &str = "Log file";
+pub(crate) const LOG_FILE_NAME: &str = "rosetun-gui.log";
+pub(crate) const OPEN_FOLDER: &str = "Open folder";
 pub(crate) const CONNECT: &str = "Connect";
 pub(crate) const DISCONNECT: &str = "Disconnect";
 pub(crate) const RETRY: &str = "Retry";
@@ -138,6 +164,14 @@ pub(crate) const MATCH_BY_FULL_PATH: &str = "Match by full path";
 pub(crate) const RULE_PRIORITY: &str = "New rule goes to the top of the list — highest priority.";
 pub(crate) const ADD_RULE: &str = "Add rule";
 pub(crate) const ADDING_RULE: &str = "Adding rule…";
+
+pub(crate) fn app_version() -> String {
+    format!("Rosetun {}", env!("CARGO_PKG_VERSION"))
+}
+
+pub(crate) fn scale(percent: u16) -> String {
+    format!("{percent}%")
+}
 
 pub(crate) fn running_processes(count: usize) -> String {
     format!("Running processes · {count}")

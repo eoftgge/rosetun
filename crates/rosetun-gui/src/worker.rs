@@ -1,21 +1,27 @@
 use std::fs;
 use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
+#[cfg(windows)]
+use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc::Sender};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, NodeId, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status,
-    Subscription, SubscriptionId,
+    AppConfig, DnsSettings, LogLevel, NodeId, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
+    RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, MoveSubscriptionError, RemoveSubscriptionError, RuleSetError,
-    SelectNodeError, SelectRuleSetError, Store, StoreError, SubscriptionUpdateResult, Timeouts,
-    UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule, create_rule_set,
-    delete_rule_set, move_rule, move_subscription, prepare_subscription, remove_rule,
-    remove_subscription, rename_rule_set, select_node, select_rule_set, set_default_target,
-    set_kill_switch, set_rule_enabled, set_rule_target, update_all, update_subscription,
+    SelectNodeError, SelectRuleSetError, SettingsError, Store, StoreError,
+    SubscriptionUpdateResult, Timeouts, UpdateReport, UpdateSubscriptionError,
+    add_prepared_subscription, add_rule, create_rule_set, delete_rule_set, move_rule,
+    move_subscription, prepare_subscription, remove_rule, remove_subscription, rename_rule_set,
+    select_node, select_rule_set, set_default_target, set_dns, set_engine_log_level,
+    set_interface_scale, set_kill_switch, set_rule_enabled, set_rule_target, update_all,
+    update_subscription,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
@@ -53,6 +59,11 @@ pub(crate) enum WorkerEvent {
     Status(Status),
     Connect(Result<(), HelperCommandError>),
     Disconnect(Result<(), HelperCommandError>),
+    SetInterfaceScale(Result<(), SettingsError>),
+    SetDns(Result<(), SettingsError>),
+    SetEngineLogLevel(Result<(), SettingsError>),
+    #[cfg(windows)]
+    OpenConfigFolder(Result<(), std::io::Error>),
     SelectNode(Result<String, SelectNodeError>),
     SelectRuleSet(Result<(), SelectRuleSetError>),
     CreateRuleSet(Result<RuleSet, RuleSetError>),
@@ -154,6 +165,43 @@ impl WorkerDispatcher {
                 &publisher.tx,
                 &publisher.repaint,
                 WorkerEvent::Disconnect(result),
+            );
+        });
+    }
+
+    pub(crate) fn set_interface_scale(&self, percent: u16) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = set_interface_scale(&publisher.store, percent);
+            publisher.complete(WorkerEvent::SetInterfaceScale(result));
+        });
+    }
+
+    pub(crate) fn set_dns(&self, dns: DnsSettings) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = set_dns(&publisher.store, dns);
+            publisher.complete(WorkerEvent::SetDns(result));
+        });
+    }
+
+    pub(crate) fn set_engine_log_level(&self, level: LogLevel) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = set_engine_log_level(&publisher.store, level);
+            publisher.complete(WorkerEvent::SetEngineLogLevel(result));
+        });
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn open_config_folder(&self, folder: PathBuf) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = Command::new("explorer.exe").arg(folder).spawn().map(|_| ());
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::OpenConfigFolder(result),
             );
         });
     }
