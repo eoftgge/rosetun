@@ -126,10 +126,9 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             tracing::info!("Disconnect command started");
             let result = with_helper(|client| client.disconnect_tunnel());
-            if result.is_ok() {
-                tracing::info!("Disconnect command succeeded");
-            } else {
-                tracing::warn!("Disconnect command failed");
+            match &result {
+                Ok(()) => tracing::info!("Connect command succeeded"),
+                Err(error) => tracing::warn!(%error, "Connect command failed"),
             }
             emit(
                 &publisher.tx,
