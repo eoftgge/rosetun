@@ -36,6 +36,9 @@ pub(crate) struct App {
 impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>, store: Store) -> Self {
         theme::apply(&cc.egui_ctx);
+        let applied_scale = initial_scale(&store);
+        cc.egui_ctx
+            .set_zoom_factor(f32::from(applied_scale) / 100.0);
         let (tx, events) = mpsc::channel();
         let mut state = State::default();
         state.settings_screen.config_folder = store.path().parent().map(|path| path.to_owned());
@@ -44,7 +47,7 @@ impl App {
             state,
             events,
             workers,
-            applied_scale: None,
+            applied_scale: Some(applied_scale),
             #[cfg(windows)]
             shell_events: None,
             #[cfg(windows)]
@@ -132,13 +135,24 @@ impl App {
     }
 }
 
-fn next_scale(applied: Option<u16>, configured: u16) -> Option<u16> {
+fn initial_scale(store: &Store) -> u16 {
+    store.load().map_or_else(
+        |_| rosetun_config::InterfaceSettings::default().scale_percent,
+        |config| supported_scale(config.interface.scale_percent),
+    )
+}
+
+fn supported_scale(configured: u16) -> u16 {
     // The file can be edited by hand; an unknown scale must not make the window unusable.
-    let percent = if rosetun_core::INTERFACE_SCALES.contains(&configured) {
+    if rosetun_core::INTERFACE_SCALES.contains(&configured) {
         configured
     } else {
         rosetun_config::InterfaceSettings::default().scale_percent
-    };
+    }
+}
+
+fn next_scale(applied: Option<u16>, configured: u16) -> Option<u16> {
+    let percent = supported_scale(configured);
     (applied != Some(percent)).then_some(percent)
 }
 
@@ -206,7 +220,9 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod tests {
-    use super::next_scale;
+    use super::{initial_scale, next_scale};
+    use rosetun_core::Store;
+    use std::fs;
 
     #[test]
     fn scale_applies_on_first_config_and_on_change_only() {
@@ -221,5 +237,25 @@ mod tests {
         assert_eq!(next_scale(None, 1000), Some(100));
         assert_eq!(next_scale(Some(100), 0), None);
         assert_eq!(next_scale(Some(125), 95), Some(100));
+    }
+
+    #[test]
+    fn initial_scale_uses_saved_value_before_config_event() {
+        let path =
+            std::env::temp_dir().join(format!("rosetun-gui-initial-scale-{}", std::process::id()));
+        let store = Store::at(&path);
+        assert_eq!(initial_scale(&store), 100);
+
+        fs::write(&path, r#"{"interface":{"scale_percent":125}}"#).unwrap();
+        let applied = initial_scale(&store);
+        assert_eq!(applied, 125);
+        assert_eq!(next_scale(Some(applied), 125), None);
+        assert_eq!(next_scale(Some(applied), 100), Some(100));
+
+        fs::write(&path, r#"{"interface":{"scale_percent":1000}}"#).unwrap();
+        assert_eq!(initial_scale(&store), 100);
+        fs::write(&path, "{invalid").unwrap();
+        assert_eq!(initial_scale(&store), 100);
+        fs::remove_file(path).unwrap();
     }
 }
