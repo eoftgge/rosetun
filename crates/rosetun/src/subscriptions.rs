@@ -112,6 +112,31 @@ fn add(
     Ok(())
 }
 
+fn commit_update(
+    path: &std::path::Path,
+    config: &mut AppConfig,
+    id: &SubscriptionId,
+    fetched: Result<rosetun_subscription::Parsed, FetchError>,
+    now: u64,
+) -> Result<update::UpdateReport, String> {
+    let parsed = fetched.map_err(|error| fetch_error_message(&error))?;
+    if !config
+        .subscriptions
+        .iter()
+        .any(|subscription| &subscription.id == id)
+    {
+        return Err("subscription does not exist".to_owned());
+    }
+
+    // Publish in-memory changes only after the replacement is persisted.
+    let mut candidate = config.clone();
+    let report = update::apply_update(&mut candidate, id, parsed, now);
+    store::save(path, &candidate).map_err(|error| error.to_string())?;
+    *config = candidate;
+
+    Ok(report)
+}
+
 fn update_subscriptions(id: Option<&str>) -> Result<(), String> {
     let path = store::config_path().map_err(|error| error.to_string())?;
     let mut config = store::load(&path).map_err(|error| error.to_string())?;
@@ -145,27 +170,16 @@ fn update_subscriptions(id: Option<&str>) -> Result<(), String> {
             terminal_text(&subscription.name)
         );
 
-        let parsed = match fetch::fetch(subscription, Timeouts::default()) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                eprintln!("{label}: {}", fetch_error_message(&error));
+        let fetched = fetch::fetch(subscription, Timeouts::default());
+        let now = now_unix()?;
+        let report = match commit_update(&path, &mut config, &id, fetched, now) {
+            Ok(report) => report,
+            Err(message) => {
+                eprintln!("{label}: {message}");
                 failed = true;
                 continue;
             }
         };
-
-        let now = now_unix()?;
-
-        // Stage the replacement so a failed save also leaves the in-memory
-        // configuration unchanged for subsequent subscriptions.
-        let mut candidate = config.clone();
-        let report = update::apply_update(&mut candidate, &id, parsed, now);
-        if let Err(error) = store::save(&path, &candidate) {
-            eprintln!("{label}: {error}");
-            failed = true;
-            continue;
-        }
-        config = candidate;
 
         println!(
             "{label}: updated; {} added, {} removed, {} retained",
@@ -377,7 +391,7 @@ fn fetch_error_message(error: &FetchError) -> String {
     }
 }
 
-fn terminal_text(input: &str) -> String {
+pub(crate) fn terminal_text(input: &str) -> String {
     let cleaned: String = input
         .chars()
         .map(|character| {
@@ -437,6 +451,267 @@ mod tests {
     use rosetun_subscription::{SkipReason, Skipped};
 
     use super::*;
+
+    static NEXT_DIRECTORY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    struct TestDirectory(std::path::PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            loop {
+                let sequence = NEXT_DIRECTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "rosetun-subscriptions-{}-{sequence}",
+                    std::process::id()
+                ));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => panic!("could not create test directory: {error}"),
+                }
+            }
+        }
+
+        fn config_path(&self) -> std::path::PathBuf {
+            self.0.join("config.json")
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_subscription(id: &str) -> Subscription {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": "Chosen name",
+            "url": format!("https://sub.example.com/private-token?id={id}"),
+            "nodes": [{
+                "id": "old",
+                "name": "Old node",
+                "server": "old.example.com",
+                "port": 443,
+                "outbound": {
+                    "trojan": {
+                        "password": "old-secret"
+                    }
+                }
+            }],
+            "updated_at_unix": 1
+        }))
+        .unwrap()
+    }
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            subscriptions: vec![test_subscription("1")],
+            active: Some(rosetun_config::Selection {
+                subscription: SubscriptionId::new("1"),
+                node: rosetun_config::NodeId::new("old"),
+            }),
+            ..AppConfig::default()
+        }
+    }
+
+    fn successful_update() -> rosetun_subscription::Parsed {
+        rosetun_subscription::parse(b"trojan://new-secret@new.example.com:443#New", &|name| {
+            match name {
+                "profile-title" => Some("Changed provider title".to_owned()),
+                "profile-update-interval" => Some("12".to_owned()),
+                "subscription-userinfo" => {
+                    Some("upload=10; download=20; total=100; expire=200".to_owned())
+                }
+                _ => None,
+            }
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn minimum_free_positive_id_is_allocated() {
+        let config = AppConfig {
+            subscriptions: vec![
+                test_subscription("3"),
+                test_subscription("1"),
+                test_subscription("01"),
+                test_subscription("legacy"),
+            ],
+            ..AppConfig::default()
+        };
+
+        assert_eq!(next_id(&config).unwrap(), SubscriptionId::new("2"));
+
+        let mut config = config;
+        config.subscriptions.push(test_subscription("2"));
+        assert_eq!(next_id(&config).unwrap(), SubscriptionId::new("4"));
+    }
+
+    #[test]
+    fn successful_update_is_persisted_and_dangling_selection_is_cleared() {
+        let directory = TestDirectory::new();
+        let path = directory.config_path();
+        let mut config = test_config();
+        store::save(&path, &config).unwrap();
+
+        let report = commit_update(
+            &path,
+            &mut config,
+            &SubscriptionId::new("1"),
+            Ok(successful_update()),
+            42,
+        )
+        .unwrap();
+
+        assert!(report.selection_cleared);
+        assert_eq!(report.added, 1);
+        assert_eq!(report.removed, 1);
+        assert_eq!(report.retained, 0);
+        assert!(config.active.is_none());
+
+        let saved = store::load(&path).unwrap();
+        assert_eq!(saved, config);
+        assert_eq!(saved.subscriptions[0].name, "Chosen name");
+        assert_eq!(saved.subscriptions[0].updated_at_unix, Some(42));
+        assert_eq!(saved.subscriptions[0].update_interval_hours, Some(12));
+        assert_eq!(saved.subscriptions[0].info.as_ref().unwrap().download, 20);
+        assert_eq!(saved.subscriptions[0].nodes[0].server, "new.example.com");
+    }
+
+    #[test]
+    fn fetch_and_parse_errors_preserve_disk_and_memory() {
+        let directory = TestDirectory::new();
+        let path = directory.config_path();
+        let original = test_config();
+        store::save(&path, &original).unwrap();
+        let original_bytes = std::fs::read(&path).unwrap();
+
+        let errors = [
+            FetchError::RequestFailed,
+            FetchError::ResponseTooLarge,
+            FetchError::AccessDenied,
+            FetchError::Parse(ParseError::DeviceLimit {
+                max_devices_reached: true,
+                not_supported: false,
+                announce: Some("Device limit reached".to_owned()),
+            }),
+            FetchError::Parse(ParseError::NoUsableNodes {
+                skipped: Vec::new(),
+                notices: vec!["Subscription expired".to_owned()],
+            }),
+        ];
+
+        for error in errors {
+            let mut config = original.clone();
+            assert!(
+                commit_update(
+                    &path,
+                    &mut config,
+                    &SubscriptionId::new("1"),
+                    Err(error),
+                    42,
+                )
+                .is_err()
+            );
+            assert_eq!(config, original);
+            assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+            assert!(!directory.0.join("config.json.tmp").exists());
+        }
+    }
+
+    #[test]
+    fn failed_save_preserves_memory_and_previous_file() {
+        let directory = TestDirectory::new();
+        let path = directory.config_path();
+        let mut config = test_config();
+        store::save(&path, &config).unwrap();
+
+        let original = config.clone();
+        let original_bytes = std::fs::read(&path).unwrap();
+        std::fs::create_dir(directory.0.join("config.json.tmp")).unwrap();
+
+        assert!(
+            commit_update(
+                &path,
+                &mut config,
+                &SubscriptionId::new("1"),
+                Ok(successful_update()),
+                42,
+            )
+            .is_err()
+        );
+        assert_eq!(config, original);
+        assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn failed_subscription_does_not_prevent_a_later_successful_commit() {
+        let directory = TestDirectory::new();
+        let path = directory.config_path();
+        let mut config = test_config();
+        config.subscriptions.push(test_subscription("2"));
+        store::save(&path, &config).unwrap();
+        let first = config.subscriptions[0].clone();
+
+        assert!(
+            commit_update(
+                &path,
+                &mut config,
+                &SubscriptionId::new("1"),
+                Err(FetchError::AccessDenied),
+                42,
+            )
+            .is_err()
+        );
+        commit_update(
+            &path,
+            &mut config,
+            &SubscriptionId::new("2"),
+            Ok(successful_update()),
+            43,
+        )
+        .unwrap();
+
+        assert_eq!(config.subscriptions[0], first);
+        assert_eq!(config.subscriptions[1].updated_at_unix, Some(43));
+        assert_eq!(store::load(&path).unwrap(), config);
+        assert!(config.active.is_some());
+    }
+
+    #[test]
+    fn unknown_update_target_does_not_create_configuration() {
+        let directory = TestDirectory::new();
+        let path = directory.config_path();
+        let mut config = AppConfig::default();
+
+        assert!(
+            commit_update(
+                &path,
+                &mut config,
+                &SubscriptionId::new("missing"),
+                Ok(successful_update()),
+                42,
+            )
+            .is_err()
+        );
+        assert_eq!(config, AppConfig::default());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn generic_device_policy_refusal_has_a_message() {
+        let error = FetchError::Parse(ParseError::DeviceLimit {
+            max_devices_reached: false,
+            not_supported: false,
+            announce: None,
+        });
+
+        assert_eq!(
+            fetch_error_message(&error),
+            "subscription access was refused by the device policy"
+        );
+    }
 
     #[test]
     fn terminal_text_removes_controls_and_bidi_markers() {

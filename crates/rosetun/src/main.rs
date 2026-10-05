@@ -191,10 +191,10 @@ fn select_node(subscription_id: &str, node_id: &str) -> Result<(), String> {
         .subscriptions
         .iter()
         .find(|subscription| subscription.id == subscription_id)
-        .ok_or_else(|| format!("subscription {subscription_id} does not exist"))?;
+        .ok_or_else(|| "subscription does not exist".to_owned())?;
     let node_name = subscription
         .node(&node_id)
-        .ok_or_else(|| format!("node {node_id} is not in subscription {subscription_id}"))?
+        .ok_or_else(|| "node is not in the specified subscription".to_owned())?
         .name
         .clone();
 
@@ -204,7 +204,10 @@ fn select_node(subscription_id: &str, node_id: &str) -> Result<(), String> {
     });
 
     store::save(&path, &config).map_err(|error| error.to_string())?;
-    println!("selected node: {node_name}");
+    println!(
+        "selected node: {}",
+        subscriptions::terminal_text(&node_name)
+    );
 
     Ok(())
 }
@@ -239,17 +242,32 @@ fn print_config() -> Result<(), String> {
 
     match config.active_node() {
         Some((subscription, node)) => {
-            println!("active subscription: {}", subscription.id);
-            println!("active node id: {}", node.id);
-            println!("active node name: {}", node.name);
+            println!(
+                "active subscription: {}",
+                subscriptions::terminal_text(subscription.id.as_str())
+            );
+            println!(
+                "active node id: {}",
+                subscriptions::terminal_text(node.id.as_str())
+            );
+            println!(
+                "active node name: {}",
+                subscriptions::terminal_text(&node.name)
+            );
         }
         None => println!("active node: none"),
     }
 
     match config.active_rules() {
         Some(rule_set) => {
-            println!("active rule set id: {}", rule_set.id);
-            println!("active rule set name: {}", rule_set.name);
+            println!(
+                "active rule set id: {}",
+                subscriptions::terminal_text(rule_set.id.as_str())
+            );
+            println!(
+                "active rule set name: {}",
+                subscriptions::terminal_text(&rule_set.name)
+            );
         }
         None => println!("active rule set: none (connect uses Default, proxy)"),
     }
@@ -399,10 +417,7 @@ mod tests {
 
     #[test]
     fn unknown_commands_are_rejected() {
-        assert_eq!(
-            parse(&["unknown"]),
-            Err("unknown command".to_owned())
-        );
+        assert_eq!(parse(&["unknown"]), Err("unknown command".to_owned()));
         assert_eq!(
             parse(&["unknown", "extra"]),
             Err("unknown command".to_owned())
