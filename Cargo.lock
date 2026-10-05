@@ -2652,6 +2652,7 @@ dependencies = [
  "rosetun-config",
  "rosetun-core",
  "rosetun-ipc",
+ "rosetun-processes",
  "thiserror 2.0.20",
  "tracing",
  "tracing-subscriber",

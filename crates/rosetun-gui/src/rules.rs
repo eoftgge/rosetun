@@ -1,4 +1,79 @@
-use rosetun_config::{DomainMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
+use rosetun_processes::RunningProcess;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProcessGroup {
+    pub(crate) name: String,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) count: usize,
+}
+
+pub(crate) fn group_processes(processes: Vec<RunningProcess>) -> Vec<ProcessGroup> {
+    let mut groups = BTreeMap::<(bool, String), ProcessGroup>::new();
+    for process in processes {
+        let key = match &process.path {
+            Some(path) => (true, path.to_string_lossy().to_lowercase()),
+            None => (false, process.name.to_lowercase()),
+        };
+        groups
+            .entry(key)
+            .and_modify(|group| group.count += 1)
+            .or_insert(ProcessGroup {
+                name: process.name,
+                path: process.path,
+                count: 1,
+            });
+    }
+    let mut groups: Vec<_> = groups.into_values().collect();
+    groups.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    groups
+}
+
+pub(crate) fn process_matches_filter(process: &ProcessGroup, filter: &str) -> bool {
+    let filter = filter.to_lowercase();
+    process.name.to_lowercase().contains(&filter)
+        || process
+            .path
+            .as_ref()
+            .is_some_and(|path| path.to_string_lossy().to_lowercase().contains(&filter))
+}
+
+pub(crate) fn different_process_case<'a>(
+    name: &str,
+    processes: &'a [ProcessGroup],
+) -> Option<&'a str> {
+    if processes.iter().any(|process| process.name == name) {
+        return None;
+    }
+    let lowercase = name.to_lowercase();
+    processes
+        .iter()
+        .find(|process| process.name.to_lowercase() == lowercase)
+        .map(|process| process.name.as_str())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ProcessMatchMode {
+    #[default]
+    Name,
+    Path,
+}
+
+pub(crate) fn update_process_match_mode(mode: &mut ProcessMatchMode, input: &str) {
+    match rosetun_core::parse_process_input(input) {
+        Ok(ProcessMatch::Path(_)) => *mode = ProcessMatchMode::Path,
+        Ok(ProcessMatch::Name(_)) => *mode = ProcessMatchMode::Name,
+        Err(_) => {}
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum TypeFilter {
@@ -129,6 +204,74 @@ mod tests {
             .into_iter()
             .map(|(index, _)| index)
             .collect()
+    }
+
+    fn process(pid: u32, name: &str, path: Option<&str>) -> RunningProcess {
+        RunningProcess {
+            pid,
+            name: name.into(),
+            path: path.map(PathBuf::from),
+        }
+    }
+
+    #[test]
+    fn processes_group_by_path_or_name_and_sort_case_insensitively() {
+        let groups = group_processes(vec![
+            process(10, "zeta.exe", Some(r"C:\Apps\zeta.exe")),
+            process(11, "Beta.exe", None),
+            process(12, "Alpha.exe", Some(r"C:\Apps\Alpha.exe")),
+            process(13, "alpha.exe", Some(r"c:\apps\alpha.exe")),
+            process(14, "beta.exe", None),
+            process(15, "Beta.exe", Some(r"C:\Apps\Beta.exe")),
+        ]);
+        assert_eq!(groups.len(), 4);
+        assert_eq!(groups[0].name, "Alpha.exe");
+        assert_eq!(groups[0].count, 2);
+        assert_eq!(groups[1].name, "Beta.exe");
+        assert_eq!(groups[1].count, 2);
+        assert!(groups[1].path.is_none());
+        assert_eq!(groups[2].name, "Beta.exe");
+        assert_eq!(groups[2].count, 1);
+        assert_eq!(groups[3].name, "zeta.exe");
+    }
+
+    #[test]
+    fn process_filter_searches_name_and_path_without_case() {
+        let group = group_processes(vec![process(
+            10,
+            "Telegram.exe",
+            Some(r"C:\Users\Test\Apps\Telegram.exe"),
+        )]);
+        assert!(process_matches_filter(&group[0], "TELEGRAM"));
+        assert!(process_matches_filter(&group[0], "users\\TEST"));
+        assert!(!process_matches_filter(&group[0], "firefox"));
+    }
+
+    #[test]
+    fn name_case_warning_only_for_running_name_with_different_case() {
+        let groups = group_processes(vec![process(10, "Telegram.exe", None)]);
+        assert_eq!(
+            different_process_case("telegram.exe", &groups),
+            Some("Telegram.exe")
+        );
+        assert_eq!(different_process_case("Telegram.exe", &groups), None);
+        assert_eq!(different_process_case("other.exe", &groups), None);
+        let groups = group_processes(vec![
+            process(10, "Telegram.exe", None),
+            process(11, "telegram.exe", Some(r"C:\Apps\telegram.exe")),
+        ]);
+        assert_eq!(different_process_case("telegram.exe", &groups), None);
+    }
+
+    #[test]
+    fn a_typed_path_switches_to_full_path_mode() {
+        let mut mode = ProcessMatchMode::Name;
+        update_process_match_mode(&mut mode, "curl.exe");
+        assert_eq!(mode, ProcessMatchMode::Name);
+        update_process_match_mode(&mut mode, r#""C:\Apps\curl.exe""#);
+        assert_eq!(mode, ProcessMatchMode::Path);
+        update_process_match_mode(&mut mode, "curl.exe");
+        assert_eq!(mode, ProcessMatchMode::Name);
     }
 
     #[test]

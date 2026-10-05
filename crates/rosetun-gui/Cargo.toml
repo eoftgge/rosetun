@@ -13,6 +13,7 @@ eframe.workspace = true
 rosetun-config.workspace = true
 rosetun-core.workspace = true
 rosetun-ipc.workspace = true
+rosetun-processes.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

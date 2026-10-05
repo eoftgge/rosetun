@@ -118,6 +118,42 @@ pub(crate) const DEFAULT_RULE_DETAIL: &str = "Default rule, cannot be removed.";
 pub(crate) const NO_RULE_SETS: &str = "No rule sets yet. Connections use Default · proxy all.";
 pub(crate) const NO_RULES_MATCH: &str = "No rules match the filter.";
 pub(crate) const RULES_NEXT_CONNECT: &str = "Changes apply on next connect.";
+pub(crate) const NEW_RULE_BUTTON: &str = "+ Rule";
+pub(crate) const NEW_RULE: &str = "New rule";
+pub(crate) const NEW_RULE_SUBTITLE: &str = "Applies to all subscriptions.";
+pub(crate) const DOMAIN_INPUT: &str = "Domain or pattern";
+pub(crate) const DOMAIN_PLACEHOLDER: &str = "example.com or *.example.com";
+pub(crate) const DOMAIN_HELP: &str =
+    "example.com — only this domain · *.example.com — the domain and its subdomains";
+pub(crate) const PROCESS_INPUT: &str = "Process name or full path to .exe";
+pub(crate) const PROCESS_PLACEHOLDER: &str = "app.exe or C:\\Apps\\app.exe";
+pub(crate) const PROCESS_FILTER: &str = "Filter by name or path";
+pub(crate) const REFRESH: &str = "Refresh";
+pub(crate) const LOADING_PROCESSES: &str = "Loading processes…";
+pub(crate) const NO_RUNNING_PROCESSES: &str = "No running processes found.";
+pub(crate) const NO_PROCESSES_MATCH: &str = "No processes match the filter.";
+pub(crate) const PATH_UNAVAILABLE: &str = "path unavailable";
+pub(crate) const MATCH_BY_NAME: &str = "Match by name";
+pub(crate) const MATCH_BY_FULL_PATH: &str = "Match by full path";
+pub(crate) const RULE_PRIORITY: &str = "New rule goes to the top of the list — highest priority.";
+pub(crate) const ADD_RULE: &str = "Add rule";
+pub(crate) const ADDING_RULE: &str = "Adding rule…";
+
+pub(crate) fn running_processes(count: usize) -> String {
+    format!("Running processes · {count}")
+}
+
+pub(crate) fn process_copies(name: &str, count: usize) -> String {
+    format!("{name} ×{count}")
+}
+
+pub(crate) fn will_match(value: &str) -> String {
+    format!("Will match: {value}")
+}
+
+pub(crate) fn process_case_warning(name: &str) -> String {
+    format!("The running program is named {name}. Use the same letter case.")
+}
 
 pub(crate) fn filter_count(label: &str, count: usize) -> String {
     format!("{label} {count}")

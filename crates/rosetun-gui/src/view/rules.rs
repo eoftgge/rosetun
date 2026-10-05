@@ -1,7 +1,5 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
-use rosetun_config::{
-    ConnectionState, DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget,
-};
+use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget};
 
 use crate::rules::{
     RuleFilter, TypeFilter, drop_target, reorder_arrows, rule_counts, visible_rules,
@@ -34,23 +32,21 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         .iter()
         .find(|item| state.rule_screen.selected_set.as_ref() == Some(&item.id))
     else {
+        theme::button_fill(ui, strings::NEW_RULE_BUTTON, false);
         return;
     };
-    if state.visible_status().is_some_and(|status| {
-        matches!(
-            status.state,
-            ConnectionState::Connected
-                | ConnectionState::Connecting
-                | ConnectionState::Reconnecting
-        )
-    }) && state.config.active_rule_set.as_ref() == Some(&set.id)
+    if state
+        .visible_status()
+        .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
+        && state.config.active_rule_set.as_ref() == Some(&set.id)
     {
         theme::card_frame().show(ui, |ui| {
             ui.colored_label(theme::ROSE_LIGHT, strings::RULES_NEXT_CONNECT);
         });
         ui.add_space(16.0);
     }
-    filter_controls(ui, &mut state.rule_screen.filter, set, actions);
+    let can_add = state.can_edit_rules();
+    filter_controls(ui, &mut state.rule_screen.filter, set, can_add, actions);
     ui.add_space(16.0);
     ui.colored_label(theme::TEXT_DIM, strings::ORDER_HINT);
     ui.add_space(8.0);
@@ -66,12 +62,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     } else {
         let value_width = (ui.available_width() - 550.0).max(140.0);
         table_header(ui, value_width);
-        for (index, rule) in visible {
-            ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
-                rule_row(ui, state, set, rule, index, value_width, actions);
-            });
-            ui.add_space(4.0);
-        }
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (index, rule) in visible {
+                ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
+                    rule_row(ui, state, set, rule, index, value_width, actions);
+                });
+            }
+        });
     }
     ui.add_space(12.0);
     default_rule(ui, state, set, actions);
@@ -117,6 +115,7 @@ fn filter_controls(
     ui: &mut egui::Ui,
     filter: &mut RuleFilter,
     set: &RuleSet,
+    can_add: bool,
     actions: &mut Vec<Action>,
 ) {
     ui.add(
@@ -155,6 +154,10 @@ fn filter_controls(
                 actions.push(Action::ToggleRuleTargetFilter(target));
             }
         }
+        ui.separator();
+        if theme::button_fill(ui, strings::NEW_RULE_BUTTON, can_add).clicked() {
+            actions.push(Action::OpenAddRule);
+        }
     });
 }
 
@@ -192,90 +195,95 @@ fn rule_row(
     } else if !rule.enabled {
         frame = frame.fill(theme::CARD.gamma_multiply(0.72));
     }
-    let response = frame
+    let response = egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(0, 2))
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            if dragged {
-                ui.multiply_opacity(0.5);
-            } else if !rule.enabled {
-                ui.multiply_opacity(0.7);
-            }
-            ui.horizontal_centered(|ui| {
-                if reorder {
-                    ui.dnd_drag_source(ui.id().with("handle"), rule.id.clone(), |ui| {
-                        ui.label(strings::DRAG_HANDLE);
-                    });
-                } else {
-                    ui.add_enabled(false, egui::Button::new(strings::DRAG_HANDLE).frame(false))
-                        .on_disabled_hover_text(strings::REORDER_DISABLED);
+            frame.show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                if dragged {
+                    ui.multiply_opacity(0.5);
+                } else if !rule.enabled {
+                    ui.multiply_opacity(0.7);
                 }
-                ui.add_sized([90.0, 22.0], egui::Label::new(rule_type(rule)));
-                ui.vertical(|ui| {
-                    ui.set_width(value_width);
-                    rule_value(ui, state, rule);
-                    if !rule.enabled {
-                        ui.colored_label(theme::TEXT_DIM, strings::RULE_DISABLED);
+                ui.horizontal_centered(|ui| {
+                    if reorder {
+                        ui.dnd_drag_source(ui.id().with("handle"), rule.id.clone(), |ui| {
+                            ui.label(strings::DRAG_HANDLE);
+                        });
+                    } else {
+                        ui.add_enabled(false, egui::Button::new(strings::DRAG_HANDLE).frame(false))
+                            .on_disabled_hover_text(strings::REORDER_DISABLED);
+                    }
+                    ui.add_sized([90.0, 22.0], egui::Label::new(rule_type(rule)));
+                    ui.vertical(|ui| {
+                        ui.set_width(value_width);
+                        rule_value(ui, state, rule);
+                        if !rule.enabled {
+                            ui.colored_label(theme::TEXT_DIM, strings::RULE_DISABLED);
+                        }
+                    });
+                    let mut target = rule.target;
+                    ui.add_enabled_ui(state.can_edit_rules(), |ui| {
+                        egui::ComboBox::from_id_salt("target")
+                            .selected_text(
+                                RichText::new(target_label(target)).color(target_color(target)),
+                            )
+                            .width(108.0)
+                            .show_ui(ui, |ui| {
+                                for value in
+                                    [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
+                                {
+                                    ui.selectable_value(
+                                        &mut target,
+                                        value,
+                                        RichText::new(target_label(value))
+                                            .color(target_color(value)),
+                                    );
+                                }
+                            });
+                    });
+                    if target != rule.target {
+                        actions.push(Action::SetRuleTarget(rule.id.clone(), target));
+                    }
+                    let mut enabled = rule.enabled;
+                    if ui
+                        .add_enabled(
+                            state.can_edit_rules(),
+                            egui::Checkbox::without_text(&mut enabled),
+                        )
+                        .changed()
+                    {
+                        actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
+                    }
+                    ui.add_space(27.0);
+                    let (up, down) = reorder_arrows(
+                        index,
+                        set.rules.len(),
+                        &state.rule_screen.filter,
+                        !state.can_edit_rules(),
+                    );
+                    if ui
+                        .add_enabled(up, egui::Button::new(strings::MOVE_UP))
+                        .clicked()
+                    {
+                        actions.push(Action::MoveRule(rule.id.clone(), index - 1));
+                    }
+                    if ui
+                        .add_enabled(down, egui::Button::new(strings::MOVE_DOWN))
+                        .clicked()
+                    {
+                        actions.push(Action::MoveRule(rule.id.clone(), index + 1));
+                    }
+                    if ui
+                        .add_enabled(
+                            state.can_edit_rules(),
+                            egui::Button::new(strings::REMOVE_RULE),
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::RequestDeleteRule(rule.id.clone()));
                     }
                 });
-                let mut target = rule.target;
-                ui.add_enabled_ui(state.can_edit_rules(), |ui| {
-                    egui::ComboBox::from_id_salt("target")
-                        .selected_text(
-                            RichText::new(target_label(target)).color(target_color(target)),
-                        )
-                        .width(108.0)
-                        .show_ui(ui, |ui| {
-                            for value in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
-                            {
-                                ui.selectable_value(
-                                    &mut target,
-                                    value,
-                                    RichText::new(target_label(value)).color(target_color(value)),
-                                );
-                            }
-                        });
-                });
-                if target != rule.target {
-                    actions.push(Action::SetRuleTarget(rule.id.clone(), target));
-                }
-                let mut enabled = rule.enabled;
-                if ui
-                    .add_enabled(
-                        state.can_edit_rules(),
-                        egui::Checkbox::without_text(&mut enabled),
-                    )
-                    .changed()
-                {
-                    actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
-                }
-                ui.add_space(27.0);
-                let (up, down) = reorder_arrows(
-                    index,
-                    set.rules.len(),
-                    &state.rule_screen.filter,
-                    !state.can_edit_rules(),
-                );
-                if ui
-                    .add_enabled(up, egui::Button::new(strings::MOVE_UP))
-                    .clicked()
-                {
-                    actions.push(Action::MoveRule(rule.id.clone(), index - 1));
-                }
-                if ui
-                    .add_enabled(down, egui::Button::new(strings::MOVE_DOWN))
-                    .clicked()
-                {
-                    actions.push(Action::MoveRule(rule.id.clone(), index + 1));
-                }
-                if ui
-                    .add_enabled(
-                        state.can_edit_rules(),
-                        egui::Button::new(strings::REMOVE_RULE),
-                    )
-                    .clicked()
-                {
-                    actions.push(Action::RequestDeleteRule(rule.id.clone()));
-                }
             });
         })
         .response;
@@ -287,22 +295,22 @@ fn rule_row(
     {
         let above = pointer.y < response.rect.center().y;
         let slot = index + usize::from(!above);
-        let y = if above {
-            response.rect.top()
-        } else {
-            response.rect.bottom()
-        };
-        ui.painter().line_segment(
-            [
-                egui::pos2(response.rect.left(), y),
-                egui::pos2(response.rect.right(), y),
-            ],
-            Stroke::new(2.0, theme::ROSE),
-        );
-        if let Some(payload) = response.dnd_release_payload::<RuleId>()
-            && drop_target(from, slot, set.rules.len()).is_some()
-        {
-            actions.push(Action::DropRule((*payload).clone(), slot));
+        if drop_target(from, slot, set.rules.len()).is_some() {
+            let y = if above {
+                response.rect.top()
+            } else {
+                response.rect.bottom()
+            };
+            ui.painter().line_segment(
+                [
+                    egui::pos2(response.rect.left(), y),
+                    egui::pos2(response.rect.right(), y),
+                ],
+                Stroke::new(2.0, theme::ROSE),
+            );
+            if let Some(payload) = response.dnd_release_payload::<RuleId>() {
+                actions.push(Action::DropRule((*payload).clone(), slot));
+            }
         }
     }
 }

@@ -36,6 +36,7 @@ impl App {
             Job::RenameRuleSet(id, name) => self.workers.rename_rule_set(id, name),
             Job::DeleteRuleSet(id) => self.workers.delete_rule_set(id),
             Job::SetDefaultTarget(id, target) => self.workers.set_default_target(id, target),
+            Job::LoadProcesses(request) => self.workers.load_processes(request),
             Job::AddRule(set, matcher, target) => self.workers.add_rule(set, matcher, target),
             Job::SetRuleTarget(set, rule, target) => {
                 self.workers.set_rule_target(set, rule, target)

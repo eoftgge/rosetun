@@ -18,6 +18,7 @@ use rosetun_core::{
     set_rule_target, update_all, update_subscription,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
+use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
 const CLIENT_NAME: &str = concat!("rosetun-gui/", env!("CARGO_PKG_VERSION"));
 
@@ -58,6 +59,10 @@ pub(crate) enum WorkerEvent {
     RenameRuleSet(Result<(), RuleSetError>),
     DeleteRuleSet(Result<(), RuleSetError>),
     SetDefaultTarget(Result<(), RuleSetError>),
+    Processes {
+        request: u64,
+        result: Result<Vec<RunningProcess>, ProcessListError>,
+    },
     AddRule(Result<Rule, RuleSetError>),
     SetRuleTarget(Result<(), RuleSetError>),
     SetRuleEnabled(Result<(), RuleSetError>),
@@ -197,6 +202,24 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             let result = set_default_target(&publisher.store, &id, target);
             publisher.complete(WorkerEvent::SetDefaultTarget(result));
+        });
+    }
+
+    pub(crate) fn load_processes(&self, request: u64) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = running_processes();
+            match &result {
+                Ok(processes) => {
+                    tracing::info!(count = processes.len(), "Loaded running processes")
+                }
+                Err(error) => tracing::warn!(%error, "Could not load running processes"),
+            }
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::Processes { request, result },
+            );
         });
     }
 

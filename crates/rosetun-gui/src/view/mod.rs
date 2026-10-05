@@ -1,3 +1,4 @@
+pub(crate) mod add_rule;
 pub(crate) mod add_subscription;
 pub(crate) mod connection;
 pub(crate) mod rules;
@@ -97,6 +98,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     if state.screen == Screen::Rules {
         rules::name_dialog(ctx, state, &mut actions);
         rules::delete_dialog(ctx, state, &mut actions);
+        if let Some(dialog) = &mut state.rule_screen.add {
+            add_rule::show(ctx, dialog, &mut actions);
+        }
     }
     actions
 }
