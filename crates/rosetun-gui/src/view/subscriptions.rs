@@ -134,14 +134,6 @@ fn subscription_card(
             ui.multiply_opacity(0.5);
         }
         ui.horizontal(|ui| {
-            if reorder {
-                ui.dnd_drag_source(ui.id().with("handle"), subscription.id.clone(), |ui| {
-                    icons::icon_button(ui, Icon::Grip, true);
-                });
-            } else {
-                icons::icon_button(ui, Icon::Grip, false)
-                    .on_hover_text(strings::SUBSCRIPTION_REORDER_DISABLED);
-            }
             if ui
                 .button(if expanded {
                     strings::COLLAPSE
@@ -152,14 +144,32 @@ fn subscription_card(
             {
                 actions.push(Action::ToggleExpanded(subscription.id.clone()));
             }
-            let label = ui.add(
-                egui::Label::new(RichText::new(state.text(&subscription.name)).strong())
-                    .wrap()
-                    .sense(egui::Sense::click()),
+            let name_width = (ui.available_width() - 22.0 - ui.spacing().item_spacing.x).max(0.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(name_width, ui.spacing().interact_size.y),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_width(name_width);
+                    let label = ui.add(
+                        egui::Label::new(RichText::new(state.text(&subscription.name)).strong())
+                            .wrap()
+                            .sense(egui::Sense::click()),
+                    );
+                    if label.clicked() {
+                        actions.push(Action::ToggleExpanded(subscription.id.clone()));
+                    }
+                },
             );
-            if label.clicked() {
-                actions.push(Action::ToggleExpanded(subscription.id.clone()));
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if reorder {
+                    ui.dnd_drag_source(ui.id().with("handle"), subscription.id.clone(), |ui| {
+                        icons::icon_button(ui, Icon::Grip, true);
+                    });
+                } else {
+                    icons::icon_button(ui, Icon::Grip, false)
+                        .on_hover_text(strings::SUBSCRIPTION_REORDER_DISABLED);
+                }
+            });
         });
         ui.colored_label(
             theme::TEXT_MUTED,
