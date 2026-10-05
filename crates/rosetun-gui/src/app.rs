@@ -4,15 +4,33 @@ use std::time::Duration;
 use eframe::egui;
 use rosetun_core::Store;
 
+#[cfg(windows)]
+use crate::state::Action;
 use crate::state::{Job, State};
+#[cfg(windows)]
+use crate::tray;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
 use crate::{theme, view};
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShellEvent {
+    Show,
+    Primary,
+    Quit,
+}
 
 pub(crate) struct App {
     state: State,
     events: Receiver<WorkerEvent>,
     workers: WorkerDispatcher,
     applied_scale: Option<u16>,
+    #[cfg(windows)]
+    shell_events: Option<Receiver<ShellEvent>>,
+    #[cfg(windows)]
+    tray: Option<tray::Tray>,
+    #[cfg(windows)]
+    quitting: bool,
 }
 
 impl App {
@@ -27,7 +45,56 @@ impl App {
             events,
             workers,
             applied_scale: None,
+            #[cfg(windows)]
+            shell_events: None,
+            #[cfg(windows)]
+            tray: None,
+            #[cfg(windows)]
+            quitting: false,
         }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn with_shell(
+        mut self,
+        ctx: &egui::Context,
+        activation: Option<rosetun_instance::Activation>,
+    ) -> Self {
+        let (sender, events) = mpsc::channel();
+        self.shell_events = Some(events);
+        self.tray = match tray::Tray::new(sender.clone(), ctx.clone()) {
+            Ok(tray) => Some(tray),
+            Err(error) => {
+                tracing::warn!(%error, "Could not create tray icon");
+                None
+            }
+        };
+        if let Some(activation) = activation {
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                loop {
+                    if let Err(error) = activation.wait() {
+                        tracing::warn!(%error, "Could not wait for GUI activation");
+                        break;
+                    }
+                    if sender.send(ShellEvent::Show).is_err() {
+                        break;
+                    }
+                    ctx.request_repaint();
+                }
+            });
+        }
+        self
+    }
+
+    #[cfg(windows)]
+    fn hides_on_close(&self) -> bool {
+        self.tray.is_some() && !self.quitting
+    }
+
+    #[cfg(not(windows))]
+    fn hides_on_close(&self) -> bool {
+        false
     }
 
     fn dispatch(&self, job: Job) {
@@ -76,10 +143,45 @@ fn next_scale(applied: Option<u16>, configured: u16) -> Option<u16> {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Ok(event) = self.events.try_recv() {
             self.state.reduce(event);
         }
+        #[cfg(windows)]
+        {
+            while let Some(event) = self
+                .shell_events
+                .as_ref()
+                .and_then(|events| events.try_recv().ok())
+            {
+                match event {
+                    ShellEvent::Show => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                    ShellEvent::Primary => {
+                        if let Some(job) = self.state.act(Action::Primary) {
+                            self.dispatch(job);
+                        }
+                    }
+                    ShellEvent::Quit => {
+                        self.quitting = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+            if let Some(tray) = &mut self.tray {
+                tray.sync(&tray::tray_view(&self.state));
+            }
+        }
+        if ctx.input(|input| input.viewport().close_requested()) && self.hides_on_close() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.state.config_ready
             && let Some(percent) = next_scale(
                 self.applied_scale,

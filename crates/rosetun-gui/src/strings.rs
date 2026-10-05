@@ -29,6 +29,10 @@ pub(crate) const HELPER_NOT_RUNNING: &str = "Helper not running";
 pub(crate) const CONFIGURATION_FOLDER: &str = "Configuration folder";
 pub(crate) const LOG_FILE: &str = "Log file";
 pub(crate) const LOG_FILE_NAME: &str = "rosetun-gui.log";
+#[cfg(windows)]
+pub(crate) const TRAY_OPEN: &str = "Open Rosetun";
+#[cfg(windows)]
+pub(crate) const TRAY_QUIT: &str = "Quit Rosetun";
 pub(crate) const OPEN_FOLDER: &str = "Open folder";
 pub(crate) const CONNECT: &str = "Connect";
 pub(crate) const DISCONNECT: &str = "Disconnect";
@@ -164,6 +168,14 @@ pub(crate) const MATCH_BY_FULL_PATH: &str = "Match by full path";
 pub(crate) const RULE_PRIORITY: &str = "New rule goes to the top of the list — highest priority.";
 pub(crate) const ADD_RULE: &str = "Add rule";
 pub(crate) const ADDING_RULE: &str = "Adding rule…";
+
+#[cfg(windows)]
+pub(crate) fn tray_tooltip(status: &str, server: Option<&str>) -> String {
+    match server {
+        Some(server) => format!("{TITLE} · {status}\n{server}"),
+        None => format!("{TITLE} · {status}"),
+    }
+}
 
 pub(crate) fn app_version() -> String {
     format!("Rosetun {}", env!("CARGO_PKG_VERSION"))

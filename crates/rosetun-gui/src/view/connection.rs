@@ -246,7 +246,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     });
 }
 
-fn state_style(state: &ConnectionState) -> (&'static str, Color32) {
+pub(crate) fn state_style(state: &ConnectionState) -> (&'static str, Color32) {
     match state {
         ConnectionState::Disconnected => (strings::DISCONNECTED, theme::DISCONNECTED),
         ConnectionState::Connecting => (strings::CONNECTING, theme::ROSE_BRIGHT),

@@ -13,6 +13,8 @@ mod rules;
 mod state;
 mod strings;
 mod theme;
+#[cfg(windows)]
+mod tray;
 mod view;
 mod worker;
 
@@ -24,6 +26,12 @@ use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    let activation = match rosetun_instance::acquire() {
+        Ok(rosetun_instance::Instance::First(activation)) => Ok(activation),
+        Ok(rosetun_instance::Instance::Other) => return Ok(()),
+        Err(error) => Err(error),
+    };
     let store = rosetun_core::Store::open_default()?;
     let log_file = store.path().parent().and_then(|directory| {
         fs::create_dir_all(directory)
@@ -56,6 +64,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    #[cfg(windows)]
+    let activation = activation
+        .inspect_err(|error| tracing::warn!(%error, "Single-instance check failed"))
+        .ok();
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title(strings::TITLE)
@@ -67,7 +80,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         strings::TITLE,
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, store)))),
+        Box::new(move |cc| {
+            let app = app::App::new(cc, store);
+            #[cfg(windows)]
+            let app = app.with_shell(&cc.egui_ctx, activation);
+            Ok(Box::new(app))
+        }),
     )?;
     Ok(())
 }
