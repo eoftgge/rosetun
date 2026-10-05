@@ -41,6 +41,7 @@ windows-sys = { version = "0.61.2", features = [
 url = "2.5.8"
 base64 = "0.23.1"
 percent-encoding = "2.3.2"
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "accesskit", "links", "x11", "wayland"] }
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"

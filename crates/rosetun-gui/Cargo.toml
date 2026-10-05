@@ -1,0 +1,18 @@
+[package]
+name = "rosetun-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+eframe.workspace = true
+rosetun-config.workspace = true
+rosetun-core.workspace = true
+rosetun-ipc.workspace = true
+thiserror.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
