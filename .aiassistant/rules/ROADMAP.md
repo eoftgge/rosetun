@@ -1,6 +1,6 @@
 # Rosetun — state, roadmap and UI
 
-*Rule mode: Manually. Status verified against `origin/master` at `753bd70` and
+*Rule mode: Manually. Status verified against `origin/master` at `83e55f6` and
 the Hyper-V failure matrix (38/38); update it as stages land.*
 
 ## Current state
@@ -16,6 +16,7 @@ the Hyper-V failure matrix (38/38); update it as stages land.*
 | 7. mihomo backend | **deferred** — still planned, not now |
 | 8. Configuration on disk | **done** — `%APPDATA%\Rosetun\config.json` (`ROSETUN_CONFIG` overrides), validated atomic save, `connect` from the config, `select`, `config` |
 | 9. Subscriptions | **done** — parser crate `rosetun-subscription` (link lists, Xray and sing-box JSON, metadata, provider notices, stable node IDs); loading with HWID headers over `ureq` with the Windows trust store; `sub add/update/list/remove`, `nodes`; verified against a real Happ-oriented panel |
+| Application layer (before 12) | **done** — `rosetun-core`: `Store` (every change reloads the file first), subscription add, update, update-all and remove, node selection, provider-text sanitising and subscription URL redaction, sensitive log targets. `HelperClient` and `ConnectRequest::from_config` live in `rosetun-ipc`. The CLI only parses arguments and prints |
 | 10–14 | not started |
 
 What the matrix (`tools/vm`, 38 checks, elevated, clean Windows 11 guest)
@@ -149,6 +150,13 @@ engine and node, traffic, connect, disconnect, subscription list, node
 selection, rule-set selection, subscription update, errors, a protected-failure
 indicator and an explicit action to drop protection. IPC, HTTP and config saves
 run on worker threads. Check `eframe`/`egui` against the dependency checklist.
+
+The GUI calls `rosetun-core` and `rosetun-ipc` the way the CLI does. Logic that
+both clients need goes into the core, not into the GUI crate. The GUI never
+writes the configuration itself: every change goes through a core function, so
+a CLI running at the same time does not lose its changes. Server-supplied text
+passes through `provider_text` or `terminal_text` before it is displayed, as in
+the CLI.
 
 ### After stage 12 — custom lists (GeoIP and GeoSite)
 
