@@ -3,6 +3,7 @@
 mod fetch;
 mod rules;
 mod selection;
+mod settings;
 pub(crate) mod store;
 mod subscription_url;
 mod subscriptions;
@@ -17,6 +18,10 @@ pub use rules::{
 };
 pub use selection::{
     SelectNodeError, SelectRuleSetError, select_node, select_rule_set, set_kill_switch,
+};
+pub use settings::{
+    DnsInputError, INTERFACE_SCALES, SettingsError, parse_dns_input, set_dns, set_engine_log_level,
+    set_interface_scale,
 };
 pub use store::{Store, StoreError};
 pub use subscription_url::{

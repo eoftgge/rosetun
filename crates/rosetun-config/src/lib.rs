@@ -21,6 +21,25 @@ use serde::{Deserialize, Serialize};
 
 pub const CONFIG_VERSION: u32 = 1;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterfaceSettings {
+    /// Window scale in percent; see `rosetun_core::INTERFACE_SCALES`.
+    #[serde(default = "default_scale_percent")]
+    pub scale_percent: u16,
+}
+
+fn default_scale_percent() -> u16 {
+    100
+}
+
+impl Default for InterfaceSettings {
+    fn default() -> Self {
+        Self {
+            scale_percent: default_scale_percent(),
+        }
+    }
+}
+
 pub(crate) fn default_true() -> bool {
     true
 }
@@ -31,6 +50,8 @@ pub struct AppConfig {
     pub version: u32,
     #[serde(default)]
     pub settings: Settings,
+    #[serde(default)]
+    pub interface: InterfaceSettings,
     #[serde(default)]
     pub subscriptions: Vec<Subscription>,
     #[serde(default)]
@@ -50,6 +71,7 @@ impl Default for AppConfig {
         Self {
             version: CONFIG_VERSION,
             settings: Settings::default(),
+            interface: InterfaceSettings::default(),
             subscriptions: Vec::new(),
             rule_sets: Vec::new(),
             active: None,
@@ -112,5 +134,22 @@ impl AppConfig {
             return Err(ConfigError::DanglingRuleSet(id.clone()));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppConfig, InterfaceSettings};
+
+    #[test]
+    fn old_configuration_without_interface_uses_default_scale() {
+        let config: AppConfig =
+            serde_json::from_str(r#"{"version":1,"settings":{}}"#).expect("old configuration");
+        assert_eq!(config.interface, InterfaceSettings::default());
+        assert_eq!(config.interface.scale_percent, 100);
+
+        let interface: InterfaceSettings =
+            serde_json::from_str("{}").expect("interface without scale");
+        assert_eq!(interface.scale_percent, 100);
     }
 }
