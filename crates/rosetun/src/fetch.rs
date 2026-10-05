@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::Read;
 use std::time::Duration;
 
 use rosetun_config::Subscription;
@@ -180,15 +181,20 @@ fn fetch_with_device(
     }
 
     let headers = response.headers().clone();
-    let body = response
+
+    // as_reader() streams the decoded body. Read at most one byte beyond
+    // the allowed size, without rejecting gzip by its encoded Content-Length.
+    let mut body = Vec::new();
+    response
         .body_mut()
-        .with_config()
-        .limit(MAX_BODY_BYTES)
-        .read_to_vec()
-        .map_err(|error| match error {
-            ureq::Error::BodyExceedsLimit(_) => FetchError::ResponseTooLarge,
-            _ => FetchError::BodyReadFailed,
-        })?;
+        .as_reader()
+        .take(MAX_BODY_BYTES + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| FetchError::BodyReadFailed)?;
+
+    if body.len() as u64 > MAX_BODY_BYTES {
+        return Err(FetchError::ResponseTooLarge);
+    }
 
     rosetun_subscription::parse(&body, &|name| {
         headers
@@ -196,7 +202,7 @@ fn fetch_with_device(
             .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
             .map(str::to_owned)
     })
-    .map_err(FetchError::Parse)
+        .map_err(FetchError::Parse)
 }
 
 #[cfg(test)]
@@ -284,6 +290,7 @@ mod tests {
                         }
                     };
 
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .unwrap();
