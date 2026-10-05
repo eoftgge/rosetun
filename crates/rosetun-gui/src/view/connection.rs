@@ -83,11 +83,18 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 ui.set_min_width(ui.available_width());
                 ui.colored_label(theme::TEXT_DIM, strings::SELECTED_SERVER);
                 if let Some((subscription, node)) = state.config.active_node() {
-                    ui.add(
-                        egui::Label::new(RichText::new(state.text(&node.name)).size(17.0).strong())
-                            .wrap(),
+                    let name = display::drop_missing_glyphs(
+                        ui.ctx(),
+                        &egui::FontId::proportional(17.0),
+                        &state.text(&node.name),
                     );
-                    ui.colored_label(theme::TEXT_MUTED, state.text(&subscription.name));
+                    ui.add(egui::Label::new(RichText::new(name).size(17.0).strong()).wrap());
+                    let subscription_name = display::drop_missing_glyphs(
+                        ui.ctx(),
+                        &egui::TextStyle::Body.resolve(ui.style()),
+                        &state.text(&subscription.name),
+                    );
+                    ui.colored_label(theme::TEXT_MUTED, subscription_name);
                     ui.add(egui::Label::new(state.text(&rosetun_core::node_address(node))).wrap());
                     ui.colored_label(
                         theme::TEXT_DIM,
@@ -100,6 +107,15 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 } else {
                     ui.colored_label(theme::TEXT_MUTED, strings::SELECT_SERVER);
                 }
+                let engine = visible_status
+                    .and_then(|status| status.engine)
+                    .unwrap_or(state.config.settings.engine);
+                ui.label(
+                    RichText::new(format!("via {}", engine.as_str()))
+                        .small()
+                        .color(theme::TEXT_DIM),
+                )
+                .on_hover_text(format!("{}: {}", strings::ENGINE, engine.as_str()));
             });
             if let Some(id) = selection_changed.and_then(|status| status.node.as_ref()) {
                 theme::card_frame().show(ui, |ui| {
@@ -109,6 +125,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         .subscriptions
                         .iter()
                         .find_map(|sub| sub.node(id).map(|node| state.text(&node.name)));
+                    let name = name.map(|name| {
+                        display::drop_missing_glyphs(
+                            ui.ctx(),
+                            &egui::TextStyle::Body.resolve(ui.style()),
+                            &name,
+                        )
+                    });
                     ui.add(
                         egui::Label::new(name.as_deref().unwrap_or(strings::UNKNOWN_SERVER)).wrap(),
                     );
@@ -116,25 +139,48 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             }
             theme::card_frame().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                let mut enabled = state.config.settings.kill_switch;
-                if ui
-                    .add_enabled(
-                        state.config_ready
-                            && !state.operations.kill_switch
-                            && !state.operations.helper,
-                        egui::Checkbox::new(&mut enabled, strings::KILL_SWITCH),
+                ui.colored_label(theme::TEXT_DIM, "Protection");
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(strings::KILL_SWITCH);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("Blocks all internet traffic if the tunnel drops.")
+                                    .small()
+                                    .color(theme::TEXT_MUTED),
+                            )
+                            .wrap(),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut enabled = state.config.settings.kill_switch;
+                        if theme::toggle(
+                            ui,
+                            &mut enabled,
+                            state.config_ready
+                                && !state.operations.kill_switch
+                                && !state.operations.helper,
+                        )
+                        .changed()
+                        {
+                            actions.push(Action::SetKillSwitch(enabled));
+                        }
+                    });
+                });
+                if visible_status.is_some_and(|status| {
+                    matches!(
+                        &status.state,
+                        ConnectionState::Connecting
+                            | ConnectionState::Connected
+                            | ConnectionState::Reconnecting
                     )
-                    .changed()
-                {
-                    actions.push(Action::SetKillSwitch(enabled));
+                }) {
+                    ui.label(
+                        RichText::new(strings::NEXT_CONNECT)
+                            .small()
+                            .color(theme::ROSE_LIGHT),
+                    );
                 }
-                ui.colored_label(theme::TEXT_DIM, strings::NEXT_CONNECT);
-                ui.add_space(10.0);
-                ui.colored_label(theme::TEXT_DIM, strings::ENGINE);
-                let engine = visible_status
-                    .and_then(|status| status.engine)
-                    .unwrap_or(state.config.settings.engine);
-                ui.label(engine.as_str());
             });
         });
     });
@@ -142,7 +188,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     if selection_changed.is_some() {
         let message = state.config.active_node().map_or_else(
             || strings::SELECTION_CLEARED.to_owned(),
-            |(_, node)| strings::selected_pending(&state.text(&node.name)),
+            |(_, node)| {
+                let name = display::drop_missing_glyphs(
+                    ui.ctx(),
+                    &egui::TextStyle::Body.resolve(ui.style()),
+                    &state.text(&node.name),
+                );
+                strings::selected_pending(&name)
+            },
         );
         ui.add(egui::Label::new(RichText::new(message).color(theme::ROSE_LIGHT)).wrap());
     }

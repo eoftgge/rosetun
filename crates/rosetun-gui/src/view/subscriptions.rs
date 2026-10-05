@@ -134,8 +134,8 @@ fn subscription_card(
             ui.multiply_opacity(0.5);
         }
         ui.horizontal(|ui| {
-            if ui
-                .button(if expanded {
+            if icons::icon_button(ui, Icon::Chevron { open: expanded }, true)
+                .on_hover_text(if expanded {
                     strings::COLLAPSE
                 } else {
                     strings::EXPAND
@@ -144,47 +144,82 @@ fn subscription_card(
             {
                 actions.push(Action::ToggleExpanded(subscription.id.clone()));
             }
-            let name_width = (ui.available_width() - 22.0 - ui.spacing().item_spacing.x).max(0.0);
+            let name_width =
+                (ui.available_width() - 3.0 * 22.0 - 3.0 * ui.spacing().item_spacing.x).max(0.0);
             ui.allocate_ui_with_layout(
-                egui::vec2(name_width, ui.spacing().interact_size.y),
+                egui::vec2(name_width, 22.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_width(name_width);
-                    let label = ui.add(
-                        egui::Label::new(RichText::new(state.text(&subscription.name)).strong())
-                            .wrap()
-                            .sense(egui::Sense::click()),
-                    );
+                    let name = provider_text(ui, state, &subscription.name, egui::TextStyle::Body);
+                    let label = ui
+                        .add(
+                            egui::Label::new(RichText::new(&name).strong())
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text(name);
                     if label.clicked() {
                         actions.push(Action::ToggleExpanded(subscription.id.clone()));
                     }
                 },
             );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if reorder {
-                    ui.dnd_drag_source(ui.id().with("handle"), subscription.id.clone(), |ui| {
-                        icons::icon_button(ui, Icon::Grip, true);
-                    });
-                } else {
-                    icons::icon_button(ui, Icon::Grip, false)
-                        .on_hover_text(strings::SUBSCRIPTION_REORDER_DISABLED);
-                }
-            });
+            if state.operations.update_all || state.operations.updating.contains(&subscription.id) {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(22.0, 22.0),
+                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                    |ui| {
+                        ui.add(egui::Spinner::new().size(18.0));
+                    },
+                )
+                .response
+                .on_hover_text(strings::UPDATING);
+            } else if icons::icon_button(
+                ui,
+                Icon::Refresh,
+                !state.subscription_busy(&subscription.id),
+            )
+            .on_hover_text(strings::UPDATE)
+            .clicked()
+            {
+                actions.push(Action::Update(subscription.id.clone()));
+            }
+            if icons::icon_button(
+                ui,
+                Icon::Trash,
+                !state.subscription_busy(&subscription.id) && !state.operations.removing,
+            )
+            .on_hover_text(strings::REMOVE)
+            .clicked()
+            {
+                actions.push(Action::RequestRemove(subscription.id.clone()));
+            }
+            if reorder {
+                ui.dnd_drag_source(ui.id().with("handle"), subscription.id.clone(), |ui| {
+                    icons::icon_button(ui, Icon::Grip, true);
+                });
+            } else {
+                icons::icon_button(ui, Icon::Grip, false)
+                    .on_hover_text(strings::SUBSCRIPTION_REORDER_DISABLED);
+            }
         });
-        ui.colored_label(
-            theme::TEXT_MUTED,
-            strings::servers(subscription.nodes.len()),
-        );
         let age = subscription
             .updated_at_unix
             .map(|timestamp| {
                 strings::last_updated(&rosetun_core::updated_text(timestamp, display::now_unix()))
             })
             .unwrap_or_else(|| strings::NEVER_UPDATED.to_owned());
-        ui.add(egui::Label::new(RichText::new(age).small().color(theme::TEXT_DIM)).wrap());
-        if state.subscription_busy(&subscription.id) {
-            ui.colored_label(theme::ROSE_LIGHT, strings::UPDATING);
-        }
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "{} · {age}",
+                    strings::servers(subscription.nodes.len())
+                ))
+                .small()
+                .color(theme::TEXT_DIM),
+            )
+            .truncate(),
+        );
         if let Some(UpdateOutcome::Error(error)) = state.outcomes.get(&subscription.id)
             && theme::dismissible_error(ui, &state.text(&error.to_string()))
         {
@@ -205,16 +240,48 @@ fn subscription_card(
             .wrap(),
         );
         if let Some(info) = &subscription.info {
-            ui.colored_label(theme::TEXT_MUTED, rosetun_core::traffic_text(info));
+            let mut details = rosetun_core::traffic_text(info);
             if let Some(expiry) = info.expire_unix {
-                ui.colored_label(
-                    theme::TEXT_DIM,
-                    rosetun_core::expiry_text(expiry, display::now_unix()),
-                );
+                details.push_str(" · ");
+                details.push_str(&rosetun_core::expiry_text(expiry, display::now_unix()));
             }
+            ui.add(
+                egui::Label::new(RichText::new(details).small().color(theme::TEXT_MUTED))
+                    .truncate(),
+            );
         }
-        if let Some(announce) = &subscription.announce {
-            ui.add(egui::Label::new(state.text(announce)).wrap());
+        if subscription.announce.is_some() || !subscription.notices.is_empty() {
+            theme::card_frame()
+                .fill(theme::INPUT)
+                .inner_margin(10)
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    if let Some(announce) = &subscription.announce {
+                        ui.add(
+                            egui::Label::new(provider_text(
+                                ui,
+                                state,
+                                announce,
+                                egui::TextStyle::Body,
+                            ))
+                            .wrap(),
+                        );
+                    }
+                    for notice in &subscription.notices {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(provider_text(
+                                    ui,
+                                    state,
+                                    notice,
+                                    egui::TextStyle::Body,
+                                ))
+                                .color(theme::TEXT_MUTED),
+                            )
+                            .wrap(),
+                        );
+                    }
+                });
         }
         if let Some(UpdateOutcome::Success(report)) = state.outcomes.get(&subscription.id) {
             ui.add(
@@ -238,37 +305,16 @@ fn subscription_card(
                 ui.add(egui::Label::new(state.text(&strings::skipped(*count, reason))).wrap());
             }
         }
-        for notice in &subscription.notices {
-            ui.add(
-                egui::Label::new(RichText::new(state.text(notice)).color(theme::TEXT_MUTED)).wrap(),
-            );
+        if subscription.support_url.is_some() || subscription.web_page_url.is_some() {
+            ui.horizontal(|ui| {
+                if let Some(value) = &subscription.support_url {
+                    provider_link(ui, state, strings::SUPPORT, value);
+                }
+                if let Some(value) = &subscription.web_page_url {
+                    provider_link(ui, state, strings::WEBSITE, value);
+                }
+            });
         }
-        if let Some(value) = &subscription.support_url {
-            provider_link(ui, state, strings::SUPPORT, value);
-        }
-        if let Some(value) = &subscription.web_page_url {
-            provider_link(ui, state, strings::WEBSITE, value);
-        }
-        ui.horizontal(|ui| {
-            if theme::outline_button(
-                ui,
-                strings::UPDATE,
-                !state.subscription_busy(&subscription.id),
-            )
-            .clicked()
-            {
-                actions.push(Action::Update(subscription.id.clone()));
-            }
-            if theme::outline_button(
-                ui,
-                strings::REMOVE,
-                !state.subscription_busy(&subscription.id) && !state.operations.removing,
-            )
-            .clicked()
-            {
-                actions.push(Action::RequestRemove(subscription.id.clone()));
-            }
-        });
         ui.separator();
         if subscription.nodes.is_empty() {
             ui.colored_label(theme::TEXT_DIM, strings::NO_SERVERS);
@@ -278,7 +324,7 @@ fn subscription_card(
                 selection.subscription == subscription.id && selection.node == node.id
             });
             ui.push_id(node.id.as_str(), |ui| {
-                let name = state.text(&node.name);
+                let name = provider_text(ui, state, &node.name, egui::TextStyle::Body);
                 let text = if selected {
                     RichText::new(name).color(theme::ROSE_LIGHT).strong()
                 } else {
@@ -326,13 +372,39 @@ fn subscription_card(
     response.response
 }
 
+fn provider_text(ui: &egui::Ui, state: &State, value: &str, style: egui::TextStyle) -> String {
+    display::drop_missing_glyphs(ui.ctx(), &style.resolve(ui.style()), &state.text(value))
+}
+
 fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, value: &str) {
     if display::safe_web_url(value).is_some() {
-        if theme::outline_button(ui, label, true).clicked() {
+        let response = ui
+            .add(
+                egui::Label::new(RichText::new(label).color(theme::ROSE_LIGHT))
+                    .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if response.hovered() {
+            ui.painter().line_segment(
+                [
+                    response.rect.left_bottom() + egui::vec2(0.0, -1.0),
+                    response.rect.right_bottom() + egui::vec2(0.0, -1.0),
+                ],
+                Stroke::new(1.0, theme::ROSE_LIGHT),
+            );
+        }
+        if response.clicked() {
             display::open_web_link(ui.ctx(), value);
         }
+        response.on_hover_text(rosetun_core::terminal_text(&state.text(value)));
     } else {
-        ui.add(egui::Label::new(state.text(&strings::plain_link(label, value))).wrap());
+        ui.add(
+            egui::Label::new(
+                RichText::new(state.text(&strings::plain_link(label, value)))
+                    .color(theme::TEXT_DIM),
+            )
+            .truncate(),
+        );
     }
 }
 
@@ -351,7 +423,12 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                 .iter()
                 .find(|sub| sub.id == dialog.id)
             {
-                ui.label(state.text(&subscription.name));
+                ui.label(provider_text(
+                    ui,
+                    state,
+                    &subscription.name,
+                    egui::TextStyle::Body,
+                ));
             }
             ui.add_space(12.0);
             ui.add(egui::Label::new(strings::REMOVE_DETAIL).wrap());

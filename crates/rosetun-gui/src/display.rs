@@ -29,6 +29,18 @@ pub(crate) fn provider_multiline(value: &str, subscription_url: &str) -> String 
         .join("\n")
 }
 
+pub(crate) fn drop_missing_glyphs(
+    ctx: &egui::Context,
+    font_id: &egui::FontId,
+    text: &str,
+) -> String {
+    ctx.fonts_mut(|fonts| {
+        text.chars()
+            .filter(|&character| character == '\n' || fonts.has_glyph(font_id, character))
+            .collect()
+    })
+}
+
 pub(crate) fn regional_flags(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut chars = value.chars().peekable();
@@ -99,6 +111,21 @@ pub(crate) fn open_web_link(ctx: &egui::Context, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_glyphs_are_removed_without_losing_line_breaks() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let font_id = egui::TextStyle::Body.resolve(ui.style());
+                assert_eq!(
+                    drop_missing_glyphs(ui.ctx(), &font_id, "Hello\u{10ffff}\nworld"),
+                    "Hello\nworld"
+                );
+            });
+        });
+        output.textures_delta.clear();
+    }
 
     #[test]
     fn flag_pairs_are_rendered_as_country_codes() {

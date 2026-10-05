@@ -78,10 +78,10 @@ pub(crate) fn show(
                 dialog.error = None;
             }
             ui.add_space(16.0);
-            ui.add_enabled(
-                !dialog.busy,
-                egui::Checkbox::new(&mut dialog.send_hwid, strings::SEND_DEVICE_ID),
-            );
+            ui.horizontal(|ui| {
+                theme::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
+                ui.label(strings::SEND_DEVICE_ID);
+            });
             ui.add(
                 egui::Label::new(
                     RichText::new(strings::DEVICE_ID_EXPLANATION).color(theme::TEXT_DIM),

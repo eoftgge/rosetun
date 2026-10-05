@@ -335,15 +335,9 @@ fn rule_row(
                         }
                     });
                     table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |ui| {
-                        ui.add_space((ENABLED_WIDTH - ui.spacing().interact_size.y) / 2.0);
+                        ui.add_space((ENABLED_WIDTH - 38.0) / 2.0);
                         let mut enabled = rule.enabled;
-                        if ui
-                            .add_enabled(
-                                state.can_edit_rules(),
-                                egui::Checkbox::without_text(&mut enabled),
-                            )
-                            .changed()
-                        {
+                        if theme::toggle(ui, &mut enabled, state.can_edit_rules()).changed() {
                             actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
                         }
                     });
@@ -705,10 +699,10 @@ mod tests {
                             .rect;
                     });
                     let mut checked = true;
-                    let mut checkbox_rect = egui::Rect::NOTHING;
+                    let mut toggle_rect = egui::Rect::NOTHING;
                     let enabled_cell = table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |ui| {
-                        ui.add_space((ENABLED_WIDTH - ui.spacing().interact_size.y) / 2.0);
-                        checkbox_rect = ui.add(egui::Checkbox::without_text(&mut checked)).rect;
+                        ui.add_space((ENABLED_WIDTH - 38.0) / 2.0);
+                        toggle_rect = theme::toggle(ui, &mut checked, true).rect;
                     });
                     assert!(
                         (combo_rect.center().x - target_cell.rect.center().x).abs() < 3.0,
@@ -723,9 +717,9 @@ mod tests {
                         target_cell.rect
                     );
                     assert!(
-                        (checkbox_rect.center().x - enabled_cell.rect.center().x).abs() < 3.0,
+                        (toggle_rect.center().x - enabled_cell.rect.center().x).abs() < 3.0,
                         "checkbox horizontal: {:?} vs {:?}",
-                        checkbox_rect,
+                        toggle_rect,
                         enabled_cell.rect
                     );
                 });
