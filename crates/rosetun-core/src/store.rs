@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use rosetun_config::{AppConfig, ConfigError};
 
@@ -40,6 +41,7 @@ impl std::fmt::Debug for StoreError {
 #[derive(Debug, Clone)]
 pub struct Store {
     path: PathBuf,
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl Store {
@@ -48,7 +50,10 @@ impl Store {
     }
 
     pub fn at(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            write_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -65,7 +70,11 @@ impl Store {
     where
         E: From<StoreError>,
     {
-        // Reloading narrows the race window but does not serialize concurrent writers.
+        // Clones of one `Store` serialize their writes; separate processes are still not serialized.
+        let _write = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let mut config = self.load().map_err(E::from)?;
         let result = change(&mut config)?;
         save(&self.path, &config).map_err(E::from)?;
@@ -652,6 +661,45 @@ mod tests {
     }
 
     #[test]
+    fn rule_selection_and_reset_preserve_other_settings() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let mut initial = selected_config();
+        initial.active_rule_set = None;
+        save(store.path(), &initial).unwrap();
+
+        crate::select_rule_set(&store, Some(&RuleSetId::new("rules"))).unwrap();
+        let mut expected = initial.clone();
+        expected.active_rule_set = Some(RuleSetId::new("rules"));
+        assert_eq!(store.load().unwrap(), expected);
+
+        let before = fs::read(store.path()).unwrap();
+        assert!(matches!(
+            crate::select_rule_set(&store, Some(&RuleSetId::new("missing"))),
+            Err(crate::SelectRuleSetError::NotFound)
+        ));
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+
+        crate::select_rule_set(&store, None).unwrap();
+        assert_eq!(store.load().unwrap(), initial);
+    }
+
+    #[test]
+    fn kill_switch_mutation_changes_only_that_setting() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let initial = selected_config();
+        save(store.path(), &initial).unwrap();
+        let mut expected = initial.clone();
+
+        for enabled in [true, false] {
+            crate::set_kill_switch(&store, enabled).unwrap();
+            expected.settings.kill_switch = enabled;
+            assert_eq!(store.load().unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn modify_reloads_configuration_before_applying_change() {
         let directory = TestDirectory::new();
         let store = Store::at(directory.config_path());
@@ -682,6 +730,71 @@ mod tests {
         );
         assert_eq!(saved.subscriptions[0].name, "Updated name");
         assert_ne!(saved.active, stale.active);
+    }
+
+    #[test]
+    fn cloned_stores_serialize_writes() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|worker| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for entry in 0..25 {
+                        store
+                            .modify(|config| {
+                                config.rule_sets.push(RuleSet::new(
+                                    RuleSetId::new(format!("{worker}-{entry}")),
+                                    "Concurrent rules",
+                                    RuleTarget::Proxy,
+                                ));
+                                Ok::<_, StoreError>(())
+                            })
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+
+        let persisted = store.load().unwrap();
+        assert_eq!(persisted.rule_sets.len(), 200);
+        let ids: std::collections::HashSet<_> =
+            persisted.rule_sets.iter().map(|rules| &rules.id).collect();
+        assert_eq!(ids.len(), 200);
+    }
+
+    #[test]
+    fn poisoned_write_lock_does_not_prevent_later_writes() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        save(store.path(), &selected_config()).unwrap();
+        let before = fs::read(store.path()).unwrap();
+        let panicking = store.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let _ = panicking.modify::<(), StoreError>(|config| {
+                    config.subscriptions.clear();
+                    panic!("interrupted mutation");
+                });
+            })
+            .join()
+            .is_err()
+        );
+        assert_eq!(fs::read(store.path()).unwrap(), before);
+
+        store
+            .modify(|config| {
+                config.subscriptions[0].name = "Recovered".to_owned();
+                Ok::<_, StoreError>(())
+            })
+            .unwrap();
+        assert_eq!(store.load().unwrap().subscriptions[0].name, "Recovered");
     }
 
     #[test]

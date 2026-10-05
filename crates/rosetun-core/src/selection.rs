@@ -1,4 +1,4 @@
-use rosetun_config::{NodeId, Selection, SubscriptionId};
+use rosetun_config::{NodeId, RuleSetId, Selection, SubscriptionId};
 
 use crate::{Store, StoreError};
 
@@ -38,5 +38,35 @@ pub fn select_node(
         });
 
         Ok(node_name)
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SelectRuleSetError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("rule set does not exist")]
+    NotFound,
+}
+
+pub fn select_rule_set(
+    store: &Store,
+    rule_set_id: Option<&RuleSetId>,
+) -> Result<(), SelectRuleSetError> {
+    store.modify(|config| {
+        if let Some(id) = rule_set_id
+            && !config.rule_sets.iter().any(|rule_set| &rule_set.id == id)
+        {
+            return Err(SelectRuleSetError::NotFound);
+        }
+        config.active_rule_set = rule_set_id.cloned();
+        Ok(())
+    })
+}
+
+pub fn set_kill_switch(store: &Store, enabled: bool) -> Result<(), StoreError> {
+    store.modify(|config| {
+        config.settings.kill_switch = enabled;
+        Ok(())
     })
 }

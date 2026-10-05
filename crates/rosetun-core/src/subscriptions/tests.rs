@@ -89,6 +89,133 @@ fn successful_update() -> rosetun_subscription::Parsed {
 }
 
 #[test]
+fn preparation_rejects_duplicate_before_fetch_and_sanitizes_id() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let mut config = test_config();
+    config.active = None;
+    config.subscriptions[0].id = SubscriptionId::new("id\n\u{202e}secret");
+    save_config(store.path(), &config).unwrap();
+    let before = std::fs::read(store.path()).unwrap();
+    let mut fetched = false;
+    let result = prepare_subscription(&store, &config.subscriptions[0].url, AddOptions::default())
+        .and_then(|prepared| {
+            add_prepared_subscription_with(&store, prepared, Timeouts::default(), |_, _| {
+                fetched = true;
+                Ok(successful_update())
+            })
+        });
+    assert!(matches!(result, Err(AddFromUrlError::AlreadyExists(_))));
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "already added as id  secret"
+    );
+    assert!(!fetched);
+    assert_eq!(std::fs::read(store.path()).unwrap(), before);
+}
+
+#[test]
+fn addition_uses_explicit_name_then_title_then_host() {
+    for (name, title, expected) in [
+        (Some("Explicit"), Some("Provider"), "Explicit"),
+        (None, Some("Provider"), "Provider"),
+        (None, None, "sub.example.com"),
+    ] {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let prepared = prepare_subscription(
+            &store,
+            "https://sub.example.com/private-token",
+            AddOptions {
+                name: name.map(str::to_owned),
+                user_agent: Some("Test client".to_owned()),
+                send_hwid: false,
+            },
+        )
+        .unwrap();
+        let (added, _) =
+            add_prepared_subscription_with(&store, prepared, Timeouts::default(), |template, _| {
+                assert_eq!(template.name, "sub.example.com");
+                assert_eq!(template.user_agent.as_deref(), Some("Test client"));
+                assert!(!template.send_hwid);
+                let mut parsed = successful_update();
+                parsed.meta.title = title.map(str::to_owned);
+                Ok(parsed)
+            })
+            .unwrap();
+        assert_eq!(added.name, expected);
+        assert!(added.updated_at_unix.is_some());
+        assert_eq!(store.load().unwrap().subscriptions, vec![added]);
+        assert!(store.load().unwrap().active.is_none());
+    }
+}
+
+#[test]
+fn preparation_reports_plain_http_after_normalizing_import_links() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    for (input, plain_http) in [
+        ("http://sub.example.com/token", true),
+        ("https://sub.example.com/token", false),
+        ("happ://add/http://sub.example.com/token", true),
+    ] {
+        let prepared = prepare_subscription(&store, input, AddOptions::default()).unwrap();
+        assert_eq!(prepared.uses_plain_http(), plain_http);
+        assert!(prepared.template.send_hwid);
+    }
+    assert!(!store.path().exists());
+}
+
+#[test]
+fn failed_add_fetch_preserves_exact_persisted_bytes_and_typed_source() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    save_config(store.path(), &test_config()).unwrap();
+    let before = std::fs::read(store.path()).unwrap();
+    let prepared = prepare_subscription(
+        &store,
+        "https://new.example.com/token",
+        AddOptions::default(),
+    )
+    .unwrap();
+    let result = add_prepared_subscription_with(&store, prepared, Timeouts::default(), |_, _| {
+        Err(FetchError::AccessDenied)
+    });
+    assert!(matches!(
+        result,
+        Err(AddFromUrlError::Fetch {
+            source: FetchError::AccessDenied,
+            ..
+        })
+    ));
+    assert_eq!(std::fs::read(store.path()).unwrap(), before);
+}
+
+#[test]
+fn addition_rechecks_duplicates_at_commit() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let config = test_config();
+    let prepared =
+        prepare_subscription(&store, &config.subscriptions[0].url, AddOptions::default()).unwrap();
+    let mut committed_bytes = Vec::new();
+    let result = add_prepared_subscription_with(&store, prepared, Timeouts::default(), |_, _| {
+        save_config(store.path(), &config).unwrap();
+        committed_bytes = std::fs::read(store.path()).unwrap();
+        Ok(successful_update())
+    });
+    assert!(matches!(
+        result,
+        Err(AddFromUrlError::Commit(AddSubscriptionError::AlreadyExists))
+    ));
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "subscription URL is already added"
+    );
+    assert_eq!(std::fs::read(store.path()).unwrap(), committed_bytes);
+}
+
+#[test]
 fn commit_reloads_preferences_changed_during_fetch() {
     let directory = TestDirectory::new();
     let path = directory.config_path();

@@ -9,17 +9,23 @@ mod text;
 mod update;
 
 pub use fetch::{FetchError, Timeouts, fetch};
-pub use selection::{SelectNodeError, select_node};
+pub use selection::{
+    SelectNodeError, SelectRuleSetError, select_node, select_rule_set, set_kill_switch,
+};
 pub use store::{Store, StoreError};
 pub use subscription_url::{
     normalize as normalize_subscription_url, redacted as redacted_subscription_url,
 };
 pub use subscriptions::{
-    AddSubscriptionError, CommitUpdateError, RemoveSubscriptionError, SubscriptionUpdateResult,
-    UpdateSubscriptionError, add_subscription, commit_subscription_update, remove_subscription,
-    update_all, update_subscription,
+    AddFromUrlError, AddOptions, AddSubscriptionError, CommitUpdateError, PreparedSubscription,
+    RemoveSubscriptionError, SubscriptionUpdateResult, UpdateSubscriptionError,
+    add_prepared_subscription, add_subscription, commit_subscription_update, prepare_subscription,
+    remove_subscription, update_all, update_subscription,
 };
-pub use text::{fetch_error_message, provider_text, terminal_text};
+pub use text::{
+    expiry_text, fetch_error_message, node_address, node_protocol, node_tls, node_transport,
+    provider_text, terminal_text, traffic_text, updated_text,
+};
 pub use update::{UpdateReport, group_skipped};
 
 pub fn is_sensitive_log_target(target: &str) -> bool {

@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rosetun_config::{Outbound, Subscription, SubscriptionId, TlsMode, Transport};
-use rosetun_core::{Timeouts, fetch_error_message, provider_text, terminal_text};
+use rosetun_config::{Subscription, SubscriptionId};
+use rosetun_core::{
+    Timeouts, expiry_text, node_address, node_protocol, node_tls, node_transport, provider_text,
+    terminal_text, traffic_text, updated_text,
+};
 
 use crate::subcommands::SubCommand;
 
@@ -35,57 +38,28 @@ fn add(
 ) -> Result<(), String> {
     let url = rosetun_core::normalize_subscription_url(input)?;
     let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
-    let config = current_store.load().map_err(|error| error.to_string())?;
+    let prepared = rosetun_core::prepare_subscription(
+        &current_store,
+        &url,
+        rosetun_core::AddOptions {
+            name,
+            user_agent,
+            send_hwid,
+        },
+    )
+    .map_err(|error| error.to_string())?;
 
-    if let Some(existing) = config.subscriptions.iter().find(|sub| sub.url == url) {
-        return Err(format!(
-            "already added as {}",
-            terminal_text(existing.id.as_str())
-        ));
-    }
-
-    let parsed_url = url::Url::parse(&url).map_err(|_| "invalid subscription URL".to_owned())?;
-    let host = parsed_url
-        .host_str()
-        .ok_or_else(|| "subscription URL requires a host".to_owned())?
-        .to_owned();
-
-    if parsed_url.scheme() == "http" {
+    if prepared.uses_plain_http() {
         eprintln!(
             "warning: this subscription uses HTTP; its token is transmitted without encryption"
         );
     }
-
-    let mut subscription = Subscription {
-        id: SubscriptionId::new("pending"),
-        name: host.clone(),
-        url,
-        nodes: Vec::new(),
-        auto_update: false,
-        updated_at_unix: None,
-        user_agent,
-        send_hwid,
-        info: None,
-        update_interval_hours: None,
-        support_url: None,
-        web_page_url: None,
-        announce: None,
-        notices: Vec::new(),
-    };
-
-    let parsed = rosetun_core::fetch(&subscription, Timeouts::default())
-        .map_err(|error| fetch_error_message(&error, &subscription.url))?;
-
-    // The parser already applies profile-title and Content-Disposition priority.
-    subscription.name = name.or_else(|| parsed.meta.title.clone()).unwrap_or(host);
-
-    let now = now_unix()?;
     let (subscription, report) =
-        rosetun_core::add_subscription(&current_store, subscription, parsed, now)
+        rosetun_core::add_prepared_subscription(&current_store, prepared, Timeouts::default())
             .map_err(|error| error.to_string())?;
 
     println!("subscription added:");
-    print_subscription(&subscription, now);
+    print_subscription(&subscription, subscription.updated_at_unix.unwrap_or(0));
     print_details(&report.skipped, &report.notices, &subscription.url);
 
     Ok(())
@@ -188,11 +162,8 @@ fn remove(id: &str) -> Result<(), String> {
 }
 
 pub(crate) fn nodes(id: Option<&str>) -> Result<(), String> {
-    let path = rosetun_core::Store::open_default()
+    let config = rosetun_core::Store::open_default()
         .map_err(|error| error.to_string())?
-        .path()
-        .to_owned();
-    let config = rosetun_core::Store::at(&path)
         .load()
         .map_err(|error| error.to_string())?;
 
@@ -212,29 +183,10 @@ pub(crate) fn nodes(id: Option<&str>) -> Result<(), String> {
                 selection.subscription == subscription.id && selection.node == node.id
             });
 
-            let protocol = match &node.outbound {
-                Outbound::Vless(_) => "vless",
-                Outbound::Vmess(_) => "vmess",
-                Outbound::Trojan(_) => "trojan",
-                Outbound::Shadowsocks(_) => "shadowsocks",
-                Outbound::Unknown { .. } => "unknown",
-            };
-            let transport = match &node.stream.transport {
-                Transport::Tcp => "tcp",
-                Transport::Ws { .. } => "ws",
-                Transport::Grpc { .. } => "grpc",
-                Transport::HttpUpgrade { .. } => "httpupgrade",
-            };
-            let tls = match &node.stream.tls {
-                TlsMode::Plain => "plain",
-                TlsMode::Tls(_) => "tls",
-                TlsMode::Reality(_) => "reality",
-            };
-            let server = if node.server.parse::<std::net::Ipv6Addr>().is_ok() {
-                format!("[{}]:{}", node.server, node.port)
-            } else {
-                format!("{}:{}", node.server, node.port)
-            };
+            let protocol = node_protocol(node);
+            let transport = node_transport(node);
+            let tls = node_tls(node);
+            let server = node_address(node);
 
             println!(
                 "{} {}\t{}\t{}\t{protocol}\t{transport}\t{tls}\t{}",
@@ -266,12 +218,7 @@ fn print_subscription(subscription: &Subscription, now: u64) {
 
 fn print_info(subscription: &Subscription, now: u64) {
     if let Some(info) = &subscription.info {
-        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-        let used = (info.upload as f64 + info.download as f64) / GIB;
-        match info.total {
-            Some(total) => println!("  traffic: {used:.2} / {:.2} GiB", total as f64 / GIB),
-            None => println!("  traffic: {used:.2} GiB / unknown"),
-        }
+        println!("  traffic: {}", traffic_text(info));
         if let Some(expiry) = info.expire_unix {
             println!("  {}", expiry_text(expiry, now));
         }
@@ -287,142 +234,11 @@ fn print_info(subscription: &Subscription, now: u64) {
     }
 }
 
-fn count_text(count: u64, unit: &str) -> String {
-    if count == 1 {
-        format!("1 {unit}")
-    } else {
-        format!("{count} {unit}s")
-    }
-}
-
-fn updated_text(timestamp: u64, now: u64) -> String {
-    let elapsed = now.saturating_sub(timestamp);
-    match elapsed {
-        0..60 => "just now".to_owned(),
-        60..3600 => format!("{} ago", count_text(elapsed / 60, "minute")),
-        3600..86400 => format!("{} ago", count_text(elapsed / 3600, "hour")),
-        _ => format!("{} ago", count_text(elapsed / 86400, "day")),
-    }
-}
-
-fn expiry_text(expiry: u64, now: u64) -> String {
-    const DAY: u64 = 24 * 60 * 60;
-    if expiry >= now {
-        format!("expires in {}", count_text((expiry - now) / DAY, "day"))
-    } else {
-        format!("expired {} ago", count_text((now - expiry) / DAY, "day"))
-    }
-}
-
 fn print_details(skipped: &BTreeMap<String, usize>, notices: &[String], subscription_url: &str) {
     for (reason, count) in skipped {
         println!("  skipped {count}: {}", terminal_text(reason));
     }
     for notice in notices {
         println!("  notice: {}", provider_text(notice, subscription_url));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rosetun_core::FetchError;
-    use rosetun_subscription::{ParseError, SkipReason, Skipped};
-
-    #[test]
-    fn generic_device_policy_refusal_has_a_message() {
-        let error = FetchError::Parse(ParseError::DeviceLimit {
-            max_devices_reached: false,
-            not_supported: false,
-            announce: None,
-        });
-
-        assert_eq!(
-            fetch_error_message(
-                &error,
-                "https://sub.example.com/private-token?key=query-secret"
-            ),
-            "subscription access was refused by the device policy"
-        );
-    }
-
-    #[test]
-    fn update_age_handles_interval_boundaries_and_future_timestamps() {
-        for (elapsed, expected) in [
-            (0, "just now"),
-            (59, "just now"),
-            (60, "1 minute ago"),
-            (120, "2 minutes ago"),
-            (3599, "59 minutes ago"),
-            (3600, "1 hour ago"),
-            (7200, "2 hours ago"),
-            (86399, "23 hours ago"),
-            (86400, "1 day ago"),
-            (172800, "2 days ago"),
-        ] {
-            assert_eq!(updated_text(0, elapsed), expected);
-        }
-        assert_eq!(updated_text(101, 100), "just now");
-        assert_eq!(updated_text(u64::MAX, 0), "just now");
-    }
-
-    #[test]
-    fn expiry_uses_signed_direction_without_unsigned_underflow() {
-        assert_eq!(expiry_text(86_400, 0), "expires in 1 day");
-        assert_eq!(expiry_text(0, 86_400), "expired 1 day ago");
-        assert_eq!(expiry_text(172_800, 0), "expires in 2 days");
-        assert_eq!(expiry_text(0, 172_800), "expired 2 days ago");
-        assert_eq!(expiry_text(100, 100), "expires in 0 days");
-        assert_eq!(expiry_text(99, 100), "expired 0 days ago");
-    }
-
-    #[test]
-    fn device_limit_message_uses_flags_and_redacts_announcement() {
-        let error = FetchError::Parse(ParseError::DeviceLimit {
-            max_devices_reached: true,
-            not_supported: true,
-            announce: Some("Visit https://sub.example.com/private-token".to_owned()),
-        });
-        let message = fetch_error_message(&error, "https://sub.example.com/private-token");
-
-        assert!(message.contains("device limit reached"));
-        assert!(message.contains("announce:"));
-        assert!(!message.contains("private-token"));
-
-        let error = FetchError::Parse(ParseError::DeviceLimit {
-            max_devices_reached: false,
-            not_supported: true,
-            announce: None,
-        });
-        assert_eq!(
-            fetch_error_message(&error, "https://sub.example.com/private-token"),
-            "the panel did not accept this device ID"
-        );
-    }
-
-    #[test]
-    fn no_usable_nodes_includes_notices_and_grouped_skips() {
-        let error = FetchError::Parse(ParseError::NoUsableNodes {
-            skipped: vec![
-                Skipped {
-                    index: 1,
-                    scheme: None,
-                    reason: SkipReason::ServiceRecord,
-                },
-                Skipped {
-                    index: 2,
-                    scheme: None,
-                    reason: SkipReason::ServiceRecord,
-                },
-            ],
-            notices: vec!["Subscription expired".to_owned()],
-        });
-
-        let message = fetch_error_message(
-            &error,
-            "https://sub.example.com/private-token?key=query-secret",
-        );
-        assert!(message.contains("notice: Subscription expired"));
-        assert!(message.contains("skipped 2: record contains a provider notice"));
     }
 }

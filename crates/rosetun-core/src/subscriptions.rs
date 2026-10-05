@@ -4,6 +4,137 @@ use rosetun_subscription::Parsed;
 use crate::update::apply_update;
 use crate::{FetchError, Store, StoreError, Timeouts, UpdateReport, fetch};
 
+#[derive(Debug, Clone)]
+pub struct AddOptions {
+    pub name: Option<String>,
+    pub user_agent: Option<String>,
+    pub send_hwid: bool,
+}
+
+impl Default for AddOptions {
+    fn default() -> Self {
+        Self {
+            name: None,
+            user_agent: None,
+            send_hwid: true,
+        }
+    }
+}
+
+pub struct PreparedSubscription {
+    template: Subscription,
+    name: Option<String>,
+    plain_http: bool,
+}
+
+impl std::fmt::Debug for PreparedSubscription {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedSubscription")
+            .field("url", &crate::redacted_subscription_url(&self.template.url))
+            .field("plain_http", &self.plain_http)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedSubscription {
+    pub fn uses_plain_http(&self) -> bool {
+        self.plain_http
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AddFromUrlError {
+    #[error("{0}")]
+    Url(String),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("already added as {0}")]
+    AlreadyExists(String),
+    #[error("invalid subscription URL")]
+    InvalidUrl(#[source] url::ParseError),
+    #[error("subscription URL requires a host")]
+    MissingHost,
+    #[error("{message}")]
+    Fetch {
+        #[source]
+        source: FetchError,
+        message: String,
+    },
+    #[error("system clock is before the Unix epoch")]
+    Clock(#[from] std::time::SystemTimeError),
+    #[error(transparent)]
+    Commit(#[from] AddSubscriptionError),
+}
+
+pub fn prepare_subscription(
+    store: &Store,
+    input: &str,
+    options: AddOptions,
+) -> Result<PreparedSubscription, AddFromUrlError> {
+    let url = crate::normalize_subscription_url(input).map_err(AddFromUrlError::Url)?;
+    let config = store.load()?;
+    if let Some(existing) = config.subscriptions.iter().find(|sub| sub.url == url) {
+        return Err(AddFromUrlError::AlreadyExists(crate::terminal_text(
+            existing.id.as_str(),
+        )));
+    }
+    let parsed_url = url::Url::parse(&url).map_err(AddFromUrlError::InvalidUrl)?;
+    let host = parsed_url.host_str().ok_or(AddFromUrlError::MissingHost)?;
+    let plain_http = parsed_url.scheme() == "http";
+    let template = Subscription {
+        id: SubscriptionId::new("pending"),
+        name: host.to_owned(),
+        url,
+        nodes: Vec::new(),
+        auto_update: false,
+        updated_at_unix: None,
+        user_agent: options.user_agent,
+        send_hwid: options.send_hwid,
+        info: None,
+        update_interval_hours: None,
+        support_url: None,
+        web_page_url: None,
+        announce: None,
+        notices: Vec::new(),
+    };
+    Ok(PreparedSubscription {
+        template,
+        name: options.name,
+        plain_http,
+    })
+}
+
+pub fn add_prepared_subscription(
+    store: &Store,
+    prepared: PreparedSubscription,
+    timeouts: Timeouts,
+) -> Result<(Subscription, UpdateReport), AddFromUrlError> {
+    add_prepared_subscription_with(store, prepared, timeouts, fetch)
+}
+
+pub(crate) fn add_prepared_subscription_with(
+    store: &Store,
+    prepared: PreparedSubscription,
+    timeouts: Timeouts,
+    mut fetch_subscription: impl FnMut(&Subscription, Timeouts) -> Result<Parsed, FetchError>,
+) -> Result<(Subscription, UpdateReport), AddFromUrlError> {
+    let mut template = prepared.template;
+    let parsed = fetch_subscription(&template, timeouts).map_err(|source| {
+        let message = crate::fetch_error_message(&source, &template.url);
+        AddFromUrlError::Fetch { source, message }
+    })?;
+    // The parser already applies profile-title and Content-Disposition priority.
+    template.name = prepared
+        .name
+        .or_else(|| parsed.meta.title.clone())
+        .unwrap_or(template.name);
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    add_subscription(store, template, parsed, now_unix).map_err(Into::into)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateSubscriptionError {
     #[error(transparent)]
