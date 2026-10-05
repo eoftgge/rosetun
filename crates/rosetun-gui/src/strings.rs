@@ -31,6 +31,8 @@ pub(crate) const SELECT_SERVER: &str = "Select a server first";
 pub(crate) const SELECTED_SERVER: &str = "Selected server";
 pub(crate) const SESSION: &str = "Session";
 pub(crate) const KILL_SWITCH: &str = "Kill switch";
+pub(crate) const PROTECTION: &str = "Protection";
+pub(crate) const KILL_SWITCH_DETAIL: &str = "Blocks all internet traffic if the tunnel drops.";
 pub(crate) const RULE_SET: &str = "Rule set";
 pub(crate) const DEFAULT_RULES: &str = "Default · proxy all";
 pub(crate) const NEXT_CONNECT: &str = "Applies on next connect";
@@ -157,8 +159,20 @@ pub(crate) fn filter_count(label: &str, count: usize) -> String {
     format!("{label} {count}")
 }
 
+pub(crate) fn via_engine(engine: &str) -> String {
+    format!("via {engine}")
+}
+
+pub(crate) fn engine_detail(engine: &str) -> String {
+    format!("{ENGINE}: {engine}")
+}
+
 pub(crate) fn subscriptions(count: usize) -> String {
     format!("Subscriptions · {count}")
+}
+
+pub(crate) fn subscription_summary(servers: &str, updated: &str) -> String {
+    format!("{servers} · {updated}")
 }
 
 pub(crate) fn servers(count: usize) -> String {

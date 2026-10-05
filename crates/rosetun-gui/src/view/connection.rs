@@ -111,11 +111,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     .and_then(|status| status.engine)
                     .unwrap_or(state.config.settings.engine);
                 ui.label(
-                    RichText::new(format!("via {}", engine.as_str()))
+                    RichText::new(strings::via_engine(engine.as_str()))
                         .small()
                         .color(theme::TEXT_DIM),
                 )
-                .on_hover_text(format!("{}: {}", strings::ENGINE, engine.as_str()));
+                .on_hover_text(strings::engine_detail(engine.as_str()));
             });
             if let Some(id) = selection_changed.and_then(|status| status.node.as_ref()) {
                 theme::card_frame().show(ui, |ui| {
@@ -139,13 +139,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             }
             theme::card_frame().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.colored_label(theme::TEXT_DIM, "Protection");
+                ui.colored_label(theme::TEXT_DIM, strings::PROTECTION);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(strings::KILL_SWITCH);
                         ui.add(
                             egui::Label::new(
-                                RichText::new("Blocks all internet traffic if the tunnel drops.")
+                                RichText::new(strings::KILL_SWITCH_DETAIL)
                                     .small()
                                     .color(theme::TEXT_MUTED),
                             )
@@ -168,12 +168,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     });
                 });
                 if visible_status.is_some_and(|status| {
-                    matches!(
-                        &status.state,
-                        ConnectionState::Connecting
-                            | ConnectionState::Connected
-                            | ConnectionState::Reconnecting
-                    )
+                    status.state.is_active() || status.state.is_transitional()
                 }) {
                     ui.label(
                         RichText::new(strings::NEXT_CONNECT)

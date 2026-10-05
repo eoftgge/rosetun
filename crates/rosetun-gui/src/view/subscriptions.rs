@@ -211,9 +211,9 @@ fn subscription_card(
             .unwrap_or_else(|| strings::NEVER_UPDATED.to_owned());
         ui.add(
             egui::Label::new(
-                RichText::new(format!(
-                    "{} · {age}",
-                    strings::servers(subscription.nodes.len())
+                RichText::new(strings::subscription_summary(
+                    &strings::servers(subscription.nodes.len()),
+                    &age,
                 ))
                 .small()
                 .color(theme::TEXT_DIM),
