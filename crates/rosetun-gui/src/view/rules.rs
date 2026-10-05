@@ -9,6 +9,9 @@ use crate::{strings, theme};
 const HANDLE_WIDTH: f32 = 28.0;
 const TYPE_WIDTH: f32 = 100.0;
 const TARGET_WIDTH: f32 = 140.0;
+const TARGET_COMBO_WIDTH: f32 = 108.0;
+// With the app theme, the visible ComboBox sits below the center of its allocated area.
+const TARGET_COMBO_TOP_OFFSET: f32 = 8.0;
 const ENABLED_WIDTH: f32 = 90.0;
 const REMOVE_WIDTH: f32 = 44.0;
 const TABLE_INSET: f32 = 10.0;
@@ -178,9 +181,44 @@ fn table_cell(
     ui.allocate_ui_with_layout(
         egui::vec2(width, height),
         egui::Layout::left_to_right(egui::Align::Center),
-        content,
+        |ui| {
+            ui.set_width(width);
+            ui.set_min_height(height);
+            content(ui);
+        },
     )
     .response
+}
+
+fn value_cell(
+    ui: &mut egui::Ui,
+    width: f32,
+    content_height: f32,
+    content: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    table_cell(ui, width, ROW_HEIGHT, |ui| {
+        ui.vertical(|ui| {
+            ui.set_width(width);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(((ROW_HEIGHT - content_height) / 2.0).max(0.0));
+            content(ui);
+        });
+    })
+}
+
+fn target_cell(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) -> egui::Response {
+    table_cell(ui, TARGET_WIDTH, ROW_HEIGHT, |ui| {
+        ui.add_space((TARGET_WIDTH - TARGET_COMBO_WIDTH) / 2.0);
+        ui.vertical(|ui| {
+            ui.set_width(TARGET_COMBO_WIDTH);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(
+                ((ROW_HEIGHT - ui.spacing().interact_size.y) / 2.0 - TARGET_COMBO_TOP_OFFSET)
+                    .max(0.0),
+            );
+            content(ui);
+        });
+    })
 }
 
 fn table_header(ui: &mut egui::Ui, value_width: f32) {
@@ -195,15 +233,15 @@ fn table_header(ui: &mut egui::Ui, value_width: f32) {
             ui.label(strings::VALUE);
         });
         table_cell(ui, TARGET_WIDTH, HEADER_HEIGHT, |ui| {
-            ui.label(strings::TARGET);
+            ui.add_sized(
+                [TARGET_WIDTH, HEADER_HEIGHT],
+                egui::Label::new(strings::TARGET).halign(egui::Align::Center),
+            );
         });
         table_cell(ui, ENABLED_WIDTH, HEADER_HEIGHT, |ui| {
-            ui.with_layout(
-                egui::Layout::left_to_right(egui::Align::Center)
-                    .with_main_align(egui::Align::Center),
-                |ui| {
-                    ui.label(strings::ENABLED);
-                },
+            ui.add_sized(
+                [ENABLED_WIDTH, HEADER_HEIGHT],
+                egui::Label::new(strings::ENABLED).halign(egui::Align::Center),
             );
         });
     });
@@ -257,55 +295,56 @@ fn rule_row(
                     table_cell(ui, TYPE_WIDTH, ROW_HEIGHT, |ui| {
                         ui.label(rule_type(rule));
                     });
-                    table_cell(ui, value_width, ROW_HEIGHT, |ui| {
-                        ui.vertical(|ui| {
-                            ui.set_width(value_width);
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            rule_value(ui, state, rule);
-                        });
+                    let value_height = match &rule.matcher {
+                        RuleMatcher::Process(ProcessMatch::Path(path))
+                            if path.parent().is_some() =>
+                        {
+                            ui.text_style_height(&egui::TextStyle::Body)
+                                + ui.text_style_height(&egui::TextStyle::Small)
+                        }
+                        _ => ui.text_style_height(&egui::TextStyle::Body),
+                    };
+                    value_cell(ui, value_width, value_height, |ui| {
+                        rule_value(ui, state, rule);
                     });
-                    table_cell(ui, TARGET_WIDTH, ROW_HEIGHT, |ui| {
+                    target_cell(ui, |ui| {
                         let mut target = rule.target;
-                        ui.add_enabled_ui(state.can_edit_rules(), |ui| {
-                            egui::ComboBox::from_id_salt("target")
-                                .selected_text(
-                                    RichText::new(target_label(target)).color(target_color(target)),
-                                )
-                                .width(108.0)
-                                .show_ui(ui, |ui| {
-                                    for value in
-                                        [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
-                                    {
-                                        ui.selectable_value(
-                                            &mut target,
-                                            value,
-                                            RichText::new(target_label(value))
-                                                .color(target_color(value)),
-                                        );
-                                    }
-                                });
-                        });
+                        if !state.can_edit_rules() {
+                            ui.disable();
+                        }
+                        egui::ComboBox::from_id_salt("target")
+                            .selected_text(
+                                RichText::new(target_label(target)).color(target_color(target)),
+                            )
+                            .width(TARGET_COMBO_WIDTH)
+                            .show_ui(ui, |ui| {
+                                for value in
+                                    [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
+                                {
+                                    ui.selectable_value(
+                                        &mut target,
+                                        value,
+                                        RichText::new(target_label(value))
+                                            .color(target_color(value)),
+                                    );
+                                }
+                            });
                         if target != rule.target {
                             actions.push(Action::SetRuleTarget(rule.id.clone(), target));
                         }
                     });
                     table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |ui| {
-                        ui.with_layout(
-                            egui::Layout::left_to_right(egui::Align::Center)
-                                .with_main_align(egui::Align::Center),
-                            |ui| {
-                                let mut enabled = rule.enabled;
-                                if ui
-                                    .add_enabled(
-                                        state.can_edit_rules(),
-                                        egui::Checkbox::without_text(&mut enabled),
-                                    )
-                                    .changed()
-                                {
-                                    actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
-                                }
-                            },
-                        );
+                        ui.add_space((ENABLED_WIDTH - ui.spacing().interact_size.y) / 2.0);
+                        let mut enabled = rule.enabled;
+                        if ui
+                            .add_enabled(
+                                state.can_edit_rules(),
+                                egui::Checkbox::without_text(&mut enabled),
+                            )
+                            .changed()
+                        {
+                            actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
+                        }
                     });
                     table_cell(ui, REMOVE_WIDTH, ROW_HEIGHT, |ui| {
                         if ui
@@ -396,55 +435,56 @@ fn default_rule(
                                     .on_hover_text(strings::DEFAULT_RULE_TOOLTIP);
                             })
                             .on_hover_text(strings::DEFAULT_RULE_TOOLTIP);
-                            table_cell(ui, value_width, ROW_HEIGHT, |ui| {
-                                ui.vertical(|ui| {
-                                    ui.set_width(value_width);
-                                    ui.spacing_mut().item_spacing.y = 0.0;
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(strings::ALL_OTHER_TRAFFIC).strong(),
-                                        )
-                                        .truncate(),
-                                    );
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(strings::DEFAULT_FALLBACK)
-                                                .small()
-                                                .color(theme::TEXT_DIM),
-                                        )
-                                        .truncate(),
+                            let value_height = ui.text_style_height(&egui::TextStyle::Body)
+                                + ui.text_style_height(&egui::TextStyle::Small);
+                            value_cell(ui, value_width, value_height, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(strings::ALL_OTHER_TRAFFIC).strong(),
                                     )
-                                    .on_hover_text(strings::DEFAULT_FALLBACK);
-                                });
+                                    .truncate(),
+                                );
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(strings::DEFAULT_FALLBACK)
+                                            .small()
+                                            .color(theme::TEXT_DIM),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(strings::DEFAULT_FALLBACK);
                             });
-                            table_cell(ui, TARGET_WIDTH, ROW_HEIGHT, |ui| {
+                            target_cell(ui, |ui| {
                                 let mut target = set.default_target;
-                                ui.add_enabled_ui(state.can_edit_rules(), |ui| {
-                                    egui::ComboBox::from_id_salt("target")
-                                        .selected_text(
-                                            RichText::new(target_label(target))
-                                                .color(target_color(target)),
-                                        )
-                                        .width(108.0)
-                                        .show_ui(ui, |ui| {
-                                            for value in [RuleTarget::Proxy, RuleTarget::Direct] {
-                                                ui.selectable_value(
-                                                    &mut target,
-                                                    value,
-                                                    RichText::new(target_label(value))
-                                                        .color(target_color(value)),
-                                                );
-                                            }
-                                            if set.default_target == RuleTarget::Block {
-                                                ui.selectable_value(
-                                                    &mut target,
-                                                    RuleTarget::Block,
-                                                    RichText::new(strings::BLOCK)
-                                                        .color(target_color(RuleTarget::Block)),
-                                                );
-                                            }
-                                        });
-                                });
+                                if !state.can_edit_rules() {
+                                    ui.disable();
+                                }
+                                ui.visuals_mut().widgets.inactive.bg_fill = theme::PANEL;
+                                ui.visuals_mut().widgets.noninteractive.bg_fill = theme::PANEL;
+                                egui::ComboBox::from_id_salt("target")
+                                    .selected_text(
+                                        RichText::new(target_label(target))
+                                            .color(target_color(target)),
+                                    )
+                                    .width(TARGET_COMBO_WIDTH)
+                                    .show_ui(ui, |ui| {
+                                        for value in [RuleTarget::Proxy, RuleTarget::Direct] {
+                                            ui.selectable_value(
+                                                &mut target,
+                                                value,
+                                                RichText::new(target_label(value))
+                                                    .color(target_color(value)),
+                                            );
+                                        }
+                                        if set.default_target == RuleTarget::Block {
+                                            ui.selectable_value(
+                                                &mut target,
+                                                RuleTarget::Block,
+                                                RichText::new(strings::BLOCK)
+                                                    .color(target_color(RuleTarget::Block)),
+                                            );
+                                        }
+                                    });
                                 if target != set.default_target {
                                     actions.push(Action::SetDefaultTarget(target));
                                 }
@@ -609,5 +649,84 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
         });
     if !busy && response.should_close() {
         actions.push(Action::CancelRuleDelete);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_cells_keep_columns_and_center_contents() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_width(800.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let type_cell = table_cell(ui, TYPE_WIDTH, ROW_HEIGHT, |ui| {
+                        ui.label("Process");
+                    });
+                    let body_height = ui.text_style_height(&egui::TextStyle::Body);
+                    let small_height = ui.text_style_height(&egui::TextStyle::Small);
+                    let mut single_label = egui::Rect::NOTHING;
+                    let single = value_cell(ui, 160.0, body_height, |ui| {
+                        single_label = ui.add(egui::Label::new("app.exe").truncate()).rect;
+                    });
+                    let mut first_line = egui::Rect::NOTHING;
+                    let mut second_line = egui::Rect::NOTHING;
+                    let double = value_cell(ui, 160.0, body_height + small_height, |ui| {
+                        first_line = ui.add(egui::Label::new("app.exe").truncate()).rect;
+                        second_line = ui
+                            .add(egui::Label::new(RichText::new("C:\\Apps").small()).truncate())
+                            .rect;
+                    });
+                    assert!((single.rect.left() - type_cell.rect.right()).abs() < 1.0);
+                    assert!((double.rect.left() - single.rect.right()).abs() < 1.0);
+                    assert!((single.rect.width() - 160.0).abs() < 1.0);
+                    assert!((single_label.center().y - single.rect.center().y).abs() < 3.0);
+                    assert!(
+                        ((first_line.top() + second_line.bottom()) / 2.0 - double.rect.center().y)
+                            .abs()
+                            < 3.0
+                    );
+                    let mut combo_rect = egui::Rect::NOTHING;
+                    let target_cell = target_cell(ui, |ui| {
+                        combo_rect = egui::ComboBox::from_id_salt("target")
+                            .selected_text("Proxy")
+                            .width(TARGET_COMBO_WIDTH)
+                            .show_ui(ui, |_| {})
+                            .response
+                            .rect;
+                    });
+                    let mut checked = true;
+                    let mut checkbox_rect = egui::Rect::NOTHING;
+                    let enabled_cell = table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |ui| {
+                        ui.add_space((ENABLED_WIDTH - ui.spacing().interact_size.y) / 2.0);
+                        checkbox_rect = ui.add(egui::Checkbox::without_text(&mut checked)).rect;
+                    });
+                    assert!(
+                        (combo_rect.center().x - target_cell.rect.center().x).abs() < 3.0,
+                        "combo horizontal: {:?} vs {:?}",
+                        combo_rect,
+                        target_cell.rect
+                    );
+                    assert!(
+                        (combo_rect.center().y - target_cell.rect.center().y).abs() < 3.0,
+                        "combo vertical: {:?} vs {:?}",
+                        combo_rect,
+                        target_cell.rect
+                    );
+                    assert!(
+                        (checkbox_rect.center().x - enabled_cell.rect.center().x).abs() < 3.0,
+                        "checkbox horizontal: {:?} vs {:?}",
+                        checkbox_rect,
+                        enabled_cell.rect
+                    );
+                });
+            });
+        });
+        output.textures_delta.clear();
     }
 }
