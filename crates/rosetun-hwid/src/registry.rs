@@ -11,8 +11,11 @@ const MAX_READ_ATTEMPTS: usize = 4;
 
 pub(super) fn read_string(subkey: &str, value: &'static str) -> Result<String, HwidError> {
     let bytes = read_value(subkey, value, RRF_RT_REG_SZ, REG_SZ)?;
+    decode_string(&bytes, value)
+}
 
-    if bytes.len() < 2 || bytes.len() % 2 != 0 {
+fn decode_string(bytes: &[u8], value: &'static str) -> Result<String, HwidError> {
+    if !bytes.len().is_multiple_of(2) {
         return Err(HwidError::InvalidRegistryValue { value });
     }
 
@@ -21,7 +24,10 @@ pub(super) fn read_string(subkey: &str, value: &'static str) -> Result<String, H
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
 
-    if units.pop() != Some(0) || units.contains(&0) {
+    while units.last() == Some(&0) {
+        units.pop();
+    }
+    if units.contains(&0) {
         return Err(HwidError::InvalidRegistryValue { value });
     }
 
@@ -127,4 +133,52 @@ fn read_value(
     }
 
     Err(HwidError::RegistryValueUnstable { value })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_string;
+    use crate::HwidError;
+
+    fn bytes(units: &[u16]) -> Vec<u8> {
+        units.iter().flat_map(|unit| unit.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn one_or_multiple_trailing_nuls_are_accepted() {
+        for units in [vec![0x41, 0], vec![0x41, 0, 0], vec![0x41]] {
+            assert_eq!(decode_string(&bytes(&units), "Test").unwrap(), "A");
+        }
+    }
+
+    #[test]
+    fn embedded_nul_is_rejected() {
+        assert!(matches!(
+            decode_string(&bytes(&[0x41, 0, 0x42, 0]), "Test"),
+            Err(HwidError::InvalidRegistryValue { value: "Test" })
+        ));
+    }
+
+    #[test]
+    fn empty_strings_are_accepted() {
+        for units in [vec![], vec![0], vec![0, 0]] {
+            assert_eq!(decode_string(&bytes(&units), "Test").unwrap(), "");
+        }
+    }
+
+    #[test]
+    fn odd_byte_length_is_rejected() {
+        assert!(matches!(
+            decode_string(&[0x41], "Test"),
+            Err(HwidError::InvalidRegistryValue { value: "Test" })
+        ));
+    }
+
+    #[test]
+    fn invalid_utf16_is_rejected() {
+        assert!(matches!(
+            decode_string(&bytes(&[0xd800, 0]), "Test"),
+            Err(HwidError::InvalidRegistryValue { value: "Test" })
+        ));
+    }
 }

@@ -93,17 +93,9 @@ pub fn device_info() -> Result<DeviceInfo, HwidError> {
     let machine_guid = registry::read_string(r"SOFTWARE\Microsoft\Cryptography", "MachineGuid")?;
     let hwid = hwid_from_machine_id(&machine_guid)?;
 
-    let version_key = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
-    let major = registry::read_dword(version_key, "CurrentMajorVersionNumber")?;
-    let minor = registry::read_dword(version_key, "CurrentMinorVersionNumber")?;
-    let build = registry::read_string(version_key, "CurrentBuildNumber")?;
-    let build = build.trim();
-
-    if build.is_empty() || !build.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(HwidError::InvalidRegistryValue {
-            value: "CurrentBuildNumber",
-        });
-    }
+    // Only the HWID is required: a panel with a device limit rejects requests
+    // without it, while the version and model are informational.
+    let os_version = windows_version().unwrap_or_else(|| "unknown".to_owned());
 
     let model = registry::read_string(r"HARDWARE\DESCRIPTION\System\BIOS", "SystemProductName")
         .ok()
@@ -113,9 +105,20 @@ pub fn device_info() -> Result<DeviceInfo, HwidError> {
     Ok(DeviceInfo {
         hwid,
         os: "Windows",
-        os_version: sanitize_header_value(&format!("{major}.{minor}.{build}")),
+        os_version: sanitize_header_value(&os_version),
         model: sanitize_header_value(model.trim()),
     })
+}
+
+#[cfg(windows)]
+fn windows_version() -> Option<String> {
+    let key = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+    let major = registry::read_dword(key, "CurrentMajorVersionNumber").ok()?;
+    let minor = registry::read_dword(key, "CurrentMinorVersionNumber").ok()?;
+    let build = registry::read_string(key, "CurrentBuildNumber").ok()?;
+    let build = build.trim();
+    (!build.is_empty() && build.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| format!("{major}.{minor}.{build}"))
 }
 
 #[cfg(target_os = "linux")]

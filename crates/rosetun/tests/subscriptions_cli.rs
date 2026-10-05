@@ -17,10 +17,8 @@ impl TestDirectory {
     fn new() -> Self {
         loop {
             let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "rosetun-cli-{}-{sequence}",
-                std::process::id()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("rosetun-cli-{}-{sequence}", std::process::id()));
             match fs::create_dir(&path) {
                 Ok(()) => return Self(path),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -107,7 +105,7 @@ impl Server {
                 "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n",
                 body.len()
             )
-                .into_bytes();
+            .into_bytes();
             response.extend_from_slice(&headers);
             response.extend_from_slice(b"\r\n");
 
@@ -152,8 +150,7 @@ fn assert_success(output: &Output) {
 }
 
 fn base64(input: &[u8]) -> Vec<u8> {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = Vec::new();
     for chunk in input.chunks(3) {
         let a = chunk[0];
@@ -216,7 +213,12 @@ fn base64_add_select_and_remove_preserve_independent_rules() {
     );
 
     assert_success(&directory.run(&[
-        "sub", "add", &server.url, "--name", "Chosen name", "--no-hwid",
+        "sub",
+        "add",
+        &server.url,
+        "--name",
+        "Chosen name",
+        "--no-hwid",
     ]));
 
     let mut config = directory.read_config();
@@ -236,7 +238,8 @@ fn base64_add_select_and_remove_preserve_independent_rules() {
     fs::write(
         directory.config_path(),
         serde_json::to_vec(&config).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     assert_success(&directory.run(&["select", "1", &node_id]));
     assert_success(&directory.run(&["nodes", "1"]));
@@ -262,7 +265,11 @@ fn rejected_add_preserves_existing_configuration_bytes() {
             &b"x-hwid-max-devices-reached: true\r\n"[..],
             NODE.as_bytes().to_vec(),
         ),
-        (200, &b""[..], b"<!doctype html><html>Denied</html>".to_vec()),
+        (
+            200,
+            &b""[..],
+            b"<!doctype html><html>Denied</html>".to_vec(),
+        ),
     ] {
         let server = Server::start(status, headers, body);
         let output = directory.run(&["sub", "add", &server.url, "--no-hwid"]);
@@ -302,7 +309,7 @@ fn partial_update_returns_failure_but_persists_successful_subscription() {
         directory.config_path(),
         serde_json::to_vec(&initial).unwrap(),
     )
-        .unwrap();
+    .unwrap();
 
     let output = directory.run(&["sub", "update"]);
     assert_eq!(output.status.code(), Some(1));
@@ -311,7 +318,12 @@ fn partial_update_returns_failure_but_persists_successful_subscription() {
     let saved = directory.read_config();
     assert_eq!(saved["subscriptions"][0]["updated_at_unix"], 1);
     assert_eq!(saved["subscriptions"][0]["nodes"], serde_json::json!([]));
-    assert!(saved["subscriptions"][1]["updated_at_unix"].as_u64().unwrap() > 1);
+    assert!(
+        saved["subscriptions"][1]["updated_at_unix"]
+            .as_u64()
+            .unwrap()
+            > 1
+    );
     assert_eq!(
         saved["subscriptions"][1]["nodes"][0]["server"],
         "new.example.com"
@@ -321,18 +333,17 @@ fn partial_update_returns_failure_but_persists_successful_subscription() {
 #[test]
 fn invalid_utf8_header_is_ignored_without_losing_valid_nodes() {
     let directory = TestDirectory::new();
-    let server = Server::start(
-        200,
-        b"Profile-Title: \xff\r\n",
-        NODE.as_bytes().to_vec(),
-    );
+    let server = Server::start(200, b"Profile-Title: \xff\r\n", NODE.as_bytes().to_vec());
 
     assert_success(&directory.run(&["sub", "add", &server.url, "--no-hwid"]));
 
     let config = directory.read_config();
     assert_eq!(config["subscriptions"][0]["name"], "127.0.0.1");
     assert_eq!(
-        config["subscriptions"][0]["nodes"].as_array().unwrap().len(),
+        config["subscriptions"][0]["nodes"]
+            .as_array()
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -368,4 +379,43 @@ fn oversized_decoded_gzip_body_is_rejected_without_creating_config() {
     assert_safe(&output);
     assert!(text(&output).contains("response too large"));
     assert!(!directory.config_path().exists());
+}
+
+#[test]
+fn list_preserves_provider_links_and_redacts_subscription_secrets() {
+    let directory = TestDirectory::new();
+    let config = serde_json::json!({
+        "subscriptions": [{
+            "id": "1",
+            "name": "Example",
+            "url": "https://sub.example.com/private-token?key=query-secret",
+            "nodes": [],
+            "announce": concat!(
+                "Renew at https://t.me/example_bot; ",
+                "subscription https://sub.example.com/private-token?key=query-secret; ",
+                "path /private-token?key=query-secret",
+                "\n\u{202e}"
+            ),
+            "support_url": "https://t.me/example_support",
+            "web_page_url": "https://provider.example.com/account/renew"
+        }]
+    });
+    fs::write(
+        directory.config_path(),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+
+    let output = directory.run(&["sub", "list"]);
+    assert_success(&output);
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Renew at https://t.me/example_bot"));
+    assert!(stdout.contains("subscription https://sub.example.com/…"));
+    assert!(stdout.contains("path /…"));
+    assert!(stdout.contains("support: https://t.me/example_support"));
+    assert!(stdout.contains("web page: https://provider.example.com/account/renew"));
+    assert!(!stdout.contains('\u{202e}'));
+    assert!(!stdout.contains("private-token"));
+    assert!(!stdout.contains("query-secret"));
 }

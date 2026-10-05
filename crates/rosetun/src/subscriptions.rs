@@ -90,7 +90,7 @@ fn add(
     };
 
     let parsed = fetch::fetch(&subscription, Timeouts::default())
-        .map_err(|error| fetch_error_message(&error))?;
+        .map_err(|error| fetch_error_message(&error, &subscription.url))?;
 
     // The parser already applies profile-title and Content-Disposition priority.
     subscription.name = name.or_else(|| parsed.meta.title.clone()).unwrap_or(host);
@@ -107,7 +107,7 @@ fn add(
         .expect("the newly added subscription is present");
     println!("subscription added:");
     print_subscription(subscription, now);
-    print_details(&report.skipped, &report.notices);
+    print_details(&report.skipped, &report.notices, &subscription.url);
 
     Ok(())
 }
@@ -119,14 +119,12 @@ fn commit_update(
     fetched: Result<rosetun_subscription::Parsed, FetchError>,
     now: u64,
 ) -> Result<update::UpdateReport, String> {
-    let parsed = fetched.map_err(|error| fetch_error_message(&error))?;
-    if !config
+    let subscription = config
         .subscriptions
         .iter()
-        .any(|subscription| &subscription.id == id)
-    {
-        return Err("subscription does not exist".to_owned());
-    }
+        .find(|subscription| &subscription.id == id)
+        .ok_or_else(|| "subscription does not exist".to_owned())?;
+    let parsed = fetched.map_err(|error| fetch_error_message(&error, &subscription.url))?;
 
     // Publish in-memory changes only after the replacement is persisted.
     let mut candidate = config.clone();
@@ -188,13 +186,12 @@ fn update_subscriptions(id: Option<&str>) -> Result<(), String> {
         if report.selection_cleared {
             println!("active node selection cleared: the selected node was removed");
         }
-        print_details(&report.skipped, &report.notices);
-
         let subscription = config
             .subscriptions
             .iter()
             .find(|sub| sub.id == id)
             .expect("the updated subscription is present");
+        print_details(&report.skipped, &report.notices, &subscription.url);
         print_info(subscription, now);
     }
 
@@ -313,7 +310,7 @@ fn print_subscription(subscription: &Subscription, now: u64) {
         subscription.nodes.len()
     );
     match subscription.updated_at_unix {
-        Some(timestamp) => println!("  last updated: {timestamp} (Unix seconds)"),
+        Some(timestamp) => println!("  last updated: {}", updated_text(timestamp, now)),
         None => println!("  last updated: never"),
     }
     print_info(subscription, now);
@@ -332,7 +329,23 @@ fn print_info(subscription: &Subscription, now: u64) {
         }
     }
     if let Some(announce) = &subscription.announce {
-        println!("  announce: {}", terminal_text(announce));
+        println!("  announce: {}", provider_text(announce, &subscription.url));
+    }
+    if let Some(url) = &subscription.support_url {
+        println!("  support: {}", terminal_text(url));
+    }
+    if let Some(url) = &subscription.web_page_url {
+        println!("  web page: {}", terminal_text(url));
+    }
+}
+
+fn updated_text(timestamp: u64, now: u64) -> String {
+    let elapsed = now.saturating_sub(timestamp);
+    match elapsed {
+        0..60 => "just now".to_owned(),
+        60..3600 => format!("{} minutes ago", elapsed / 60),
+        3600..86400 => format!("{} hours ago", elapsed / 3600),
+        _ => format!("{} days ago", elapsed / 86400),
     }
 }
 
@@ -345,16 +358,16 @@ fn expiry_text(expiry: u64, now: u64) -> String {
     }
 }
 
-fn print_details(skipped: &BTreeMap<String, usize>, notices: &[String]) {
+fn print_details(skipped: &BTreeMap<String, usize>, notices: &[String], subscription_url: &str) {
     for (reason, count) in skipped {
         println!("  skipped {count}: {}", terminal_text(reason));
     }
     for notice in notices {
-        println!("  notice: {}", terminal_text(notice));
+        println!("  notice: {}", provider_text(notice, subscription_url));
     }
 }
 
-fn fetch_error_message(error: &FetchError) -> String {
+fn fetch_error_message(error: &FetchError, subscription_url: &str) -> String {
     match error {
         FetchError::Parse(ParseError::DeviceLimit {
             max_devices_reached,
@@ -372,7 +385,7 @@ fn fetch_error_message(error: &FetchError) -> String {
             let mut output = message.to_owned();
             if let Some(announce) = announce {
                 output.push_str("\n  announce: ");
-                output.push_str(&terminal_text(announce));
+                output.push_str(&provider_text(announce, subscription_url));
             }
             output
         }
@@ -380,7 +393,7 @@ fn fetch_error_message(error: &FetchError) -> String {
             let mut output = error.to_string();
             for notice in notices {
                 output.push_str("\n  notice: ");
-                output.push_str(&terminal_text(notice));
+                output.push_str(&provider_text(notice, subscription_url));
             }
             for (reason, count) in update::group_skipped(skipped) {
                 output.push_str(&format!("\n  skipped {count}: {}", terminal_text(&reason)));
@@ -392,7 +405,7 @@ fn fetch_error_message(error: &FetchError) -> String {
 }
 
 pub(crate) fn terminal_text(input: &str) -> String {
-    let cleaned: String = input
+    input
         .chars()
         .map(|character| {
             if character.is_control()
@@ -412,38 +425,28 @@ pub(crate) fn terminal_text(input: &str) -> String {
                 character
             }
         })
-        .collect();
-
-    let mut output = String::new();
-    let mut remainder = cleaned.as_str();
-
-    // Even an announcement can echo a subscription URL. Redact every HTTP URL
-    // before terminal output, not just the subscription's dedicated URL field.
-    while let Some(offset) = find_http_url(remainder) {
-        output.push_str(&remainder[..offset]);
-        remainder = &remainder[offset..];
-
-        let end = remainder
-            .find(char::is_whitespace)
-            .unwrap_or(remainder.len());
-        output.push_str(&subscription_url::redacted(&remainder[..end]));
-        remainder = &remainder[end..];
-    }
-    output.push_str(remainder);
-    output
+        .collect()
 }
 
-fn find_http_url(input: &str) -> Option<usize> {
-    input.char_indices().find_map(|(offset, _)| {
-        let suffix = &input[offset..];
-        let found = suffix
-            .get(..7)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
-            || suffix
-                .get(..8)
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"));
-        found.then_some(offset)
-    })
+fn provider_text(text: &str, subscription_url: &str) -> String {
+    let mut output = terminal_text(text);
+    let secret = terminal_text(subscription_url);
+    if !secret.is_empty() {
+        output = output.replace(&secret, &subscription_url::redacted(subscription_url));
+    }
+
+    if let Ok(url) = url::Url::parse(subscription_url) {
+        let mut path_and_query = url.path().to_owned();
+        if let Some(query) = url.query() {
+            path_and_query.push('?');
+            path_and_query.push_str(query);
+        }
+        if path_and_query.len() > 8 {
+            output = output.replace(&terminal_text(&path_and_query), "/…");
+        }
+    }
+
+    output
 }
 
 #[cfg(test)]
@@ -708,7 +711,10 @@ mod tests {
         });
 
         assert_eq!(
-            fetch_error_message(&error),
+            fetch_error_message(
+                &error,
+                "https://sub.example.com/private-token?key=query-secret"
+            ),
             "subscription access was refused by the device policy"
         );
     }
@@ -722,22 +728,86 @@ mod tests {
     }
 
     #[test]
-    fn terminal_text_redacts_urls_inside_server_text() {
-        let text = terminal_text(
-            "See (https://user:password@sub.example.com/private-token?key=query-secret) now",
+    fn provider_text_preserves_renewal_links() {
+        assert_eq!(
+            provider_text(
+                "Renew at https://t.me/example_bot",
+                "https://sub.example.com/private-token?key=query-secret",
+            ),
+            "Renew at https://t.me/example_bot"
         );
+    }
 
-        assert!(text.contains("https://sub.example.com/…"));
-        assert!(!text.contains("password"));
-        assert!(!text.contains("private-token"));
-        assert!(!text.contains("query-secret"));
+    #[test]
+    fn provider_text_redacts_subscription_url_and_token_path() {
+        let subscription_url = "https://sub.example.com/private-token?key=query-secret";
+
+        assert_eq!(
+            provider_text(
+                &format!("Subscription: {subscription_url}"),
+                subscription_url,
+            ),
+            "Subscription: https://sub.example.com/…"
+        );
+        assert_eq!(
+            provider_text(
+                "Subscription path: /private-token?key=query-secret",
+                subscription_url,
+            ),
+            "Subscription path: /…"
+        );
+    }
+
+    #[test]
+    fn provider_text_does_not_redact_short_paths() {
+        assert_eq!(
+            provider_text("Open /renew", "https://sub.example.com/renew"),
+            "Open /renew"
+        );
+    }
+
+    #[test]
+    fn terminal_text_preserves_links_and_unicode() {
+        assert_eq!(
+            terminal_text("消息 HTTPS://sub.example.com/private"),
+            "消息 HTTPS://sub.example.com/private"
+        );
+    }
+
+    #[test]
+    fn provider_text_removes_controls_and_bidi() {
+        assert_eq!(
+            provider_text(
+                "Renew\nat\u{202e} https://t.me/example_bot\x1b",
+                "https://sub.example.com/private-token",
+            ),
+            "Renew at  https://t.me/example_bot "
+        );
+    }
+
+    #[test]
+    fn update_age_handles_interval_boundaries_and_future_timestamps() {
+        for (elapsed, expected) in [
+            (0, "just now"),
+            (59, "just now"),
+            (60, "1 minutes ago"),
+            (3599, "59 minutes ago"),
+            (3600, "1 hours ago"),
+            (86399, "23 hours ago"),
+            (86400, "1 days ago"),
+            (172800, "2 days ago"),
+        ] {
+            assert_eq!(updated_text(0, elapsed), expected);
+        }
+        assert_eq!(updated_text(101, 100), "just now");
+        assert_eq!(updated_text(u64::MAX, 0), "just now");
     }
 
     #[test]
     fn terminal_text_handles_uppercase_schemes_and_unicode() {
         assert_eq!(
             terminal_text("消息 HTTPS://sub.example.com/private"),
-            "消息 https://sub.example.com/…"
+            "消息 HTTPS://sub.example.com/private"
         );
     }
 
@@ -756,7 +826,7 @@ mod tests {
             not_supported: true,
             announce: Some("Visit https://sub.example.com/private-token".to_owned()),
         });
-        let message = fetch_error_message(&error);
+        let message = fetch_error_message(&error, "https://sub.example.com/private-token");
 
         assert!(message.contains("device limit reached"));
         assert!(message.contains("announce:"));
@@ -768,7 +838,7 @@ mod tests {
             announce: None,
         });
         assert_eq!(
-            fetch_error_message(&error),
+            fetch_error_message(&error, "https://sub.example.com/private-token"),
             "the panel did not accept this device ID"
         );
     }
@@ -791,7 +861,10 @@ mod tests {
             notices: vec!["Subscription expired".to_owned()],
         });
 
-        let message = fetch_error_message(&error);
+        let message = fetch_error_message(
+            &error,
+            "https://sub.example.com/private-token?key=query-secret",
+        );
         assert!(message.contains("notice: Subscription expired"));
         assert!(message.contains("skipped 2: record contains a provider notice"));
     }

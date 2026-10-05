@@ -32,6 +32,12 @@ pub(crate) enum FetchError {
     InvalidUserAgent,
     InvalidDeviceId,
     RequestFailed,
+    Timeout,
+    HostNotFound,
+    ConnectionFailed,
+    TooManyRedirects,
+    InsecureRedirect,
+    Tls(String),
     ResponseTooLarge,
     BodyReadFailed,
     NotFound { sent_hwid: bool },
@@ -43,26 +49,25 @@ pub(crate) enum FetchError {
 impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidUrl => {
-                f.write_str("invalid subscription URL")
-            }
+            Self::InvalidUrl => f.write_str("invalid subscription URL"),
             Self::InvalidUserAgent => {
                 f.write_str("User-Agent must contain printable ASCII characters")
             }
-            Self::InvalidDeviceId => {
-                f.write_str("device ID has an invalid format")
+            Self::InvalidDeviceId => f.write_str("device ID has an invalid format"),
+            Self::RequestFailed => f.write_str("subscription request failed"),
+            Self::Timeout => f.write_str("subscription server did not respond in time"),
+            Self::HostNotFound => f.write_str("subscription server name could not be resolved"),
+            Self::ConnectionFailed => f.write_str("could not connect to the subscription server"),
+            Self::TooManyRedirects => f.write_str("too many redirects"),
+            Self::InsecureRedirect => {
+                f.write_str("the server redirected to an unencrypted http:// address; refused")
             }
-            Self::RequestFailed => {
-                f.write_str(
-                    "subscription request failed; check connectivity, TLS certificates, redirects and timeouts",
-                )
-            }
-            Self::ResponseTooLarge => {
-                f.write_str("response too large")
-            }
-            Self::BodyReadFailed => {
-                f.write_str("could not read the subscription response")
-            }
+            Self::Tls(detail) => write!(
+                f,
+                "TLS error: {detail}; HTTPS inspection by an antivirus or a wrong system clock can cause this"
+            ),
+            Self::ResponseTooLarge => f.write_str("response too large"),
+            Self::BodyReadFailed => f.write_str("could not read the subscription response"),
             Self::NotFound { sent_hwid } => {
                 f.write_str(
                     "subscription not found; panels with a device limit also answer 404 when no device ID is sent",
@@ -73,9 +78,7 @@ impl fmt::Display for FetchError {
                 Ok(())
             }
             Self::AccessDenied => {
-                f.write_str(
-                    "access denied; the panel may only serve specific client apps",
-                )
+                f.write_str("access denied; the panel may only serve specific client apps")
             }
             Self::HttpStatus(status) => {
                 write!(f, "subscription server returned HTTP {status}")
@@ -164,9 +167,30 @@ fn fetch_with_device(
             .header("x-device-model", sanitize_header_value(&device.model));
     }
 
-    // Network errors can embed the request URI, so their Display, Debug and
-    // source chain are deliberately not retained in our diagnostic type.
-    let mut response = request.call().map_err(|_| FetchError::RequestFailed)?;
+    // ureq errors can embed the request URI, so only their kind is kept;
+    // rustls errors describe the certificate problem and carry no URI.
+    let mut response = request.call().map_err(|error| match error {
+        ureq::Error::Timeout(_) => FetchError::Timeout,
+        ureq::Error::HostNotFound => FetchError::HostNotFound,
+        ureq::Error::ConnectionFailed => FetchError::ConnectionFailed,
+        ureq::Error::Io(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::AddrNotAvailable
+                    | std::io::ErrorKind::NetworkUnreachable
+                    | std::io::ErrorKind::HostUnreachable
+            ) =>
+        {
+            FetchError::ConnectionFailed
+        }
+        ureq::Error::TooManyRedirects | ureq::Error::RedirectFailed => FetchError::TooManyRedirects,
+        ureq::Error::RequireHttpsOnly(_) => FetchError::InsecureRedirect,
+        ureq::Error::Rustls(error) => FetchError::Tls(error.to_string()),
+        _ => FetchError::RequestFailed,
+    })?;
 
     let status = response.status().as_u16();
     match status {
@@ -202,7 +226,7 @@ fn fetch_with_device(
             .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
             .map(str::to_owned)
     })
-        .map_err(FetchError::Parse)
+    .map_err(FetchError::Parse)
 }
 
 #[cfg(test)]
@@ -539,7 +563,8 @@ mod tests {
 
         let error = fetch_with_device(&subscription(&server.url), timeouts(), None).unwrap_err();
 
-        assert!(matches!(error, FetchError::RequestFailed));
+        assert!(matches!(error, FetchError::TooManyRedirects));
+        assert_eq!(error.to_string(), "too many redirects");
         assert_redacted(&error);
     }
 
@@ -570,8 +595,40 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, FetchError::RequestFailed));
+        assert!(matches!(error, FetchError::Timeout));
+        assert_eq!(
+            error.to_string(),
+            "subscription server did not respond in time"
+        );
         assert_redacted(&error);
+    }
+
+    #[test]
+    fn closed_port_reports_connection_failure_without_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+
+        let url = format!("http://{address}{SECRET_SUFFIX}");
+        let error = fetch_with_device(
+            &subscription(&url),
+            Timeouts {
+                connect: Duration::from_secs(5),
+                global: Duration::from_secs(10),
+            },
+            None,
+        )
+        .unwrap_err();
+
+        assert_redacted(&error);
+        assert!(
+            matches!(error, FetchError::ConnectionFailed),
+            "expected ConnectionFailed, got {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "could not connect to the subscription server"
+        );
     }
 
     #[test]
