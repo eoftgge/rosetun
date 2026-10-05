@@ -111,7 +111,7 @@ fn subscription_card(
                 strings::last_updated(&rosetun_core::updated_text(timestamp, display::now_unix()))
             })
             .unwrap_or_else(|| strings::NEVER_UPDATED.to_owned());
-        ui.add(egui::Label::new(RichText::new(age).size(11.0).color(theme::TEXT_DIM)).wrap());
+        ui.add(egui::Label::new(RichText::new(age).small().color(theme::TEXT_DIM)).wrap());
         if state.subscription_busy(&subscription.id) {
             ui.colored_label(theme::ROSE_LIGHT, strings::UPDATING);
         }
@@ -129,7 +129,7 @@ fn subscription_card(
                 RichText::new(display::safe_text(
                     &rosetun_core::redacted_subscription_url(&subscription.url),
                 ))
-                .size(11.0)
+                .small()
                 .color(theme::TEXT_DIM),
             )
             .wrap(),
@@ -228,7 +228,7 @@ fn subscription_card(
                             rosetun_core::node_tls(node),
                             rosetun_core::node_transport(node),
                         ))
-                        .size(11.0)
+                        .small()
                         .color(theme::TEXT_DIM),
                     )
                     .wrap(),
@@ -236,7 +236,7 @@ fn subscription_card(
                 ui.add(
                     egui::Label::new(
                         RichText::new(state.text(&rosetun_core::node_address(node)))
-                            .size(11.0)
+                            .small()
                             .color(theme::TEXT_DIM),
                     )
                     .wrap(),

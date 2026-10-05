@@ -1,6 +1,7 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget};
 
+use crate::icons::{self, Icon};
 use crate::rules::{
     RuleFilter, TypeFilter, drop_target, reorder_arrows, rule_counts, visible_rules,
 };
@@ -205,14 +206,14 @@ fn rule_row(
                 } else if !rule.enabled {
                     ui.multiply_opacity(0.7);
                 }
-                ui.horizontal_centered(|ui| {
+                ui.horizontal(|ui| {
                     if reorder {
                         ui.dnd_drag_source(ui.id().with("handle"), rule.id.clone(), |ui| {
-                            ui.label(strings::DRAG_HANDLE);
+                            icons::icon_button(ui, Icon::Grip, true);
                         });
                     } else {
-                        ui.add_enabled(false, egui::Button::new(strings::DRAG_HANDLE).frame(false))
-                            .on_disabled_hover_text(strings::REORDER_DISABLED);
+                        icons::icon_button(ui, Icon::Grip, false)
+                            .on_hover_text(strings::REORDER_DISABLED);
                     }
                     ui.add_sized([90.0, 22.0], egui::Label::new(rule_type(rule)));
                     ui.vertical(|ui| {
@@ -262,16 +263,10 @@ fn rule_row(
                         &state.rule_screen.filter,
                         !state.can_edit_rules(),
                     );
-                    if ui
-                        .add_enabled(up, egui::Button::new(strings::MOVE_UP))
-                        .clicked()
-                    {
+                    if icons::icon_button(ui, Icon::Up, up).clicked() {
                         actions.push(Action::MoveRule(rule.id.clone(), index - 1));
                     }
-                    if ui
-                        .add_enabled(down, egui::Button::new(strings::MOVE_DOWN))
-                        .clicked()
-                    {
+                    if icons::icon_button(ui, Icon::Down, down).clicked() {
                         actions.push(Action::MoveRule(rule.id.clone(), index + 1));
                     }
                     if ui
@@ -326,7 +321,7 @@ fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
             ui.add(
                 egui::Label::new(
                     RichText::new(state.text(&parent.to_string_lossy()))
-                        .size(11.0)
+                        .small()
                         .color(theme::TEXT_DIM),
                 )
                 .wrap(),

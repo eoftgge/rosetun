@@ -185,7 +185,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                                             || strings::PATH_UNAVAILABLE.into(),
                                             |path| path.to_string_lossy(),
                                         ))
-                                        .size(11.0)
+                                        .small()
                                         .color(theme::TEXT_DIM),
                                     )
                                     .wrap(),

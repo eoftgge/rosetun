@@ -7,6 +7,7 @@
 mod actions;
 mod app;
 mod display;
+mod icons;
 mod rules;
 mod state;
 mod strings;

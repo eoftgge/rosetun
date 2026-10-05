@@ -1,4 +1,6 @@
-use eframe::egui::{self, Color32, CornerRadius, Shadow, Stroke, Style, Visuals};
+use eframe::egui::{
+    self, Color32, CornerRadius, FontFamily, FontId, Shadow, Stroke, Style, TextStyle, Visuals,
+};
 
 pub(crate) const BG: Color32 = Color32::from_rgb(0x17, 0x10, 0x14);
 pub(crate) const PANEL: Color32 = Color32::from_rgb(0x1B, 0x14, 0x18);
@@ -55,6 +57,26 @@ pub(crate) fn apply(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(10.0, 8.0);
     style.spacing.button_padding = egui::vec2(14.0, 8.0);
     style.spacing.window_margin = egui::Margin::same(20);
+    style.text_styles = [
+        (
+            TextStyle::Small,
+            FontId::new(12.0, FontFamily::Proportional),
+        ),
+        (TextStyle::Body, FontId::new(15.0, FontFamily::Proportional)),
+        (
+            TextStyle::Button,
+            FontId::new(15.0, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Monospace,
+            FontId::new(14.0, FontFamily::Monospace),
+        ),
+        (
+            TextStyle::Heading,
+            FontId::new(24.0, FontFamily::Proportional),
+        ),
+    ]
+    .into();
     style.visuals = visuals;
     ctx.set_global_style(style);
 }
