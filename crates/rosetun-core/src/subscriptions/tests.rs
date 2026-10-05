@@ -73,6 +73,54 @@ fn test_config() -> AppConfig {
     }
 }
 
+#[test]
+fn moving_subscriptions_preserves_selection_and_subscription_contents() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let mut original = test_config();
+    original.subscriptions.push(test_subscription("2"));
+    original.subscriptions.push(test_subscription("3"));
+    save_config(store.path(), &original).unwrap();
+
+    let ids = |store: &Store| {
+        store
+            .load()
+            .unwrap()
+            .subscriptions
+            .iter()
+            .map(|subscription| subscription.id.clone())
+            .collect::<Vec<_>>()
+    };
+    move_subscription(&store, &SubscriptionId::new("3"), 0).unwrap();
+    assert_eq!(ids(&store), ["3", "1", "2"].map(SubscriptionId::new));
+    move_subscription(&store, &SubscriptionId::new("3"), 2).unwrap();
+    assert_eq!(ids(&store), ["1", "2", "3"].map(SubscriptionId::new));
+    move_subscription(&store, &SubscriptionId::new("1"), usize::MAX).unwrap();
+    assert_eq!(ids(&store), ["2", "3", "1"].map(SubscriptionId::new));
+
+    let saved = store.load().unwrap();
+    assert_eq!(saved.subscriptions[0], original.subscriptions[1]);
+    assert_eq!(saved.subscriptions[1], original.subscriptions[2]);
+    assert_eq!(saved.subscriptions[2], original.subscriptions[0]);
+    assert_eq!(saved.active, original.active);
+    assert_eq!(saved.rule_sets, original.rule_sets);
+    assert_eq!(saved.active_rule_set, original.active_rule_set);
+}
+
+#[test]
+fn moving_missing_subscription_does_not_write() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    save_config(store.path(), &test_config()).unwrap();
+    let before = std::fs::read(store.path()).unwrap();
+
+    assert!(matches!(
+        move_subscription(&store, &SubscriptionId::new("missing"), 0),
+        Err(MoveSubscriptionError::NotFound)
+    ));
+    assert_eq!(std::fs::read(store.path()).unwrap(), before);
+}
+
 fn successful_update() -> rosetun_subscription::Parsed {
     rosetun_subscription::parse(
         b"trojan://new-secret@new.example.com:443#New",

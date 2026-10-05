@@ -303,6 +303,33 @@ pub fn remove_subscription(
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum MoveSubscriptionError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("subscription does not exist")]
+    NotFound,
+}
+
+pub fn move_subscription(
+    store: &Store,
+    id: &SubscriptionId,
+    to_index: usize,
+) -> Result<(), MoveSubscriptionError> {
+    store.modify(|config| {
+        let index = config
+            .subscriptions
+            .iter()
+            .position(|subscription| &subscription.id == id)
+            .ok_or(MoveSubscriptionError::NotFound)?;
+        let subscription = config.subscriptions.remove(index);
+        config
+            .subscriptions
+            .insert(to_index.min(config.subscriptions.len()), subscription);
+        Ok(())
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum AddSubscriptionError {
     #[error(transparent)]
     Store(#[from] StoreError),

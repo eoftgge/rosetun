@@ -23,10 +23,11 @@ pub use subscription_url::{
     normalize as normalize_subscription_url, redacted as redacted_subscription_url,
 };
 pub use subscriptions::{
-    AddFromUrlError, AddOptions, AddSubscriptionError, CommitUpdateError, PreparedSubscription,
-    RemoveSubscriptionError, SubscriptionUpdateResult, UpdateSubscriptionError,
-    add_prepared_subscription, add_subscription, commit_subscription_update, prepare_subscription,
-    remove_subscription, update_all, update_subscription,
+    AddFromUrlError, AddOptions, AddSubscriptionError, CommitUpdateError, MoveSubscriptionError,
+    PreparedSubscription, RemoveSubscriptionError, SubscriptionUpdateResult,
+    UpdateSubscriptionError, add_prepared_subscription, add_subscription,
+    commit_subscription_update, move_subscription, prepare_subscription, remove_subscription,
+    update_all, update_subscription,
 };
 pub use text::{
     expiry_text, fetch_error_message, node_address, node_protocol, node_tls, node_transport,
