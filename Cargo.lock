@@ -2695,6 +2695,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rosetun-processes"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.20",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rosetun-routing"
 version = "0.1.0"
 dependencies = [
