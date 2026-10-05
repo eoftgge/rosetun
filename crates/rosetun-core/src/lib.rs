@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod fetch;
+mod rules;
 mod selection;
 pub(crate) mod store;
 mod subscription_url;
@@ -9,6 +10,11 @@ mod text;
 mod update;
 
 pub use fetch::{FetchError, Timeouts, fetch};
+pub use rules::{
+    RuleInputError, RuleSetError, add_rule, create_rule_set, delete_rule_set, move_rule,
+    parse_domain_input, parse_process_input, remove_rule, rename_rule_set, rule_value_text,
+    set_default_target, set_rule_enabled, set_rule_target,
+};
 pub use selection::{
     SelectNodeError, SelectRuleSetError, select_node, select_rule_set, set_kill_switch,
 };
