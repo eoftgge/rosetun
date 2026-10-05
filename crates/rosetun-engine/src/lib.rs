@@ -11,6 +11,11 @@
 
 pub mod errors;
 
+/// Tracing target for lines an engine writes to its own output. The helper's
+/// default filter passes it at every level, because `Settings::log_level`
+/// already decides how much the engine writes.
+pub const ENGINE_OUTPUT_TARGET: &str = "engine_output";
+
 use errors::EngineError;
 use rosetun_config::{EngineKind, Node, RuleId, RuleSet, Settings, Traffic};
 use std::path::{Path, PathBuf};

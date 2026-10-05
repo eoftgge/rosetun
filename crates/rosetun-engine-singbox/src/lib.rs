@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod output;
 mod readiness;
 mod render;
 mod version;
@@ -10,6 +11,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
 
+use output::LineLevel;
 use readiness::Readiness;
 use rosetun_config::{EngineKind, Traffic};
 use rosetun_engine::{
@@ -178,7 +180,7 @@ where
                         {
                             let _ = sender.send(());
                         }
-                        tracing::info!(stream, "{line}");
+                        log_output_line(stream, &line);
                     }
                     Err(error) => {
                         tracing::debug!(
@@ -194,6 +196,17 @@ where
             tracing::debug!(stream, "sing-box output stream closed");
         })
         .map(|_| ())
+}
+
+fn log_output_line(stream: &'static str, line: &str) {
+    use rosetun_engine::ENGINE_OUTPUT_TARGET as TARGET;
+    match output::line_level(line) {
+        Some(LineLevel::Trace) => tracing::trace!(target: TARGET, stream, "{line}"),
+        Some(LineLevel::Debug) => tracing::debug!(target: TARGET, stream, "{line}"),
+        Some(LineLevel::Info) | None => tracing::info!(target: TARGET, stream, "{line}"),
+        Some(LineLevel::Warn) => tracing::warn!(target: TARGET, stream, "{line}"),
+        Some(LineLevel::Error) => tracing::error!(target: TARGET, stream, "{line}"),
+    }
 }
 
 fn find_in_neighbours() -> Option<PathBuf> {

@@ -16,8 +16,12 @@ use rosetun_ipc::Listener;
 fn main() -> std::process::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG").unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(format!(
+                    "info,{}=trace",
+                    rosetun_engine::ENGINE_OUTPUT_TARGET
+                ))
+            }),
         )
         .init();
 

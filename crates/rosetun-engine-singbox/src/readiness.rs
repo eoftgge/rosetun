@@ -80,7 +80,7 @@ pub(super) fn is_startup_message(line: &str) -> bool {
         && words.next().is_none()
 }
 
-fn strip_ansi_csi(line: &str) -> String {
+pub(super) fn strip_ansi_csi(line: &str) -> String {
     let mut result = String::with_capacity(line.len());
     let mut chars = line.chars().peekable();
 
