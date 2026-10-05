@@ -1,11 +1,7 @@
 use std::path::Path;
 
+use crate::{ConnectRequest, Connection, Frame, HelperError, PROTOCOL_VERSION, Request, Response};
 use rosetun_config::Status;
-use rosetun_ipc::{
-    ConnectRequest, Connection, Frame, HelperError, PROTOCOL_VERSION, Request, Response,
-};
-
-const CLIENT: &str = concat!("rosetun/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -27,16 +23,16 @@ pub struct HelperClient {
 }
 
 impl HelperClient {
-    pub fn connect(endpoint: &Path) -> Result<Self, ClientError> {
-        let connection = rosetun_ipc::connect(endpoint)
-            .map_err(|error| ClientError::Transport(error.to_string()))?;
+    pub fn connect(endpoint: &Path, client_name: &str) -> Result<Self, ClientError> {
+        let connection =
+            crate::connect(endpoint).map_err(|error| ClientError::Transport(error.to_string()))?;
         let mut client = Self {
             connection,
             next_id: 1,
             helper_version: String::new(),
         };
         match client.request(Request::Hello {
-            client: CLIENT.to_owned(),
+            client: client_name.to_owned(),
             protocol_version: PROTOCOL_VERSION,
         })? {
             Response::Hello { helper_version, .. } => {

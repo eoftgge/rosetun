@@ -10,6 +10,7 @@ repository = "https://github.com/eoftgge/rosetun"
 
 [workspace.dependencies]
 rosetun-config = { path = "crates/rosetun-config" }
+rosetun-core = { path = "crates/rosetun-core" }
 rosetun-engine = { path = "crates/rosetun-engine" }
 rosetun-engine-singbox = { path = "crates/rosetun-engine-singbox" }
 rosetun-engine-xray = { path = "crates/rosetun-engine-xray" }

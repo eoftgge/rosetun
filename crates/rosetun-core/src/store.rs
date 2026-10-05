@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use rosetun_config::{AppConfig, ConfigError};
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum StoreError {
+#[derive(thiserror::Error)]
+pub enum StoreError {
     #[error("could not determine the configuration directory")]
     NoConfigDir,
     #[error("could not access {}: {source}", path.display())]
@@ -31,7 +31,49 @@ pub(crate) enum StoreError {
     },
 }
 
-pub(crate) fn config_path() -> Result<PathBuf, StoreError> {
+impl std::fmt::Debug for StoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "StoreError({self})")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Store {
+    path: PathBuf,
+}
+
+impl Store {
+    pub fn open_default() -> Result<Self, StoreError> {
+        Ok(Self::at(config_path()?))
+    }
+
+    pub fn at(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load(&self) -> Result<AppConfig, StoreError> {
+        load(&self.path)
+    }
+
+    /// Loads the current file, applies `change` and saves the result.
+    /// An error from `change` leaves the file untouched.
+    pub fn modify<T, E>(&self, change: impl FnOnce(&mut AppConfig) -> Result<T, E>) -> Result<T, E>
+    where
+        E: From<StoreError>,
+    {
+        // Reloading narrows the race window but does not serialize concurrent writers.
+        let mut config = self.load().map_err(E::from)?;
+        let result = change(&mut config)?;
+        save(&self.path, &config).map_err(E::from)?;
+        Ok(result)
+    }
+}
+
+fn config_path() -> Result<PathBuf, StoreError> {
     config_path_with(|name| std::env::var_os(name), cfg!(windows))
 }
 
@@ -59,7 +101,7 @@ fn config_path_with(
     Ok(directory.join("rosetun").join("config.json"))
 }
 
-pub(crate) fn load(path: &Path) -> Result<AppConfig, StoreError> {
+fn load(path: &Path) -> Result<AppConfig, StoreError> {
     let contents = match fs::read(path) {
         Ok(contents) => contents,
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
@@ -88,7 +130,7 @@ pub(crate) fn load(path: &Path) -> Result<AppConfig, StoreError> {
     Ok(config)
 }
 
-pub(crate) fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
+fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
     config.validate().map_err(|source| StoreError::Invalid {
         path: path.to_owned(),
         source,
@@ -169,13 +211,13 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use super::{StoreError, config_path_with, load, save};
+    use crate::Store;
     use rosetun_config::{
         AppConfig, CONFIG_VERSION, ConfigError, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher,
         RuleSet, RuleSetId, RuleTarget, Selection, StreamSettings, Subscription, SubscriptionId,
         TrojanParams,
     };
-
-    use super::{StoreError, config_path_with, load, save};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -276,6 +318,92 @@ mod tests {
             active_rule_set: Some(RuleSetId::new("missing")),
             ..AppConfig::default()
         }
+    }
+
+    #[test]
+    fn modify_reloads_configuration_before_applying_change() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        save(store.path(), &selected_config()).unwrap();
+
+        let stale = store.load().unwrap();
+        let mut external = stale.clone();
+        let mut second_node = external.subscriptions[0].nodes[0].clone();
+        second_node.id = NodeId::new("external-node");
+        second_node.name = "Externally selected node".to_owned();
+        external.subscriptions[0].nodes.push(second_node);
+        external.active.as_mut().unwrap().node = NodeId::new("external-node");
+
+        fs::write(store.path(), serde_json::to_vec_pretty(&external).unwrap()).unwrap();
+
+        store
+            .modify(|config| {
+                config.subscriptions[0].name = "Updated name".to_owned();
+                Ok::<_, StoreError>(())
+            })
+            .unwrap();
+
+        let saved = store.load().unwrap();
+        assert_eq!(saved.active, external.active);
+        assert_eq!(
+            saved.subscriptions[0].nodes,
+            external.subscriptions[0].nodes
+        );
+        assert_eq!(saved.subscriptions[0].name, "Updated name");
+        assert_ne!(saved.active, stale.active);
+    }
+
+    #[test]
+    fn change_error_preserves_existing_bytes() {
+        #[derive(Debug, thiserror::Error)]
+        enum ChangeError {
+            #[error(transparent)]
+            Store(#[from] StoreError),
+            #[error("change rejected")]
+            Rejected,
+        }
+
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        save(store.path(), &selected_config()).unwrap();
+        let original = fs::read(store.path()).unwrap();
+
+        let result = store.modify(|config| {
+            config.subscriptions.clear();
+            config.active = None;
+            Err::<(), _>(ChangeError::Rejected)
+        });
+
+        assert!(matches!(result, Err(ChangeError::Rejected)));
+        assert_eq!(fs::read(store.path()).unwrap(), original);
+    }
+
+    #[test]
+    fn failed_modify_save_preserves_existing_bytes() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        save(store.path(), &selected_config()).unwrap();
+        let original = fs::read(store.path()).unwrap();
+        fs::create_dir(directory.path.join("config.json.tmp")).unwrap();
+
+        let result = store.modify(|config| {
+            config.subscriptions[0].name = "Unsaved name".to_owned();
+            Ok::<_, StoreError>(())
+        });
+
+        assert!(matches!(result, Err(StoreError::Io { .. })));
+        assert_eq!(fs::read(store.path()).unwrap(), original);
+    }
+
+    #[test]
+    fn change_error_does_not_create_a_missing_file() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+
+        let result = store.modify(|_| Err::<(), _>(StoreError::NoConfigDir));
+
+        assert!(matches!(result, Err(StoreError::NoConfigDir)));
+        assert!(!store.path().exists());
     }
 
     #[test]

@@ -502,14 +502,13 @@ name = "rosetun"
 version = "0.1.0"
 dependencies = [
  "rosetun-config",
- "rosetun-hwid",
+ "rosetun-core",
  "rosetun-ipc",
  "rosetun-subscription",
  "serde_json",
  "thiserror",
  "tracing",
  "tracing-subscriber",
- "ureq",
  "url",
 ]
 
@@ -520,6 +519,20 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "rosetun-core"
+version = "0.1.0"
+dependencies = [
+ "rosetun-config",
+ "rosetun-hwid",
+ "rosetun-subscription",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "ureq",
+ "url",
 ]
 
 [[package]]

@@ -1,12 +1,15 @@
 #![cfg_attr(not(windows), forbid(unsafe_code))]
 #![cfg_attr(windows, deny(unsafe_code))]
 
+mod client;
 mod codec;
 mod protocol;
 pub mod transport;
 
+pub use client::{ClientError, HelperClient};
 pub use codec::{CodecError, MAX_FRAME_BYTES, read_frame, write_frame};
 pub use protocol::{
-    ConnectRequest, ErrorCode, Event, Frame, HelperError, PROTOCOL_VERSION, Request, Response,
+    ConnectRequest, ConnectRequestError, ErrorCode, Event, Frame, HelperError, PROTOCOL_VERSION,
+    Request, Response,
 };
 pub use transport::{Connection, Listener, connect, default_endpoint};

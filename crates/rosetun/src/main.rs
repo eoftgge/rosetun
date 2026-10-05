@@ -1,6 +1,5 @@
 #![allow(unreachable_pub)]
 
-mod client;
 mod fetch;
 mod store;
 mod subcommands;
@@ -14,9 +13,8 @@ use std::process::ExitCode;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
-use client::HelperClient;
 use rosetun_config::{NodeId, Selection, SubscriptionId};
-use rosetun_ipc::ConnectRequest;
+use rosetun_ipc::{ConnectRequest, HelperClient};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -43,17 +41,8 @@ fn main() -> ExitCode {
 
     // HTTP-library diagnostics can contain subscription URIs, so an environment
     // log filter must never be able to enable their terminal output.
-    let safe_targets = filter_fn(|metadata| {
-        let target = metadata.target();
-        !["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"]
-            .iter()
-            .any(|prefix| {
-                target == *prefix
-                    || target
-                        .strip_prefix(prefix)
-                        .is_some_and(|suffix| suffix.starts_with("::"))
-            })
-    });
+    let safe_targets =
+        filter_fn(|metadata| !rosetun_core::is_sensitive_log_target(metadata.target()));
 
     tracing_subscriber::registry()
         .with(env_filter)
@@ -149,7 +138,8 @@ fn shutdown(client: &mut HelperClient) -> ExitCode {
 
 fn with_helper(run: impl FnOnce(&mut HelperClient) -> ExitCode) -> ExitCode {
     let endpoint = rosetun_ipc::default_endpoint();
-    match HelperClient::connect(&endpoint) {
+    let client_name = concat!("rosetun/", env!("CARGO_PKG_VERSION"));
+    match HelperClient::connect(&endpoint, client_name) {
         Ok(mut client) => {
             tracing::info!(helper = client.helper_version(), "connection established");
             run(&mut client)
@@ -178,7 +168,7 @@ fn prepare_connect_request(request_path: Option<&str>) -> Result<ConnectRequest,
 
     let path = store::config_path().map_err(|error| error.to_string())?;
     let config = store::load(&path).map_err(|error| error.to_string())?;
-    store::connect_request(&config)
+    ConnectRequest::from_config(&config).map_err(|error| error.to_string())
 }
 
 fn select_node(subscription_id: &str, node_id: &str) -> Result<(), String> {

@@ -1,5 +1,5 @@
 [package]
-name = "rosetun"
+name = "rosetun-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,14 +7,13 @@ repository.workspace = true
 
 [dependencies]
 rosetun-config.workspace = true
-rosetun-core.workspace = true
-rosetun-ipc.workspace = true
 rosetun-subscription.workspace = true
+rosetun-hwid.workspace = true
+ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier", "gzip"] }
+url.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-url.workspace = true
 
 [lints]
 workspace = true
