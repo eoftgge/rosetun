@@ -185,7 +185,6 @@ pub(crate) enum Action {
     SubmitAddRule,
     SetRuleTarget(RuleId, RuleTarget),
     SetRuleEnabled(RuleId, bool),
-    MoveRule(RuleId, usize),
     DropRule(RuleId, usize),
     Primary,
     RequestProtectionOff,
@@ -718,17 +717,6 @@ impl State {
                         rule,
                         enabled,
                     ));
-                }
-            }
-            Action::MoveRule(rule, to_index) => {
-                if self.can_edit_rules()
-                    && !self.rule_screen.filter.is_active()
-                    && let Some(set) = self.selected_rules()
-                    && let Some(from) = set.rules.iter().position(|item| item.id == rule)
-                    && to_index < set.rules.len()
-                    && from != to_index
-                {
-                    return self.start_rule_edit(Job::MoveRule(set.id.clone(), rule, to_index));
                 }
             }
             Action::DropRule(rule, slot) => {
@@ -1475,10 +1463,10 @@ mod tests {
         state.act(Action::OpenRules);
         let rule = RuleId::new("1");
         assert!(matches!(
-            state.act(Action::MoveRule(rule.clone(), 0)),
+            state.act(Action::DropRule(rule.clone(), 0)),
             Some(Job::MoveRule(_, _, 0))
         ));
-        assert!(state.act(Action::MoveRule(rule.clone(), 2)).is_none());
+        assert!(state.act(Action::DropRule(rule.clone(), 3)).is_none());
         assert!(
             state
                 .act(Action::SetRuleEnabled(rule.clone(), false))
@@ -1487,7 +1475,7 @@ mod tests {
         assert!(state.act(Action::SelectRuleSet(None)).is_none());
         state.reduce(WorkerEvent::MoveRule(Ok(())));
         state.rule_screen.filter.search = "second".into();
-        assert!(state.act(Action::MoveRule(rule.clone(), 2)).is_none());
+        assert!(state.act(Action::DropRule(rule.clone(), 0)).is_none());
         assert!(state.act(Action::DropRule(rule.clone(), 3)).is_none());
         state.rule_screen.filter.search.clear();
         assert!(state.act(Action::DropRule(rule.clone(), 2)).is_none());

@@ -46,20 +46,6 @@ pub(crate) fn process_matches_filter(process: &ProcessGroup, filter: &str) -> bo
             .is_some_and(|path| path.to_string_lossy().to_lowercase().contains(&filter))
 }
 
-pub(crate) fn different_process_case<'a>(
-    name: &str,
-    processes: &'a [ProcessGroup],
-) -> Option<&'a str> {
-    if processes.iter().any(|process| process.name == name) {
-        return None;
-    }
-    let lowercase = name.to_lowercase();
-    processes
-        .iter()
-        .find(|process| process.name.to_lowercase() == lowercase)
-        .map(|process| process.name.as_str())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ProcessMatchMode {
     #[default]
@@ -145,16 +131,6 @@ pub(crate) fn visible_rules<'a>(set: &'a RuleSet, filter: &RuleFilter) -> Vec<(u
                         .contains(&search))
         })
         .collect()
-}
-
-pub(crate) fn reorder_arrows(
-    index: usize,
-    len: usize,
-    filter: &RuleFilter,
-    busy: bool,
-) -> (bool, bool) {
-    let enabled = !busy && !filter.is_active() && index < len;
-    (enabled && index > 0, enabled && index + 1 < len)
 }
 
 /// `slot` is a gap in the full list. Removing a rule shifts later gaps left.
@@ -248,22 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn name_case_warning_only_for_running_name_with_different_case() {
-        let groups = group_processes(vec![process(10, "Telegram.exe", None)]);
-        assert_eq!(
-            different_process_case("telegram.exe", &groups),
-            Some("Telegram.exe")
-        );
-        assert_eq!(different_process_case("Telegram.exe", &groups), None);
-        assert_eq!(different_process_case("other.exe", &groups), None);
-        let groups = group_processes(vec![
-            process(10, "Telegram.exe", None),
-            process(11, "telegram.exe", Some(r"C:\Apps\telegram.exe")),
-        ]);
-        assert_eq!(different_process_case("telegram.exe", &groups), None);
-    }
-
-    #[test]
     fn a_typed_path_switches_to_full_path_mode() {
         let mut mode = ProcessMatchMode::Name;
         update_process_match_mode(&mut mode, "curl.exe");
@@ -311,23 +271,6 @@ mod tests {
         filter.search = "NEWS".into();
         assert_eq!(indices(&set, &filter), vec![3]);
         assert_eq!(visible_rules(&set, &filter)[0].1.id.as_str(), "3");
-    }
-
-    #[test]
-    fn arrows_require_an_unfiltered_idle_full_list() {
-        let mut filter = RuleFilter::default();
-        assert_eq!(reorder_arrows(0, 3, &filter, false), (false, true));
-        assert_eq!(reorder_arrows(1, 3, &filter, false), (true, true));
-        assert_eq!(reorder_arrows(2, 3, &filter, false), (true, false));
-        assert_eq!(reorder_arrows(1, 3, &filter, true), (false, false));
-        filter.target = Some(RuleTarget::Direct);
-        assert_eq!(reorder_arrows(1, 3, &filter, false), (false, false));
-        filter.target = None;
-        filter.search = "app".into();
-        assert_eq!(reorder_arrows(1, 3, &filter, false), (false, false));
-        filter.search.clear();
-        filter.kind = TypeFilter::Processes;
-        assert_eq!(reorder_arrows(1, 3, &filter, false), (false, false));
     }
 
     #[test]

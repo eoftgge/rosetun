@@ -2,11 +2,18 @@ use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget};
 
 use crate::icons::{self, Icon};
-use crate::rules::{
-    RuleFilter, TypeFilter, drop_target, reorder_arrows, rule_counts, visible_rules,
-};
+use crate::rules::{RuleFilter, TypeFilter, drop_target, rule_counts, visible_rules};
 use crate::state::{Action, DeleteDialog, NameDialogKind, State};
 use crate::{strings, theme};
+
+const HANDLE_WIDTH: f32 = 28.0;
+const TYPE_WIDTH: f32 = 100.0;
+const TARGET_WIDTH: f32 = 140.0;
+const ENABLED_WIDTH: f32 = 90.0;
+const REMOVE_WIDTH: f32 = 44.0;
+const TABLE_INSET: f32 = 10.0;
+const ROW_HEIGHT: f32 = 52.0;
+const HEADER_HEIGHT: f32 = 24.0;
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     ui.heading(strings::RULES_TITLE);
@@ -53,27 +60,27 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     ui.add_space(8.0);
 
     let visible = visible_rules(set, &state.rule_screen.filter);
-    if set.rules.is_empty() {
-        ui.colored_label(
-            theme::TEXT_MUTED,
-            strings::no_rules(target_label(set.default_target)),
-        );
-    } else if visible.is_empty() {
+    let value_width = (ui.available_width()
+        - 2.0 * TABLE_INSET
+        - HANDLE_WIDTH
+        - TYPE_WIDTH
+        - TARGET_WIDTH
+        - ENABLED_WIDTH
+        - REMOVE_WIDTH)
+        .max(140.0);
+    table_header(ui, value_width);
+    if visible.is_empty() && !set.rules.is_empty() {
         ui.colored_label(theme::TEXT_MUTED, strings::NO_RULES_MATCH);
-    } else {
-        let value_width = (ui.available_width() - 550.0).max(140.0);
-        table_header(ui, value_width);
-        ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for (index, rule) in visible {
-                ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
-                    rule_row(ui, state, set, rule, index, value_width, actions);
-                });
-            }
-        });
     }
-    ui.add_space(12.0);
-    default_rule(ui, state, set, actions);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for (index, rule) in visible {
+            ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
+                rule_row(ui, state, set, rule, index, value_width, actions);
+            });
+        }
+        default_rule(ui, state, set, value_width, actions);
+    });
 }
 
 fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -162,14 +169,43 @@ fn filter_controls(
     });
 }
 
+fn table_cell(
+    ui: &mut egui::Ui,
+    width: f32,
+    height: f32,
+    content: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, height),
+        egui::Layout::left_to_right(egui::Align::Center),
+        content,
+    )
+    .response
+}
+
 fn table_header(ui: &mut egui::Ui, value_width: f32) {
     ui.horizontal(|ui| {
-        ui.add_space(30.0);
-        ui.add_sized([90.0, 20.0], egui::Label::new(strings::TYPE));
-        ui.add_sized([value_width, 20.0], egui::Label::new(strings::VALUE));
-        ui.add_sized([126.0, 20.0], egui::Label::new(strings::TARGET));
-        ui.add_sized([78.0, 20.0], egui::Label::new(strings::ENABLED));
-        ui.label(strings::ACTIONS);
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_space(TABLE_INSET);
+        table_cell(ui, HANDLE_WIDTH, HEADER_HEIGHT, |_| {});
+        table_cell(ui, TYPE_WIDTH, HEADER_HEIGHT, |ui| {
+            ui.label(strings::TYPE);
+        });
+        table_cell(ui, value_width, HEADER_HEIGHT, |ui| {
+            ui.label(strings::VALUE);
+        });
+        table_cell(ui, TARGET_WIDTH, HEADER_HEIGHT, |ui| {
+            ui.label(strings::TARGET);
+        });
+        table_cell(ui, ENABLED_WIDTH, HEADER_HEIGHT, |ui| {
+            ui.with_layout(
+                egui::Layout::left_to_right(egui::Align::Center)
+                    .with_main_align(egui::Align::Center),
+                |ui| {
+                    ui.label(strings::ENABLED);
+                },
+            );
+        });
     });
 }
 
@@ -185,7 +221,7 @@ fn rule_row(
     let reorder = state.can_edit_rules() && !state.rule_screen.filter.is_active();
     let dragged =
         reorder && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| *id == rule.id);
-    let mut frame = theme::card_frame().inner_margin(egui::Margin::symmetric(10, 8));
+    let mut frame = theme::card_frame().inner_margin(egui::Margin::symmetric(10, 0));
     if dragged {
         frame = frame.fill(Color32::from_rgba_unmultiplied(
             theme::CARD.r(),
@@ -207,77 +243,81 @@ fn rule_row(
                     ui.multiply_opacity(0.7);
                 }
                 ui.horizontal(|ui| {
-                    if reorder {
-                        ui.dnd_drag_source(ui.id().with("handle"), rule.id.clone(), |ui| {
-                            icons::icon_button(ui, Icon::Grip, true);
-                        });
-                    } else {
-                        icons::icon_button(ui, Icon::Grip, false)
-                            .on_hover_text(strings::REORDER_DISABLED);
-                    }
-                    ui.add_sized([90.0, 22.0], egui::Label::new(rule_type(rule)));
-                    ui.vertical(|ui| {
-                        ui.set_width(value_width);
-                        rule_value(ui, state, rule);
-                        if !rule.enabled {
-                            ui.colored_label(theme::TEXT_DIM, strings::RULE_DISABLED);
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    table_cell(ui, HANDLE_WIDTH, ROW_HEIGHT, |ui| {
+                        if reorder {
+                            ui.dnd_drag_source(ui.id().with("handle"), rule.id.clone(), |ui| {
+                                icons::icon_button(ui, Icon::Grip, true);
+                            });
+                        } else {
+                            icons::icon_button(ui, Icon::Grip, false)
+                                .on_hover_text(strings::REORDER_DISABLED);
                         }
                     });
-                    let mut target = rule.target;
-                    ui.add_enabled_ui(state.can_edit_rules(), |ui| {
-                        egui::ComboBox::from_id_salt("target")
-                            .selected_text(
-                                RichText::new(target_label(target)).color(target_color(target)),
-                            )
-                            .width(108.0)
-                            .show_ui(ui, |ui| {
-                                for value in
-                                    [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
-                                {
-                                    ui.selectable_value(
-                                        &mut target,
-                                        value,
-                                        RichText::new(target_label(value))
-                                            .color(target_color(value)),
-                                    );
-                                }
-                            });
+                    table_cell(ui, TYPE_WIDTH, ROW_HEIGHT, |ui| {
+                        ui.label(rule_type(rule));
                     });
-                    if target != rule.target {
-                        actions.push(Action::SetRuleTarget(rule.id.clone(), target));
-                    }
-                    let mut enabled = rule.enabled;
-                    if ui
-                        .add_enabled(
-                            state.can_edit_rules(),
-                            egui::Checkbox::without_text(&mut enabled),
-                        )
-                        .changed()
-                    {
-                        actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
-                    }
-                    ui.add_space(27.0);
-                    let (up, down) = reorder_arrows(
-                        index,
-                        set.rules.len(),
-                        &state.rule_screen.filter,
-                        !state.can_edit_rules(),
-                    );
-                    if icons::icon_button(ui, Icon::Up, up).clicked() {
-                        actions.push(Action::MoveRule(rule.id.clone(), index - 1));
-                    }
-                    if icons::icon_button(ui, Icon::Down, down).clicked() {
-                        actions.push(Action::MoveRule(rule.id.clone(), index + 1));
-                    }
-                    if ui
-                        .add_enabled(
-                            state.can_edit_rules(),
-                            egui::Button::new(strings::REMOVE_RULE),
-                        )
-                        .clicked()
-                    {
-                        actions.push(Action::RequestDeleteRule(rule.id.clone()));
-                    }
+                    table_cell(ui, value_width, ROW_HEIGHT, |ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(value_width);
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            rule_value(ui, state, rule);
+                        });
+                    });
+                    table_cell(ui, TARGET_WIDTH, ROW_HEIGHT, |ui| {
+                        let mut target = rule.target;
+                        ui.add_enabled_ui(state.can_edit_rules(), |ui| {
+                            egui::ComboBox::from_id_salt("target")
+                                .selected_text(
+                                    RichText::new(target_label(target)).color(target_color(target)),
+                                )
+                                .width(108.0)
+                                .show_ui(ui, |ui| {
+                                    for value in
+                                        [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
+                                    {
+                                        ui.selectable_value(
+                                            &mut target,
+                                            value,
+                                            RichText::new(target_label(value))
+                                                .color(target_color(value)),
+                                        );
+                                    }
+                                });
+                        });
+                        if target != rule.target {
+                            actions.push(Action::SetRuleTarget(rule.id.clone(), target));
+                        }
+                    });
+                    table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |ui| {
+                        ui.with_layout(
+                            egui::Layout::left_to_right(egui::Align::Center)
+                                .with_main_align(egui::Align::Center),
+                            |ui| {
+                                let mut enabled = rule.enabled;
+                                if ui
+                                    .add_enabled(
+                                        state.can_edit_rules(),
+                                        egui::Checkbox::without_text(&mut enabled),
+                                    )
+                                    .changed()
+                                {
+                                    actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
+                                }
+                            },
+                        );
+                    });
+                    table_cell(ui, REMOVE_WIDTH, ROW_HEIGHT, |ui| {
+                        if ui
+                            .add_enabled(
+                                state.can_edit_rules(),
+                                egui::Button::new(strings::REMOVE_RULE),
+                            )
+                            .clicked()
+                        {
+                            actions.push(Action::RequestDeleteRule(rule.id.clone()));
+                        }
+                    });
                 });
             });
         })
@@ -316,45 +356,131 @@ fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
             .file_name()
             .map(|name| state.text(&name.to_string_lossy()))
             .unwrap_or_else(|| state.text(&rosetun_core::rule_value_text(&rule.matcher)));
-        ui.add(egui::Label::new(RichText::new(filename).size(16.0).strong()).wrap());
+        ui.add(egui::Label::new(RichText::new(&filename).size(16.0).strong()).truncate())
+            .on_hover_text(filename);
         if let Some(parent) = path.parent() {
+            let folder = state.text(&parent.to_string_lossy());
             ui.add(
-                egui::Label::new(
-                    RichText::new(state.text(&parent.to_string_lossy()))
-                        .small()
-                        .color(theme::TEXT_DIM),
-                )
-                .wrap(),
-            );
+                egui::Label::new(RichText::new(&folder).small().color(theme::TEXT_DIM)).truncate(),
+            )
+            .on_hover_text(folder);
         }
     } else {
-        ui.add(egui::Label::new(state.text(&rosetun_core::rule_value_text(&rule.matcher))).wrap());
+        let value = state.text(&rosetun_core::rule_value_text(&rule.matcher));
+        ui.add(egui::Label::new(&value).truncate())
+            .on_hover_text(value);
     }
 }
 
-fn default_rule(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec<Action>) {
-    theme::card_frame().show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(strings::ALL_OTHER_TRAFFIC).strong());
-            if set.default_target == RuleTarget::Block {
-                ui.colored_label(target_color(RuleTarget::Block), strings::BLOCK);
-            }
-            for target in [RuleTarget::Proxy, RuleTarget::Direct] {
-                let selected = set.default_target == target;
-                let label = RichText::new(target_label(target)).color(target_color(target));
-                if ui
-                    .add_enabled(
-                        state.can_edit_rules(),
-                        egui::Button::new(label).selected(selected),
-                    )
-                    .clicked()
-                {
-                    actions.push(Action::SetDefaultTarget(target));
-                }
-            }
-        });
-        ui.colored_label(theme::TEXT_DIM, strings::DEFAULT_RULE_DETAIL);
+fn default_rule(
+    ui: &mut egui::Ui,
+    state: &State,
+    set: &RuleSet,
+    value_width: f32,
+    actions: &mut Vec<Action>,
+) {
+    let response = ui.push_id("default_rule", |ui| {
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(0, 2))
+            .show(ui, |ui| {
+                theme::card_frame()
+                    .fill(theme::PANEL)
+                    .inner_margin(egui::Margin::symmetric(10, 0))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            table_cell(ui, HANDLE_WIDTH, ROW_HEIGHT, |_| {});
+                            table_cell(ui, TYPE_WIDTH, ROW_HEIGHT, |ui| {
+                                ui.label(strings::DEFAULT)
+                                    .on_hover_text(strings::DEFAULT_RULE_TOOLTIP);
+                            })
+                            .on_hover_text(strings::DEFAULT_RULE_TOOLTIP);
+                            table_cell(ui, value_width, ROW_HEIGHT, |ui| {
+                                ui.vertical(|ui| {
+                                    ui.set_width(value_width);
+                                    ui.spacing_mut().item_spacing.y = 0.0;
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(strings::ALL_OTHER_TRAFFIC).strong(),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(strings::DEFAULT_FALLBACK)
+                                                .small()
+                                                .color(theme::TEXT_DIM),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(strings::DEFAULT_FALLBACK);
+                                });
+                            });
+                            table_cell(ui, TARGET_WIDTH, ROW_HEIGHT, |ui| {
+                                let mut target = set.default_target;
+                                ui.add_enabled_ui(state.can_edit_rules(), |ui| {
+                                    egui::ComboBox::from_id_salt("target")
+                                        .selected_text(
+                                            RichText::new(target_label(target))
+                                                .color(target_color(target)),
+                                        )
+                                        .width(108.0)
+                                        .show_ui(ui, |ui| {
+                                            for value in [RuleTarget::Proxy, RuleTarget::Direct] {
+                                                ui.selectable_value(
+                                                    &mut target,
+                                                    value,
+                                                    RichText::new(target_label(value))
+                                                        .color(target_color(value)),
+                                                );
+                                            }
+                                            if set.default_target == RuleTarget::Block {
+                                                ui.selectable_value(
+                                                    &mut target,
+                                                    RuleTarget::Block,
+                                                    RichText::new(strings::BLOCK)
+                                                        .color(target_color(RuleTarget::Block)),
+                                                );
+                                            }
+                                        });
+                                });
+                                if target != set.default_target {
+                                    actions.push(Action::SetDefaultTarget(target));
+                                }
+                            });
+                            table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |_| {});
+                            table_cell(ui, REMOVE_WIDTH, ROW_HEIGHT, |_| {});
+                        });
+                    });
+            })
+            .response
     });
+    let rect = response.inner.rect;
+    ui.painter().line_segment(
+        [
+            egui::pos2(rect.left(), rect.top() + 2.0),
+            egui::pos2(rect.right(), rect.top() + 2.0),
+        ],
+        Stroke::new(1.0, theme::BORDER_STRONG),
+    );
+    if state.can_edit_rules()
+        && !state.rule_screen.filter.is_active()
+        && let Some(dragged_id) = response.inner.dnd_hover_payload::<RuleId>()
+        && let Some(from) = set.rules.iter().position(|rule| rule.id == *dragged_id)
+        && drop_target(from, set.rules.len(), set.rules.len()).is_some()
+    {
+        ui.painter().line_segment(
+            [
+                egui::pos2(rect.left(), rect.top()),
+                egui::pos2(rect.right(), rect.top()),
+            ],
+            Stroke::new(2.0, theme::ROSE),
+        );
+        if let Some(payload) = response.inner.dnd_release_payload::<RuleId>() {
+            actions.push(Action::DropRule((*payload).clone(), set.rules.len()));
+        }
+    }
 }
 
 fn rule_type(rule: &Rule) -> &'static str {

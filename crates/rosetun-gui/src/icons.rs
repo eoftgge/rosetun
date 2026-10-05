@@ -1,20 +1,13 @@
-use eframe::egui::{self, Shape, Stroke};
+use eframe::egui;
 
 use crate::theme;
 
 pub(crate) enum Icon {
     Grip,
-    Up,
-    Down,
 }
 
 pub(crate) fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool) -> egui::Response {
-    let sense = if enabled && !matches!(icon, Icon::Grip) {
-        egui::Sense::click()
-    } else {
-        egui::Sense::hover()
-    };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), sense);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
     if ui.is_rect_visible(rect) {
         let color = if !enabled {
             theme::DISABLED
@@ -39,28 +32,6 @@ pub(crate) fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool) -> egui:
                         );
                     }
                 }
-            }
-            Icon::Up => {
-                painter.add(Shape::convex_polygon(
-                    vec![
-                        center + egui::vec2(0.0, -3.0),
-                        center + egui::vec2(5.0, 3.0),
-                        center + egui::vec2(-5.0, 3.0),
-                    ],
-                    color,
-                    Stroke::NONE,
-                ));
-            }
-            Icon::Down => {
-                painter.add(Shape::convex_polygon(
-                    vec![
-                        center + egui::vec2(-5.0, -3.0),
-                        center + egui::vec2(5.0, -3.0),
-                        center + egui::vec2(0.0, 3.0),
-                    ],
-                    color,
-                    Stroke::NONE,
-                ));
             }
         }
     }

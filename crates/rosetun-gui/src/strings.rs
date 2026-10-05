@@ -105,13 +105,13 @@ pub(crate) const TYPE: &str = "Type";
 pub(crate) const VALUE: &str = "Value";
 pub(crate) const TARGET: &str = "Target";
 pub(crate) const ENABLED: &str = "Enabled";
-pub(crate) const ACTIONS: &str = "Actions";
 pub(crate) const ORDER_HINT: &str = "Order from top to bottom sets priority.";
 pub(crate) const REMOVE_RULE: &str = "×";
-pub(crate) const RULE_DISABLED: &str = "rule disabled";
 pub(crate) const REORDER_DISABLED: &str = "Clear the search and filters to reorder.";
+pub(crate) const DEFAULT: &str = "Default";
 pub(crate) const ALL_OTHER_TRAFFIC: &str = "All other traffic";
-pub(crate) const DEFAULT_RULE_DETAIL: &str = "Default rule, cannot be removed.";
+pub(crate) const DEFAULT_FALLBACK: &str = "Used when no rule above matches";
+pub(crate) const DEFAULT_RULE_TOOLTIP: &str = "The default rule cannot be moved or removed.";
 pub(crate) const NO_RULE_SETS: &str = "No rule sets yet. Connections use Default · proxy all.";
 pub(crate) const NO_RULES_MATCH: &str = "No rules match the filter.";
 pub(crate) const RULES_NEXT_CONNECT: &str = "Changes apply on next connect.";
@@ -148,19 +148,8 @@ pub(crate) fn will_match(value: &str) -> String {
     format!("Will match: {value}")
 }
 
-pub(crate) fn process_case_warning(name: &str) -> String {
-    format!("The running program is named {name}. Use the same letter case.")
-}
-
 pub(crate) fn filter_count(label: &str, count: usize) -> String {
     format!("{label} {count}")
-}
-
-pub(crate) fn no_rules(target: &str) -> String {
-    format!(
-        "No rules yet. All traffic goes to {}.",
-        target.to_lowercase()
-    )
 }
 
 pub(crate) fn subscriptions(count: usize) -> String {
