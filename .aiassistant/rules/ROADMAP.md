@@ -158,6 +158,21 @@ a CLI running at the same time does not lose its changes. Server-supplied text
 passes through `provider_text` or `terminal_text` before it is displayed, as in
 the CLI.
 
+Steps:
+
+- **12a — connection screen.** `eframe` with `glow`; status polling and
+  operations on worker threads; connect, disconnect, protected failure with an
+  explicit turn-off; subscriptions, nodes, node selection; add, update and
+  remove subscriptions; kill switch and rule-set selection. English UI, every
+  string in one module.
+- **12b — rules screen.** Rule-set editor and the add-rule dialog from the
+  mockups (process and domain rules).
+- **12c — settings and shell.** Settings screen, tray icon, autostart, single
+  instance, brand fonts and icons, Russian translation. Archivo has no Cyrillic,
+  so the UI font needs a Cyrillic-capable replacement or fallback before the
+  translation.
+- Traffic and the speed graph appear once stage 10 provides the numbers.
+
 ### After stage 12 — custom lists (GeoIP and GeoSite)
 
 User-supplied domain and IP lists as a rule matcher, so that a single rule can
