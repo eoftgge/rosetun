@@ -14,5 +14,6 @@ rosetun-config.workspace = true
 rosetun-core.workspace = true
 rosetun-ipc.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true

@@ -69,7 +69,6 @@ pub(crate) struct State {
     pub(crate) add: Option<AddDialog>,
     pub(crate) remove: Option<RemoveDialog>,
     pub(crate) protection_confirmation: bool,
-    pub(crate) selection_pending: Option<String>,
 }
 
 pub(crate) enum Action {
@@ -107,6 +106,13 @@ pub(crate) enum Job {
 }
 
 impl State {
+    /// The last status is kept for when the helper comes back, but it is not
+    /// shown while the helper is unreachable: a helper that died has already
+    /// taken the engine and the kill-switch filters with it.
+    pub(crate) fn visible_status(&self) -> Option<&Status> {
+        self.helper_available.then_some(&self.status)
+    }
+
     pub(crate) fn primary_action(&self) -> PrimaryAction {
         actions::primary_action(
             self.helper_available,
@@ -151,14 +157,9 @@ impl State {
             WorkerEvent::HelperUnavailable(error) => {
                 self.helper_available = false;
                 self.helper_error = Some(error);
+                self.protection_confirmation = false;
             }
             WorkerEvent::Status(status) => {
-                if status.node.as_ref()
-                    == self.config.active.as_ref().map(|selection| &selection.node)
-                    || matches!(status.state, ConnectionState::Disconnected)
-                {
-                    self.selection_pending = None;
-                }
                 if !matches!(status.state, ConnectionState::FailedProtected { .. })
                     && !self.operations.helper
                 {
@@ -179,15 +180,7 @@ impl State {
             }
             WorkerEvent::SelectNode(result) => {
                 self.operations.selection = false;
-                match result {
-                    Ok(name) => {
-                        self.operation_error = None;
-                        if self.status.state.is_active() || self.status.state.is_transitional() {
-                            self.selection_pending = Some(name);
-                        }
-                    }
-                    Err(error) => self.operation_error = Some(self.text(&error.to_string())),
-                }
+                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
             }
             WorkerEvent::SelectRuleSet(result) => {
                 self.operations.rules = false;
@@ -425,6 +418,9 @@ pub(crate) fn redact(config: &AppConfig, value: &str) -> String {
 }
 
 pub(crate) fn primary_label(state: &State) -> &'static str {
+    if !state.helper_available {
+        return strings::CONNECT;
+    }
     if state.operations.helper || state.status.state.is_transitional() {
         match state.status.state {
             ConnectionState::Reconnecting => strings::RECONNECTING_ACTION,
@@ -479,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn helper_recovery_keeps_last_status_and_clears_availability_error() {
+    fn helper_recovery_keeps_last_status_hidden_until_available() {
         let mut state = State::default();
         state.reduce(WorkerEvent::Status(Status {
             state: ConnectionState::Connected,
@@ -488,11 +484,20 @@ mod tests {
         state.reduce(WorkerEvent::HelperUnavailable(ClientError::Closed));
         assert!(!state.helper_available);
         assert!(matches!(state.status.state, ConnectionState::Connected));
+        assert!(state.visible_status().is_none());
         state.reduce(WorkerEvent::HelperAvailable {
             version: "test".into(),
         });
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Disconnected,
+            ..Status::default()
+        }));
         assert!(state.helper_available);
         assert!(state.helper_error.is_none());
+        assert!(matches!(
+            state.visible_status().map(|status| &status.state),
+            Some(ConnectionState::Disconnected)
+        ));
     }
 
     #[test]

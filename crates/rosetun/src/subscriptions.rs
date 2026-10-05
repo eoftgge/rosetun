@@ -36,11 +36,10 @@ fn add(
     user_agent: Option<String>,
     send_hwid: bool,
 ) -> Result<(), String> {
-    let url = rosetun_core::normalize_subscription_url(input)?;
     let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let prepared = rosetun_core::prepare_subscription(
         &current_store,
-        &url,
+        input,
         rosetun_core::AddOptions {
             name,
             user_agent,

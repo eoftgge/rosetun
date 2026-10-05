@@ -19,20 +19,47 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         ui.add_space(16.0);
     }
 
-    let (label, color) = state_style(&state.status.state);
+    let visible_status = state.visible_status();
+    let (label, color) = visible_status
+        .map_or((strings::STATUS_UNKNOWN, theme::DISCONNECTED), |status| {
+            state_style(&status.state)
+        });
+    let selection_changed = visible_status.filter(|status| {
+        (status.state.is_active() || status.state.is_transitional())
+            && state
+                .config
+                .active
+                .as_ref()
+                .is_none_or(|selection| status.node.as_ref() != Some(&selection.node))
+    });
     ui.columns(2, |columns| {
         columns[0].vertical_centered(|ui| {
             ui.add_space(12.0);
-            let enabled = state.primary_action() != PrimaryAction::Disabled;
+            let action = state.primary_action();
+            let enabled = action != PrimaryAction::Disabled;
+            let mut text = RichText::new(primary_label(state)).size(19.0).strong();
+            let (fill, stroke) = match action {
+                PrimaryAction::Connect | PrimaryAction::Retry | PrimaryAction::Reconnect => {
+                    text = text.color(Color32::WHITE);
+                    (theme::ROSE, Stroke::NONE)
+                }
+                PrimaryAction::Disconnect => (
+                    Color32::from_rgba_unmultiplied(
+                        theme::CONNECTED.r(),
+                        theme::CONNECTED.g(),
+                        theme::CONNECTED.b(),
+                        36,
+                    ),
+                    Stroke::new(2.0, theme::CONNECTED),
+                ),
+                PrimaryAction::Disabled => (theme::MODAL, Stroke::new(2.0, theme::DISABLED)),
+            };
             let response = ui.add_enabled(
                 enabled,
-                egui::Button::new(RichText::new(primary_label(state)).size(19.0).strong())
+                egui::Button::new(text)
                     .min_size(egui::vec2(216.0, 200.0))
-                    .fill(theme::MODAL)
-                    .stroke(Stroke::new(
-                        2.0,
-                        if enabled { color } else { theme::DISABLED },
-                    )),
+                    .fill(fill)
+                    .stroke(stroke),
             );
             if response.clicked() {
                 actions.push(Action::Primary);
@@ -40,11 +67,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             ui.add_space(20.0);
             ui.label(RichText::new(label).size(26.0).color(color));
             ui.add_space(6.0);
-            let session = if state.status.since_unix.is_some() {
-                display::session_text(state.status.since_unix, display::now_unix())
-            } else {
-                strings::NO_SESSION.to_owned()
-            };
+            let session = visible_status
+                .and_then(|status| status.since_unix)
+                .map_or_else(
+                    || strings::NO_SESSION.to_owned(),
+                    |since| display::session_text(Some(since), display::now_unix()),
+                );
             ui.colored_label(
                 theme::TEXT_MUTED,
                 strings::plain_link(strings::SESSION, &session),
@@ -73,14 +101,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui.colored_label(theme::TEXT_MUTED, strings::SELECT_SERVER);
                 }
             });
-            if let Some(id) = &state.status.node
-                && state
-                    .config
-                    .active
-                    .as_ref()
-                    .is_none_or(|selection| &selection.node != id)
-                && (state.status.state.is_active() || state.status.state.is_transitional())
-            {
+            if let Some(id) = selection_changed.and_then(|status| status.node.as_ref()) {
                 theme::card_frame().show(ui, |ui| {
                     ui.colored_label(theme::TEXT_DIM, strings::ACTIVE_SERVER);
                     let name = state
@@ -110,55 +131,34 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 ui.colored_label(theme::TEXT_DIM, strings::NEXT_CONNECT);
                 ui.add_space(10.0);
                 ui.colored_label(theme::TEXT_DIM, strings::ENGINE);
-                let engine = state.status.engine.unwrap_or(state.config.settings.engine);
+                let engine = visible_status
+                    .and_then(|status| status.engine)
+                    .unwrap_or(state.config.settings.engine);
                 ui.label(engine.as_str());
             });
         });
     });
     ui.add_space(20.0);
-    if let Some(name) = &state.selection_pending {
-        ui.add(
-            egui::Label::new(
-                RichText::new(strings::selected_pending(&state.text(name)))
-                    .color(theme::ROSE_LIGHT),
-            )
-            .wrap(),
+    if selection_changed.is_some() {
+        let message = state.config.active_node().map_or_else(
+            || strings::SELECTION_CLEARED.to_owned(),
+            |(_, node)| strings::selected_pending(&state.text(&node.name)),
         );
+        ui.add(egui::Label::new(RichText::new(message).color(theme::ROSE_LIGHT)).wrap());
     }
-    match &state.status.state {
-        ConnectionState::Failed { reason } | ConnectionState::FailedProtected { reason } => {
-            theme::card_frame().show(ui, |ui| {
-                ui.add(
-                    egui::Label::new(RichText::new(state.text(reason)).color(theme::ERROR)).wrap(),
-                );
-            });
-        }
-        _ => {}
+    if let Some(ConnectionState::Failed { reason } | ConnectionState::FailedProtected { reason }) =
+        visible_status.map(|status| &status.state)
+    {
+        theme::card_frame().show(ui, |ui| {
+            ui.add(egui::Label::new(RichText::new(state.text(reason)).color(theme::ERROR)).wrap());
+        });
     }
-    if protection_action(&state.status, state.operations.helper)
-        == ProtectionAction::ConfirmDisconnect
-        && theme::outline_button(ui, strings::TURN_OFF_PROTECTION, state.helper_available).clicked()
+    if let Some(status) = visible_status
+        && protection_action(status, state.operations.helper) == ProtectionAction::ConfirmDisconnect
+        && theme::outline_button(ui, strings::TURN_OFF_PROTECTION, true).clicked()
     {
         actions.push(Action::RequestProtectionOff);
     }
-    ui.add_space(12.0);
-    theme::card_frame().show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        ui.columns(2, |columns| {
-            columns[0].colored_label(theme::TEXT_DIM, strings::UPLOAD);
-            columns[0].label(
-                RichText::new(strings::transfer_rate(state.status.traffic.up_bps))
-                    .size(20.0)
-                    .color(theme::CONNECTED),
-            );
-            columns[1].colored_label(theme::TEXT_DIM, strings::DOWNLOAD);
-            columns[1].label(
-                RichText::new(strings::transfer_rate(state.status.traffic.down_bps))
-                    .size(20.0)
-                    .color(theme::ROSE_LIGHT),
-            );
-        });
-    });
     ui.add_space(12.0);
     theme::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());

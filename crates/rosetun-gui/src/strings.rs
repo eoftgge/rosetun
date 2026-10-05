@@ -14,11 +14,10 @@ pub(crate) const WORKING: &str = "Working…";
 pub(crate) const LOADING: &str = "Loading configuration…";
 pub(crate) const ERROR_MARK: &str = "!";
 pub(crate) const ENGINE: &str = "Engine";
-pub(crate) const DOWNLOAD: &str = "Download";
-pub(crate) const UPLOAD: &str = "Upload";
 pub(crate) const ACTIVE_SERVER: &str = "Active tunnel server";
 pub(crate) const UNKNOWN_SERVER: &str = "Server no longer in configuration";
 pub(crate) const NO_SESSION: &str = "—";
+pub(crate) const STATUS_UNKNOWN: &str = "Status unknown";
 pub(crate) const DISCONNECTED: &str = "Disconnected";
 pub(crate) const CONNECTING: &str = "Connecting";
 pub(crate) const CONNECTED: &str = "Connected";
@@ -115,12 +114,4 @@ pub(crate) fn plain_link(label: &str, value: &str) -> String {
 
 pub(crate) fn helper_version(version: &str) -> String {
     format!("Helper {version}")
-}
-
-pub(crate) fn transfer_rate(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{:.2} MiB/s", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1} KiB/s", bytes as f64 / 1024.0)
-    }
 }

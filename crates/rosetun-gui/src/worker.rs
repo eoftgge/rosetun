@@ -106,12 +106,18 @@ impl WorkerDispatcher {
     pub(crate) fn connect(&self) {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
+            tracing::info!("Connect command started");
             let result = publisher
                 .store
                 .load()
                 .map_err(HelperCommandError::Store)
                 .and_then(|config| ConnectRequest::from_config(&config).map_err(Into::into))
                 .and_then(|request| with_helper(|client| client.connect_tunnel(request)));
+            if result.is_ok() {
+                tracing::info!("Connect command succeeded");
+            } else {
+                tracing::warn!("Connect command failed");
+            }
             publisher.complete(WorkerEvent::Connect(result));
         });
     }
@@ -119,7 +125,13 @@ impl WorkerDispatcher {
     pub(crate) fn disconnect(&self) {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
+            tracing::info!("Disconnect command started");
             let result = with_helper(|client| client.disconnect_tunnel());
+            if result.is_ok() {
+                tracing::info!("Disconnect command succeeded");
+            } else {
+                tracing::warn!("Disconnect command failed");
+            }
             emit(
                 &publisher.tx,
                 &publisher.repaint,
@@ -159,6 +171,9 @@ impl WorkerDispatcher {
                 prepare_subscription(&publisher.store, &input, options).and_then(|prepared| {
                     add_prepared_subscription(&publisher.store, prepared, Timeouts::default())
                 });
+            if let Err(error) = &result {
+                log_subscription_error("add", error);
+            }
             publisher.complete(WorkerEvent::Add(result));
         });
     }
@@ -167,6 +182,9 @@ impl WorkerDispatcher {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
             let result = update_subscription(&publisher.store, &id, Timeouts::default());
+            if let Err(error) = &result {
+                log_subscription_error("update", error);
+            }
             publisher.complete(WorkerEvent::Update { id, result });
         });
     }
@@ -175,6 +193,16 @@ impl WorkerDispatcher {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
             let result = update_all(&publisher.store, Timeouts::default());
+            match &result {
+                Ok(results) => {
+                    for (_, outcome) in results {
+                        if let Err(error) = outcome {
+                            log_subscription_error("update all", error);
+                        }
+                    }
+                }
+                Err(error) => log_subscription_error("update all", error),
+            }
             publisher.complete(WorkerEvent::UpdateAll(result));
         });
     }
@@ -183,6 +211,9 @@ impl WorkerDispatcher {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
             let result = remove_subscription(&publisher.store, &id);
+            if let Err(error) = &result {
+                log_subscription_error("remove", error);
+            }
             publisher.complete(WorkerEvent::Remove { id, result });
         });
     }
@@ -231,9 +262,11 @@ pub(crate) fn start(
 
     thread::spawn(move || {
         let endpoint = rosetun_ipc::default_endpoint();
+        let mut available = None;
         loop {
             match HelperClient::connect(&endpoint, CLIENT_NAME) {
                 Ok(mut client) => {
+                    log_helper_availability(&mut available, true);
                     if !emit(
                         &tx,
                         &repaint,
@@ -251,6 +284,7 @@ pub(crate) fn start(
                                 }
                             }
                             Err(error) => {
+                                log_helper_availability(&mut available, false);
                                 if !emit(&tx, &repaint, WorkerEvent::HelperUnavailable(error)) {
                                     return;
                                 }
@@ -261,6 +295,7 @@ pub(crate) fn start(
                     }
                 }
                 Err(error) => {
+                    log_helper_availability(&mut available, false);
                     if !emit(&tx, &repaint, WorkerEvent::HelperUnavailable(error)) {
                         return;
                     }
@@ -296,6 +331,30 @@ fn with_helper(
     operation(&mut client).map_err(Into::into)
 }
 
+fn log_helper_availability(previous: &mut Option<bool>, available: bool) {
+    if previous.replace(available) == Some(available) {
+        return;
+    }
+    if available {
+        tracing::info!("Helper available");
+    } else {
+        tracing::warn!("Helper unavailable");
+    }
+}
+
+fn log_subscription_error(operation: &str, error: &impl std::fmt::Display) {
+    let message = without_urls(&error.to_string());
+    tracing::warn!(operation, error = %message, "Subscription operation failed");
+}
+
+fn without_urls(message: &str) -> String {
+    message
+        .split_whitespace()
+        .map(|word| if word.contains("://") { "[URL]" } else { word })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn emit(tx: &Sender<WorkerEvent>, repaint: &egui::Context, event: WorkerEvent) -> bool {
     if tx.send(event).is_err() {
         return false;
@@ -308,6 +367,20 @@ fn emit(tx: &Sender<WorkerEvent>, repaint: &egui::Context, event: WorkerEvent) -
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn subscription_errors_do_not_log_urls_or_tokens() {
+        assert_eq!(
+            without_urls(
+                "request failed for happ://add/https://example.com/sub?token=secret: timeout"
+            ),
+            "request failed for [URL] timeout"
+        );
+        assert_eq!(
+            without_urls("subscription does not exist"),
+            "subscription does not exist"
+        );
+    }
 
     #[test]
     fn missing_and_present_files_have_distinct_stamps() {

@@ -49,8 +49,8 @@ pub enum AddFromUrlError {
     Url(String),
     #[error(transparent)]
     Store(#[from] StoreError),
-    #[error("already added as {0}")]
-    AlreadyExists(String),
+    #[error("already added as {}", crate::terminal_text(.0.as_str()))]
+    AlreadyExists(SubscriptionId),
     #[error("invalid subscription URL")]
     InvalidUrl(#[source] url::ParseError),
     #[error("subscription URL requires a host")]
@@ -75,9 +75,7 @@ pub fn prepare_subscription(
     let url = crate::normalize_subscription_url(input).map_err(AddFromUrlError::Url)?;
     let config = store.load()?;
     if let Some(existing) = config.subscriptions.iter().find(|sub| sub.url == url) {
-        return Err(AddFromUrlError::AlreadyExists(crate::terminal_text(
-            existing.id.as_str(),
-        )));
+        return Err(AddFromUrlError::AlreadyExists(existing.id.clone()));
     }
     let parsed_url = url::Url::parse(&url).map_err(AddFromUrlError::InvalidUrl)?;
     let host = parsed_url.host_str().ok_or(AddFromUrlError::MissingHost)?;
