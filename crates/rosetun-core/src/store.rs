@@ -320,6 +320,25 @@ mod tests {
         }
     }
 
+    fn parsed_from_template(
+        subscription: &rosetun_config::Subscription,
+    ) -> rosetun_subscription::Parsed {
+        rosetun_subscription::Parsed {
+            format: rosetun_subscription::Format::Links { base64: false },
+            nodes: subscription.nodes.clone(),
+            skipped: Vec::new(),
+            meta: rosetun_subscription::SubscriptionMeta {
+                title: None,
+                info: subscription.info.clone(),
+                update_interval_hours: subscription.update_interval_hours,
+                support_url: subscription.support_url.clone(),
+                web_page_url: subscription.web_page_url.clone(),
+                announce: subscription.announce.clone(),
+                notices: subscription.notices.clone(),
+            },
+        }
+    }
+
     #[test]
     fn adding_duplicate_url_preserves_existing_bytes() {
         let directory = TestDirectory::new();
@@ -332,8 +351,8 @@ mod tests {
 
         save(store.path(), &initial).unwrap();
         let before = fs::read(store.path()).unwrap();
-
-        let result = crate::add_subscription(&store, prepared);
+        let parsed = parsed_from_template(&prepared);
+        let result = crate::add_subscription(&store, prepared, parsed, 42);
 
         assert!(matches!(
             result,
@@ -358,11 +377,19 @@ mod tests {
         save(store.path(), &initial).unwrap();
 
         prepared.url = "https://new.example.com/subscription".into();
-        let added = crate::add_subscription(&store, prepared.clone()).unwrap();
+        let parsed = parsed_from_template(&prepared);
+        let (added, report) =
+            crate::add_subscription(&store, prepared.clone(), parsed, 42).unwrap();
 
         assert_eq!(added.id, SubscriptionId::new("2"));
         let mut expected_added = prepared;
+        expected_added.updated_at_unix = Some(42);
         expected_added.id = SubscriptionId::new("2");
+        assert_eq!(report.added, expected_added.nodes.len());
+        assert_eq!(report.removed, 0);
+        assert_eq!(report.retained, 0);
+        assert!(!report.selection_cleared);
+        assert_eq!(report.notices, expected_added.notices);
         assert_eq!(added, expected_added);
 
         let saved = store.load().unwrap();
@@ -392,7 +419,8 @@ mod tests {
         let before = store.load().unwrap();
 
         prepared.url = "https://new.example.com/subscription".into();
-        let added = crate::add_subscription(&store, prepared).unwrap();
+        let parsed = parsed_from_template(&prepared);
+        let (added, _) = crate::add_subscription(&store, prepared, parsed, 42).unwrap();
 
         assert_eq!(added.id, SubscriptionId::new("2"));
         let mut expected = before;
@@ -406,7 +434,8 @@ mod tests {
         let store = Store::at(directory.config_path());
         let prepared = selected_config().subscriptions.remove(0);
 
-        let added = crate::add_subscription(&store, prepared).unwrap();
+        let parsed = parsed_from_template(&prepared);
+        let (added, _) = crate::add_subscription(&store, prepared, parsed, 42).unwrap();
 
         assert_eq!(added.id, SubscriptionId::new("1"));
         let saved = store.load().unwrap();
@@ -426,7 +455,8 @@ mod tests {
 
         let mut prepared = initial.subscriptions[0].clone();
         prepared.url = "https://new.example.com/subscription".into();
-        let result = crate::add_subscription(&store, prepared);
+        let parsed = parsed_from_template(&prepared);
+        let result = crate::add_subscription(&store, prepared, parsed, 42);
 
         assert!(matches!(
             result,

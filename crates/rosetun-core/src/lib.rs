@@ -14,10 +14,11 @@ pub use subscription_url::{
     normalize as normalize_subscription_url, redacted as redacted_subscription_url,
 };
 pub use subscriptions::{
-    AddSubscriptionError, CommitUpdateError, RemoveSubscriptionError, add_subscription,
-    commit_subscription_update, remove_subscription,
+    AddSubscriptionError, CommitUpdateError, RemoveSubscriptionError, SubscriptionUpdateResult,
+    UpdateSubscriptionError, add_subscription, commit_subscription_update, remove_subscription,
+    update_all, update_subscription,
 };
-pub use update::{UpdateReport, apply_update, group_skipped};
+pub use update::{UpdateReport, group_skipped};
 
 pub fn is_sensitive_log_target(target: &str) -> bool {
     ["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"]

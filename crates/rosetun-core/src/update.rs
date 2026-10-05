@@ -21,7 +21,7 @@ pub fn group_skipped(skipped: &[Skipped]) -> BTreeMap<String, usize> {
     grouped
 }
 
-pub fn apply_update(
+pub(crate) fn apply_update(
     config: &mut AppConfig,
     id: &SubscriptionId,
     parsed: Parsed,
@@ -122,6 +122,50 @@ mod tests {
                 Ok::<_, StoreError>(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn update_all_reports_subscription_removed_during_previous_fetch() {
+        let directory = TestDirectory::new();
+        let store = directory.store();
+        let other_store = Store::at(store.path().to_path_buf());
+
+        let mut initial = config(None);
+        let mut second = initial.subscriptions[0].clone();
+        second.id = SubscriptionId::new("2");
+        second.url = "https://other.example.com/subscription".to_owned();
+        initial.subscriptions.push(second);
+        initialize(&store, initial);
+
+        let mut fetched_ids = Vec::new();
+        let results = crate::subscriptions::update_all_with(
+            &store,
+            crate::Timeouts::default(),
+            |subscription, _| {
+                fetched_ids.push(subscription.id.clone());
+                assert_eq!(subscription.id, SubscriptionId::new("1"));
+
+                crate::remove_subscription(&other_store, &SubscriptionId::new("2")).unwrap();
+                Ok(parsed())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(fetched_ids, vec![SubscriptionId::new("1")]);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, SubscriptionId::new("1"));
+        assert!(results[0].1.is_ok());
+        assert_eq!(results[1].0, SubscriptionId::new("2"));
+        assert!(matches!(
+            &results[1].1,
+            Err(crate::UpdateSubscriptionError::NotFound)
+        ));
+
+        let saved = store.load().unwrap();
+        assert_eq!(saved.subscriptions.len(), 1);
+        assert_eq!(saved.subscriptions[0].id, SubscriptionId::new("1"));
+        assert_eq!(saved.subscriptions[0].nodes, parsed().nodes);
+        assert!(saved.subscriptions[0].updated_at_unix.is_some());
     }
 
     #[test]

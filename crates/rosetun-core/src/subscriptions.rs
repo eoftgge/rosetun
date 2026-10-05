@@ -2,7 +2,95 @@ use rosetun_config::{Subscription, SubscriptionId};
 use rosetun_subscription::Parsed;
 
 use crate::update::apply_update;
-use crate::{Store, StoreError, UpdateReport};
+use crate::{FetchError, Store, StoreError, Timeouts, UpdateReport, fetch};
+
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateSubscriptionError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("subscription does not exist")]
+    NotFound,
+    #[error(transparent)]
+    Fetch(#[from] FetchError),
+    #[error(
+        "subscription request settings changed while the update was being fetched; retry the update"
+    )]
+    RequestSettingsChanged,
+    #[error("system clock is before the Unix epoch")]
+    Clock(#[from] std::time::SystemTimeError),
+}
+
+impl From<CommitUpdateError> for UpdateSubscriptionError {
+    fn from(error: CommitUpdateError) -> Self {
+        match error {
+            CommitUpdateError::Store(error) => Self::Store(error),
+            CommitUpdateError::SubscriptionNotFound => Self::NotFound,
+            CommitUpdateError::RequestSettingsChanged => Self::RequestSettingsChanged,
+        }
+    }
+}
+
+pub fn update_subscription(
+    store: &Store,
+    id: &SubscriptionId,
+    timeouts: Timeouts,
+) -> Result<UpdateReport, UpdateSubscriptionError> {
+    update_subscription_with(store, id, timeouts, &mut fetch)
+}
+
+fn update_subscription_with(
+    store: &Store,
+    id: &SubscriptionId,
+    timeouts: Timeouts,
+    fetch_subscription: &mut impl FnMut(&Subscription, Timeouts) -> Result<Parsed, FetchError>,
+) -> Result<UpdateReport, UpdateSubscriptionError> {
+    let config = store.load()?;
+    let requested = config
+        .subscriptions
+        .iter()
+        .find(|subscription| &subscription.id == id)
+        .ok_or(UpdateSubscriptionError::NotFound)?;
+
+    let parsed = fetch_subscription(requested, timeouts)?;
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+
+    commit_subscription_update(store, requested, parsed, now_unix).map_err(Into::into)
+}
+
+pub type SubscriptionUpdateResult = (
+    SubscriptionId,
+    Result<UpdateReport, UpdateSubscriptionError>,
+);
+
+pub fn update_all(
+    store: &Store,
+    timeouts: Timeouts,
+) -> Result<Vec<SubscriptionUpdateResult>, StoreError> {
+    update_all_with(store, timeouts, fetch)
+}
+
+pub(crate) fn update_all_with(
+    store: &Store,
+    timeouts: Timeouts,
+    mut fetch_subscription: impl FnMut(&Subscription, Timeouts) -> Result<Parsed, FetchError>,
+) -> Result<Vec<SubscriptionUpdateResult>, StoreError> {
+    let ids: Vec<_> = store
+        .load()?
+        .subscriptions
+        .into_iter()
+        .map(|subscription| subscription.id)
+        .collect();
+
+    Ok(ids
+        .into_iter()
+        .map(|id| {
+            let result = update_subscription_with(store, &id, timeouts, &mut fetch_subscription);
+            (id, result)
+        })
+        .collect())
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CommitUpdateError {
@@ -86,17 +174,17 @@ pub enum AddSubscriptionError {
     IdExhausted,
 }
 
-/// Saves a prepared subscription, replacing its ID with the smallest free
-/// positive decimal ID from the current configuration.
 pub fn add_subscription(
     store: &Store,
-    mut subscription: Subscription,
-) -> Result<Subscription, AddSubscriptionError> {
+    mut template: Subscription,
+    parsed: Parsed,
+    now_unix: u64,
+) -> Result<(Subscription, UpdateReport), AddSubscriptionError> {
     store.modify(|config| {
         if config
             .subscriptions
             .iter()
-            .any(|existing| existing.url == subscription.url)
+            .any(|existing| existing.url == template.url)
         {
             return Err(AddSubscriptionError::AlreadyExists);
         }
@@ -118,9 +206,13 @@ pub fn add_subscription(
                 .ok_or(AddSubscriptionError::IdExhausted)?;
         };
 
-        subscription.id = id;
-        config.subscriptions.push(subscription.clone());
+        template.id = id.clone();
+        template.nodes.clear();
 
-        Ok(subscription)
+        let index = config.subscriptions.len();
+        config.subscriptions.push(template);
+
+        let report = apply_update(config, &id, parsed, now_unix);
+        Ok((config.subscriptions[index].clone(), report))
     })
 }

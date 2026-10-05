@@ -78,27 +78,17 @@ fn add(
     let parsed = fetch::fetch(&subscription, Timeouts::default())
         .map_err(|error| fetch_error_message(&error, &subscription.url))?;
 
-    let skipped = update::group_skipped(&parsed.skipped);
-
     // The parser already applies profile-title and Content-Disposition priority.
-    subscription.name = name.or(parsed.meta.title).unwrap_or(host);
+    subscription.name = name.or_else(|| parsed.meta.title.clone()).unwrap_or(host);
 
     let now = now_unix()?;
-    subscription.nodes = parsed.nodes;
-    subscription.info = parsed.meta.info;
-    subscription.update_interval_hours = parsed.meta.update_interval_hours;
-    subscription.support_url = parsed.meta.support_url;
-    subscription.web_page_url = parsed.meta.web_page_url;
-    subscription.announce = parsed.meta.announce;
-    subscription.notices = parsed.meta.notices;
-    subscription.updated_at_unix = Some(now);
-
-    let subscription = rosetun_core::add_subscription(&current_store, subscription)
-        .map_err(|error| error.to_string())?;
+    let (subscription, report) =
+        rosetun_core::add_subscription(&current_store, subscription, parsed, now)
+            .map_err(|error| error.to_string())?;
 
     println!("subscription added:");
     print_subscription(&subscription, now);
-    print_details(&skipped, &subscription.notices, &subscription.url);
+    print_details(&report.skipped, &report.notices, &subscription.url);
 
     Ok(())
 }
