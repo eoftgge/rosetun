@@ -2608,6 +2608,7 @@ dependencies = [
 name = "rosetun-core"
 version = "0.1.0"
 dependencies = [
+ "idna",
  "rosetun-config",
  "rosetun-hwid",
  "rosetun-subscription",

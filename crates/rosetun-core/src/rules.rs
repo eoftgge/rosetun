@@ -210,6 +210,8 @@ pub enum RuleInputError {
     InvalidDomain,
     #[error("this is an IP address, not a domain")]
     IpAddress,
+    #[error("enter a full domain such as example.com; use *.label for a top-level domain")]
+    SingleLabel,
     #[error("enter a process name such as app.exe or a full path to it")]
     InvalidProcess,
     #[error("a process path must be absolute")]
@@ -257,6 +259,8 @@ fn parse_domain(host: &str, suffix: bool) -> Result<DomainMatch, RuleInputError>
             }
             if suffix {
                 Ok(DomainMatch::Suffix(domain))
+            } else if !domain.contains('.') {
+                Err(RuleInputError::SingleLabel)
             } else {
                 Ok(DomainMatch::Exact(domain))
             }
@@ -296,13 +300,33 @@ pub fn parse_process_input(input: &str) -> Result<ProcessMatch, RuleInputError> 
 
 pub fn rule_value_text(matcher: &RuleMatcher) -> String {
     match matcher {
-        RuleMatcher::Domain(DomainMatch::Exact(domain)) => domain.clone(),
-        RuleMatcher::Domain(DomainMatch::Suffix(domain)) => format!("*.{domain}"),
+        RuleMatcher::Domain(DomainMatch::Exact(domain)) => idna::domain_to_unicode(domain).0,
+        RuleMatcher::Domain(DomainMatch::Suffix(domain)) => {
+            format!("*.{}", idna::domain_to_unicode(domain).0)
+        }
         RuleMatcher::Domain(DomainMatch::Keyword(keyword)) => format!("contains \"{keyword}\""),
         RuleMatcher::Process(ProcessMatch::Name(name)) => name.clone(),
         RuleMatcher::Process(ProcessMatch::Path(path)) => path.to_string_lossy().into_owned(),
         RuleMatcher::IpCidr(cidr) => cidr.clone(),
     }
+}
+
+/// The stored form when it differs from `rule_value_text`, so the UI can
+/// show the punycode next to the readable name.
+pub fn rule_value_ascii(matcher: &RuleMatcher) -> Option<String> {
+    let (domain, suffix) = match matcher {
+        RuleMatcher::Domain(DomainMatch::Exact(domain)) => (domain, false),
+        RuleMatcher::Domain(DomainMatch::Suffix(domain)) => (domain, true),
+        _ => return None,
+    };
+    let (unicode, _) = idna::domain_to_unicode(domain);
+    (unicode != *domain).then(|| {
+        if suffix {
+            format!("*.{domain}")
+        } else {
+            domain.clone()
+        }
+    })
 }
 
 #[cfg(test)]
@@ -336,6 +360,63 @@ mod matcher_tests {
             assert!(!same_matcher(&name, &upper, ignore_case));
             assert!(!same_matcher(&domain, &other_domain, ignore_case));
         }
+    }
+}
+
+#[cfg(test)]
+mod domain_tests {
+    use super::*;
+
+    #[test]
+    fn international_domains_round_trip_with_readable_and_stored_forms() {
+        let exact = RuleMatcher::Domain(parse_domain_input("пример.рф").unwrap());
+        assert_eq!(rule_value_text(&exact), "пример.рф");
+        assert_eq!(
+            rule_value_ascii(&exact).as_deref(),
+            Some("xn--e1afmkfd.xn--p1ai")
+        );
+        assert_eq!(
+            parse_domain_input(&rule_value_text(&exact)),
+            Ok(DomainMatch::Exact("xn--e1afmkfd.xn--p1ai".into()))
+        );
+
+        let suffix = RuleMatcher::Domain(parse_domain_input("*.пример.рф").unwrap());
+        assert_eq!(rule_value_text(&suffix), "*.пример.рф");
+        assert_eq!(
+            rule_value_ascii(&suffix).as_deref(),
+            Some("*.xn--e1afmkfd.xn--p1ai")
+        );
+        assert_eq!(
+            parse_domain_input(&rule_value_text(&suffix)),
+            Ok(DomainMatch::Suffix("xn--e1afmkfd.xn--p1ai".into()))
+        );
+        assert_eq!(
+            rule_value_ascii(&RuleMatcher::Domain(DomainMatch::Exact(
+                "example.com".into()
+            ))),
+            None
+        );
+    }
+
+    #[test]
+    fn exact_domains_need_a_dot_but_top_level_suffixes_are_valid() {
+        assert_eq!(parse_domain_input("вф"), Err(RuleInputError::SingleLabel));
+        assert_eq!(
+            parse_domain_input("localhost"),
+            Err(RuleInputError::SingleLabel)
+        );
+        assert_eq!(
+            parse_domain_input("https://localhost/"),
+            Err(RuleInputError::SingleLabel)
+        );
+        assert_eq!(
+            parse_domain_input("*.рф"),
+            Ok(DomainMatch::Suffix("xn--p1ai".into()))
+        );
+        assert_eq!(
+            parse_domain_input("*.ru"),
+            Ok(DomainMatch::Suffix("ru".into()))
+        );
     }
 }
 
