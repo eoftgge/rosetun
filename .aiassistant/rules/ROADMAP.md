@@ -58,6 +58,13 @@ on it and go first. Do not start it, and do not widen the capability taxonomy
 for it, until it is picked up again. When it is, see `ENGINE.md` for what to pin
 and verify.
 
+It is also the only route to XHTTP nodes. sing-box has no XHTTP transport in
+1.14.1, nor in 1.15.0-alpha.10; mihomo has a VLESS XHTTP client with its modes,
+connection reuse and download settings. If providers move to XHTTP, pick this
+stage up right after the GUI. That also means a `Transport::Xhttp` in the model,
+parsed instead of skipped, with engine capabilities deciding which engine can
+run a node.
+
 ### Stage 8 — configuration on disk
 
 Lives in the client, not the helper. Platform config directory, read, validate,
