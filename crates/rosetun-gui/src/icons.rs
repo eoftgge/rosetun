@@ -7,18 +7,36 @@ pub(crate) enum Icon {
     Grip,
     Chevron { open: bool },
     Refresh,
-    Trash,
+    More,
 }
 
 pub(crate) fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool) -> egui::Response {
+    icon_button_sized(ui, icon, enabled, 22.0)
+}
+
+pub(crate) fn icon_button_sized(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    enabled: bool,
+    size: f32,
+) -> egui::Response {
     let enabled = enabled && ui.is_enabled();
     let sense = if enabled && !matches!(icon, Icon::Grip) {
         egui::Sense::click()
     } else {
         egui::Sense::hover()
     };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), sense);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), sense);
     if ui.is_rect_visible(rect) {
+        if enabled && !matches!(icon, Icon::Grip) {
+            if response.is_pointer_button_down_on() {
+                ui.painter()
+                    .rect_filled(rect, theme::RADIUS_INNER, theme::ROSE_DARK);
+            } else if response.hovered() {
+                ui.painter()
+                    .rect_filled(rect, theme::RADIUS_INNER, theme::BORDER);
+            }
+        }
         let color = if !enabled {
             theme::DISABLED
         } else if response.hovered() {
@@ -80,30 +98,10 @@ pub(crate) fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool) -> egui:
                     egui::Stroke::NONE,
                 ));
             }
-            Icon::Trash => {
-                painter.add(egui::Shape::line(
-                    vec![
-                        center + egui::vec2(-4.0, -1.0),
-                        center + egui::vec2(-4.0, 8.0),
-                        center + egui::vec2(4.0, 8.0),
-                        center + egui::vec2(4.0, -1.0),
-                    ],
-                    stroke,
-                ));
-                painter.line_segment(
-                    [
-                        center + egui::vec2(-6.0, -4.0),
-                        center + egui::vec2(6.0, -4.0),
-                    ],
-                    stroke,
-                );
-                painter.line_segment(
-                    [
-                        center + egui::vec2(-2.0, -7.0),
-                        center + egui::vec2(2.0, -7.0),
-                    ],
-                    stroke,
-                );
+            Icon::More => {
+                for x in [-5.0, 0.0, 5.0] {
+                    painter.circle_filled(center + egui::vec2(x, 0.0), 1.3, color);
+                }
             }
         }
     }

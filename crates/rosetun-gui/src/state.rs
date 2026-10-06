@@ -35,12 +35,26 @@ const AUTO_UPDATE_RETRY: u64 = 60 * 60;
 const AUTO_UPDATE_CHECK: u64 = 60;
 const TRAFFIC_HISTORY: usize = 60;
 
-/// Whether one subscription is due, in Unix seconds.
-fn update_due(subscription: &Subscription, now: u64, last_attempt: Option<u64>) -> bool {
-    let hours = subscription
+/// Hours between automatic updates of one subscription.
+pub(crate) fn auto_update_hours(subscription: &Subscription) -> u64 {
+    subscription
         .update_interval_hours
         .map(|hours| hours.clamp(*AUTO_UPDATE_RANGE.start(), *AUTO_UPDATE_RANGE.end()))
-        .unwrap_or(AUTO_UPDATE_HOURS);
+        .unwrap_or(AUTO_UPDATE_HOURS)
+}
+
+/// The interval the panel footer names: one value when every subscription shares it.
+pub(crate) fn shared_auto_update_hours(subscriptions: &[Subscription]) -> Option<u64> {
+    let first = auto_update_hours(subscriptions.first()?);
+    subscriptions
+        .iter()
+        .all(|subscription| auto_update_hours(subscription) == first)
+        .then_some(first)
+}
+
+/// Whether one subscription is due, in Unix seconds.
+fn update_due(subscription: &Subscription, now: u64, last_attempt: Option<u64>) -> bool {
+    let hours = auto_update_hours(subscription);
     subscription
         .updated_at_unix
         .is_none_or(|updated| now.saturating_sub(updated) >= hours * 60 * 60)
@@ -59,6 +73,7 @@ pub(crate) struct Operations {
     pub(crate) pinging: BTreeSet<SubscriptionId>,
     pub(crate) update_all: bool,
     pub(crate) removing: bool,
+    pub(crate) renaming: bool,
     pub(crate) moving_subscription: bool,
 }
 
@@ -87,6 +102,15 @@ impl Default for AddDialog {
 pub(crate) struct RemoveDialog {
     pub(crate) id: SubscriptionId,
     pub(crate) error: Option<String>,
+}
+
+pub(crate) struct RenameDialog {
+    pub(crate) id: SubscriptionId,
+    /// The name as the dialog first showed it: submitting it unchanged saves nothing.
+    pub(crate) original: String,
+    pub(crate) name: String,
+    pub(crate) error: Option<String>,
+    pub(crate) focus: bool,
 }
 
 pub(crate) enum UpdateOutcome {
@@ -313,6 +337,7 @@ pub(crate) struct State {
     pub(crate) operations: Operations,
     pub(crate) add: Option<AddDialog>,
     pub(crate) remove: Option<RemoveDialog>,
+    pub(crate) rename: Option<RenameDialog>,
     pub(crate) protection_confirmation: bool,
 }
 
@@ -348,6 +373,7 @@ impl Default for State {
             operations: Operations::default(),
             add: None,
             remove: None,
+            rename: None,
             protection_confirmation: false,
         }
     }
@@ -416,6 +442,9 @@ pub(crate) enum Action {
     RequestRemove(SubscriptionId),
     CancelRemove,
     ConfirmRemove,
+    RequestRename(SubscriptionId),
+    CancelRename,
+    SubmitRename,
     DismissOperationError,
     DismissConfigError,
     DismissOutcome(SubscriptionId),
@@ -467,6 +496,7 @@ pub(crate) enum Job {
     },
     UpdateAll,
     Remove(SubscriptionId),
+    RenameSubscription(SubscriptionId, String),
     MoveSubscription(SubscriptionId, usize),
 }
 
@@ -1009,6 +1039,20 @@ impl State {
                         let message = self.text(&errors::remove_subscription(t(), &error));
                         if let Some(dialog) = &mut self.remove {
                             dialog.error = Some(message);
+                        }
+                    }
+                }
+            }
+            WorkerEvent::RenameSubscription(result) => {
+                self.operations.renaming = false;
+                match result {
+                    Ok(()) => self.rename = None,
+                    Err(error) => {
+                        let message = self.text(&errors::rename_subscription(t(), &error));
+                        if let Some(dialog) = &mut self.rename {
+                            dialog.error = Some(message);
+                        } else {
+                            self.operation_error = Some(message);
                         }
                     }
                 }
@@ -1584,6 +1628,48 @@ impl State {
                     return Some(Job::Remove(dialog.id.clone()));
                 }
             }
+            Action::RequestRename(id) => {
+                if self.config_ready
+                    && self.rename.is_none()
+                    && self.remove.is_none()
+                    && !self.operations.renaming
+                    && let Some(subscription) =
+                        self.config.subscriptions.iter().find(|sub| sub.id == id)
+                {
+                    let original = self.text(&subscription.name);
+                    self.rename = Some(RenameDialog {
+                        id,
+                        name: original.clone(),
+                        original,
+                        error: None,
+                        focus: true,
+                    });
+                }
+            }
+            Action::CancelRename => {
+                if !self.operations.renaming {
+                    self.rename = None;
+                }
+            }
+            Action::SubmitRename => {
+                if let Some(dialog) = &mut self.rename
+                    && !self.operations.renaming
+                {
+                    let name = dialog.name.trim();
+                    if !name.is_empty() {
+                        if name == dialog.original.trim() {
+                            self.rename = None;
+                        } else {
+                            self.operations.renaming = true;
+                            dialog.error = None;
+                            return Some(Job::RenameSubscription(
+                                dialog.id.clone(),
+                                name.to_owned(),
+                            ));
+                        }
+                    }
+                }
+            }
             Action::DismissOperationError => self.operation_error = None,
             Action::DismissConfigError => self.config_error = None,
             Action::DismissOutcome(id) => {
@@ -1871,6 +1957,64 @@ mod tests {
         assert!(update_due(&sub, now, None));
         assert!(!update_due(&sub, now, Some(now - 10 * 60)));
         assert!(update_due(&sub, now, Some(now - 2 * 60 * 60)));
+    }
+
+    #[test]
+    fn shared_auto_update_interval_requires_matching_subscriptions() {
+        assert_eq!(shared_auto_update_hours(&[]), None);
+        let mut subscriptions = vec![subscription("1"), subscription("2")];
+        assert_eq!(shared_auto_update_hours(&subscriptions), Some(12));
+        subscriptions[0].update_interval_hours = Some(0);
+        assert_eq!(shared_auto_update_hours(&subscriptions[..1]), Some(1));
+        subscriptions[0].update_interval_hours = Some(500);
+        assert_eq!(shared_auto_update_hours(&subscriptions[..1]), Some(168));
+        subscriptions[0].update_interval_hours = Some(12);
+        subscriptions[1].update_interval_hours = Some(24);
+        assert_eq!(shared_auto_update_hours(&subscriptions), None);
+    }
+
+    #[test]
+    fn renaming_subscription_validates_and_tracks_the_result() {
+        let mut state = state_with_subscriptions();
+        let id = SubscriptionId::new("1");
+        state.config.subscriptions[0].name = "🇳🇱 Provider".to_owned();
+        state.act(Action::RequestRename(id.clone()));
+        let dialog = state.rename.as_ref().unwrap();
+        assert_eq!(dialog.name, "[NL] Provider");
+        assert_eq!(dialog.original, dialog.name);
+        assert!(dialog.focus);
+        assert!(state.act(Action::RequestRename(id.clone())).is_none());
+        assert_eq!(state.rename.as_ref().unwrap().name, "[NL] Provider");
+
+        state.rename.as_mut().unwrap().name = "  [NL] Provider  ".to_owned();
+        assert!(state.act(Action::SubmitRename).is_none());
+        assert!(state.rename.is_none());
+        state.act(Action::RequestRename(id.clone()));
+        state.rename.as_mut().unwrap().name = "   ".to_owned();
+        assert!(state.act(Action::SubmitRename).is_none());
+        assert!(state.rename.is_some());
+
+        state.rename.as_mut().unwrap().name = "  New name  ".to_owned();
+        assert!(matches!(
+            state.act(Action::SubmitRename),
+            Some(Job::RenameSubscription(job_id, name)) if job_id == id && name == "New name"
+        ));
+        assert!(state.operations.renaming);
+        assert!(state.act(Action::SubmitRename).is_none());
+        state.act(Action::CancelRename);
+        assert!(state.rename.is_some());
+        state.reduce(WorkerEvent::RenameSubscription(Err(
+            rosetun_core::RenameSubscriptionError::EmptyName,
+        )));
+        assert!(!state.operations.renaming);
+        assert_eq!(
+            state.rename.as_ref().unwrap().error.as_deref(),
+            Some(t().errors.subscription_name_empty)
+        );
+        assert!(state.act(Action::SubmitRename).is_some());
+        state.reduce(WorkerEvent::RenameSubscription(Ok(())));
+        assert!(state.rename.is_none());
+        assert!(!state.operations.renaming);
     }
 
     #[test]

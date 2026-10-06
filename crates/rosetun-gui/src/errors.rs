@@ -1,9 +1,9 @@
 use rosetun_config::ConfigError;
 use rosetun_core::{
     AddFromUrlError, AddSubscriptionError, DnsInputError, FetchError, MoveSubscriptionError,
-    ParseError, RemoveSubscriptionError, RuleInputError, RuleSetError, SelectNodeError,
-    SelectRuleSetError, SettingsError, SkipReason, StoreError, SubscriptionUrlError,
-    UnsupportedTransport, UpdateSubscriptionError,
+    ParseError, RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
+    SelectNodeError, SelectRuleSetError, SettingsError, SkipReason, StoreError,
+    SubscriptionUrlError, UnsupportedTransport, UpdateSubscriptionError,
 };
 use rosetun_ipc::{ClientError, ConnectRequestError, ErrorCode};
 use rosetun_processes::ProcessListError;
@@ -281,6 +281,14 @@ pub(crate) fn remove_subscription(s: &Strings, error: &RemoveSubscriptionError) 
     match error {
         RemoveSubscriptionError::Store(error) => store(s, error),
         RemoveSubscriptionError::SubscriptionNotFound => s.errors.subscription_not_found.to_owned(),
+    }
+}
+
+pub(crate) fn rename_subscription(s: &Strings, error: &RenameSubscriptionError) -> String {
+    match error {
+        RenameSubscriptionError::Store(error) => store(s, error),
+        RenameSubscriptionError::NotFound => s.errors.subscription_not_found.to_owned(),
+        RenameSubscriptionError::EmptyName => s.errors.subscription_name_empty.to_owned(),
     }
 }
 

@@ -98,6 +98,7 @@ pub(crate) struct ErrorStrings {
     pub(crate) invalid_port: &'static str,
     pub(crate) invalid_dns_path: &'static str,
     pub(crate) subscription_not_found: &'static str,
+    pub(crate) subscription_name_empty: &'static str,
     pub(crate) node_not_found: &'static str,
     pub(crate) request_settings_changed: &'static str,
     pub(crate) clock_before_epoch: &'static str,
@@ -281,6 +282,8 @@ pub(crate) struct Strings {
     pub(crate) keep_blocked: &'static str,
     pub(crate) protection_warning: &'static str,
     pub(crate) add_subscription: &'static str,
+    pub(crate) subscriptions_title: &'static str,
+    pub(crate) add_short: &'static str,
     pub(crate) add_subtitle: &'static str,
     pub(crate) subscription_url: &'static str,
     pub(crate) paste: &'static str,
@@ -296,12 +299,16 @@ pub(crate) struct Strings {
     pub(crate) remove: &'static str,
     pub(crate) removing: &'static str,
     pub(crate) remove_subscription: &'static str,
+    pub(crate) rename_subscription: &'static str,
+    pub(crate) subscription_name: &'static str,
+    pub(crate) more_actions: &'static str,
     pub(crate) remove_detail: &'static str,
     pub(crate) remove_selected_warning: &'static str,
     pub(crate) update: &'static str,
     pub(crate) update_all: &'static str,
     pub(crate) updating: &'static str,
-    pub(crate) subscription_reorder_disabled: &'static str,
+    pub(crate) auto_update_every: &'static str,
+    pub(crate) auto_update_on: &'static str,
     pub(crate) never_updated: &'static str,
     pub(crate) no_subscriptions: &'static str,
     pub(crate) empty_subscriptions: &'static str,
@@ -491,13 +498,6 @@ impl Strings {
         format!("{}: {engine}", self.engine)
     }
 
-    pub(crate) fn subscriptions(&self, count: usize) -> String {
-        match self.language {
-            Language::English => format!("Subscriptions · {count}"),
-            Language::Russian => format!("Подписки · {count}"),
-        }
-    }
-
     pub(crate) fn servers(&self, count: usize) -> String {
         match self.language {
             Language::English => en_count(count as u64, "server"),
@@ -510,8 +510,8 @@ impl Strings {
 
     pub(crate) fn last_updated(&self, age: &str) -> String {
         match self.language {
-            Language::English => format!("Last updated {age}"),
-            Language::Russian => format!("Обновлено {age}"),
+            Language::English => format!("updated {age}"),
+            Language::Russian => format!("обновлено {age}"),
         }
     }
 
@@ -857,7 +857,7 @@ mod tests {
         assert_eq!(RU.updated_ago(0, 86_400), "1 день назад");
         assert_eq!(
             RU.last_updated(&RU.updated_ago(0, 5 * 60)),
-            "Обновлено 5 минут назад"
+            "обновлено 5 минут назад"
         );
         assert_eq!(RU.expiry(2 * 86_400, 0), "истекает через 2 дня");
         assert_eq!(RU.expiry(0, 5 * 86_400), "истекла 5 дней назад");

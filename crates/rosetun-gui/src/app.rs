@@ -238,6 +238,7 @@ impl App {
             Job::LookupExit { generation, route } => self.workers.lookup_exit(generation, route),
             Job::UpdateAll => self.workers.update_all(),
             Job::Remove(id) => self.workers.remove(id),
+            Job::RenameSubscription(id, name) => self.workers.rename_subscription(id, name),
             Job::MoveSubscription(id, to_index) => self.workers.move_subscription(id, to_index),
         }
     }
