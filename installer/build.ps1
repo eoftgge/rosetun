@@ -1,0 +1,102 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$manifest = Get-Content -LiteralPath (Join-Path $root 'Cargo.toml') -Raw
+$workspacePackage = [regex]::Match($manifest, '(?ms)^\[workspace\.package\]\r?\n(?<section>.*?)(?=^\[|\z)')
+if (-not $workspacePackage.Success) {
+    throw 'Missing [workspace.package] in Cargo.toml.'
+}
+$versionMatch = [regex]::Match($workspacePackage.Groups['section'].Value, '(?m)^version\s*=\s*"(?<version>[^"]+)"\s*$')
+if (-not $versionMatch.Success) {
+    throw 'Missing version in [workspace.package] in Cargo.toml.'
+}
+$version = $versionMatch.Groups['version'].Value
+
+# Update these together with Install-RosetunSingBox and SUPPORTED_SING_BOX_VERSION.
+$singBoxVersion = '1.14.1'
+$expectedHash = 'B838DE45BD0B2E6DDBED1977E4745622F7DFFAB3B293807FF4C6B1B640FED909'
+$versionFile = Get-Content -LiteralPath (Join-Path $root 'crates/rosetun-engine-singbox/src/version.rs') -Raw
+$supportedVersion = [regex]::Match($versionFile, '(?m)^pub const SUPPORTED_SING_BOX_VERSION:\s*&str\s*=\s*"([^"]+)"\s*;')
+if (-not $supportedVersion.Success) {
+    throw 'Cannot read SUPPORTED_SING_BOX_VERSION from version.rs.'
+}
+if ($singBoxVersion -ne $supportedVersion.Groups[1].Value) {
+    throw "Installer sing-box $singBoxVersion differs from SUPPORTED_SING_BOX_VERSION $($supportedVersion.Groups[1].Value)."
+}
+
+$buildDir = Join-Path $root 'target/release'
+$outputDir = Join-Path $root 'target/installer'
+$singBoxDir = Join-Path $outputDir 'sing-box'
+$binary = Join-Path $singBoxDir 'sing-box.exe'
+$license = Join-Path $singBoxDir 'LICENSE'
+
+Push-Location $root
+try {
+    & cargo build --release --locked -p rosetun-gui -p rosetun-helper-privileged -p rosetun
+    if ($LASTEXITCODE -ne 0) {
+        throw "Building release binaries failed with cargo exit code $LASTEXITCODE."
+    }
+}
+finally {
+    Pop-Location
+}
+
+if (-not ((Test-Path -LiteralPath $binary -PathType Leaf) -and
+           (Test-Path -LiteralPath $license -PathType Leaf) -and
+           (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -eq $expectedHash)) {
+    $name = "sing-box-$singBoxVersion-windows-amd64"
+    $url = "https://github.com/SagerNet/sing-box/releases/download/v$singBoxVersion/$name.zip"
+    $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("rosetun-installer-" + [guid]::NewGuid().ToString('N'))
+    $archive = Join-Path $tempDir "$name.zip"
+    $unpacked = Join-Path $tempDir 'unpacked'
+    New-Item -ItemType Directory -Path $tempDir | Out-Null
+    try {
+        & curl.exe --fail --silent --show-error --location --output $archive $url
+        if ($LASTEXITCODE -ne 0) {
+            throw "Downloading $url failed with curl exit code $LASTEXITCODE."
+        }
+        Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+        $downloadedBinary = Join-Path $unpacked "$name/sing-box.exe"
+        $downloadedLicense = Join-Path $unpacked "$name/LICENSE"
+        if (-not (Test-Path -LiteralPath $downloadedLicense -PathType Leaf)) {
+            throw "Archive $url does not contain LICENSE."
+        }
+        $hash = (Get-FileHash -LiteralPath $downloadedBinary -Algorithm SHA256).Hash
+        if ($hash -ne $expectedHash) {
+            throw "sing-box.exe from $url has SHA-256 $hash, expected $expectedHash."
+        }
+        New-Item -ItemType Directory -Path $singBoxDir -Force | Out-Null
+        Copy-Item -LiteralPath $downloadedBinary -Destination $binary -Force
+        Copy-Item -LiteralPath $downloadedLicense -Destination $license -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if ($env:ISCC) {
+    $iscc = $env:ISCC
+}
+else {
+    $iscc = @(
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+}
+if (-not $iscc -or -not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+    throw 'Inno Setup 6.3 or later is required: https://jrsoftware.org/isdl.php (or set ISCC)'
+}
+
+New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+$issPath = Join-Path $PSScriptRoot 'rosetun.iss'
+& $iscc /Qp "/DAppVersion=$version" "/DBuildDir=$buildDir" "/DSingBoxDir=$singBoxDir" "/O$outputDir" $issPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Compiling $issPath failed with ISCC exit code $LASTEXITCODE."
+}
+$setup = Join-Path $outputDir "rosetun-$version-setup.exe"
+if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
+    throw "ISCC did not produce $setup."
+}
+Write-Host "Installer: $setup"
+Write-Host "SHA-256: $((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash)"
