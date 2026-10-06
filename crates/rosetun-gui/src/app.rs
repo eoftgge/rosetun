@@ -10,7 +10,7 @@ use crate::state::{Job, State};
 #[cfg(windows)]
 use crate::tray;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
-use crate::{theme, view};
+use crate::{strings, theme, view};
 
 #[cfg(windows)]
 /// Far outside every monitor: the first frame of a hidden start is drawn here.
@@ -39,6 +39,7 @@ pub(crate) struct App {
     events: Receiver<WorkerEvent>,
     workers: WorkerDispatcher,
     applied_scale: Option<u16>,
+    system_russian: bool,
     #[cfg(windows)]
     shell_events: Option<Receiver<ShellEvent>>,
     #[cfg(windows)]
@@ -54,6 +55,20 @@ pub(crate) struct App {
 impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>, store: Store) -> Self {
         theme::apply(&cc.egui_ctx);
+        #[cfg(windows)]
+        let system_russian = rosetun_shell::user_language_is_russian();
+        #[cfg(not(windows))]
+        let system_russian = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .into_iter()
+            .filter_map(|key| std::env::var(key).ok())
+            .find(|value| !value.trim().is_empty())
+            .is_some_and(|value| locale_is_russian(&value));
+        let setting = store
+            .load()
+            .map_or(rosetun_config::LanguageSetting::System, |config| {
+                config.interface.language
+            });
+        strings::set_language(strings::resolve_language(setting, system_russian));
         let applied_scale = initial_scale(&store);
         cc.egui_ctx
             .set_zoom_factor(f32::from(applied_scale) / 100.0);
@@ -66,6 +81,7 @@ impl App {
             events,
             workers,
             applied_scale: Some(applied_scale),
+            system_russian,
             #[cfg(windows)]
             shell_events: None,
             #[cfg(windows)]
@@ -156,6 +172,7 @@ impl App {
             Job::Connect => self.workers.connect(),
             Job::Disconnect => self.workers.disconnect(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
+            Job::SetLanguage(language) => self.workers.set_language(language),
             #[cfg(windows)]
             Job::LoadAutostart => self.workers.load_autostart(),
             #[cfg(windows)]
@@ -194,6 +211,11 @@ impl App {
     }
 }
 
+#[cfg(any(not(windows), test))]
+fn locale_is_russian(value: &str) -> bool {
+    value.starts_with("ru")
+}
+
 fn initial_scale(store: &Store) -> u16 {
     store.load().map_or_else(
         |_| rosetun_config::InterfaceSettings::default().scale_percent,
@@ -219,6 +241,12 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Ok(event) = self.events.try_recv() {
             self.state.reduce(event);
+        }
+        let language =
+            strings::resolve_language(self.state.config.interface.language, self.system_russian);
+        if self.state.config_ready && language != strings::language() {
+            strings::set_language(language);
+            ctx.request_repaint();
         }
         #[cfg(windows)]
         {
@@ -280,7 +308,7 @@ impl eframe::App for App {
 mod tests {
     #[cfg(windows)]
     use super::centered_position;
-    use super::{initial_scale, next_scale};
+    use super::{initial_scale, locale_is_russian, next_scale};
     #[cfg(windows)]
     use eframe::egui;
     use rosetun_core::Store;
@@ -311,6 +339,14 @@ mod tests {
             centered_position(None, egui::vec2(1200.0, 780.0)),
             egui::pos2(80.0, 80.0),
         );
+    }
+
+    #[test]
+    fn russian_locale_detection() {
+        assert!(locale_is_russian("ru_RU.UTF-8"));
+        assert!(locale_is_russian("ru"));
+        assert!(!locale_is_russian("en_US.UTF-8"));
+        assert!(!locale_is_russian(""));
     }
 
     #[test]

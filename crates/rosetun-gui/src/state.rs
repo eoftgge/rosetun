@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use rosetun_config::{
-    AppConfig, ConnectionState, DnsSettings, LogLevel, NodeId, ProcessMatch, RuleId, RuleMatcher,
-    RuleSet, RuleSetId, RuleTarget, Status, SubscriptionId,
+    AppConfig, ConnectionState, DnsSettings, LanguageSetting, LogLevel, NodeId, ProcessMatch,
+    RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, SubscriptionId,
 };
 use rosetun_core::{AddFromUrlError, AddOptions, UpdateReport, UpdateSubscriptionError};
 use rosetun_ipc::ClientError;
@@ -249,6 +249,7 @@ pub(crate) enum Action {
     ShowConnection,
     OpenSettings,
     SetInterfaceScale(u16),
+    SetLanguage(LanguageSetting),
     #[cfg(windows)]
     SetAutostart(bool),
     #[cfg(windows)]
@@ -308,6 +309,7 @@ pub(crate) enum Job {
     Connect,
     Disconnect,
     SetInterfaceScale(u16),
+    SetLanguage(LanguageSetting),
     #[cfg(windows)]
     LoadAutostart,
     #[cfg(windows)]
@@ -568,6 +570,7 @@ impl State {
                 self.operation_error = result.err().map(|error| self.text(&error.to_string()));
             }
             WorkerEvent::SetInterfaceScale(result) => self.finish_settings(result),
+            WorkerEvent::SetLanguage(result) => self.finish_settings(result),
             #[cfg(windows)]
             WorkerEvent::AutostartLoaded(result) => match result {
                 Ok(enabled) => self.settings_screen.autostart = Some(enabled),
@@ -731,6 +734,11 @@ impl State {
                     && rosetun_core::INTERFACE_SCALES.contains(&percent)
                 {
                     return self.start_settings(Job::SetInterfaceScale(percent));
+                }
+            }
+            Action::SetLanguage(language) => {
+                if self.can_edit_settings() && self.config.interface.language != language {
+                    return self.start_settings(Job::SetLanguage(language));
                 }
             }
             #[cfg(windows)]
@@ -2137,6 +2145,45 @@ mod tests {
         assert_eq!(
             state.operation_error.as_deref(),
             Some("could not determine the configuration directory")
+        );
+    }
+
+    #[test]
+    fn changing_language_uses_a_settings_job_and_completion_clears_busy() {
+        let mut state = State::default();
+        assert!(
+            state
+                .act(Action::SetLanguage(LanguageSetting::Russian))
+                .is_none()
+        );
+        state.config_ready = true;
+        assert!(
+            state
+                .act(Action::SetLanguage(LanguageSetting::System))
+                .is_none()
+        );
+        assert!(matches!(
+            state.act(Action::SetLanguage(LanguageSetting::Russian)),
+            Some(Job::SetLanguage(LanguageSetting::Russian))
+        ));
+        assert!(state.operations.settings);
+        assert!(
+            state
+                .act(Action::SetLanguage(LanguageSetting::English))
+                .is_none()
+        );
+        state.reduce(WorkerEvent::SetLanguage(Ok(())));
+        assert!(!state.operations.settings);
+        let mut config = state.config.clone();
+        config.interface.language = LanguageSetting::Russian;
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config,
+        });
+        assert!(
+            state
+                .act(Action::SetLanguage(LanguageSetting::Russian))
+                .is_none()
         );
     }
 

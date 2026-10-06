@@ -1,5 +1,5 @@
 use eframe::egui::{self, RichText};
-use rosetun_config::LogLevel;
+use rosetun_config::{LanguageSetting, LogLevel};
 
 use crate::state::{Action, State};
 use crate::strings::t;
@@ -48,7 +48,35 @@ fn interface(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             }
         });
         ui.label(RichText::new(t().zoom_hint).small().color(theme::TEXT_DIM));
+        ui.add_space(12.0);
+        ui.label(t().language_title);
+        let saved = state.config.interface.language;
+        let mut selected = saved;
+        ui.add_enabled_ui(state.can_edit_settings(), |ui| {
+            egui::ComboBox::from_id_salt("interface_language")
+                .selected_text(language_label(selected))
+                .show_ui(ui, |ui| {
+                    for language in [
+                        LanguageSetting::System,
+                        LanguageSetting::English,
+                        LanguageSetting::Russian,
+                    ] {
+                        ui.selectable_value(&mut selected, language, language_label(language));
+                    }
+                });
+        });
+        if selected != saved && state.can_edit_settings() {
+            actions.push(Action::SetLanguage(selected));
+        }
     });
+}
+
+fn language_label(setting: LanguageSetting) -> &'static str {
+    match setting {
+        LanguageSetting::System => t().language_system,
+        LanguageSetting::English => strings::ENGLISH,
+        LanguageSetting::Russian => strings::RUSSIAN,
+    }
 }
 
 #[cfg(windows)]
@@ -246,7 +274,7 @@ fn about_path(
         let path = state.text(path);
         ui.add_sized(
             [
-                ui.available_width() - if cfg!(windows) { 130.0 } else { 0.0 },
+                ui.available_width() - if cfg!(windows) { 180.0 } else { 0.0 },
                 20.0,
             ],
             egui::Label::new(RichText::new(&path).small().color(theme::TEXT_DIM)).truncate(),

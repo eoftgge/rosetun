@@ -204,9 +204,7 @@ fn subscription_card(
         });
         let age = subscription
             .updated_at_unix
-            .map(|timestamp| {
-                t().last_updated(&rosetun_core::updated_text(timestamp, display::now_unix()))
-            })
+            .map(|timestamp| t().last_updated(&t().updated_ago(timestamp, display::now_unix())))
             .unwrap_or_else(|| t().never_updated.to_owned());
         ui.add(
             egui::Label::new(
@@ -239,10 +237,10 @@ fn subscription_card(
             .wrap(),
         );
         if let Some(info) = &subscription.info {
-            let mut details = rosetun_core::traffic_text(info);
+            let mut details = t().traffic(info);
             if let Some(expiry) = info.expire_unix {
                 details.push_str(" · ");
-                details.push_str(&rosetun_core::expiry_text(expiry, display::now_unix()));
+                details.push_str(&t().expiry(expiry, display::now_unix()));
             }
             ui.add(
                 egui::Label::new(RichText::new(details).small().color(theme::TEXT_MUTED))

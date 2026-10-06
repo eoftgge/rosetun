@@ -20,6 +20,8 @@ pub(crate) struct TrayView {
     pub(crate) tooltip: String,
     pub(crate) primary_label: &'static str,
     pub(crate) primary_enabled: bool,
+    pub(crate) open_label: &'static str,
+    pub(crate) quit_label: &'static str,
 }
 
 pub(crate) fn tray_view(state: &State) -> TrayView {
@@ -41,6 +43,8 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
         tooltip: fit_tooltip(&strings::tray_tooltip(status, server.as_deref())),
         primary_label: primary_label(state),
         primary_enabled: state.primary_action() != PrimaryAction::Disabled,
+        open_label: t().tray_open,
+        quit_label: t().tray_quit,
     }
 }
 
@@ -74,6 +78,8 @@ pub(crate) enum TrayError {
 pub(crate) struct Tray {
     icon: tray_icon::TrayIcon,
     primary: MenuItem,
+    open: MenuItem,
+    quit: MenuItem,
     shown: Option<TrayView>,
 }
 
@@ -128,6 +134,8 @@ impl Tray {
         Ok(Self {
             icon,
             primary,
+            open,
+            quit,
             shown: None,
         })
     }
@@ -171,6 +179,20 @@ impl Tray {
             .is_none_or(|shown| shown.primary_enabled != view.primary_enabled)
         {
             self.primary.set_enabled(view.primary_enabled);
+        }
+        if self
+            .shown
+            .as_ref()
+            .is_none_or(|shown| shown.open_label != view.open_label)
+        {
+            self.open.set_text(view.open_label);
+        }
+        if self
+            .shown
+            .as_ref()
+            .is_none_or(|shown| shown.quit_label != view.quit_label)
+        {
+            self.quit.set_text(view.quit_label);
         }
         self.shown = Some(view.clone());
     }

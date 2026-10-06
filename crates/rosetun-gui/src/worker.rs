@@ -10,8 +10,8 @@ use std::time::{Duration, SystemTime};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, DnsSettings, LogLevel, NodeId, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
-    RuleTarget, Status, Subscription, SubscriptionId,
+    AppConfig, DnsSettings, LanguageSetting, LogLevel, NodeId, Rule, RuleId, RuleMatcher, RuleSet,
+    RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, MoveSubscriptionError, RemoveSubscriptionError, RuleSetError,
@@ -20,8 +20,8 @@ use rosetun_core::{
     add_prepared_subscription, add_rule, create_rule_set, delete_rule_set, move_rule,
     move_subscription, prepare_subscription, remove_rule, remove_subscription, rename_rule_set,
     select_node, select_rule_set, set_default_target, set_dns, set_engine_log_level,
-    set_interface_scale, set_kill_switch, set_rule_enabled, set_rule_target, update_all,
-    update_subscription,
+    set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
+    update_all, update_subscription,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
@@ -63,6 +63,7 @@ pub(crate) enum WorkerEvent {
     Connect(Result<(), HelperCommandError>),
     Disconnect(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
+    SetLanguage(Result<(), SettingsError>),
     #[cfg(windows)]
     AutostartLoaded(std::io::Result<bool>),
     #[cfg(windows)]
@@ -185,6 +186,14 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             let result = set_interface_scale(&publisher.store, percent);
             publisher.complete(WorkerEvent::SetInterfaceScale(result));
+        });
+    }
+
+    pub(crate) fn set_language(&self, language: LanguageSetting) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = set_language(&publisher.store, language);
+            publisher.complete(WorkerEvent::SetLanguage(result));
         });
     }
 

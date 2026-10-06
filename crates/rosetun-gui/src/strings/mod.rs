@@ -1,11 +1,53 @@
+use std::sync::atomic::{AtomicU8, Ordering};
+
+use rosetun_config::{LanguageSetting, SubscriptionInfo};
+
 mod en;
+mod ru;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Language {
+    English,
+    Russian,
+}
+
+static CURRENT: AtomicU8 = AtomicU8::new(0);
+
+pub(crate) fn set_language(language: Language) {
+    CURRENT.store(
+        match language {
+            Language::English => 0,
+            Language::Russian => 1,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+pub(crate) fn language() -> Language {
+    match CURRENT.load(Ordering::Relaxed) {
+        1 => Language::Russian,
+        _ => Language::English,
+    }
+}
 
 /// The table of the current interface language.
 pub(crate) fn t() -> &'static Strings {
-    &en::EN
+    match language() {
+        Language::English => &en::EN,
+        Language::Russian => &ru::RU,
+    }
+}
+
+pub(crate) fn resolve_language(setting: LanguageSetting, system_russian: bool) -> Language {
+    match setting {
+        LanguageSetting::System if system_russian => Language::Russian,
+        LanguageSetting::System | LanguageSetting::English => Language::English,
+        LanguageSetting::Russian => Language::Russian,
+    }
 }
 
 pub(crate) struct Strings {
+    pub(crate) language: Language,
     pub(crate) connection: &'static str,
     pub(crate) rules: &'static str,
     pub(crate) settings: &'static str,
@@ -177,6 +219,8 @@ pub(crate) struct Strings {
     pub(crate) match_by_full_path: &'static str,
     pub(crate) add_rule: &'static str,
     pub(crate) adding_rule: &'static str,
+    pub(crate) language_title: &'static str,
+    pub(crate) language_system: &'static str,
 }
 
 pub(crate) const TITLE: &str = "Rosetun";
@@ -192,6 +236,8 @@ pub(crate) const EXPAND: &str = "+";
 pub(crate) const COLLAPSE: &str = "−";
 pub(crate) const IP: &str = "IP";
 pub(crate) const REMOVE_RULE: &str = "×";
+pub(crate) const ENGLISH: &str = "English";
+pub(crate) const RUSSIAN: &str = "Русский";
 
 #[cfg(windows)]
 pub(crate) fn tray_tooltip(status: &str, server: Option<&str>) -> String {
@@ -233,21 +279,52 @@ pub(crate) fn plain_link(label: &str, value: &str) -> String {
     format!("{label}: {value}")
 }
 
+/// Russian plural: 1 сервер, 2 сервера, 5 серверов, 11 серверов, 21 сервер.
+fn ru_plural<'a>(n: u64, one: &'a str, few: &'a str, many: &'a str) -> &'a str {
+    if n % 10 == 1 && n % 100 != 11 {
+        one
+    } else if (2..=4).contains(&(n % 10)) && !(12..=14).contains(&(n % 100)) {
+        few
+    } else {
+        many
+    }
+}
+
+fn en_count(n: u64, unit: &str) -> String {
+    if n == 1 {
+        format!("1 {unit}")
+    } else {
+        format!("{n} {unit}s")
+    }
+}
+
 impl Strings {
     pub(crate) fn running_processes(&self, count: usize) -> String {
-        format!("Running processes · {count}")
+        match self.language {
+            Language::English => format!("Running processes · {count}"),
+            Language::Russian => format!("Запущенные процессы · {count}"),
+        }
     }
 
     pub(crate) fn will_match(&self, value: &str) -> String {
-        format!("Will match: {value}")
+        match self.language {
+            Language::English => format!("Will match: {value}"),
+            Language::Russian => format!("Сработает для: {value}"),
+        }
     }
 
     pub(crate) fn stored_as(&self, ascii: &str) -> String {
-        format!("Stored as {ascii}")
+        match self.language {
+            Language::English => format!("Stored as {ascii}"),
+            Language::Russian => format!("Хранится как {ascii}"),
+        }
     }
 
     pub(crate) fn via_engine(&self, engine: &str) -> String {
-        format!("via {engine}")
+        match self.language {
+            Language::English => format!("via {engine}"),
+            Language::Russian => format!("через {engine}"),
+        }
     }
 
     pub(crate) fn engine_detail(&self, engine: &str) -> String {
@@ -255,34 +332,237 @@ impl Strings {
     }
 
     pub(crate) fn subscriptions(&self, count: usize) -> String {
-        format!("Subscriptions · {count}")
+        match self.language {
+            Language::English => format!("Subscriptions · {count}"),
+            Language::Russian => format!("Подписки · {count}"),
+        }
     }
 
     pub(crate) fn servers(&self, count: usize) -> String {
-        if count == 1 {
-            "1 server".to_owned()
-        } else {
-            format!("{count} servers")
+        match self.language {
+            Language::English => en_count(count as u64, "server"),
+            Language::Russian => format!(
+                "{count} {}",
+                ru_plural(count as u64, "сервер", "сервера", "серверов")
+            ),
         }
     }
 
     pub(crate) fn last_updated(&self, age: &str) -> String {
-        format!("Last updated {age}")
+        match self.language {
+            Language::English => format!("Last updated {age}"),
+            Language::Russian => format!("Обновлено {age}"),
+        }
     }
 
     pub(crate) fn selected_pending(&self, name: &str) -> String {
-        format!("Selected {name} · reconnect to apply")
+        match self.language {
+            Language::English => format!("Selected {name} · reconnect to apply"),
+            Language::Russian => format!("Выбран {name} · переподключитесь, чтобы применить"),
+        }
     }
 
     pub(crate) fn updated(&self, added: usize, removed: usize, retained: usize) -> String {
-        format!("Updated · {added} added, {removed} removed, {retained} retained")
+        match self.language {
+            Language::English => {
+                format!("Updated · {added} added, {removed} removed, {retained} retained")
+            }
+            Language::Russian => {
+                format!("Обновлено · добавлено {added}, удалено {removed}, оставлено {retained}")
+            }
+        }
     }
 
     pub(crate) fn skipped(&self, count: usize, reason: &str) -> String {
-        format!("Skipped {count}: {reason}")
+        match self.language {
+            Language::English => format!("Skipped {count}: {reason}"),
+            Language::Russian => format!("Пропущено {count}: {reason}"),
+        }
     }
 
     pub(crate) fn helper_version(&self, version: &str) -> String {
-        format!("Helper {version}")
+        match self.language {
+            Language::English => format!("Helper {version}"),
+            Language::Russian => format!("Служба {version}"),
+        }
+    }
+
+    pub(crate) fn updated_ago(&self, timestamp: u64, now: u64) -> String {
+        let elapsed = now.saturating_sub(timestamp);
+        match (self.language, elapsed) {
+            (Language::English, 0..60) => "just now".to_owned(),
+            (Language::English, 60..3600) => format!("{} ago", en_count(elapsed / 60, "minute")),
+            (Language::English, 3600..86400) => {
+                format!("{} ago", en_count(elapsed / 3600, "hour"))
+            }
+            (Language::English, _) => format!("{} ago", en_count(elapsed / 86400, "day")),
+            (Language::Russian, 0..60) => "только что".to_owned(),
+            (Language::Russian, 60..3600) => {
+                let n = elapsed / 60;
+                format!("{n} {} назад", ru_plural(n, "минуту", "минуты", "минут"))
+            }
+            (Language::Russian, 3600..86400) => {
+                let n = elapsed / 3600;
+                format!("{n} {} назад", ru_plural(n, "час", "часа", "часов"))
+            }
+            (Language::Russian, _) => {
+                let n = elapsed / 86400;
+                format!("{n} {} назад", ru_plural(n, "день", "дня", "дней"))
+            }
+        }
+    }
+
+    pub(crate) fn expiry(&self, expiry: u64, now: u64) -> String {
+        const DAY: u64 = 24 * 60 * 60;
+        let (days, future) = if expiry >= now {
+            ((expiry - now) / DAY, true)
+        } else {
+            ((now - expiry) / DAY, false)
+        };
+        match (self.language, future) {
+            (Language::English, true) => format!("expires in {}", en_count(days, "day")),
+            (Language::English, false) => format!("expired {} ago", en_count(days, "day")),
+            (Language::Russian, true) => {
+                format!(
+                    "истекает через {days} {}",
+                    ru_plural(days, "день", "дня", "дней")
+                )
+            }
+            (Language::Russian, false) => {
+                format!(
+                    "истекла {days} {} назад",
+                    ru_plural(days, "день", "дня", "дней")
+                )
+            }
+        }
+    }
+
+    pub(crate) fn traffic(&self, info: &SubscriptionInfo) -> String {
+        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+        let used = (info.upload as f64 + info.download as f64) / GIB;
+        match (self.language, info.total) {
+            (Language::English, Some(total)) => {
+                format!("{used:.2} / {:.2} GiB", total as f64 / GIB)
+            }
+            (Language::English, None) => format!("{used:.2} GiB / unknown"),
+            (Language::Russian, Some(total)) => format!(
+                "{} / {} ГБ",
+                format!("{used:.2}").replace('.', ","),
+                format!("{:.2}", total as f64 / GIB).replace('.', ",")
+            ),
+            (Language::Russian, None) => {
+                format!(
+                    "{} ГБ / лимит не указан",
+                    format!("{used:.2}").replace('.', ",")
+                )
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Language, en::EN, resolve_language, ru::RU, ru_plural};
+    use rosetun_config::{LanguageSetting, SubscriptionInfo};
+
+    #[test]
+    fn language_resolution_covers_all_settings_and_system_languages() {
+        for (setting, system_russian, expected) in [
+            (LanguageSetting::System, false, Language::English),
+            (LanguageSetting::System, true, Language::Russian),
+            (LanguageSetting::English, false, Language::English),
+            (LanguageSetting::English, true, Language::English),
+            (LanguageSetting::Russian, false, Language::Russian),
+            (LanguageSetting::Russian, true, Language::Russian),
+        ] {
+            assert_eq!(resolve_language(setting, system_russian), expected);
+        }
+    }
+
+    #[test]
+    fn russian_plural_handles_tens_and_hundreds() {
+        for (count, expected) in [
+            (0, "many"),
+            (1, "one"),
+            (2, "few"),
+            (4, "few"),
+            (5, "many"),
+            (11, "many"),
+            (12, "many"),
+            (14, "many"),
+            (21, "one"),
+            (22, "few"),
+            (25, "many"),
+            (101, "one"),
+            (111, "many"),
+        ] {
+            assert_eq!(ru_plural(count, "one", "few", "many"), expected, "{count}");
+        }
+        for (count, expected) in [
+            (1, "1 сервер"),
+            (3, "3 сервера"),
+            (5, "5 серверов"),
+            (21, "21 сервер"),
+        ] {
+            assert_eq!(RU.servers(count), expected);
+        }
+    }
+
+    #[test]
+    fn english_update_age_matches_core_at_interval_boundaries() {
+        for (elapsed, expected) in [
+            (0, "just now"),
+            (59, "just now"),
+            (60, "1 minute ago"),
+            (120, "2 minutes ago"),
+            (3599, "59 minutes ago"),
+            (3600, "1 hour ago"),
+            (7200, "2 hours ago"),
+            (86399, "23 hours ago"),
+            (86400, "1 day ago"),
+            (172800, "2 days ago"),
+        ] {
+            assert_eq!(EN.updated_ago(0, elapsed), expected);
+        }
+        assert_eq!(EN.updated_ago(101, 100), "just now");
+        assert_eq!(EN.updated_ago(u64::MAX, 0), "just now");
+    }
+
+    #[test]
+    fn english_expiry_matches_core_in_both_directions() {
+        for (expiry, now, expected) in [
+            (86_400, 0, "expires in 1 day"),
+            (0, 86_400, "expired 1 day ago"),
+            (172_800, 0, "expires in 2 days"),
+            (0, 172_800, "expired 2 days ago"),
+            (100, 100, "expires in 0 days"),
+            (99, 100, "expired 0 days ago"),
+        ] {
+            assert_eq!(EN.expiry(expiry, now), expected);
+        }
+    }
+
+    #[test]
+    fn russian_age_expiry_and_traffic() {
+        assert_eq!(RU.updated_ago(0, 30), "только что");
+        assert_eq!(RU.updated_ago(0, 120), "2 минуты назад");
+        assert_eq!(RU.updated_ago(0, 5 * 3600), "5 часов назад");
+        assert_eq!(RU.updated_ago(0, 86_400), "1 день назад");
+        assert_eq!(
+            RU.last_updated(&RU.updated_ago(0, 5 * 60)),
+            "Обновлено 5 минут назад"
+        );
+        assert_eq!(RU.expiry(2 * 86_400, 0), "истекает через 2 дня");
+        assert_eq!(RU.expiry(0, 5 * 86_400), "истекла 5 дней назад");
+        let mut info = SubscriptionInfo {
+            upload: 1 << 30,
+            download: 1 << 29,
+            total: Some(10 << 30),
+            expire_unix: None,
+        };
+        assert_eq!(RU.traffic(&info), "1,50 / 10,00 ГБ");
+        info.total = None;
+        assert_eq!(RU.traffic(&info), "1,50 ГБ / лимит не указан");
+        assert_eq!(EN.traffic(&info), "1.50 GiB / unknown");
     }
 }

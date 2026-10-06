@@ -10,11 +10,11 @@ use crate::{strings, theme};
 
 const HANDLE_WIDTH: f32 = 28.0;
 const TYPE_WIDTH: f32 = 100.0;
-const TARGET_WIDTH: f32 = 140.0;
-const TARGET_COMBO_WIDTH: f32 = 108.0;
+const TARGET_WIDTH: f32 = 172.0;
+const TARGET_COMBO_WIDTH: f32 = 140.0;
 // With the app theme, the visible ComboBox sits below the center of its allocated area.
 const TARGET_COMBO_TOP_OFFSET: f32 = 8.0;
-const ENABLED_WIDTH: f32 = 90.0;
+const ENABLED_WIDTH: f32 = 100.0;
 const REMOVE_WIDTH: f32 = 44.0;
 const TABLE_INSET: f32 = 10.0;
 const ROW_HEIGHT: f32 = 52.0;

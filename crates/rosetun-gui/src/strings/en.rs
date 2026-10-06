@@ -1,6 +1,7 @@
-use super::Strings;
+use super::{Language, Strings};
 
 pub(crate) static EN: Strings = Strings {
+    language: Language::English,
     connection: "Connection",
     rules: "Rules",
     settings: "Settings",
@@ -172,4 +173,6 @@ pub(crate) static EN: Strings = Strings {
     match_by_full_path: "Match by full path",
     add_rule: "Add rule",
     adding_rule: "Adding rule…",
+    language_title: "Language",
+    language_system: "System",
 };
