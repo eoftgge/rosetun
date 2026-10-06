@@ -17,6 +17,38 @@ pub(crate) enum RoseIcon {
 
 type Pt = (f32, f32);
 
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+    min: Pt,
+    max: Pt,
+}
+
+impl Bounds {
+    /// The box around `vertices`, grown by `margin` on every side so that the
+    /// stroke around the outline stays inside it.
+    fn around(vertices: &[Pt], margin: f32) -> Self {
+        let mut min = (f32::INFINITY, f32::INFINITY);
+        let mut max = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for &(x, y) in vertices {
+            min.0 = min.0.min(x);
+            min.1 = min.1.min(y);
+            max.0 = max.0.max(x);
+            max.1 = max.1.max(y);
+        }
+        Self {
+            min: (min.0 - margin, min.1 - margin),
+            max: (max.0 + margin, max.1 + margin),
+        }
+    }
+
+    fn contains(&self, point: Pt) -> bool {
+        point.0 >= self.min.0
+            && point.0 <= self.max.0
+            && point.1 >= self.min.1
+            && point.1 <= self.max.1
+    }
+}
+
 /// `M inner L side Q control tip L far Z`; the fold is the triangle inner, tip, far.
 struct Petal {
     inner: Pt,
@@ -147,7 +179,13 @@ fn on_spiral(point: Pt, spiral: &[Pt], half_stroke: f32) -> bool {
     })
 }
 
-fn sample(point: Pt, icon: RoseIcon, faces: &[[Pt; 19]; 5]) -> Option<Color32> {
+fn sample(
+    point: Pt,
+    icon: RoseIcon,
+    faces: &[[Pt; 19]; 5],
+    face_bounds: &[Bounds; 5],
+    fold_bounds: &[Bounds; 5],
+) -> Option<Color32> {
     let (spiral, half_stroke, spiral_color): (&[Pt], _, _) = match icon {
         RoseIcon::Large => (&LARGE_SPIRAL, 0.9, theme::ROSE_LIGHT),
         RoseIcon::Small => (&SMALL_SPIRAL, 1.2, theme::ROSE_LIGHT),
@@ -171,11 +209,12 @@ fn sample(point: Pt, icon: RoseIcon, faces: &[[Pt; 19]; 5]) -> Option<Color32> {
     for index in (0..PETALS.len()).rev() {
         let petal = &PETALS[index];
         if !matches!(icon, RoseIcon::Tray(_))
+            && fold_bounds[index].contains(point)
             && in_path(point, &[petal.inner, petal.tip, petal.far], 0.3)
         {
             return Some(theme::ROSE_DARK);
         }
-        if in_path(point, &faces[index], 0.6) {
+        if face_bounds[index].contains(point) && in_path(point, &faces[index], 0.6) {
             return Some(match icon {
                 RoseIcon::Tray(color) => color,
                 _ => theme::ROSE,
@@ -188,6 +227,10 @@ fn sample(point: Pt, icon: RoseIcon, faces: &[[Pt; 19]; 5]) -> Option<Color32> {
 /// Straight-alpha RGBA of the icon, `size`×`size`.
 pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon) -> Vec<u8> {
     let faces = PETALS.each_ref().map(face_points);
+    let face_bounds = faces.each_ref().map(|face| Bounds::around(face, 0.6));
+    let fold_bounds = PETALS
+        .each_ref()
+        .map(|petal| Bounds::around(&[petal.inner, petal.tip, petal.far], 0.3));
     let scale = 48.0 / size as f32;
     let mut rgba = Vec::with_capacity(size as usize * size as usize * 4);
     for y in 0..size {
@@ -200,7 +243,7 @@ pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon) -> Vec<u8> {
                         (x as f32 + (i as f32 + 0.5) / 4.0) * scale,
                         (y as f32 + (j as f32 + 0.5) / 4.0) * scale,
                     );
-                    if let Some(color) = sample(point, icon, &faces) {
+                    if let Some(color) = sample(point, icon, &faces, &face_bounds, &fold_bounds) {
                         covered += 1;
                         red += u32::from(color.r());
                         green += u32::from(color.g());
@@ -228,6 +271,27 @@ mod tests {
         rgba[(y * size + x) * 4..(y * size + x + 1) * 4]
             .try_into()
             .unwrap()
+    }
+
+    #[test]
+    fn bounds_hold_every_shape() {
+        for petal in &PETALS {
+            let face = face_points(petal);
+            let fold = [petal.inner, petal.tip, petal.far];
+            let face_bounds = Bounds::around(&face, 0.6);
+            let fold_bounds = Bounds::around(&fold, 0.3);
+            for y in 0..=192 {
+                for x in 0..=192 {
+                    let point = (x as f32 / 4.0, y as f32 / 4.0);
+                    if in_path(point, &face, 0.6) {
+                        assert!(face_bounds.contains(point), "face at {point:?}");
+                    }
+                    if in_path(point, &fold, 0.3) {
+                        assert!(fold_bounds.contains(point), "fold at {point:?}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
