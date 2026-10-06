@@ -26,16 +26,24 @@ pub struct InterfaceSettings {
     /// Window scale in percent; see `rosetun_core::INTERFACE_SCALES`.
     #[serde(default = "default_scale_percent")]
     pub scale_percent: u16,
+    /// The close button hides the window to the tray instead of quitting.
+    #[serde(default = "default_close_to_tray")]
+    pub close_to_tray: bool,
 }
 
 fn default_scale_percent() -> u16 {
     100
 }
 
+fn default_close_to_tray() -> bool {
+    true
+}
+
 impl Default for InterfaceSettings {
     fn default() -> Self {
         Self {
             scale_percent: default_scale_percent(),
+            close_to_tray: default_close_to_tray(),
         }
     }
 }
@@ -151,5 +159,14 @@ mod tests {
         let interface: InterfaceSettings =
             serde_json::from_str("{}").expect("interface without scale");
         assert_eq!(interface.scale_percent, 100);
+        assert!(interface.close_to_tray);
+    }
+
+    #[test]
+    fn old_interface_with_only_scale_defaults_to_close_to_tray() {
+        let config: AppConfig = serde_json::from_str(r#"{"interface":{"scale_percent":125}}"#)
+            .expect("configuration without close-to-tray setting");
+        assert_eq!(config.interface.scale_percent, 125);
+        assert!(config.interface.close_to_tray);
     }
 }

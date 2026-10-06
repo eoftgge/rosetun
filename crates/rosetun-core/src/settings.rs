@@ -76,6 +76,13 @@ pub fn set_interface_scale(store: &Store, percent: u16) -> Result<(), SettingsEr
     })
 }
 
+pub fn set_close_to_tray(store: &Store, enabled: bool) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.close_to_tray = enabled;
+        Ok(())
+    })
+}
+
 pub fn set_dns(store: &Store, dns: DnsSettings) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.settings.dns = dns;
@@ -184,6 +191,10 @@ mod tests {
 
         set_interface_scale(&store, 125).unwrap();
         expected.interface.scale_percent = 125;
+        assert_eq!(store.load().unwrap(), expected);
+
+        set_close_to_tray(&store, false).unwrap();
+        expected.interface.close_to_tray = false;
         assert_eq!(store.load().unwrap(), expected);
 
         let dns = parse_dns_input("1.1.1.1", "cloudflare-dns.com", "443", "/dns-query").unwrap();

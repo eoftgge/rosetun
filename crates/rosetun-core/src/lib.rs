@@ -20,8 +20,8 @@ pub use selection::{
     SelectNodeError, SelectRuleSetError, select_node, select_rule_set, set_kill_switch,
 };
 pub use settings::{
-    DnsInputError, INTERFACE_SCALES, SettingsError, parse_dns_input, set_dns, set_engine_log_level,
-    set_interface_scale,
+    DnsInputError, INTERFACE_SCALES, SettingsError, parse_dns_input, set_close_to_tray, set_dns,
+    set_engine_log_level, set_interface_scale,
 };
 pub use store::{Store, StoreError};
 pub use subscription_url::{

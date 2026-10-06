@@ -13,7 +13,7 @@ const EVENT_NAME: &str = "Local\\Rosetun.Gui.Activate";
 pub enum Instance {
     /// No other instance is running; later ones reach this one through it.
     First(Activation),
-    /// Another instance is running and has been asked to show its window.
+    /// Another instance is running; optionally asked to show its window.
     Other,
 }
 
@@ -33,13 +33,25 @@ impl Activation {
             Err(io::Error::last_os_error())
         }
     }
+
+    #[cfg(test)]
+    fn is_signaled(&self) -> io::Result<bool> {
+        use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+
+        // SAFETY: The owned event remains open throughout the zero-timeout wait.
+        match unsafe { WaitForSingleObject(self.event.as_raw_handle() as HANDLE, 0) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
 }
 
-pub fn acquire() -> io::Result<Instance> {
-    acquire_named(EVENT_NAME)
+pub fn acquire(activate: bool) -> io::Result<Instance> {
+    acquire_named(EVENT_NAME, activate)
 }
 
-fn acquire_named(name: &str) -> io::Result<Instance> {
+fn acquire_named(name: &str, activate: bool) -> io::Result<Instance> {
     let name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: The null-terminated name is valid for this Windows ABI call. The
     // event is non-inheritable and its handle is transferred to OwnedHandle below.
@@ -55,13 +67,15 @@ fn acquire_named(name: &str) -> io::Result<Instance> {
     // by OwnedHandle on both the first-instance and subsequent-instance paths.
     let event = unsafe { OwnedHandle::from_raw_handle(event) };
     if already_exists {
-        // The process being launched can delegate foreground permission to the
-        // first process before the activation event wakes its window.
-        // SAFETY: The Windows ABI call takes a constant process identifier.
-        unsafe { AllowSetForegroundWindow(ASFW_ANY) };
-        // SAFETY: The owned event remains open for the duration of the call.
-        if unsafe { SetEvent(event.as_raw_handle() as HANDLE) } == 0 {
-            return Err(io::Error::last_os_error());
+        if activate {
+            // The process being launched can delegate foreground permission to the
+            // first process before the activation event wakes its window.
+            // SAFETY: The Windows ABI call takes a constant process identifier.
+            unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+            // SAFETY: The owned event remains open for the duration of the call.
+            if unsafe { SetEvent(event.as_raw_handle() as HANDLE) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
         }
         Ok(Instance::Other)
     } else {
@@ -76,10 +90,29 @@ mod tests {
     #[test]
     fn later_instance_wakes_the_first() {
         let name = format!("Local\\Rosetun.Gui.Activate.Test.{}", std::process::id());
-        let Instance::First(activation) = acquire_named(&name).unwrap() else {
+        let Instance::First(activation) = acquire_named(&name, true).unwrap() else {
             panic!("first acquisition should own the event");
         };
-        assert!(matches!(acquire_named(&name).unwrap(), Instance::Other));
+        assert!(matches!(
+            acquire_named(&name, true).unwrap(),
+            Instance::Other
+        ));
         activation.wait().unwrap();
+    }
+
+    #[test]
+    fn later_instance_without_activation_leaves_event_unsignaled() {
+        let name = format!(
+            "Local\\Rosetun.Gui.Activate.Silent.Test.{}",
+            std::process::id()
+        );
+        let Instance::First(activation) = acquire_named(&name, true).unwrap() else {
+            panic!("first acquisition should own the event");
+        };
+        assert!(matches!(
+            acquire_named(&name, false).unwrap(),
+            Instance::Other
+        ));
+        assert!(!activation.is_signaled().unwrap());
     }
 }
