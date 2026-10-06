@@ -95,6 +95,13 @@ without sniffing, and DNS packets must be hijacked before user rules can send
 them anywhere. `route.auto_detect_interface` stays on, or the engine's own
 outbound connections loop into its TUN.
 
+**`process_name` ignores letter case on Windows.** Checked by hand with 1.14.1:
+a `CURL.EXE → direct` rule matched `curl.exe` exactly as `curl.exe → direct`
+did. So on Windows two process-name rules that differ only in case are the same
+rule. `process_path` was not checked; until it is, treat it as case-sensitive.
+Domain rules are stored in lower case by the core, because domains are
+case-insensitive and sing-box domain matching has not been checked either.
+
 ## Process lifecycle
 
 Readiness is the INFO line `sing-box started (<seconds>s)` on stderr, followed
@@ -105,15 +112,50 @@ redirected to a file with `log.output`, because readiness reads stderr.
 The version check and the first spawn of a newly installed binary wait for the
 Defender scan of that file. In the test VM that took 6–15 s when the guest was
 idle and over 30 s when it was busy right after a checkpoint restore. That is
-why the version check timeout is 30 s, and why a first connect on a clean
-system can still time out.
+why the version check timeout is 30 s. The helper therefore runs the check
+once on a thread at start, and the installer launches sing-box once, so the
+scan does not land on the user's first connect.
 
 Piped stdout and stderr must be drained. An undrained pipe fills, and the engine
 then blocks on its next log write — the tunnel freezes with no error anywhere.
+Anything that runs on the drain thread must therefore never panic.
+
+The helper logs each engine line at the level the engine gave it, under the
+`engine_output` target (`rosetun_engine::ENGINE_OUTPUT_TARGET`). The helper's
+default filter passes that target at every level, because `Settings::log_level`
+already limits what the engine writes. A custom `ROSETUN_LOG` replaces the whole
+filter, so add `engine_output=trace` to it to keep TRACE lines.
 
 The helper's process-lifetime job kills the engine with the helper. In the VM
 failure matrix sing-box 1.14.1 removed its Wintun adapter in every tested exit
 path, including a forced kill of the helper.
+
+## Traffic statistics
+
+**The Clash API serves statistics only, on loopback, with a fresh secret per
+engine start.** `ControlEndpoint::local()` picks a free port on `127.0.0.1` and a
+256-bit secret; `render` adds `experimental.clash_api` only when the helper
+passes one. The secret lives in the helper's memory and in the run-directory
+config (SYSTEM and Administrators only). `ControlEndpoint` and the probe redact
+it in `Debug`, and it never reaches a log. Picking the port and binding it are
+not atomic: if another process takes the port first, sing-box fails to start
+and the connect fails as an ordinary engine error.
+
+**Traffic comes from the totals in `GET /connections`.** The helper polls once
+a second and derives rates from two samples; a smaller total reads as zero. The
+probe's `ureq` agent has `proxy(None)`, so proxy settings from the environment
+never redirect the local request. Only `uploadTotal` and `downloadTotal` are
+parsed. The connection list carries the user's destinations, so neither it nor
+a `serde_json` message about it is ever logged. The totals count every
+connection the engine routes, direct rules included, not only proxied traffic.
+
+**Statistics never affect the tunnel.** Failures zero the rates, keep the
+totals and never change the connection state. A monitor that cannot start is
+logged and skipped; the connect still succeeds. The monitor thread takes only
+the status mutex, never the session mutex. `stop_engine` stops it, waiting at
+most the 1 s request timeout plus 100 ms, and zeroes the traffic. An engine that
+exits on its own leaves the monitor polling errors until the next connect or
+disconnect.
 
 ## Rejected approaches
 

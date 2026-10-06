@@ -1,13 +1,13 @@
 # Rosetun — state, roadmap and UI
 
-*Rule mode: Manually. Status verified against `origin/master` at `83e55f6` and
+*Rule mode: Manually. Status verified against `origin/master` at `cfe9e83` and
 the Hyper-V failure matrix (38/38); update it as stages land.*
 
 ## Current state
 
 | Stage | Status |
 |---|---|
-| 1. Windows IPC | **done** — named pipes, restrictive DACL, `PIPE_REJECT_REMOTE_CLIENTS`, protocol version 2 |
+| 1. Windows IPC | **done** — named pipes, restrictive DACL, `PIPE_REJECT_REMOTE_CLIENTS`, protocol version 2; the client connects at identification level and accepts only a pipe owned by SYSTEM or Administrators |
 | 2. Engine ownership contract | **done** — engine-managed TUN; the routing plan has no route fields |
 | 3. Capabilities and unsupported rules | **done for sing-box** — rejection before spawn, sniffing emitted so domain rules match, the Xray stub claims nothing. A wider taxonomy waits for mihomo |
 | 4. Lifecycle and protected failure | **done except graceful stop** — `FailedProtected`, protected reconnect, shutdown through the server loop, output draining, DNS check before `Connected`. The engine is still stopped by a kill |
@@ -17,7 +17,9 @@ the Hyper-V failure matrix (38/38); update it as stages land.*
 | 8. Configuration on disk | **done** — `%APPDATA%\Rosetun\config.json` (`ROSETUN_CONFIG` overrides), validated atomic save, `connect` from the config, `select`, `config` |
 | 9. Subscriptions | **done** — parser crate `rosetun-subscription` (link lists, Xray and sing-box JSON, metadata, provider notices, stable node IDs); loading with HWID headers over `ureq` with the Windows trust store; `sub add/update/list/remove`, `nodes`; verified against a real Happ-oriented panel |
 | Application layer (before 12) | **done** — `rosetun-core`: `Store` (every change reloads the file first), subscription add, update, update-all and remove, node selection, provider-text sanitising and subscription URL redaction, sensitive log targets. `HelperClient` and `ConnectRequest::from_config` live in `rosetun-ipc`. The CLI only parses arguments and prints |
-| 10–14 | not started |
+| 10. Traffic statistics | **10a done** — the helper polls the sing-box Clash API on loopback with a per-session secret and publishes rates and totals in `Status.traffic`; the CLI prints them. 10b (GUI) next |
+| 11, 13–14 | not started |
+| 12. GUI | **in progress** — 12a (connection screen) and 12b (rules screen, add-rule dialog, running-process picker) done and checked by hand on Windows, including process and domain rules through a live tunnel. Layout polish done: rule table grid with the default rule as its last row, drag-only reordering of rules and subscriptions, painted icons and switches, protection card. 12c-1 (settings screen) and 12c-2 (tray, close to tray, single instance) done; the header from the mockup done (brand header and the window frame drawn in it on Windows); 12c-3 (autostart, start in the tray, close-to-tray setting, `Browse` for process rules) and 12c-4 (Manrope, emblem window and tray icons) and 12c-5 (Russian translation, errors included) done, so 12c is complete |
 
 What the matrix (`tools/vm`, 38 checks, elevated, clean Windows 11 guest)
 proves:
@@ -122,6 +124,13 @@ Local-only control API, a unique port or socket per engine session, readiness
 check, polling. Statistics errors never move the engine to a failed state, and
 traffic updates independently of state transitions.
 
+- **10a, helper side: done** (`4280744`, `4055f57`, `cfe9e83`). The contract
+  and its invariants are in `ENGINE.md`, "Traffic statistics".
+- **10b, GUI:** rates and session totals on the connection screen, only while
+  connected. The totals include direct-rule traffic, so the label must not say
+  "through the proxy". The speed graph needs a history kept in the GUI, because
+  the helper publishes only the latest sample.
+
 ### Stage 11 — events and rule updates
 
 Add subscription to events only once status polling is a reliable fallback;
@@ -158,20 +167,75 @@ a CLI running at the same time does not lose its changes. Server-supplied text
 passes through `provider_text` or `terminal_text` before it is displayed, as in
 the CLI.
 
+Interface texts live in the language tables (`strings/en.rs`, `strings/ru.rs`),
+never inline. They avoid the em dash: a period, comma or colon reads more
+naturally in short UI text. `·` separates parts of a status line.
+
 Steps:
 
-- **12a — connection screen.** `eframe` with `glow`; status polling and
+- **12a — connection screen. Done.** `eframe` with `glow`; status polling and
   operations on worker threads; connect, disconnect, protected failure with an
   explicit turn-off; subscriptions, nodes, node selection; add, update and
   remove subscriptions; kill switch and rule-set selection. English UI, every
-  string in one module.
-- **12b — rules screen.** Rule-set editor and the add-rule dialog from the
-  mockups (process and domain rules).
-- **12c — settings and shell.** Settings screen, tray icon, autostart, single
-  instance, brand fonts and icons, Russian translation. Archivo has no Cyrillic,
-  so the UI font needs a Cyrillic-capable replacement or fallback before the
-  translation.
-- Traffic and the speed graph appear once stage 10 provides the numbers.
+  string in one module. Without the helper the window shows `Status unknown`,
+  never the last state: a dead helper has taken the engine and the kill switch
+  with it.
+- **12b — rules screen. Done.** Three steps: rule-set and rule operations plus input
+  parsing in the core; the rules screen (sets, order, targets, enable, default
+  target); the add-rule dialog with a running-process picker
+  (`rosetun-processes`). Rule changes apply on the next connect until stage 11;
+  no reconnect button, because a disconnect drops the kill switch.
+- **12c — settings and shell. Done.** Five steps:
+  1. **Done.** Settings screen: saved interface scale (an `interface` section in
+     `AppConfig`, not in `Settings`, which goes to the helper), DNS-over-HTTPS
+     resolver, engine log level, about (versions, open the config and log
+     folders). `allow_lan` is deliberately not exposed: it changes the
+     kill-switch filters and the matrix has no scenario for it yet.
+  2. **Done.** Tray icon with connect and disconnect, close to tray, single
+     instance (`rosetun-instance`: a named event that also wakes the first
+     window). Windows only; elsewhere the close button still quits.
+  - **Done.** Header from the mockup, inserted before step 3, in two parts:
+    the brand header (emblem, Cormorant Garamond wordmark, tabs with icons and
+    a sliding underline, background petals; the rose "blooms" while
+    connecting and when connected, with no animation in idle), then the
+    window frame drawn in the header on Windows (`CUSTOM_FRAME`: one constant
+    brings the system frame back).
+  3. In two parts. (a) **Done.** Autostart for the window (HKCU `Run` with `--hidden`,
+     starts in the tray; respects the Task Manager startup switch) and a
+     setting for whether the close button hides the window to the tray (on by
+     default); `rosetun-instance` becomes `rosetun-shell`. (b) **Done.** A `Browse`
+     file dialog for process rules (`rfd`, Windows only). The installer will
+     have to remove the `Run` value on uninstall.
+  4. **Done.** The UI font and the application icons. The UI font is Manrope
+     (Archivo from the mockup has no Cyrillic); headings use its SemiBold, the
+     wordmark stays Cormorant Garamond. The window, tray and `.exe` icons are the "Vortex" rose
+     designed in Claude Design (`assets/icon/rosetun-{large,small,tray}.svg`),
+     rasterised by `rose_icon.rs`, which mirrors those SVGs: change both
+     together. The tray variant takes the state colour. The header keeps its
+     own emblem (`paint_emblem`, `paint_petals`). `assets/rosetun.ico` is
+     drawn by an ignored test (`cargo test -p rosetun-gui -- --ignored
+     write_app_icon`, rerun after changing the icon); `build.rs` writes it into
+     a `.res` itself, with no crate and no Windows SDK, and the MSVC linker
+     embeds it. The installer uses the same file.
+  5. Russian translation, in three parts. (a) **Done.** A language setting (System,
+     English, Russian; the system language comes from Windows), string tables
+     checked by the compiler (`strings::t()`), Russian plurals, and the GUI's
+     own age, expiry and traffic texts (the CLI stays English). (b) **Done.**
+     The GUI's own texts for core, IPC and system error variants (`errors.rs`,
+     an `ErrorStrings` table with one-pass `{name}` templates), and a failed
+     connect (`EngineFailed`, `RoutingFailed`, `UnsupportedRules`) shown only in
+     the status card;
+     also a computed rule type column width, a footer panel for Update all and
+     plain punctuation in interface texts. (c) **Done.** Subscription URL,
+     fetch and parse errors and the skipped-node reasons: the core returns
+     `SubscriptionUrlError` and a typed `UpdateReport::skipped`, the GUI
+     translates them with exhaustive matches (no `_` arm), and the English
+     table is tested against the core's `Display`. Free text from the provider,
+     the helper and sing-box stays as the detail after a translated headline;
+     typed helper failure reasons would need an IPC change. Log level names stay
+     English, as sing-box writes them.
+- Traffic and the speed graph are stage 10b; the helper provides the numbers
+  since 10a.
 
 ### After stage 12 — custom lists (GeoIP and GeoSite)
 
@@ -198,12 +262,43 @@ the proxy and the rest direct.
 
 ### After stage 12 — Windows service and installer
 
-Before anything is given to other people. The helper runs as a Windows service
-instead of a scheduled task, starting automatically; the existing graceful
-shutdown path serves the service stop request. The installer registers the
-service, places sing-box next to the helper and launches it once, which keeps
-the Defender scan and the first-connect timeouts out of the user's first
-connect (see open problems).
+Before anything is given to other people. Two steps:
+
+1. **Done, checked by hand (the VM matrix is still to be rerun).** The helper
+   runs as the Windows service `Rosetun` (`--service`): LocalSystem, automatic
+   start, depends on `BFE`, restarts 5 s after a failure (twice, reset after a
+   day, also for non-crash failures), 30 s preshutdown. Stop and preshutdown
+   go through the same graceful path as the IPC `shutdown` request, which the
+   service refuses (`InvalidState`): only an administrator stops the service.
+   `--install-service` creates or updates and starts it, `--uninstall-service`
+   stops and deletes it. Without arguments the helper runs in the console, as
+   the VM rig and development use it.
+   - Data live in `data` next to the helper (`ROSETUN_DATA_DIR` overrides),
+     reset to a protected DACL for SYSTEM and Administrators at every start:
+     `data\run` for the engines, `data\logs` for the service log. Never move
+     them to a place a user can create first, such as `ProgramData`: sing-box
+     runs as SYSTEM with the config from there.
+   - The service log is `data\logs\helper.log`, rotated at 10 MiB and at every
+     start into `helper.previous.log`; a file held open by another process is
+     appended to rather than failing the service.
+   - The helper runs the sing-box version check on a thread at start, so the
+     Defender scan of a new binary does not land on the first connect.
+2. **Done, checked on a laptop that never had Rosetun** (install, first
+   connect in about 3 s, service restart after a kill, upgrade over a
+   running copy, uninstall with the service running). The installer (Inno Setup 6.3+,
+   `installer\rosetun.iss` and `installer\build.ps1`, which pins sing-box by
+   version and SHA-256 and checks it against `SUPPORTED_SING_BOX_VERSION`): `C:\Program Files\Rosetun` with no folder choice,
+   since the helper runs as SYSTEM from there; sing-box launched once at
+   install; the service installed through the helper's flags; the GUI started
+   without elevation; the GPL text of sing-box shipped beside it. Uninstall
+   removes the service, `data` and the current user's autostart values and
+   keeps `%APPDATA%\Rosetun`. The workspace version must stay numeric
+   (`x.y.z`): the script passes it to `VersionInfoVersion`, which rejects a
+   suffix such as `-beta`. The `AppId` GUID never changes.
+
+Later, before a public release: code signing, third-party notices for the
+Rust dependencies, and possibly a version resource so Task Manager shows
+"Rosetun" rather than `rosetun-gui.exe`.
 
 ### Stage 13 — rule groups
 
@@ -230,7 +325,8 @@ routes.
    does not wait for it.
 6. Persistence, subscriptions, traffic, events, GUI.
 7. Installable on a clean Windows: helper as a service, installer, first connect
-   succeeds without a retry.
+   succeeds without a retry. **passed on real hardware** (a laptop, first
+   connect in about 3 s).
 
 ## UI (not implemented)
 
@@ -244,7 +340,7 @@ live in `design/`.
 - State colours are deliberately separate: connected `#E0705B` (warm, must not
   read as an error), disconnected `#8C8189`, error `#FF6A2A` (sharp, must not be
   confusable with the brand red).
-- Fonts: Cormorant Garamond for display, Archivo for UI.
+- Fonts: Cormorant Garamond for the wordmark, Manrope for the UI.
 - Rose motif: logo in a corner, petals semi-transparent in the header. Icons are
   sharp and geometric; widgets and buttons are rounded.
 - Flat fills, simple transitions, no gradients or shadows — it has to be

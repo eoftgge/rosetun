@@ -4,12 +4,13 @@ apply: always
 
 # Rosetun — always-on rules
 
-*Rule mode: Always. Scoped detail lives in the other rules; roadmap and open
-problems are separate files, attach them with @ when they matter.*
+*Rule mode: Always. Scoped detail lives in `ENGINE.md`, `HELPER.md` and
+`WINDOWS.md`; `ROADMAP.md` and `OPEN-PROBLEMS.md` are attached with @ when they
+matter.*
 
 Cross-platform desktop VPN client. Unprivileged client, privileged helper,
-sing-box as the first engine and mihomo as the second. The engine runs the
-tunnel; Rosetun runs the engine and protects against leaks.
+sing-box as the engine; mihomo is the planned second engine, deferred. The
+engine runs the tunnel; Rosetun runs the engine and protects against leaks.
 
 ## Working rules
 
@@ -29,7 +30,7 @@ tunnel; Rosetun runs the engine and protects against leaks.
 - No pull requests. Changes are ported and tested by hand.
 - Keep platform FFI narrowly scoped. Next to unsafe code, document ownership,
   lifetime, ABI and the security rationale.
-- Before adding a dependency, check MSRV, licence, maintenance status,
+- Before adding a dependency, check MSRV 1.96, licence, maintenance status,
   dependency tree size, and that it drags in no async runtime.
 
 ## Never

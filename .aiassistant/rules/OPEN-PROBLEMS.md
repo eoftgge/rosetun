@@ -1,23 +1,19 @@
----
-apply: manually
----
-
 # Rosetun — open problems
 
 *Rule mode: Manually. This is a snapshot, not a standing truth — verified
-against `origin/master` at `be13454` and the Hyper-V failure matrix (38/38).
+against `origin/master` at `5db85e1` and the Hyper-V failure matrix (38/38).
 Re-check anything here against the code before acting on it, and delete entries
 as they are fixed.*
 
 ## Product
 
-**First connect on a fresh system can time out.** The version check and the
-first engine start wait for the Defender scan of a new `sing-box.exe` (6 to over
-30 s in the test VM), and the first TUN creation installs the Wintun driver.
-Against a 30 s version-check timeout and a 15 s readiness deadline the first
-connect can fail while the retry succeeds. Options: run the version check once
-at helper start or install time and cache the result by path, size and mtime;
-let the installer launch sing-box once.
+**First connect on a slow machine can still be slow.** On a laptop that never
+had Rosetun it took about 3 s. In the test VM the Defender scan of a new
+`sing-box.exe` took 6 to over 30 s; it now happens at install time (the
+installer launches sing-box once) and at helper start, on a thread. The first
+TUN creation still installs the Wintun driver inside the first connect, against
+a 15 s readiness deadline. If a slow machine still fails, cache the version
+check by path, size and mtime and measure the driver install.
 
 **Without the kill switch, a stalled engine leaks silently.** sing-tun routes
 the default route through a gateway, and Windows dead-gateway detection moves
@@ -32,8 +28,12 @@ being closed — a NAT entry dropped during sleep, a network change that leaves
 the old socket open — blocks all name resolution until the OS gives up on it.
 The helper checks DNS only before `Connected`. Options: look for a fix in later
 sing-box releases; a periodic DNS probe from the helper that reports a degraded
-state; restarting the engine as a last resort. Not reproduced yet: the matrix's
-adapter toggle gets the same address back within a second.
+state; restarting the engine as a last resort. Seen once on a laptop after sleep: web pages stopped loading while Telegram,
+which connects by IP, kept working. A second, short sleep did not reproduce
+it; a long sleep with `Resolve-DnsName` against a request by IP is the next
+check. A Wi-Fi switch recovered at once, as expected: the old sockets are
+closed rather than left hanging. Likely fix once confirmed: the service
+accepts power events and restarts the engine under protection on resume.
 
 **Names resolved before connect stay in application caches.** Browsers and
 other apps keep their own DNS caches, so answers obtained before connect — from
@@ -45,9 +45,9 @@ browser.
 
 ## Correctness
 
-- The `shutdown` request is honoured for any local account that can write to
-  the pipe. Teardown is graceful, but anyone can stop the helper and with it
-  the protection.
+- In console mode (the VM rig, development) the `shutdown` request is still
+  honoured for any local account that can write to the pipe. The service
+  refuses it.
 - The engine is stopped by a kill only (`engine-singbox/src/lib.rs`, `stop`).
   In the matrix sing-box removed its adapter anyway, but that is sing-box
   behaviour, not a guarantee.
