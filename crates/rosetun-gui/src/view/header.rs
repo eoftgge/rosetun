@@ -7,7 +7,7 @@ use eframe::egui::{
 use rosetun_config::ConnectionState;
 
 use crate::brand;
-use crate::state::{Action, Screen, State};
+use crate::state::{Action, ExitLookup, ExitRoute, Screen, State};
 use crate::strings::t;
 use crate::{strings, theme, widgets};
 
@@ -148,7 +148,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui.add_space(12.0);
                 }
                 let (text, color) = header_status(state);
-                let response = widgets::status_pill(ui, text, color);
+                let response = widgets::status_pill(ui, &text, color);
                 let response = if state.helper_available {
                     response
                 } else {
@@ -185,28 +185,43 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }
 }
 
-fn header_status(state: &State) -> (&'static str, Color32) {
+fn header_status(state: &State) -> (String, Color32) {
+    let country = match &state.exit {
+        ExitLookup::Known {
+            route: ExitRoute::Tunnel,
+            info,
+        } => info.country.as_deref(),
+        _ => None,
+    };
     header_status_for(
         state.helper_available,
         state.visible_status().map(|status| &status.state),
+        country,
     )
 }
 
 fn header_status_for(
     helper_available: bool,
     connection: Option<&ConnectionState>,
-) -> (&'static str, Color32) {
+    country: Option<&str>,
+) -> (String, Color32) {
     if !helper_available {
-        return (t().helper_unavailable, theme::ERROR);
+        return (t().helper_unavailable.to_owned(), theme::ERROR);
     }
-    match connection {
+    let (label, color) = match connection {
         None | Some(ConnectionState::Disconnected) => (t().disconnected, theme::DISCONNECTED),
         Some(ConnectionState::Connecting) => (t().connecting_action, theme::ROSE_BRIGHT),
         Some(ConnectionState::Reconnecting) => (t().reconnecting_action, theme::ROSE_BRIGHT),
-        Some(ConnectionState::Connected) => (t().connected, theme::CONNECTED),
+        Some(ConnectionState::Connected) => {
+            return (
+                country.map_or_else(|| t().connected.to_owned(), |code| t().connected_in(code)),
+                theme::CONNECTED,
+            );
+        }
         Some(ConnectionState::Failed { .. }) => (t().failed, theme::ERROR),
         Some(ConnectionState::FailedProtected { .. }) => (t().traffic_blocked, theme::ERROR),
-    }
+    };
+    (label.to_owned(), color)
 }
 
 fn intro_progress(time: f64, started_at: f64) -> f32 {
@@ -470,20 +485,34 @@ mod tests {
             ),
         ];
         for (state, expected) in &states {
-            assert_eq!(header_status_for(true, Some(state)), *expected);
             assert_eq!(
-                header_status_for(false, Some(state)),
-                (t().helper_unavailable, theme::ERROR),
+                header_status_for(true, Some(state), None),
+                (expected.0.to_owned(), expected.1),
             );
+            assert_eq!(
+                header_status_for(false, Some(state), Some("NL")),
+                (t().helper_unavailable.to_owned(), theme::ERROR),
+            );
+            if !matches!(state, ConnectionState::Connected) {
+                assert_eq!(
+                    header_status_for(true, Some(state), Some("NL")),
+                    (expected.0.to_owned(), expected.1),
+                );
+            }
         }
         assert_eq!(
-            header_status_for(true, None),
-            (t().disconnected, theme::DISCONNECTED)
+            header_status_for(true, Some(&ConnectionState::Connected), Some("NL")),
+            ("Connected · NL".to_owned(), theme::CONNECTED),
         );
         assert_eq!(
-            header_status_for(false, None),
-            (t().helper_unavailable, theme::ERROR),
+            header_status_for(true, None, Some("NL")),
+            (t().disconnected.to_owned(), theme::DISCONNECTED)
         );
+        assert_eq!(
+            header_status_for(false, None, Some("NL")),
+            (t().helper_unavailable.to_owned(), theme::ERROR),
+        );
+        assert_eq!(crate::strings::RU.connected_in("NL"), "Подключено · NL");
     }
 
     #[test]

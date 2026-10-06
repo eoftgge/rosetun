@@ -235,6 +235,7 @@ impl App {
             Job::Add { input, options } => self.workers.add(input, options),
             Job::Update(id) => self.workers.update(id),
             Job::Ping(id) => self.workers.ping(id),
+            Job::LookupExit { generation, route } => self.workers.lookup_exit(generation, route),
             Job::UpdateAll => self.workers.update_all(),
             Job::Remove(id) => self.workers.remove(id),
             Job::MoveSubscription(id, to_index) => self.workers.move_subscription(id, to_index),
@@ -288,6 +289,9 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_auto_update(display::now_unix()) {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_exit_lookup() {
             self.dispatch(job);
         }
         let language =

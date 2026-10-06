@@ -14,11 +14,11 @@ use rosetun_config::{
     RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
-    AddFromUrlError, AddOptions, MoveSubscriptionError, PING_PARALLEL, PING_TIMEOUT, Ping,
-    RemoveSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingsError,
-    Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateReport, UpdateSubscriptionError,
-    add_prepared_subscription, add_rule, create_rule_set, delete_rule_set, move_rule,
-    move_subscription, ping_all, prepare_subscription, remove_rule, remove_subscription,
+    AddFromUrlError, AddOptions, ExitInfo, ExitInfoError, MoveSubscriptionError, PING_PARALLEL,
+    PING_TIMEOUT, Ping, RemoveSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError,
+    SettingsError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateReport,
+    UpdateSubscriptionError, add_prepared_subscription, add_rule, create_rule_set, delete_rule_set,
+    move_rule, move_subscription, ping_all, prepare_subscription, remove_rule, remove_subscription,
     rename_rule_set, select_node, select_rule_set, set_default_target, set_dns,
     set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
     set_verbose_log, update_all, update_subscription,
@@ -26,6 +26,7 @@ use rosetun_core::{
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
+use crate::state::ExitRoute;
 #[cfg(windows)]
 use crate::strings::t;
 
@@ -60,6 +61,11 @@ pub(crate) enum WorkerEvent {
     },
     HelperUnavailable(ClientError),
     Status(Status),
+    Exit {
+        generation: u64,
+        route: ExitRoute,
+        result: Result<ExitInfo, ExitInfoError>,
+    },
     Connect(Result<(), HelperCommandError>),
     Disconnect(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
@@ -503,6 +509,22 @@ impl WorkerDispatcher {
                 });
             }
             emit(&publisher.tx, &publisher.repaint, WorkerEvent::PingDone(id));
+        });
+    }
+
+    pub(crate) fn lookup_exit(&self, generation: u64, route: ExitRoute) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = rosetun_core::exit_info(Duration::from_secs(5));
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::Exit {
+                    generation,
+                    route,
+                    result,
+                },
+            );
         });
     }
 

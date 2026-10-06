@@ -5,12 +5,14 @@ use rosetun_config::ConnectionState;
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
-use crate::state::{Action, State, primary_label};
+use crate::state::{Action, ExitLookup, ExitRoute, State, primary_label};
 use crate::strings::t;
 use crate::{display, strings, theme, widgets};
 
 use super::rose_button::{self, RosePhase};
 use super::rules::{target_color, target_label};
+
+const IP_MASK: &str = "•••.•••.•••.•••";
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if !state.config_ready {
@@ -211,13 +213,44 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     let engine = visible_status
                         .and_then(|status| status.engine)
                         .unwrap_or(state.config.settings.engine);
-                    let protocol_width = (ui.available_width() - 100.0).max(0.0);
+                    let details_width = ui.available_width();
+                    let protocol_width = (details_width - 300.0).max(80.0);
+                    let ip_width = (details_width - protocol_width - 130.0).max(130.0);
+                    let (ip, ip_color, toggle) = match &state.exit {
+                        ExitLookup::Known { route, info } => {
+                            let address = if state.exit_revealed {
+                                info.ip.to_string()
+                            } else {
+                                IP_MASK.to_owned()
+                            };
+                            let address = if *route == ExitRoute::Direct {
+                                format!("{address} {}", t().ip_own)
+                            } else {
+                                address
+                            };
+                            let toggle = if state.exit_revealed {
+                                t().ip_hide
+                            } else {
+                                t().ip_show
+                            };
+                            (address, theme::TEXT, Some(toggle))
+                        }
+                        ExitLookup::Failed(_) => (t().ip_unknown.to_owned(), theme::TEXT_DIM, None),
+                        ExitLookup::None | ExitLookup::Pending(_) => {
+                            (t().ip_pending.to_owned(), theme::TEXT_DIM, None)
+                        }
+                    };
                     egui::Grid::new("connection_details")
-                        .num_columns(2)
+                        .num_columns(3)
                         .spacing(egui::vec2(20.0, 4.0))
                         .show(ui, |ui| {
                             ui.label(RichText::new(t().protocol).small().color(theme::TEXT_DIM));
                             ui.label(RichText::new(t().engine).small().color(theme::TEXT_DIM));
+                            ui.label(
+                                RichText::new(t().external_ip)
+                                    .small()
+                                    .color(theme::TEXT_DIM),
+                            );
                             ui.end_row();
                             ui.add_sized(
                                 [protocol_width, 0.0],
@@ -225,6 +258,35 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             );
                             ui.label(engine.as_str())
                                 .on_hover_text(t().engine_detail(engine.as_str()));
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ip_width, 0.0),
+                                egui::Layout::left_to_right(egui::Align::Center)
+                                    .with_main_wrap(true),
+                                |ui| {
+                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(ip).monospace().color(ip_color),
+                                        )
+                                        .wrap(),
+                                    );
+                                    if let Some(toggle) = toggle
+                                        && ui
+                                            .add(
+                                                egui::Label::new(
+                                                    RichText::new(toggle)
+                                                        .small()
+                                                        .color(theme::ROSE_LIGHT),
+                                                )
+                                                .sense(egui::Sense::click()),
+                                            )
+                                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                            .clicked()
+                                    {
+                                        actions.push(Action::ToggleExitReveal);
+                                    }
+                                },
+                            );
                             ui.end_row();
                         });
                 });
@@ -234,6 +296,24 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 
 /// The selected server as a wide button; returns true when clicked.
 fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
+    let country = match (state.visible_status(), &state.exit) {
+        (
+            Some(status),
+            ExitLookup::Known {
+                route: ExitRoute::Tunnel,
+                info,
+            },
+        ) if matches!(status.state, ConnectionState::Connected)
+            && state
+                .config
+                .active
+                .as_ref()
+                .is_some_and(|selected| status.node.as_ref() == Some(&selected.node)) =>
+        {
+            info.country.as_deref()
+        }
+        _ => None,
+    };
     let width = ui.available_width();
     let response = egui::Frame::new()
         .fill(theme::INPUT)
@@ -243,6 +323,23 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
         .show(ui, |ui| {
             ui.set_min_width(width - 28.0);
             ui.horizontal(|ui| {
+                if let Some(code) = country {
+                    let (badge, _) =
+                        ui.allocate_exact_size(egui::vec2(36.0, 26.0), egui::Sense::hover());
+                    ui.painter().rect_stroke(
+                        badge,
+                        theme::RADIUS_INNER,
+                        egui::Stroke::new(1.0, theme::ROSE_DARK),
+                        egui::StrokeKind::Inside,
+                    );
+                    ui.painter().text(
+                        badge.center(),
+                        egui::Align2::CENTER_CENTER,
+                        code,
+                        egui::FontId::monospace(13.0),
+                        theme::ROSE_LIGHT,
+                    );
+                }
                 let name_width = (ui.available_width() - 100.0).max(0.0);
                 ui.allocate_ui_with_layout(
                     egui::vec2(name_width, 0.0),

@@ -101,6 +101,26 @@ pub(crate) enum PingResult {
     NoAnswer,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitRoute {
+    /// Connected: the server's exit.
+    Tunnel,
+    /// Disconnected, failed, or the service is down: the user's own address.
+    Direct,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExitLookup {
+    /// Not meaningful in this state (connecting, reconnecting, blocked).
+    None,
+    Pending(ExitRoute),
+    Known {
+        route: ExitRoute,
+        info: rosetun_core::ExitInfo,
+    },
+    Failed(ExitRoute),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Screen {
     #[default]
@@ -272,6 +292,10 @@ pub(crate) struct State {
     pub(crate) config_generation: u64,
     pub(crate) config_error: Option<ConfigWorkerError>,
     pub(crate) status: Status,
+    pub(crate) exit: ExitLookup,
+    exit_route: Option<ExitRoute>,
+    exit_generation: u64,
+    pub(crate) exit_revealed: bool,
     /// Rates of the last minute, one sample per status; newest last.
     pub(crate) traffic_history: VecDeque<(u64, u64)>,
     pub(crate) helper_available: bool,
@@ -304,6 +328,10 @@ impl Default for State {
             config_generation: 0,
             config_error: None,
             status: Status::default(),
+            exit: ExitLookup::None,
+            exit_route: None,
+            exit_generation: 0,
+            exit_revealed: false,
             traffic_history: VecDeque::new(),
             helper_available: false,
             helper_version: None,
@@ -374,6 +402,7 @@ pub(crate) enum Action {
     SelectNode(SubscriptionId, NodeId),
     RevealServer,
     RevealDone,
+    ToggleExitReveal,
     SelectRuleSet(Option<RuleSetId>),
     SetKillSwitch(bool),
     ToggleExpanded(SubscriptionId),
@@ -432,6 +461,10 @@ pub(crate) enum Job {
     },
     Update(SubscriptionId),
     Ping(SubscriptionId),
+    LookupExit {
+        generation: u64,
+        route: ExitRoute,
+    },
     UpdateAll,
     Remove(SubscriptionId),
     MoveSubscription(SubscriptionId, usize),
@@ -524,6 +557,42 @@ impl State {
         self.operations.updating.insert(id.clone());
         self.outcomes.remove(&id);
         Some(Job::Update(id))
+    }
+
+    /// Starts one lookup after the route changes.
+    pub(crate) fn take_exit_lookup(&mut self) -> Option<Job> {
+        let route = if !self.helper_available {
+            self.helper_error.as_ref().map(|_| ExitRoute::Direct)
+        } else if !self.status_received {
+            None
+        } else {
+            match self.status.state {
+                ConnectionState::Disconnected | ConnectionState::Failed { .. } => {
+                    Some(ExitRoute::Direct)
+                }
+                ConnectionState::Connected => Some(ExitRoute::Tunnel),
+                ConnectionState::Connecting
+                | ConnectionState::Reconnecting
+                | ConnectionState::FailedProtected { .. } => None,
+            }
+        };
+        let Some(route) = route else {
+            self.exit = ExitLookup::None;
+            self.exit_route = None;
+            self.exit_revealed = false;
+            return None;
+        };
+        if self.exit_route == Some(route) {
+            return None;
+        }
+        self.exit_route = Some(route);
+        self.exit_generation += 1;
+        self.exit = ExitLookup::Pending(route);
+        self.exit_revealed = false;
+        Some(Job::LookupExit {
+            generation: self.exit_generation,
+            route,
+        })
     }
 
     pub(crate) fn can_ping(&self) -> bool {
@@ -655,6 +724,7 @@ impl State {
                 self.helper_available = true;
                 self.helper_version = Some(version);
                 self.helper_error = None;
+                self.status_received = false;
             }
             WorkerEvent::HelperUnavailable(error) => {
                 self.helper_available = false;
@@ -684,6 +754,22 @@ impl State {
                     self.protection_confirmation = false;
                 }
                 self.status = status;
+            }
+            WorkerEvent::Exit {
+                generation,
+                route,
+                result,
+            } => {
+                if generation != self.exit_generation
+                    || !matches!(&self.exit, ExitLookup::Pending(pending) if *pending == route)
+                {
+                    return;
+                }
+                self.exit = match result {
+                    Ok(info) => ExitLookup::Known { route, info },
+                    Err(_) => ExitLookup::Failed(route),
+                };
+                self.exit_revealed = false;
             }
             WorkerEvent::Connect(result) => {
                 self.operations.helper = false;
@@ -1366,6 +1452,11 @@ impl State {
                 }
             }
             Action::RevealDone => self.reveal = None,
+            Action::ToggleExitReveal => {
+                if matches!(self.exit, ExitLookup::Known { .. }) {
+                    self.exit_revealed = !self.exit_revealed;
+                }
+            }
             Action::SelectRuleSet(id) => {
                 if self.config_ready
                     && !self.operations.rules
@@ -1908,6 +1999,201 @@ mod tests {
         no_server.reduce(WorkerEvent::Status(Status::default()));
         assert!(no_server.take_auto_connect().is_none());
         assert!(!no_server.auto_connect_pending);
+    }
+
+    fn exit_info(ip: &str) -> rosetun_core::ExitInfo {
+        rosetun_core::ExitInfo {
+            ip: ip.parse().unwrap(),
+            country: Some("NL".into()),
+        }
+    }
+
+    #[test]
+    fn exit_lookup_waits_for_status_and_runs_once_per_route() {
+        let mut state = State::default();
+        assert!(state.take_exit_lookup().is_none());
+        assert_eq!(state.exit, ExitLookup::None);
+        state.reduce(WorkerEvent::HelperAvailable {
+            version: "test".into(),
+        });
+        assert!(state.take_exit_lookup().is_none());
+
+        state.reduce(WorkerEvent::Status(Status::default()));
+        assert!(matches!(
+            state.take_exit_lookup(),
+            Some(Job::LookupExit {
+                generation: 1,
+                route: ExitRoute::Direct
+            })
+        ));
+        assert_eq!(state.exit, ExitLookup::Pending(ExitRoute::Direct));
+        assert!(state.take_exit_lookup().is_none());
+
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connecting,
+            ..Status::default()
+        }));
+        assert!(state.take_exit_lookup().is_none());
+        assert_eq!(state.exit, ExitLookup::None);
+        assert!(!state.exit_revealed);
+
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            ..Status::default()
+        }));
+        assert!(matches!(
+            state.take_exit_lookup(),
+            Some(Job::LookupExit {
+                generation: 2,
+                route: ExitRoute::Tunnel
+            })
+        ));
+        assert_eq!(state.exit, ExitLookup::Pending(ExitRoute::Tunnel));
+        assert!(state.take_exit_lookup().is_none());
+
+        for connection in [
+            ConnectionState::Reconnecting,
+            ConnectionState::FailedProtected {
+                reason: "failure".into(),
+            },
+        ] {
+            state.reduce(WorkerEvent::Status(Status {
+                state: connection,
+                ..Status::default()
+            }));
+            assert!(state.take_exit_lookup().is_none());
+            assert_eq!(state.exit, ExitLookup::None);
+        }
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Failed {
+                reason: "failure".into(),
+            },
+            ..Status::default()
+        }));
+        assert!(matches!(
+            state.take_exit_lookup(),
+            Some(Job::LookupExit {
+                generation: 3,
+                route: ExitRoute::Direct
+            })
+        ));
+    }
+
+    #[test]
+    fn exit_lookup_uses_direct_route_when_helper_is_unavailable() {
+        let mut state = State::default();
+        state.reduce(WorkerEvent::HelperUnavailable(ClientError::Closed));
+        assert!(matches!(
+            state.take_exit_lookup(),
+            Some(Job::LookupExit {
+                generation: 1,
+                route: ExitRoute::Direct
+            })
+        ));
+        assert!(state.take_exit_lookup().is_none());
+
+        state.reduce(WorkerEvent::HelperAvailable {
+            version: "test".into(),
+        });
+        assert!(state.take_exit_lookup().is_none());
+        assert_eq!(state.exit, ExitLookup::None);
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            ..Status::default()
+        }));
+        assert!(matches!(
+            state.take_exit_lookup(),
+            Some(Job::LookupExit {
+                generation: 2,
+                route: ExitRoute::Tunnel
+            })
+        ));
+    }
+
+    #[test]
+    fn exit_lookup_discards_old_replies_and_hides_new_addresses() {
+        let mut state = State::default();
+        state.reduce(WorkerEvent::HelperAvailable {
+            version: "test".into(),
+        });
+        state.reduce(WorkerEvent::Status(Status::default()));
+        assert!(state.take_exit_lookup().is_some());
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            ..Status::default()
+        }));
+        assert!(state.take_exit_lookup().is_some());
+        state.reduce(WorkerEvent::Exit {
+            generation: 1,
+            route: ExitRoute::Direct,
+            result: Ok(exit_info("203.0.113.1")),
+        });
+        assert_eq!(state.exit, ExitLookup::Pending(ExitRoute::Tunnel));
+
+        state.reduce(WorkerEvent::Exit {
+            generation: 2,
+            route: ExitRoute::Tunnel,
+            result: Ok(exit_info("203.0.113.2")),
+        });
+        assert!(matches!(state.exit, ExitLookup::Known { .. }));
+        assert!(!state.exit_revealed);
+        state.act(Action::ToggleExitReveal);
+        assert!(state.exit_revealed);
+        state.act(Action::ToggleExitReveal);
+        assert!(!state.exit_revealed);
+        state.act(Action::ToggleExitReveal);
+
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Reconnecting,
+            ..Status::default()
+        }));
+        assert!(state.take_exit_lookup().is_none());
+        assert_eq!(state.exit, ExitLookup::None);
+        assert!(!state.exit_revealed);
+        state.reduce(WorkerEvent::Exit {
+            generation: 2,
+            route: ExitRoute::Tunnel,
+            result: Ok(exit_info("203.0.113.2")),
+        });
+        assert_eq!(state.exit, ExitLookup::None);
+        state.act(Action::ToggleExitReveal);
+        assert!(!state.exit_revealed);
+
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            ..Status::default()
+        }));
+        assert!(matches!(
+            state.take_exit_lookup(),
+            Some(Job::LookupExit {
+                generation: 3,
+                route: ExitRoute::Tunnel
+            })
+        ));
+        state.reduce(WorkerEvent::Exit {
+            generation: 3,
+            route: ExitRoute::Tunnel,
+            result: Ok(exit_info("203.0.113.3")),
+        });
+        assert!(matches!(
+            &state.exit,
+            ExitLookup::Known { info, .. } if info.ip == "203.0.113.3".parse::<std::net::IpAddr>().unwrap()
+        ));
+        assert!(!state.exit_revealed);
+    }
+
+    #[test]
+    fn exit_lookup_failure_does_not_retry_until_route_changes() {
+        let mut state = State::default();
+        state.reduce(WorkerEvent::HelperUnavailable(ClientError::Closed));
+        assert!(state.take_exit_lookup().is_some());
+        state.reduce(WorkerEvent::Exit {
+            generation: 1,
+            route: ExitRoute::Direct,
+            result: Err(rosetun_core::ExitInfoError::Parse),
+        });
+        assert_eq!(state.exit, ExitLookup::Failed(ExitRoute::Direct));
+        assert!(state.take_exit_lookup().is_none());
     }
 
     #[test]

@@ -245,6 +245,7 @@ pub(crate) struct Strings {
     pub(crate) disconnected: &'static str,
     pub(crate) connecting: &'static str,
     pub(crate) connected: &'static str,
+    pub(crate) connected_in_template: &'static str,
     pub(crate) reconnecting: &'static str,
     pub(crate) failed: &'static str,
     pub(crate) failed_protected: &'static str,
@@ -259,6 +260,12 @@ pub(crate) struct Strings {
     pub(crate) server_change: &'static str,
     pub(crate) subscription_label: &'static str,
     pub(crate) protocol: &'static str,
+    pub(crate) external_ip: &'static str,
+    pub(crate) ip_own: &'static str,
+    pub(crate) ip_show: &'static str,
+    pub(crate) ip_hide: &'static str,
+    pub(crate) ip_unknown: &'static str,
+    pub(crate) ip_pending: &'static str,
     pub(crate) session: &'static str,
     pub(crate) traffic_down: &'static str,
     pub(crate) traffic_up: &'static str,
@@ -455,6 +462,10 @@ fn en_count(n: u64, unit: &str) -> String {
 }
 
 impl Strings {
+    pub(crate) fn connected_in(&self, code: &str) -> String {
+        fill(self.connected_in_template, &[("code", code)])
+    }
+
     pub(crate) fn running_processes(&self, count: usize) -> String {
         match self.language {
             Language::English => format!("Running processes · {count}"),
