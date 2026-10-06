@@ -121,6 +121,57 @@ fn moving_missing_subscription_does_not_write() {
     assert_eq!(std::fs::read(store.path()).unwrap(), before);
 }
 
+#[test]
+fn renaming_subscription_trims_name_and_preserves_other_data() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let mut original = test_config();
+    original.subscriptions.push(test_subscription("2"));
+    save_config(store.path(), &original).unwrap();
+
+    rename_subscription(&store, &SubscriptionId::new("1"), "  Мой VPN  ").unwrap();
+
+    let mut expected = original;
+    expected.subscriptions[0].name = "Мой VPN".to_owned();
+    assert_eq!(store.load().unwrap(), expected);
+}
+
+#[test]
+fn renaming_subscription_rejects_empty_name_without_writing() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    save_config(store.path(), &test_config()).unwrap();
+    let before = std::fs::read(store.path()).unwrap();
+
+    assert!(matches!(
+        rename_subscription(&store, &SubscriptionId::new("1"), "   "),
+        Err(RenameSubscriptionError::EmptyName)
+    ));
+    assert_eq!(std::fs::read(store.path()).unwrap(), before);
+}
+
+#[test]
+fn renaming_missing_subscription_returns_not_found() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    save_config(store.path(), &test_config()).unwrap();
+
+    assert!(matches!(
+        rename_subscription(&store, &SubscriptionId::new("missing"), "Name"),
+        Err(RenameSubscriptionError::NotFound)
+    ));
+}
+
+#[test]
+fn renaming_subscription_limits_unicode_characters() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    save_config(store.path(), &test_config()).unwrap();
+
+    rename_subscription(&store, &SubscriptionId::new("1"), &"я".repeat(200)).unwrap();
+    assert_eq!(store.load().unwrap().subscriptions[0].name, "я".repeat(128));
+}
+
 fn successful_update() -> rosetun_subscription::Parsed {
     rosetun_subscription::parse(
         b"trojan://new-secret@new.example.com:443#New",

@@ -36,10 +36,11 @@ pub use subscription_url::{
 };
 pub use subscriptions::{
     AddFromUrlError, AddOptions, AddSubscriptionError, CommitUpdateError, MoveSubscriptionError,
-    PreparedSubscription, RemoveSubscriptionError, SubscriptionUpdateResult,
-    UpdateSubscriptionError, add_prepared_subscription, add_subscription,
-    commit_subscription_update, move_subscription, prepare_subscription, remove_subscription,
-    update_all, update_subscription,
+    PreparedSubscription, RemoveSubscriptionError, RenameSubscriptionError,
+    SUBSCRIPTION_NAME_LIMIT, SubscriptionUpdateResult, UpdateSubscriptionError,
+    add_prepared_subscription, add_subscription, commit_subscription_update, move_subscription,
+    prepare_subscription, remove_subscription, rename_subscription, update_all,
+    update_subscription,
 };
 pub use text::{
     expiry_text, fetch_error_message, node_address, node_protocol, node_tls, node_transport,

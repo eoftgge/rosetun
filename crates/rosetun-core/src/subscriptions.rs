@@ -330,6 +330,44 @@ pub fn move_subscription(
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum RenameSubscriptionError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("subscription does not exist")]
+    NotFound,
+    #[error("subscription name must not be empty")]
+    EmptyName,
+}
+
+/// Longest name kept, in characters: the same limit as a provider title.
+pub const SUBSCRIPTION_NAME_LIMIT: usize = 128;
+
+pub fn rename_subscription(
+    store: &Store,
+    id: &SubscriptionId,
+    name: &str,
+) -> Result<(), RenameSubscriptionError> {
+    store.modify(|config| {
+        let subscription = config
+            .subscriptions
+            .iter_mut()
+            .find(|subscription| &subscription.id == id)
+            .ok_or(RenameSubscriptionError::NotFound)?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(RenameSubscriptionError::EmptyName);
+        }
+        subscription.name = name
+            .chars()
+            .take(SUBSCRIPTION_NAME_LIMIT)
+            .collect::<String>()
+            .trim_end()
+            .to_owned();
+        Ok(())
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum AddSubscriptionError {
     #[error(transparent)]
     Store(#[from] StoreError),
