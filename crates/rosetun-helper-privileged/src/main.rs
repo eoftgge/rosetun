@@ -4,6 +4,7 @@
 mod data_dir;
 #[cfg(windows)]
 mod log_file;
+mod log_gate;
 #[cfg(windows)]
 mod process_job;
 mod server;
@@ -18,7 +19,9 @@ use std::sync::Arc;
 use rosetun_engine::{EngineBackend, EngineRegistry};
 use rosetun_engine_singbox::SingBoxBackend;
 use rosetun_ipc::Listener;
+use tracing_subscriber::prelude::*;
 
+use crate::log_gate::VerboseGate;
 use crate::server::{Helper, Server};
 
 const USAGE: &str =
@@ -92,8 +95,14 @@ fn service_command(result: std::io::Result<()>) -> std::process::ExitCode {
 }
 
 fn run_console() -> std::process::ExitCode {
+    let gate = VerboseGate::default();
+    let log_gate = gate.clone();
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
+        .finish()
+        .with(tracing_subscriber::filter::filter_fn(move |metadata| {
+            log_gate.allows(metadata)
+        }))
         .init();
 
     #[cfg(windows)]
@@ -110,7 +119,7 @@ fn run_console() -> std::process::ExitCode {
     #[cfg(not(windows))]
     let run_dir = std::path::PathBuf::from("/run/rosetun");
 
-    let (listener, helper) = match start(&run_dir) {
+    let (listener, helper) = match start(&run_dir, gate) {
         Ok(result) => result,
         Err(error) => {
             tracing::error!(%error, "failed to start helper");
@@ -137,12 +146,18 @@ fn run_service() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    let gate = VerboseGate::default();
+    let log_gate = gate.clone();
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
         .with_writer(std::sync::Mutex::new(file))
         .with_ansi(false)
+        .finish()
+        .with(tracing_subscriber::filter::filter_fn(move |metadata| {
+            log_gate.allows(metadata)
+        }))
         .init();
-    service::run()
+    service::run(gate)
 }
 
 #[derive(Debug)]
@@ -154,7 +169,7 @@ impl std::fmt::Display for StartError {
     }
 }
 
-fn start(run_dir: &Path) -> Result<(Listener, Arc<Helper>), StartError> {
+fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), StartError> {
     #[cfg(windows)]
     process_job::install().map_err(|error| {
         StartError(format!(
@@ -174,7 +189,7 @@ fn start(run_dir: &Path) -> Result<(Listener, Arc<Helper>), StartError> {
         .map_err(|error| StartError(format!("failed to start engine warmup thread: {error}")))?;
     engines.register(Box::new(singbox));
 
-    let helper = Arc::new(Helper::new(engines, rosetun_routing::backend()));
+    let helper = Arc::new(Helper::new(engines, rosetun_routing::backend(), gate));
     let endpoint = rosetun_ipc::default_endpoint();
     let listener = Listener::bind(&endpoint).map_err(|error| {
         StartError(format!(

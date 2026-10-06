@@ -492,6 +492,7 @@ struct TrafficEngine {
     totals: TrafficTotals,
     dropped: Arc<AtomicUsize>,
     controls: Arc<Mutex<Vec<ControlEndpoint>>>,
+    verbose_logs: Arc<Mutex<Vec<bool>>>,
 }
 
 impl EngineBackend for TrafficEngine {
@@ -525,6 +526,10 @@ impl EngineBackend for TrafficEngine {
             .lock()
             .expect("test controls mutex")
             .push(request.control.expect("session control endpoint").clone());
+        self.verbose_logs
+            .lock()
+            .expect("test verbose logs mutex")
+            .push(request.verbose_log);
         Ok(RenderedConfig {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
@@ -631,8 +636,9 @@ fn traffic_monitor_publishes_totals_and_stops_on_disconnect() {
         totals,
         dropped: Arc::clone(&dropped),
         controls: Arc::clone(&controls),
+        verbose_logs: Arc::new(Mutex::new(Vec::new())),
     }));
-    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     let mut request = connect_request();
     request.settings.kill_switch = false;
     helper
@@ -645,6 +651,40 @@ fn traffic_monitor_publishes_totals_and_stops_on_disconnect() {
     helper.disconnect().expect("disconnect stops monitor");
     assert_eq!(helper.status().traffic, Traffic::default());
     assert_eq!(dropped.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn verbose_log_is_passed_to_engine_and_closed_on_disconnect_or_expiry() {
+    let verbose_logs = Arc::new(Mutex::new(Vec::new()));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(TrafficEngine {
+        totals: TrafficTotals::default(),
+        dropped: Arc::new(AtomicUsize::new(0)),
+        controls: Arc::new(Mutex::new(Vec::new())),
+        verbose_logs: Arc::clone(&verbose_logs),
+    }));
+    let gate = VerboseGate::default();
+    let helper = Helper::new(engines, Box::new(UnusedRouting), gate.clone());
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request.settings.verbose_log_until = Some(now_unix() + 60);
+
+    helper.connect(&request).expect("verbose connect");
+    assert_eq!(
+        *verbose_logs.lock().expect("test verbose logs mutex"),
+        [true]
+    );
+    assert!(gate.is_open(now_unix()));
+    helper.disconnect().expect("disconnect closes verbose log");
+    assert!(!gate.is_open(now_unix()));
+
+    request.settings.verbose_log_until = Some(now_unix().saturating_sub(1));
+    helper.connect(&request).expect("expired verbose connect");
+    assert_eq!(
+        *verbose_logs.lock().expect("test verbose logs mutex"),
+        [true, false]
+    );
+    assert!(!gate.is_open(now_unix()));
 }
 
 fn shorten_dns_timeouts(helper: &Helper) {
@@ -674,7 +714,7 @@ fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
         } else {
             Box::new(UnusedRouting)
         };
-        let helper = Helper::new(engines, routing);
+        let helper = Helper::new(engines, routing, VerboseGate::default());
         shorten_dns_timeouts(&helper);
 
         let mut request = connect_request();
@@ -706,6 +746,7 @@ fn fresh_dns_timeout_stops_engine_and_releases_protection() {
         Box::new(CountingRouting {
             reverted: Arc::clone(&reverted),
         }),
+        VerboseGate::default(),
     );
     shorten_dns_timeouts(&helper);
 
@@ -775,7 +816,7 @@ fn backend_without_dns_server_connects_without_checking_dns() {
         stopped: Arc::clone(&stopped),
     }));
 
-    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     {
         let mut session = helper.session().expect("session");
         session.dns_timeout = Duration::ZERO;
@@ -806,6 +847,7 @@ fn status_answers_while_connect_holds_the_session() {
             release,
             received_plan: Arc::clone(&received_plan),
         }),
+        VerboseGate::default(),
     ));
 
     let mut request = connect_request();
@@ -851,6 +893,7 @@ fn second_operation_reports_busy() {
             release,
             received_plan,
         }),
+        VerboseGate::default(),
     ));
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -876,7 +919,7 @@ fn connect_without_kill_switch_does_not_use_routing_backend() {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(StubEngine));
 
-    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     let mut request = connect_request();
     request.settings.kill_switch = false;
 
@@ -899,7 +942,7 @@ fn connect_rejects_unsupported_rules_before_starting_the_engine() {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(UnsupportedRuleEngine));
 
-    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     let error = helper
         .connect(&connect_request())
         .expect_err("unsupported rules reject the connection");
@@ -917,7 +960,7 @@ fn kill_switch_rejects_an_unresolvable_vpn_endpoint_before_routing() {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(StubEngine));
 
-    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     let mut request = connect_request();
     request.node.server = "invalid host name with spaces".to_owned();
     request.settings.kill_switch = true;
@@ -948,6 +991,7 @@ fn kill_switch_authorizes_the_configured_tunnel_after_spawning_the_engine() {
             spawned: Some(spawn_observed),
             authorized,
         }),
+        VerboseGate::default(),
     );
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -979,7 +1023,7 @@ fn status_marks_the_session_failed_when_the_engine_returns_not_running() {
         running: Arc::clone(&running),
     }));
 
-    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     let mut request = connect_request();
     request.settings.kill_switch = false;
 
@@ -1008,7 +1052,7 @@ fn connect_rejects_an_engine_that_exits_before_startup_readiness() {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(ExitedEngine));
 
-    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     let mut request = connect_request();
     request.settings.kill_switch = false;
 
@@ -1043,6 +1087,7 @@ fn status_reports_failed_protected_when_connected_engine_exits() {
         Box::new(CountingRouting {
             reverted: Arc::clone(&reverted),
         }),
+        VerboseGate::default(),
     );
 
     let mut request = connect_request();
@@ -1097,6 +1142,7 @@ fn disconnect_from_failed_protected_state_returns_to_disconnected() {
         Box::new(CountingRouting {
             reverted: Arc::new(AtomicUsize::new(0)),
         }),
+        VerboseGate::default(),
     );
 
     let mut request = connect_request();
@@ -1130,7 +1176,7 @@ fn protected_helper(
     let reverted = Arc::new(AtomicUsize::new(0));
     let mut engines = EngineRegistry::new();
     engines.register(engine);
-    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
 
     {
         let mut session = helper.session().expect("session");
@@ -1200,6 +1246,7 @@ fn protected_reconnect_replaces_the_traffic_monitor_and_control() {
         totals,
         dropped: Arc::clone(&dropped),
         controls: Arc::clone(&controls),
+        verbose_logs: Arc::new(Mutex::new(Vec::new())),
     }));
     helper.connect(&protected_request()).expect("first connect");
     wait_for_totals(&helper, totals);
@@ -1278,7 +1325,7 @@ fn protected_reconnect_cannot_disable_kill_switch() {
 fn connect_from_connected_is_still_rejected() {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(StubEngine));
-    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     let request = connect_request();
 
     helper.connect(&request).expect("fresh connect");

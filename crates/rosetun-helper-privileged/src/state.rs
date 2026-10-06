@@ -15,6 +15,8 @@ use rosetun_engine::{
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 use rosetun_routing::{RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface};
 
+use crate::log_gate::VerboseGate;
+
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -40,6 +42,7 @@ struct SuccessfulEndpoint {
 struct Session {
     engines: EngineRegistry,
     routing: Box<dyn RoutingBackend>,
+    gate: VerboseGate,
     status: Arc<Mutex<Status>>,
     process: Option<Box<dyn EngineProcess>>,
     control: Option<ControlEndpoint>,
@@ -58,13 +61,18 @@ impl std::fmt::Debug for Helper {
 }
 
 impl Helper {
-    pub fn new(engines: EngineRegistry, routing: Box<dyn RoutingBackend>) -> Self {
+    pub fn new(
+        engines: EngineRegistry,
+        routing: Box<dyn RoutingBackend>,
+        gate: VerboseGate,
+    ) -> Self {
         let status = Arc::new(Mutex::new(Status::default()));
         Self {
             status: Arc::clone(&status),
             session: Mutex::new(Session {
                 engines,
                 routing,
+                gate,
                 status,
                 process: None,
                 control: None,
@@ -129,6 +137,7 @@ impl Helper {
             allow_lan = request.settings.allow_lan,
             dns_server = %request.settings.dns.server,
             dns_server_name = %request.settings.dns.server_name,
+            verbose_log = request.settings.verbose_log_active(now_unix()),
             ?mode,
             "starting tunnel connection"
         );
@@ -394,12 +403,22 @@ impl Session {
             }
         };
 
+        let verbose_until = settings
+            .verbose_log_until
+            .filter(|until| now_unix() < *until);
+        if let Some(until) = verbose_until {
+            self.gate.open_until(until);
+            tracing::info!(until, "verbose engine log is on");
+        } else {
+            self.gate.close();
+        }
         let config = backend
             .render(&RenderRequest {
                 node: resolved_node.as_ref().unwrap_or(node),
                 rules,
                 settings,
                 control: control.as_ref(),
+                verbose_log: verbose_until.is_some(),
             })
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
@@ -654,6 +673,7 @@ impl Session {
     }
 
     fn stop_engine(&mut self) -> Result<(), HelperError> {
+        self.gate.close();
         if let Some(monitor) = self.monitor.take() {
             monitor.stop();
         } else {

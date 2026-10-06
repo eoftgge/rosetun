@@ -214,6 +214,7 @@ mod tests {
         let helper = Helper::new(
             rosetun_engine::EngineRegistry::new(),
             rosetun_routing::backend(),
+            crate::log_gate::VerboseGate::default(),
         );
         let mut greeted = true;
         assert!(matches!(

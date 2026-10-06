@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::log_gate::VerboseGate;
 use crate::server::{Server, ShutdownHandle};
 use windows_sys::Win32::Foundation::{
     ERROR_CALL_NOT_IMPLEMENTED, ERROR_FAILED_SERVICE_CONTROLLER_CONNECT,
@@ -52,6 +53,7 @@ impl Drop for ScHandle {
 
 static STATUS: OnceLock<StatusHandle> = OnceLock::new();
 static SHUTDOWN: OnceLock<ShutdownHandle> = OnceLock::new();
+static VERBOSE_GATE: OnceLock<VerboseGate> = OnceLock::new();
 static CHECKPOINT: AtomicU32 = AtomicU32::new(0);
 
 fn wide(value: &str) -> Vec<u16> {
@@ -120,7 +122,13 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
     let started = crate::data_dir::data_dir()
         .map(|dir| dir.join("run"))
         .map_err(|error| error.to_string())
-        .and_then(|run_dir| crate::start(&run_dir).map_err(|error| error.to_string()));
+        .and_then(|run_dir| {
+            let gate = VERBOSE_GATE
+                .get()
+                .expect("service log gate configured")
+                .clone();
+            crate::start(&run_dir, gate).map_err(|error| error.to_string())
+        });
     let (listener, helper) = match started {
         Ok(started) => started,
         Err(error) => {
@@ -153,7 +161,11 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
     }
 }
 
-pub(crate) fn run() -> ExitCode {
+pub(crate) fn run(gate: VerboseGate) -> ExitCode {
+    if VERBOSE_GATE.set(gate).is_err() {
+        tracing::error!("service log gate was already configured");
+        return ExitCode::FAILURE;
+    }
     let mut name = wide(SERVICE_NAME);
     let table = [
         SERVICE_TABLE_ENTRYW {
