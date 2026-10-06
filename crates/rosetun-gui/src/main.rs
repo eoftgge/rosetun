@@ -16,7 +16,6 @@ mod errors;
 mod icon_res;
 mod icons;
 mod reorder;
-#[cfg(test)]
 mod rose_icon;
 mod rules;
 mod state;
@@ -87,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(strings::TITLE)
         .with_icon(std::sync::Arc::new(eframe::egui::IconData {
-            rgba: brand::emblem_rgba(128, theme::ROSE, Some(theme::ROSE_LIGHT)),
+            rgba: rose_icon::rose_icon_rgba(128, rose_icon::RoseIcon::Large),
             width: 128,
             height: 128,
         }))

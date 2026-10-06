@@ -1,11 +1,9 @@
-use crate::{brand, theme};
+use crate::rose_icon::{self, RoseIcon};
 
 /// Sizes Explorer, the Start menu and the taskbar ask for at 100–200 % scaling.
 const SIZES: [u32; 8] = [16, 20, 24, 32, 40, 48, 64, 256];
-/// Below this the spiral blurs into the petals, as in the tray icon.
-const SPIRAL_FROM: u32 = 32;
 
-/// The `.ico` embedded in the executable: the window icon's emblem at every size.
+/// The `.ico` embedded in the executable: the icon at every size.
 fn app_icon() -> Vec<u8> {
     let mut ico = Vec::new();
     ico.extend_from_slice(&0_u16.to_le_bytes());
@@ -14,8 +12,12 @@ fn app_icon() -> Vec<u8> {
 
     let mut images = Vec::new();
     for size in SIZES {
-        let spiral = (size >= SPIRAL_FROM).then_some(theme::ROSE_LIGHT);
-        let rgba = brand::emblem_rgba(size, theme::ROSE, spiral);
+        let icon = if size >= 40 {
+            RoseIcon::Large
+        } else {
+            RoseIcon::Small
+        };
+        let rgba = rose_icon::rose_icon_rgba(size, icon);
         let image = dib(&rgba, size);
         let offset = (6 + 16 * SIZES.len() + images.len()) as u32;
         ico.extend_from_slice(&[size as u8, size as u8, 0, 0]);
@@ -60,7 +62,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "writes assets/rosetun.ico; run after changing the emblem"]
+    #[ignore = "writes assets/rosetun.ico; run after changing the icon"]
     fn write_app_icon() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/rosetun.ico");
         std::fs::write(path, app_icon()).unwrap();

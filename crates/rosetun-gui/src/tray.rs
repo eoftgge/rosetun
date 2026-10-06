@@ -6,9 +6,10 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEv
 
 use crate::actions::PrimaryAction;
 use crate::app::ShellEvent;
+use crate::rose_icon::{self, RoseIcon};
 use crate::state::{State, primary_label};
 use crate::strings::t;
-use crate::{brand, strings, theme, view};
+use crate::{strings, theme, view};
 
 const OPEN_ID: &str = "rosetun.tray.open";
 const PRIMARY_ID: &str = "rosetun.tray.primary";
@@ -95,8 +96,11 @@ impl Tray {
             &PredefinedMenuItem::separator(),
             &quit,
         ])?;
-        let initial_icon =
-            Icon::from_rgba(brand::emblem_rgba(32, theme::DISCONNECTED, None), 32, 32)?;
+        let initial_icon = Icon::from_rgba(
+            rose_icon::rose_icon_rgba(32, RoseIcon::Tray(theme::DISCONNECTED)),
+            32,
+            32,
+        )?;
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
@@ -149,7 +153,11 @@ impl Tray {
             .as_ref()
             .is_none_or(|shown| shown.color != view.color)
         {
-            match Icon::from_rgba(brand::emblem_rgba(32, view.color, None), 32, 32) {
+            match Icon::from_rgba(
+                rose_icon::rose_icon_rgba(32, RoseIcon::Tray(view.color)),
+                32,
+                32,
+            ) {
                 Ok(icon) => {
                     if let Err(error) = self.icon.set_icon(Some(icon)) {
                         tracing::warn!(%error, "Could not update tray icon");
