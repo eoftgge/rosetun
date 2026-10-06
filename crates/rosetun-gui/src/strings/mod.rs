@@ -232,6 +232,7 @@ pub(crate) struct Strings {
     pub(crate) tray_quit: &'static str,
     pub(crate) open_folder: &'static str,
     pub(crate) connect: &'static str,
+    pub(crate) unavailable: &'static str,
     pub(crate) disconnect: &'static str,
     pub(crate) retry: &'static str,
     pub(crate) reconnect: &'static str,

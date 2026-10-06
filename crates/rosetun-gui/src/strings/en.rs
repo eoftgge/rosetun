@@ -157,6 +157,7 @@ pub(crate) static EN: Strings = Strings {
     tray_quit: "Quit Rosetun",
     open_folder: "Open folder",
     connect: "Connect",
+    unavailable: "Unavailable",
     disconnect: "Disconnect",
     retry: "Retry",
     reconnect: "Reconnect",

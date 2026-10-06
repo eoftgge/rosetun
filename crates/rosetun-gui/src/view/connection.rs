@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, RichText, Stroke};
+use eframe::egui::{self, Color32, RichText};
 use rosetun_config::ConnectionState;
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
@@ -6,6 +6,8 @@ use crate::errors;
 use crate::state::{Action, State, primary_label};
 use crate::strings::t;
 use crate::{display, strings, theme, widgets};
+
+use super::rose_button::{self, RosePhase};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if !state.config_ready {
@@ -38,32 +40,22 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         columns[0].vertical_centered(|ui| {
             ui.add_space(12.0);
             let action = state.primary_action();
-            let enabled = action != PrimaryAction::Disabled;
-            let mut text = RichText::new(primary_label(state)).size(19.0).strong();
-            let (fill, stroke) = match action {
-                PrimaryAction::Connect | PrimaryAction::Retry | PrimaryAction::Reconnect => {
-                    text = text.color(Color32::WHITE);
-                    (theme::ROSE, Stroke::NONE)
-                }
-                PrimaryAction::Disconnect => (
-                    Color32::from_rgba_unmultiplied(
-                        theme::CONNECTED.r(),
-                        theme::CONNECTED.g(),
-                        theme::CONNECTED.b(),
-                        36,
-                    ),
-                    Stroke::new(2.0, theme::CONNECTED),
-                ),
-                PrimaryAction::Disabled => (theme::MODAL, Stroke::new(2.0, theme::DISABLED)),
-            };
-            let response = ui.add_enabled(
-                enabled,
-                egui::Button::new(text)
-                    .min_size(egui::vec2(216.0, 200.0))
-                    .fill(fill)
-                    .stroke(stroke),
+            let phase = rose_button::rose_phase(
+                state.helper_available,
+                state.visible_status().map(|status| &status.state),
             );
-            if response.clicked() {
+            let button_label = if phase == RosePhase::Unavailable {
+                t().unavailable
+            } else {
+                primary_label(state)
+            };
+            if rose_button::rose_button(
+                ui,
+                phase,
+                button_label,
+                action != PrimaryAction::Disabled,
+                state.config.interface.reduce_motion,
+            ) {
                 actions.push(Action::Primary);
             }
             ui.add_space(20.0);

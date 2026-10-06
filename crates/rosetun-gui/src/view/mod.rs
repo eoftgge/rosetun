@@ -2,6 +2,7 @@ pub(crate) mod add_rule;
 pub(crate) mod add_subscription;
 pub(crate) mod connection;
 pub(crate) mod header;
+pub(crate) mod rose_button;
 pub(crate) mod rules;
 pub(crate) mod settings;
 pub(crate) mod subscriptions;

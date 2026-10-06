@@ -157,6 +157,7 @@ pub(crate) static RU: Strings = Strings {
     tray_quit: "Выйти из Rosetun",
     open_folder: "Открыть папку",
     connect: "Подключиться",
+    unavailable: "Недоступно",
     disconnect: "Отключиться",
     retry: "Повторить",
     reconnect: "Переподключиться",
