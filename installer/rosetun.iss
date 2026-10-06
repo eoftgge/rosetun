@@ -32,6 +32,7 @@ ShowLanguageDialog=auto
 CloseApplications=no
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#GuiExe}
+SetupIconFile=..\crates\rosetun-gui\assets\rosetun.ico
 SetupLogging=yes
 
 [Languages]
