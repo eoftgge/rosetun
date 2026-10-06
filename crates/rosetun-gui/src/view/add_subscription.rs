@@ -4,7 +4,7 @@ use rosetun_config::AppConfig;
 use crate::errors;
 use crate::state::{Action, AddDialog, redact};
 use crate::strings::t;
-use crate::{display, strings, theme};
+use crate::{display, strings, theme, widgets};
 
 pub(crate) fn show(
     ctx: &egui::Context,
@@ -13,7 +13,7 @@ pub(crate) fn show(
     actions: &mut Vec<Action>,
 ) {
     let response = egui::Modal::new(egui::Id::new("add_subscription"))
-        .frame(theme::modal_frame())
+        .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(520.0);
             ui.heading(t().add_subscription);
@@ -35,7 +35,7 @@ pub(crate) fn show(
                 if input.changed() {
                     dialog.error = None;
                 }
-                if theme::outline_button(ui, t().paste, !dialog.busy).clicked() {
+                if widgets::outline_button(ui, t().paste, !dialog.busy).clicked() {
                     input.request_focus();
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                 }
@@ -81,7 +81,7 @@ pub(crate) fn show(
             }
             ui.add_space(16.0);
             ui.horizontal(|ui| {
-                theme::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
+                widgets::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
                 ui.label(t().send_device_id);
             });
             ui.add(
@@ -104,7 +104,7 @@ pub(crate) fn show(
             }
             ui.add_space(22.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if theme::button_fill(
+                if widgets::button_fill(
                     ui,
                     if dialog.busy { t().adding } else { t().add },
                     !dialog.busy && normalized.is_ok(),
@@ -113,7 +113,7 @@ pub(crate) fn show(
                 {
                     actions.push(Action::SubmitAdd);
                 }
-                if theme::outline_button(ui, t().cancel, !dialog.busy).clicked() {
+                if widgets::outline_button(ui, t().cancel, !dialog.busy).clicked() {
                     actions.push(Action::CancelAdd);
                 }
             });

@@ -5,7 +5,7 @@ use crate::errors;
 use crate::rules::{ProcessMatchMode, process_matches_filter, update_process_match_mode};
 use crate::state::{Action, AddRuleDialog, RuleInputKind};
 use crate::strings::t;
-use crate::{strings, theme};
+use crate::{strings, theme, widgets};
 
 const DIALOG_WIDTH: f32 = 640.0;
 /// The dialog hangs from this distance below the window top, so switching to
@@ -31,7 +31,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
             egui::Modal::default_area(id)
                 .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, DIALOG_TOP)),
         )
-        .frame(theme::modal_frame())
+        .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(DIALOG_WIDTH);
             ui.set_max_width(DIALOG_WIDTH);
@@ -96,7 +96,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                 valid
             };
             let valid = if process {
-                let frame = theme::modal_frame();
+                let frame = widgets::modal_frame();
                 let limit = ui.ctx().content_rect().bottom()
                     - BOTTOM_GAP
                     - (frame.inner_margin.bottom as f32 + frame.stroke.width)
@@ -122,7 +122,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                 egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
                     ui.set_min_size(egui::vec2(DIALOG_WIDTH, BUTTON_ROW_HEIGHT));
-                    if theme::button_fill(
+                    if widgets::button_fill(
                         ui,
                         if dialog.busy {
                             t().adding_rule
@@ -135,7 +135,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                     {
                         actions.push(Action::SubmitAddRule);
                     }
-                    if theme::outline_button(ui, t().cancel, !dialog.busy).clicked() {
+                    if widgets::outline_button(ui, t().cancel, !dialog.busy).clicked() {
                         actions.push(Action::CancelAddRule);
                     }
                 },
@@ -239,7 +239,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 }
                 visible += 1;
                 ui.push_id(index, |ui| {
-                    let frame = theme::card_frame()
+                    let frame = widgets::card_frame()
                         .inner_margin(egui::Margin::symmetric(12, 7))
                         .fill(if dialog.selected_process == Some(index) {
                             theme::BORDER

@@ -12,7 +12,7 @@ use eframe::egui::{self, Stroke};
 use crate::errors;
 use crate::state::{Action, Screen, State};
 use crate::strings::t;
-use crate::theme;
+use crate::{theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     let mut actions = Vec::new();
@@ -49,7 +49,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                 .id_salt("connection_scroll")
                 .show(ui, |ui| {
                     if let Some(error) = &state.config_error
-                        && theme::dismissible_error(
+                        && widgets::dismissible_error(
                             ui,
                             &state.text(&errors::config_worker(t(), error)),
                         )
@@ -57,7 +57,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                         actions.push(Action::DismissConfigError);
                     }
                     if let Some(error) = &state.operation_error
-                        && theme::dismissible_error(ui, &state.text(error))
+                        && widgets::dismissible_error(ui, &state.text(error))
                     {
                         actions.push(Action::DismissOperationError);
                     }

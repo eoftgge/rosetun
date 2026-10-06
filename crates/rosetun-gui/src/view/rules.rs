@@ -6,7 +6,7 @@ use crate::reorder::drop_target;
 use crate::rules::{RuleFilter, TypeFilter, rule_counts, visible_rules};
 use crate::state::{Action, DeleteDialog, NameDialogKind, State};
 use crate::strings::t;
-use crate::{strings, theme};
+use crate::{strings, theme, widgets};
 
 const HANDLE_WIDTH: f32 = 28.0;
 const MIN_TYPE_WIDTH: f32 = 100.0;
@@ -61,7 +61,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     if state.config.rule_sets.is_empty() {
         ui.colored_label(theme::TEXT_MUTED, t().no_rule_sets);
         ui.add_space(12.0);
-        if theme::button_fill(ui, t().create_rule_set, state.can_edit_rules()).clicked() {
+        if widgets::button_fill(ui, t().create_rule_set, state.can_edit_rules()).clicked() {
             actions.push(Action::OpenCreateSet);
         }
         return;
@@ -75,7 +75,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         .iter()
         .find(|item| state.rule_screen.selected_set.as_ref() == Some(&item.id))
     else {
-        theme::button_fill(ui, t().new_rule_button, false);
+        widgets::button_fill(ui, t().new_rule_button, false);
         return;
     };
     if state
@@ -83,7 +83,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
         && state.config.active_rule_set.as_ref() == Some(&set.id)
     {
-        theme::card_frame().show(ui, |ui| {
+        widgets::card_frame().show(ui, |ui| {
             ui.colored_label(theme::ROSE_LIGHT, t().rules_next_connect);
         });
         ui.add_space(16.0);
@@ -141,18 +141,18 @@ fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         }
         if state.config.active_rule_set.as_ref() == Some(&set.id) {
             ui.colored_label(theme::ROSE_LIGHT, t().active);
-        } else if theme::outline_button(ui, t().use_for_connections, state.can_edit_rules())
+        } else if widgets::outline_button(ui, t().use_for_connections, state.can_edit_rules())
             .clicked()
         {
             actions.push(Action::SelectRuleSet(Some(set.id.clone())));
         }
-        if theme::outline_button(ui, t().new_set, state.can_edit_rules()).clicked() {
+        if widgets::outline_button(ui, t().new_set, state.can_edit_rules()).clicked() {
             actions.push(Action::OpenCreateSet);
         }
-        if theme::outline_button(ui, t().rename, state.can_edit_rules()).clicked() {
+        if widgets::outline_button(ui, t().rename, state.can_edit_rules()).clicked() {
             actions.push(Action::OpenRenameSet);
         }
-        if theme::outline_button(ui, t().delete, state.can_edit_rules()).clicked() {
+        if widgets::outline_button(ui, t().delete, state.can_edit_rules()).clicked() {
             actions.push(Action::RequestDeleteSet);
         }
     });
@@ -202,7 +202,7 @@ fn filter_controls(
             }
         }
         ui.separator();
-        if theme::button_fill(ui, t().new_rule_button, can_add).clicked() {
+        if widgets::button_fill(ui, t().new_rule_button, can_add).clicked() {
             actions.push(Action::OpenAddRule);
         }
     });
@@ -295,7 +295,7 @@ fn rule_row(
     let reorder = state.can_edit_rules() && !state.rule_screen.filter.is_active();
     let dragged =
         reorder && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| *id == rule.id);
-    let mut frame = theme::card_frame().inner_margin(egui::Margin::symmetric(10, 0));
+    let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(10, 0));
     if dragged {
         frame = frame.fill(Color32::from_rgba_unmultiplied(
             theme::CARD.r(),
@@ -372,7 +372,7 @@ fn rule_row(
                     table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |ui| {
                         ui.add_space((ENABLED_WIDTH - 38.0) / 2.0);
                         let mut enabled = rule.enabled;
-                        if theme::toggle(ui, &mut enabled, state.can_edit_rules()).changed() {
+                        if widgets::toggle(ui, &mut enabled, state.can_edit_rules()).changed() {
                             actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
                         }
                     });
@@ -455,7 +455,7 @@ fn default_rule(
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(0, 2))
             .show(ui, |ui| {
-                theme::card_frame()
+                widgets::card_frame()
                     .fill(theme::PANEL)
                     .inner_margin(egui::Margin::symmetric(10, 0))
                     .show(ui, |ui| {
@@ -585,7 +585,7 @@ pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
     };
     let busy = state.operations.rules_edit;
     let response = egui::Modal::new(egui::Id::new("rule_set_name"))
-        .frame(theme::modal_frame())
+        .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(400.0);
             ui.heading(match dialog.kind {
@@ -610,14 +610,14 @@ pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
             }
             ui.add_space(16.0);
             ui.horizontal(|ui| {
-                if theme::outline_button(ui, t().cancel, !busy).clicked() {
+                if widgets::outline_button(ui, t().cancel, !busy).clicked() {
                     actions.push(Action::CancelSetName);
                 }
                 let label = match dialog.kind {
                     NameDialogKind::Create => t().create_rule_set,
                     NameDialogKind::Rename(_) => t().rename,
                 };
-                if theme::button_fill(ui, label, !busy && !dialog.name.trim().is_empty()).clicked()
+                if widgets::button_fill(ui, label, !busy && !dialog.name.trim().is_empty()).clicked()
                 {
                     actions.push(Action::SubmitSetName);
                 }
@@ -634,7 +634,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
     };
     let busy = state.operations.rules_edit;
     let response = egui::Modal::new(egui::Id::new("delete_rules"))
-        .frame(theme::modal_frame())
+        .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(440.0);
             match dialog {
@@ -670,10 +670,10 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             }
             ui.add_space(18.0);
             ui.horizontal(|ui| {
-                if theme::outline_button(ui, t().cancel, !busy).clicked() {
+                if widgets::outline_button(ui, t().cancel, !busy).clicked() {
                     actions.push(Action::CancelRuleDelete);
                 }
-                if theme::button_fill(ui, t().delete, !busy).clicked() {
+                if widgets::button_fill(ui, t().delete, !busy).clicked() {
                     actions.push(Action::ConfirmRuleDelete);
                 }
             });
@@ -735,7 +735,7 @@ mod tests {
                     let mut toggle_rect = egui::Rect::NOTHING;
                     let enabled_cell = table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |ui| {
                         ui.add_space((ENABLED_WIDTH - 38.0) / 2.0);
-                        toggle_rect = theme::toggle(ui, &mut checked, true).rect;
+                        toggle_rect = widgets::toggle(ui, &mut checked, true).rect;
                     });
                     assert!(
                         (combo_rect.center().x - target_cell.rect.center().x).abs() < 3.0,

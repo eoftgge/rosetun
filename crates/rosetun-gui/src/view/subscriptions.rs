@@ -6,7 +6,7 @@ use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
 use crate::state::{Action, State, UpdateOutcome};
 use crate::strings::t;
-use crate::{display, strings, theme};
+use crate::{display, strings, theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     const FOOTER_HEIGHT: f32 = 72.0;
@@ -21,7 +21,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     && !state.operations.update_all
                     && state.operations.updating.is_empty()
                     && !state.operations.removing;
-                if theme::outline_button(
+                if widgets::outline_button(
                     ui,
                     if state.operations.update_all {
                         t().updating
@@ -42,7 +42,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             .strong(),
     );
     ui.add_space(6.0);
-    if theme::button_fill(ui, t().add_subscription, state.add.is_none()).clicked() {
+    if widgets::button_fill(ui, t().add_subscription, state.add.is_none()).clicked() {
         actions.push(Action::OpenAdd);
     }
     ui.add_space(12.0);
@@ -118,7 +118,7 @@ fn subscription_card(
         .active
         .as_ref()
         .is_some_and(|selection| selection.subscription == subscription.id);
-    let mut frame = theme::card_frame().inner_margin(12).stroke(Stroke::new(
+    let mut frame = widgets::card_frame().inner_margin(12).stroke(Stroke::new(
         1.0,
         if selected {
             theme::ROSE_DARK
@@ -225,7 +225,7 @@ fn subscription_card(
             .truncate(),
         );
         if let Some(UpdateOutcome::Error(error)) = state.outcomes.get(&subscription.id)
-            && theme::dismissible_error(ui, &state.text(&errors::update_subscription(t(), error)))
+            && widgets::dismissible_error(ui, &state.text(&errors::update_subscription(t(), error)))
         {
             actions.push(Action::DismissOutcome(subscription.id.clone()));
         }
@@ -255,7 +255,7 @@ fn subscription_card(
             );
         }
         if subscription.announce.is_some() || !subscription.notices.is_empty() {
-            theme::card_frame()
+            widgets::card_frame()
                 .fill(theme::INPUT)
                 .inner_margin(10)
                 .show(ui, |ui| {
@@ -418,7 +418,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
         return;
     };
     let response = egui::Modal::new(egui::Id::new("remove_subscription"))
-        .frame(theme::modal_frame())
+        .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(480.0);
             ui.heading(t().remove_subscription);
@@ -457,10 +457,10 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             }
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                if theme::outline_button(ui, t().cancel, !state.operations.removing).clicked() {
+                if widgets::outline_button(ui, t().cancel, !state.operations.removing).clicked() {
                     actions.push(Action::CancelRemove);
                 }
-                if theme::button_fill(
+                if widgets::button_fill(
                     ui,
                     if state.operations.removing {
                         t().removing

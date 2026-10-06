@@ -24,6 +24,7 @@ mod theme;
 #[cfg(windows)]
 mod tray;
 mod view;
+mod widgets;
 #[cfg(windows)]
 mod window_memory;
 mod worker;

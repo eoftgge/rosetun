@@ -5,14 +5,14 @@ use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
 use crate::state::{Action, State, primary_label};
 use crate::strings::t;
-use crate::{display, strings, theme};
+use crate::{display, strings, theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if !state.config_ready {
         ui.colored_label(theme::TEXT_DIM, t().loading);
     }
     if !state.helper_available {
-        theme::card_frame().show(ui, |ui| {
+        widgets::card_frame().show(ui, |ui| {
             ui.colored_label(theme::ERROR, t().helper_unavailable_detail);
             if let Some(error) = &state.helper_error {
                 ui.add(egui::Label::new(state.text(&errors::client(t(), error))).wrap());
@@ -81,7 +81,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             );
         });
         columns[1].vertical(|ui| {
-            theme::card_frame().show(ui, |ui| {
+            widgets::card_frame().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.colored_label(theme::TEXT_DIM, t().selected_server);
                 if let Some((subscription, node)) = state.config.active_node() {
@@ -120,7 +120,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 .on_hover_text(t().engine_detail(engine.as_str()));
             });
             if let Some(id) = selection_changed.and_then(|status| status.node.as_ref()) {
-                theme::card_frame().show(ui, |ui| {
+                widgets::card_frame().show(ui, |ui| {
                     ui.colored_label(theme::TEXT_DIM, t().active_server);
                     let name = state
                         .config
@@ -137,11 +137,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui.add(egui::Label::new(name.as_deref().unwrap_or(t().unknown_server)).wrap());
                 });
             }
-            theme::card_frame().show(ui, |ui| {
+            widgets::card_frame().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.colored_label(theme::TEXT_DIM, t().protection);
                 let mut enabled = state.config.settings.kill_switch;
-                if theme::switch_row(
+                if widgets::switch_row(
                     ui,
                     t().kill_switch,
                     t().kill_switch_detail,
@@ -182,18 +182,18 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     if let Some(ConnectionState::Failed { reason } | ConnectionState::FailedProtected { reason }) =
         visible_status.map(|status| &status.state)
     {
-        theme::card_frame().show(ui, |ui| {
+        widgets::card_frame().show(ui, |ui| {
             ui.add(egui::Label::new(RichText::new(state.text(reason)).color(theme::ERROR)).wrap());
         });
     }
     if let Some(status) = visible_status
         && protection_action(status, state.operations.helper) == ProtectionAction::ConfirmDisconnect
-        && theme::outline_button(ui, t().turn_off_protection, true).clicked()
+        && widgets::outline_button(ui, t().turn_off_protection, true).clicked()
     {
         actions.push(Action::RequestProtectionOff);
     }
     ui.add_space(12.0);
-    theme::card_frame().show(ui, |ui| {
+    widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.colored_label(theme::TEXT_DIM, t().rule_set);
         let mut selected = state.config.active_rule_set.clone();
@@ -222,7 +222,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             actions.push(Action::SelectRuleSet(selected));
         }
         ui.colored_label(theme::TEXT_DIM, t().next_connect);
-        if theme::outline_button(ui, t().open_rules, true).clicked() {
+        if widgets::outline_button(ui, t().open_rules, true).clicked() {
             actions.push(Action::OpenActiveRules);
         }
     });
@@ -241,7 +241,7 @@ pub(crate) fn state_style(state: &ConnectionState) -> (&'static str, Color32) {
 
 pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
     let response = egui::Modal::new(egui::Id::new("turn_off_protection"))
-        .frame(theme::modal_frame())
+        .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(480.0);
             ui.heading(t().turn_off_protection);
@@ -254,10 +254,10 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
             }
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                if theme::outline_button(ui, t().keep_blocked, !state.operations.helper).clicked() {
+                if widgets::outline_button(ui, t().keep_blocked, !state.operations.helper).clicked() {
                     actions.push(Action::KeepBlocked);
                 }
-                if theme::button_fill(
+                if widgets::button_fill(
                     ui,
                     t().turn_off_protection,
                     state.helper_available && !state.operations.helper,
