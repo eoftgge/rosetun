@@ -192,6 +192,29 @@ pub(crate) fn toggle(ui: &mut egui::Ui, on: &mut bool, enabled: bool) -> egui::R
     }
 }
 
+/// A title, a muted detail below it and a toggle to the right, centred on both lines.
+pub(crate) fn switch_row(
+    ui: &mut egui::Ui,
+    title: &str,
+    detail: &str,
+    on: &mut bool,
+    enabled: bool,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        let text_width = ui.available_width() - TOGGLE_SIZE.x - ui.spacing().item_spacing.x;
+        ui.vertical(|ui| {
+            ui.set_max_width(text_width);
+            ui.label(title);
+            ui.add(egui::Label::new(egui::RichText::new(detail).small().color(TEXT_MUTED)).wrap());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            toggle(ui, on, enabled)
+        })
+        .inner
+    })
+    .inner
+}
+
 fn toggled_value(on: bool, clicked: bool, enabled: bool) -> bool {
     if clicked && enabled { !on } else { on }
 }

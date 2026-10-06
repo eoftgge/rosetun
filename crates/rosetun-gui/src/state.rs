@@ -151,6 +151,8 @@ pub(crate) struct SettingsScreen {
     pub(crate) path: String,
     pub(crate) dirty: bool,
     pub(crate) config_folder: Option<PathBuf>,
+    #[cfg(windows)]
+    pub(crate) autostart: Option<bool>,
     opened: bool,
 }
 
@@ -194,6 +196,10 @@ pub(crate) enum Action {
     ShowConnection,
     OpenSettings,
     SetInterfaceScale(u16),
+    #[cfg(windows)]
+    SetAutostart(bool),
+    #[cfg(windows)]
+    SetCloseToTray(bool),
     SaveDns,
     ResetDns,
     SetEngineLogLevel(LogLevel),
@@ -247,6 +253,12 @@ pub(crate) enum Job {
     Connect,
     Disconnect,
     SetInterfaceScale(u16),
+    #[cfg(windows)]
+    LoadAutostart,
+    #[cfg(windows)]
+    SetAutostart(bool),
+    #[cfg(windows)]
+    SetCloseToTray(bool),
     SetDns(DnsSettings),
     SetEngineLogLevel(LogLevel),
     #[cfg(windows)]
@@ -481,6 +493,22 @@ impl State {
                 self.operation_error = result.err().map(|error| self.text(&error.to_string()));
             }
             WorkerEvent::SetInterfaceScale(result) => self.finish_settings(result),
+            #[cfg(windows)]
+            WorkerEvent::AutostartLoaded(result) => match result {
+                Ok(enabled) => self.settings_screen.autostart = Some(enabled),
+                Err(error) => {
+                    self.settings_screen.autostart = None;
+                    self.operation_error = Some(self.text(&error.to_string()));
+                }
+            },
+            #[cfg(windows)]
+            WorkerEvent::SetAutostart(result) => {
+                self.operations.settings = false;
+                self.settings_screen.autostart = result.as_ref().ok().copied();
+                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+            }
+            #[cfg(windows)]
+            WorkerEvent::SetCloseToTray(result) => self.finish_settings(result),
             WorkerEvent::SetDns(result) => {
                 if result.is_ok() {
                     self.settings_screen.dirty = false;
@@ -616,6 +644,11 @@ impl State {
                     }
                 }
                 self.screen = Screen::Settings;
+                #[cfg(windows)]
+                {
+                    self.settings_screen.autostart = None;
+                    return Some(Job::LoadAutostart);
+                }
             }
             Action::SetInterfaceScale(percent) => {
                 if self.can_edit_settings()
@@ -623,6 +656,21 @@ impl State {
                     && rosetun_core::INTERFACE_SCALES.contains(&percent)
                 {
                     return self.start_settings(Job::SetInterfaceScale(percent));
+                }
+            }
+            #[cfg(windows)]
+            Action::SetAutostart(enabled) => {
+                if self.can_edit_settings()
+                    && self.settings_screen.autostart.is_some()
+                    && self.settings_screen.autostart != Some(enabled)
+                {
+                    return self.start_settings(Job::SetAutostart(enabled));
+                }
+            }
+            #[cfg(windows)]
+            Action::SetCloseToTray(enabled) => {
+                if self.can_edit_settings() && self.config.interface.close_to_tray != enabled {
+                    return self.start_settings(Job::SetCloseToTray(enabled));
                 }
             }
             Action::SaveDns => {
@@ -1898,6 +1946,113 @@ mod tests {
             state.operation_error.as_deref(),
             Some("could not determine the configuration directory")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn opening_settings_refreshes_autostart_every_time() {
+        let mut state = State::default();
+        assert!(matches!(
+            state.act(Action::OpenSettings),
+            Some(Job::LoadAutostart)
+        ));
+        assert_eq!(state.settings_screen.autostart, None);
+        state.reduce(WorkerEvent::AutostartLoaded(Ok(true)));
+        assert_eq!(state.settings_screen.autostart, Some(true));
+
+        state.act(Action::ShowConnection);
+        assert!(matches!(
+            state.act(Action::OpenSettings),
+            Some(Job::LoadAutostart)
+        ));
+        assert_eq!(state.settings_screen.autostart, None);
+        state.reduce(WorkerEvent::AutostartLoaded(Ok(false)));
+        assert_eq!(state.settings_screen.autostart, Some(false));
+        state.reduce(WorkerEvent::AutostartLoaded(Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "registry read denied",
+        ))));
+        assert_eq!(state.settings_screen.autostart, None);
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("registry read denied")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_settings_jobs_respect_busy_state_and_saved_values() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        assert!(state.act(Action::SetAutostart(true)).is_none());
+        state.reduce(WorkerEvent::AutostartLoaded(Ok(false)));
+        assert!(state.act(Action::SetAutostart(false)).is_none());
+        assert!(state.act(Action::SetCloseToTray(true)).is_none());
+        assert!(matches!(
+            state.act(Action::SetAutostart(true)),
+            Some(Job::SetAutostart(true))
+        ));
+        assert!(state.operations.settings);
+        assert!(state.act(Action::SetCloseToTray(false)).is_none());
+        state.reduce(WorkerEvent::SetAutostart(Ok(true)));
+        assert!(!state.operations.settings);
+        assert_eq!(state.settings_screen.autostart, Some(true));
+
+        assert!(matches!(
+            state.act(Action::SetCloseToTray(false)),
+            Some(Job::SetCloseToTray(false))
+        ));
+        assert!(state.operations.settings);
+        assert!(state.act(Action::SetAutostart(false)).is_none());
+        state.reduce(WorkerEvent::SetCloseToTray(Err(
+            rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
+        )));
+        assert!(!state.operations.settings);
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("could not determine the configuration directory")
+        );
+        assert!(matches!(
+            state.act(Action::SetCloseToTray(false)),
+            Some(Job::SetCloseToTray(false))
+        ));
+        let mut config = AppConfig::default();
+        config.interface.close_to_tray = false;
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config,
+        });
+        state.reduce(WorkerEvent::SetCloseToTray(Ok(())));
+        assert!(!state.operations.settings);
+        assert!(state.operation_error.is_none());
+        assert!(state.act(Action::SetCloseToTray(false)).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_autostart_write_clears_busy_and_loaded_state() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        state.reduce(WorkerEvent::AutostartLoaded(Ok(false)));
+        assert!(matches!(
+            state.act(Action::SetAutostart(true)),
+            Some(Job::SetAutostart(true))
+        ));
+        state.reduce(WorkerEvent::SetAutostart(Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "registry write denied",
+        ))));
+        assert!(!state.operations.settings);
+        assert_eq!(state.settings_screen.autostart, None);
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("registry write denied")
+        );
+        assert!(state.act(Action::SetAutostart(true)).is_none());
     }
 
     #[cfg(windows)]

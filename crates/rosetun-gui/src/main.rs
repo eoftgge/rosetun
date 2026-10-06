@@ -26,9 +26,15 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::prelude::*;
 
+#[cfg(windows)]
+/// Passed by autostart: start in the tray without showing the window.
+pub(crate) const HIDDEN_ARG: &str = "--hidden";
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
-    let activation = match rosetun_shell::acquire() {
+    let start_hidden = std::env::args_os().any(|arg| arg == HIDDEN_ARG);
+    #[cfg(windows)]
+    let activation = match rosetun_shell::acquire(!start_hidden) {
         Ok(rosetun_shell::Instance::First(activation)) => Ok(activation),
         Ok(rosetun_shell::Instance::Other) => return Ok(()),
         Err(error) => Err(error),
@@ -85,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(move |cc| {
             let app = app::App::new(cc, store);
             #[cfg(windows)]
-            let app = app.with_shell(&cc.egui_ctx, activation);
+            let app = app.with_shell(&cc.egui_ctx, activation, start_hidden);
             Ok(Box::new(app))
         }),
     )?;

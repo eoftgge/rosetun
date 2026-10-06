@@ -60,6 +60,12 @@ pub(crate) enum WorkerEvent {
     Connect(Result<(), HelperCommandError>),
     Disconnect(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
+    #[cfg(windows)]
+    AutostartLoaded(std::io::Result<bool>),
+    #[cfg(windows)]
+    SetAutostart(std::io::Result<bool>),
+    #[cfg(windows)]
+    SetCloseToTray(Result<(), SettingsError>),
     SetDns(Result<(), SettingsError>),
     SetEngineLogLevel(Result<(), SettingsError>),
     #[cfg(windows)]
@@ -174,6 +180,49 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             let result = set_interface_scale(&publisher.store, percent);
             publisher.complete(WorkerEvent::SetInterfaceScale(result));
+        });
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn load_autostart(&self) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = rosetun_shell::autostart_enabled();
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::AutostartLoaded(result),
+            );
+        });
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn set_autostart(&self, enabled: bool) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = (|| {
+                if enabled {
+                    let exe = std::env::current_exe()?;
+                    rosetun_shell::enable_autostart(&exe, crate::HIDDEN_ARG)?;
+                } else {
+                    rosetun_shell::disable_autostart()?;
+                }
+                rosetun_shell::autostart_enabled()
+            })();
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::SetAutostart(result),
+            );
+        });
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn set_close_to_tray(&self, enabled: bool) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = rosetun_core::set_close_to_tray(&publisher.store, enabled);
+            publisher.complete(WorkerEvent::SetCloseToTray(result));
         });
     }
 

@@ -30,6 +30,8 @@ pub(crate) struct App {
     #[cfg(windows)]
     tray: Option<tray::Tray>,
     #[cfg(windows)]
+    hide_on_start: bool,
+    #[cfg(windows)]
     quitting: bool,
 }
 
@@ -53,6 +55,8 @@ impl App {
             #[cfg(windows)]
             tray: None,
             #[cfg(windows)]
+            hide_on_start: false,
+            #[cfg(windows)]
             quitting: false,
         }
     }
@@ -62,6 +66,7 @@ impl App {
         mut self,
         ctx: &egui::Context,
         activation: Option<rosetun_shell::Activation>,
+        start_hidden: bool,
     ) -> Self {
         let (sender, events) = mpsc::channel();
         self.shell_events = Some(events);
@@ -72,6 +77,7 @@ impl App {
                 None
             }
         };
+        self.hide_on_start = start_hidden && self.tray.is_some();
         if let Some(activation) = activation {
             let ctx = ctx.clone();
             std::thread::spawn(move || {
@@ -92,7 +98,9 @@ impl App {
 
     #[cfg(windows)]
     fn hides_on_close(&self) -> bool {
-        self.tray.is_some() && !self.quitting
+        self.tray.is_some()
+            && !self.quitting
+            && (!self.state.config_ready || self.state.config.interface.close_to_tray)
     }
 
     #[cfg(not(windows))]
@@ -105,6 +113,12 @@ impl App {
             Job::Connect => self.workers.connect(),
             Job::Disconnect => self.workers.disconnect(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
+            #[cfg(windows)]
+            Job::LoadAutostart => self.workers.load_autostart(),
+            #[cfg(windows)]
+            Job::SetAutostart(enabled) => self.workers.set_autostart(enabled),
+            #[cfg(windows)]
+            Job::SetCloseToTray(enabled) => self.workers.set_close_to_tray(enabled),
             Job::SetDns(dns) => self.workers.set_dns(dns),
             Job::SetEngineLogLevel(level) => self.workers.set_engine_log_level(level),
             #[cfg(windows)]
@@ -163,6 +177,9 @@ impl eframe::App for App {
         }
         #[cfg(windows)]
         {
+            if std::mem::take(&mut self.hide_on_start) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
             while let Some(event) = self
                 .shell_events
                 .as_ref()

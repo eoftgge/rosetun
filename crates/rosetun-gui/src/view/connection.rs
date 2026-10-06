@@ -140,36 +140,18 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             theme::card_frame().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.colored_label(theme::TEXT_DIM, strings::PROTECTION);
-                ui.horizontal(|ui| {
-                    let text_width =
-                        ui.available_width() - theme::TOGGLE_SIZE.x - ui.spacing().item_spacing.x;
-                    ui.vertical(|ui| {
-                        ui.set_max_width(text_width);
-                        ui.label(strings::KILL_SWITCH);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(strings::KILL_SWITCH_DETAIL)
-                                    .small()
-                                    .color(theme::TEXT_MUTED),
-                            )
-                            .wrap(),
-                        );
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let mut enabled = state.config.settings.kill_switch;
-                        if theme::toggle(
-                            ui,
-                            &mut enabled,
-                            state.config_ready
-                                && !state.operations.kill_switch
-                                && !state.operations.helper,
-                        )
-                        .changed()
-                        {
-                            actions.push(Action::SetKillSwitch(enabled));
-                        }
-                    });
-                });
+                let mut enabled = state.config.settings.kill_switch;
+                if theme::switch_row(
+                    ui,
+                    strings::KILL_SWITCH,
+                    strings::KILL_SWITCH_DETAIL,
+                    &mut enabled,
+                    state.config_ready && !state.operations.kill_switch && !state.operations.helper,
+                )
+                .changed()
+                {
+                    actions.push(Action::SetKillSwitch(enabled));
+                }
                 if visible_status.is_some_and(|status| {
                     status.state.is_active() || status.state.is_transitional()
                 }) {

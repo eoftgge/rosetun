@@ -13,6 +13,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     }
 
     interface(ui, state, actions);
+    #[cfg(windows)]
+    {
+        ui.add_space(16.0);
+        windows(ui, state, actions);
+    }
     ui.add_space(16.0);
     dns(ui, state, actions);
     ui.add_space(16.0);
@@ -46,6 +51,41 @@ fn interface(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 .small()
                 .color(theme::TEXT_DIM),
         );
+    });
+}
+
+#[cfg(windows)]
+fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    theme::card_frame().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        ui.heading(strings::WINDOWS);
+        ui.add_space(8.0);
+        let editable = state.can_edit_settings();
+        let mut autostart = state.settings_screen.autostart.unwrap_or(false);
+        if theme::switch_row(
+            ui,
+            strings::START_WITH_WINDOWS,
+            strings::START_WITH_WINDOWS_DETAIL,
+            &mut autostart,
+            editable && state.settings_screen.autostart.is_some(),
+        )
+        .changed()
+        {
+            actions.push(Action::SetAutostart(autostart));
+        }
+        ui.add_space(12.0);
+        let mut close_to_tray = state.config.interface.close_to_tray;
+        if theme::switch_row(
+            ui,
+            strings::KEEP_IN_TRAY,
+            strings::KEEP_IN_TRAY_DETAIL,
+            &mut close_to_tray,
+            editable,
+        )
+        .changed()
+        {
+            actions.push(Action::SetCloseToTray(close_to_tray));
+        }
     });
 }
 

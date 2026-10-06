@@ -11,6 +11,17 @@ pub(crate) const CLOSE_WINDOW: &str = "Close";
 pub(crate) const INTERFACE: &str = "Interface";
 pub(crate) const SCALE: &str = "Scale";
 pub(crate) const ZOOM_HINT: &str = "Ctrl+Plus and Ctrl+Minus zoom until the app closes.";
+#[cfg(windows)]
+pub(crate) const WINDOWS: &str = "Windows";
+#[cfg(windows)]
+pub(crate) const START_WITH_WINDOWS: &str = "Start with Windows";
+#[cfg(windows)]
+pub(crate) const START_WITH_WINDOWS_DETAIL: &str = "Opens in the tray when you sign in.";
+#[cfg(windows)]
+pub(crate) const KEEP_IN_TRAY: &str = "Keep running in the tray";
+#[cfg(windows)]
+pub(crate) const KEEP_IN_TRAY_DETAIL: &str =
+    "The close button hides the window. Quit from the tray menu.";
 pub(crate) const DNS_THROUGH_TUNNEL: &str = "DNS through the tunnel";
 pub(crate) const DNS_EXPLANATION: &str = "Name lookups go to this DNS-over-HTTPS resolver through the server. It must be reachable from the server's exit.";
 pub(crate) const RESOLVER_IP: &str = "Resolver IP";
