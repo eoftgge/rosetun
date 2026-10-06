@@ -20,7 +20,17 @@ enum TabIcon {
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let rect = ui.max_rect();
     let time = ui.input(|input| input.time);
-    let progress = (time / 0.9).min(1.0) as f32;
+    // Startup work can delay the first frame past the intro's duration.
+    let started_at = ui.ctx().data_mut(|data| {
+        let id = Id::new("header_intro_start");
+        if let Some(start) = data.get_temp::<f64>(id) {
+            start
+        } else {
+            data.insert_temp(id, time);
+            time
+        }
+    });
+    let progress = intro_progress(time, started_at);
     let intro = 1.0 - (1.0 - progress).powi(3);
     let status = state.visible_status();
     let connected = status.is_some_and(|status| matches!(status.state, ConnectionState::Connected));
@@ -115,6 +125,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             theme::ROSE,
         );
     }
+}
+
+fn intro_progress(time: f64, started_at: f64) -> f32 {
+    ((time - started_at) / 0.9).clamp(0.0, 1.0) as f32
 }
 
 fn paint_brand(ui: &mut egui::Ui, bloom: f32) {
@@ -254,5 +268,18 @@ fn paint_tab_icon(painter: &egui::Painter, rect: Rect, icon: TabIcon, color: Col
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::intro_progress;
+
+    #[test]
+    fn intro_starts_with_first_header_frame_even_after_startup_delay() {
+        assert_eq!(intro_progress(12.0, 12.0), 0.0);
+        assert!((intro_progress(12.45, 12.0) - 0.5).abs() < 0.001);
+        assert_eq!(intro_progress(12.9, 12.0), 1.0);
+        assert_eq!(intro_progress(13.5, 12.0), 1.0);
     }
 }
