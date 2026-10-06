@@ -78,6 +78,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(strings::TITLE)
+        .with_icon(std::sync::Arc::new(eframe::egui::IconData {
+            rgba: brand::emblem_rgba(128, theme::ROSE, Some(theme::ROSE_LIGHT)),
+            width: 128,
+            height: 128,
+        }))
         .with_decorations(!view::header::CUSTOM_FRAME)
         .with_inner_size([1200.0, 780.0])
         .with_min_inner_size([960.0, 640.0]);

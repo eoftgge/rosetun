@@ -7,7 +7,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEv
 use crate::actions::PrimaryAction;
 use crate::app::ShellEvent;
 use crate::state::{State, primary_label};
-use crate::{strings, theme, view};
+use crate::{brand, strings, theme, view};
 
 const OPEN_ID: &str = "rosetun.tray.open";
 const PRIMARY_ID: &str = "rosetun.tray.primary";
@@ -60,24 +60,6 @@ fn fit_tooltip(text: &str) -> String {
     fitted
 }
 
-fn status_icon_rgba(color: egui::Color32) -> Vec<u8> {
-    let mut pixels = Vec::with_capacity(32 * 32 * 4);
-    for y in 0..32 {
-        for x in 0..32 {
-            let dx = x as f32 + 0.5 - 16.0;
-            let dy = y as f32 + 0.5 - 16.0;
-            let distance = (dx * dx + dy * dy).sqrt();
-            let alpha = ((13.5 - distance).clamp(0.0, 1.0) * 255.0) as u8;
-            if alpha == 0 {
-                pixels.extend_from_slice(&[0, 0, 0, 0]);
-            } else {
-                pixels.extend_from_slice(&[color.r(), color.g(), color.b(), alpha]);
-            }
-        }
-    }
-    pixels
-}
-
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TrayError {
     #[error(transparent)]
@@ -106,7 +88,8 @@ impl Tray {
             &PredefinedMenuItem::separator(),
             &quit,
         ])?;
-        let initial_icon = Icon::from_rgba(status_icon_rgba(theme::DISCONNECTED), 32, 32)?;
+        let initial_icon =
+            Icon::from_rgba(brand::emblem_rgba(32, theme::DISCONNECTED, None), 32, 32)?;
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
@@ -157,7 +140,7 @@ impl Tray {
             .as_ref()
             .is_none_or(|shown| shown.color != view.color)
         {
-            match Icon::from_rgba(status_icon_rgba(view.color), 32, 32) {
+            match Icon::from_rgba(brand::emblem_rgba(32, view.color, None), 32, 32) {
                 Ok(icon) => {
                     if let Err(error) = self.icon.set_icon(Some(icon)) {
                         tracing::warn!(%error, "Could not update tray icon");
@@ -194,10 +177,9 @@ impl Tray {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_tooltip, status_icon_rgba, tray_view};
+    use super::{fit_tooltip, tray_view};
     use crate::state::State;
     use crate::{strings, theme};
-    use eframe::egui::Color32;
     use rosetun_config::{ConnectionState, Status};
     use rosetun_core::Store;
     use std::fs;
@@ -216,16 +198,6 @@ mod tests {
         let fitted = fit_tooltip(&"😀".repeat(70));
         assert!(fitted.encode_utf16().count() <= 127);
         assert!(fitted.ends_with('…'));
-    }
-
-    #[test]
-    fn icon_has_transparent_background_and_opaque_center() {
-        let color = Color32::from_rgb(12, 34, 56);
-        let rgba = status_icon_rgba(color);
-        assert_eq!(rgba.len(), 32 * 32 * 4);
-        assert_eq!(&rgba[0..4], &[0, 0, 0, 0]);
-        let center = (16 * 32 + 16) * 4;
-        assert_eq!(&rgba[center..center + 4], &[12, 34, 56, 255]);
     }
 
     #[test]

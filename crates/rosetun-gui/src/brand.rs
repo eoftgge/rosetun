@@ -3,6 +3,17 @@ use eframe::egui::{self, Pos2, Rect, Shape, Stroke};
 use crate::theme;
 
 const PETAL: [(f32, f32); 4] = [(0.0, -20.0), (12.0, 0.0), (0.0, 22.0), (-12.0, 0.0)];
+const SPIRAL: [(f32, f32); 9] = [
+    (24.0, 31.0),
+    (18.0, 27.0),
+    (18.0, 21.0),
+    (24.0, 17.0),
+    (30.0, 21.0),
+    (30.0, 25.0),
+    (26.0, 28.0),
+    (22.0, 25.0),
+    (23.0, 22.0),
+];
 
 pub(crate) struct Petal {
     x: f32,
@@ -172,21 +183,87 @@ pub(crate) fn paint_emblem(painter: &egui::Painter, rect: Rect, bloom: f32) {
             Stroke::new(1.4 * scale, theme::ROSE.gamma_multiply(0.6 + 0.3 * bloom)),
         ));
     }
-    let spiral = [
-        (24.0, 31.0),
-        (18.0, 27.0),
-        (18.0, 21.0),
-        (24.0, 17.0),
-        (30.0, 21.0),
-        (30.0, 25.0),
-        (26.0, 28.0),
-        (22.0, 25.0),
-        (23.0, 22.0),
-    ];
     painter.add(Shape::line(
-        spiral.map(|(x, y)| place(egui::pos2(x, y))).to_vec(),
+        SPIRAL.map(|(x, y)| place(egui::pos2(x, y))).to_vec(),
         Stroke::new(1.6 * scale, theme::ROSE_LIGHT),
     ));
+}
+
+fn inside_petal(point: Pos2, petal: &[Pos2; 4]) -> bool {
+    let mut positive = false;
+    let mut negative = false;
+    for edge in 0..4 {
+        let a = petal[edge];
+        let b = petal[(edge + 1) % 4];
+        let cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+        positive |= cross > 0.0;
+        negative |= cross < 0.0;
+        if positive && negative {
+            return false;
+        }
+    }
+    true
+}
+
+fn on_spiral(point: Pos2) -> bool {
+    SPIRAL.windows(2).any(|segment| {
+        let (ax, ay) = segment[0];
+        let (bx, by) = segment[1];
+        let dx = bx - ax;
+        let dy = by - ay;
+        let position =
+            (((point.x - ax) * dx + (point.y - ay) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+        let distance_x = point.x - ax - position * dx;
+        let distance_y = point.y - ay - position * dy;
+        distance_x * distance_x + distance_y * distance_y <= 1.2 * 1.2
+    })
+}
+
+/// Straight-alpha RGBA of the emblem, `size`×`size`: the five petals filled with
+/// `petals` and, when given, the spiral drawn over them in `spiral`.
+pub(crate) fn emblem_rgba(
+    size: u32,
+    petals: egui::Color32,
+    spiral: Option<egui::Color32>,
+) -> Vec<u8> {
+    let shapes: [[Pos2; 4]; 5] = std::array::from_fn(emblem_petal);
+    let scale = 48.0 / size as f32;
+    let mut rgba = Vec::with_capacity(size as usize * size as usize * 4);
+    for y in 0..size {
+        for x in 0..size {
+            let mut covered = 0_u32;
+            let (mut red, mut green, mut blue) = (0_u32, 0_u32, 0_u32);
+            for j in 0..4 {
+                for i in 0..4 {
+                    let point = egui::pos2(
+                        (x as f32 + (i as f32 + 0.5) / 4.0) * scale,
+                        (y as f32 + (j as f32 + 0.5) / 4.0) * scale,
+                    );
+                    let color = if spiral.is_some() && on_spiral(point) {
+                        spiral
+                    } else if shapes.iter().any(|petal| inside_petal(point, petal)) {
+                        Some(petals)
+                    } else {
+                        None
+                    };
+                    if let Some(color) = color {
+                        covered += 1;
+                        red += u32::from(color.r());
+                        green += u32::from(color.g());
+                        blue += u32::from(color.b());
+                    }
+                }
+            }
+            let divisor = covered.max(1);
+            rgba.extend_from_slice(&[
+                (red / divisor) as u8,
+                (green / divisor) as u8,
+                (blue / divisor) as u8,
+                (covered * 255 / 16) as u8,
+            ]);
+        }
+    }
+    rgba
 }
 
 /// 0 when idle, 1 when connected; pulses between 0 and 0.35 while connecting.
@@ -245,6 +322,19 @@ mod tests {
         let point = emblem_petal(1)[0];
         near(point.x, 43.97);
         near(point.y, 17.51);
+    }
+
+    #[test]
+    fn raster_emblem_has_opaque_petals_and_optional_spiral() {
+        let petals = egui::Color32::from_rgb(12, 34, 56);
+        let spiral = egui::Color32::from_rgb(200, 210, 220);
+        let rgba = emblem_rgba(48, petals, Some(spiral));
+        let pixel = |x: usize, y: usize| &rgba[(y * 48 + x) * 4..(y * 48 + x + 1) * 4];
+        assert_eq!(rgba.len(), 48 * 48 * 4);
+        assert_eq!(pixel(24, 10), &[12, 34, 56, 255]);
+        assert_eq!(pixel(0, 0), &[0, 0, 0, 0]);
+        assert_eq!(pixel(18, 24), &[200, 210, 220, 255]);
+        assert_eq!(emblem_rgba(32, petals, None).len(), 32 * 32 * 4);
     }
 
     #[test]
