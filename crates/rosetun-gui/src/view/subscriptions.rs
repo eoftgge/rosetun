@@ -382,6 +382,12 @@ fn subscription_card(
                             },
                         )
                         .inner;
+                    if state.reveal.as_ref().is_some_and(|(id, selected)| {
+                        id == &subscription.id && selected == &node.id
+                    }) {
+                        response.scroll_to_me(Some(egui::Align::Center));
+                        actions.push(Action::RevealDone);
+                    }
                     if response.clicked() {
                         actions.push(Action::SelectNode(subscription.id.clone(), node.id.clone()));
                     }

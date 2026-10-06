@@ -283,6 +283,7 @@ pub(crate) struct State {
     pub(crate) settings_screen: SettingsScreen,
     next_process_request: u64,
     pub(crate) expanded: BTreeSet<SubscriptionId>,
+    pub(crate) reveal: Option<(SubscriptionId, NodeId)>,
     pub(crate) outcomes: BTreeMap<SubscriptionId, UpdateOutcome>,
     pub(crate) pings: HashMap<(SubscriptionId, NodeId), PingResult>,
     pub(crate) operations: Operations,
@@ -313,6 +314,7 @@ impl Default for State {
             settings_screen: SettingsScreen::default(),
             next_process_request: 0,
             expanded: BTreeSet::new(),
+            reveal: None,
             outcomes: BTreeMap::new(),
             pings: HashMap::new(),
             operations: Operations::default(),
@@ -370,6 +372,8 @@ pub(crate) enum Action {
     KeepBlocked,
     ConfirmProtectionOff,
     SelectNode(SubscriptionId, NodeId),
+    RevealServer,
+    RevealDone,
     SelectRuleSet(Option<RuleSetId>),
     SetKillSwitch(bool),
     ToggleExpanded(SubscriptionId),
@@ -622,6 +626,15 @@ impl State {
                 }
                 self.expanded
                     .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));
+                if self.reveal.as_ref().is_some_and(|(id, node)| {
+                    !self
+                        .config
+                        .subscriptions
+                        .iter()
+                        .any(|sub| &sub.id == id && sub.node(node).is_some())
+                }) {
+                    self.reveal = None;
+                }
                 self.outcomes
                     .retain(|id, _| self.config.subscriptions.iter().any(|sub| &sub.id == id));
                 self.auto_update_attempts
@@ -1342,6 +1355,17 @@ impl State {
                     return Some(Job::SelectNode(subscription, node));
                 }
             }
+            Action::RevealServer => {
+                self.reveal = None;
+                if let Some((subscription, node)) = self.config.active_node() {
+                    let id = subscription.id.clone();
+                    self.expanded.insert(id.clone());
+                    self.reveal = Some((id, node.id.clone()));
+                } else if let Some(subscription) = self.config.subscriptions.first() {
+                    self.expanded.insert(subscription.id.clone());
+                }
+            }
+            Action::RevealDone => self.reveal = None,
             Action::SelectRuleSet(id) => {
                 if self.config_ready
                     && !self.operations.rules
@@ -1616,6 +1640,38 @@ mod tests {
             helper_available: true,
             ..State::default()
         }
+    }
+
+    #[test]
+    fn reveal_server_opens_the_selected_subscription_and_clears_after_scroll() {
+        let mut state = state_for_auto_connect();
+        let id = SubscriptionId::new("1");
+        let node = NodeId::new("node");
+        assert!(state.act(Action::RevealServer).is_none());
+        assert!(state.expanded.contains(&id));
+        assert_eq!(state.reveal, Some((id, node)));
+        assert!(state.act(Action::RevealDone).is_none());
+        assert_eq!(state.reveal, None);
+    }
+
+    #[test]
+    fn reveal_server_clears_a_node_removed_by_a_config_update() {
+        let mut state = state_for_auto_connect();
+        state.act(Action::RevealServer);
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: AppConfig::default(),
+        });
+        assert_eq!(state.reveal, None);
+    }
+
+    #[test]
+    fn reveal_server_without_selection_opens_the_first_subscription() {
+        let mut state = state_with_subscriptions();
+        assert!(state.act(Action::RevealServer).is_none());
+        assert_eq!(state.expanded.len(), 1);
+        assert!(state.expanded.contains(&SubscriptionId::new("1")));
+        assert_eq!(state.reveal, None);
     }
 
     #[test]

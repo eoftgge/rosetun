@@ -176,7 +176,9 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             actions.push(Action::RequestProtectionOff);
                         }
                     }
-                    let _ = server_button(ui, state);
+                    if server_button(ui, state) {
+                        actions.push(Action::RevealServer);
+                    }
                     if selection_changed.is_some() {
                         let message = state.config.active_node().map_or_else(
                             || t().selection_cleared.to_owned(),
@@ -496,20 +498,20 @@ fn control_cards(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = theme::SECTION_GAP;
         ui.columns(2, |columns| {
-            let left_height = columns[0]
-                .scope_builder(egui::UiBuilder::new().sizing_pass(), |ui| {
-                    protection_card(ui, state, &mut Vec::new(), 0.0);
-                })
-                .response
-                .rect
-                .height();
-            let right_height = columns[1]
-                .scope_builder(egui::UiBuilder::new().sizing_pass(), |ui| {
-                    rules_card(ui, state, &mut Vec::new(), 0.0);
-                })
-                .response
-                .rect
-                .height();
+            let mut left = columns[0].new_child(
+                egui::UiBuilder::new()
+                    .max_rect(columns[0].available_rect_before_wrap())
+                    .sizing_pass(),
+            );
+            protection_card(&mut left, state, &mut Vec::new(), 0.0);
+            let left_height = left.min_rect().height();
+            let mut right = columns[1].new_child(
+                egui::UiBuilder::new()
+                    .max_rect(columns[1].available_rect_before_wrap())
+                    .sizing_pass(),
+            );
+            rules_card(&mut right, state, &mut Vec::new(), 0.0);
+            let right_height = right.min_rect().height();
             let height = left_height.max(right_height);
             protection_card(&mut columns[0], state, actions, height);
             rules_card(&mut columns[1], state, actions, height);
