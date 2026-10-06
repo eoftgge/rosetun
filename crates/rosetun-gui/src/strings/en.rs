@@ -124,6 +124,10 @@ pub(crate) static EN: Strings = Strings {
     keep_in_tray: "Keep running in the tray",
     #[cfg(windows)]
     keep_in_tray_detail: "The close button hides the window. Quit from the tray menu.",
+    connect_on_start: "Connect at startup",
+    connect_on_start_detail: "Connects to the selected server as soon as Rosetun starts, including at Windows sign-in.",
+    auto_reconnect: "Reconnect automatically",
+    auto_reconnect_detail: "If the engine stops or the computer wakes from sleep, the service brings the tunnel back. With protection on, the internet stays blocked until then. Applies on next connect.",
     dns_through_tunnel: "DNS through the tunnel",
     dns_explanation: "Name lookups go to this DNS-over-HTTPS resolver through the server. It must be reachable from the server's exit.",
     resolver_ip: "Resolver IP",

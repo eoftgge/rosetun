@@ -199,6 +199,10 @@ pub(crate) struct Strings {
     pub(crate) keep_in_tray: &'static str,
     #[cfg(windows)]
     pub(crate) keep_in_tray_detail: &'static str,
+    pub(crate) connect_on_start: &'static str,
+    pub(crate) connect_on_start_detail: &'static str,
+    pub(crate) auto_reconnect: &'static str,
+    pub(crate) auto_reconnect_detail: &'static str,
     pub(crate) dns_through_tunnel: &'static str,
     pub(crate) dns_explanation: &'static str,
     pub(crate) resolver_ip: &'static str,

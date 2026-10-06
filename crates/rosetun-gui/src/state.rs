@@ -231,10 +231,11 @@ impl SettingsScreen {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct State {
     pub(crate) config: AppConfig,
     pub(crate) config_ready: bool,
+    auto_connect_pending: bool,
+    status_received: bool,
     pub(crate) config_generation: u64,
     pub(crate) config_error: Option<ConfigWorkerError>,
     pub(crate) status: Status,
@@ -254,6 +255,34 @@ pub(crate) struct State {
     pub(crate) protection_confirmation: bool,
 }
 
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            config: AppConfig::default(),
+            config_ready: false,
+            auto_connect_pending: true,
+            status_received: false,
+            config_generation: 0,
+            config_error: None,
+            status: Status::default(),
+            helper_available: false,
+            helper_version: None,
+            helper_error: None,
+            operation_error: None,
+            screen: Screen::default(),
+            rule_screen: RuleScreen::default(),
+            settings_screen: SettingsScreen::default(),
+            next_process_request: 0,
+            expanded: BTreeSet::new(),
+            outcomes: BTreeMap::new(),
+            operations: Operations::default(),
+            add: None,
+            remove: None,
+            protection_confirmation: false,
+        }
+    }
+}
+
 pub(crate) enum Action {
     ShowConnection,
     OpenSettings,
@@ -263,6 +292,8 @@ pub(crate) enum Action {
     SetAutostart(bool),
     #[cfg(windows)]
     SetCloseToTray(bool),
+    SetConnectOnStart(bool),
+    SetAutoReconnect(bool),
     SaveDns,
     ResetDns,
     SetVerboseLog(bool),
@@ -325,6 +356,8 @@ pub(crate) enum Job {
     SetAutostart(bool),
     #[cfg(windows)]
     SetCloseToTray(bool),
+    SetConnectOnStart(bool),
+    SetAutoReconnect(bool),
     SetDns(DnsSettings),
     SetVerboseLog(bool),
     #[cfg(windows)]
@@ -380,6 +413,28 @@ impl State {
             self.config.active_node().is_some(),
             self.operations.helper,
         )
+    }
+
+    /// Connects once after start when the user asked for it.
+    pub(crate) fn take_auto_connect(&mut self) -> Option<Job> {
+        if !self.auto_connect_pending
+            || !self.config_ready
+            || !self.helper_available
+            || !self.status_received
+        {
+            return None;
+        }
+        self.auto_connect_pending = false;
+        if self.config.interface.connect_on_start
+            && matches!(self.status.state, ConnectionState::Disconnected)
+            && !self.operations.helper
+            && self.primary_action() == PrimaryAction::Connect
+        {
+            self.operations.helper = true;
+            self.operation_error = None;
+            return Some(Job::Connect);
+        }
+        None
     }
 
     pub(crate) fn subscription_busy(&self, id: &SubscriptionId) -> bool {
@@ -476,6 +531,7 @@ impl State {
                 self.protection_confirmation = false;
             }
             WorkerEvent::Status(status) => {
+                self.status_received = true;
                 if !matches!(status.state, ConnectionState::FailedProtected { .. })
                     && !self.operations.helper
                 {
@@ -631,6 +687,8 @@ impl State {
             }
             #[cfg(windows)]
             WorkerEvent::SetCloseToTray(result) => self.finish_settings(result),
+            WorkerEvent::SetConnectOnStart(result) => self.finish_settings(result),
+            WorkerEvent::SetAutoReconnect(result) => self.finish_settings(result),
             WorkerEvent::SetDns(result) => {
                 if result.is_ok() {
                     self.settings_screen.dirty = false;
@@ -804,6 +862,16 @@ impl State {
             Action::SetCloseToTray(enabled) => {
                 if self.can_edit_settings() && self.config.interface.close_to_tray != enabled {
                     return self.start_settings(Job::SetCloseToTray(enabled));
+                }
+            }
+            Action::SetConnectOnStart(enabled) => {
+                if self.can_edit_settings() && self.config.interface.connect_on_start != enabled {
+                    return self.start_settings(Job::SetConnectOnStart(enabled));
+                }
+            }
+            Action::SetAutoReconnect(enabled) => {
+                if self.can_edit_settings() && self.config.settings.auto_reconnect != enabled {
+                    return self.start_settings(Job::SetAutoReconnect(enabled));
                 }
             }
             Action::SaveDns => {
@@ -1253,7 +1321,9 @@ pub(crate) fn primary_label(state: &State) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rosetun_config::{DomainMatch, Rule, RuleMatcher};
+    use rosetun_config::{
+        DomainMatch, Node, NodeId, Outbound, Rule, RuleMatcher, Selection, VlessParams,
+    };
     use rosetun_core::{FetchError, ParseError, RemoveSubscriptionError, RuleSetError, StoreError};
     use rosetun_ipc::ConnectRequestError;
     use rosetun_processes::RunningProcess;
@@ -1323,6 +1393,35 @@ mod tests {
                 active_rule_set: Some(RuleSetId::new("2")),
                 ..AppConfig::default()
             },
+            ..State::default()
+        }
+    }
+
+    fn state_for_auto_connect() -> State {
+        let mut provider = subscription("1");
+        provider.nodes.push(Node {
+            id: NodeId::new("node"),
+            name: "Test".into(),
+            server: "127.0.0.1".into(),
+            port: 443,
+            outbound: Outbound::Vless(VlessParams {
+                uuid: "00000000-0000-0000-0000-000000000000".into(),
+                flow: None,
+            }),
+            stream: Default::default(),
+            raw: None,
+        });
+        let mut config = AppConfig::default();
+        config.subscriptions.push(provider);
+        config.active = Some(Selection {
+            subscription: SubscriptionId::new("1"),
+            node: NodeId::new("node"),
+        });
+        config.interface.connect_on_start = true;
+        State {
+            config,
+            config_ready: true,
+            helper_available: true,
             ..State::default()
         }
     }
@@ -1408,6 +1507,49 @@ mod tests {
         state.reduce(WorkerEvent::MoveSubscription(Ok(())));
         assert!(!state.operations.moving_subscription);
         assert!(state.operation_error.is_none());
+    }
+
+    #[test]
+    fn auto_connect_waits_for_config_helper_and_first_status_then_runs_once() {
+        let mut state = state_for_auto_connect();
+        assert!(state.take_auto_connect().is_none());
+        assert!(state.auto_connect_pending);
+        state.config_ready = false;
+        state.reduce(WorkerEvent::Status(Status::default()));
+        assert!(state.take_auto_connect().is_none());
+        state.config_ready = true;
+        state.helper_available = false;
+        assert!(state.take_auto_connect().is_none());
+        state.helper_available = true;
+        state.operation_error = Some("previous error".into());
+        assert!(matches!(state.take_auto_connect(), Some(Job::Connect)));
+        assert!(!state.auto_connect_pending);
+        assert!(state.operations.helper);
+        assert!(state.operation_error.is_none());
+        assert!(state.take_auto_connect().is_none());
+    }
+
+    #[test]
+    fn auto_connect_does_not_run_if_already_connected_or_disabled_or_no_server() {
+        let mut connected = state_for_auto_connect();
+        connected.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            ..Status::default()
+        }));
+        assert!(connected.take_auto_connect().is_none());
+        assert!(!connected.auto_connect_pending);
+
+        let mut disabled = state_for_auto_connect();
+        disabled.config.interface.connect_on_start = false;
+        disabled.reduce(WorkerEvent::Status(Status::default()));
+        assert!(disabled.take_auto_connect().is_none());
+        assert!(!disabled.auto_connect_pending);
+
+        let mut no_server = state_for_auto_connect();
+        no_server.config.active = None;
+        no_server.reduce(WorkerEvent::Status(Status::default()));
+        assert!(no_server.take_auto_connect().is_none());
+        assert!(!no_server.auto_connect_pending);
     }
 
     #[test]
@@ -2323,6 +2465,40 @@ mod tests {
                 .act(Action::SetLanguage(LanguageSetting::Russian))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn connection_settings_jobs_respect_busy_state_and_saved_values() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        assert!(state.act(Action::SetConnectOnStart(false)).is_none());
+        assert!(state.act(Action::SetAutoReconnect(true)).is_none());
+        assert!(matches!(
+            state.act(Action::SetConnectOnStart(true)),
+            Some(Job::SetConnectOnStart(true))
+        ));
+        assert!(state.act(Action::SetAutoReconnect(false)).is_none());
+        state.reduce(WorkerEvent::SetConnectOnStart(Ok(())));
+        assert!(matches!(
+            state.act(Action::SetAutoReconnect(false)),
+            Some(Job::SetAutoReconnect(false))
+        ));
+        state.reduce(WorkerEvent::SetAutoReconnect(Err(
+            rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
+        )));
+        assert!(!state.operations.settings);
+        assert!(state.operation_error.is_some());
+        let mut config = AppConfig::default();
+        config.interface.connect_on_start = true;
+        config.settings.auto_reconnect = false;
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config,
+        });
+        assert!(state.act(Action::SetConnectOnStart(true)).is_none());
+        assert!(state.act(Action::SetAutoReconnect(false)).is_none());
     }
 
     #[cfg(windows)]

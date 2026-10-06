@@ -46,8 +46,8 @@ pub(crate) fn primary_action(
                 PrimaryAction::Disabled
             }
         }
-        ConnectionState::Connecting | ConnectionState::Reconnecting => PrimaryAction::Disabled,
-        ConnectionState::Connected => PrimaryAction::Disconnect,
+        ConnectionState::Connecting => PrimaryAction::Disabled,
+        ConnectionState::Connected | ConnectionState::Reconnecting => PrimaryAction::Disconnect,
         ConnectionState::Failed { .. } => PrimaryAction::Retry,
         ConnectionState::FailedProtected { .. } => PrimaryAction::Reconnect,
     }
@@ -95,7 +95,7 @@ mod tests {
         );
         assert_eq!(
             primary_action(true, &status(ConnectionState::Reconnecting), true, false),
-            PrimaryAction::Disabled
+            PrimaryAction::Disconnect
         );
         assert_eq!(
             primary_action(true, &status(ConnectionState::Connected), true, false),

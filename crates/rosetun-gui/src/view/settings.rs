@@ -21,6 +21,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         windows(ui, state, actions);
     }
     ui.add_space(16.0);
+    connection(ui, state, actions);
+    ui.add_space(16.0);
     dns(ui, state, actions);
     ui.add_space(16.0);
     engine_log(ui, state, actions);
@@ -114,6 +116,40 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         .changed()
         {
             actions.push(Action::SetCloseToTray(close_to_tray));
+        }
+    });
+}
+
+fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    widgets::card_frame().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        ui.heading(t().connection);
+        ui.add_space(8.0);
+        let editable = state.can_edit_settings();
+        let mut connect_on_start = state.config.interface.connect_on_start;
+        if widgets::toggle_row(
+            ui,
+            t().connect_on_start,
+            t().connect_on_start_detail,
+            &mut connect_on_start,
+            editable,
+        )
+        .changed()
+        {
+            actions.push(Action::SetConnectOnStart(connect_on_start));
+        }
+        ui.add_space(12.0);
+        let mut auto_reconnect = state.config.settings.auto_reconnect;
+        if widgets::toggle_row(
+            ui,
+            t().auto_reconnect,
+            t().auto_reconnect_detail,
+            &mut auto_reconnect,
+            editable,
+        )
+        .changed()
+        {
+            actions.push(Action::SetAutoReconnect(auto_reconnect));
         }
     });
 }

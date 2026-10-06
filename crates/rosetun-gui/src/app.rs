@@ -203,6 +203,8 @@ impl App {
             Job::SetAutostart(enabled) => self.workers.set_autostart(enabled),
             #[cfg(windows)]
             Job::SetCloseToTray(enabled) => self.workers.set_close_to_tray(enabled),
+            Job::SetConnectOnStart(enabled) => self.workers.set_connect_on_start(enabled),
+            Job::SetAutoReconnect(enabled) => self.workers.set_auto_reconnect(enabled),
             Job::SetDns(dns) => self.workers.set_dns(dns),
             Job::SetVerboseLog(on) => self.workers.set_verbose_log(on),
             #[cfg(windows)]
@@ -276,6 +278,9 @@ impl eframe::App for App {
         }
         while let Ok(event) = self.events.try_recv() {
             self.state.reduce(event);
+        }
+        if let Some(job) = self.state.take_auto_connect() {
+            self.dispatch(job);
         }
         let language =
             strings::resolve_language(self.state.config.interface.language, self.system_russian);
