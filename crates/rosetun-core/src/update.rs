@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rosetun_config::{AppConfig, SubscriptionId};
-use rosetun_subscription::{Parsed, Skipped};
+use rosetun_subscription::{Parsed, SkipReason, Skipped};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateReport {
@@ -9,14 +9,14 @@ pub struct UpdateReport {
     pub removed: usize,
     pub retained: usize,
     pub selection_cleared: bool,
-    pub skipped: BTreeMap<String, usize>,
+    pub skipped: BTreeMap<SkipReason, usize>,
     pub notices: Vec<String>,
 }
 
-pub fn group_skipped(skipped: &[Skipped]) -> BTreeMap<String, usize> {
+pub fn group_skipped(skipped: &[Skipped]) -> BTreeMap<SkipReason, usize> {
     let mut grouped = BTreeMap::new();
     for entry in skipped {
-        *grouped.entry(entry.reason.to_string()).or_default() += 1;
+        *grouped.entry(entry.reason.clone()).or_default() += 1;
     }
     grouped
 }
@@ -476,11 +476,8 @@ mod tests {
         assert_eq!(subscription.announce.as_deref(), Some("New announcement"));
         assert_eq!(subscription.notices, ["New notice"]);
         assert_eq!(report.notices, ["New notice"]);
-        assert_eq!(
-            report.skipped.get("record contains a provider notice"),
-            Some(&2)
-        );
-        assert_eq!(report.skipped.get("flow is not supported"), Some(&1));
+        assert_eq!(report.skipped.get(&SkipReason::ServiceRecord), Some(&2));
+        assert_eq!(report.skipped.get(&SkipReason::UnsupportedFlow), Some(&1));
     }
 
     #[test]

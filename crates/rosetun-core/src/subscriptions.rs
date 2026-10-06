@@ -2,7 +2,7 @@ use rosetun_config::{Subscription, SubscriptionId};
 use rosetun_subscription::Parsed;
 
 use crate::update::apply_update;
-use crate::{FetchError, Store, StoreError, Timeouts, UpdateReport, fetch};
+use crate::{FetchError, Store, StoreError, SubscriptionUrlError, Timeouts, UpdateReport, fetch};
 
 #[derive(Debug, Clone)]
 pub struct AddOptions {
@@ -46,7 +46,7 @@ impl PreparedSubscription {
 #[derive(Debug, thiserror::Error)]
 pub enum AddFromUrlError {
     #[error("{0}")]
-    Url(String),
+    Url(SubscriptionUrlError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error("already added as {}", crate::terminal_text(.0.as_str()))]

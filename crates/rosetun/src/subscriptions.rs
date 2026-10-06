@@ -3,8 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{Subscription, SubscriptionId};
 use rosetun_core::{
-    Timeouts, expiry_text, node_address, node_protocol, node_tls, node_transport, provider_text,
-    terminal_text, traffic_text, updated_text,
+    SkipReason, Timeouts, expiry_text, node_address, node_protocol, node_tls, node_transport,
+    provider_text, terminal_text, traffic_text, updated_text,
 };
 
 use crate::subcommands::SubCommand;
@@ -233,9 +233,13 @@ fn print_info(subscription: &Subscription, now: u64) {
     }
 }
 
-fn print_details(skipped: &BTreeMap<String, usize>, notices: &[String], subscription_url: &str) {
+fn print_details(
+    skipped: &BTreeMap<SkipReason, usize>,
+    notices: &[String],
+    subscription_url: &str,
+) {
     for (reason, count) in skipped {
-        println!("  skipped {count}: {}", terminal_text(reason));
+        println!("  skipped {count}: {}", terminal_text(&reason.to_string()));
     }
     for notice in notices {
         println!("  notice: {}", provider_text(notice, subscription_url));

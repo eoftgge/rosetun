@@ -76,7 +76,10 @@ pub fn fetch_error_message(error: &FetchError, subscription_url: &str) -> String
                 output.push_str(&provider_text(notice, subscription_url));
             }
             for (reason, count) in crate::group_skipped(skipped) {
-                output.push_str(&format!("\n  skipped {count}: {}", terminal_text(&reason)));
+                output.push_str(&format!(
+                    "\n  skipped {count}: {}",
+                    terminal_text(&reason.to_string())
+                ));
             }
             output
         }

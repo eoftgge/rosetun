@@ -1,19 +1,38 @@
 use url::Url;
 
-pub fn normalize(input: &str) -> Result<String, String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SubscriptionUrlError {
+    #[error("invalid subscription URL")]
+    Invalid,
+    #[error("subscription URL requires a host")]
+    MissingHost,
+    #[error("Happ link is encrypted; ask your provider for a regular subscription link")]
+    EncryptedHappLink,
+    #[error("subscription URL must use http or https")]
+    UnsupportedScheme,
+    #[error("invalid subscription import link")]
+    InvalidImportLink,
+    #[error("subscription import link requires a URL")]
+    ImportLinkWithoutUrl,
+    #[error("subscription import link contains multiple URLs")]
+    ImportLinkWithMultipleUrls,
+    #[error("too many nested subscription import links")]
+    TooManyNestedLinks,
+}
+
+pub fn normalize(input: &str) -> Result<String, SubscriptionUrlError> {
     let mut current = input.trim().to_owned();
 
     for _ in 0..8 {
         let Some((scheme, remainder)) = current.split_once("://") else {
-            return Err("invalid subscription URL".to_owned());
+            return Err(SubscriptionUrlError::Invalid);
         };
 
         match scheme.to_ascii_lowercase().as_str() {
             "http" | "https" => {
-                let parsed =
-                    Url::parse(&current).map_err(|_| "invalid subscription URL".to_owned())?;
+                let parsed = Url::parse(&current).map_err(|_| SubscriptionUrlError::Invalid)?;
                 if parsed.host_str().is_none() {
-                    return Err("subscription URL requires a host".to_owned());
+                    return Err(SubscriptionUrlError::MissingHost);
                 }
                 return Ok(parsed.to_string());
             }
@@ -22,7 +41,7 @@ pub fn normalize(input: &str) -> Result<String, String> {
                     .get(..5)
                     .is_some_and(|prefix| prefix.eq_ignore_ascii_case("crypt"))
                 {
-                    return Err(rosetun_subscription::ParseError::EncryptedHappLink.to_string());
+                    return Err(SubscriptionUrlError::EncryptedHappLink);
                 }
                 current = unwrap_path(remainder, "add/")?;
             }
@@ -36,27 +55,27 @@ pub fn normalize(input: &str) -> Result<String, String> {
                 current = unwrap_query(&current, "install-config")?;
             }
             _ => {
-                return Err("subscription URL must use http or https".to_owned());
+                return Err(SubscriptionUrlError::UnsupportedScheme);
             }
         }
     }
 
-    Err("too many nested subscription import links".to_owned())
+    Err(SubscriptionUrlError::TooManyNestedLinks)
 }
 
-fn unwrap_path(remainder: &str, prefix: &str) -> Result<String, String> {
+fn unwrap_path(remainder: &str, prefix: &str) -> Result<String, SubscriptionUrlError> {
     let inner = remainder
         .strip_prefix(prefix)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "invalid subscription import link".to_owned())?;
+        .ok_or(SubscriptionUrlError::InvalidImportLink)?;
 
     // Keep the embedded URL verbatim: its query and percent escapes belong
     // to the provider's token, not to the outer import link.
     Ok(inner.to_owned())
 }
 
-fn unwrap_query(input: &str, action: &str) -> Result<String, String> {
-    let parsed = Url::parse(input).map_err(|_| "invalid subscription import link".to_owned())?;
+fn unwrap_query(input: &str, action: &str) -> Result<String, SubscriptionUrlError> {
+    let parsed = Url::parse(input).map_err(|_| SubscriptionUrlError::InvalidImportLink)?;
 
     if parsed.host_str() != Some(action)
         || !matches!(parsed.path(), "" | "/")
@@ -64,7 +83,7 @@ fn unwrap_query(input: &str, action: &str) -> Result<String, String> {
         || parsed.password().is_some()
         || parsed.port().is_some()
     {
-        return Err("invalid subscription import link".to_owned());
+        return Err(SubscriptionUrlError::InvalidImportLink);
     }
 
     let mut urls = parsed
@@ -75,10 +94,10 @@ fn unwrap_query(input: &str, action: &str) -> Result<String, String> {
     let inner = urls
         .next()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "subscription import link requires a URL".to_owned())?;
+        .ok_or(SubscriptionUrlError::ImportLinkWithoutUrl)?;
 
     if urls.next().is_some() {
-        return Err("subscription import link contains multiple URLs".to_owned());
+        return Err(SubscriptionUrlError::ImportLinkWithMultipleUrls);
     }
 
     Ok(inner)
@@ -102,7 +121,7 @@ pub fn redacted(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize, redacted};
+    use super::{SubscriptionUrlError, normalize, redacted};
 
     const SECRET_URL: &str = "https://sub.example.com/private-token?key=query-secret";
 
@@ -174,10 +193,14 @@ mod tests {
             "happ://add/happ://crypt/private-token",
         ] {
             assert_eq!(
-                normalize(input).unwrap_err(),
-                rosetun_subscription::ParseError::EncryptedHappLink.to_string()
+                normalize(input),
+                Err(SubscriptionUrlError::EncryptedHappLink)
             );
         }
+        assert_eq!(
+            SubscriptionUrlError::EncryptedHappLink.to_string(),
+            rosetun_subscription::ParseError::EncryptedHappLink.to_string()
+        );
     }
 
     #[test]
@@ -188,25 +211,43 @@ mod tests {
             "clash://install-config?url=ftp%3A%2F%2Fexample.com%2Fprivate-token",
         ] {
             assert_eq!(
-                normalize(input).unwrap_err(),
-                "subscription URL must use http or https"
+                normalize(input),
+                Err(SubscriptionUrlError::UnsupportedScheme)
             );
         }
     }
 
     #[test]
     fn malformed_import_links_are_rejected() {
-        for input in [
-            "happ://add/",
-            "happ://unknown/private-token",
-            "hiddify://import/",
-            "sing-box://wrong-action?url=https%3A%2F%2Fexample.com",
-            "clash://install-config",
-            "clash://install-config?url=",
-            "clash://install-config?url=https%3A%2F%2Fa.example&url=https%3A%2F%2Fb.example",
-            "clash://install-config/extra?url=https%3A%2F%2Fexample.com",
+        for (input, expected) in [
+            ("happ://add/", SubscriptionUrlError::InvalidImportLink),
+            (
+                "happ://unknown/private-token",
+                SubscriptionUrlError::InvalidImportLink,
+            ),
+            ("hiddify://import/", SubscriptionUrlError::InvalidImportLink),
+            (
+                "sing-box://wrong-action?url=https%3A%2F%2Fexample.com",
+                SubscriptionUrlError::InvalidImportLink,
+            ),
+            (
+                "clash://install-config",
+                SubscriptionUrlError::ImportLinkWithoutUrl,
+            ),
+            (
+                "clash://install-config?url=",
+                SubscriptionUrlError::ImportLinkWithoutUrl,
+            ),
+            (
+                "clash://install-config?url=https%3A%2F%2Fa.example&url=https%3A%2F%2Fb.example",
+                SubscriptionUrlError::ImportLinkWithMultipleUrls,
+            ),
+            (
+                "clash://install-config/extra?url=https%3A%2F%2Fexample.com",
+                SubscriptionUrlError::InvalidImportLink,
+            ),
         ] {
-            assert!(normalize(input).is_err());
+            assert_eq!(normalize(input), Err(expected), "{input}");
         }
     }
 
@@ -215,8 +256,8 @@ mod tests {
         let input = format!("{}{SECRET_URL}", "happ://add/".repeat(20));
 
         assert_eq!(
-            normalize(&input).unwrap_err(),
-            "too many nested subscription import links"
+            normalize(&input),
+            Err(SubscriptionUrlError::TooManyNestedLinks)
         );
     }
 
@@ -228,7 +269,7 @@ mod tests {
             "happ://crypt/private-token?key=query-secret",
             "clash://wrong-action?url=private-token%3Fkey%3Dquery-secret",
         ] {
-            let error = normalize(input).unwrap_err();
+            let error = normalize(input).unwrap_err().to_string();
             assert!(!error.contains("private-token"));
             assert!(!error.contains("query-secret"));
             assert!(!error.contains(input));

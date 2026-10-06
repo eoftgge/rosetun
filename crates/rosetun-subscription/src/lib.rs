@@ -67,7 +67,7 @@ pub struct Skipped {
     pub reason: SkipReason,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnsupportedTransport {
     Xhttp,
     SplitHttp,
@@ -92,7 +92,7 @@ impl fmt::Display for UnsupportedTransport {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SkipReason {
     InvalidRecord,
     InvalidPort,

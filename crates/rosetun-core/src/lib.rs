@@ -11,6 +11,7 @@ mod text;
 mod update;
 
 pub use fetch::{FetchError, Timeouts, fetch};
+pub use rosetun_subscription::{ParseError, SkipReason, Skipped, UnsupportedTransport};
 pub use rules::{
     RuleInputError, RuleSetError, add_rule, create_rule_set, delete_rule_set, move_rule,
     parse_domain_input, parse_process_input, remove_rule, rename_rule_set, rule_value_ascii,
@@ -25,7 +26,8 @@ pub use settings::{
 };
 pub use store::{Store, StoreError};
 pub use subscription_url::{
-    normalize as normalize_subscription_url, redacted as redacted_subscription_url,
+    SubscriptionUrlError, normalize as normalize_subscription_url,
+    redacted as redacted_subscription_url,
 };
 pub use subscriptions::{
     AddFromUrlError, AddOptions, AddSubscriptionError, CommitUpdateError, MoveSubscriptionError,
