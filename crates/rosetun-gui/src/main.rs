@@ -16,6 +16,8 @@ mod errors;
 mod icon_res;
 mod icons;
 mod reorder;
+#[cfg(test)]
+mod rose_icon;
 mod rules;
 mod state;
 mod strings;
