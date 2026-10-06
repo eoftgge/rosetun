@@ -563,7 +563,7 @@ fn rule_type(rule: &Rule) -> &'static str {
     }
 }
 
-fn target_label(target: RuleTarget) -> &'static str {
+pub(crate) fn target_label(target: RuleTarget) -> &'static str {
     match target {
         RuleTarget::Proxy => t().proxy,
         RuleTarget::Direct => t().direct,
@@ -571,7 +571,7 @@ fn target_label(target: RuleTarget) -> &'static str {
     }
 }
 
-fn target_color(target: RuleTarget) -> Color32 {
+pub(crate) fn target_color(target: RuleTarget) -> Color32 {
     match target {
         RuleTarget::Proxy => theme::ROSE_LIGHT,
         RuleTarget::Direct => theme::TEXT_MUTED,

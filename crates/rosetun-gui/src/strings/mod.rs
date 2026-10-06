@@ -241,8 +241,6 @@ pub(crate) struct Strings {
     pub(crate) working: &'static str,
     pub(crate) loading: &'static str,
     pub(crate) engine: &'static str,
-    pub(crate) active_server: &'static str,
-    pub(crate) unknown_server: &'static str,
     pub(crate) status_unknown: &'static str,
     pub(crate) disconnected: &'static str,
     pub(crate) connecting: &'static str,
@@ -253,14 +251,23 @@ pub(crate) struct Strings {
     pub(crate) traffic_blocked: &'static str,
     pub(crate) helper_unavailable: &'static str,
     pub(crate) helper_unavailable_detail: &'static str,
+    pub(crate) service_down_title: &'static str,
+    pub(crate) service_down_body: &'static str,
+    pub(crate) details: &'static str,
+    pub(crate) hide_details: &'static str,
     pub(crate) select_server: &'static str,
-    pub(crate) selected_server: &'static str,
+    pub(crate) server_change: &'static str,
+    pub(crate) subscription_label: &'static str,
+    pub(crate) protocol: &'static str,
     pub(crate) session: &'static str,
+    pub(crate) traffic_down: &'static str,
+    pub(crate) traffic_up: &'static str,
+    pub(crate) traffic_session: &'static str,
+    pub(crate) traffic_empty: &'static str,
     pub(crate) no_session: &'static str,
     pub(crate) kill_switch: &'static str,
     pub(crate) protection: &'static str,
     pub(crate) kill_switch_detail: &'static str,
-    pub(crate) rule_set: &'static str,
     pub(crate) default_rules: &'static str,
     pub(crate) next_connect: &'static str,
     pub(crate) turn_off_protection: &'static str,
@@ -305,7 +312,8 @@ pub(crate) struct Strings {
     pub(crate) dismiss: &'static str,
     pub(crate) rules_title: &'static str,
     pub(crate) rules_subtitle: &'static str,
-    pub(crate) open_rules: &'static str,
+    pub(crate) open_link: &'static str,
+    pub(crate) no_rules_yet: &'static str,
     pub(crate) active: &'static str,
     pub(crate) use_for_connections: &'static str,
     pub(crate) new_set: &'static str,
@@ -468,13 +476,6 @@ impl Strings {
         }
     }
 
-    pub(crate) fn via_engine(&self, engine: &str) -> String {
-        match self.language {
-            Language::English => format!("via {engine}"),
-            Language::Russian => format!("через {engine}"),
-        }
-    }
-
     pub(crate) fn engine_detail(&self, engine: &str) -> String {
         format!("{}: {engine}", self.engine)
     }
@@ -500,6 +501,20 @@ impl Strings {
         match self.language {
             Language::English => format!("Last updated {age}"),
             Language::Russian => format!("Обновлено {age}"),
+        }
+    }
+
+    pub(crate) fn traffic_peak(&self, rate: &str) -> String {
+        match self.language {
+            Language::English => format!("peak {rate}"),
+            Language::Russian => format!("пик {rate}"),
+        }
+    }
+
+    pub(crate) fn more_rules(&self, count: usize) -> String {
+        match self.language {
+            Language::English => format!("and {count} more"),
+            Language::Russian => format!("и ещё {count}"),
         }
     }
 
