@@ -4,16 +4,17 @@ use rosetun_config::{Subscription, SubscriptionId};
 use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
 use crate::state::{Action, State, UpdateOutcome};
+use crate::strings::t;
 use crate::{display, strings, theme};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.label(
-        RichText::new(strings::subscriptions(state.config.subscriptions.len()))
+        RichText::new(t().subscriptions(state.config.subscriptions.len()))
             .color(theme::TEXT_DIM)
             .strong(),
     );
     ui.add_space(6.0);
-    if theme::button_fill(ui, strings::ADD_SUBSCRIPTION, state.add.is_none()).clicked() {
+    if theme::button_fill(ui, t().add_subscription, state.add.is_none()).clicked() {
         actions.push(Action::OpenAdd);
     }
     ui.add_space(12.0);
@@ -24,13 +25,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if state.config.subscriptions.is_empty() {
-                ui.colored_label(theme::TEXT_MUTED, strings::NO_SUBSCRIPTIONS);
+                ui.colored_label(theme::TEXT_MUTED, t().no_subscriptions);
                 ui.add_space(8.0);
                 ui.add(
-                    egui::Label::new(
-                        RichText::new(strings::EMPTY_SUBSCRIPTIONS).color(theme::TEXT_DIM),
-                    )
-                    .wrap(),
+                    egui::Label::new(RichText::new(t().empty_subscriptions).color(theme::TEXT_DIM))
+                        .wrap(),
                 );
             }
             ui.scope(|ui| {
@@ -84,9 +83,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     if theme::outline_button(
         ui,
         if state.operations.update_all {
-            strings::UPDATING
+            t().updating
         } else {
-            strings::UPDATE_ALL
+            t().update_all
         },
         enabled,
     )
@@ -173,13 +172,13 @@ fn subscription_card(
                     },
                 )
                 .response
-                .on_hover_text(strings::UPDATING);
+                .on_hover_text(t().updating);
             } else if icons::icon_button(
                 ui,
                 Icon::Refresh,
                 !state.subscription_busy(&subscription.id),
             )
-            .on_hover_text(strings::UPDATE)
+            .on_hover_text(t().update)
             .clicked()
             {
                 actions.push(Action::Update(subscription.id.clone()));
@@ -189,7 +188,7 @@ fn subscription_card(
                 Icon::Trash,
                 !state.subscription_busy(&subscription.id) && !state.operations.removing,
             )
-            .on_hover_text(strings::REMOVE)
+            .on_hover_text(t().remove)
             .clicked()
             {
                 actions.push(Action::RequestRemove(subscription.id.clone()));
@@ -200,19 +199,19 @@ fn subscription_card(
                 });
             } else {
                 icons::icon_button(ui, Icon::Grip, false)
-                    .on_hover_text(strings::SUBSCRIPTION_REORDER_DISABLED);
+                    .on_hover_text(t().subscription_reorder_disabled);
             }
         });
         let age = subscription
             .updated_at_unix
             .map(|timestamp| {
-                strings::last_updated(&rosetun_core::updated_text(timestamp, display::now_unix()))
+                t().last_updated(&rosetun_core::updated_text(timestamp, display::now_unix()))
             })
-            .unwrap_or_else(|| strings::NEVER_UPDATED.to_owned());
+            .unwrap_or_else(|| t().never_updated.to_owned());
         ui.add(
             egui::Label::new(
                 RichText::new(strings::subscription_summary(
-                    &strings::servers(subscription.nodes.len()),
+                    &t().servers(subscription.nodes.len()),
                     &age,
                 ))
                 .small()
@@ -286,38 +285,34 @@ fn subscription_card(
         if let Some(UpdateOutcome::Success(report)) = state.outcomes.get(&subscription.id) {
             ui.add(
                 egui::Label::new(
-                    RichText::new(strings::updated(
-                        report.added,
-                        report.removed,
-                        report.retained,
-                    ))
-                    .color(theme::ROSE_LIGHT),
+                    RichText::new(t().updated(report.added, report.removed, report.retained))
+                        .color(theme::ROSE_LIGHT),
                 )
                 .wrap(),
             );
             if report.selection_cleared {
                 ui.add(
-                    egui::Label::new(RichText::new(strings::SELECTION_CLEARED).color(theme::ERROR))
+                    egui::Label::new(RichText::new(t().selection_cleared).color(theme::ERROR))
                         .wrap(),
                 );
             }
             for (reason, count) in &report.skipped {
-                ui.add(egui::Label::new(state.text(&strings::skipped(*count, reason))).wrap());
+                ui.add(egui::Label::new(state.text(&t().skipped(*count, reason))).wrap());
             }
         }
         if subscription.support_url.is_some() || subscription.web_page_url.is_some() {
             ui.horizontal(|ui| {
                 if let Some(value) = &subscription.support_url {
-                    provider_link(ui, state, strings::SUPPORT, value);
+                    provider_link(ui, state, t().support, value);
                 }
                 if let Some(value) = &subscription.web_page_url {
-                    provider_link(ui, state, strings::WEBSITE, value);
+                    provider_link(ui, state, t().website, value);
                 }
             });
         }
         ui.separator();
         if subscription.nodes.is_empty() {
-            ui.colored_label(theme::TEXT_DIM, strings::NO_SERVERS);
+            ui.colored_label(theme::TEXT_DIM, t().no_servers);
         }
         for node in &subscription.nodes {
             let selected = state.config.active.as_ref().is_some_and(|selection| {
@@ -416,7 +411,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
         .frame(theme::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(480.0);
-            ui.heading(strings::REMOVE_SUBSCRIPTION);
+            ui.heading(t().remove_subscription);
             if let Some(subscription) = state
                 .config
                 .subscriptions
@@ -431,7 +426,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                 ));
             }
             ui.add_space(12.0);
-            ui.add(egui::Label::new(strings::REMOVE_DETAIL).wrap());
+            ui.add(egui::Label::new(t().remove_detail).wrap());
             if state
                 .config
                 .active
@@ -440,7 +435,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(strings::REMOVE_SELECTED_WARNING).color(theme::ERROR),
+                        RichText::new(t().remove_selected_warning).color(theme::ERROR),
                     )
                     .wrap(),
                 );
@@ -452,16 +447,15 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             }
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                if theme::outline_button(ui, strings::CANCEL, !state.operations.removing).clicked()
-                {
+                if theme::outline_button(ui, t().cancel, !state.operations.removing).clicked() {
                     actions.push(Action::CancelRemove);
                 }
                 if theme::button_fill(
                     ui,
                     if state.operations.removing {
-                        strings::REMOVING
+                        t().removing
                     } else {
-                        strings::REMOVE
+                        t().remove
                     },
                     !state.operations.removing,
                 )

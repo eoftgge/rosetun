@@ -2,6 +2,7 @@ use eframe::egui::{self, RichText};
 use rosetun_config::AppConfig;
 
 use crate::state::{Action, AddDialog, redact};
+use crate::strings::t;
 use crate::{display, strings, theme};
 
 pub(crate) fn show(
@@ -14,10 +15,10 @@ pub(crate) fn show(
         .frame(theme::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(520.0);
-            ui.heading(strings::ADD_SUBSCRIPTION);
-            ui.colored_label(theme::TEXT_MUTED, strings::ADD_SUBTITLE);
+            ui.heading(t().add_subscription);
+            ui.colored_label(theme::TEXT_MUTED, t().add_subtitle);
             ui.add_space(18.0);
-            ui.label(strings::SUBSCRIPTION_URL);
+            ui.label(t().subscription_url);
             ui.horizontal(|ui| {
                 let input = ui.add_enabled(
                     !dialog.busy,
@@ -33,23 +34,19 @@ pub(crate) fn show(
                 if input.changed() {
                     dialog.error = None;
                 }
-                if theme::outline_button(ui, strings::PASTE, !dialog.busy).clicked() {
+                if theme::outline_button(ui, t().paste, !dialog.busy).clicked() {
                     input.request_focus();
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                 }
             });
-            ui.add(
-                egui::Label::new(RichText::new(strings::URL_HELP).color(theme::TEXT_DIM)).wrap(),
-            );
+            ui.add(egui::Label::new(RichText::new(t().url_help).color(theme::TEXT_DIM)).wrap());
             let normalized = rosetun_core::normalize_subscription_url(&dialog.url);
             if !dialog.url.trim().is_empty() {
                 match &normalized {
                     Ok(url) if uses_plain_http(url) => {
                         ui.add(
-                            egui::Label::new(
-                                RichText::new(strings::HTTP_WARNING).color(theme::ERROR),
-                            )
-                            .wrap(),
+                            egui::Label::new(RichText::new(t().http_warning).color(theme::ERROR))
+                                .wrap(),
                         );
                     }
                     Err(message) => {
@@ -65,12 +62,12 @@ pub(crate) fn show(
                 }
             }
             ui.add_space(16.0);
-            ui.label(strings::NAME);
+            ui.label(t().name);
             if ui
                 .add_enabled(
                     !dialog.busy,
                     egui::TextEdit::singleline(&mut dialog.name)
-                        .hint_text(strings::NAME_PLACEHOLDER)
+                        .hint_text(t().name_placeholder)
                         .desired_width(f32::INFINITY),
                 )
                 .changed()
@@ -80,13 +77,11 @@ pub(crate) fn show(
             ui.add_space(16.0);
             ui.horizontal(|ui| {
                 theme::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
-                ui.label(strings::SEND_DEVICE_ID);
+                ui.label(t().send_device_id);
             });
             ui.add(
-                egui::Label::new(
-                    RichText::new(strings::DEVICE_ID_EXPLANATION).color(theme::TEXT_DIM),
-                )
-                .wrap(),
+                egui::Label::new(RichText::new(t().device_id_explanation).color(theme::TEXT_DIM))
+                    .wrap(),
             );
             if let Some(error) = &dialog.error {
                 ui.add_space(12.0);
@@ -102,18 +97,14 @@ pub(crate) fn show(
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if theme::button_fill(
                     ui,
-                    if dialog.busy {
-                        strings::ADDING
-                    } else {
-                        strings::ADD
-                    },
+                    if dialog.busy { t().adding } else { t().add },
                     !dialog.busy && normalized.is_ok(),
                 )
                 .clicked()
                 {
                     actions.push(Action::SubmitAdd);
                 }
-                if theme::outline_button(ui, strings::CANCEL, !dialog.busy).clicked() {
+                if theme::outline_button(ui, t().cancel, !dialog.busy).clicked() {
                     actions.push(Action::CancelAdd);
                 }
             });

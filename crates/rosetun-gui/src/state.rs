@@ -12,7 +12,7 @@ use crate::actions::{self, PrimaryAction};
 use crate::display;
 use crate::reorder::drop_target;
 use crate::rules::{ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes};
-use crate::strings;
+use crate::strings::t;
 use crate::worker::{ConfigWorkerError, HelperCommandError, WorkerEvent};
 
 #[derive(Default)]
@@ -805,7 +805,7 @@ impl State {
                 if self.can_edit_rules() && self.rule_screen.name.is_none() {
                     self.rule_screen.name = Some(NameDialog {
                         kind: NameDialogKind::Create,
-                        name: strings::BASIC.to_owned(),
+                        name: t().basic.to_owned(),
                         error: None,
                         focus: true,
                     });
@@ -1171,20 +1171,20 @@ pub(crate) fn redact(config: &AppConfig, value: &str) -> String {
 
 pub(crate) fn primary_label(state: &State) -> &'static str {
     if !state.helper_available {
-        return strings::CONNECT;
+        return t().connect;
     }
     if state.operations.helper || state.status.state.is_transitional() {
         match state.status.state {
-            ConnectionState::Reconnecting => strings::RECONNECTING_ACTION,
+            ConnectionState::Reconnecting => t().reconnecting_action,
             ConnectionState::Connected | ConnectionState::FailedProtected { .. }
                 if state.operations.helper =>
             {
-                strings::WORKING
+                t().working
             }
-            _ => strings::CONNECTING_ACTION,
+            _ => t().connecting_action,
         }
     } else if state.primary_action() == PrimaryAction::Disabled {
-        strings::CONNECT
+        t().connect
     } else {
         state.primary_action().label()
     }
@@ -1412,10 +1412,7 @@ mod tests {
             ConnectRequestError::NodeNotFound,
         ))));
         assert!(!state.operations.helper);
-        assert_eq!(
-            state.operation_error.as_deref(),
-            Some(strings::SELECT_SERVER)
-        );
+        assert_eq!(state.operation_error.as_deref(), Some(t().select_server));
         state.operations.selection = true;
         state.reduce(WorkerEvent::SelectNode(Err(
             rosetun_core::SelectNodeError::NodeNotFound,
@@ -1616,10 +1613,7 @@ mod tests {
     fn set_name_dialog_keeps_errors_and_success_selects_created_set() {
         let mut state = state_with_rules();
         state.act(Action::OpenCreateSet);
-        assert_eq!(
-            state.rule_screen.name.as_ref().unwrap().name,
-            strings::BASIC
-        );
+        assert_eq!(state.rule_screen.name.as_ref().unwrap().name, t().basic);
         state.rule_screen.name.as_mut().unwrap().name = "   ".into();
         assert!(state.act(Action::SubmitSetName).is_none());
         state.rule_screen.name.as_mut().unwrap().name = "  Work  ".into();

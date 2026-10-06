@@ -8,6 +8,7 @@ use rosetun_config::ConnectionState;
 
 use crate::brand;
 use crate::state::{Action, Screen, State};
+use crate::strings::t;
 use crate::{strings, theme};
 
 /// The window draws its own title bar on Windows; elsewhere the system frame stays.
@@ -87,19 +88,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             for (index, (icon, label, screen, action)) in [
                 (
                     TabIcon::Connection,
-                    strings::CONNECTION,
+                    t().connection,
                     Screen::Connection,
                     Action::ShowConnection,
                 ),
-                (
-                    TabIcon::Rules,
-                    strings::RULES,
-                    Screen::Rules,
-                    Action::OpenRules,
-                ),
+                (TabIcon::Rules, t().rules, Screen::Rules, Action::OpenRules),
                 (
                     TabIcon::Settings,
-                    strings::SETTINGS,
+                    t().settings,
                     Screen::Settings,
                     Action::OpenSettings,
                 ),
@@ -141,7 +137,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui.add_space(12.0);
                 }
                 if !state.helper_available {
-                    ui.colored_label(theme::ERROR, strings::HELPER_UNAVAILABLE);
+                    ui.colored_label(theme::ERROR, t().helper_unavailable);
                 }
             });
             selected_rect
@@ -222,10 +218,10 @@ fn paint_brand(ui: &mut egui::Ui, bloom: f32) {
 
 fn window_button(ui: &mut egui::Ui, kind: WindowButton) -> Response {
     let label = match kind {
-        WindowButton::Minimize => strings::MINIMIZE,
-        WindowButton::Maximize => strings::MAXIMIZE,
-        WindowButton::Restore => strings::RESTORE,
-        WindowButton::Close => strings::CLOSE_WINDOW,
+        WindowButton::Minimize => t().minimize,
+        WindowButton::Maximize => t().maximize,
+        WindowButton::Restore => t().restore,
+        WindowButton::Close => t().close_window,
     };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(38.0, 32.0), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));

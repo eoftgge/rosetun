@@ -1,7 +1,7 @@
 use rosetun_config::{ConnectionState, Status};
 use rosetun_ipc::{ClientError, ConnectRequestError};
 
-use crate::strings;
+use crate::strings::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimaryAction {
@@ -15,11 +15,11 @@ pub(crate) enum PrimaryAction {
 impl PrimaryAction {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Disabled => strings::CONNECTING_ACTION,
-            Self::Connect => strings::CONNECT,
-            Self::Disconnect => strings::DISCONNECT,
-            Self::Retry => strings::RETRY,
-            Self::Reconnect => strings::RECONNECT,
+            Self::Disabled => t().connecting_action,
+            Self::Connect => t().connect,
+            Self::Disconnect => t().disconnect,
+            Self::Retry => t().retry,
+            Self::Reconnect => t().reconnect,
         }
     }
 }
@@ -68,7 +68,7 @@ pub(crate) fn protection_action(status: &Status, operation_in_flight: bool) -> P
 pub(crate) fn connect_request_message(error: &ConnectRequestError) -> String {
     match error {
         ConnectRequestError::SelectionMissing | ConnectRequestError::NodeNotFound => {
-            strings::SELECT_SERVER.to_owned()
+            t().select_server.to_owned()
         }
         ConnectRequestError::RuleSetNotFound => error.to_string(),
     }
@@ -183,11 +183,11 @@ mod tests {
     fn selection_errors_are_safe_and_actionable() {
         assert_eq!(
             connect_request_message(&ConnectRequestError::SelectionMissing),
-            strings::SELECT_SERVER
+            t().select_server
         );
         assert_eq!(
             connect_request_message(&ConnectRequestError::NodeNotFound),
-            strings::SELECT_SERVER
+            t().select_server
         );
         assert_eq!(
             connect_request_message(&ConnectRequestError::RuleSetNotFound),

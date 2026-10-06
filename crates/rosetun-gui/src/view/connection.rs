@@ -3,15 +3,16 @@ use rosetun_config::ConnectionState;
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::state::{Action, State, primary_label};
+use crate::strings::t;
 use crate::{display, strings, theme};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if !state.config_ready {
-        ui.colored_label(theme::TEXT_DIM, strings::LOADING);
+        ui.colored_label(theme::TEXT_DIM, t().loading);
     }
     if !state.helper_available {
         theme::card_frame().show(ui, |ui| {
-            ui.colored_label(theme::ERROR, strings::HELPER_UNAVAILABLE_DETAIL);
+            ui.colored_label(theme::ERROR, t().helper_unavailable_detail);
             if let Some(error) = &state.helper_error {
                 ui.add(egui::Label::new(state.text(&error.to_string())).wrap());
             }
@@ -21,7 +22,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
 
     let visible_status = state.visible_status();
     let (label, color) = visible_status
-        .map_or((strings::STATUS_UNKNOWN, theme::DISCONNECTED), |status| {
+        .map_or((t().status_unknown, theme::DISCONNECTED), |status| {
             state_style(&status.state)
         });
     let selection_changed = visible_status.filter(|status| {
@@ -75,13 +76,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 );
             ui.colored_label(
                 theme::TEXT_MUTED,
-                strings::plain_link(strings::SESSION, &session),
+                strings::plain_link(t().session, &session),
             );
         });
         columns[1].vertical(|ui| {
             theme::card_frame().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.colored_label(theme::TEXT_DIM, strings::SELECTED_SERVER);
+                ui.colored_label(theme::TEXT_DIM, t().selected_server);
                 if let Some((subscription, node)) = state.config.active_node() {
                     let name = display::drop_missing_glyphs(
                         ui.ctx(),
@@ -105,21 +106,21 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         ),
                     );
                 } else {
-                    ui.colored_label(theme::TEXT_MUTED, strings::SELECT_SERVER);
+                    ui.colored_label(theme::TEXT_MUTED, t().select_server);
                 }
                 let engine = visible_status
                     .and_then(|status| status.engine)
                     .unwrap_or(state.config.settings.engine);
                 ui.label(
-                    RichText::new(strings::via_engine(engine.as_str()))
+                    RichText::new(t().via_engine(engine.as_str()))
                         .small()
                         .color(theme::TEXT_DIM),
                 )
-                .on_hover_text(strings::engine_detail(engine.as_str()));
+                .on_hover_text(t().engine_detail(engine.as_str()));
             });
             if let Some(id) = selection_changed.and_then(|status| status.node.as_ref()) {
                 theme::card_frame().show(ui, |ui| {
-                    ui.colored_label(theme::TEXT_DIM, strings::ACTIVE_SERVER);
+                    ui.colored_label(theme::TEXT_DIM, t().active_server);
                     let name = state
                         .config
                         .subscriptions
@@ -132,19 +133,17 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                             &name,
                         )
                     });
-                    ui.add(
-                        egui::Label::new(name.as_deref().unwrap_or(strings::UNKNOWN_SERVER)).wrap(),
-                    );
+                    ui.add(egui::Label::new(name.as_deref().unwrap_or(t().unknown_server)).wrap());
                 });
             }
             theme::card_frame().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.colored_label(theme::TEXT_DIM, strings::PROTECTION);
+                ui.colored_label(theme::TEXT_DIM, t().protection);
                 let mut enabled = state.config.settings.kill_switch;
                 if theme::switch_row(
                     ui,
-                    strings::KILL_SWITCH,
-                    strings::KILL_SWITCH_DETAIL,
+                    t().kill_switch,
+                    t().kill_switch_detail,
                     &mut enabled,
                     state.config_ready && !state.operations.kill_switch && !state.operations.helper,
                 )
@@ -156,7 +155,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     status.state.is_active() || status.state.is_transitional()
                 }) {
                     ui.label(
-                        RichText::new(strings::NEXT_CONNECT)
+                        RichText::new(t().next_connect)
                             .small()
                             .color(theme::ROSE_LIGHT),
                     );
@@ -167,14 +166,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     ui.add_space(20.0);
     if selection_changed.is_some() {
         let message = state.config.active_node().map_or_else(
-            || strings::SELECTION_CLEARED.to_owned(),
+            || t().selection_cleared.to_owned(),
             |(_, node)| {
                 let name = display::drop_missing_glyphs(
                     ui.ctx(),
                     &egui::TextStyle::Body.resolve(ui.style()),
                     &state.text(&node.name),
                 );
-                strings::selected_pending(&name)
+                t().selected_pending(&name)
             },
         );
         ui.add(egui::Label::new(RichText::new(message).color(theme::ROSE_LIGHT)).wrap());
@@ -188,27 +187,27 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }
     if let Some(status) = visible_status
         && protection_action(status, state.operations.helper) == ProtectionAction::ConfirmDisconnect
-        && theme::outline_button(ui, strings::TURN_OFF_PROTECTION, true).clicked()
+        && theme::outline_button(ui, t().turn_off_protection, true).clicked()
     {
         actions.push(Action::RequestProtectionOff);
     }
     ui.add_space(12.0);
     theme::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.colored_label(theme::TEXT_DIM, strings::RULE_SET);
+        ui.colored_label(theme::TEXT_DIM, t().rule_set);
         let mut selected = state.config.active_rule_set.clone();
         let previous = selected.clone();
         let current_name = state
             .config
             .active_rules()
             .map(|rules| state.text(&rules.name))
-            .unwrap_or_else(|| strings::DEFAULT_RULES.to_owned());
+            .unwrap_or_else(|| t().default_rules.to_owned());
         ui.add_enabled_ui(state.can_edit_rules(), |ui| {
             egui::ComboBox::from_id_salt("active_rule_set")
                 .selected_text(current_name)
                 .width(ui.available_width())
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut selected, None, strings::DEFAULT_RULES);
+                    ui.selectable_value(&mut selected, None, t().default_rules);
                     for rules in &state.config.rule_sets {
                         ui.selectable_value(
                             &mut selected,
@@ -221,8 +220,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         if selected != previous {
             actions.push(Action::SelectRuleSet(selected));
         }
-        ui.colored_label(theme::TEXT_DIM, strings::NEXT_CONNECT);
-        if theme::outline_button(ui, strings::OPEN_RULES, true).clicked() {
+        ui.colored_label(theme::TEXT_DIM, t().next_connect);
+        if theme::outline_button(ui, t().open_rules, true).clicked() {
             actions.push(Action::OpenActiveRules);
         }
     });
@@ -230,12 +229,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
 
 pub(crate) fn state_style(state: &ConnectionState) -> (&'static str, Color32) {
     match state {
-        ConnectionState::Disconnected => (strings::DISCONNECTED, theme::DISCONNECTED),
-        ConnectionState::Connecting => (strings::CONNECTING, theme::ROSE_BRIGHT),
-        ConnectionState::Connected => (strings::CONNECTED, theme::CONNECTED),
-        ConnectionState::Reconnecting => (strings::RECONNECTING, theme::ROSE_BRIGHT),
-        ConnectionState::Failed { .. } => (strings::FAILED, theme::ERROR),
-        ConnectionState::FailedProtected { .. } => (strings::FAILED_PROTECTED, theme::ERROR),
+        ConnectionState::Disconnected => (t().disconnected, theme::DISCONNECTED),
+        ConnectionState::Connecting => (t().connecting, theme::ROSE_BRIGHT),
+        ConnectionState::Connected => (t().connected, theme::CONNECTED),
+        ConnectionState::Reconnecting => (t().reconnecting, theme::ROSE_BRIGHT),
+        ConnectionState::Failed { .. } => (t().failed, theme::ERROR),
+        ConnectionState::FailedProtected { .. } => (t().failed_protected, theme::ERROR),
     }
 }
 
@@ -244,25 +243,22 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
         .frame(theme::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(480.0);
-            ui.heading(strings::TURN_OFF_PROTECTION);
+            ui.heading(t().turn_off_protection);
             ui.add_space(12.0);
             ui.add(
-                egui::Label::new(RichText::new(strings::PROTECTION_WARNING).color(theme::ERROR))
-                    .wrap(),
+                egui::Label::new(RichText::new(t().protection_warning).color(theme::ERROR)).wrap(),
             );
             if let Some(error) = &state.operation_error {
                 ui.add(egui::Label::new(state.text(error)).wrap());
             }
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                if theme::outline_button(ui, strings::KEEP_BLOCKED, !state.operations.helper)
-                    .clicked()
-                {
+                if theme::outline_button(ui, t().keep_blocked, !state.operations.helper).clicked() {
                     actions.push(Action::KeepBlocked);
                 }
                 if theme::button_fill(
                     ui,
-                    strings::TURN_OFF_PROTECTION,
+                    t().turn_off_protection,
                     state.helper_available && !state.operations.helper,
                 )
                 .clicked()

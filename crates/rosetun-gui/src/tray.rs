@@ -7,6 +7,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEv
 use crate::actions::PrimaryAction;
 use crate::app::ShellEvent;
 use crate::state::{State, primary_label};
+use crate::strings::t;
 use crate::{brand, strings, theme, view};
 
 const OPEN_ID: &str = "rosetun.tray.open";
@@ -24,7 +25,7 @@ pub(crate) struct TrayView {
 pub(crate) fn tray_view(state: &State) -> TrayView {
     let (status, color) = state
         .visible_status()
-        .map_or((strings::STATUS_UNKNOWN, theme::DISCONNECTED), |status| {
+        .map_or((t().status_unknown, theme::DISCONNECTED), |status| {
             view::connection::state_style(&status.state)
         });
     let server = state.config.active_node().map(|(_, node)| {
@@ -78,9 +79,9 @@ pub(crate) struct Tray {
 
 impl Tray {
     pub(crate) fn new(events: Sender<ShellEvent>, ctx: egui::Context) -> Result<Self, TrayError> {
-        let open = MenuItem::with_id(OPEN_ID, strings::TRAY_OPEN, true, None);
-        let primary = MenuItem::with_id(PRIMARY_ID, strings::CONNECT, false, None);
-        let quit = MenuItem::with_id(QUIT_ID, strings::TRAY_QUIT, true, None);
+        let open = MenuItem::with_id(OPEN_ID, t().tray_open, true, None);
+        let primary = MenuItem::with_id(PRIMARY_ID, t().connect, false, None);
+        let quit = MenuItem::with_id(QUIT_ID, t().tray_quit, true, None);
         let menu = Menu::with_items(&[
             &open,
             &PredefinedMenuItem::separator(),
@@ -179,6 +180,7 @@ impl Tray {
 mod tests {
     use super::{fit_tooltip, tray_view};
     use crate::state::State;
+    use crate::strings::t;
     use crate::{strings, theme};
     use rosetun_config::{ConnectionState, Status};
     use rosetun_core::Store;
@@ -207,7 +209,7 @@ mod tests {
         assert_eq!(unknown.color, theme::DISCONNECTED);
         assert_eq!(
             unknown.tooltip,
-            strings::tray_tooltip(strings::STATUS_UNKNOWN, None)
+            strings::tray_tooltip(t().status_unknown, None)
         );
         assert!(!unknown.primary_enabled);
 
@@ -226,7 +228,7 @@ mod tests {
         fs::remove_file(path).unwrap();
         let connected = tray_view(&state);
         assert_eq!(connected.color, theme::CONNECTED);
-        assert_eq!(connected.primary_label, strings::DISCONNECT);
+        assert_eq!(connected.primary_label, t().disconnect);
         assert!(connected.primary_enabled);
         assert!(connected.tooltip.contains("Server Blue"));
         assert_eq!(connected.tooltip.matches('\n').count(), 1);

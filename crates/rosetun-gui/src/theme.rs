@@ -1,3 +1,4 @@
+use crate::strings::t;
 use eframe::egui::{
     self, Color32, CornerRadius, FontFamily, FontId, Shadow, Stroke, Style, TextStyle, Visuals,
 };
@@ -260,7 +261,7 @@ pub(crate) fn dismissible_error(ui: &mut egui::Ui, message: &str) -> bool {
                         ui.colored_label(ERROR, crate::strings::ERROR_MARK);
                         ui.add(egui::Label::new(message).wrap());
                     },
-                    |ui| ui.button(crate::strings::DISMISS).clicked(),
+                    |ui| ui.button(t().dismiss).clicked(),
                 )
                 .1
         })

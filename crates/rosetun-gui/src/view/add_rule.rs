@@ -3,6 +3,7 @@ use rosetun_config::{ProcessMatch, RuleMatcher, RuleTarget};
 
 use crate::rules::{ProcessMatchMode, process_matches_filter, update_process_match_mode};
 use crate::state::{Action, AddRuleDialog, RuleInputKind};
+use crate::strings::t;
 use crate::{strings, theme};
 
 const DIALOG_WIDTH: f32 = 640.0;
@@ -33,12 +34,10 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
         .show(ctx, |ui| {
             ui.set_width(DIALOG_WIDTH);
             ui.set_max_width(DIALOG_WIDTH);
-            ui.heading(strings::NEW_RULE);
+            ui.heading(t().new_rule);
             ui.add(
-                egui::Label::new(
-                    RichText::new(strings::NEW_RULE_SUBTITLE).color(theme::TEXT_MUTED),
-                )
-                .wrap(),
+                egui::Label::new(RichText::new(t().new_rule_subtitle).color(theme::TEXT_MUTED))
+                    .wrap(),
             );
             ui.add_space(16.0);
             egui::Sides::new().show(
@@ -46,8 +45,8 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                 |ui| {
                     ui.horizontal(|ui| {
                         for (kind, label) in [
-                            (RuleInputKind::Domain, strings::DOMAIN),
-                            (RuleInputKind::Process, strings::PROCESS),
+                            (RuleInputKind::Domain, t().domain),
+                            (RuleInputKind::Process, t().process),
                         ] {
                             if ui
                                 .add_enabled(
@@ -64,9 +63,9 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                 |ui| {
                     ui.horizontal(|ui| {
                         for (target, label) in [
-                            (RuleTarget::Proxy, strings::PROXY),
-                            (RuleTarget::Direct, strings::DIRECT),
-                            (RuleTarget::Block, strings::BLOCK),
+                            (RuleTarget::Proxy, t().proxy),
+                            (RuleTarget::Direct, t().direct),
+                            (RuleTarget::Block, t().block),
                         ] {
                             if ui
                                 .add_enabled(
@@ -125,9 +124,9 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                     if theme::button_fill(
                         ui,
                         if dialog.busy {
-                            strings::ADDING_RULE
+                            t().adding_rule
                         } else {
-                            strings::ADD_RULE
+                            t().add_rule
                         },
                         !dialog.busy && valid,
                     )
@@ -135,7 +134,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                     {
                         actions.push(Action::SubmitAddRule);
                     }
-                    if theme::outline_button(ui, strings::CANCEL, !dialog.busy).clicked() {
+                    if theme::outline_button(ui, t().cancel, !dialog.busy).clicked() {
                         actions.push(Action::CancelAddRule);
                     }
                 },
@@ -147,11 +146,11 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
 }
 
 fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
-    ui.label(strings::DOMAIN_INPUT);
+    ui.label(t().domain_input);
     let input = ui.add_enabled(
         !dialog.busy,
         egui::TextEdit::singleline(&mut dialog.domain)
-            .hint_text(strings::DOMAIN_PLACEHOLDER)
+            .hint_text(t().domain_placeholder)
             .desired_width(f32::INFINITY),
     );
     if dialog.focus_input {
@@ -161,19 +160,19 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     if input.changed() {
         dialog.error = None;
     }
-    ui.add(egui::Label::new(RichText::new(strings::DOMAIN_HELP).color(theme::TEXT_DIM)).wrap());
+    ui.add(egui::Label::new(RichText::new(t().domain_help).color(theme::TEXT_DIM)).wrap());
     let parsed = rosetun_core::parse_domain_input(&dialog.domain);
     if !dialog.domain.trim().is_empty() {
         match &parsed {
             Ok(domain) => {
                 let matcher = RuleMatcher::Domain(domain.clone());
-                let preview = strings::will_match(&rosetun_core::rule_value_text(&matcher));
+                let preview = t().will_match(&rosetun_core::rule_value_text(&matcher));
                 ui.add(
                     egui::Label::new(RichText::new(&preview).color(theme::ROSE_LIGHT)).truncate(),
                 )
                 .on_hover_text(preview);
                 if let Some(ascii) = rosetun_core::rule_value_ascii(&matcher) {
-                    let stored = strings::stored_as(&ascii);
+                    let stored = t().stored_as(&ascii);
                     ui.add(
                         egui::Label::new(RichText::new(&stored).small().color(theme::TEXT_DIM))
                             .truncate(),
@@ -191,7 +190,7 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
 
 fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) -> bool {
     let count: usize = dialog.processes.iter().map(|group| group.count).sum();
-    ui.label(strings::running_processes(count));
+    ui.label(t().running_processes(count));
     ui.horizontal(|ui| {
         let height = 28.0;
         let refresh_width = 88.0;
@@ -200,13 +199,13 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
             ui.add_sized(
                 [filter_width, height],
                 egui::TextEdit::singleline(&mut dialog.process_filter)
-                    .hint_text(strings::PROCESS_FILTER),
+                    .hint_text(t().process_filter),
             );
         });
         if ui
             .add_enabled(
                 !dialog.busy && dialog.load_request.is_none(),
-                egui::Button::new(strings::REFRESH).min_size(egui::vec2(refresh_width, height)),
+                egui::Button::new(t().refresh).min_size(egui::vec2(refresh_width, height)),
             )
             .clicked()
         {
@@ -217,7 +216,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
     }
     if dialog.load_request.is_some() {
-        ui.colored_label(theme::TEXT_DIM, strings::LOADING_PROCESSES);
+        ui.colored_label(theme::TEXT_DIM, t().loading_processes);
     }
     let preview_height = if dialog.process.trim().is_empty() {
         0.0
@@ -267,7 +266,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                                 ui.add(egui::Label::new(RichText::new(&label).strong()).truncate())
                                     .on_hover_text(label);
                                 let path = group.path.as_ref().map_or_else(
-                                    || strings::PATH_UNAVAILABLE.to_owned(),
+                                    || t().path_unavailable.to_owned(),
                                     |path| path.to_string_lossy().into_owned(),
                                 );
                                 ui.add(
@@ -311,9 +310,9 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 ui.colored_label(
                     theme::TEXT_DIM,
                     if dialog.process_filter.is_empty() {
-                        strings::NO_RUNNING_PROCESSES
+                        t().no_running_processes
                     } else {
-                        strings::NO_PROCESSES_MATCH
+                        t().no_processes_match
                     },
                 );
             }
@@ -332,8 +331,8 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     let full_path_available = full_path_available || dialog.browsed.is_some();
     ui.horizontal(|ui| {
         for (mode, label) in [
-            (ProcessMatchMode::Name, strings::MATCH_BY_NAME),
-            (ProcessMatchMode::Path, strings::MATCH_BY_FULL_PATH),
+            (ProcessMatchMode::Name, t().match_by_name),
+            (ProcessMatchMode::Path, t().match_by_full_path),
         ] {
             if ui
                 .add_enabled(
@@ -347,7 +346,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         }
     });
     ui.add_space(12.0);
-    ui.label(strings::PROCESS_INPUT);
+    ui.label(t().process_input);
     #[cfg(windows)]
     let input = ui
         .horizontal(|ui| {
@@ -359,14 +358,14 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     ui.add_sized(
                         [input_width, height],
                         egui::TextEdit::singleline(&mut dialog.process)
-                            .hint_text(strings::PROCESS_PLACEHOLDER),
+                            .hint_text(t().process_placeholder),
                     )
                 })
                 .inner;
             if ui
                 .add_enabled(
                     !dialog.busy && !dialog.browsing,
-                    egui::Button::new(strings::BROWSE).min_size(egui::vec2(browse_width, height)),
+                    egui::Button::new(t().browse).min_size(egui::vec2(browse_width, height)),
                 )
                 .clicked()
             {
@@ -379,7 +378,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     let input = ui.add_enabled(
         !dialog.busy,
         egui::TextEdit::singleline(&mut dialog.process)
-            .hint_text(strings::PROCESS_PLACEHOLDER)
+            .hint_text(t().process_placeholder)
             .desired_width(f32::INFINITY),
     );
     if dialog.focus_input {
@@ -399,7 +398,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     if !dialog.process.trim().is_empty() {
         match &parsed {
             Ok(matcher) => {
-                let preview = strings::will_match(&rosetun_core::rule_value_text(
+                let preview = t().will_match(&rosetun_core::rule_value_text(
                     &RuleMatcher::Process(matcher.clone()),
                 ));
                 ui.add(

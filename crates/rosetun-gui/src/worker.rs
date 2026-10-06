@@ -27,7 +27,7 @@ use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
 #[cfg(windows)]
-use crate::strings;
+use crate::strings::t;
 
 const CLIENT_NAME: &str = concat!("rosetun-gui/", env!("CARGO_PKG_VERSION"));
 
@@ -331,8 +331,8 @@ impl WorkerDispatcher {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
             let path = rfd::FileDialog::new()
-                .set_title(strings::CHOOSE_PROGRAM)
-                .add_filter(strings::PROGRAMS, &["exe"])
+                .set_title(t().choose_program)
+                .add_filter(t().programs, &["exe"])
                 .pick_file();
             emit(
                 &publisher.tx,
