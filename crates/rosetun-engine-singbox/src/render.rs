@@ -23,7 +23,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
     let (route, unsupported) =
         route_section(request.rules, RULE_CAPABILITIES, request.settings.allow_lan);
     let mut config = json!({
-        "log": log_section(request.settings),
+        "log": log_section(request),
         "dns": dns_section(&request.settings.dns)?,
         "inbounds": [tun_inbound(request.settings)],
         "outbounds": [
@@ -86,12 +86,12 @@ fn dns_section(settings: &DnsSettings) -> Result<Value, EngineError> {
     Ok(json!({ "servers": [server] }))
 }
 
-fn log_section(settings: &Settings) -> Value {
-    let level = match settings.log_level {
-        // Startup readiness currently requires the INFO startup message.
-        LogLevel::Error | LogLevel::Warn | LogLevel::Info => "info",
-        LogLevel::Debug => "debug",
-        LogLevel::Trace => "trace",
+fn log_section(request: &RenderRequest<'_>) -> Value {
+    // Startup readiness needs the INFO message, so the engine must not go below INFO.
+    let level = match (request.verbose_log, request.settings.log_level) {
+        (false, _) => "info",
+        (true, LogLevel::Trace) => "trace",
+        (true, _) => "debug",
     };
     json!({ "level": level, "timestamp": true })
 }

@@ -339,7 +339,7 @@ impl EngineProcess for SingBoxProcess {
 mod tests {
     use super::*;
     use rosetun_config::{
-        DomainMatch, Node, NodeId, Outbound, ProcessMatch, RealityParams, Rule, RuleId,
+        DomainMatch, LogLevel, Node, NodeId, Outbound, ProcessMatch, RealityParams, Rule, RuleId,
         RuleMatcher, RuleSet, RuleSetId, RuleTarget, Settings, StreamSettings, TlsMode,
         VlessParams,
     };
@@ -409,6 +409,7 @@ mod tests {
             rules: &rules,
             settings: &settings,
             control: None,
+            verbose_log: false,
         };
         let config = render::render(&request).expect("config built");
         serde_json::from_slice(&config.body).expect("config is valid json")
@@ -426,8 +427,36 @@ mod tests {
             rules: &rules,
             settings: &settings,
             control: None,
+            verbose_log: false,
         })?;
         Ok(serde_json::from_slice(&config.body).expect("valid JSON"))
+    }
+
+    #[test]
+    fn log_level_depends_on_verbose_log() {
+        let node = node();
+        let rules = rules();
+        let mut settings = Settings::default();
+        for (verbose_log, log_level, expected) in [
+            (false, LogLevel::Trace, "info"),
+            (true, LogLevel::Error, "debug"),
+            (true, LogLevel::Warn, "debug"),
+            (true, LogLevel::Info, "debug"),
+            (true, LogLevel::Debug, "debug"),
+            (true, LogLevel::Trace, "trace"),
+        ] {
+            settings.log_level = log_level;
+            let config = render::render(&RenderRequest {
+                node: &node,
+                rules: &rules,
+                settings: &settings,
+                control: None,
+                verbose_log,
+            })
+            .expect("config rendered");
+            let config: Value = serde_json::from_slice(&config.body).expect("valid JSON");
+            assert_eq!(config["log"]["level"], expected);
+        }
     }
 
     #[test]
@@ -446,6 +475,7 @@ mod tests {
             rules: &rules,
             settings: &settings,
             control: Some(&control),
+            verbose_log: false,
         })
         .expect("config rendered");
         let config: Value = serde_json::from_slice(&config.body).expect("valid JSON");
@@ -826,6 +856,7 @@ mod tests {
             rules: &rule_set,
             settings: &settings,
             control: None,
+            verbose_log: false,
         })
         .expect("rendered");
 
@@ -915,6 +946,7 @@ mod tests {
             rules: &rule_set,
             settings: &settings,
             control: None,
+            verbose_log: false,
         })
         .expect("config rendered");
 
@@ -992,6 +1024,7 @@ mod tests {
             rules: &rules,
             settings: &settings,
             control: None,
+            verbose_log: false,
         };
         assert!(matches!(
             render::render(&request),
@@ -1014,6 +1047,7 @@ mod tests {
             rules: &rule_set,
             settings: &settings,
             control: None,
+            verbose_log: false,
         })
         .expect("config rendered");
         assert!(rendered.unsupported.is_empty());
@@ -1068,6 +1102,7 @@ mod tests {
                 rules: &rules,
                 settings: &settings,
                 control: None,
+                verbose_log: false,
             })
             .expect("rendered");
             let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");

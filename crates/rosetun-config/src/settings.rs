@@ -90,8 +90,21 @@ pub struct Settings {
     pub tun: TunSettings,
     #[serde(default)]
     pub dns: DnsSettings,
+    /// Sets only the depth of an enabled verbose log: trace or debug.
     #[serde(default)]
     pub log_level: LogLevel,
+    /// The verbose log is on until this Unix time, in seconds. `None` or a past time means off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbose_log_until: Option<u64>,
+}
+
+impl Settings {
+    /// How long the verbose log stays on after it is turned on.
+    pub const VERBOSE_LOG_SECONDS: u64 = 24 * 60 * 60;
+
+    pub fn verbose_log_active(&self, now_unix: u64) -> bool {
+        self.verbose_log_until.is_some_and(|until| now_unix < until)
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +119,30 @@ mod settings_tests {
         assert!(settings.kill_switch);
         assert!(!settings.allow_lan);
         assert!(!Settings::default().allow_lan);
+    }
+
+    #[test]
+    fn verbose_log_expires_at_its_deadline() {
+        let mut settings = Settings::default();
+        assert!(!settings.verbose_log_active(0));
+        settings.verbose_log_until = Some(100);
+        assert!(settings.verbose_log_active(99));
+        assert!(!settings.verbose_log_active(100));
+        assert!(!settings.verbose_log_active(101));
+    }
+
+    #[test]
+    fn verbose_log_remains_off_in_old_settings() {
+        let settings: Settings = serde_json::from_str(r#"{"log_level":"trace"}"#)
+            .expect("old settings without verbose log");
+        assert_eq!(settings.verbose_log_until, None);
+        assert!(!settings.verbose_log_active(0));
+        let encoded = serde_json::to_value(&settings).expect("serialized settings");
+        assert!(encoded.get("verbose_log_until").is_none());
+
+        let settings: Settings = serde_json::from_str(r#"{"verbose_log_until":123}"#)
+            .expect("settings with verbose log deadline");
+        assert_eq!(settings.verbose_log_until, Some(123));
     }
 
     #[test]

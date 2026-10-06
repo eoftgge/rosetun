@@ -157,6 +157,7 @@ pub struct RenderRequest<'a> {
     pub rules: &'a RuleSet,
     pub settings: &'a Settings,
     pub control: Option<&'a ControlEndpoint>,
+    pub verbose_log: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
