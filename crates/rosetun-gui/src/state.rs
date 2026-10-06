@@ -2651,8 +2651,8 @@ mod tests {
             generation: 2,
             config,
         });
-        assert_eq!(state.settings_screen.server, "8.8.8.8");
-        assert_eq!(state.settings_screen.server_name, "dns.google");
+        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        assert_eq!(state.settings_screen.server_name, "cloudflare-dns.com");
         assert!(state.settings_screen.port.is_empty());
         assert!(state.settings_screen.path.is_empty());
     }
@@ -2665,9 +2665,9 @@ mod tests {
             generation: 1,
             config: AppConfig::default(),
         });
-        assert_eq!(state.settings_screen.server, "8.8.8.8");
-        state.settings_screen.server = "1.1.1.1".into();
-        state.settings_screen.server_name = "cloudflare-dns.com".into();
+        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        state.settings_screen.server = "8.8.8.8".into();
+        state.settings_screen.server_name = "dns.google".into();
         state.settings_screen.dirty = true;
         let mut config = AppConfig::default();
         config.settings.kill_switch = true;
@@ -2675,17 +2675,17 @@ mod tests {
             generation: 2,
             config,
         });
-        assert_eq!(state.settings_screen.server, "1.1.1.1");
-        assert_eq!(state.settings_screen.server_name, "cloudflare-dns.com");
+        assert_eq!(state.settings_screen.server, "8.8.8.8");
+        assert_eq!(state.settings_screen.server_name, "dns.google");
         assert!(state.settings_screen.dirty);
 
         let Some(Job::SetDns(dns)) = state.act(Action::SaveDns) else {
             panic!("expected DNS save");
         };
-        assert_eq!(dns.server_name, "cloudflare-dns.com");
+        assert_eq!(dns.server_name, "dns.google");
         assert!(state.operations.settings);
         assert!(state.act(Action::ResetDns).is_none());
-        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        assert_eq!(state.settings_screen.server, "8.8.8.8");
         let mut config = state.config.clone();
         config.settings.dns = dns;
         state.reduce(WorkerEvent::Config {
@@ -2696,7 +2696,7 @@ mod tests {
         state.reduce(WorkerEvent::SetDns(Ok(())));
         assert!(!state.operations.settings);
         assert!(!state.settings_screen.dirty);
-        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        assert_eq!(state.settings_screen.server, "8.8.8.8");
         assert!(state.act(Action::SaveDns).is_none());
     }
 
@@ -2755,14 +2755,14 @@ mod tests {
         assert!(state.settings_screen.dirty);
         state.settings_screen.server = "bad".into();
         assert!(state.act(Action::SaveDns).is_none());
-        state.settings_screen.server = "1.1.1.1".into();
+        state.settings_screen.server = "8.8.8.8".into();
         assert!(matches!(state.act(Action::SaveDns), Some(Job::SetDns(_))));
         state.reduce(WorkerEvent::SetDns(Err(
             rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
         )));
         assert!(!state.operations.settings);
         assert!(state.settings_screen.dirty);
-        assert_eq!(state.settings_screen.server, "1.1.1.1");
+        assert_eq!(state.settings_screen.server, "8.8.8.8");
         assert_eq!(
             state.operation_error.as_deref(),
             Some("could not determine the configuration directory")

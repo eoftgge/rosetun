@@ -68,8 +68,8 @@ pub struct DnsSettings {
 impl Default for DnsSettings {
     fn default() -> Self {
         Self {
-            server: IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-            server_name: "dns.google".to_owned(),
+            server: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+            server_name: "cloudflare-dns.com".to_owned(),
             port: None,
             path: None,
         }
@@ -176,10 +176,10 @@ mod settings_tests {
     }
 
     #[test]
-    fn dns_defaults_preserve_the_public_resolver() {
+    fn dns_defaults_use_cloudflare_resolver() {
         let dns = DnsSettings::default();
-        assert_eq!(dns.server, IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
-        assert_eq!(dns.server_name, "dns.google");
+        assert_eq!(dns.server, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));
+        assert_eq!(dns.server_name, "cloudflare-dns.com");
         assert_eq!(dns.port, None);
         assert_eq!(dns.path, None);
         assert_eq!(Settings::default().dns, dns);

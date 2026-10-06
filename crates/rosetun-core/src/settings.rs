@@ -17,9 +17,9 @@ pub enum SettingsError {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DnsInputError {
-    #[error("enter the resolver's IP address, such as 8.8.8.8")]
+    #[error("enter the resolver's IP address, such as 1.1.1.1")]
     InvalidServer,
-    #[error("enter the resolver's TLS name, such as dns.google")]
+    #[error("enter the resolver's TLS name, such as cloudflare-dns.com")]
     InvalidServerName,
     #[error("the port must be a number from 1 to 65535")]
     InvalidPort,
@@ -161,7 +161,7 @@ mod tests {
     fn default_and_custom_dns_input() {
         let default = DnsSettings::default();
         assert_eq!(
-            parse_dns_input(" 8.8.8.8 ", " dns.google ", "", "").unwrap(),
+            parse_dns_input(" 1.1.1.1 ", " cloudflare-dns.com ", "", "").unwrap(),
             default
         );
         let custom =

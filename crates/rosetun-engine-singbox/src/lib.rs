@@ -596,9 +596,9 @@ mod tests {
                 "type": "https",
                 "detour": "proxy",
                 "tag": "dns-proxy",
-                "server": "8.8.8.8",
+                "server": "1.1.1.1",
                 "tls": {
-                    "server_name": "dns.google",
+                    "server_name": "cloudflare-dns.com",
                 }
             })
         );
