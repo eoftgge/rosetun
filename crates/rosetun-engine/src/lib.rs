@@ -17,8 +17,56 @@ pub mod errors;
 pub const ENGINE_OUTPUT_TARGET: &str = "engine_output";
 
 use errors::EngineError;
-use rosetun_config::{EngineKind, Node, RuleId, RuleSet, Settings, Traffic};
+use rosetun_config::{EngineKind, Node, RuleId, RuleSet, Settings};
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
+
+/// A local-only control API that the engine serves for one session.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ControlEndpoint {
+    pub address: SocketAddr,
+    pub secret: String,
+}
+
+impl ControlEndpoint {
+    /// A free port on 127.0.0.1 and a random 256-bit secret.
+    pub fn local() -> std::io::Result<Self> {
+        // Another process may claim this port before the engine starts listening.
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        drop(listener);
+
+        let mut bytes = [0u8; 32];
+        getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
+        let hex = b"0123456789abcdef";
+        let mut secret = String::with_capacity(64);
+        for byte in bytes {
+            secret.push(char::from(hex[usize::from(byte >> 4)]));
+            secret.push(char::from(hex[usize::from(byte & 0x0f)]));
+        }
+        Ok(Self { address, secret })
+    }
+}
+
+impl std::fmt::Debug for ControlEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlEndpoint")
+            .field("address", &self.address)
+            .field("secret", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Bytes the engine has carried since it started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TrafficTotals {
+    pub up: u64,
+    pub down: u64,
+}
+
+pub trait TrafficProbe: Send + std::fmt::Debug {
+    fn totals(&mut self) -> Result<TrafficTotals, EngineError>;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineIntegration {
@@ -91,6 +139,11 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     fn locate_binary(&self) -> Result<PathBuf, EngineError>;
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError>;
 
+    /// Reads traffic from the control API that `render` enabled for `control`.
+    fn traffic_probe(&self, _control: &ControlEndpoint) -> Option<Box<dyn TrafficProbe>> {
+        None
+    }
+
     fn spawn(
         &self,
         binary: &Path,
@@ -103,6 +156,7 @@ pub struct RenderRequest<'a> {
     pub node: &'a Node,
     pub rules: &'a RuleSet,
     pub settings: &'a Settings,
+    pub control: Option<&'a ControlEndpoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,7 +184,6 @@ pub trait EngineProcess: Send + std::fmt::Debug {
         Ok(true)
     }
 
-    fn traffic(&mut self) -> Result<Traffic, EngineError>;
     fn stop(&mut self) -> Result<(), EngineError>;
 }
 
@@ -158,5 +211,27 @@ impl EngineRegistry {
 
     pub fn kinds(&self) -> impl Iterator<Item = EngineKind> + '_ {
         self.backends.iter().map(|backend| backend.kind())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ControlEndpoint;
+
+    #[test]
+    fn local_control_endpoint_uses_loopback_and_a_redacted_hex_secret() {
+        let endpoint = ControlEndpoint::local().expect("local endpoint");
+        assert!(endpoint.address.ip().is_loopback());
+        assert_ne!(endpoint.address.port(), 0);
+        assert_eq!(endpoint.secret.len(), 64);
+        assert!(
+            endpoint
+                .secret
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        );
+        let debug = format!("{endpoint:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains(&endpoint.secret));
     }
 }

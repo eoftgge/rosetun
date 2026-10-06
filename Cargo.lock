@@ -2687,6 +2687,7 @@ dependencies = [
 name = "rosetun-engine"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "rosetun-config",
  "thiserror 2.0.20",
 ]

@@ -8,8 +8,8 @@ pub enum EngineError {
     Render(String),
     #[error("engine exited with code {code:?}")]
     Exited { code: Option<i32> },
-    #[error("statistics are not available for this engine")]
-    StatsUnavailable,
+    #[error("statistics request failed: {0}")]
+    Stats(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
