@@ -1,12 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
     AppConfig, ConnectionState, DnsSettings, LanguageSetting, NodeId, ProcessMatch, RuleId,
-    RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, SubscriptionId,
+    RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
 };
-use rosetun_core::{AddFromUrlError, AddOptions, UpdateReport, UpdateSubscriptionError};
+use rosetun_core::{AddFromUrlError, AddOptions, Ping, UpdateReport, UpdateSubscriptionError};
 use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
 use crate::actions::{self, PrimaryAction};
@@ -33,6 +33,7 @@ pub(crate) struct Operations {
     pub(crate) kill_switch: bool,
     pub(crate) settings: bool,
     pub(crate) updating: BTreeSet<SubscriptionId>,
+    pub(crate) pinging: BTreeSet<SubscriptionId>,
     pub(crate) update_all: bool,
     pub(crate) removing: bool,
     pub(crate) moving_subscription: bool,
@@ -68,6 +69,13 @@ pub(crate) struct RemoveDialog {
 pub(crate) enum UpdateOutcome {
     Success(UpdateReport),
     Error(UpdateSubscriptionError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PingResult {
+    Pending,
+    Answered(Duration),
+    NoAnswer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -249,6 +257,7 @@ pub(crate) struct State {
     next_process_request: u64,
     pub(crate) expanded: BTreeSet<SubscriptionId>,
     pub(crate) outcomes: BTreeMap<SubscriptionId, UpdateOutcome>,
+    pub(crate) pings: HashMap<(SubscriptionId, NodeId), PingResult>,
     pub(crate) operations: Operations,
     pub(crate) add: Option<AddDialog>,
     pub(crate) remove: Option<RemoveDialog>,
@@ -275,6 +284,7 @@ impl Default for State {
             next_process_request: 0,
             expanded: BTreeSet::new(),
             outcomes: BTreeMap::new(),
+            pings: HashMap::new(),
             operations: Operations::default(),
             add: None,
             remove: None,
@@ -336,6 +346,7 @@ pub(crate) enum Action {
     CancelAdd,
     SubmitAdd,
     Update(SubscriptionId),
+    Ping(SubscriptionId),
     UpdateAll,
     RequestRemove(SubscriptionId),
     CancelRemove,
@@ -382,6 +393,7 @@ pub(crate) enum Job {
         options: AddOptions,
     },
     Update(SubscriptionId),
+    Ping(SubscriptionId),
     UpdateAll,
     Remove(SubscriptionId),
     MoveSubscription(SubscriptionId, usize),
@@ -435,6 +447,27 @@ impl State {
             return Some(Job::Connect);
         }
         None
+    }
+
+    pub(crate) fn can_ping(&self) -> bool {
+        !self.helper_available
+            || matches!(
+                self.status.state,
+                ConnectionState::Disconnected | ConnectionState::Failed { .. }
+            )
+    }
+
+    pub(crate) fn best_ping(&self, subscription: &Subscription) -> Option<Duration> {
+        subscription
+            .nodes
+            .iter()
+            .filter_map(
+                |node| match self.pings.get(&(subscription.id.clone(), node.id.clone())) {
+                    Some(PingResult::Answered(elapsed)) => Some(*elapsed),
+                    _ => None,
+                },
+            )
+            .min()
     }
 
     pub(crate) fn subscription_busy(&self, id: &SubscriptionId) -> bool {
@@ -517,6 +550,15 @@ impl State {
                     .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));
                 self.outcomes
                     .retain(|id, _| self.config.subscriptions.iter().any(|sub| &sub.id == id));
+                self.pings.retain(|(id, node), _| {
+                    self.config
+                        .subscriptions
+                        .iter()
+                        .any(|sub| &sub.id == id && sub.node(node).is_some())
+                });
+                self.operations
+                    .pinging
+                    .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));
                 self.reconcile_selected_set();
             }
             WorkerEvent::ConfigError(error) => self.config_error = Some(error),
@@ -722,6 +764,33 @@ impl State {
             WorkerEvent::Update { id, result } => {
                 self.operations.updating.remove(&id);
                 self.update_result(id, result);
+            }
+            WorkerEvent::Ping {
+                subscription,
+                node,
+                result,
+            } => {
+                if self.operations.pinging.contains(&subscription)
+                    && self
+                        .config
+                        .subscriptions
+                        .iter()
+                        .any(|sub| sub.id == subscription && sub.node(&node).is_some())
+                {
+                    let result = match result {
+                        Ping::Answered(elapsed) => PingResult::Answered(elapsed),
+                        Ping::NoAnswer => PingResult::NoAnswer,
+                    };
+                    self.pings.insert((subscription, node), result);
+                }
+            }
+            WorkerEvent::PingDone(subscription) => {
+                self.operations.pinging.remove(&subscription);
+                for ((id, _), result) in &mut self.pings {
+                    if id == &subscription && *result == PingResult::Pending {
+                        *result = PingResult::NoAnswer;
+                    }
+                }
             }
             WorkerEvent::UpdateAll(result) => {
                 self.operations.update_all = false;
@@ -1245,6 +1314,23 @@ impl State {
                     return Some(Job::Update(id));
                 }
             }
+            Action::Ping(id) => {
+                if self.can_ping()
+                    && !self.operations.pinging.contains(&id)
+                    && !self.subscription_busy(&id)
+                    && let Some(subscription) =
+                        self.config.subscriptions.iter().find(|subscription| {
+                            subscription.id == id && !subscription.nodes.is_empty()
+                        })
+                {
+                    for node in &subscription.nodes {
+                        self.pings
+                            .insert((id.clone(), node.id.clone()), PingResult::Pending);
+                    }
+                    self.operations.pinging.insert(id.clone());
+                    return Some(Job::Ping(id));
+                }
+            }
             Action::UpdateAll => {
                 if self.config_ready
                     && !self.config.subscriptions.is_empty()
@@ -1550,6 +1636,89 @@ mod tests {
         no_server.reduce(WorkerEvent::Status(Status::default()));
         assert!(no_server.take_auto_connect().is_none());
         assert!(!no_server.auto_connect_pending);
+    }
+
+    #[test]
+    fn ping_starts_only_with_tunnel_down_and_marks_nodes_pending() {
+        let mut state = state_for_auto_connect();
+        let id = SubscriptionId::new("1");
+        let node = NodeId::new("node");
+        state.status.state = ConnectionState::Connected;
+        assert!(state.act(Action::Ping(id.clone())).is_none());
+        state.status.state = ConnectionState::Disconnected;
+        assert!(
+            matches!(state.act(Action::Ping(id.clone())), Some(Job::Ping(found)) if found == id)
+        );
+        assert_eq!(state.pings[&(id.clone(), node)], PingResult::Pending);
+        assert!(state.operations.pinging.contains(&id));
+        assert!(state.act(Action::Ping(id.clone())).is_none());
+        state.reduce(WorkerEvent::PingDone(id.clone()));
+        assert!(!state.operations.pinging.contains(&id));
+    }
+
+    #[test]
+    fn ping_results_finish_missing_answers_and_prune_removed_nodes() {
+        let mut state = state_for_auto_connect();
+        let mut second = state.config.subscriptions[0].nodes[0].clone();
+        second.id = NodeId::new("second");
+        state.config.subscriptions[0].nodes.push(second);
+        let id = SubscriptionId::new("1");
+        let first = NodeId::new("node");
+        let second = NodeId::new("second");
+        assert!(matches!(
+            state.act(Action::Ping(id.clone())),
+            Some(Job::Ping(_))
+        ));
+        state.reduce(WorkerEvent::Ping {
+            subscription: id.clone(),
+            node: first.clone(),
+            result: Ping::Answered(Duration::from_millis(118)),
+        });
+        state.reduce(WorkerEvent::PingDone(id.clone()));
+        assert_eq!(
+            state.pings[&(id.clone(), first.clone())],
+            PingResult::Answered(Duration::from_millis(118))
+        );
+        assert_eq!(
+            state.pings[&(id.clone(), second.clone())],
+            PingResult::NoAnswer
+        );
+        assert_eq!(
+            state.best_ping(&state.config.subscriptions[0]),
+            Some(Duration::from_millis(118))
+        );
+
+        state.config.subscriptions[0]
+            .nodes
+            .retain(|node| node.id != first);
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: state.config.clone(),
+        });
+        assert!(!state.pings.contains_key(&(id, first)));
+        assert!(state.best_ping(&state.config.subscriptions[0]).is_none());
+    }
+
+    #[test]
+    fn best_ping_ignores_unanswered_nodes_and_chooses_smallest_answer() {
+        let mut state = state_for_auto_connect();
+        let id = SubscriptionId::new("1");
+        let mut second = state.config.subscriptions[0].nodes[0].clone();
+        second.id = NodeId::new("second");
+        state.config.subscriptions[0].nodes.push(second);
+        assert!(state.best_ping(&state.config.subscriptions[0]).is_none());
+        state.pings.insert(
+            (id.clone(), NodeId::new("node")),
+            PingResult::Answered(Duration::from_millis(118)),
+        );
+        state.pings.insert(
+            (id, NodeId::new("second")),
+            PingResult::Answered(Duration::from_millis(40)),
+        );
+        assert_eq!(
+            state.best_ping(&state.config.subscriptions[0]),
+            Some(Duration::from_millis(40))
+        );
     }
 
     #[test]

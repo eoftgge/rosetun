@@ -230,6 +230,7 @@ impl App {
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
             Job::Add { input, options } => self.workers.add(input, options),
             Job::Update(id) => self.workers.update(id),
+            Job::Ping(id) => self.workers.ping(id),
             Job::UpdateAll => self.workers.update_all(),
             Job::Remove(id) => self.workers.remove(id),
             Job::MoveSubscription(id, to_index) => self.workers.move_subscription(id, to_index),

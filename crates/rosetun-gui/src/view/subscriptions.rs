@@ -1,10 +1,12 @@
+use std::time::Duration;
+
 use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{Subscription, SubscriptionId};
 
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
-use crate::state::{Action, State, UpdateOutcome};
+use crate::state::{Action, PingResult, State, UpdateOutcome};
 use crate::strings::t;
 use crate::{display, strings, theme, widgets};
 
@@ -213,17 +215,16 @@ fn subscription_card(
             .updated_at_unix
             .map(|timestamp| t().last_updated(&t().updated_ago(timestamp, display::now_unix())))
             .unwrap_or_else(|| t().never_updated.to_owned());
-        ui.add(
-            egui::Label::new(
-                RichText::new(strings::subscription_summary(
-                    &t().servers(subscription.nodes.len()),
-                    &age,
-                ))
-                .small()
-                .color(theme::TEXT_DIM),
-            )
-            .truncate(),
-        );
+        let mut summary =
+            strings::subscription_summary(&t().servers(subscription.nodes.len()), &age);
+        if let Some(best) = state.best_ping(subscription) {
+            summary.push_str(" · ");
+            summary.push_str(&strings::fill(
+                t().ping_best,
+                &[("ms", &ping_millis(best).to_string())],
+            ));
+        }
+        ui.add(egui::Label::new(RichText::new(summary).small().color(theme::TEXT_DIM)).truncate());
         if let Some(UpdateOutcome::Error(error)) = state.outcomes.get(&subscription.id)
             && widgets::dismissible_error(ui, &state.text(&errors::update_subscription(t(), error)))
         {
@@ -321,6 +322,31 @@ fn subscription_card(
             });
         }
         ui.separator();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let checking = state.operations.pinging.contains(&subscription.id);
+            let enabled = state.config_ready
+                && !subscription.nodes.is_empty()
+                && !checking
+                && !state.subscription_busy(&subscription.id)
+                && state.can_ping();
+            let button = widgets::outline_button(
+                ui,
+                if checking {
+                    t().ping_checking
+                } else {
+                    t().ping_check
+                },
+                enabled,
+            );
+            let button = if state.can_ping() {
+                button
+            } else {
+                button.on_disabled_hover_text(t().ping_tunnel_up)
+            };
+            if button.clicked() {
+                actions.push(Action::Ping(subscription.id.clone()));
+            }
+        });
         if subscription.nodes.is_empty() {
             ui.colored_label(theme::TEXT_DIM, t().no_servers);
         }
@@ -335,13 +361,45 @@ fn subscription_card(
                 } else {
                     RichText::new(name).color(theme::TEXT)
                 };
-                let response = ui.add_enabled(
-                    state.config_ready && !state.operations.selection && !state.operations.helper,
-                    egui::Button::new(text).selected(selected).wrap(),
-                );
-                if response.clicked() {
-                    actions.push(Action::SelectNode(subscription.id.clone(), node.id.clone()));
-                }
+                let ping = state.pings.get(&(subscription.id.clone(), node.id.clone()));
+                ui.horizontal(|ui| {
+                    let ping_width = if ping.is_some() {
+                        108.0 + ui.spacing().item_spacing.x
+                    } else {
+                        0.0
+                    };
+                    let name_width = (ui.available_width() - ping_width).max(0.0);
+                    let response = ui
+                        .add_enabled_ui(
+                            state.config_ready
+                                && !state.operations.selection
+                                && !state.operations.helper,
+                            |ui| {
+                                ui.add_sized(
+                                    [name_width, 0.0],
+                                    egui::Button::new(text).selected(selected).wrap(),
+                                )
+                            },
+                        )
+                        .inner;
+                    if response.clicked() {
+                        actions.push(Action::SelectNode(subscription.id.clone(), node.id.clone()));
+                    }
+                    if let Some(result) = ping {
+                        let (label, color) = match result {
+                            PingResult::Answered(elapsed) => (
+                                strings::fill(
+                                    t().ping_ms,
+                                    &[("ms", &ping_millis(*elapsed).to_string())],
+                                ),
+                                theme::TEXT_DIM,
+                            ),
+                            PingResult::NoAnswer => (t().ping_no_answer.to_owned(), theme::ERROR),
+                            PingResult::Pending => (t().ping_pending.to_owned(), theme::TEXT_DIM),
+                        };
+                        ui.colored_label(color, label);
+                    }
+                });
                 ui.add(
                     egui::Label::new(
                         RichText::new(strings::node_details(
@@ -378,6 +436,15 @@ fn subscription_card(
         );
     }
     response.response
+}
+
+fn ping_millis(elapsed: Duration) -> u128 {
+    elapsed
+        .as_millis()
+        .saturating_add(u128::from(
+            !elapsed.subsec_nanos().is_multiple_of(1_000_000),
+        ))
+        .max(1)
 }
 
 fn provider_text(ui: &egui::Ui, state: &State, value: &str, style: egui::TextStyle) -> String {
@@ -480,5 +547,19 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
         });
     if !state.operations.removing && response.should_close() {
         actions.push(Action::CancelRemove);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ping_milliseconds_round_up_and_never_show_zero() {
+        assert_eq!(ping_millis(Duration::ZERO), 1);
+        assert_eq!(ping_millis(Duration::from_nanos(1)), 1);
+        assert_eq!(ping_millis(Duration::from_millis(1)), 1);
+        assert_eq!(ping_millis(Duration::from_micros(1_001)), 2);
+        assert_eq!(ping_millis(Duration::from_millis(118)), 118);
     }
 }
