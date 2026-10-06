@@ -76,12 +76,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .inspect_err(|error| tracing::warn!(%error, "Single-instance check failed"))
         .ok();
 
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_title(strings::TITLE)
+        .with_decorations(!view::header::CUSTOM_FRAME)
+        .with_inner_size([1200.0, 780.0])
+        .with_min_inner_size([960.0, 640.0]);
+    #[cfg(windows)]
+    if start_hidden {
+        // eframe shows the window after its first frame; keep that frame off every screen.
+        viewport = viewport.with_position(app::OFFSCREEN).with_active(false);
+    }
     let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title(strings::TITLE)
-            .with_decorations(!view::header::CUSTOM_FRAME)
-            .with_inner_size([1200.0, 780.0])
-            .with_min_inner_size([960.0, 640.0]),
+        viewport,
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };

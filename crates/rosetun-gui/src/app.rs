@@ -13,6 +13,20 @@ use crate::worker::{self, WorkerDispatcher, WorkerEvent};
 use crate::{theme, view};
 
 #[cfg(windows)]
+/// Far outside every monitor: the first frame of a hidden start is drawn here.
+pub(crate) const OFFSCREEN: egui::Pos2 = egui::pos2(-32000.0, -32000.0);
+
+#[cfg(windows)]
+fn centered_position(monitor: Option<egui::Vec2>, window: egui::Vec2) -> egui::Pos2 {
+    monitor.map_or(egui::pos2(80.0, 80.0), |monitor| {
+        egui::pos2(
+            ((monitor.x - window.x) / 2.0).max(0.0),
+            ((monitor.y - window.y) / 2.0).max(0.0),
+        )
+    })
+}
+
+#[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShellEvent {
     Show,
@@ -31,6 +45,8 @@ pub(crate) struct App {
     tray: Option<tray::Tray>,
     #[cfg(windows)]
     hide_on_start: bool,
+    #[cfg(windows)]
+    place_on_show: bool,
     #[cfg(windows)]
     quitting: bool,
 }
@@ -57,6 +73,8 @@ impl App {
             #[cfg(windows)]
             hide_on_start: false,
             #[cfg(windows)]
+            place_on_show: false,
+            #[cfg(windows)]
             quitting: false,
         }
     }
@@ -78,6 +96,10 @@ impl App {
             }
         };
         self.hide_on_start = start_hidden && self.tray.is_some();
+        self.place_on_show = start_hidden;
+        if start_hidden && self.tray.is_none() {
+            let _ = sender.send(ShellEvent::Show);
+        }
         if let Some(activation) = activation {
             let ctx = ctx.clone();
             std::thread::spawn(move || {
@@ -94,6 +116,27 @@ impl App {
             });
         }
         self
+    }
+
+    #[cfg(windows)]
+    fn show_window(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.place_on_show) {
+            let (monitor, size) = ctx.input(|input| {
+                let viewport = input.viewport();
+                (
+                    viewport.monitor_size,
+                    viewport
+                        .outer_rect
+                        .map_or(egui::vec2(1200.0, 780.0), |rect| rect.size()),
+                )
+            });
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(centered_position(
+                monitor, size,
+            )));
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
     #[cfg(windows)]
@@ -186,11 +229,7 @@ impl eframe::App for App {
                 .and_then(|events| events.try_recv().ok())
             {
                 match event {
-                    ShellEvent::Show => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                    }
+                    ShellEvent::Show => self.show_window(ctx),
                     ShellEvent::Primary => {
                         if let Some(job) = self.state.act(Action::Primary) {
                             self.dispatch(job);
@@ -237,9 +276,40 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::centered_position;
     use super::{initial_scale, next_scale};
+    #[cfg(windows)]
+    use eframe::egui;
     use rosetun_core::Store;
     use std::fs;
+
+    #[cfg(windows)]
+    #[test]
+    fn window_is_centered_on_monitor() {
+        assert_eq!(
+            centered_position(Some(egui::vec2(1920.0, 1080.0)), egui::vec2(1200.0, 780.0)),
+            egui::pos2(360.0, 150.0),
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn window_does_not_start_above_or_left_of_a_small_monitor() {
+        assert_eq!(
+            centered_position(Some(egui::vec2(800.0, 600.0)), egui::vec2(1200.0, 780.0)),
+            egui::pos2(0.0, 0.0),
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn window_uses_fallback_position_without_monitor_size() {
+        assert_eq!(
+            centered_position(None, egui::vec2(1200.0, 780.0)),
+            egui::pos2(80.0, 80.0),
+        );
+    }
 
     #[test]
     fn scale_applies_on_first_config_and_on_change_only() {
