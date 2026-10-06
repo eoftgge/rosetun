@@ -40,6 +40,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Threading",
     "Win32_System_Pipes",
     "Win32_System_Rpc",
+    "Win32_System_Services",
 ] }
 url = "2.5.8"
 base64 = "0.23.1"

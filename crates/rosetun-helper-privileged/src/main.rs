@@ -1,67 +1,205 @@
 #![allow(unreachable_pub)]
 
 #[cfg(windows)]
+mod data_dir;
+#[cfg(windows)]
+mod log_file;
+#[cfg(windows)]
 mod process_job;
-
 mod server;
+#[cfg(windows)]
+mod service;
 mod state;
 
-use crate::server::Helper;
+use std::ffi::OsString;
+use std::path::Path;
 use std::sync::Arc;
 
-use rosetun_engine::EngineRegistry;
+use rosetun_engine::{EngineBackend, EngineRegistry};
 use rosetun_engine_singbox::SingBoxBackend;
 use rosetun_ipc::Listener;
 
-fn main() -> std::process::ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG").unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(format!(
-                    "info,{}=trace",
-                    rosetun_engine::ENGINE_OUTPUT_TARGET
-                ))
-            }),
-        )
-        .init();
+use crate::server::{Helper, Server};
 
-    #[cfg(windows)]
-    if let Err(error) = process_job::install() {
-        tracing::error!(%error, "failed to install helper process-lifetime job");
-        return std::process::ExitCode::FAILURE;
+const USAGE: &str =
+    "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service]";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Console,
+    Service,
+    InstallService,
+    UninstallService,
+}
+
+fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> {
+    let args: Vec<_> = args.into_iter().collect();
+    match args.as_slice() {
+        [] => Ok(Mode::Console),
+        [arg] if arg == "--service" => Ok(Mode::Service),
+        [arg] if arg == "--install-service" => Ok(Mode::InstallService),
+        [arg] if arg == "--uninstall-service" => Ok(Mode::UninstallService),
+        _ => Err(USAGE.to_owned()),
     }
+}
 
-    let work_dir = work_dir();
-    let mut engines = EngineRegistry::new();
-    engines.register(Box::new(SingBoxBackend::new(work_dir.join("sing-box"))));
+fn log_filter() -> tracing_subscriber::EnvFilter {
+    tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG").unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(format!(
+            "info,{}=trace",
+            rosetun_engine::ENGINE_OUTPUT_TARGET
+        ))
+    })
+}
 
-    let helper = Arc::new(Helper::new(engines, rosetun_routing::backend()));
-    let endpoint = rosetun_ipc::default_endpoint();
-    let listener = match Listener::bind(&endpoint) {
-        Ok(listener) => listener,
-        Err(error) => {
-            tracing::error!(endpoint = %endpoint.display(), %error, "failed to bind socket");
-            return std::process::ExitCode::FAILURE;
+fn main() -> std::process::ExitCode {
+    let mode = match parse_mode(std::env::args_os().skip(1)) {
+        Ok(mode) => mode,
+        Err(message) => {
+            eprintln!("{message}");
+            return std::process::ExitCode::from(2);
         }
     };
 
-    if let Err(error) = server::serve(listener, helper) {
+    #[cfg(not(windows))]
+    if mode != Mode::Console {
+        eprintln!("--service and its install flags are Windows only");
+        return std::process::ExitCode::from(2);
+    }
+
+    match mode {
+        Mode::Console => run_console(),
+        #[cfg(windows)]
+        Mode::Service => run_service(),
+        #[cfg(windows)]
+        Mode::InstallService => service_command(service::install()),
+        #[cfg(windows)]
+        Mode::UninstallService => service_command(service::uninstall()),
+        #[cfg(not(windows))]
+        _ => unreachable!("non-Windows modes were rejected above"),
+    }
+}
+
+#[cfg(windows)]
+fn service_command(result: std::io::Result<()>) -> std::process::ExitCode {
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_console() -> std::process::ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(log_filter())
+        .init();
+
+    #[cfg(windows)]
+    let run_dir = match data_dir::data_dir().and_then(|dir| {
+        data_dir::secure(&dir)?;
+        Ok(dir.join("run"))
+    }) {
+        Ok(dir) => dir,
+        Err(error) => {
+            tracing::error!(%error, "failed to secure helper data directory");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    #[cfg(not(windows))]
+    let run_dir = std::path::PathBuf::from("/run/rosetun");
+
+    let (listener, helper) = match start(&run_dir) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(%error, "failed to start helper");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = Server::new(true).serve(listener, helper) {
         tracing::error!(%error, "helper stopped");
         return std::process::ExitCode::FAILURE;
     }
     std::process::ExitCode::SUCCESS
 }
 
-fn work_dir() -> std::path::PathBuf {
-    if let Some(custom) = std::env::var_os("ROSETUN_WORK_DIR") {
-        return std::path::PathBuf::from(custom);
+#[cfg(windows)]
+fn run_service() -> std::process::ExitCode {
+    let result = data_dir::data_dir().and_then(|dir| {
+        data_dir::secure(&dir)?;
+        log_file::RotatingFile::open(&dir.join("logs"), log_file::LOG_LIMIT)
+    });
+    let file = match result {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("failed to initialize Rosetun service data and log: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(log_filter())
+        .with_writer(std::sync::Mutex::new(file))
+        .with_ansi(false)
+        .init();
+    service::run()
+}
+
+#[derive(Debug)]
+struct StartError(String);
+
+impl std::fmt::Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
-    #[cfg(unix)]
-    {
-        std::path::PathBuf::from("/run/rosetun")
-    }
+}
+
+fn start(run_dir: &Path) -> Result<(Listener, Arc<Helper>), StartError> {
     #[cfg(windows)]
-    {
-        std::path::PathBuf::from(r"C:\ProgramData\Rosetun\run")
+    process_job::install().map_err(|error| {
+        StartError(format!(
+            "failed to install helper process-lifetime job: {error}"
+        ))
+    })?;
+
+    let mut engines = EngineRegistry::new();
+    let singbox = SingBoxBackend::new(run_dir.join("sing-box"));
+    let warmup = singbox.clone();
+    std::thread::Builder::new()
+        .name("engine-warmup".to_owned())
+        .spawn(move || match warmup.locate_binary() {
+            Ok(binary) => tracing::info!(binary = %binary.display(), "sing-box is ready"),
+            Err(error) => tracing::warn!(%error, "sing-box check at start failed"),
+        })
+        .map_err(|error| StartError(format!("failed to start engine warmup thread: {error}")))?;
+    engines.register(Box::new(singbox));
+
+    let helper = Arc::new(Helper::new(engines, rosetun_routing::backend()));
+    let endpoint = rosetun_ipc::default_endpoint();
+    let listener = Listener::bind(&endpoint).map_err(|error| {
+        StartError(format!(
+            "failed to bind socket {}: {error}",
+            endpoint.display()
+        ))
+    })?;
+    Ok((listener, helper))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modes_accept_only_one_known_flag() {
+        let mode = |args: &[&str]| parse_mode(args.iter().map(OsString::from));
+        assert_eq!(mode(&[]), Ok(Mode::Console));
+        assert_eq!(mode(&["--service"]), Ok(Mode::Service));
+        assert_eq!(mode(&["--install-service"]), Ok(Mode::InstallService));
+        assert_eq!(mode(&["--uninstall-service"]), Ok(Mode::UninstallService));
+        assert_eq!(mode(&["--unknown"]), Err(USAGE.to_owned()));
+        assert_eq!(
+            mode(&["--service", "--install-service"]),
+            Err(USAGE.to_owned())
+        );
     }
 }

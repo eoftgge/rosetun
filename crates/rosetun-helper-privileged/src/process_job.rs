@@ -83,6 +83,7 @@ mod tests {
         let job = create_job().expect("job creation succeeds");
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
 
+        // SAFETY: The job and the output buffer remain valid for the query.
         let queried = unsafe {
             QueryInformationJobObject(
                 job.as_raw_handle() as HANDLE,

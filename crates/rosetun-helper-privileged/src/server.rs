@@ -1,5 +1,6 @@
+use std::io;
 use std::sync::Arc;
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use rosetun_ipc::{
     Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request, Response,
@@ -14,58 +15,86 @@ enum ServerEvent {
     Shutdown,
 }
 
-pub fn serve(listener: Listener, helper: Arc<Helper>) -> std::io::Result<()> {
-    tracing::info!(endpoint = %listener.path().display(), "helper listener started");
+pub(crate) struct Server {
+    tx: Sender<ServerEvent>,
+    rx: Receiver<ServerEvent>,
+    ipc_shutdown: bool,
+}
 
-    let (event_tx, event_rx) = channel::<ServerEvent>();
-    let accept_tx = event_tx.clone();
+#[derive(Debug, Clone)]
+pub(crate) struct ShutdownHandle(Sender<ServerEvent>);
 
-    std::thread::Builder::new()
-        .name("rosetun-ipc-accept".to_owned())
-        .spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok(connection) => {
-                        if accept_tx.send(ServerEvent::Accepted(connection)).is_err() {
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "failed to accept connection");
-                    }
-                }
-            }
-        })?;
-
-    while let Ok(event) = event_rx.recv() {
-        match event {
-            ServerEvent::Accepted(connection) => {
-                let helper = Arc::clone(&helper);
-                let event_tx = event_tx.clone();
-                std::thread::spawn(move || {
-                    if let Err(error) = handle(connection, helper, event_tx) {
-                        tracing::warn!(%error, "the connection was closed with an error");
-                    }
-                });
-            }
-            ServerEvent::Shutdown => {
-                helper.shutdown();
-                tracing::info!("helper shutdown completed");
-                return Ok(());
-            }
+impl Server {
+    pub(crate) fn new(ipc_shutdown: bool) -> Self {
+        let (tx, rx) = channel();
+        Self {
+            tx,
+            rx,
+            ipc_shutdown,
         }
     }
 
-    helper.shutdown();
-    Err(std::io::Error::other(
-        "helper event channel closed unexpectedly",
-    ))
+    pub(crate) fn shutdown_handle(&self) -> ShutdownHandle {
+        ShutdownHandle(self.tx.clone())
+    }
+
+    pub(crate) fn serve(self, listener: Listener, helper: Arc<Helper>) -> io::Result<()> {
+        tracing::info!(endpoint = %listener.path().display(), "helper listener started");
+
+        let accept_tx = self.tx.clone();
+        std::thread::Builder::new()
+            .name("rosetun-ipc-accept".to_owned())
+            .spawn(move || {
+                loop {
+                    match listener.accept() {
+                        Ok(connection) => {
+                            if accept_tx.send(ServerEvent::Accepted(connection)).is_err() {
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "failed to accept connection");
+                        }
+                    }
+                }
+            })?;
+
+        while let Ok(event) = self.rx.recv() {
+            match event {
+                ServerEvent::Accepted(connection) => {
+                    let helper = Arc::clone(&helper);
+                    let event_tx = self.tx.clone();
+                    let ipc_shutdown = self.ipc_shutdown;
+                    std::thread::spawn(move || {
+                        if let Err(error) = handle(connection, helper, event_tx, ipc_shutdown) {
+                            tracing::warn!(%error, "the connection was closed with an error");
+                        }
+                    });
+                }
+                ServerEvent::Shutdown => {
+                    helper.shutdown();
+                    tracing::info!("helper shutdown completed");
+                    return Ok(());
+                }
+            }
+        }
+
+        helper.shutdown();
+        Err(io::Error::other("helper event channel closed unexpectedly"))
+    }
+}
+
+impl ShutdownHandle {
+    pub(crate) fn request(&self) {
+        let _ = self.0.send(ServerEvent::Shutdown);
+    }
 }
 
 fn handle(
     mut connection: Connection,
     helper: Arc<Helper>,
     event_tx: Sender<ServerEvent>,
+    ipc_shutdown: bool,
 ) -> Result<(), String> {
     let mut greeted = false;
 
@@ -93,7 +122,7 @@ fn handle(
         }
 
         tracing::debug!(request = ?body, "handling helper request");
-        let response = dispatch(&body, &helper, &mut greeted);
+        let response = dispatch(&body, &helper, &mut greeted, ipc_shutdown);
         let fatal = matches!(
             response,
             Response::Error(HelperError {
@@ -119,7 +148,12 @@ fn handle(
     }
 }
 
-fn dispatch(request: &Request, helper: &Helper, greeted: &mut bool) -> Response {
+fn dispatch(
+    request: &Request,
+    helper: &Helper,
+    greeted: &mut bool,
+    ipc_shutdown: bool,
+) -> Response {
     match request {
         Request::Hello {
             client,
@@ -157,6 +191,10 @@ fn dispatch(request: &Request, helper: &Helper, greeted: &mut bool) -> Response 
             ErrorCode::NotImplemented,
             "events are not pushed yet; poll with status",
         )),
+        Request::Shutdown if !ipc_shutdown => Response::Error(HelperError::new(
+            ErrorCode::InvalidState,
+            "the helper runs as a service; stop the Rosetun service instead",
+        )),
         Request::Shutdown => Response::Ok,
     }
 }
@@ -165,4 +203,29 @@ fn reply(connection: &mut Connection, id: u64, body: Response) -> Result<(), Str
     connection
         .write(&Frame::Response { id, body })
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_is_rejected_only_in_service_mode() {
+        let helper = Helper::new(
+            rosetun_engine::EngineRegistry::new(),
+            rosetun_routing::backend(),
+        );
+        let mut greeted = true;
+        assert!(matches!(
+            dispatch(&Request::Shutdown, &helper, &mut greeted, false),
+            Response::Error(HelperError {
+                code: ErrorCode::InvalidState,
+                ..
+            })
+        ));
+        assert!(matches!(
+            dispatch(&Request::Shutdown, &helper, &mut greeted, true),
+            Response::Ok
+        ));
+    }
 }
