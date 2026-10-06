@@ -629,7 +629,7 @@ mod tests {
         let unsafe_detail = ClientError::Transport("socket\u{202e}failed".to_owned());
         assert_eq!(
             client(&EN, &unsafe_detail),
-            "unable to contact helper: socket failed"
+            "unable to contact the Rosetun service: socket failed"
         );
     }
 

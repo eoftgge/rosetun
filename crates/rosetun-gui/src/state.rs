@@ -2008,7 +2008,7 @@ mod tests {
         assert!(!state.operations.helper);
         assert_eq!(
             state.operation_error.as_deref(),
-            Some("the helper is busy with another operation: retry")
+            Some("the service is busy with another operation: retry")
         );
 
         state.operations.helper = true;
