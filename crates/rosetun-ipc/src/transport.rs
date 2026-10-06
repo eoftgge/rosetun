@@ -110,10 +110,16 @@ mod platform {
         ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE,
         GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
     };
-    use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
-    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
+    };
+    use windows_sys::Win32::Security::{
+        IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES,
+        WinBuiltinAdministratorsSid, WinLocalSystemSid,
+    };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
+        SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
     };
     use windows_sys::Win32::System::Pipes::{
         CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
@@ -148,13 +154,68 @@ mod platform {
     }
 
     fn last_error() -> io::Error {
+        // SAFETY: GetLastError has no pointer or ownership requirements.
         io::Error::from_raw_os_error(unsafe { GetLastError() } as i32)
     }
 
-    fn security_descriptor() -> io::Result<*mut c_void> {
+    struct SecurityDescriptor(*mut c_void);
+
+    impl Drop for SecurityDescriptor {
+        fn drop(&mut self) {
+            // SAFETY: The descriptor was allocated by Windows and is freed exactly once.
+            unsafe { LocalFree(self.0) };
+        }
+    }
+
+    pub(super) fn trusted_owner(owner: PSID) -> bool {
+        if owner.is_null() {
+            return false;
+        }
+        // The helper runs as SYSTEM or elevated in development. A pipe owned by
+        // another account may have been created first to steal node credentials.
+        // SAFETY: The SID comes from a live security descriptor and remains valid
+        // for both calls.
+        unsafe {
+            IsWellKnownSid(owner, WinLocalSystemSid) != 0
+                || IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0
+        }
+    }
+
+    fn verify_owner(handle: &OwnedHandle) -> io::Result<()> {
+        let mut owner = std::ptr::null_mut();
+        let mut descriptor = std::ptr::null_mut();
+        // SAFETY: The handle is live; the owner and descriptor outputs are valid
+        // for this call, and the descriptor is subsequently owned by LocalFree.
+        let status = unsafe {
+            GetSecurityInfo(
+                handle.as_raw_handle() as HANDLE,
+                SE_KERNEL_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        let _descriptor = SecurityDescriptor(descriptor);
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status as i32));
+        }
+        if !trusted_owner(owner) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the helper pipe is not owned by SYSTEM or Administrators",
+            ));
+        }
+        Ok(())
+    }
+
+    fn security_descriptor() -> io::Result<SecurityDescriptor> {
         let sddl = wide_string(SECURITY_DESCRIPTOR_SDDL);
         let mut descriptor = std::ptr::null_mut();
 
+        // SAFETY: The SDDL string and output pointer are valid for the call.
         let result = unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 sddl.as_ptr(),
@@ -167,7 +228,7 @@ mod platform {
             return Err(last_error());
         }
 
-        Ok(descriptor)
+        Ok(SecurityDescriptor(descriptor))
     }
 
     fn create_instance(name: &[u16], first: bool) -> io::Result<OwnedHandle> {
@@ -181,13 +242,14 @@ mod platform {
         } else {
             None
         };
-        let attributes = descriptor.map(|descriptor| SECURITY_ATTRIBUTES {
+        let attributes = descriptor.as_ref().map(|descriptor| SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: descriptor,
+            lpSecurityDescriptor: descriptor.0,
             bInheritHandle: 0,
         });
         let attributes = attributes.as_ref().map_or(std::ptr::null(), |value| value);
 
+        // SAFETY: The name and optional security attributes remain live for the call.
         let handle = unsafe {
             CreateNamedPipeW(
                 name.as_ptr(),
@@ -201,12 +263,6 @@ mod platform {
             )
         };
 
-        if let Some(descriptor) = descriptor {
-            unsafe {
-                LocalFree(descriptor);
-            }
-        }
-
         if handle == INVALID_HANDLE_VALUE {
             let error = last_error();
             if first && error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) {
@@ -218,11 +274,13 @@ mod platform {
             return Err(error);
         }
 
+        // SAFETY: CreateNamedPipeW returned a live handle now owned by OwnedHandle.
         Ok(unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) })
     }
 
     fn wait_for_connection(handle: &OwnedHandle) -> io::Result<()> {
         let handle = handle.as_raw_handle() as HANDLE;
+        // SAFETY: The pipe handle stays live during the synchronous connection.
         let result = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
         if result != 0 {
             return Ok(());
@@ -243,10 +301,11 @@ mod platform {
         Ok(Connection::new(Box::new(reader), Box::new(writer)))
     }
 
-    pub fn connect(endpoint: &Path) -> io::Result<Connection> {
+    pub(super) fn open(endpoint: &Path, check_owner: bool) -> io::Result<Connection> {
         let name = wide_path(endpoint);
 
         for attempt in 0..CONNECT_ATTEMPTS {
+            // SAFETY: The pipe name is NUL-terminated and remains live for the call.
             let handle = unsafe {
                 CreateFileW(
                     name.as_ptr(),
@@ -254,13 +313,17 @@ mod platform {
                     0,
                     std::ptr::null(),
                     OPEN_EXISTING,
-                    0,
+                    SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
                     std::ptr::null_mut(),
                 )
             };
 
             if handle != INVALID_HANDLE_VALUE {
+                // SAFETY: CreateFileW returned a live handle now owned by OwnedHandle.
                 let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
+                if check_owner {
+                    verify_owner(&handle)?;
+                }
                 return connection_from_handle(handle);
             }
 
@@ -271,6 +334,7 @@ mod platform {
                 return Err(error);
             }
 
+            // SAFETY: The pipe name is NUL-terminated and remains live for the call.
             let available = unsafe { WaitNamedPipeW(name.as_ptr(), CONNECT_WAIT_MS) };
             if available == 0 {
                 return Err(last_error());
@@ -278,6 +342,10 @@ mod platform {
         }
 
         unreachable!("connection attempts always return or succeed")
+    }
+
+    pub fn connect(endpoint: &Path) -> io::Result<Connection> {
+        open(endpoint, true)
     }
 
     #[derive(Debug)]
@@ -361,12 +429,19 @@ mod platform {
 pub use platform::{Listener, connect};
 
 #[cfg(all(test, windows))]
+#[allow(unsafe_code)]
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc;
 
-    use crate::{Connection, Frame, Listener, Request, Response, connect};
+    use windows_sys::Win32::Security::{
+        CreateWellKnownSid, SECURITY_MAX_SID_SIZE, WinBuiltinAdministratorsSid, WinBuiltinUsersSid,
+        WinLocalSystemSid, WinWorldSid,
+    };
+
+    use super::platform::{open, trusted_owner};
+    use crate::{Connection, Frame, Listener, Request, Response};
 
     static NEXT_ENDPOINT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -376,6 +451,35 @@ mod tests {
             r"\\.\pipe\rosetun-ipc-test-{}-{id}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn only_system_and_administrators_own_trusted_pipes() {
+        for (sid_type, trusted) in [
+            (WinLocalSystemSid, true),
+            (WinBuiltinAdministratorsSid, true),
+            (WinBuiltinUsersSid, false),
+            (WinWorldSid, false),
+        ] {
+            let mut sid = [0u8; SECURITY_MAX_SID_SIZE as usize];
+            let mut size = sid.len() as u32;
+            // SAFETY: The SID output is backed by a buffer of the advertised size.
+            let result = unsafe {
+                CreateWellKnownSid(
+                    sid_type,
+                    std::ptr::null_mut(),
+                    sid.as_mut_ptr().cast(),
+                    &mut size,
+                )
+            };
+            assert_ne!(
+                result,
+                0,
+                "SID creation failed: {}",
+                std::io::Error::last_os_error()
+            );
+            assert_eq!(trusted_owner(sid.as_mut_ptr().cast()), trusted);
+        }
     }
 
     fn roundtrip(connection: &mut Connection, id: u64) {
@@ -433,7 +537,7 @@ mod tests {
         });
 
         for id in 1..=32 {
-            let mut connection = connect(&endpoint).expect("client connects");
+            let mut connection = open(&endpoint, false).expect("client connects");
             roundtrip(&mut connection, id);
         }
 
@@ -477,12 +581,12 @@ mod tests {
                 .expect("second response is written");
         });
 
-        drop(connect(&endpoint).expect("first client connects"));
+        drop(open(&endpoint, false).expect("first client connects"));
         first_accept_failed_rx
             .recv()
             .expect("server observed the failed first accept");
 
-        let mut second = connect(&endpoint).expect("second client connects");
+        let mut second = open(&endpoint, false).expect("second client connects");
         roundtrip(&mut second, 2);
         drop(second);
 
