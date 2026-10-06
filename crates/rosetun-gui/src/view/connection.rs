@@ -314,6 +314,10 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
         }
         _ => None,
     };
+    let flag = state
+        .config
+        .active_node()
+        .and_then(|(_, node)| display::leading_flag(&node.name).0);
     let width = ui.available_width();
     let response = egui::Frame::new()
         .fill(theme::INPUT)
@@ -323,13 +327,23 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
         .show(ui, |ui| {
             ui.set_min_width(width - 28.0);
             ui.horizontal(|ui| {
-                if let Some(code) = country {
+                if let Some((code, verified)) = country
+                    .map(|code| (code, true))
+                    .or_else(|| flag.as_deref().map(|code| (code, false)))
+                {
                     let (badge, _) =
                         ui.allocate_exact_size(egui::vec2(36.0, 26.0), egui::Sense::hover());
                     ui.painter().rect_stroke(
                         badge,
                         theme::RADIUS_INNER,
-                        egui::Stroke::new(1.0, theme::ROSE_DARK),
+                        egui::Stroke::new(
+                            1.0,
+                            if verified {
+                                theme::ROSE_DARK
+                            } else {
+                                theme::BORDER_STRONG
+                            },
+                        ),
                         egui::StrokeKind::Inside,
                     );
                     ui.painter().text(
@@ -337,7 +351,11 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                         egui::Align2::CENTER_CENTER,
                         code,
                         egui::FontId::monospace(13.0),
-                        theme::ROSE_LIGHT,
+                        if verified {
+                            theme::ROSE_LIGHT
+                        } else {
+                            theme::TEXT_MUTED
+                        },
                     );
                 }
                 let name_width = (ui.available_width() - 100.0).max(0.0);
@@ -353,7 +371,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                                     17.0,
                                     egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
                                 ),
-                                &state.text(&node.name),
+                                &state.text(display::leading_flag(&node.name).1),
                             );
                             ui.add(
                                 egui::Label::new(
@@ -368,8 +386,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                             );
                             let subscription = state.text(&subscription.name);
                             let address = state.text(&rosetun_core::node_address(node));
-                            let detail =
-                                format!("{} · {subscription} · {address}", t().subscription_label);
+                            let detail = format!("{subscription} · {address}");
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(detail).small().color(theme::TEXT_DIM),

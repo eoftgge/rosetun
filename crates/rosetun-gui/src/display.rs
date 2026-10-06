@@ -64,6 +64,26 @@ pub(crate) fn regional_flags(value: &str) -> String {
     output
 }
 
+/// A flag emoji at the start of a server name, as its two-letter code, and the rest of the name.
+pub(crate) fn leading_flag(name: &str) -> (Option<String>, &str) {
+    let mut characters = name.trim_start().chars();
+    let (Some(first), Some(second)) = (characters.next(), characters.next()) else {
+        return (None, name);
+    };
+    if !is_regional_indicator(first) || !is_regional_indicator(second) {
+        return (None, name);
+    }
+    let rest = characters.as_str().trim_start();
+    if rest.is_empty() {
+        return (None, name);
+    }
+    let code = [first, second]
+        .map(|character| (character as u32 - REGIONAL_START + u32::from(b'A')) as u8 as char)
+        .into_iter()
+        .collect();
+    (Some(code), rest)
+}
+
 const REGIONAL_START: u32 = 0x1f1e6;
 const REGIONAL_END: u32 = 0x1f1ff;
 
@@ -135,6 +155,24 @@ mod tests {
     #[test]
     fn adjacent_flags_are_rendered_independently() {
         assert_eq!(safe_text("🇩🇪🇫🇷"), "[DE][FR]");
+    }
+
+    #[test]
+    fn leading_flags_split_country_code_from_server_name() {
+        for (name, code, rest) in [
+            ("🇳🇱 Amsterdam", Some("NL"), "Amsterdam"),
+            ("  🇩🇪Frankfurt", Some("DE"), "Frankfurt"),
+            ("Amsterdam 🇳🇱", None, "Amsterdam 🇳🇱"),
+            ("🇳 Amsterdam", None, "🇳 Amsterdam"),
+            ("🇳🇱", None, "🇳🇱"),
+            ("🇳🇱🇩🇪 Mix", Some("NL"), "🇩🇪 Mix"),
+        ] {
+            assert_eq!(
+                leading_flag(name),
+                (code.map(str::to_owned), rest),
+                "{name}"
+            );
+        }
     }
 
     #[test]

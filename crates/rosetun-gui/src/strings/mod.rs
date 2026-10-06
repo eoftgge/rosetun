@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use rosetun_config::{LanguageSetting, SubscriptionInfo};
+use rosetun_config::LanguageSetting;
 
 mod en;
 mod ru;
@@ -259,7 +259,6 @@ pub(crate) struct Strings {
     pub(crate) hide_details: &'static str,
     pub(crate) select_server: &'static str,
     pub(crate) server_change: &'static str,
-    pub(crate) subscription_label: &'static str,
     pub(crate) protocol: &'static str,
     pub(crate) external_ip: &'static str,
     pub(crate) ip_own: &'static str,
@@ -309,6 +308,16 @@ pub(crate) struct Strings {
     pub(crate) updating: &'static str,
     pub(crate) auto_update_every: &'static str,
     pub(crate) auto_update_on: &'static str,
+    pub(crate) servers_heading: &'static str,
+    pub(crate) quota_used: &'static str,
+    pub(crate) quota_used_of: &'static str,
+    pub(crate) last_updated_template: &'static str,
+    pub(crate) term_left_template: &'static str,
+    pub(crate) term_day_one: &'static str,
+    pub(crate) term_day_few: &'static str,
+    pub(crate) term_day_many: &'static str,
+    pub(crate) term_under_day: &'static str,
+    pub(crate) term_expired: &'static str,
     pub(crate) never_updated: &'static str,
     pub(crate) no_subscriptions: &'static str,
     pub(crate) empty_subscriptions: &'static str,
@@ -441,6 +450,10 @@ pub(crate) fn node_details(protocol: &str, tls: &str, transport: &str) -> String
     format!("{protocol} · {tls} · {transport}")
 }
 
+pub(crate) fn server_tooltip(name: &str, details: &str, address: &str) -> String {
+    format!("{name}\n{details}\n{address}")
+}
+
 pub(crate) fn session_time(hours: u64, minutes: u64, seconds: u64) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
@@ -509,10 +522,7 @@ impl Strings {
     }
 
     pub(crate) fn last_updated(&self, age: &str) -> String {
-        match self.language {
-            Language::English => format!("updated {age}"),
-            Language::Russian => format!("обновлено {age}"),
-        }
+        fill(self.last_updated_template, &[("age", age)])
     }
 
     pub(crate) fn traffic_peak(&self, rate: &str) -> String {
@@ -602,29 +612,31 @@ impl Strings {
         }
     }
 
-    pub(crate) fn expiry(&self, expiry: u64, now: u64) -> String {
-        const DAY: u64 = 24 * 60 * 60;
-        let (days, future) = if expiry >= now {
-            ((expiry - now) / DAY, true)
-        } else {
-            ((now - expiry) / DAY, false)
-        };
-        match (self.language, future) {
-            (Language::English, true) => format!("expires in {}", en_count(days, "day")),
-            (Language::English, false) => format!("expired {} ago", en_count(days, "day")),
-            (Language::Russian, true) => {
-                format!(
-                    "истекает через {days} {}",
-                    ru_plural(days, "день", "дня", "дней")
-                )
-            }
-            (Language::Russian, false) => {
-                format!(
-                    "истекла {days} {} назад",
-                    ru_plural(days, "день", "дня", "дней")
-                )
-            }
+    pub(crate) fn term_left(&self, expire: u64, now: u64) -> (String, bool) {
+        if expire <= now {
+            return (self.term_expired.to_owned(), true);
         }
+        let days = (expire - now) / 86_400;
+        if days == 0 {
+            return (self.term_under_day.to_owned(), false);
+        }
+        let unit = match self.language {
+            Language::English if days == 1 => self.term_day_one,
+            Language::English => self.term_day_many,
+            Language::Russian => ru_plural(
+                days,
+                self.term_day_one,
+                self.term_day_few,
+                self.term_day_many,
+            ),
+        };
+        (
+            fill(
+                self.term_left_template,
+                &[("days", &days.to_string()), ("unit", unit)],
+            ),
+            false,
+        )
     }
 
     pub(crate) fn bytes(&self, value: u64) -> String {
@@ -658,34 +670,12 @@ impl Strings {
             Language::Russian => format!("{}/с", self.bytes(bytes_per_second)),
         }
     }
-
-    pub(crate) fn traffic(&self, info: &SubscriptionInfo) -> String {
-        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-        let used = (info.upload as f64 + info.download as f64) / GIB;
-        match (self.language, info.total) {
-            (Language::English, Some(total)) => {
-                format!("{used:.2} / {:.2} GiB", total as f64 / GIB)
-            }
-            (Language::English, None) => format!("{used:.2} GiB / unknown"),
-            (Language::Russian, Some(total)) => format!(
-                "{} / {} ГБ",
-                format!("{used:.2}").replace('.', ","),
-                format!("{:.2}", total as f64 / GIB).replace('.', ",")
-            ),
-            (Language::Russian, None) => {
-                format!(
-                    "{} ГБ / лимит не указан",
-                    format!("{used:.2}").replace('.', ",")
-                )
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Language, en::EN, fill, resolve_language, ru::RU, ru_plural};
-    use rosetun_config::{LanguageSetting, SubscriptionInfo};
+    use rosetun_config::LanguageSetting;
 
     #[test]
     fn fill_does_not_expand_values_again() {
@@ -836,21 +826,36 @@ mod tests {
     }
 
     #[test]
-    fn english_expiry_matches_core_in_both_directions() {
-        for (expiry, now, expected) in [
-            (86_400, 0, "expires in 1 day"),
-            (0, 86_400, "expired 1 day ago"),
-            (172_800, 0, "expires in 2 days"),
-            (0, 172_800, "expired 2 days ago"),
-            (100, 100, "expires in 0 days"),
-            (99, 100, "expired 0 days ago"),
+    fn term_left_covers_days_partial_days_and_expiry_in_both_languages() {
+        for (strings, one, two, five, partial, expired) in [
+            (
+                &EN,
+                "1 day left",
+                "2 days left",
+                "5 days left",
+                "under a day",
+                "expired",
+            ),
+            (
+                &RU,
+                "ещё 1 день",
+                "ещё 2 дня",
+                "ещё 5 дней",
+                "меньше дня",
+                "истекла",
+            ),
         ] {
-            assert_eq!(EN.expiry(expiry, now), expected);
+            assert_eq!(strings.term_left(86_400, 0), (one.to_owned(), false));
+            assert_eq!(strings.term_left(2 * 86_400, 0), (two.to_owned(), false));
+            assert_eq!(strings.term_left(5 * 86_400, 0), (five.to_owned(), false));
+            assert_eq!(strings.term_left(86_399, 0), (partial.to_owned(), false));
+            assert_eq!(strings.term_left(100, 100), (expired.to_owned(), true));
+            assert_eq!(strings.term_left(99, 100), (expired.to_owned(), true));
         }
     }
 
     #[test]
-    fn russian_age_expiry_and_traffic() {
+    fn russian_age_uses_lowercase_updated_summary() {
         assert_eq!(RU.updated_ago(0, 30), "только что");
         assert_eq!(RU.updated_ago(0, 120), "2 минуты назад");
         assert_eq!(RU.updated_ago(0, 5 * 3600), "5 часов назад");
@@ -859,17 +864,8 @@ mod tests {
             RU.last_updated(&RU.updated_ago(0, 5 * 60)),
             "обновлено 5 минут назад"
         );
-        assert_eq!(RU.expiry(2 * 86_400, 0), "истекает через 2 дня");
-        assert_eq!(RU.expiry(0, 5 * 86_400), "истекла 5 дней назад");
-        let mut info = SubscriptionInfo {
-            upload: 1 << 30,
-            download: 1 << 29,
-            total: Some(10 << 30),
-            expire_unix: None,
-        };
-        assert_eq!(RU.traffic(&info), "1,50 / 10,00 ГБ");
-        info.total = None;
-        assert_eq!(RU.traffic(&info), "1,50 ГБ / лимит не указан");
-        assert_eq!(EN.traffic(&info), "1.50 GiB / unknown");
+        assert_eq!(EN.last_updated("1 hour ago"), "updated 1 hour ago");
+        assert_eq!(RU.never_updated, "ещё не обновлялась");
+        assert_eq!(EN.never_updated, "not updated yet");
     }
 }

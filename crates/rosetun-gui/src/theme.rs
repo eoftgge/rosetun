@@ -63,6 +63,7 @@ pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x2A);
 
 /// Gap between blocks on the connection tab.
 pub(crate) const SECTION_GAP: f32 = 16.0;
+pub(crate) const SERVER_ROW: f32 = 40.0;
 
 /// Cards, buttons, fields, modals and menus.
 pub(crate) const RADIUS: u8 = 6;
