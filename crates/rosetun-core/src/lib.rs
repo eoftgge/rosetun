@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod exit;
 mod fetch;
 mod ping;
 mod rules;
@@ -11,6 +12,7 @@ mod subscriptions;
 mod text;
 mod update;
 
+pub use exit::{ExitInfo, ExitInfoError, exit_info};
 pub use fetch::{FetchError, Timeouts, fetch};
 pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
 pub use rosetun_subscription::{ParseError, SkipReason, Skipped, UnsupportedTransport};

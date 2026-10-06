@@ -9,7 +9,7 @@ use ureq::tls::{RootCerts, TlsConfig};
 use url::Url;
 
 const MAX_BODY_BYTES: u64 = 5 * 1024 * 1024;
-const DEFAULT_USER_AGENT: &str = concat!("Rosetun/", env!("CARGO_PKG_VERSION"));
+pub(crate) const DEFAULT_USER_AGENT: &str = concat!("Rosetun/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, Copy)]
 pub struct Timeouts {
