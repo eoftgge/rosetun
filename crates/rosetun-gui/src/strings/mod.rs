@@ -601,6 +601,38 @@ impl Strings {
         }
     }
 
+    pub(crate) fn bytes(&self, value: u64) -> String {
+        let units = match self.language {
+            Language::English => ["B", "KiB", "MiB", "GiB", "TiB"],
+            Language::Russian => ["Б", "КБ", "МБ", "ГБ", "ТБ"],
+        };
+        let mut amount = value as f64;
+        let mut unit = 0;
+        while amount >= 1000.0 && unit < units.len() - 1 {
+            amount /= 1024.0;
+            unit += 1;
+        }
+        let number = if unit == 0 || amount >= 100.0 {
+            format!("{amount:.0}")
+        } else if amount >= 10.0 {
+            format!("{amount:.1}")
+        } else {
+            format!("{amount:.2}")
+        };
+        let number = match self.language {
+            Language::English => number,
+            Language::Russian => number.replace('.', ","),
+        };
+        format!("{number} {}", units[unit])
+    }
+
+    pub(crate) fn rate(&self, bytes_per_second: u64) -> String {
+        match self.language {
+            Language::English => format!("{}/s", self.bytes(bytes_per_second)),
+            Language::Russian => format!("{}/с", self.bytes(bytes_per_second)),
+        }
+    }
+
     pub(crate) fn traffic(&self, info: &SubscriptionInfo) -> String {
         const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
         let used = (info.upload as f64 + info.download as f64) / GIB;
@@ -640,6 +672,45 @@ mod tests {
             "{unknown} x {open"
         );
     }
+    #[test]
+    fn byte_counts_and_rates_use_localized_three_digit_units() {
+        for (strings, zero, kib, mib_rate, mib, gib, threshold) in [
+            (
+                &EN,
+                "0 B/s",
+                "1.50 KiB",
+                "11.8 MiB/s",
+                "150 MiB",
+                "1.82 GiB",
+                "0.98 MiB",
+            ),
+            (
+                &RU,
+                "0 Б/с",
+                "1,50 КБ",
+                "11,8 МБ/с",
+                "150 МБ",
+                "1,82 ГБ",
+                "0,98 МБ",
+            ),
+        ] {
+            assert_eq!(strings.rate(0), zero);
+            assert_eq!(
+                strings.bytes(512),
+                if strings.language == Language::English {
+                    "512 B"
+                } else {
+                    "512 Б"
+                }
+            );
+            assert_eq!(strings.bytes(1536), kib);
+            assert_eq!(strings.rate(12_373_196), mib_rate);
+            assert_eq!(strings.bytes(157_286_400), mib);
+            assert_eq!(strings.bytes(1_954_210_119), gib);
+            assert_eq!(strings.bytes(1_024_000), threshold);
+        }
+    }
+
     #[test]
     fn interface_copy_uses_plain_punctuation_and_a_session_word() {
         assert_eq!(EN.no_session, "not started");

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -33,6 +33,7 @@ const AUTO_UPDATE_RANGE: RangeInclusive<u64> = 1..=168;
 const AUTO_UPDATE_RETRY: u64 = 60 * 60;
 /// How often the schedule is checked.
 const AUTO_UPDATE_CHECK: u64 = 60;
+const TRAFFIC_HISTORY: usize = 60;
 
 /// Whether one subscription is due, in Unix seconds.
 fn update_due(subscription: &Subscription, now: u64, last_attempt: Option<u64>) -> bool {
@@ -271,6 +272,8 @@ pub(crate) struct State {
     pub(crate) config_generation: u64,
     pub(crate) config_error: Option<ConfigWorkerError>,
     pub(crate) status: Status,
+    /// Rates of the last minute, one sample per status; newest last.
+    pub(crate) traffic_history: VecDeque<(u64, u64)>,
     pub(crate) helper_available: bool,
     pub(crate) helper_version: Option<String>,
     pub(crate) helper_error: Option<ClientError>,
@@ -300,6 +303,7 @@ impl Default for State {
             config_generation: 0,
             config_error: None,
             status: Status::default(),
+            traffic_history: VecDeque::new(),
             helper_available: false,
             helper_version: None,
             helper_error: None,
@@ -641,11 +645,26 @@ impl State {
             }
             WorkerEvent::HelperUnavailable(error) => {
                 self.helper_available = false;
+                self.traffic_history.clear();
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;
             }
             WorkerEvent::Status(status) => {
                 self.status_received = true;
+                if self.helper_available
+                    && matches!(
+                        status.state,
+                        ConnectionState::Connected | ConnectionState::Reconnecting
+                    )
+                {
+                    self.traffic_history
+                        .push_back((status.traffic.down_bps, status.traffic.up_bps));
+                    if self.traffic_history.len() > TRAFFIC_HISTORY {
+                        self.traffic_history.pop_front();
+                    }
+                } else {
+                    self.traffic_history.clear();
+                }
                 if !matches!(status.state, ConnectionState::FailedProtected { .. })
                     && !self.operations.helper
                 {
@@ -1919,6 +1938,47 @@ mod tests {
             state.best_ping(&state.config.subscriptions[0]),
             Some(Duration::from_millis(40))
         );
+    }
+
+    #[test]
+    fn traffic_history_tracks_a_minute_and_clears_when_tunnel_or_helper_stops() {
+        let mut state = State {
+            helper_available: true,
+            ..State::default()
+        };
+        for down in 0..=TRAFFIC_HISTORY as u64 {
+            let mut status = Status {
+                state: ConnectionState::Connected,
+                ..Status::default()
+            };
+            status.traffic.down_bps = down;
+            status.traffic.up_bps = down + 1;
+            state.reduce(WorkerEvent::Status(status));
+        }
+        assert_eq!(state.traffic_history.len(), TRAFFIC_HISTORY);
+        assert_eq!(state.traffic_history.front(), Some(&(1, 2)));
+        assert_eq!(state.traffic_history.back(), Some(&(60, 61)));
+
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Reconnecting,
+            ..Status::default()
+        }));
+        assert_eq!(state.traffic_history.len(), TRAFFIC_HISTORY);
+        state.reduce(WorkerEvent::Status(Status::default()));
+        assert!(state.traffic_history.is_empty());
+
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            ..Status::default()
+        }));
+        assert_eq!(state.traffic_history.len(), 1);
+        state.reduce(WorkerEvent::HelperUnavailable(ClientError::Closed));
+        assert!(state.traffic_history.is_empty());
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            ..Status::default()
+        }));
+        assert!(state.traffic_history.is_empty());
     }
 
     #[test]
