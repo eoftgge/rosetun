@@ -15,6 +15,7 @@ mod errors;
 #[path = "../build/icon_res.rs"]
 mod icon_res;
 mod icons;
+mod placement;
 mod reorder;
 mod rose_icon;
 mod rules;
@@ -83,6 +84,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .inspect_err(|error| tracing::warn!(%error, "Single-instance check failed"))
         .ok();
 
+    #[cfg(windows)]
+    let placement =
+        rosetun_shell::primary_work_area().map_or_else(placement::Placement::fallback, |area| {
+            placement::Placement::in_work_area(eframe::egui::Rect::from_min_size(
+                eframe::egui::pos2(area.left, area.top),
+                eframe::egui::vec2(area.width, area.height),
+            ))
+        });
+    #[cfg(not(windows))]
+    let placement = placement::Placement::fallback();
+    tracing::debug!(?placement, "Initial window placement");
+
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(strings::TITLE)
         .with_icon(std::sync::Arc::new(eframe::egui::IconData {
@@ -91,12 +104,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             height: 128,
         }))
         .with_decorations(!view::header::CUSTOM_FRAME)
-        .with_inner_size([1200.0, 780.0])
-        .with_min_inner_size([960.0, 640.0]);
+        .with_inner_size(placement.size)
+        .with_min_inner_size(placement.min_size);
     #[cfg(windows)]
     if start_hidden {
         // eframe shows the window after its first frame; keep that frame off every screen.
         viewport = viewport.with_position(app::OFFSCREEN).with_active(false);
+    } else if let Some(position) = placement.position {
+        viewport = viewport.with_position(position);
     }
     let options = eframe::NativeOptions {
         viewport,
@@ -109,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(move |cc| {
             let app = app::App::new(cc, store);
             #[cfg(windows)]
-            let app = app.with_shell(&cc.egui_ctx, activation, start_hidden);
+            let app = app.with_shell(&cc.egui_ctx, activation, start_hidden, placement.position);
             Ok(Box::new(app))
         }),
     )?;

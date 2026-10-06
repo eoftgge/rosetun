@@ -49,6 +49,8 @@ pub(crate) struct App {
     #[cfg(windows)]
     place_on_show: bool,
     #[cfg(windows)]
+    home: Option<egui::Pos2>,
+    #[cfg(windows)]
     quitting: bool,
 }
 
@@ -91,6 +93,8 @@ impl App {
             #[cfg(windows)]
             place_on_show: false,
             #[cfg(windows)]
+            home: None,
+            #[cfg(windows)]
             quitting: false,
         }
     }
@@ -101,6 +105,7 @@ impl App {
         ctx: &egui::Context,
         activation: Option<rosetun_shell::Activation>,
         start_hidden: bool,
+        home: Option<egui::Pos2>,
     ) -> Self {
         let (sender, events) = mpsc::channel();
         self.shell_events = Some(events);
@@ -113,6 +118,7 @@ impl App {
         };
         self.hide_on_start = start_hidden && self.tray.is_some();
         self.place_on_show = start_hidden;
+        self.home = home;
         if start_hidden && self.tray.is_none() {
             let _ = sender.send(ShellEvent::Show);
         }
@@ -137,18 +143,26 @@ impl App {
     #[cfg(windows)]
     fn show_window(&mut self, ctx: &egui::Context) {
         if std::mem::take(&mut self.place_on_show) {
-            let (monitor, size) = ctx.input(|input| {
-                let viewport = input.viewport();
-                (
-                    viewport.monitor_size,
-                    viewport
-                        .outer_rect
-                        .map_or(egui::vec2(1200.0, 780.0), |rect| rect.size()),
-                )
-            });
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(centered_position(
-                monitor, size,
-            )));
+            let position = self.home.map_or_else(
+                || {
+                    let (monitor, size) = ctx.input(|input| {
+                        let viewport = input.viewport();
+                        (
+                            viewport.monitor_size,
+                            viewport
+                                .outer_rect
+                                .map_or(egui::vec2(1200.0, 780.0), |rect| rect.size()),
+                        )
+                    });
+                    centered_position(monitor, size)
+                },
+                |home| {
+                    // OuterPosition applies the current zoom, but home is in logical pixels.
+                    let zoom = ctx.zoom_factor();
+                    egui::pos2(home.x / zoom, home.y / zoom)
+                },
+            );
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
