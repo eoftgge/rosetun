@@ -38,6 +38,9 @@ pub struct InterfaceSettings {
     /// The close button hides the window to the tray instead of quitting.
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
+    /// The client connects once at start when the tunnel is disconnected.
+    #[serde(default)]
+    pub connect_on_start: bool,
     #[serde(default)]
     pub language: LanguageSetting,
 }
@@ -55,6 +58,7 @@ impl Default for InterfaceSettings {
         Self {
             scale_percent: default_scale_percent(),
             close_to_tray: default_close_to_tray(),
+            connect_on_start: false,
             language: LanguageSetting::System,
         }
     }
@@ -172,6 +176,8 @@ mod tests {
             serde_json::from_str("{}").expect("interface without scale");
         assert_eq!(interface.scale_percent, 100);
         assert!(interface.close_to_tray);
+        assert!(!interface.connect_on_start);
+        assert!(!config.interface.connect_on_start);
     }
 
     #[test]

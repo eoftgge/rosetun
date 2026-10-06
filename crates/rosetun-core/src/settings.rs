@@ -83,6 +83,20 @@ pub fn set_close_to_tray(store: &Store, enabled: bool) -> Result<(), SettingsErr
     })
 }
 
+pub fn set_connect_on_start(store: &Store, enabled: bool) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.connect_on_start = enabled;
+        Ok(())
+    })
+}
+
+pub fn set_auto_reconnect(store: &Store, enabled: bool) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.settings.auto_reconnect = enabled;
+        Ok(())
+    })
+}
+
 pub fn set_language(store: &Store, language: LanguageSetting) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.interface.language = language;
@@ -205,6 +219,14 @@ mod tests {
 
         set_close_to_tray(&store, false).unwrap();
         expected.interface.close_to_tray = false;
+        assert_eq!(store.load().unwrap(), expected);
+
+        set_connect_on_start(&store, true).unwrap();
+        expected.interface.connect_on_start = true;
+        assert_eq!(store.load().unwrap(), expected);
+
+        set_auto_reconnect(&store, false).unwrap();
+        expected.settings.auto_reconnect = false;
         assert_eq!(store.load().unwrap(), expected);
 
         set_language(&store, LanguageSetting::Russian).unwrap();

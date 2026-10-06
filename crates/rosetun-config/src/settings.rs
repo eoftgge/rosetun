@@ -76,12 +76,15 @@ impl Default for DnsSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub engine: EngineKind,
     #[serde(default)]
     pub kill_switch: bool,
+    /// The helper restarts the engine by itself after it exits or after a resume from sleep.
+    #[serde(default = "crate::default_true")]
+    pub auto_reconnect: bool,
     #[serde(default)]
     pub allow_lan: bool,
     #[serde(default)]
@@ -96,6 +99,22 @@ pub struct Settings {
     /// The verbose log is on until this Unix time, in seconds. `None` or a past time means off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbose_log_until: Option<u64>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            engine: EngineKind::default(),
+            kill_switch: false,
+            auto_reconnect: true,
+            allow_lan: false,
+            autostart: false,
+            tun: TunSettings::default(),
+            dns: DnsSettings::default(),
+            log_level: LogLevel::default(),
+            verbose_log_until: None,
+        }
+    }
 }
 
 impl Settings {
@@ -119,6 +138,17 @@ mod settings_tests {
         assert!(settings.kill_switch);
         assert!(!settings.allow_lan);
         assert!(!Settings::default().allow_lan);
+    }
+
+    #[test]
+    fn old_settings_enable_auto_reconnect_by_default() {
+        let settings: Settings = serde_json::from_str(r#"{"kill_switch":true}"#)
+            .expect("settings without auto reconnect");
+        assert!(settings.auto_reconnect);
+        assert!(Settings::default().auto_reconnect);
+        let disabled: Settings = serde_json::from_str(r#"{"auto_reconnect":false}"#)
+            .expect("settings with auto reconnect disabled");
+        assert!(!disabled.auto_reconnect);
     }
 
     #[test]

@@ -21,8 +21,9 @@ pub use selection::{
     SelectNodeError, SelectRuleSetError, select_node, select_rule_set, set_kill_switch,
 };
 pub use settings::{
-    DnsInputError, INTERFACE_SCALES, SettingsError, parse_dns_input, set_close_to_tray, set_dns,
-    set_interface_scale, set_language, set_verbose_log,
+    DnsInputError, INTERFACE_SCALES, SettingsError, parse_dns_input, set_auto_reconnect,
+    set_close_to_tray, set_connect_on_start, set_dns, set_interface_scale, set_language,
+    set_verbose_log,
 };
 pub use store::{Store, StoreError};
 pub use subscription_url::{
