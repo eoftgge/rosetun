@@ -2690,9 +2690,9 @@ dependencies = [
  "eframe",
  "rosetun-config",
  "rosetun-core",
- "rosetun-instance",
  "rosetun-ipc",
  "rosetun-processes",
+ "rosetun-shell",
  "thiserror 2.0.20",
  "tracing",
  "tracing-subscriber",
@@ -2725,13 +2725,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rosetun-instance"
-version = "0.1.0"
-dependencies = [
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "rosetun-ipc"
 version = "0.1.0"
 dependencies = [
@@ -2758,6 +2751,13 @@ dependencies = [
  "rosetun-config",
  "thiserror 2.0.20",
  "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rosetun-shell"
+version = "0.1.0"
+dependencies = [
  "windows-sys 0.61.2",
 ]
 

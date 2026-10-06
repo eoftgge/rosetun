@@ -28,9 +28,9 @@ use tracing_subscriber::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
-    let activation = match rosetun_instance::acquire() {
-        Ok(rosetun_instance::Instance::First(activation)) => Ok(activation),
-        Ok(rosetun_instance::Instance::Other) => return Ok(()),
+    let activation = match rosetun_shell::acquire() {
+        Ok(rosetun_shell::Instance::First(activation)) => Ok(activation),
+        Ok(rosetun_shell::Instance::Other) => return Ok(()),
         Err(error) => Err(error),
     };
     let store = rosetun_core::Store::open_default()?;

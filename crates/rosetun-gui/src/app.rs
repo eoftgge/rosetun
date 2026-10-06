@@ -61,7 +61,7 @@ impl App {
     pub(crate) fn with_shell(
         mut self,
         ctx: &egui::Context,
-        activation: Option<rosetun_instance::Activation>,
+        activation: Option<rosetun_shell::Activation>,
     ) -> Self {
         let (sender, events) = mpsc::channel();
         self.shell_events = Some(events);

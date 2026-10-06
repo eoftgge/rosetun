@@ -2,7 +2,7 @@
 
 #[cfg(windows)]
 #[allow(unsafe_code)]
-mod windows;
+mod instance;
 
 #[cfg(windows)]
-pub use windows::{Activation, Instance, acquire};
+pub use instance::{Activation, Instance, acquire};
