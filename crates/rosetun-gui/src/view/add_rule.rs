@@ -6,78 +6,117 @@ use crate::state::{Action, AddRuleDialog, RuleInputKind};
 use crate::{strings, theme};
 
 const DIALOG_WIDTH: f32 = 640.0;
-const BODY_HEIGHT: f32 = 380.0;
+/// The dialog hangs from this distance below the window top, so switching to
+/// Process only grows it downwards.
+const DIALOG_TOP: f32 = 100.0;
+const MAX_PROCESS_BODY: f32 = 420.0;
+const MIN_PROCESS_LIST: f32 = 40.0;
 const BUTTON_ROW_HEIGHT: f32 = 40.0;
 const PROCESS_FOOTER_HEIGHT: f32 = 180.0;
+const ACTIONS_GAP: f32 = 16.0;
+const BOTTOM_GAP: f32 = 24.0;
+
+/// Room for the Process body: from `top` down to `limit`, at most MAX_PROCESS_BODY,
+/// and never less than the footer with a sliver of list.
+fn process_body_height(top: f32, limit: f32) -> f32 {
+    (limit - top).clamp(PROCESS_FOOTER_HEIGHT + MIN_PROCESS_LIST, MAX_PROCESS_BODY)
+}
 
 pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) {
-    let response = egui::Modal::new(egui::Id::new("add_rule"))
+    let id = egui::Id::new("add_rule");
+    let response = egui::Modal::new(id)
+        .area(
+            egui::Modal::default_area(id)
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, DIALOG_TOP)),
+        )
         .frame(theme::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(DIALOG_WIDTH);
             ui.set_max_width(DIALOG_WIDTH);
             ui.heading(strings::NEW_RULE);
-            ui.colored_label(theme::TEXT_MUTED, strings::NEW_RULE_SUBTITLE);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(strings::NEW_RULE_SUBTITLE).color(theme::TEXT_MUTED),
+                )
+                .wrap(),
+            );
             ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                for (kind, label) in [
-                    (RuleInputKind::Domain, strings::DOMAIN),
-                    (RuleInputKind::Process, strings::PROCESS),
-                ] {
-                    if ui
-                        .add_enabled(
-                            !dialog.busy,
-                            egui::Button::new(label).selected(dialog.kind == kind),
-                        )
-                        .clicked()
-                    {
-                        actions.push(Action::SelectRuleInput(kind));
-                    }
-                }
-            });
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                for (target, label) in [
-                    (RuleTarget::Proxy, strings::PROXY),
-                    (RuleTarget::Direct, strings::DIRECT),
-                    (RuleTarget::Block, strings::BLOCK),
-                ] {
-                    if ui
-                        .add_enabled(
-                            !dialog.busy,
-                            egui::Button::new(label).selected(dialog.target == target),
-                        )
-                        .clicked()
-                    {
-                        dialog.target = target;
-                        dialog.error = None;
-                    }
-                }
-            });
+            egui::Sides::new().show(
+                ui,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        for (kind, label) in [
+                            (RuleInputKind::Domain, strings::DOMAIN),
+                            (RuleInputKind::Process, strings::PROCESS),
+                        ] {
+                            if ui
+                                .add_enabled(
+                                    !dialog.busy,
+                                    egui::Button::new(label).selected(dialog.kind == kind),
+                                )
+                                .clicked()
+                            {
+                                actions.push(Action::SelectRuleInput(kind));
+                            }
+                        }
+                    });
+                },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        for (target, label) in [
+                            (RuleTarget::Proxy, strings::PROXY),
+                            (RuleTarget::Direct, strings::DIRECT),
+                            (RuleTarget::Block, strings::BLOCK),
+                        ] {
+                            if ui
+                                .add_enabled(
+                                    !dialog.busy,
+                                    egui::Button::new(label).selected(dialog.target == target),
+                                )
+                                .clicked()
+                            {
+                                dialog.target = target;
+                                dialog.error = None;
+                            }
+                        }
+                    });
+                },
+            );
             ui.add_space(16.0);
-            let valid = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(DIALOG_WIDTH, BODY_HEIGHT),
+            let process = dialog.kind == RuleInputKind::Process;
+            let mut body = |ui: &mut egui::Ui| {
+                let valid = match dialog.kind {
+                    RuleInputKind::Domain => domain_input(ui, dialog),
+                    RuleInputKind::Process => process_input(ui, dialog, actions),
+                };
+                if let Some(error) = &dialog.error {
+                    ui.add_space(8.0);
+                    ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
+                }
+                valid
+            };
+            let valid = if process {
+                let frame = theme::modal_frame();
+                let limit = ui.ctx().content_rect().bottom()
+                    - BOTTOM_GAP
+                    - (frame.inner_margin.bottom as f32 + frame.stroke.width)
+                    - BUTTON_ROW_HEIGHT
+                    - ACTIONS_GAP
+                    - 2.0 * ui.spacing().item_spacing.y;
+                let height = process_body_height(ui.cursor().top(), limit);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(DIALOG_WIDTH, height),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        ui.set_min_size(egui::vec2(DIALOG_WIDTH, BODY_HEIGHT));
-                        let valid = match dialog.kind {
-                            RuleInputKind::Domain => domain_input(ui, dialog),
-                            RuleInputKind::Process => process_input(ui, dialog, actions),
-                        };
-                        if let Some(error) = &dialog.error {
-                            ui.add_space(8.0);
-                            ui.add(
-                                egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap(),
-                            );
-                        }
-                        valid
+                        ui.set_min_size(egui::vec2(DIALOG_WIDTH, height));
+                        body(ui)
                     },
                 )
-                .inner;
-            ui.add_space(18.0);
-            ui.colored_label(theme::TEXT_DIM, strings::RULE_PRIORITY);
-            ui.add_space(12.0);
+                .inner
+            } else {
+                body(ui)
+            };
+            ui.add_space(ACTIONS_GAP);
             ui.allocate_ui_with_layout(
                 egui::vec2(DIALOG_WIDTH, BUTTON_ROW_HEIGHT),
                 egui::Layout::right_to_left(egui::Align::Center),
@@ -374,4 +413,19 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         }
     }
     parsed.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_PROCESS_BODY, MIN_PROCESS_LIST, PROCESS_FOOTER_HEIGHT, process_body_height};
+
+    #[test]
+    fn process_body_fits_available_space_with_bounds() {
+        assert_eq!(process_body_height(270.0, 675.0), 405.0);
+        assert_eq!(process_body_height(270.0, 900.0), MAX_PROCESS_BODY);
+        assert_eq!(
+            process_body_height(270.0, 400.0),
+            PROCESS_FOOTER_HEIGHT + MIN_PROCESS_LIST
+        );
+    }
 }

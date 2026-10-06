@@ -166,7 +166,8 @@ pub(crate) const NO_RULES_MATCH: &str = "No rules match the filter.";
 pub(crate) const RULES_NEXT_CONNECT: &str = "Changes apply on next connect.";
 pub(crate) const NEW_RULE_BUTTON: &str = "+ Rule";
 pub(crate) const NEW_RULE: &str = "New rule";
-pub(crate) const NEW_RULE_SUBTITLE: &str = "Applies to all subscriptions.";
+pub(crate) const NEW_RULE_SUBTITLE: &str =
+    "Applies to all subscriptions and goes to the top of the list — highest priority.";
 pub(crate) const DOMAIN_INPUT: &str = "Domain or pattern";
 pub(crate) const DOMAIN_PLACEHOLDER: &str = "example.com or *.example.com";
 pub(crate) const DOMAIN_HELP: &str =
@@ -187,7 +188,6 @@ pub(crate) const NO_PROCESSES_MATCH: &str = "No processes match the filter.";
 pub(crate) const PATH_UNAVAILABLE: &str = "path unavailable";
 pub(crate) const MATCH_BY_NAME: &str = "Match by name";
 pub(crate) const MATCH_BY_FULL_PATH: &str = "Match by full path";
-pub(crate) const RULE_PRIORITY: &str = "New rule goes to the top of the list — highest priority.";
 pub(crate) const ADD_RULE: &str = "Add rule";
 pub(crate) const ADDING_RULE: &str = "Adding rule…";
 
