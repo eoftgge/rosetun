@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc::Sender};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, DnsSettings, LanguageSetting, LogLevel, NodeId, Rule, RuleId, RuleMatcher, RuleSet,
-    RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
+    AppConfig, DnsSettings, LanguageSetting, NodeId, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
+    RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, MoveSubscriptionError, RemoveSubscriptionError, RuleSetError,
@@ -19,9 +19,9 @@ use rosetun_core::{
     SubscriptionUpdateResult, Timeouts, UpdateReport, UpdateSubscriptionError,
     add_prepared_subscription, add_rule, create_rule_set, delete_rule_set, move_rule,
     move_subscription, prepare_subscription, remove_rule, remove_subscription, rename_rule_set,
-    select_node, select_rule_set, set_default_target, set_dns, set_engine_log_level,
-    set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
-    update_all, update_subscription,
+    select_node, select_rule_set, set_default_target, set_dns, set_interface_scale,
+    set_kill_switch, set_language, set_rule_enabled, set_rule_target, set_verbose_log, update_all,
+    update_subscription,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
@@ -71,7 +71,7 @@ pub(crate) enum WorkerEvent {
     #[cfg(windows)]
     SetCloseToTray(Result<(), SettingsError>),
     SetDns(Result<(), SettingsError>),
-    SetEngineLogLevel(Result<(), SettingsError>),
+    SetVerboseLog(Result<(), SettingsError>),
     #[cfg(windows)]
     OpenConfigFolder(Result<(), std::io::Error>),
     SelectNode(Result<String, SelectNodeError>),
@@ -248,11 +248,15 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn set_engine_log_level(&self, level: LogLevel) {
+    pub(crate) fn set_verbose_log(&self, on: bool) {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
-            let result = set_engine_log_level(&publisher.store, level);
-            publisher.complete(WorkerEvent::SetEngineLogLevel(result));
+            let now_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|value| value.as_secs())
+                .unwrap_or_default();
+            let result = set_verbose_log(&publisher.store, on, now_unix);
+            publisher.complete(WorkerEvent::SetVerboseLog(result));
         });
     }
 

@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AppConfig, ConnectionState, DnsSettings, LanguageSetting, LogLevel, NodeId, ProcessMatch,
-    RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, SubscriptionId,
+    AppConfig, ConnectionState, DnsSettings, LanguageSetting, NodeId, ProcessMatch, RuleId,
+    RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, SubscriptionId,
 };
 use rosetun_core::{AddFromUrlError, AddOptions, UpdateReport, UpdateSubscriptionError};
 use rosetun_ipc::{ClientError, ErrorCode, HelperError};
@@ -15,6 +16,13 @@ use crate::reorder::drop_target;
 use crate::rules::{ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes};
 use crate::strings::{fill, t};
 use crate::worker::{ConfigWorkerError, HelperCommandError, WorkerEvent};
+
+pub(crate) fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default()
+}
 
 #[derive(Default)]
 pub(crate) struct Operations {
@@ -257,7 +265,7 @@ pub(crate) enum Action {
     SetCloseToTray(bool),
     SaveDns,
     ResetDns,
-    SetEngineLogLevel(LogLevel),
+    SetVerboseLog(bool),
     #[cfg(windows)]
     OpenConfigFolder,
     OpenRules,
@@ -318,7 +326,7 @@ pub(crate) enum Job {
     #[cfg(windows)]
     SetCloseToTray(bool),
     SetDns(DnsSettings),
-    SetEngineLogLevel(LogLevel),
+    SetVerboseLog(bool),
     #[cfg(windows)]
     OpenConfigFolder(PathBuf),
     SelectNode(SubscriptionId, NodeId),
@@ -630,7 +638,7 @@ impl State {
                 }
                 self.finish_settings(result);
             }
-            WorkerEvent::SetEngineLogLevel(result) => self.finish_settings(result),
+            WorkerEvent::SetVerboseLog(result) => self.finish_settings(result),
             #[cfg(windows)]
             WorkerEvent::OpenConfigFolder(result) => {
                 self.operations.settings = false;
@@ -812,9 +820,11 @@ impl State {
                     self.settings_screen.dirty = true;
                 }
             }
-            Action::SetEngineLogLevel(level) => {
-                if self.can_edit_settings() && self.config.settings.log_level != level {
-                    return self.start_settings(Job::SetEngineLogLevel(level));
+            Action::SetVerboseLog(on) => {
+                if self.can_edit_settings()
+                    && self.config.settings.verbose_log_active(now_unix()) != on
+                {
+                    return self.start_settings(Job::SetVerboseLog(on));
                 }
             }
             #[cfg(windows)]
@@ -2208,6 +2218,20 @@ mod tests {
     }
 
     #[test]
+    fn expired_verbose_log_can_be_turned_on_again() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        state.config.settings.verbose_log_until = Some(now_unix().saturating_sub(1));
+        assert!(state.act(Action::SetVerboseLog(false)).is_none());
+        assert!(matches!(
+            state.act(Action::SetVerboseLog(true)),
+            Some(Job::SetVerboseLog(true))
+        ));
+    }
+
+    #[test]
     fn settings_operations_clear_busy_and_report_errors() {
         let mut state = State {
             config_ready: true,
@@ -2220,11 +2244,7 @@ mod tests {
             Some(Job::SetInterfaceScale(125))
         ));
         assert!(state.operations.settings);
-        assert!(
-            state
-                .act(Action::SetEngineLogLevel(LogLevel::Debug))
-                .is_none()
-        );
+        assert!(state.act(Action::SetVerboseLog(true)).is_none());
         state.reduce(WorkerEvent::SetInterfaceScale(Err(
             rosetun_core::SettingsError::UnsupportedScale,
         )));
@@ -2235,10 +2255,10 @@ mod tests {
         );
 
         assert!(matches!(
-            state.act(Action::SetEngineLogLevel(LogLevel::Debug)),
-            Some(Job::SetEngineLogLevel(LogLevel::Debug))
+            state.act(Action::SetVerboseLog(true)),
+            Some(Job::SetVerboseLog(true))
         ));
-        state.reduce(WorkerEvent::SetEngineLogLevel(Err(
+        state.reduce(WorkerEvent::SetVerboseLog(Err(
             rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
         )));
         assert!(!state.operations.settings);

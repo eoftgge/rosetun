@@ -1,8 +1,8 @@
 use eframe::egui::{self, RichText};
-use rosetun_config::{LanguageSetting, LogLevel};
+use rosetun_config::LanguageSetting;
 
 use crate::errors;
-use crate::state::{Action, State};
+use crate::state::{Action, State, now_unix};
 use crate::strings::t;
 use crate::{strings, theme, widgets};
 
@@ -193,43 +193,33 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
 fn engine_log(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.heading(t().engine_log);
-        ui.label(
-            RichText::new(t().engine_log_detail)
-                .small()
-                .color(theme::TEXT_MUTED),
-        );
-        let saved = state.config.settings.log_level;
-        let mut selected = saved;
-        ui.add_enabled_ui(state.can_edit_settings(), |ui| {
-            egui::ComboBox::from_id_salt("engine_log_level")
-                .selected_text(log_label(selected))
-                .show_ui(ui, |ui| {
-                    for level in [
-                        LogLevel::Error,
-                        LogLevel::Warn,
-                        LogLevel::Info,
-                        LogLevel::Debug,
-                        LogLevel::Trace,
-                    ] {
-                        ui.selectable_value(&mut selected, level, log_label(level));
-                    }
-                });
-        });
-        if selected != saved {
-            actions.push(Action::SetEngineLogLevel(selected));
+        ui.heading(t().log_title);
+        ui.add_space(8.0);
+        let settings = &state.config.settings;
+        let now = now_unix();
+        let mut on = settings.verbose_log_active(now);
+        let detail = if on {
+            let hours = settings
+                .verbose_log_until
+                .unwrap_or(now)
+                .saturating_sub(now)
+                .div_ceil(3600);
+            t().verbose_log_on_detail(hours)
+        } else {
+            t().verbose_log_off_detail.to_owned()
+        };
+        if widgets::toggle_row(
+            ui,
+            t().verbose_log,
+            &detail,
+            &mut on,
+            state.can_edit_settings(),
+        )
+        .changed()
+        {
+            actions.push(Action::SetVerboseLog(on));
         }
     });
-}
-
-fn log_label(level: LogLevel) -> &'static str {
-    match level {
-        LogLevel::Error => t().log_error,
-        LogLevel::Warn => t().log_warn,
-        LogLevel::Info => t().log_info,
-        LogLevel::Debug => t().log_debug,
-        LogLevel::Trace => t().log_trace,
-    }
 }
 
 fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {

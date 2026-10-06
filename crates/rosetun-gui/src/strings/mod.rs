@@ -207,13 +207,13 @@ pub(crate) struct Strings {
     pub(crate) dns_path: &'static str,
     pub(crate) save: &'static str,
     pub(crate) reset_to_default: &'static str,
-    pub(crate) engine_log: &'static str,
-    pub(crate) engine_log_detail: &'static str,
-    pub(crate) log_error: &'static str,
-    pub(crate) log_warn: &'static str,
-    pub(crate) log_info: &'static str,
-    pub(crate) log_debug: &'static str,
-    pub(crate) log_trace: &'static str,
+    pub(crate) log_title: &'static str,
+    pub(crate) verbose_log: &'static str,
+    pub(crate) verbose_log_off_detail: &'static str,
+    pub(crate) verbose_log_on_detail: &'static str,
+    pub(crate) verbose_log_hour_one: &'static str,
+    pub(crate) verbose_log_hour_few: &'static str,
+    pub(crate) verbose_log_hour_many: &'static str,
     pub(crate) about: &'static str,
     pub(crate) helper_not_running: &'static str,
     pub(crate) configuration_folder: &'static str,
@@ -519,6 +519,22 @@ impl Strings {
         }
     }
 
+    pub(crate) fn verbose_log_on_detail(&self, hours: u64) -> String {
+        let duration = match self.language {
+            Language::English => en_count(hours, self.verbose_log_hour_one),
+            Language::Russian => format!(
+                "{hours} {}",
+                ru_plural(
+                    hours,
+                    self.verbose_log_hour_one,
+                    self.verbose_log_hour_few,
+                    self.verbose_log_hour_many,
+                )
+            ),
+        };
+        fill(self.verbose_log_on_detail, &[("hours", &duration)])
+    }
+
     pub(crate) fn updated_ago(&self, timestamp: u64, now: u64) -> String {
         let elapsed = now.saturating_sub(timestamp);
         match (self.language, elapsed) {
@@ -657,6 +673,32 @@ mod tests {
             (21, "21 сервер"),
         ] {
             assert_eq!(RU.servers(count), expected);
+        }
+    }
+
+    #[test]
+    fn verbose_log_details_pluralize_remaining_hours() {
+        for (hours, expected) in [
+            (1, "1 час"),
+            (2, "2 часа"),
+            (5, "5 часов"),
+            (21, "21 час"),
+            (24, "24 часа"),
+        ] {
+            assert_eq!(
+                RU.verbose_log_on_detail(hours),
+                format!(
+                    "Выключится сам через {expected}. Пока включён, записывает адреса сайтов. Применится при следующем подключении."
+                )
+            );
+        }
+        for (hours, expected) in [(1, "1 hour"), (24, "24 hours")] {
+            assert_eq!(
+                EN.verbose_log_on_detail(hours),
+                format!(
+                    "Turns itself off in {expected}. While on, it records site addresses. Applies on next connect."
+                )
+            );
         }
     }
 

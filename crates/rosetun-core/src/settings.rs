@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use rosetun_config::{DnsSettings, LanguageSetting, LogLevel};
+use rosetun_config::{DnsSettings, LanguageSetting, Settings};
 use url::Host;
 
 use crate::{Store, StoreError};
@@ -97,9 +97,11 @@ pub fn set_dns(store: &Store, dns: DnsSettings) -> Result<(), SettingsError> {
     })
 }
 
-pub fn set_engine_log_level(store: &Store, level: LogLevel) -> Result<(), SettingsError> {
+/// Turns the verbose log on for a day from `now_unix`, or off.
+pub fn set_verbose_log(store: &Store, on: bool, now_unix: u64) -> Result<(), SettingsError> {
     store.modify(|config| {
-        config.settings.log_level = level;
+        config.settings.verbose_log_until =
+            on.then_some(now_unix.saturating_add(Settings::VERBOSE_LOG_SECONDS));
         Ok(())
     })
 }
@@ -189,6 +191,7 @@ mod tests {
         let mut expected = AppConfig::default();
         expected.settings.kill_switch = true;
         expected.settings.dns.path = Some("/original".to_owned());
+        expected.settings.log_level = LogLevel::Trace;
         store
             .modify::<_, StoreError>(|config| {
                 *config = expected.clone();
@@ -213,8 +216,12 @@ mod tests {
         expected.settings.dns = dns;
         assert_eq!(store.load().unwrap(), expected);
 
-        set_engine_log_level(&store, LogLevel::Debug).unwrap();
-        expected.settings.log_level = LogLevel::Debug;
+        set_verbose_log(&store, true, 100).unwrap();
+        expected.settings.verbose_log_until = Some(100 + Settings::VERBOSE_LOG_SECONDS);
+        assert_eq!(store.load().unwrap(), expected);
+
+        set_verbose_log(&store, false, 101).unwrap();
+        expected.settings.verbose_log_until = None;
         assert_eq!(store.load().unwrap(), expected);
     }
 

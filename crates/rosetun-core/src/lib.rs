@@ -22,7 +22,7 @@ pub use selection::{
 };
 pub use settings::{
     DnsInputError, INTERFACE_SCALES, SettingsError, parse_dns_input, set_close_to_tray, set_dns,
-    set_engine_log_level, set_interface_scale, set_language,
+    set_interface_scale, set_language, set_verbose_log,
 };
 pub use store::{Store, StoreError};
 pub use subscription_url::{

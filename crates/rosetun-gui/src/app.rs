@@ -204,7 +204,7 @@ impl App {
             #[cfg(windows)]
             Job::SetCloseToTray(enabled) => self.workers.set_close_to_tray(enabled),
             Job::SetDns(dns) => self.workers.set_dns(dns),
-            Job::SetEngineLogLevel(level) => self.workers.set_engine_log_level(level),
+            Job::SetVerboseLog(on) => self.workers.set_verbose_log(on),
             #[cfg(windows)]
             Job::OpenConfigFolder(folder) => self.workers.open_config_folder(folder),
             Job::SelectNode(subscription, node) => self.workers.select_node(subscription, node),
