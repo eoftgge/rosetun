@@ -8,10 +8,12 @@ pub(crate) enum RoseIcon {
     /// 40 px and above: folds, centre disc and the full spiral.
     Large,
     /// 32 px and below: the same petals with a bolder, shorter spiral.
-    // Used only by the test-only executable icon generator.
-    #[allow(dead_code)]
+    // Only the test-only `.ico` generator draws it.
+    #[cfg_attr(not(test), allow(dead_code))]
     Small,
     /// The tray: petals in the state colour, no folds or disc, a light spiral.
+    // The tray exists only on Windows.
+    #[cfg_attr(not(any(test, windows)), allow(dead_code))]
     Tray(Color32),
 }
 
