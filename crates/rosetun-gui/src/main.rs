@@ -6,6 +6,7 @@
 
 mod actions;
 mod app;
+mod brand;
 mod display;
 mod icons;
 mod reorder;

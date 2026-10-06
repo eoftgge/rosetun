@@ -1,0 +1,258 @@
+use std::time::Duration;
+
+use eframe::egui::{
+    self, Align, Color32, FontFamily, FontId, Id, Layout, Rect, Response, Sense, Shape, Stroke,
+    TextFormat, WidgetInfo, WidgetType, text::LayoutJob,
+};
+use rosetun_config::ConnectionState;
+
+use crate::brand;
+use crate::state::{Action, Screen, State};
+use crate::{strings, theme};
+
+#[derive(Clone, Copy)]
+enum TabIcon {
+    Connection,
+    Rules,
+    Settings,
+}
+
+pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let rect = ui.max_rect();
+    let time = ui.input(|input| input.time);
+    let progress = (time / 0.9).min(1.0) as f32;
+    let intro = 1.0 - (1.0 - progress).powi(3);
+    let status = state.visible_status();
+    let connected = status.is_some_and(|status| matches!(status.state, ConnectionState::Connected));
+    let transitional = status.is_some_and(|status| status.state.is_transitional());
+    let settled = ui
+        .ctx()
+        .animate_bool_with_time(Id::new("header_bloom"), connected, 0.8);
+    let bloom = brand::bloom(settled, transitional, time);
+    if progress < 1.0 || transitional {
+        ui.ctx().request_repaint_after(Duration::from_millis(33));
+    }
+
+    brand::paint_petals(ui.painter(), rect, bloom, intro);
+    ui.painter().line_segment(
+        [
+            egui::pos2(rect.left(), rect.bottom() - 0.5),
+            egui::pos2(rect.right(), rect.bottom() - 0.5),
+        ],
+        Stroke::new(1.0, theme::BORDER),
+    );
+
+    ui.spacing_mut().item_spacing.x = 0.0;
+    let selected_rect = ui
+        .with_layout(Layout::left_to_right(Align::Center), |ui| {
+            ui.add_space(22.0);
+            paint_brand(ui, bloom);
+            ui.add_space(44.0);
+
+            let mut selected_rect = None;
+            for (index, (icon, label, screen, action)) in [
+                (
+                    TabIcon::Connection,
+                    strings::CONNECTION,
+                    Screen::Connection,
+                    Action::ShowConnection,
+                ),
+                (
+                    TabIcon::Rules,
+                    strings::RULES,
+                    Screen::Rules,
+                    Action::OpenRules,
+                ),
+                (
+                    TabIcon::Settings,
+                    strings::SETTINGS,
+                    Screen::Settings,
+                    Action::OpenSettings,
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if index != 0 {
+                    ui.add_space(4.0);
+                }
+                let selected = state.screen == screen;
+                let response = tab(ui, icon, label, selected);
+                if selected {
+                    selected_rect = Some(response.rect);
+                } else if response.clicked() {
+                    actions.push(action);
+                }
+            }
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add_space(18.0);
+                if !state.helper_available {
+                    ui.colored_label(theme::ERROR, strings::HELPER_UNAVAILABLE);
+                }
+            });
+            selected_rect
+        })
+        .inner;
+
+    if let Some(tab_rect) = selected_rect {
+        let left = ui.ctx().animate_value_with_time(
+            Id::new("header_tab_underline_left"),
+            tab_rect.left(),
+            0.2,
+        );
+        let width = ui.ctx().animate_value_with_time(
+            Id::new("header_tab_underline_width"),
+            tab_rect.width(),
+            0.2,
+        );
+        ui.painter().rect_filled(
+            Rect::from_min_size(
+                egui::pos2(left, rect.bottom() - 2.0),
+                egui::vec2(width, 2.0),
+            ),
+            0.0,
+            theme::ROSE,
+        );
+    }
+}
+
+fn paint_brand(ui: &mut egui::Ui, bloom: f32) {
+    let mut name = LayoutJob::default();
+    name.append(
+        strings::BRAND,
+        0.0,
+        TextFormat {
+            font_id: FontId::new(25.0, FontFamily::Name(theme::BRAND_FONT.into())),
+            color: theme::TEXT,
+            extra_letter_spacing: 6.0,
+            ..Default::default()
+        },
+    );
+    let name = ui.painter().layout_job(name);
+
+    let mut tagline = LayoutJob::default();
+    tagline.append(
+        &strings::TAGLINE.to_uppercase(),
+        0.0,
+        TextFormat {
+            font_id: FontId::new(10.5, FontFamily::Proportional),
+            color: theme::TEXT_DIM,
+            extra_letter_spacing: 2.3,
+            ..Default::default()
+        },
+    );
+    let tagline = ui.painter().layout_job(tagline);
+
+    let width = 40.0 + 12.0 + name.size().x.max(tagline.size().x);
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(width, ui.max_rect().height()), Sense::hover());
+    let emblem = Rect::from_center_size(
+        egui::pos2(rect.left() + 20.0, rect.center().y),
+        egui::vec2(40.0, 40.0),
+    );
+    brand::paint_emblem(ui.painter(), emblem, bloom);
+    let top = rect.center().y - (name.size().y + 1.0 + tagline.size().y) / 2.0;
+    let x = rect.left() + 52.0;
+    ui.painter()
+        .galley(egui::pos2(x, top), name.clone(), theme::TEXT);
+    ui.painter().galley(
+        egui::pos2(x, top + name.size().y + 1.0),
+        tagline,
+        theme::TEXT_DIM,
+    );
+}
+
+fn tab(ui: &mut egui::Ui, icon: TabIcon, label: &str, selected: bool) -> Response {
+    let font_id = FontId::new(15.0, FontFamily::Proportional);
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font_id.clone(), theme::TEXT)
+        .size()
+        .x;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(
+            18.0 + 18.0 + 9.0 + text_width + 18.0,
+            ui.max_rect().height(),
+        ),
+        Sense::click(),
+    );
+    response
+        .widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, label));
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(response.id, selected || response.hovered(), 0.12);
+    let text_color = theme::TEXT_MUTED.lerp_to_gamma(theme::TEXT, t);
+    let icon_color = theme::TEXT_DIM.lerp_to_gamma(theme::ROSE, t);
+    if ui.is_rect_visible(rect) {
+        paint_tab_icon(
+            ui.painter(),
+            Rect::from_center_size(
+                egui::pos2(rect.left() + 27.0, rect.center().y),
+                egui::vec2(18.0, 18.0),
+            ),
+            icon,
+            icon_color,
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + 45.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font_id,
+            text_color,
+        );
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+fn paint_tab_icon(painter: &egui::Painter, rect: Rect, icon: TabIcon, color: Color32) {
+    let scale = rect.width() / 20.0;
+    let point = |x: f32, y: f32| rect.min + egui::vec2(x * scale, y * scale);
+    let stroke = Stroke::new(1.5 * scale, color);
+    let line = |points: &[(f32, f32)]| {
+        painter.add(Shape::line(
+            points.iter().map(|&(x, y)| point(x, y)).collect(),
+            stroke,
+        ));
+    };
+    match icon {
+        TabIcon::Connection => {
+            painter.add(Shape::closed_line(
+                [
+                    (10.0, 2.0),
+                    (17.0, 5.5),
+                    (17.0, 10.5),
+                    (10.0, 18.0),
+                    (3.0, 10.5),
+                    (3.0, 5.5),
+                ]
+                .map(|(x, y)| point(x, y))
+                .to_vec(),
+                stroke,
+            ));
+            line(&[(10.0, 6.0), (10.0, 11.0)]);
+            line(&[(7.5, 9.0), (10.0, 6.0), (12.5, 9.0)]);
+        }
+        TabIcon::Rules => {
+            line(&[(2.0, 10.0), (7.0, 10.0), (12.0, 4.5), (18.0, 4.5)]);
+            line(&[(7.0, 10.0), (12.0, 15.5)]);
+            line(&[(12.0, 15.5), (18.0, 15.5)]);
+            line(&[(15.5, 2.5), (18.0, 4.5), (15.5, 6.5)]);
+            line(&[(15.5, 13.5), (18.0, 15.5), (15.5, 17.5)]);
+        }
+        TabIcon::Settings => {
+            line(&[(2.0, 6.5), (18.0, 6.5)]);
+            line(&[(2.0, 13.5), (18.0, 13.5)]);
+            for points in [
+                [(7.0, 4.0), (9.5, 6.5), (7.0, 9.0), (4.5, 6.5)],
+                [(13.0, 11.0), (15.5, 13.5), (13.0, 16.0), (10.5, 13.5)],
+            ] {
+                painter.add(Shape::convex_polygon(
+                    points.map(|(x, y)| point(x, y)).to_vec(),
+                    color,
+                    Stroke::NONE,
+                ));
+            }
+        }
+    }
+}

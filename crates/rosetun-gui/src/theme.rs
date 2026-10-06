@@ -2,6 +2,23 @@ use eframe::egui::{
     self, Color32, CornerRadius, FontFamily, FontId, Shadow, Stroke, Style, TextStyle, Visuals,
 };
 
+pub(crate) const BRAND_FONT: &str = "brand";
+
+fn fonts() -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "cormorant-garamond-semibold".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/CormorantGaramond-SemiBold.ttf"
+        ))),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name(BRAND_FONT.into()),
+        vec!["cormorant-garamond-semibold".to_owned()],
+    );
+    fonts
+}
+
 pub(crate) const BG: Color32 = Color32::from_rgb(0x17, 0x10, 0x14);
 pub(crate) const PANEL: Color32 = Color32::from_rgb(0x1B, 0x14, 0x18);
 pub(crate) const CARD: Color32 = Color32::from_rgb(0x1F, 0x15, 0x19);
@@ -22,6 +39,7 @@ pub(crate) const DISCONNECTED: Color32 = Color32::from_rgb(0x8C, 0x81, 0x89);
 pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x2A);
 
 pub(crate) fn apply(ctx: &egui::Context) {
+    ctx.set_fonts(fonts());
     ctx.set_theme(egui::Theme::Dark);
 
     let mut visuals = Visuals::dark();

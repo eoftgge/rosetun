@@ -1,5 +1,6 @@
 pub(crate) const TITLE: &str = "Rosetun";
 pub(crate) const BRAND: &str = "ROSETUN";
+pub(crate) const TAGLINE: &str = "Tunnel in bloom";
 pub(crate) const CONNECTION: &str = "Connection";
 pub(crate) const RULES: &str = "Rules";
 pub(crate) const SETTINGS: &str = "Settings";

@@ -1,55 +1,23 @@
 pub(crate) mod add_rule;
 pub(crate) mod add_subscription;
 pub(crate) mod connection;
+pub(crate) mod header;
 pub(crate) mod rules;
 pub(crate) mod settings;
 pub(crate) mod subscriptions;
 
-use eframe::egui::{self, RichText, Stroke};
+use eframe::egui::{self, Stroke};
 
 use crate::state::{Action, Screen, State};
-use crate::{strings, theme};
+use crate::theme;
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     let mut actions = Vec::new();
     egui::Panel::top("header")
         .exact_size(76.0)
-        .frame(
-            egui::Frame::new()
-                .fill(theme::PANEL)
-                .inner_margin(egui::Margin::symmetric(24, 20)),
-        )
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.label(RichText::new(strings::BRAND).size(23.0).strong());
-                ui.add_space(32.0);
-                if state.screen == Screen::Connection {
-                    ui.colored_label(theme::ROSE_LIGHT, strings::CONNECTION);
-                } else if ui.button(strings::CONNECTION).clicked() {
-                    actions.push(Action::ShowConnection);
-                }
-                if state.screen == Screen::Rules {
-                    ui.colored_label(theme::ROSE_LIGHT, strings::RULES);
-                } else if ui.button(strings::RULES).clicked() {
-                    actions.push(Action::OpenRules);
-                }
-                if state.screen == Screen::Settings {
-                    ui.colored_label(theme::ROSE_LIGHT, strings::SETTINGS);
-                } else if ui.button(strings::SETTINGS).clicked() {
-                    actions.push(Action::OpenSettings);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !state.helper_available {
-                        ui.colored_label(theme::ERROR, strings::HELPER_UNAVAILABLE);
-                    } else if let Some(version) = &state.helper_version {
-                        ui.colored_label(
-                            theme::TEXT_DIM,
-                            strings::helper_version(&state.text(version)),
-                        );
-                    }
-                });
-            });
-        });
+        .show_separator_line(false)
+        .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(0))
+        .show(ui, |ui| header::show(ui, state, &mut actions));
     if state.screen == Screen::Connection {
         egui::Panel::left("subscriptions")
             .exact_size(316.0)
