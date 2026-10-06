@@ -6,6 +6,8 @@
 
 mod actions;
 mod app;
+#[cfg(test)]
+mod app_icon;
 mod brand;
 mod display;
 mod errors;
