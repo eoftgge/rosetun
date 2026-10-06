@@ -2717,12 +2717,14 @@ name = "rosetun-gui"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "raw-window-handle",
  "rfd",
  "rosetun-config",
  "rosetun-core",
  "rosetun-ipc",
  "rosetun-processes",
  "rosetun-shell",
+ "serde_json",
  "thiserror 2.0.20",
  "tracing",
  "tracing-subscriber",
@@ -2788,6 +2790,7 @@ dependencies = [
 name = "rosetun-shell"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "windows-sys 0.61.2",
 ]
 

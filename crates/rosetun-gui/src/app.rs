@@ -9,6 +9,8 @@ use crate::state::Action;
 use crate::state::{Job, State};
 #[cfg(windows)]
 use crate::tray;
+#[cfg(windows)]
+use crate::window_memory::WindowMemory;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
 use crate::{strings, theme, view};
 
@@ -49,7 +51,9 @@ pub(crate) struct App {
     #[cfg(windows)]
     place_on_show: bool,
     #[cfg(windows)]
-    home: Option<egui::Pos2>,
+    window: Option<WindowMemory>,
+    #[cfg(windows)]
+    maximize_in: Option<u8>,
     #[cfg(windows)]
     quitting: bool,
 }
@@ -93,7 +97,9 @@ impl App {
             #[cfg(windows)]
             place_on_show: false,
             #[cfg(windows)]
-            home: None,
+            window: None,
+            #[cfg(windows)]
+            maximize_in: None,
             #[cfg(windows)]
             quitting: false,
         }
@@ -105,7 +111,7 @@ impl App {
         ctx: &egui::Context,
         activation: Option<rosetun_shell::Activation>,
         start_hidden: bool,
-        home: Option<egui::Pos2>,
+        window: Option<WindowMemory>,
     ) -> Self {
         let (sender, events) = mpsc::channel();
         self.shell_events = Some(events);
@@ -118,7 +124,13 @@ impl App {
         };
         self.hide_on_start = start_hidden && self.tray.is_some();
         self.place_on_show = start_hidden;
-        self.home = home;
+        self.window = window;
+        if !start_hidden
+            && let Some(window) = &mut self.window
+            && window.place()
+        {
+            self.maximize_in = Some(1);
+        }
         if start_hidden && self.tray.is_none() {
             let _ = sender.send(ShellEvent::Show);
         }
@@ -143,26 +155,24 @@ impl App {
     #[cfg(windows)]
     fn show_window(&mut self, ctx: &egui::Context) {
         if std::mem::take(&mut self.place_on_show) {
-            let position = self.home.map_or_else(
-                || {
-                    let (monitor, size) = ctx.input(|input| {
-                        let viewport = input.viewport();
-                        (
-                            viewport.monitor_size,
-                            viewport
-                                .outer_rect
-                                .map_or(egui::vec2(1200.0, 780.0), |rect| rect.size()),
-                        )
-                    });
-                    centered_position(monitor, size)
-                },
-                |home| {
-                    // OuterPosition applies the current zoom, but home is in logical pixels.
-                    let zoom = ctx.zoom_factor();
-                    egui::pos2(home.x / zoom, home.y / zoom)
-                },
-            );
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
+            if let Some(window) = &mut self.window {
+                if window.place() {
+                    self.maximize_in = Some(1);
+                }
+            } else {
+                let (monitor, size) = ctx.input(|input| {
+                    let viewport = input.viewport();
+                    (
+                        viewport.monitor_size,
+                        viewport
+                            .outer_rect
+                            .map_or(egui::vec2(1200.0, 780.0), |rect| rect.size()),
+                    )
+                });
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(centered_position(
+                    monitor, size,
+                )));
+            }
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -253,6 +263,17 @@ fn next_scale(applied: Option<u16>, configured: u16) -> Option<u16> {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(windows)]
+        if let Some(frames) = self.maximize_in.as_mut() {
+            if *frames == 0 {
+                // Maximizing before the first onscreen frame can make Windows show it early.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                self.maximize_in = None;
+            } else {
+                *frames -= 1;
+                ctx.request_repaint();
+            }
+        }
         while let Ok(event) = self.events.try_recv() {
             self.state.reduce(event);
         }
@@ -289,9 +310,15 @@ impl eframe::App for App {
                 tray.sync(&tray::tray_view(&self.state));
             }
         }
-        if ctx.input(|input| input.viewport().close_requested()) && self.hides_on_close() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        if ctx.input(|input| input.viewport().close_requested()) {
+            #[cfg(windows)]
+            if let Some(window) = &self.window {
+                window.save();
+            }
+            if self.hides_on_close() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
         }
     }
 
