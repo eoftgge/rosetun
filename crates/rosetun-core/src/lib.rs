@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod fetch;
+mod ping;
 mod rules;
 mod selection;
 mod settings;
@@ -11,6 +12,7 @@ mod text;
 mod update;
 
 pub use fetch::{FetchError, Timeouts, fetch};
+pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
 pub use rosetun_subscription::{ParseError, SkipReason, Skipped, UnsupportedTransport};
 pub use rules::{
     RuleInputError, RuleSetError, add_rule, create_rule_set, delete_rule_set, move_rule,
