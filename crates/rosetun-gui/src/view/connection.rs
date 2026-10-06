@@ -72,7 +72,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             let session = visible_status
                 .and_then(|status| status.since_unix)
                 .map_or_else(
-                    || strings::NO_SESSION.to_owned(),
+                    || t().no_session.to_owned(),
                     |since| display::session_text(Some(since), display::now_unix()),
                 );
             ui.colored_label(

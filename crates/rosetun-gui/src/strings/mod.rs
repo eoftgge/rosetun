@@ -195,6 +195,7 @@ pub(crate) struct Strings {
     pub(crate) select_server: &'static str,
     pub(crate) selected_server: &'static str,
     pub(crate) session: &'static str,
+    pub(crate) no_session: &'static str,
     pub(crate) kill_switch: &'static str,
     pub(crate) protection: &'static str,
     pub(crate) kill_switch_detail: &'static str,
@@ -310,7 +311,6 @@ pub(crate) const PORT_PLACEHOLDER: &str = "443";
 pub(crate) const DNS_PATH_PLACEHOLDER: &str = "/dns-query";
 pub(crate) const LOG_FILE_NAME: &str = "rosetun-gui.log";
 pub(crate) const ERROR_MARK: &str = "!";
-pub(crate) const NO_SESSION: &str = "—";
 pub(crate) const URL_PLACEHOLDER: &str = "https://provider.example/subscription";
 pub(crate) const EXPAND: &str = "+";
 pub(crate) const COLLAPSE: &str = "−";
@@ -543,6 +543,7 @@ impl Strings {
 #[cfg(test)]
 mod tests {
     use super::{Language, en::EN, fill, resolve_language, ru::RU, ru_plural};
+    use rosetun_config::{LanguageSetting, SubscriptionInfo};
 
     #[test]
     fn fill_does_not_expand_values_again() {
@@ -555,7 +556,20 @@ mod tests {
             "{unknown} x {open"
         );
     }
-    use rosetun_config::{LanguageSetting, SubscriptionInfo};
+    #[test]
+    fn interface_copy_uses_plain_punctuation_and_a_session_word() {
+        assert_eq!(EN.no_session, "not started");
+        assert_eq!(RU.no_session, "не начат");
+        for strings in [&EN, &RU] {
+            for text in [
+                strings.rules_subtitle,
+                strings.new_rule_subtitle,
+                strings.domain_help,
+            ] {
+                assert!(!text.contains('—'));
+            }
+        }
+    }
 
     #[test]
     fn language_resolution_covers_all_settings_and_system_languages() {
