@@ -151,6 +151,21 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         {
             actions.push(Action::SetAutoReconnect(auto_reconnect));
         }
+        ui.add_space(12.0);
+        let mut auto_update_subscriptions = state.config.interface.auto_update_subscriptions;
+        if widgets::toggle_row(
+            ui,
+            t().auto_update_subscriptions,
+            t().auto_update_subscriptions_detail,
+            &mut auto_update_subscriptions,
+            editable,
+        )
+        .changed()
+        {
+            actions.push(Action::SetAutoUpdateSubscriptions(
+                auto_update_subscriptions,
+            ));
+        }
     });
 }
 

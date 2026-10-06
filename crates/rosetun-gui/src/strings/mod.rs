@@ -203,6 +203,8 @@ pub(crate) struct Strings {
     pub(crate) connect_on_start_detail: &'static str,
     pub(crate) auto_reconnect: &'static str,
     pub(crate) auto_reconnect_detail: &'static str,
+    pub(crate) auto_update_subscriptions: &'static str,
+    pub(crate) auto_update_subscriptions_detail: &'static str,
     pub(crate) dns_through_tunnel: &'static str,
     pub(crate) dns_explanation: &'static str,
     pub(crate) resolver_ip: &'static str,

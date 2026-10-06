@@ -41,6 +41,9 @@ pub struct InterfaceSettings {
     /// The client connects once at start when the tunnel is disconnected.
     #[serde(default)]
     pub connect_on_start: bool,
+    /// Subscriptions are refreshed in the background when they get old.
+    #[serde(default = "default_true")]
+    pub auto_update_subscriptions: bool,
     #[serde(default)]
     pub language: LanguageSetting,
 }
@@ -59,6 +62,7 @@ impl Default for InterfaceSettings {
             scale_percent: default_scale_percent(),
             close_to_tray: default_close_to_tray(),
             connect_on_start: false,
+            auto_update_subscriptions: true,
             language: LanguageSetting::System,
         }
     }
@@ -178,6 +182,8 @@ mod tests {
         assert!(interface.close_to_tray);
         assert!(!interface.connect_on_start);
         assert!(!config.interface.connect_on_start);
+        assert!(interface.auto_update_subscriptions);
+        assert!(config.interface.auto_update_subscriptions);
     }
 
     #[test]

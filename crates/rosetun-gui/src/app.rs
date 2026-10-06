@@ -12,7 +12,7 @@ use crate::tray;
 #[cfg(windows)]
 use crate::window_memory::WindowMemory;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
-use crate::{strings, theme, view};
+use crate::{display, strings, theme, view};
 
 #[cfg(windows)]
 /// Far outside every monitor: the first frame of a hidden start is drawn here.
@@ -205,6 +205,9 @@ impl App {
             Job::SetCloseToTray(enabled) => self.workers.set_close_to_tray(enabled),
             Job::SetConnectOnStart(enabled) => self.workers.set_connect_on_start(enabled),
             Job::SetAutoReconnect(enabled) => self.workers.set_auto_reconnect(enabled),
+            Job::SetAutoUpdateSubscriptions(enabled) => {
+                self.workers.set_auto_update_subscriptions(enabled)
+            }
             Job::SetDns(dns) => self.workers.set_dns(dns),
             Job::SetVerboseLog(on) => self.workers.set_verbose_log(on),
             #[cfg(windows)]
@@ -281,6 +284,9 @@ impl eframe::App for App {
             self.state.reduce(event);
         }
         if let Some(job) = self.state.take_auto_connect() {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_auto_update(display::now_unix()) {
             self.dispatch(job);
         }
         let language =

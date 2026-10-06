@@ -72,6 +72,7 @@ pub(crate) enum WorkerEvent {
     SetCloseToTray(Result<(), SettingsError>),
     SetConnectOnStart(Result<(), SettingsError>),
     SetAutoReconnect(Result<(), SettingsError>),
+    SetAutoUpdateSubscriptions(Result<(), SettingsError>),
     SetDns(Result<(), SettingsError>),
     SetVerboseLog(Result<(), SettingsError>),
     #[cfg(windows)]
@@ -261,6 +262,14 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             let result = rosetun_core::set_auto_reconnect(&publisher.store, enabled);
             publisher.complete(WorkerEvent::SetAutoReconnect(result));
+        });
+    }
+
+    pub(crate) fn set_auto_update_subscriptions(&self, enabled: bool) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = rosetun_core::set_auto_update_subscriptions(&publisher.store, enabled);
+            publisher.complete(WorkerEvent::SetAutoUpdateSubscriptions(result));
         });
     }
 

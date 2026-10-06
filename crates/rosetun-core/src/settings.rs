@@ -90,6 +90,13 @@ pub fn set_connect_on_start(store: &Store, enabled: bool) -> Result<(), Settings
     })
 }
 
+pub fn set_auto_update_subscriptions(store: &Store, enabled: bool) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.auto_update_subscriptions = enabled;
+        Ok(())
+    })
+}
+
 pub fn set_auto_reconnect(store: &Store, enabled: bool) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.settings.auto_reconnect = enabled;
@@ -223,6 +230,10 @@ mod tests {
 
         set_connect_on_start(&store, true).unwrap();
         expected.interface.connect_on_start = true;
+        assert_eq!(store.load().unwrap(), expected);
+
+        set_auto_update_subscriptions(&store, false).unwrap();
+        expected.interface.auto_update_subscriptions = false;
         assert_eq!(store.load().unwrap(), expected);
 
         set_auto_reconnect(&store, false).unwrap();

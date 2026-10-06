@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -22,6 +23,27 @@ pub(crate) fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_secs())
         .unwrap_or_default()
+}
+
+/// Default refresh interval when the provider names none.
+const AUTO_UPDATE_HOURS: u64 = 12;
+/// Provider intervals outside this range are clamped.
+const AUTO_UPDATE_RANGE: RangeInclusive<u64> = 1..=168;
+/// A failed automatic update is retried after this long.
+const AUTO_UPDATE_RETRY: u64 = 60 * 60;
+/// How often the schedule is checked.
+const AUTO_UPDATE_CHECK: u64 = 60;
+
+/// Whether one subscription is due, in Unix seconds.
+fn update_due(subscription: &Subscription, now: u64, last_attempt: Option<u64>) -> bool {
+    let hours = subscription
+        .update_interval_hours
+        .map(|hours| hours.clamp(*AUTO_UPDATE_RANGE.start(), *AUTO_UPDATE_RANGE.end()))
+        .unwrap_or(AUTO_UPDATE_HOURS);
+    subscription
+        .updated_at_unix
+        .is_none_or(|updated| now.saturating_sub(updated) >= hours * 60 * 60)
+        && last_attempt.is_none_or(|attempt| now.saturating_sub(attempt) >= AUTO_UPDATE_RETRY)
 }
 
 #[derive(Default)]
@@ -243,6 +265,8 @@ pub(crate) struct State {
     pub(crate) config: AppConfig,
     pub(crate) config_ready: bool,
     auto_connect_pending: bool,
+    next_auto_update_check: u64,
+    auto_update_attempts: HashMap<SubscriptionId, u64>,
     status_received: bool,
     pub(crate) config_generation: u64,
     pub(crate) config_error: Option<ConfigWorkerError>,
@@ -270,6 +294,8 @@ impl Default for State {
             config: AppConfig::default(),
             config_ready: false,
             auto_connect_pending: true,
+            next_auto_update_check: 0,
+            auto_update_attempts: HashMap::new(),
             status_received: false,
             config_generation: 0,
             config_error: None,
@@ -304,6 +330,7 @@ pub(crate) enum Action {
     SetCloseToTray(bool),
     SetConnectOnStart(bool),
     SetAutoReconnect(bool),
+    SetAutoUpdateSubscriptions(bool),
     SaveDns,
     ResetDns,
     SetVerboseLog(bool),
@@ -369,6 +396,7 @@ pub(crate) enum Job {
     SetCloseToTray(bool),
     SetConnectOnStart(bool),
     SetAutoReconnect(bool),
+    SetAutoUpdateSubscriptions(bool),
     SetDns(DnsSettings),
     SetVerboseLog(bool),
     #[cfg(windows)]
@@ -449,12 +477,52 @@ impl State {
         None
     }
 
-    pub(crate) fn can_ping(&self) -> bool {
-        !self.helper_available
+    /// Starts at most one due subscription on each schedule check.
+    pub(crate) fn take_auto_update(&mut self, now: u64) -> Option<Job> {
+        if now < self.next_auto_update_check {
+            return None;
+        }
+        self.next_auto_update_check = now.saturating_add(AUTO_UPDATE_CHECK);
+        if !self.config_ready
+            || !self.config.interface.auto_update_subscriptions
+            || self.operations.update_all
+            || self.operations.helper
             || matches!(
                 self.status.state,
-                ConnectionState::Disconnected | ConnectionState::Failed { .. }
+                ConnectionState::Connecting
+                    | ConnectionState::Reconnecting
+                    | ConnectionState::FailedProtected { .. }
             )
+        {
+            return None;
+        }
+        let id = self
+            .config
+            .subscriptions
+            .iter()
+            .find(|subscription| {
+                !self.subscription_busy(&subscription.id)
+                    && update_due(
+                        subscription,
+                        now,
+                        self.auto_update_attempts.get(&subscription.id).copied(),
+                    )
+            })?
+            .id
+            .clone();
+        self.auto_update_attempts.insert(id.clone(), now);
+        self.operations.updating.insert(id.clone());
+        self.outcomes.remove(&id);
+        Some(Job::Update(id))
+    }
+
+    pub(crate) fn can_ping(&self) -> bool {
+        !self.operations.helper
+            && (!self.helper_available
+                || matches!(
+                    self.status.state,
+                    ConnectionState::Disconnected | ConnectionState::Failed { .. }
+                ))
     }
 
     pub(crate) fn best_ping(&self, subscription: &Subscription) -> Option<Duration> {
@@ -549,6 +617,8 @@ impl State {
                 self.expanded
                     .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));
                 self.outcomes
+                    .retain(|id, _| self.config.subscriptions.iter().any(|sub| &sub.id == id));
+                self.auto_update_attempts
                     .retain(|id, _| self.config.subscriptions.iter().any(|sub| &sub.id == id));
                 self.pings.retain(|(id, node), _| {
                     self.config
@@ -731,6 +801,7 @@ impl State {
             WorkerEvent::SetCloseToTray(result) => self.finish_settings(result),
             WorkerEvent::SetConnectOnStart(result) => self.finish_settings(result),
             WorkerEvent::SetAutoReconnect(result) => self.finish_settings(result),
+            WorkerEvent::SetAutoUpdateSubscriptions(result) => self.finish_settings(result),
             WorkerEvent::SetDns(result) => {
                 if result.is_ok() {
                     self.settings_screen.dirty = false;
@@ -941,6 +1012,13 @@ impl State {
             Action::SetAutoReconnect(enabled) => {
                 if self.can_edit_settings() && self.config.settings.auto_reconnect != enabled {
                     return self.start_settings(Job::SetAutoReconnect(enabled));
+                }
+            }
+            Action::SetAutoUpdateSubscriptions(enabled) => {
+                if self.can_edit_settings()
+                    && self.config.interface.auto_update_subscriptions != enabled
+                {
+                    return self.start_settings(Job::SetAutoUpdateSubscriptions(enabled));
                 }
             }
             Action::SaveDns => {
@@ -1596,6 +1674,96 @@ mod tests {
     }
 
     #[test]
+    fn update_due_uses_default_and_clamped_provider_intervals() {
+        let mut sub = subscription("1");
+        let now = 200 * 60 * 60;
+        assert!(update_due(&sub, now, None));
+        sub.updated_at_unix = Some(now - 11 * 60 * 60);
+        assert!(!update_due(&sub, now, None));
+        sub.updated_at_unix = Some(now - 12 * 60 * 60);
+        assert!(update_due(&sub, now, None));
+
+        sub.update_interval_hours = Some(1);
+        sub.updated_at_unix = Some(now - 2 * 60 * 60);
+        assert!(update_due(&sub, now, None));
+        sub.update_interval_hours = Some(0);
+        sub.updated_at_unix = Some(now - 60 * 60);
+        assert!(update_due(&sub, now, None));
+        sub.update_interval_hours = Some(1000);
+        sub.updated_at_unix = Some(now - 167 * 60 * 60);
+        assert!(!update_due(&sub, now, None));
+        sub.updated_at_unix = Some(now - 168 * 60 * 60);
+        assert!(update_due(&sub, now, None));
+        assert!(!update_due(&sub, now, Some(now - 10 * 60)));
+        assert!(update_due(&sub, now, Some(now - 2 * 60 * 60)));
+    }
+
+    #[test]
+    fn auto_update_checks_once_per_minute_and_starts_one_due_subscription() {
+        let mut state = state_with_subscriptions();
+        let now = 200_000;
+        assert!(
+            matches!(state.take_auto_update(now), Some(Job::Update(id)) if id == SubscriptionId::new("1"))
+        );
+        assert!(state.take_auto_update(now).is_none());
+        state.reduce(WorkerEvent::Update {
+            id: SubscriptionId::new("1"),
+            result: Err(UpdateSubscriptionError::NotFound),
+        });
+        assert!(
+            matches!(state.take_auto_update(now + AUTO_UPDATE_CHECK), Some(Job::Update(id)) if id == SubscriptionId::new("2"))
+        );
+        assert!(
+            !state
+                .operations
+                .updating
+                .contains(&SubscriptionId::new("1"))
+        );
+        assert!(
+            state
+                .operations
+                .updating
+                .contains(&SubscriptionId::new("2"))
+        );
+    }
+
+    #[test]
+    fn auto_update_waits_for_config_and_update_all() {
+        let mut state = state_with_subscriptions();
+        state.config_ready = false;
+        assert!(state.take_auto_update(1_000).is_none());
+        state.config_ready = true;
+        state.operations.update_all = true;
+        assert!(state.take_auto_update(1_060).is_none());
+        state.operations.update_all = false;
+        assert!(matches!(
+            state.take_auto_update(1_120),
+            Some(Job::Update(_))
+        ));
+    }
+
+    #[test]
+    fn auto_update_respects_setting_and_connection_transitions() {
+        let mut state = state_with_subscriptions();
+        state.config.interface.auto_update_subscriptions = false;
+        assert!(state.take_auto_update(1_000).is_none());
+        state.config.interface.auto_update_subscriptions = true;
+        state.status.state = ConnectionState::Connecting;
+        assert!(state.take_auto_update(1_060).is_none());
+        state.status.state = ConnectionState::Reconnecting;
+        assert!(state.take_auto_update(1_120).is_none());
+        state.status.state = ConnectionState::FailedProtected {
+            reason: "failure".into(),
+        };
+        assert!(state.take_auto_update(1_180).is_none());
+        state.status.state = ConnectionState::Connected;
+        assert!(matches!(
+            state.take_auto_update(1_240),
+            Some(Job::Update(_))
+        ));
+    }
+
+    #[test]
     fn auto_connect_waits_for_config_helper_and_first_status_then_runs_once() {
         let mut state = state_for_auto_connect();
         assert!(state.take_auto_connect().is_none());
@@ -1612,6 +1780,7 @@ mod tests {
         assert!(!state.auto_connect_pending);
         assert!(state.operations.helper);
         assert!(state.operation_error.is_none());
+        assert!(state.take_auto_update(1_000).is_none());
         assert!(state.take_auto_connect().is_none());
     }
 
@@ -1646,6 +1815,9 @@ mod tests {
         state.status.state = ConnectionState::Connected;
         assert!(state.act(Action::Ping(id.clone())).is_none());
         state.status.state = ConnectionState::Disconnected;
+        state.operations.helper = true;
+        assert!(state.act(Action::Ping(id.clone())).is_none());
+        state.operations.helper = false;
         assert!(
             matches!(state.act(Action::Ping(id.clone())), Some(Job::Ping(found)) if found == id)
         );
@@ -2668,6 +2840,35 @@ mod tests {
         });
         assert!(state.act(Action::SetConnectOnStart(true)).is_none());
         assert!(state.act(Action::SetAutoReconnect(false)).is_none());
+    }
+
+    #[test]
+    fn auto_update_setting_uses_settings_job_and_respects_busy_state() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        assert!(
+            state
+                .act(Action::SetAutoUpdateSubscriptions(true))
+                .is_none()
+        );
+        assert!(matches!(
+            state.act(Action::SetAutoUpdateSubscriptions(false)),
+            Some(Job::SetAutoUpdateSubscriptions(false))
+        ));
+        assert!(
+            state
+                .act(Action::SetAutoUpdateSubscriptions(false))
+                .is_none()
+        );
+        state.reduce(WorkerEvent::SetAutoUpdateSubscriptions(Ok(())));
+        state.config.interface.auto_update_subscriptions = false;
+        assert!(
+            state
+                .act(Action::SetAutoUpdateSubscriptions(false))
+                .is_none()
+        );
     }
 
     #[cfg(windows)]

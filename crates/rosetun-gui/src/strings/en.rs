@@ -128,6 +128,8 @@ pub(crate) static EN: Strings = Strings {
     connect_on_start_detail: "Connects to the selected server as soon as Rosetun starts, including at Windows sign-in.",
     auto_reconnect: "Reconnect automatically",
     auto_reconnect_detail: "If the engine stops or the computer wakes from sleep, the service brings the tunnel back. With protection on, the internet stays blocked until then. Applies on next connect.",
+    auto_update_subscriptions: "Update subscriptions automatically",
+    auto_update_subscriptions_detail: "Every 12 hours, or as often as the provider asks. New servers and keys arrive on their own.",
     dns_through_tunnel: "DNS through the tunnel",
     dns_explanation: "Name lookups go to this DNS-over-HTTPS resolver through the server. It must be reachable from the server's exit.",
     resolver_ip: "Resolver IP",
