@@ -381,14 +381,13 @@ pub fn spawn_supervisor(helper: Arc<Helper>) -> std::io::Result<()> {
     thread::Builder::new()
         .name("engine-supervisor".to_owned())
         .spawn(move || {
-            let mut previous = SystemTime::now();
             loop {
+                let before = SystemTime::now();
                 thread::sleep(SUPERVISOR_TICK);
-                let now = SystemTime::now();
-                if slept(previous, now) {
+                // Only the pause counts: a long reconnect attempt inside `supervise` is not sleep.
+                if slept(before, SystemTime::now()) {
                     helper.notify_resume();
                 }
-                previous = now;
                 helper.supervise(Instant::now());
             }
         })?;
