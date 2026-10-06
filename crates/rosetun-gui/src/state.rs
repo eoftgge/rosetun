@@ -1467,7 +1467,8 @@ pub(crate) fn primary_label(state: &State) -> &'static str {
     }
     if state.operations.helper || state.status.state.is_transitional() {
         match state.status.state {
-            ConnectionState::Reconnecting => t().reconnecting_action,
+            ConnectionState::Reconnecting if state.operations.helper => t().working,
+            ConnectionState::Reconnecting => t().disconnect,
             ConnectionState::Connected | ConnectionState::FailedProtected { .. }
                 if state.operations.helper =>
             {
@@ -1740,6 +1741,25 @@ mod tests {
             state.take_auto_update(1_120),
             Some(Job::Update(_))
         ));
+    }
+
+    #[test]
+    fn primary_label_matches_reconnecting_action_and_busy_state() {
+        let mut state = State {
+            helper_available: true,
+            ..State::default()
+        };
+        state.status.state = ConnectionState::Reconnecting;
+        assert_eq!(state.primary_action(), PrimaryAction::Disconnect);
+        assert_eq!(primary_label(&state), t().disconnect);
+
+        state.operations.helper = true;
+        assert_eq!(state.primary_action(), PrimaryAction::Disabled);
+        assert_eq!(primary_label(&state), t().working);
+
+        state.operations.helper = false;
+        state.status.state = ConnectionState::Connecting;
+        assert_eq!(primary_label(&state), t().connecting_action);
     }
 
     #[test]

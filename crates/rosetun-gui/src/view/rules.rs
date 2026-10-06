@@ -186,7 +186,9 @@ fn filter_controls(
         .map(|(kind, label)| (*kind, label.as_str()))
         .collect();
     ui.horizontal_wrapped(|ui| {
-        if let Some(kind) = widgets::segmented(ui, "rule_type_filter", filter.kind, &options, false, true) {
+        if let Some(kind) =
+            widgets::segmented(ui, "rule_type_filter", filter.kind, &options, false, true)
+        {
             actions.push(Action::SetRuleTypeFilter(kind));
         }
         ui.separator();
