@@ -6,7 +6,7 @@ use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{ConnectionState, Node, RuleSet, Settings, Status, Traffic};
 use rosetun_engine::{
@@ -21,10 +21,25 @@ const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
+/// Failed automatic attempts before the helper gives up.
+const RECONNECT_ATTEMPTS: u32 = 5;
+/// Waits before the second to fifth attempt.
+const RECONNECT_BACKOFF: [Duration; 4] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+    Duration::from_secs(20),
+];
+/// The network needs a moment after a resume.
+const RESUME_DELAY: Duration = Duration::from_secs(2);
+const SUPERVISOR_TICK: Duration = Duration::from_millis(500);
+/// A wall-clock jump this large between two ticks means the machine slept.
+const SLEEP_GAP: Duration = Duration::from_secs(30);
 
 pub struct Helper {
     status: Arc<Mutex<Status>>,
     session: Mutex<Session>,
+    resumed: AtomicBool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +54,14 @@ struct SuccessfulEndpoint {
     address: IpAddr,
 }
 
+/// A pending automatic reconnect.
+#[derive(Debug)]
+struct Reconnect {
+    failures: u32,
+    next_at: Instant,
+    cause: &'static str,
+}
+
 struct Session {
     engines: EngineRegistry,
     routing: Box<dyn RoutingBackend>,
@@ -49,6 +72,8 @@ struct Session {
     monitor: Option<TrafficMonitor>,
     guard: Option<RoutingGuard>,
     last_endpoint: Option<SuccessfulEndpoint>,
+    request: Option<ConnectRequest>,
+    reconnect: Option<Reconnect>,
     stopping: bool,
     dns_timeout: Duration,
     dns_attempt_timeout: Duration,
@@ -69,6 +94,7 @@ impl Helper {
         let status = Arc::new(Mutex::new(Status::default()));
         Self {
             status: Arc::clone(&status),
+            resumed: AtomicBool::new(false),
             session: Mutex::new(Session {
                 engines,
                 routing,
@@ -79,6 +105,8 @@ impl Helper {
                 monitor: None,
                 guard: None,
                 last_endpoint: None,
+                request: None,
+                reconnect: None,
                 stopping: false,
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
@@ -87,32 +115,136 @@ impl Helper {
     }
 
     pub fn status(&self) -> Status {
-        if self.with_status(|status| matches!(status.state, ConnectionState::Connected))
-            && let Ok(mut session) = self.session.try_lock()
-        {
-            let protected = session.guard.is_some();
+        self.with_status(|status| status.clone())
+    }
+
+    /// The machine woke from sleep; the supervisor restarts a live tunnel.
+    pub fn notify_resume(&self) {
+        self.resumed.store(true, Ordering::Release);
+    }
+
+    pub fn supervise(&self, now: Instant) {
+        let Ok(mut session) = self.session.try_lock() else {
+            return;
+        };
+        if session.stopping {
+            return;
+        }
+        let Some(auto_reconnect) = session
+            .request
+            .as_ref()
+            .map(|request| request.settings.auto_reconnect)
+        else {
+            self.resumed.store(false, Ordering::Release);
+            return;
+        };
+
+        if let Some(reconnect) = &session.reconnect {
+            if now < reconnect.next_at {
+                return;
+            }
+        } else {
             let exited = match session.process.as_mut() {
                 Some(process) => match process.is_running() {
                     Ok(true) => None,
                     Ok(false) => Some("the engine process exited".to_owned()),
                     Err(error) => Some(error.to_string()),
                 },
-                None => None,
+                None => Some("the engine process is missing".to_owned()),
             };
-
             if let Some(reason) = exited {
-                tracing::warn!(%reason, protected, "the engine terminated itself");
-                self.with_status(|status| {
-                    status.state = if protected {
-                        ConnectionState::FailedProtected { reason }
-                    } else {
-                        ConnectionState::Failed { reason }
-                    };
-                    status.since_unix = None;
+                let protected = session.guard.is_some();
+                if !auto_reconnect {
+                    tracing::warn!(%reason, protected, "the engine terminated itself");
+                    self.with_status(|status| {
+                        status.state = if protected {
+                            ConnectionState::FailedProtected { reason }
+                        } else {
+                            ConnectionState::Failed { reason }
+                        };
+                        status.since_unix = None;
+                    });
+                    session.request = None;
+                    return;
+                }
+                tracing::warn!(%reason, protected, "the engine terminated; reconnecting");
+                self.with_status(|status| status.state = ConnectionState::Reconnecting);
+                session.reconnect = Some(Reconnect {
+                    failures: 0,
+                    next_at: now,
+                    cause: "engine exited",
                 });
+            } else if self.resumed.swap(false, Ordering::AcqRel) {
+                if !auto_reconnect {
+                    return;
+                }
+                tracing::info!("resumed from sleep; reconnecting tunnel");
+                self.with_status(|status| status.state = ConnectionState::Reconnecting);
+                session.reconnect = Some(Reconnect {
+                    failures: 0,
+                    next_at: now + RESUME_DELAY,
+                    cause: "resume",
+                });
+                return;
+            } else {
+                return;
             }
         }
-        self.with_status(|status| status.clone())
+
+        self.resumed.store(false, Ordering::Release);
+        let request = session.request.clone().expect("active request is present");
+        let reconnect = session.reconnect.take().expect("reconnect is scheduled");
+        let attempt = reconnect.failures + 1;
+        let mode = if session.guard.is_some() {
+            StartMode::ProtectedReconnect
+        } else {
+            StartMode::Fresh
+        };
+        match session.start(&request.node, &request.rule_set, &request.settings, mode) {
+            Ok(()) => {
+                self.with_status(|status| {
+                    status.state = ConnectionState::Connected;
+                    status.since_unix.get_or_insert_with(now_unix);
+                });
+                session.start_monitor(request.settings.engine);
+                tracing::info!(cause = reconnect.cause, attempt, "tunnel reconnected");
+            }
+            Err(error) => {
+                let failures = attempt;
+                if failures < RECONNECT_ATTEMPTS {
+                    if let Err(cleanup_error) = session.stop_engine() {
+                        tracing::error!(%cleanup_error, "failed to stop engine after reconnect failure");
+                    }
+                    session.reconnect = Some(Reconnect {
+                        failures,
+                        next_at: Instant::now() + RECONNECT_BACKOFF[(failures - 1) as usize],
+                        cause: reconnect.cause,
+                    });
+                    tracing::warn!(cause = reconnect.cause, attempt, %error, "tunnel reconnect failed; retrying");
+                } else {
+                    match mode {
+                        StartMode::Fresh => session.teardown(),
+                        StartMode::ProtectedReconnect => {
+                            if let Err(cleanup_error) = session.stop_engine() {
+                                tracing::error!(%cleanup_error, "failed to stop engine after protected reconnect failure");
+                            }
+                        }
+                    }
+                    tracing::warn!(cause = reconnect.cause, attempt, %error, "tunnel reconnect attempts exhausted");
+                    let reason = error.message;
+                    self.with_status(|status| {
+                        status.state = match mode {
+                            StartMode::Fresh => ConnectionState::Failed { reason },
+                            StartMode::ProtectedReconnect => {
+                                ConnectionState::FailedProtected { reason }
+                            }
+                        };
+                        status.since_unix = None;
+                    });
+                    session.request = None;
+                }
+            }
+        }
     }
 
     pub fn connect(&self, request: &ConnectRequest) -> Result<(), HelperError> {
@@ -142,6 +274,8 @@ impl Helper {
             "starting tunnel connection"
         );
 
+        session.request = None;
+        session.reconnect = None;
         self.with_status(|status| status.state = ConnectionState::Connecting);
 
         match session.start(&request.node, &request.rule_set, &request.settings, mode) {
@@ -152,6 +286,8 @@ impl Helper {
                     status.engine = Some(request.settings.engine);
                     status.since_unix = Some(now_unix());
                 });
+                session.request = Some(request.clone());
+                self.resumed.store(false, Ordering::Release);
                 session.start_monitor(request.settings.engine);
                 Ok(())
             }
@@ -185,6 +321,8 @@ impl Helper {
 
     pub fn disconnect(&self) -> Result<(), HelperError> {
         let mut session = self.session()?;
+        session.request = None;
+        session.reconnect = None;
         session.teardown();
         self.with_status(|status| *status = Status::default());
         Ok(())
@@ -197,6 +335,8 @@ impl Helper {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         session.stopping = true;
+        session.request = None;
+        session.reconnect = None;
         session.teardown();
         self.with_status(|status| *status = Status::default());
         tracing::info!("helper session teardown completed");
@@ -234,6 +374,31 @@ impl Helper {
             .unwrap_or_else(|error| error.into_inner());
         apply(&mut status)
     }
+}
+
+/// Runs `supervise` every tick and reports a resume when the wall clock jumps.
+pub fn spawn_supervisor(helper: Arc<Helper>) -> std::io::Result<()> {
+    thread::Builder::new()
+        .name("engine-supervisor".to_owned())
+        .spawn(move || {
+            let mut previous = SystemTime::now();
+            loop {
+                thread::sleep(SUPERVISOR_TICK);
+                let now = SystemTime::now();
+                if slept(previous, now) {
+                    helper.notify_resume();
+                }
+                previous = now;
+                helper.supervise(Instant::now());
+            }
+        })?;
+    Ok(())
+}
+
+/// The machine slept between two ticks: the wall clock moved much further than the tick.
+fn slept(previous: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(previous)
+        .is_ok_and(|gap| gap > SLEEP_GAP)
 }
 
 /// Polls the engine once a second and publishes traffic into the status.

@@ -190,6 +190,9 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
     engines.register(Box::new(singbox));
 
     let helper = Arc::new(Helper::new(engines, rosetun_routing::backend(), gate));
+    state::spawn_supervisor(Arc::clone(&helper)).map_err(|error| {
+        StartError(format!("failed to start engine supervisor thread: {error}"))
+    })?;
     let endpoint = rosetun_ipc::default_endpoint();
     let listener = Listener::bind(&endpoint).map_err(|error| {
         StartError(format!(

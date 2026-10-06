@@ -3,12 +3,13 @@ use std::io;
 use std::path::Path;
 use std::process::ExitCode;
 use std::ptr;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::log_gate::VerboseGate;
 use crate::server::{Server, ShutdownHandle};
+use crate::state::Helper;
 use windows_sys::Win32::Foundation::{
     ERROR_CALL_NOT_IMPLEMENTED, ERROR_FAILED_SERVICE_CONTROLLER_CONNECT,
     ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL, ERROR_SERVICE_DOES_NOT_EXIST,
@@ -18,16 +19,18 @@ use windows_sys::Win32::System::Services::{
     ChangeServiceConfig2W, ChangeServiceConfigW, CloseServiceHandle, ControlService,
     CreateServiceW, DeleteService, OpenSCManagerW, OpenServiceW, QueryServiceStatus,
     RegisterServiceCtrlHandlerExW, SC_ACTION, SC_ACTION_RESTART, SC_HANDLE, SC_MANAGER_CONNECT,
-    SC_MANAGER_CREATE_SERVICE, SERVICE_ACCEPT_PRESHUTDOWN, SERVICE_ACCEPT_STOP, SERVICE_AUTO_START,
-    SERVICE_CHANGE_CONFIG, SERVICE_CONFIG_DESCRIPTION, SERVICE_CONFIG_FAILURE_ACTIONS,
-    SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, SERVICE_CONFIG_PRESHUTDOWN_INFO,
-    SERVICE_CONTROL_INTERROGATE, SERVICE_CONTROL_PRESHUTDOWN, SERVICE_CONTROL_STOP,
-    SERVICE_DESCRIPTIONW, SERVICE_ERROR_NORMAL, SERVICE_FAILURE_ACTIONS_FLAG,
-    SERVICE_FAILURE_ACTIONSW, SERVICE_PRESHUTDOWN_INFO, SERVICE_QUERY_STATUS, SERVICE_RUNNING,
-    SERVICE_START, SERVICE_START_PENDING, SERVICE_STATUS, SERVICE_STATUS_HANDLE, SERVICE_STOP,
-    SERVICE_STOP_PENDING, SERVICE_STOPPED, SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS,
-    SetServiceStatus, StartServiceCtrlDispatcherW, StartServiceW,
+    SC_MANAGER_CREATE_SERVICE, SERVICE_ACCEPT_POWEREVENT, SERVICE_ACCEPT_PRESHUTDOWN,
+    SERVICE_ACCEPT_STOP, SERVICE_AUTO_START, SERVICE_CHANGE_CONFIG, SERVICE_CONFIG_DESCRIPTION,
+    SERVICE_CONFIG_FAILURE_ACTIONS, SERVICE_CONFIG_FAILURE_ACTIONS_FLAG,
+    SERVICE_CONFIG_PRESHUTDOWN_INFO, SERVICE_CONTROL_INTERROGATE, SERVICE_CONTROL_POWEREVENT,
+    SERVICE_CONTROL_PRESHUTDOWN, SERVICE_CONTROL_STOP, SERVICE_DESCRIPTIONW, SERVICE_ERROR_NORMAL,
+    SERVICE_FAILURE_ACTIONS_FLAG, SERVICE_FAILURE_ACTIONSW, SERVICE_PRESHUTDOWN_INFO,
+    SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_START_PENDING, SERVICE_STATUS,
+    SERVICE_STATUS_HANDLE, SERVICE_STOP, SERVICE_STOP_PENDING, SERVICE_STOPPED,
+    SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS, SetServiceStatus, StartServiceCtrlDispatcherW,
+    StartServiceW,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND};
 
 pub(crate) const SERVICE_NAME: &str = "Rosetun";
 const DESCRIPTION: &str = "Runs the Rosetun tunnel and kill switch.";
@@ -53,6 +56,7 @@ impl Drop for ScHandle {
 
 static STATUS: OnceLock<StatusHandle> = OnceLock::new();
 static SHUTDOWN: OnceLock<ShutdownHandle> = OnceLock::new();
+static HELPER: OnceLock<Arc<Helper>> = OnceLock::new();
 static VERBOSE_GATE: OnceLock<VerboseGate> = OnceLock::new();
 static CHECKPOINT: AtomicU32 = AtomicU32::new(0);
 
@@ -85,7 +89,7 @@ fn report_status(state: u32, accepted: u32, exit_code: u32, specific_code: u32, 
 
 unsafe extern "system" fn control_handler(
     control: u32,
-    _event_type: u32,
+    event_type: u32,
     _event_data: *mut c_void,
     _context: *mut c_void,
 ) -> u32 {
@@ -94,6 +98,14 @@ unsafe extern "system" fn control_handler(
             report_status(SERVICE_STOP_PENDING, 0, NO_ERROR, 0, WAIT_HINT_MS);
             if let Some(handle) = SHUTDOWN.get() {
                 handle.request();
+            }
+            NO_ERROR
+        }
+        SERVICE_CONTROL_POWEREVENT => {
+            if matches!(event_type, PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND)
+                && let Some(helper) = HELPER.get()
+            {
+                helper.notify_resume();
             }
             NO_ERROR
         }
@@ -138,6 +150,11 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
         }
     };
 
+    if HELPER.set(Arc::clone(&helper)).is_err() {
+        tracing::error!("service helper was already registered");
+        report_status(SERVICE_STOPPED, 0, ERROR_SERVICE_SPECIFIC_ERROR, 1, 0);
+        return;
+    }
     let server = Server::new(false);
     if SHUTDOWN.set(server.shutdown_handle()).is_err() {
         tracing::error!("service shutdown handle was already registered");
@@ -146,7 +163,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
     }
     report_status(
         SERVICE_RUNNING,
-        SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_PRESHUTDOWN,
+        SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_PRESHUTDOWN | SERVICE_ACCEPT_POWEREVENT,
         NO_ERROR,
         0,
         0,

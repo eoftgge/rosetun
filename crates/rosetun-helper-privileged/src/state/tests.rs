@@ -7,6 +7,7 @@ use rosetun_engine::{
     EngineBackend, EngineCapabilities, EngineIntegration, RenderedConfig, RuleCapabilities,
 };
 use rosetun_routing::errors::RoutingError;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -387,6 +388,159 @@ impl EngineBackend for RunningThenExitedEngine {
             running: Arc::clone(&self.running),
         }))
     }
+}
+
+#[derive(Debug, Default)]
+struct EngineControls {
+    spawns: AtomicUsize,
+    running: Mutex<Option<Arc<AtomicBool>>>,
+    outcomes: Mutex<VecDeque<bool>>,
+}
+
+impl EngineControls {
+    fn fail_next(&self, count: usize) {
+        self.outcomes
+            .lock()
+            .expect("test outcomes mutex")
+            .extend(std::iter::repeat_n(false, count));
+    }
+
+    fn kill(&self) {
+        self.running
+            .lock()
+            .expect("test process mutex")
+            .as_ref()
+            .expect("engine is running")
+            .store(false, Ordering::Release);
+    }
+
+    fn spawns(&self) -> usize {
+        self.spawns.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug)]
+struct ControlledEngine(Arc<EngineControls>);
+
+impl EngineBackend for ControlledEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
+    }
+
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        None
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        Ok(PathBuf::from("sing-box"))
+    }
+
+    fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        Ok(RenderedConfig {
+            file_name: "config.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+        })
+    }
+
+    fn spawn(
+        &self,
+        _binary: &Path,
+        _config: &RenderedConfig,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        self.0.spawns.fetch_add(1, Ordering::AcqRel);
+        if self
+            .0
+            .outcomes
+            .lock()
+            .expect("test outcomes mutex")
+            .pop_front()
+            == Some(false)
+        {
+            return Err(EngineError::BinaryNotFound("test engine".to_owned()));
+        }
+        let running = Arc::new(AtomicBool::new(true));
+        *self.0.running.lock().expect("test process mutex") = Some(Arc::clone(&running));
+        Ok(Box::new(RunningThenExitedProcess { running }))
+    }
+}
+
+#[derive(Debug)]
+struct ReconnectRouting {
+    prepared: Arc<AtomicUsize>,
+    reverted: Arc<AtomicUsize>,
+}
+
+impl RoutingBackend for ReconnectRouting {
+    fn name(&self) -> &'static str {
+        "test-reconnect"
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binary: &Path,
+    ) -> Result<RoutingGuard, RoutingError> {
+        let prepared = Arc::clone(&self.prepared);
+        let reverted = Arc::clone(&self.reverted);
+        Ok(RoutingGuard::new_with_reconnector(
+            move |_, _| {
+                prepared.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+            |_| Ok(()),
+            move || {
+                reverted.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        ))
+    }
+}
+
+fn supervised_helper(
+    protected: bool,
+) -> (
+    Helper,
+    Arc<EngineControls>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+) {
+    let controls = Arc::new(EngineControls::default());
+    let prepared = Arc::new(AtomicUsize::new(0));
+    let reverted = Arc::new(AtomicUsize::new(0));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ControlledEngine(Arc::clone(&controls))));
+    let routing: Box<dyn RoutingBackend> = if protected {
+        Box::new(ReconnectRouting {
+            prepared: Arc::clone(&prepared),
+            reverted: Arc::clone(&reverted),
+        })
+    } else {
+        Box::new(UnusedRouting)
+    };
+    (
+        Helper::new(engines, routing, VerboseGate::default()),
+        controls,
+        prepared,
+        reverted,
+    )
 }
 
 #[derive(Debug)]
@@ -1015,7 +1169,7 @@ fn kill_switch_authorizes_the_configured_tunnel_after_spawning_the_engine() {
 }
 
 #[test]
-fn status_marks_the_session_failed_when_the_engine_returns_not_running() {
+fn supervisor_marks_the_session_failed_when_reconnect_is_disabled() {
     let running = Arc::new(AtomicBool::new(true));
 
     let mut engines = EngineRegistry::new();
@@ -1026,6 +1180,7 @@ fn status_marks_the_session_failed_when_the_engine_returns_not_running() {
     let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     let mut request = connect_request();
     request.settings.kill_switch = false;
+    request.settings.auto_reconnect = false;
 
     helper
         .connect(&request)
@@ -1037,7 +1192,8 @@ fn status_marks_the_session_failed_when_the_engine_returns_not_running() {
 
     // Exit only after connect has completed its readiness checks.
     running.store(false, Ordering::Release);
-
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    helper.supervise(Instant::now());
     let status = helper.status();
 
     assert!(matches!(
@@ -1073,7 +1229,7 @@ fn connect_rejects_an_engine_that_exits_before_startup_readiness() {
 }
 
 #[test]
-fn status_reports_failed_protected_when_connected_engine_exits() {
+fn supervisor_reports_failed_protected_when_reconnect_is_disabled() {
     let running = Arc::new(AtomicBool::new(true));
     let reverted = Arc::new(AtomicUsize::new(0));
 
@@ -1094,12 +1250,14 @@ fn status_reports_failed_protected_when_connected_engine_exits() {
     request.settings.kill_switch = true;
     request.settings.tun.name = "rosetun-test".to_owned();
     request.settings.tun.ipv4 = "172.29.10.1/30".to_owned();
+    request.settings.auto_reconnect = false;
 
     helper
         .connect(&request)
         .expect("connection succeeds while the engine is running");
 
     running.store(false, Ordering::Release);
+    helper.supervise(Instant::now());
 
     let status = helper.status();
     assert!(matches!(
@@ -1150,8 +1308,10 @@ fn disconnect_from_failed_protected_state_returns_to_disconnected() {
     request.settings.tun.name = "rosetun-test".to_owned();
     request.settings.tun.ipv4 = "172.29.10.1/30".to_owned();
 
+    request.settings.auto_reconnect = false;
     helper.connect(&request).expect("connection succeeds");
     running.store(false, Ordering::Release);
+    helper.supervise(Instant::now());
 
     assert!(matches!(
         helper.status().state,
@@ -1166,6 +1326,210 @@ fn disconnect_from_failed_protected_state_returns_to_disconnected() {
         helper.status().state,
         ConnectionState::Disconnected
     ));
+}
+
+#[test]
+fn supervisor_restarts_unprotected_engine_after_exit() {
+    let (helper, controls, _, _) = supervised_helper(false);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).expect("first connect");
+    let since = helper.status().since_unix;
+
+    controls.kill();
+    helper.supervise(Instant::now());
+
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.status().since_unix, since);
+    assert_eq!(controls.spawns(), 2);
+}
+
+#[test]
+fn supervisor_reuses_protection_after_exit() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("first protected connect");
+
+    controls.kill();
+    helper.supervise(Instant::now());
+
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn disabled_reconnect_leaves_both_session_types_failed() {
+    for protected in [false, true] {
+        let (helper, controls, _, reverted) = supervised_helper(protected);
+        let mut request = connect_request();
+        request.settings.kill_switch = protected;
+        request.settings.auto_reconnect = false;
+        helper.connect(&request).expect("first connect");
+        controls.kill();
+        helper.supervise(Instant::now());
+        if protected {
+            assert!(matches!(
+                helper.status().state,
+                ConnectionState::FailedProtected { .. }
+            ));
+        } else {
+            assert!(matches!(
+                helper.status().state,
+                ConnectionState::Failed { .. }
+            ));
+        }
+        helper.supervise(Instant::now() + Duration::from_secs(60));
+        assert_eq!(controls.spawns(), 1);
+        assert_eq!(reverted.load(Ordering::Acquire), 0);
+    }
+}
+
+#[test]
+fn supervisor_backs_off_and_gives_up_after_five_failures() {
+    for protected in [false, true] {
+        let (helper, controls, prepared, reverted) = supervised_helper(protected);
+        let mut request = connect_request();
+        request.settings.kill_switch = protected;
+        helper.connect(&request).expect("first connect");
+        controls.fail_next(RECONNECT_ATTEMPTS as usize);
+        controls.kill();
+        let now = Instant::now();
+        helper.supervise(now);
+        assert!(matches!(
+            helper.status().state,
+            ConnectionState::Reconnecting
+        ));
+        assert_eq!(controls.spawns(), 2);
+        helper.supervise(now);
+        assert_eq!(controls.spawns(), 2, "backoff prevents immediate retry");
+
+        for attempt in 2..=RECONNECT_ATTEMPTS {
+            helper.supervise(now + Duration::from_secs(u64::from(attempt) * 60));
+            assert_eq!(controls.spawns(), (attempt + 1) as usize);
+        }
+        let status = helper.status();
+        if protected {
+            assert!(matches!(
+                status.state,
+                ConnectionState::FailedProtected { .. }
+            ));
+        } else {
+            assert!(matches!(status.state, ConnectionState::Failed { .. }));
+        }
+        assert!(status.since_unix.is_none());
+        assert!(helper.session().expect("session").request.is_none());
+        assert!(helper.session().expect("session").reconnect.is_none());
+        assert_eq!(reverted.load(Ordering::Acquire), 0);
+        if protected {
+            assert_eq!(
+                prepared.load(Ordering::Acquire),
+                RECONNECT_ATTEMPTS as usize
+            );
+            assert!(helper.session().expect("session").guard.is_some());
+        }
+        helper.supervise(now + Duration::from_secs(600));
+        assert_eq!(controls.spawns(), (RECONNECT_ATTEMPTS + 1) as usize);
+    }
+}
+
+#[test]
+fn supervisor_delays_resume_reconnect_and_consumes_resume_flag() {
+    let (helper, controls, _, _) = supervised_helper(false);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).expect("first connect");
+    let now = Instant::now();
+    helper.notify_resume();
+    helper.supervise(now);
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Reconnecting
+    ));
+    assert_eq!(controls.spawns(), 1);
+    helper.supervise(now + Duration::from_secs(3));
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 2);
+    helper.supervise(now + Duration::from_secs(10));
+    assert_eq!(controls.spawns(), 2);
+}
+
+#[test]
+fn disabled_reconnect_ignores_resume_while_engine_is_running() {
+    let (helper, controls, _, _) = supervised_helper(false);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request.settings.auto_reconnect = false;
+    helper.connect(&request).expect("first connect");
+    helper.notify_resume();
+    helper.supervise(Instant::now());
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert!(!helper.resumed.load(Ordering::Acquire));
+    assert_eq!(controls.spawns(), 1);
+}
+
+#[test]
+fn supervisor_does_not_wait_for_a_busy_session() {
+    let (helper, controls, _, _) = supervised_helper(false);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).expect("first connect");
+    controls.kill();
+    let session = helper.session().expect("hold session lock");
+    helper.supervise(Instant::now());
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 1);
+    drop(session);
+    helper.supervise(Instant::now());
+    assert_eq!(controls.spawns(), 2);
+}
+
+#[test]
+fn supervisor_ignores_resume_without_a_tunnel() {
+    let (helper, controls, _, _) = supervised_helper(false);
+    helper.notify_resume();
+    helper.supervise(Instant::now());
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Disconnected
+    ));
+    assert!(!helper.resumed.load(Ordering::Acquire));
+    assert_eq!(controls.spawns(), 0);
+}
+
+#[test]
+fn disconnect_cancels_pending_reconnect() {
+    let (helper, controls, _, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("first connect");
+    controls.fail_next(1);
+    controls.kill();
+    let now = Instant::now();
+    helper.supervise(now);
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Reconnecting
+    ));
+
+    helper.disconnect().expect("disconnect during backoff");
+    helper.supervise(now + Duration::from_secs(60));
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Disconnected
+    ));
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(reverted.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn wall_clock_gap_detects_sleep_only_for_large_forward_jumps() {
+    let now = SystemTime::now();
+    assert!(slept(now, now + Duration::from_secs(31)));
+    assert!(!slept(now, now + Duration::from_secs(1)));
+    assert!(!slept(now, now - Duration::from_secs(31)));
 }
 
 fn protected_helper(
