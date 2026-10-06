@@ -2698,8 +2698,10 @@ version = "0.1.0"
 dependencies = [
  "rosetun-config",
  "rosetun-engine",
+ "serde",
  "serde_json",
  "tracing",
+ "ureq",
 ]
 
 [[package]]

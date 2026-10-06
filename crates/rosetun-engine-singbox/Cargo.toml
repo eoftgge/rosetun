@@ -8,8 +8,10 @@ repository.workspace = true
 [dependencies]
 rosetun-config.workspace = true
 rosetun-engine.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+ureq = { version = "3.4", default-features = false }
 
 [lints]
 workspace = true

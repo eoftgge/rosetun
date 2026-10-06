@@ -22,7 +22,7 @@ pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
     let (route, unsupported) =
         route_section(request.rules, RULE_CAPABILITIES, request.settings.allow_lan);
-    let config = json!({
+    let mut config = json!({
         "log": log_section(request.settings),
         "dns": dns_section(&request.settings.dns)?,
         "inbounds": [tun_inbound(request.settings)],
@@ -32,6 +32,14 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         ],
         "route": route,
     });
+    if let Some(control) = request.control {
+        config["experimental"] = json!({
+            "clash_api": {
+                "external_controller": control.address.to_string(),
+                "secret": control.secret,
+            },
+        });
+    }
 
     let body = serde_json::to_vec_pretty(&config)
         .map_err(|error| EngineError::Render(error.to_string()))?;

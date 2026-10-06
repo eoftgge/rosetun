@@ -10,13 +10,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
+use std::time::Duration;
+
+use serde::Deserialize;
 
 use output::LineLevel;
 use readiness::Readiness;
-use rosetun_config::{EngineKind, Traffic};
+use rosetun_config::EngineKind;
 use rosetun_engine::{
-    EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess, RenderRequest,
-    RenderedConfig, errors::EngineError,
+    ControlEndpoint, EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess,
+    RenderRequest, RenderedConfig, TrafficProbe, TrafficTotals, errors::EngineError,
 };
 
 pub use render::render;
@@ -108,6 +111,10 @@ impl EngineBackend for SingBoxBackend {
         render::render(request)
     }
 
+    fn traffic_probe(&self, control: &ControlEndpoint) -> Option<Box<dyn TrafficProbe>> {
+        Some(Box::new(ClashTrafficProbe::new(control)))
+    }
+
     fn spawn(
         &self,
         binary: &Path,
@@ -148,6 +155,74 @@ impl EngineBackend for SingBoxBackend {
         }
 
         Ok(Box::new(SingBoxProcess { child, readiness }))
+    }
+}
+
+/// Polls `GET /connections` on the sing-box Clash API.
+struct ClashTrafficProbe {
+    agent: ureq::Agent,
+    url: String,
+    authorization: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Snapshot {
+    upload_total: u64,
+    download_total: u64,
+}
+
+impl ClashTrafficProbe {
+    fn new(control: &ControlEndpoint) -> Self {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(1)))
+            .http_status_as_error(false)
+            // Environment proxy settings must not intercept the local control request.
+            .proxy(None)
+            .build();
+        Self {
+            agent: ureq::Agent::new_with_config(config),
+            url: format!("http://{}/connections", control.address),
+            authorization: format!("Bearer {}", control.secret),
+        }
+    }
+}
+
+impl std::fmt::Debug for ClashTrafficProbe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClashTrafficProbe")
+            .field("url", &self.url)
+            .field("authorization", &"<redacted>")
+            .finish()
+    }
+}
+
+impl TrafficProbe for ClashTrafficProbe {
+    fn totals(&mut self) -> Result<TrafficTotals, EngineError> {
+        let mut response = self
+            .agent
+            .get(&self.url)
+            .header("Authorization", &self.authorization)
+            .call()
+            .map_err(|_| EngineError::Stats("local control request failed".to_owned()))?;
+        if response.status() != 200 {
+            return Err(EngineError::Stats(format!(
+                "HTTP status {}",
+                response.status().as_u16()
+            )));
+        }
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(16 * 1024 * 1024)
+            .read_to_vec()
+            .map_err(|_| EngineError::Stats("failed to read traffic response".to_owned()))?;
+        let snapshot: Snapshot = serde_json::from_slice(&body)
+            .map_err(|_| EngineError::Stats("invalid traffic response".to_owned()))?;
+        Ok(TrafficTotals {
+            up: snapshot.upload_total,
+            down: snapshot.download_total,
+        })
     }
 }
 
@@ -233,10 +308,6 @@ impl EngineProcess for SingBoxProcess {
 
     fn is_ready(&mut self) -> Result<bool, EngineError> {
         self.readiness.poll().map_err(EngineError::from)
-    }
-
-    fn traffic(&mut self) -> Result<Traffic, EngineError> {
-        Err(EngineError::StatsUnavailable)
     }
 
     fn stop(&mut self) -> Result<(), EngineError> {
@@ -335,6 +406,7 @@ mod tests {
             node: &node,
             rules: &rules,
             settings: &settings,
+            control: None,
         };
         let config = render::render(&request).expect("config built");
         serde_json::from_slice(&config.body).expect("config is valid json")
@@ -351,8 +423,133 @@ mod tests {
             node: &node,
             rules: &rules,
             settings: &settings,
+            control: None,
         })?;
         Ok(serde_json::from_slice(&config.body).expect("valid JSON"))
+    }
+
+    #[test]
+    fn clash_api_is_rendered_only_with_control() {
+        assert!(rendered().get("experimental").is_none());
+
+        let node = node();
+        let rules = rules();
+        let settings = Settings::default();
+        let control = ControlEndpoint {
+            address: "127.0.0.1:12345".parse().expect("loopback address"),
+            secret: "private-secret".to_owned(),
+        };
+        let config = render::render(&RenderRequest {
+            node: &node,
+            rules: &rules,
+            settings: &settings,
+            control: Some(&control),
+        })
+        .expect("config rendered");
+        let config: Value = serde_json::from_slice(&config.body).expect("valid JSON");
+        assert_eq!(
+            config["experimental"],
+            serde_json::json!({
+                "clash_api": {
+                    "external_controller": "127.0.0.1:12345",
+                    "secret": "private-secret",
+                }
+            })
+        );
+    }
+
+    fn probe_against_server(status: u16, chunked: bool) -> Result<TrafficTotals, EngineError> {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::time::Instant;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test server");
+        listener.set_nonblocking(true).expect("nonblocking accept");
+        let control = ControlEndpoint {
+            address: listener.local_addr().expect("server address"),
+            secret: "test-secret".to_owned(),
+        };
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("probe failed to connect: {error}"),
+                }
+            };
+            socket.set_nonblocking(false).expect("blocking socket");
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("read timeout");
+            let mut reader = BufReader::new(socket);
+            let mut request = String::new();
+            reader.read_line(&mut request).expect("request line");
+            assert_eq!(request, "GET /connections HTTP/1.1\r\n");
+            let mut authorized = false;
+            loop {
+                request.clear();
+                reader.read_line(&mut request).expect("request header");
+                if request == "\r\n" {
+                    break;
+                }
+                if let Some((key, value)) = request.split_once(':')
+                    && key.eq_ignore_ascii_case("Authorization")
+                {
+                    authorized = value.trim() == "Bearer test-secret";
+                }
+            }
+            assert!(authorized, "the probe must send bearer authorization");
+
+            let body = r#"{"uploadTotal":10,"downloadTotal":20,"connections":[]}"#;
+            let response = if chunked {
+                format!(
+                    "HTTP/1.1 {status} Test\r\nTransfer-Encoding: chunked\r\n\r\n{:X}\r\n{body}\r\n0\r\n\r\n",
+                    body.len()
+                )
+            } else {
+                format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+            };
+            reader
+                .get_mut()
+                .write_all(response.as_bytes())
+                .expect("server response");
+        });
+        let mut probe = SingBoxBackend::new("unused")
+            .traffic_probe(&control)
+            .expect("sing-box supports traffic");
+        let debug = format!("{probe:?}");
+        assert!(!debug.contains(&control.secret));
+        assert!(debug.contains("<redacted>"));
+        let result = probe.totals();
+        server.join().expect("test server completed");
+        result
+    }
+
+    #[test]
+    fn traffic_probe_reads_content_length_and_chunked_totals() {
+        for chunked in [false, true] {
+            assert_eq!(
+                probe_against_server(200, chunked).expect("traffic totals"),
+                TrafficTotals { up: 10, down: 20 }
+            );
+        }
+    }
+
+    #[test]
+    fn traffic_probe_reports_http_failure() {
+        assert!(matches!(
+            probe_against_server(401, false),
+            Err(EngineError::Stats(message)) if message.contains("401")
+        ));
     }
 
     #[test]
@@ -626,6 +823,7 @@ mod tests {
             node: &node,
             rules: &rule_set,
             settings: &settings,
+            control: None,
         })
         .expect("rendered");
 
@@ -714,6 +912,7 @@ mod tests {
             node: &node,
             rules: &rule_set,
             settings: &settings,
+            control: None,
         })
         .expect("config rendered");
 
@@ -790,6 +989,7 @@ mod tests {
             node: &node,
             rules: &rules,
             settings: &settings,
+            control: None,
         };
         assert!(matches!(
             render::render(&request),
@@ -811,6 +1011,7 @@ mod tests {
             node: &node,
             rules: &rule_set,
             settings: &settings,
+            control: None,
         })
         .expect("config rendered");
         assert!(rendered.unsupported.is_empty());
@@ -864,6 +1065,7 @@ mod tests {
                 node: &node,
                 rules: &rules,
                 settings: &settings,
+                control: None,
             })
             .expect("rendered");
             let config: Value = serde_json::from_slice(&rendered.body).expect("JSON");
