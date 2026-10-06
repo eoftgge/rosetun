@@ -1,13 +1,13 @@
 use eframe::egui::{self, CornerRadius, Stroke};
 
 use crate::strings::t;
-use crate::theme::{BORDER, BORDER_STRONG, CARD, ERROR, MODAL};
+use crate::theme::{BORDER, BORDER_STRONG, CARD, ERROR, MODAL, RADIUS};
 
 pub(crate) fn card_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(CARD)
         .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(CornerRadius::same(2))
+        .corner_radius(CornerRadius::same(RADIUS))
         .inner_margin(egui::Margin::same(16))
 }
 
@@ -15,7 +15,7 @@ pub(crate) fn modal_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(MODAL)
         .stroke(Stroke::new(1.0, BORDER_STRONG))
-        .corner_radius(CornerRadius::same(2))
+        .corner_radius(CornerRadius::same(RADIUS))
         .inner_margin(egui::Margin::same(24))
 }
 

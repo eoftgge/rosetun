@@ -61,6 +61,13 @@ pub(crate) const CONNECTED: Color32 = Color32::from_rgb(0xE0, 0x70, 0x5B);
 pub(crate) const DISCONNECTED: Color32 = Color32::from_rgb(0x8C, 0x81, 0x89);
 pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x2A);
 
+/// Cards, buttons, fields, modals and menus.
+pub(crate) const RADIUS: u8 = 6;
+/// Buttons inside a segmented control.
+pub(crate) const RADIUS_INNER: u8 = 4;
+/// The toggle track: half its height.
+pub(crate) const RADIUS_TOGGLE: u8 = 11;
+
 pub(crate) fn apply(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
     ctx.set_theme(egui::Theme::Dark);
@@ -85,14 +92,14 @@ pub(crate) fn apply(ctx: &egui::Context) {
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, TEXT);
     visuals.selection.bg_fill = ROSE;
     visuals.selection.stroke = Stroke::new(1.0, TEXT);
-    visuals.window_corner_radius = CornerRadius::same(2);
-    visuals.menu_corner_radius = CornerRadius::same(2);
+    visuals.window_corner_radius = CornerRadius::same(RADIUS);
+    visuals.menu_corner_radius = CornerRadius::same(RADIUS);
     visuals.window_shadow = Shadow::NONE;
     visuals.popup_shadow = Shadow::NONE;
-    visuals.widgets.noninteractive.corner_radius = CornerRadius::same(2);
-    visuals.widgets.inactive.corner_radius = CornerRadius::same(2);
-    visuals.widgets.hovered.corner_radius = CornerRadius::same(2);
-    visuals.widgets.active.corner_radius = CornerRadius::same(2);
+    visuals.widgets.noninteractive.corner_radius = CornerRadius::same(RADIUS);
+    visuals.widgets.inactive.corner_radius = CornerRadius::same(RADIUS);
+    visuals.widgets.hovered.corner_radius = CornerRadius::same(RADIUS);
+    visuals.widgets.active.corner_radius = CornerRadius::same(RADIUS);
 
     let mut style = Style::default();
     style.spacing.item_spacing = egui::vec2(10.0, 8.0);

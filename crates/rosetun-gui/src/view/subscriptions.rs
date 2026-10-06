@@ -369,7 +369,10 @@ fn subscription_card(
     if selected {
         let rect = response.response.rect;
         ui.painter().rect_filled(
-            egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + 3.0, rect.bottom())),
+            egui::Rect::from_min_max(
+                egui::pos2(rect.left(), rect.top() + f32::from(theme::RADIUS)),
+                egui::pos2(rect.left() + 3.0, rect.bottom() - f32::from(theme::RADIUS)),
+            ),
             0.0,
             theme::ROSE,
         );

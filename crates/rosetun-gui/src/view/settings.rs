@@ -34,20 +34,23 @@ fn interface(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         ui.heading(t().interface);
         ui.add_space(8.0);
         ui.label(t().scale);
-        ui.horizontal_wrapped(|ui| {
-            for percent in rosetun_core::INTERFACE_SCALES {
-                if ui
-                    .add_enabled(
-                        state.can_edit_settings(),
-                        egui::Button::new(strings::scale(percent))
-                            .selected(state.config.interface.scale_percent == percent),
-                    )
-                    .clicked()
-                {
-                    actions.push(Action::SetInterfaceScale(percent));
-                }
-            }
-        });
+        let scales: Vec<_> = rosetun_core::INTERFACE_SCALES
+            .into_iter()
+            .map(|percent| (percent, strings::scale(percent)))
+            .collect();
+        let options: Vec<_> = scales
+            .iter()
+            .map(|(percent, label)| (*percent, label.as_str()))
+            .collect();
+        if let Some(percent) = widgets::segmented(
+            ui,
+            state.config.interface.scale_percent,
+            &options,
+            false,
+            state.can_edit_settings(),
+        ) {
+            actions.push(Action::SetInterfaceScale(percent));
+        }
         ui.label(RichText::new(t().zoom_hint).small().color(theme::TEXT_DIM));
         ui.add_space(12.0);
         ui.label(t().language_title);
@@ -88,7 +91,7 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         ui.add_space(8.0);
         let editable = state.can_edit_settings();
         let mut autostart = state.settings_screen.autostart.unwrap_or(false);
-        if widgets::switch_row(
+        if widgets::toggle_row(
             ui,
             t().start_with_windows,
             t().start_with_windows_detail,
@@ -101,7 +104,7 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         }
         ui.add_space(12.0);
         let mut close_to_tray = state.config.interface.close_to_tray;
-        if widgets::switch_row(
+        if widgets::toggle_row(
             ui,
             t().keep_in_tray,
             t().keep_in_tray_detail,

@@ -171,25 +171,23 @@ fn filter_controls(
             .desired_width(330.0),
     );
     let counts = rule_counts(set);
+    let labels: Vec<_> = [
+        (TypeFilter::All, t().all, counts.all()),
+        (TypeFilter::Domains, t().domains, counts.domains),
+        (TypeFilter::Processes, t().processes, counts.processes),
+        (TypeFilter::Other, t().other, counts.other),
+    ]
+    .into_iter()
+    .filter(|(kind, _, count)| *kind != TypeFilter::Other || *count != 0)
+    .map(|(kind, label, count)| (kind, strings::filter_count(label, count)))
+    .collect();
+    let options: Vec<_> = labels
+        .iter()
+        .map(|(kind, label)| (*kind, label.as_str()))
+        .collect();
     ui.horizontal_wrapped(|ui| {
-        for (kind, label, count) in [
-            (TypeFilter::All, t().all, counts.all()),
-            (TypeFilter::Domains, t().domains, counts.domains),
-            (TypeFilter::Processes, t().processes, counts.processes),
-            (TypeFilter::Other, t().other, counts.other),
-        ] {
-            if kind == TypeFilter::Other && count == 0 {
-                continue;
-            }
-            if ui
-                .add(
-                    egui::Button::new(strings::filter_count(label, count))
-                        .selected(filter.kind == kind),
-                )
-                .clicked()
-            {
-                actions.push(Action::SetRuleTypeFilter(kind));
-            }
+        if let Some(kind) = widgets::segmented(ui, filter.kind, &options, false, true) {
+            actions.push(Action::SetRuleTypeFilter(kind));
         }
         ui.separator();
         for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
@@ -617,7 +615,8 @@ pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
                     NameDialogKind::Create => t().create_rule_set,
                     NameDialogKind::Rename(_) => t().rename,
                 };
-                if widgets::button_fill(ui, label, !busy && !dialog.name.trim().is_empty()).clicked()
+                if widgets::button_fill(ui, label, !busy && !dialog.name.trim().is_empty())
+                    .clicked()
                 {
                     actions.push(Action::SubmitSetName);
                 }

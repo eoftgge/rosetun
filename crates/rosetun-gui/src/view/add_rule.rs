@@ -44,22 +44,18 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
             egui::Sides::new().show(
                 ui,
                 |ui| {
-                    ui.horizontal(|ui| {
-                        for (kind, label) in [
+                    if let Some(kind) = widgets::segmented(
+                        ui,
+                        dialog.kind,
+                        &[
                             (RuleInputKind::Domain, t().domain),
                             (RuleInputKind::Process, t().process),
-                        ] {
-                            if ui
-                                .add_enabled(
-                                    !dialog.busy,
-                                    egui::Button::new(label).selected(dialog.kind == kind),
-                                )
-                                .clicked()
-                            {
-                                actions.push(Action::SelectRuleInput(kind));
-                            }
-                        }
-                    });
+                        ],
+                        false,
+                        !dialog.busy,
+                    ) {
+                        actions.push(Action::SelectRuleInput(kind));
+                    }
                 },
                 |ui| {
                     ui.horizontal(|ui| {

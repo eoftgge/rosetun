@@ -141,7 +141,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 ui.set_min_width(ui.available_width());
                 ui.colored_label(theme::TEXT_DIM, t().protection);
                 let mut enabled = state.config.settings.kill_switch;
-                if widgets::switch_row(
+                if widgets::toggle_row(
                     ui,
                     t().kill_switch,
                     t().kill_switch_detail,
@@ -254,7 +254,8 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
             }
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                if widgets::outline_button(ui, t().keep_blocked, !state.operations.helper).clicked() {
+                if widgets::outline_button(ui, t().keep_blocked, !state.operations.helper).clicked()
+                {
                     actions.push(Action::KeepBlocked);
                 }
                 if widgets::button_fill(

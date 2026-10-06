@@ -42,7 +42,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
         .frame(
             egui::Frame::new()
                 .fill(theme::BG)
-                .inner_margin(egui::Margin::symmetric(36, 32)),
+                .inner_margin(egui::Margin {
+                    left: 36,
+                    right: 36,
+                    top: 28,
+                    bottom: 32,
+                }),
         )
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
