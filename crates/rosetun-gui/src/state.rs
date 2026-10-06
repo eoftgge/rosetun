@@ -351,7 +351,7 @@ fn reported_by_status(error: &HelperCommandError) -> bool {
     matches!(
         error,
         HelperCommandError::Client(ClientError::Helper(HelperError {
-            code: ErrorCode::EngineFailed | ErrorCode::RoutingFailed,
+            code: ErrorCode::EngineFailed | ErrorCode::RoutingFailed | ErrorCode::UnsupportedRules,
             ..
         }))
     )
@@ -1480,7 +1480,11 @@ mod tests {
 
     #[test]
     fn failed_connect_reported_by_status_has_no_second_error() {
-        for code in [ErrorCode::EngineFailed, ErrorCode::RoutingFailed] {
+        for code in [
+            ErrorCode::EngineFailed,
+            ErrorCode::RoutingFailed,
+            ErrorCode::UnsupportedRules,
+        ] {
             let mut state = State {
                 status: Status {
                     state: ConnectionState::Failed {
