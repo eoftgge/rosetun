@@ -1,6 +1,7 @@
 use eframe::egui::{self, RichText};
 use rosetun_config::AppConfig;
 
+use crate::errors;
 use crate::state::{Action, AddDialog, redact};
 use crate::strings::t;
 use crate::{display, strings, theme};
@@ -87,8 +88,12 @@ pub(crate) fn show(
                 ui.add_space(12.0);
                 ui.add(
                     egui::Label::new(
-                        RichText::new(form_error(config, dialog, &error.to_string()))
-                            .color(theme::ERROR),
+                        RichText::new(form_error(
+                            config,
+                            dialog,
+                            &errors::add_subscription(t(), error),
+                        ))
+                        .color(theme::ERROR),
                     )
                     .wrap(),
                 );

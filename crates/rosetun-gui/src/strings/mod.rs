@@ -5,6 +5,9 @@ use rosetun_config::{LanguageSetting, SubscriptionInfo};
 mod en;
 mod ru;
 
+#[cfg(test)]
+pub(crate) use self::{en::EN, ru::RU};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Language {
     English,
@@ -46,8 +49,85 @@ pub(crate) fn resolve_language(setting: LanguageSetting, system_russian: bool) -
     }
 }
 
+/// Replaces `{name}` placeholders in one pass, so a value that itself contains
+/// `{…}` (a path, provider text) is never substituted again.
+pub(crate) fn fill(template: &str, values: &[(&str, &str)]) -> String {
+    let mut output = String::with_capacity(template.len());
+    let mut remaining = template;
+    while let Some(start) = remaining.find('{') {
+        output.push_str(&remaining[..start]);
+        let after_open = &remaining[start + 1..];
+        let Some(end) = after_open.find('}') else {
+            remaining = &remaining[start..];
+            break;
+        };
+        let name = &after_open[..end];
+        if let Some((_, value)) = values.iter().find(|(key, _)| *key == name) {
+            output.push_str(value);
+        } else {
+            output.push_str(&remaining[start..start + end + 2]);
+        }
+        remaining = &after_open[end + 1..];
+    }
+    output.push_str(remaining);
+    output
+}
+
+pub(crate) struct ErrorStrings {
+    pub(crate) config_dir: &'static str,
+    pub(crate) config_access: &'static str,
+    pub(crate) config_json: &'static str,
+    pub(crate) config_invalid: &'static str,
+    pub(crate) config_version: &'static str,
+    pub(crate) config_dangling_node: &'static str,
+    pub(crate) config_dangling_rule_set: &'static str,
+    pub(crate) config_inspect: &'static str,
+    pub(crate) unsupported_scale: &'static str,
+    pub(crate) rule_set_not_found: &'static str,
+    pub(crate) rule_not_found: &'static str,
+    pub(crate) rule_set_name_empty: &'static str,
+    pub(crate) duplicate_rule: &'static str,
+    pub(crate) selected_rule_set_missing: &'static str,
+    pub(crate) invalid_domain: &'static str,
+    pub(crate) domain_is_ip: &'static str,
+    pub(crate) single_label_domain: &'static str,
+    pub(crate) invalid_process: &'static str,
+    pub(crate) relative_path: &'static str,
+    pub(crate) invalid_resolver_ip: &'static str,
+    pub(crate) invalid_resolver_name: &'static str,
+    pub(crate) invalid_port: &'static str,
+    pub(crate) invalid_dns_path: &'static str,
+    pub(crate) subscription_not_found: &'static str,
+    pub(crate) node_not_found: &'static str,
+    pub(crate) request_settings_changed: &'static str,
+    pub(crate) clock_before_epoch: &'static str,
+    pub(crate) already_added: &'static str,
+    pub(crate) url_already_added: &'static str,
+    pub(crate) ids_exhausted: &'static str,
+    pub(crate) invalid_subscription_url: &'static str,
+    pub(crate) missing_host: &'static str,
+    pub(crate) process_list: &'static str,
+    pub(crate) helper_transport: &'static str,
+    pub(crate) helper_unexpected: &'static str,
+    pub(crate) helper_closed: &'static str,
+    pub(crate) code_protocol_mismatch: &'static str,
+    pub(crate) code_handshake_required: &'static str,
+    pub(crate) code_not_privileged: &'static str,
+    pub(crate) code_engine_failed: &'static str,
+    pub(crate) code_routing_failed: &'static str,
+    pub(crate) code_busy: &'static str,
+    pub(crate) code_invalid_state: &'static str,
+    pub(crate) code_unsupported_rules: &'static str,
+    pub(crate) code_not_implemented: &'static str,
+    pub(crate) code_internal: &'static str,
+    pub(crate) autostart_read: &'static str,
+    pub(crate) autostart_write: &'static str,
+    pub(crate) open_folder: &'static str,
+}
+
 pub(crate) struct Strings {
     pub(crate) language: Language,
+    pub(crate) errors: ErrorStrings,
     pub(crate) connection: &'static str,
     pub(crate) rules: &'static str,
     pub(crate) settings: &'static str,
@@ -462,7 +542,19 @@ impl Strings {
 
 #[cfg(test)]
 mod tests {
-    use super::{Language, en::EN, resolve_language, ru::RU, ru_plural};
+    use super::{Language, en::EN, fill, resolve_language, ru::RU, ru_plural};
+
+    #[test]
+    fn fill_does_not_expand_values_again() {
+        assert_eq!(
+            fill("{a} and {b}", &[("a", "{b}"), ("b", "x")]),
+            "{b} and x"
+        );
+        assert_eq!(
+            fill("{unknown} {a} {open", &[("a", "x")]),
+            "{unknown} x {open"
+        );
+    }
     use rosetun_config::{LanguageSetting, SubscriptionInfo};
 
     #[test]

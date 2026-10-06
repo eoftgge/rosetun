@@ -9,7 +9,9 @@ mod window_frame;
 
 use eframe::egui::{self, Stroke};
 
+use crate::errors;
 use crate::state::{Action, Screen, State};
+use crate::strings::t;
 use crate::theme;
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
@@ -42,7 +44,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                 .id_salt("connection_scroll")
                 .show(ui, |ui| {
                     if let Some(error) = &state.config_error
-                        && theme::dismissible_error(ui, &state.text(&error.to_string()))
+                        && theme::dismissible_error(
+                            ui,
+                            &state.text(&errors::config_worker(t(), error)),
+                        )
                     {
                         actions.push(Action::DismissConfigError);
                     }

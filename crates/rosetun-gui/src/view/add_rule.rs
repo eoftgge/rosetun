@@ -1,6 +1,7 @@
 use eframe::egui::{self, RichText};
 use rosetun_config::{ProcessMatch, RuleMatcher, RuleTarget};
 
+use crate::errors;
 use crate::rules::{ProcessMatchMode, process_matches_filter, update_process_match_mode};
 use crate::state::{Action, AddRuleDialog, RuleInputKind};
 use crate::strings::t;
@@ -181,7 +182,7 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
                 }
             }
             Err(error) => {
-                ui.colored_label(theme::ERROR, error.to_string());
+                ui.colored_label(theme::ERROR, errors::rule_input(t(), error));
             }
         };
     }
@@ -407,7 +408,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 .on_hover_text(preview);
             }
             Err(error) => {
-                ui.colored_label(theme::ERROR, error.to_string());
+                ui.colored_label(theme::ERROR, errors::rule_input(t(), error));
             }
         }
     }

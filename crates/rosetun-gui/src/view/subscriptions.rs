@@ -1,6 +1,7 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{Subscription, SubscriptionId};
 
+use crate::errors;
 use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
 use crate::state::{Action, State, UpdateOutcome};
@@ -218,7 +219,7 @@ fn subscription_card(
             .truncate(),
         );
         if let Some(UpdateOutcome::Error(error)) = state.outcomes.get(&subscription.id)
-            && theme::dismissible_error(ui, &state.text(&error.to_string()))
+            && theme::dismissible_error(ui, &state.text(&errors::update_subscription(t(), error)))
         {
             actions.push(Action::DismissOutcome(subscription.id.clone()));
         }

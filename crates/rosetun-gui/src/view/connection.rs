@@ -2,6 +2,7 @@ use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::ConnectionState;
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
+use crate::errors;
 use crate::state::{Action, State, primary_label};
 use crate::strings::t;
 use crate::{display, strings, theme};
@@ -14,7 +15,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         theme::card_frame().show(ui, |ui| {
             ui.colored_label(theme::ERROR, t().helper_unavailable_detail);
             if let Some(error) = &state.helper_error {
-                ui.add(egui::Label::new(state.text(&error.to_string())).wrap());
+                ui.add(egui::Label::new(state.text(&errors::client(t(), error))).wrap());
             }
         });
         ui.add_space(16.0);

@@ -10,9 +10,10 @@ use rosetun_ipc::ClientError;
 
 use crate::actions::{self, PrimaryAction};
 use crate::display;
+use crate::errors;
 use crate::reorder::drop_target;
 use crate::rules::{ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes};
-use crate::strings::t;
+use crate::strings::{fill, t};
 use crate::worker::{ConfigWorkerError, HelperCommandError, WorkerEvent};
 
 #[derive(Default)]
@@ -476,11 +477,15 @@ impl State {
             }
             WorkerEvent::SelectNode(result) => {
                 self.operations.selection = false;
-                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+                self.operation_error = result
+                    .err()
+                    .map(|error| self.text(&errors::select_node(t(), &error)));
             }
             WorkerEvent::SelectRuleSet(result) => {
                 self.operations.rules = false;
-                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+                self.operation_error = result
+                    .err()
+                    .map(|error| self.text(&errors::select_rule_set(t(), &error)));
             }
             WorkerEvent::CreateRuleSet(result) => {
                 self.operations.rules_edit = false;
@@ -489,14 +494,14 @@ impl State {
                         self.rule_screen.selected_set = Some(set.id);
                         self.rule_screen.name = None;
                     }
-                    Err(error) => self.name_error(error.to_string()),
+                    Err(error) => self.name_error(errors::rule_set(t(), &error)),
                 }
             }
             WorkerEvent::RenameRuleSet(result) => {
                 self.operations.rules_edit = false;
                 match result {
                     Ok(()) => self.rule_screen.name = None,
-                    Err(error) => self.name_error(error.to_string()),
+                    Err(error) => self.name_error(errors::rule_set(t(), &error)),
                 }
             }
             WorkerEvent::DeleteRuleSet(result) => {
@@ -505,6 +510,10 @@ impl State {
             }
             WorkerEvent::SetDefaultTarget(result) => self.finish_rule_edit(result),
             WorkerEvent::Processes { request, result } => {
+                let message = result
+                    .as_ref()
+                    .err()
+                    .map(|error| self.text(&errors::process_list(t(), error)));
                 if let Some(dialog) = &mut self.rule_screen.add
                     && dialog.load_request == Some(request)
                 {
@@ -516,7 +525,7 @@ impl State {
                             dialog.selected_process = None;
                             dialog.processes_error = None;
                         }
-                        Err(error) => dialog.processes_error = Some(error.to_string()),
+                        Err(_) => dialog.processes_error = message,
                     }
                 }
             }
@@ -547,7 +556,7 @@ impl State {
                             self.rule_screen.filter = RuleFilter::default();
                         }
                         Err(error) => {
-                            let message = self.text(&error.to_string());
+                            let message = self.text(&errors::rule_set(t(), &error));
                             if let Some(dialog) = &mut self.rule_screen.add {
                                 dialog.busy = false;
                                 dialog.error = Some(message);
@@ -555,7 +564,9 @@ impl State {
                         }
                     }
                 } else {
-                    self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+                    self.operation_error = result
+                        .err()
+                        .map(|error| self.text(&errors::rule_set(t(), &error)));
                 }
             }
             WorkerEvent::SetRuleTarget(result) => self.finish_rule_edit(result),
@@ -567,7 +578,9 @@ impl State {
             }
             WorkerEvent::SetKillSwitch(result) => {
                 self.operations.kill_switch = false;
-                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+                self.operation_error = result
+                    .err()
+                    .map(|error| self.text(&errors::store(t(), &error)));
             }
             WorkerEvent::SetInterfaceScale(result) => self.finish_settings(result),
             WorkerEvent::SetLanguage(result) => self.finish_settings(result),
@@ -576,14 +589,22 @@ impl State {
                 Ok(enabled) => self.settings_screen.autostart = Some(enabled),
                 Err(error) => {
                     self.settings_screen.autostart = None;
-                    self.operation_error = Some(self.text(&error.to_string()));
+                    let message =
+                        fill(t().errors.autostart_read, &[("detail", &error.to_string())]);
+                    self.operation_error = Some(self.text(&message));
                 }
             },
             #[cfg(windows)]
             WorkerEvent::SetAutostart(result) => {
                 self.operations.settings = false;
                 self.settings_screen.autostart = result.as_ref().ok().copied();
-                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+                self.operation_error = result.err().map(|error| {
+                    let message = fill(
+                        t().errors.autostart_write,
+                        &[("detail", &error.to_string())],
+                    );
+                    self.text(&message)
+                });
             }
             #[cfg(windows)]
             WorkerEvent::SetCloseToTray(result) => self.finish_settings(result),
@@ -598,7 +619,10 @@ impl State {
             #[cfg(windows)]
             WorkerEvent::OpenConfigFolder(result) => {
                 self.operations.settings = false;
-                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+                self.operation_error = result.err().map(|error| {
+                    let message = fill(t().errors.open_folder, &[("detail", &error.to_string())]);
+                    self.text(&message)
+                });
             }
             WorkerEvent::Add(result) => match result {
                 Ok((subscription, report)) => {
@@ -626,7 +650,9 @@ impl State {
                             self.update_result(id, result);
                         }
                     }
-                    Err(error) => self.operation_error = Some(self.text(&error.to_string())),
+                    Err(error) => {
+                        self.operation_error = Some(self.text(&errors::store(t(), &error)));
+                    }
                 }
             }
             WorkerEvent::Remove { id, result } => {
@@ -638,7 +664,7 @@ impl State {
                         self.remove = None;
                     }
                     Err(error) => {
-                        let message = self.text(&error.to_string());
+                        let message = self.text(&errors::remove_subscription(t(), &error));
                         if let Some(dialog) = &mut self.remove {
                             dialog.error = Some(message);
                         }
@@ -647,7 +673,9 @@ impl State {
             }
             WorkerEvent::MoveSubscription(result) => {
                 self.operations.moving_subscription = false;
-                self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+                self.operation_error = result
+                    .err()
+                    .map(|error| self.text(&errors::move_subscription(t(), &error)));
             }
         }
     }
@@ -663,7 +691,9 @@ impl State {
 
     fn finish_rule_edit(&mut self, result: Result<(), rosetun_core::RuleSetError>) {
         self.operations.rules_edit = false;
-        self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+        self.operation_error = result
+            .err()
+            .map(|error| self.text(&errors::rule_set(t(), &error)));
     }
 
     fn start_rule_edit(&mut self, job: Job) -> Option<Job> {
@@ -674,7 +704,9 @@ impl State {
 
     fn finish_settings(&mut self, result: Result<(), rosetun_core::SettingsError>) {
         self.operations.settings = false;
-        self.operation_error = result.err().map(|error| self.text(&error.to_string()));
+        self.operation_error = result
+            .err()
+            .map(|error| self.text(&errors::settings(t(), &error)));
     }
 
     fn load_processes(&mut self) -> Option<Job> {
@@ -689,14 +721,9 @@ impl State {
     }
 
     fn helper_result(&mut self, result: Result<(), HelperCommandError>) {
-        self.operation_error = result.err().map(|error| {
-            let message = match error {
-                HelperCommandError::Request(error) => actions::connect_request_message(&error),
-                HelperCommandError::Client(error) => actions::helper_error_message(&error),
-                other => other.to_string(),
-            };
-            self.text(&message)
-        });
+        self.operation_error = result
+            .err()
+            .map(|error| self.text(&errors::helper_command(t(), &error)));
     }
 
     fn update_result(
@@ -2214,7 +2241,7 @@ mod tests {
         assert_eq!(state.settings_screen.autostart, None);
         assert_eq!(
             state.operation_error.as_deref(),
-            Some("registry read denied")
+            Some("could not read the autostart setting: registry read denied")
         );
     }
 
@@ -2289,7 +2316,7 @@ mod tests {
         assert_eq!(state.settings_screen.autostart, None);
         assert_eq!(
             state.operation_error.as_deref(),
-            Some("registry write denied")
+            Some("could not change autostart: registry write denied")
         );
         assert!(state.act(Action::SetAutostart(true)).is_none());
     }
@@ -2314,7 +2341,7 @@ mod tests {
         assert!(!state.operations.settings);
         assert_eq!(
             state.operation_error.as_deref(),
-            Some("explorer unavailable")
+            Some("could not open the folder: explorer unavailable")
         );
     }
 }

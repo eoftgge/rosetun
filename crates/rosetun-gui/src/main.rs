@@ -8,6 +8,7 @@ mod actions;
 mod app;
 mod brand;
 mod display;
+mod errors;
 mod icons;
 mod reorder;
 mod rules;

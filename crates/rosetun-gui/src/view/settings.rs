@@ -1,6 +1,7 @@
 use eframe::egui::{self, RichText};
 use rosetun_config::{LanguageSetting, LogLevel};
 
+use crate::errors;
 use crate::state::{Action, State};
 use crate::strings::t;
 use crate::{strings, theme};
@@ -156,7 +157,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             });
         let parsed = form.parsed_dns();
         if let Err(error) = &parsed {
-            ui.colored_label(theme::ERROR, error.to_string());
+            ui.colored_label(theme::ERROR, errors::dns_input(t(), error));
         }
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {

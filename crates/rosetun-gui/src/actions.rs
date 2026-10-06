@@ -1,7 +1,5 @@
-use rosetun_config::{ConnectionState, Status};
-use rosetun_ipc::{ClientError, ConnectRequestError};
-
 use crate::strings::t;
+use rosetun_config::{ConnectionState, Status};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimaryAction {
@@ -63,19 +61,6 @@ pub(crate) fn protection_action(status: &Status, operation_in_flight: bool) -> P
     } else {
         ProtectionAction::None
     }
-}
-
-pub(crate) fn connect_request_message(error: &ConnectRequestError) -> String {
-    match error {
-        ConnectRequestError::SelectionMissing | ConnectRequestError::NodeNotFound => {
-            t().select_server.to_owned()
-        }
-        ConnectRequestError::RuleSetNotFound => error.to_string(),
-    }
-}
-
-pub(crate) fn helper_error_message(error: &ClientError) -> String {
-    crate::display::safe_multiline(&error.to_string())
 }
 
 #[cfg(test)]
@@ -176,31 +161,6 @@ mod tests {
                 true,
             ),
             ProtectionAction::None
-        );
-    }
-
-    #[test]
-    fn selection_errors_are_safe_and_actionable() {
-        assert_eq!(
-            connect_request_message(&ConnectRequestError::SelectionMissing),
-            t().select_server
-        );
-        assert_eq!(
-            connect_request_message(&ConnectRequestError::NodeNotFound),
-            t().select_server
-        );
-        assert_eq!(
-            connect_request_message(&ConnectRequestError::RuleSetNotFound),
-            "the selected rule set does not exist"
-        );
-    }
-
-    #[test]
-    fn helper_errors_are_terminal_safe() {
-        let error = ClientError::Transport("socket\u{202e}failed".to_owned());
-        assert_eq!(
-            helper_error_message(&error),
-            "unable to contact helper: socket failed"
         );
     }
 }
