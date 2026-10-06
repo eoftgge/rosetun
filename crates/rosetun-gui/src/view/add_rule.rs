@@ -46,6 +46,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                 |ui| {
                     if let Some(kind) = widgets::segmented(
                         ui,
+                        "rule_input_kind",
                         dialog.kind,
                         &[
                             (RuleInputKind::Domain, t().domain),

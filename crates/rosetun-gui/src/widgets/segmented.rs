@@ -21,6 +21,7 @@ fn segment_widths(natural: &[f32], fill: Option<f32>, gap: f32) -> Vec<f32> {
 /// when it differs from `selected`.
 pub(crate) fn segmented<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     selected: T,
     options: &[(T, &str)],
     fill_width: bool,
@@ -63,13 +64,14 @@ pub(crate) fn segmented<T: Copy + PartialEq>(
         egui::StrokeKind::Inside,
     );
     let mut x = track.left() + 4.0;
+    let id = ui.make_persistent_id(id_salt);
     let mut clicked = None;
     for (index, ((value, label), width)) in options.iter().zip(widths).enumerate() {
         let rect =
             egui::Rect::from_min_size(egui::pos2(x, track.top() + 4.0), egui::vec2(width, 30.0));
         let response = ui.interact(
             rect,
-            ui.id().with(index),
+            id.with(index),
             if enabled {
                 egui::Sense::click()
             } else {

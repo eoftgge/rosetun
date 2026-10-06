@@ -46,6 +46,7 @@ fn interface(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             .collect();
         if let Some(percent) = widgets::segmented(
             ui,
+            "interface_scale",
             state.config.interface.scale_percent,
             &options,
             false,
