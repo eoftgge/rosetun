@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use crate::server::{Server, ShutdownHandle};
 use windows_sys::Win32::Foundation::{
     ERROR_CALL_NOT_IMPLEMENTED, ERROR_FAILED_SERVICE_CONTROLLER_CONNECT,
-    ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SERVICE_EXISTS,
-    ERROR_SERVICE_NOT_ACTIVE, ERROR_SERVICE_SPECIFIC_ERROR, NO_ERROR,
+    ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL, ERROR_SERVICE_DOES_NOT_EXIST,
+    ERROR_SERVICE_EXISTS, ERROR_SERVICE_NOT_ACTIVE, ERROR_SERVICE_SPECIFIC_ERROR, NO_ERROR,
 };
 use windows_sys::Win32::System::Services::{
     ChangeServiceConfig2W, ChangeServiceConfigW, CloseServiceHandle, ControlService,
@@ -375,7 +375,10 @@ pub(crate) fn uninstall() -> io::Result<()> {
     // SAFETY: The service handle and status output remain live during the call.
     if unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut status) } == 0 {
         let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(ERROR_SERVICE_NOT_ACTIVE as i32) {
+        let code = error.raw_os_error();
+        if code != Some(ERROR_SERVICE_NOT_ACTIVE as i32)
+            && code != Some(ERROR_SERVICE_CANNOT_ACCEPT_CTRL as i32)
+        {
             return Err(error);
         }
     }
@@ -388,6 +391,10 @@ pub(crate) fn uninstall() -> io::Result<()> {
         }
         if status.dwCurrentState == SERVICE_STOPPED {
             break;
+        }
+        if status.dwCurrentState == SERVICE_RUNNING {
+            // SAFETY: The service handle and status output remain live during the call.
+            let _ = unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut status) };
         }
         if Instant::now() >= deadline {
             return Err(io::Error::new(
