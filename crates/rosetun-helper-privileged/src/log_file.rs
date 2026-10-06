@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ pub(crate) const LOG_LIMIT: u64 = 10 * 1024 * 1024;
 pub(crate) struct RotatingFile {
     path: PathBuf,
     previous: PathBuf,
-    file: Option<File>,
+    file: File,
     written: u64,
     limit: u64,
 }
@@ -19,54 +19,54 @@ impl RotatingFile {
         fs::create_dir_all(dir)?;
         let path = dir.join("helper.log");
         let previous = dir.join("helper.previous.log");
-        if path.exists() {
-            fs::rename(&path, &previous)?;
-        }
-        let file = File::create(&path)?;
+        let (file, written) = if path.exists() && fs::rename(&path, &previous).is_err() {
+            let file = OpenOptions::new().create(true).append(true).open(&path)?;
+            let written = file.metadata()?.len();
+            (file, written)
+        } else {
+            (File::create(&path)?, 0)
+        };
         Ok(Self {
             path,
             previous,
-            file: Some(file),
-            written: 0,
+            file,
+            written,
             limit,
         })
     }
 
-    fn rotate(&mut self) -> io::Result<()> {
-        drop(self.file.take());
-        fs::rename(&self.path, &self.previous)?;
-        self.file = Some(File::create(&self.path)?);
+    fn rotate(&mut self) {
+        // Keeping the log writable matters more than bounding its size when a file is held open.
+        if fs::rename(&self.path, &self.previous).is_ok()
+            && let Ok(file) = File::create(&self.path)
+        {
+            self.file = file;
+        }
         self.written = 0;
-        Ok(())
     }
 }
 
 impl Write for RotatingFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.written > 0 && self.written.saturating_add(buf.len() as u64) > self.limit {
-            self.rotate()?;
+            self.rotate();
         }
-        let file = self
-            .file
-            .as_mut()
-            .ok_or_else(|| io::Error::other("helper log file is unavailable"))?;
-        let count = file.write(buf)?;
+        let count = self.file.write(buf)?;
         self.written += count as u64;
         Ok(count)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.file
-            .as_mut()
-            .ok_or_else(|| io::Error::other("helper log file is unavailable"))?
-            .flush()
+        self.file.flush()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
 
     static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -103,6 +103,24 @@ mod tests {
     }
 
     #[test]
+    fn open_appends_when_the_existing_log_is_held_open() {
+        let dir = TestDir::new();
+        let path = dir.0.join("helper.log");
+        fs::write(&path, b"earlier").unwrap();
+        let _reader = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&path)
+            .unwrap();
+
+        let mut log = RotatingFile::open(&dir.0, 20).unwrap();
+        log.write_all(b"later").unwrap();
+        drop(log);
+        assert_eq!(fs::read(path).unwrap(), b"earlierlater");
+        assert!(!dir.0.join("helper.previous.log").exists());
+    }
+
+    #[test]
     fn crossing_limit_rotates_before_writing() {
         let dir = TestDir::new();
         let mut log = RotatingFile::open(&dir.0, 5).unwrap();
@@ -114,6 +132,24 @@ mod tests {
             b"first"
         );
         assert_eq!(fs::read(dir.0.join("helper.log")).unwrap(), b"second");
+    }
+
+    #[test]
+    fn rotation_keeps_writing_when_the_log_is_held_open() {
+        let dir = TestDir::new();
+        let path = dir.0.join("helper.log");
+        let mut log = RotatingFile::open(&dir.0, 5).unwrap();
+        log.write_all(b"first").unwrap();
+        let _reader = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&path)
+            .unwrap();
+
+        log.write_all(b"second").unwrap();
+        drop(log);
+        assert_eq!(fs::read(path).unwrap(), b"firstsecond");
+        assert!(!dir.0.join("helper.previous.log").exists());
     }
 
     #[test]
