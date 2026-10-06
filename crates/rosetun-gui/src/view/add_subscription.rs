@@ -50,11 +50,15 @@ pub(crate) fn show(
                                 .wrap(),
                         );
                     }
-                    Err(message) => {
+                    Err(error) => {
                         ui.add(
                             egui::Label::new(
-                                RichText::new(form_error(config, dialog, message))
-                                    .color(theme::ERROR),
+                                RichText::new(form_error(
+                                    config,
+                                    dialog,
+                                    &errors::subscription_url(t(), error),
+                                ))
+                                .color(theme::ERROR),
                             )
                             .wrap(),
                         );

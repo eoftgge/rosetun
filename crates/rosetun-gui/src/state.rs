@@ -1156,7 +1156,7 @@ impl State {
                                 },
                             });
                         }
-                        Err(message) => dialog.error = Some(AddFromUrlError::Url(message)),
+                        Err(error) => dialog.error = Some(AddFromUrlError::Url(error)),
                     }
                 }
             }
@@ -1244,7 +1244,7 @@ pub(crate) fn primary_label(state: &State) -> &'static str {
 mod tests {
     use super::*;
     use rosetun_config::{DomainMatch, Rule, RuleMatcher};
-    use rosetun_core::{RemoveSubscriptionError, RuleSetError, StoreError};
+    use rosetun_core::{FetchError, ParseError, RemoveSubscriptionError, RuleSetError, StoreError};
     use rosetun_ipc::ConnectRequestError;
     use rosetun_processes::RunningProcess;
 
@@ -1549,6 +1549,31 @@ mod tests {
         state.reduce(WorkerEvent::UpdateAll(Err(StoreError::NoConfigDir)));
         assert!(!state.operations.update_all);
         assert!(state.operation_error.is_some());
+    }
+
+    #[test]
+    fn provider_announcement_in_translated_error_redacts_subscription_url() {
+        let url = "https://sub.example.com/private-token";
+        let mut subscription = subscription("1");
+        subscription.url = url.into();
+        let config = AppConfig {
+            subscriptions: vec![subscription],
+            ..AppConfig::default()
+        };
+        let error = UpdateSubscriptionError::Fetch {
+            source: FetchError::Parse(ParseError::DeviceLimit {
+                max_devices_reached: true,
+                not_supported: false,
+                announce: Some(format!("see {url}")),
+            }),
+            message: "CLI only".into(),
+        };
+        let text = redact(
+            &config,
+            &errors::update_subscription(&crate::strings::RU, &error),
+        );
+        assert!(!text.contains("private-token"));
+        assert!(text.contains("https://sub.example.com/…"));
     }
 
     #[test]

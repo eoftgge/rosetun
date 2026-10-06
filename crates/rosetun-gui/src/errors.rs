@@ -1,8 +1,9 @@
 use rosetun_config::ConfigError;
 use rosetun_core::{
-    AddFromUrlError, AddSubscriptionError, DnsInputError, MoveSubscriptionError,
-    RemoveSubscriptionError, RuleInputError, RuleSetError, SelectNodeError, SelectRuleSetError,
-    SettingsError, StoreError, UpdateSubscriptionError,
+    AddFromUrlError, AddSubscriptionError, DnsInputError, FetchError, MoveSubscriptionError,
+    ParseError, RemoveSubscriptionError, RuleInputError, RuleSetError, SelectNodeError,
+    SelectRuleSetError, SettingsError, SkipReason, StoreError, SubscriptionUrlError,
+    UnsupportedTransport, UpdateSubscriptionError,
 };
 use rosetun_ipc::{ClientError, ConnectRequestError, ErrorCode};
 use rosetun_processes::ProcessListError;
@@ -121,9 +122,132 @@ pub(crate) fn select_rule_set(s: &Strings, error: &SelectRuleSetError) -> String
     }
 }
 
+pub(crate) fn subscription_url(s: &Strings, error: &SubscriptionUrlError) -> String {
+    match error {
+        SubscriptionUrlError::Invalid => s.errors.invalid_subscription_url,
+        SubscriptionUrlError::MissingHost => s.errors.missing_host,
+        SubscriptionUrlError::EncryptedHappLink => s.errors.encrypted_happ_link,
+        SubscriptionUrlError::UnsupportedScheme => s.errors.url_scheme,
+        SubscriptionUrlError::InvalidImportLink => s.errors.import_link_invalid,
+        SubscriptionUrlError::ImportLinkWithoutUrl => s.errors.import_link_without_url,
+        SubscriptionUrlError::ImportLinkWithMultipleUrls => s.errors.import_link_multiple_urls,
+        SubscriptionUrlError::TooManyNestedLinks => s.errors.import_link_nested,
+    }
+    .to_owned()
+}
+
+pub(crate) fn fetch(s: &Strings, error: &FetchError) -> String {
+    match error {
+        FetchError::InvalidUrl => s.errors.invalid_subscription_url.to_owned(),
+        FetchError::InvalidUserAgent => s.errors.fetch_user_agent.to_owned(),
+        FetchError::InvalidDeviceId => s.errors.fetch_device_id.to_owned(),
+        FetchError::RequestFailed => s.errors.fetch_failed.to_owned(),
+        FetchError::Timeout => s.errors.fetch_timeout.to_owned(),
+        FetchError::HostNotFound => s.errors.fetch_host_not_found.to_owned(),
+        FetchError::ConnectionFailed => s.errors.fetch_connection.to_owned(),
+        FetchError::TooManyRedirects => s.errors.fetch_redirects.to_owned(),
+        FetchError::InsecureRedirect => s.errors.fetch_insecure_redirect.to_owned(),
+        FetchError::Tls(detail) => fill(s.errors.fetch_tls, &[("detail", detail)]),
+        FetchError::ResponseTooLarge => s.errors.fetch_too_large.to_owned(),
+        FetchError::BodyReadFailed => s.errors.fetch_body.to_owned(),
+        FetchError::NotFound { sent_hwid: true } => s.errors.fetch_not_found.to_owned(),
+        FetchError::NotFound { sent_hwid: false } => s.errors.fetch_not_found_retry.to_owned(),
+        FetchError::AccessDenied => s.errors.fetch_access_denied.to_owned(),
+        FetchError::HttpStatus(status) => fill(
+            s.errors.fetch_http_status,
+            &[("status", &status.to_string())],
+        ),
+        FetchError::Parse(error) => parse(s, error),
+    }
+}
+
+fn parse(s: &Strings, error: &ParseError) -> String {
+    match error {
+        ParseError::Empty => s.errors.parse_empty.to_owned(),
+        ParseError::WebPage => s.errors.parse_web_page.to_owned(),
+        ParseError::UnsupportedFormat => s.errors.parse_unsupported_format.to_owned(),
+        ParseError::EncryptedHappLink => s.errors.encrypted_happ_link.to_owned(),
+        ParseError::UnrecognizedFormat => s.errors.parse_unrecognized_format.to_owned(),
+        ParseError::InvalidUtf8 => s.errors.parse_invalid_utf8.to_owned(),
+        ParseError::InvalidJson { line, column } => fill(
+            s.errors.parse_invalid_json,
+            &[("line", &line.to_string()), ("column", &column.to_string())],
+        ),
+        ParseError::DeviceLimit {
+            max_devices_reached,
+            not_supported,
+            announce,
+        } => {
+            let title = if *max_devices_reached {
+                s.errors.device_limit_reached
+            } else if *not_supported {
+                s.errors.device_id_rejected
+            } else {
+                s.errors.device_policy
+            };
+            let mut output = title.to_owned();
+            if let Some(text) = announce {
+                output.push('\n');
+                output.push_str(&fill(s.errors.provider_announce, &[("text", text)]));
+            }
+            output
+        }
+        ParseError::NoUsableNodes { skipped, notices } => {
+            let mut output = s.errors.no_usable_nodes.to_owned();
+            for text in notices {
+                output.push('\n');
+                output.push_str(&fill(s.errors.provider_notice, &[("text", text)]));
+            }
+            for (reason, count) in rosetun_core::group_skipped(skipped) {
+                output.push('\n');
+                output.push_str(&s.skipped(count, &skip_reason(s, &reason)));
+            }
+            output
+        }
+    }
+}
+
+pub(crate) fn skip_reason(s: &Strings, reason: &SkipReason) -> String {
+    match reason {
+        SkipReason::InvalidRecord => s.errors.skip_invalid_record.to_owned(),
+        SkipReason::InvalidPort => s.errors.skip_invalid_port.to_owned(),
+        SkipReason::MissingField => s.errors.skip_missing_field.to_owned(),
+        SkipReason::InvalidJson { line, column } => fill(
+            s.errors.skip_invalid_json,
+            &[("line", &line.to_string()), ("column", &column.to_string())],
+        ),
+        SkipReason::UnsupportedProtocol => s.errors.skip_unsupported_protocol.to_owned(),
+        SkipReason::ClientSettings => s.errors.skip_client_settings.to_owned(),
+        SkipReason::UnsupportedVmessFormat => s.errors.skip_vmess_format.to_owned(),
+        SkipReason::UnsupportedTransport(UnsupportedTransport::Other) => {
+            s.errors.skip_unknown_transport.to_owned()
+        }
+        SkipReason::UnsupportedTransport(
+            transport @ (UnsupportedTransport::Xhttp
+            | UnsupportedTransport::SplitHttp
+            | UnsupportedTransport::Kcp
+            | UnsupportedTransport::Quic
+            | UnsupportedTransport::H2
+            | UnsupportedTransport::Http),
+        ) => fill(
+            s.errors.skip_transport,
+            &[("transport", &transport.to_string())],
+        ),
+        SkipReason::UnsupportedTcpHeader => s.errors.skip_tcp_header.to_owned(),
+        SkipReason::UnsupportedGrpcMultiMode => s.errors.skip_grpc_multi_mode.to_owned(),
+        SkipReason::UnsupportedEncryption => s.errors.skip_encryption.to_owned(),
+        SkipReason::UnsupportedFlow => s.errors.skip_flow.to_owned(),
+        SkipReason::UnsupportedSecurity => s.errors.skip_security.to_owned(),
+        SkipReason::MissingRealityPublicKey => s.errors.skip_reality_key.to_owned(),
+        SkipReason::ShadowsocksPlugin => s.errors.skip_shadowsocks_plugin.to_owned(),
+        SkipReason::UnsupportedShadowsocksMethod => s.errors.skip_shadowsocks_method.to_owned(),
+        SkipReason::ServiceRecord => s.errors.skip_service_record.to_owned(),
+    }
+}
+
 pub(crate) fn add_subscription(s: &Strings, error: &AddFromUrlError) -> String {
     match error {
-        AddFromUrlError::Url(message) => message.clone(),
+        AddFromUrlError::Url(error) => subscription_url(s, error),
         AddFromUrlError::Store(error) => store(s, error),
         AddFromUrlError::AlreadyExists(id) => fill(
             s.errors.already_added,
@@ -131,7 +255,7 @@ pub(crate) fn add_subscription(s: &Strings, error: &AddFromUrlError) -> String {
         ),
         AddFromUrlError::InvalidUrl(_) => s.errors.invalid_subscription_url.to_owned(),
         AddFromUrlError::MissingHost => s.errors.missing_host.to_owned(),
-        AddFromUrlError::Fetch { message, .. } => message.clone(),
+        AddFromUrlError::Fetch { source, .. } => fetch(s, source),
         AddFromUrlError::Clock(_) => s.errors.clock_before_epoch.to_owned(),
         AddFromUrlError::Commit(error) => match error {
             AddSubscriptionError::Store(error) => store(s, error),
@@ -145,7 +269,7 @@ pub(crate) fn update_subscription(s: &Strings, error: &UpdateSubscriptionError) 
     match error {
         UpdateSubscriptionError::Store(error) => store(s, error),
         UpdateSubscriptionError::NotFound => s.errors.subscription_not_found.to_owned(),
-        UpdateSubscriptionError::Fetch { message, .. } => message.clone(),
+        UpdateSubscriptionError::Fetch { source, .. } => fetch(s, source),
         UpdateSubscriptionError::RequestSettingsChanged => {
             s.errors.request_settings_changed.to_owned()
         }
@@ -224,7 +348,7 @@ pub(crate) fn helper_command(s: &Strings, error: &HelperCommandError) -> String 
 mod tests {
     use super::*;
     use crate::strings::{EN, RU};
-    use rosetun_core::Store;
+    use rosetun_core::{Skipped, Store};
     use rosetun_ipc::HelperError;
 
     #[test]
@@ -232,6 +356,213 @@ mod tests {
         let error = RuleSetError::DuplicateRule;
         assert_eq!(rule_set(&EN, &error), "this rule is already in the set");
         assert_eq!(rule_set(&RU, &error), "такое правило уже есть в наборе");
+    }
+
+    #[test]
+    fn english_subscription_url_errors_match_core() {
+        for error in [
+            SubscriptionUrlError::Invalid,
+            SubscriptionUrlError::MissingHost,
+            SubscriptionUrlError::EncryptedHappLink,
+            SubscriptionUrlError::UnsupportedScheme,
+            SubscriptionUrlError::InvalidImportLink,
+            SubscriptionUrlError::ImportLinkWithoutUrl,
+            SubscriptionUrlError::ImportLinkWithMultipleUrls,
+            SubscriptionUrlError::TooManyNestedLinks,
+        ] {
+            assert_eq!(subscription_url(&EN, &error), error.to_string());
+        }
+    }
+
+    #[test]
+    fn english_skip_reasons_match_core() {
+        for reason in [
+            SkipReason::InvalidRecord,
+            SkipReason::InvalidPort,
+            SkipReason::MissingField,
+            SkipReason::InvalidJson { line: 2, column: 3 },
+            SkipReason::UnsupportedProtocol,
+            SkipReason::ClientSettings,
+            SkipReason::UnsupportedVmessFormat,
+            SkipReason::UnsupportedTcpHeader,
+            SkipReason::UnsupportedGrpcMultiMode,
+            SkipReason::UnsupportedEncryption,
+            SkipReason::UnsupportedFlow,
+            SkipReason::UnsupportedSecurity,
+            SkipReason::MissingRealityPublicKey,
+            SkipReason::ShadowsocksPlugin,
+            SkipReason::UnsupportedShadowsocksMethod,
+            SkipReason::ServiceRecord,
+        ] {
+            assert_eq!(skip_reason(&EN, &reason), reason.to_string());
+        }
+        for transport in [
+            UnsupportedTransport::Xhttp,
+            UnsupportedTransport::SplitHttp,
+            UnsupportedTransport::Kcp,
+            UnsupportedTransport::Quic,
+            UnsupportedTransport::H2,
+            UnsupportedTransport::Http,
+            UnsupportedTransport::Other,
+        ] {
+            let reason = SkipReason::UnsupportedTransport(transport);
+            assert_eq!(skip_reason(&EN, &reason), reason.to_string());
+        }
+    }
+
+    #[test]
+    fn english_fetch_and_simple_parse_errors_match_core() {
+        for error in [
+            FetchError::InvalidUrl,
+            FetchError::InvalidUserAgent,
+            FetchError::InvalidDeviceId,
+            FetchError::RequestFailed,
+            FetchError::Timeout,
+            FetchError::HostNotFound,
+            FetchError::ConnectionFailed,
+            FetchError::TooManyRedirects,
+            FetchError::InsecureRedirect,
+            FetchError::Tls("bad certificate".to_owned()),
+            FetchError::ResponseTooLarge,
+            FetchError::BodyReadFailed,
+            FetchError::AccessDenied,
+            FetchError::HttpStatus(418),
+        ] {
+            assert_eq!(fetch(&EN, &error), error.to_string());
+        }
+        for error in [
+            ParseError::Empty,
+            ParseError::WebPage,
+            ParseError::UnsupportedFormat,
+            ParseError::EncryptedHappLink,
+            ParseError::UnrecognizedFormat,
+            ParseError::InvalidUtf8,
+            ParseError::InvalidJson { line: 2, column: 3 },
+        ] {
+            let expected = error.to_string();
+            assert_eq!(parse(&EN, &error), expected);
+            assert_eq!(fetch(&EN, &FetchError::Parse(error)), expected);
+        }
+    }
+
+    #[test]
+    fn russian_subscription_errors_use_the_selected_table() {
+        assert_eq!(
+            fetch(&RU, &FetchError::Timeout),
+            "сервер подписки не ответил вовремя"
+        );
+        assert_eq!(
+            fetch(&RU, &FetchError::NotFound { sent_hwid: false }),
+            "подписка не найдена; панели с лимитом устройств отвечают так же, если ID устройства не отправлен; включите «Отправлять ID устройства» и добавьте подписку снова"
+        );
+        assert_eq!(
+            fetch(&RU, &FetchError::NotFound { sent_hwid: true }),
+            "подписка не найдена; панели с лимитом устройств отвечают так же, если ID устройства не отправлен"
+        );
+        assert_eq!(
+            fetch(&RU, &FetchError::Tls("bad certificate".into())),
+            "ошибка TLS: bad certificate; так бывает, если антивирус проверяет HTTPS-трафик или на компьютере неверное время"
+        );
+        assert_eq!(
+            subscription_url(&RU, &SubscriptionUrlError::UnsupportedScheme),
+            "адрес подписки должен начинаться с http:// или https://"
+        );
+        assert_eq!(
+            skip_reason(
+                &RU,
+                &SkipReason::UnsupportedTransport(UnsupportedTransport::Other)
+            ),
+            "неизвестный транспорт не поддерживается"
+        );
+        assert_eq!(
+            fetch(&EN, &FetchError::NotFound { sent_hwid: false }),
+            EN.errors.fetch_not_found_retry
+        );
+    }
+
+    #[test]
+    fn device_limit_announcement_keeps_provider_text() {
+        let error = FetchError::Parse(ParseError::DeviceLimit {
+            max_devices_reached: true,
+            not_supported: true,
+            announce: Some("Remove an old device".into()),
+        });
+        assert_eq!(
+            fetch(&RU, &error),
+            "достигнут лимит устройств; удалите старое устройство в панели провайдера\nобъявление провайдера: Remove an old device"
+        );
+        assert_eq!(
+            fetch(&EN, &error),
+            "device limit reached for this subscription; remove an old device in your provider's panel\nannounce: Remove an old device"
+        );
+        assert_eq!(
+            parse(
+                &RU,
+                &ParseError::DeviceLimit {
+                    max_devices_reached: false,
+                    not_supported: true,
+                    announce: None,
+                }
+            ),
+            RU.errors.device_id_rejected
+        );
+    }
+
+    #[test]
+    fn no_usable_nodes_localizes_notices_and_grouped_reasons() {
+        let error = FetchError::Parse(ParseError::NoUsableNodes {
+            skipped: vec![
+                Skipped {
+                    index: 1,
+                    scheme: None,
+                    reason: SkipReason::ServiceRecord,
+                },
+                Skipped {
+                    index: 2,
+                    scheme: None,
+                    reason: SkipReason::ServiceRecord,
+                },
+                Skipped {
+                    index: 3,
+                    scheme: Some("vless".into()),
+                    reason: SkipReason::UnsupportedTransport(UnsupportedTransport::Xhttp),
+                },
+            ],
+            notices: vec!["Subscription expired".into()],
+        });
+        assert_eq!(
+            fetch(&RU, &error),
+            "в подписке нет подходящих серверов\nуведомление провайдера: Subscription expired\nПропущено 1: транспорт xhttp не поддерживается\nПропущено 2: запись содержит уведомление провайдера"
+        );
+        assert_eq!(
+            fetch(&EN, &error),
+            "subscription contains no usable nodes\nnotice: Subscription expired\nSkipped 1: xhttp transport is not supported\nSkipped 2: record contains a provider notice"
+        );
+    }
+
+    #[test]
+    fn fetch_errors_use_sources_instead_of_cli_messages() {
+        let error = FetchError::Timeout;
+        assert_eq!(
+            add_subscription(
+                &RU,
+                &AddFromUrlError::Fetch {
+                    source: error,
+                    message: "CLI only".into(),
+                }
+            ),
+            RU.errors.fetch_timeout
+        );
+        assert_eq!(
+            update_subscription(
+                &RU,
+                &UpdateSubscriptionError::Fetch {
+                    source: FetchError::Timeout,
+                    message: "CLI only".into(),
+                }
+            ),
+            RU.errors.fetch_timeout
+        );
     }
 
     #[test]
@@ -244,7 +575,6 @@ mod tests {
             dns_input(&RU, &DnsInputError::InvalidPort),
             "порт должен быть числом от 1 до 65535"
         );
-        assert!(!include_str!("strings/ru.rs").contains('—'));
     }
 
     #[test]

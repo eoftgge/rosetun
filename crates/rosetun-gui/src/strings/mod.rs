@@ -106,6 +106,57 @@ pub(crate) struct ErrorStrings {
     pub(crate) ids_exhausted: &'static str,
     pub(crate) invalid_subscription_url: &'static str,
     pub(crate) missing_host: &'static str,
+    pub(crate) encrypted_happ_link: &'static str,
+    pub(crate) url_scheme: &'static str,
+    pub(crate) import_link_invalid: &'static str,
+    pub(crate) import_link_without_url: &'static str,
+    pub(crate) import_link_multiple_urls: &'static str,
+    pub(crate) import_link_nested: &'static str,
+    pub(crate) fetch_user_agent: &'static str,
+    pub(crate) fetch_device_id: &'static str,
+    pub(crate) fetch_failed: &'static str,
+    pub(crate) fetch_timeout: &'static str,
+    pub(crate) fetch_host_not_found: &'static str,
+    pub(crate) fetch_connection: &'static str,
+    pub(crate) fetch_redirects: &'static str,
+    pub(crate) fetch_insecure_redirect: &'static str,
+    pub(crate) fetch_tls: &'static str,
+    pub(crate) fetch_too_large: &'static str,
+    pub(crate) fetch_body: &'static str,
+    pub(crate) fetch_not_found: &'static str,
+    pub(crate) fetch_not_found_retry: &'static str,
+    pub(crate) fetch_access_denied: &'static str,
+    pub(crate) fetch_http_status: &'static str,
+    pub(crate) parse_empty: &'static str,
+    pub(crate) parse_web_page: &'static str,
+    pub(crate) parse_unsupported_format: &'static str,
+    pub(crate) parse_unrecognized_format: &'static str,
+    pub(crate) parse_invalid_utf8: &'static str,
+    pub(crate) parse_invalid_json: &'static str,
+    pub(crate) device_limit_reached: &'static str,
+    pub(crate) device_id_rejected: &'static str,
+    pub(crate) device_policy: &'static str,
+    pub(crate) no_usable_nodes: &'static str,
+    pub(crate) provider_announce: &'static str,
+    pub(crate) provider_notice: &'static str,
+    pub(crate) skip_invalid_record: &'static str,
+    pub(crate) skip_invalid_port: &'static str,
+    pub(crate) skip_missing_field: &'static str,
+    pub(crate) skip_invalid_json: &'static str,
+    pub(crate) skip_unsupported_protocol: &'static str,
+    pub(crate) skip_client_settings: &'static str,
+    pub(crate) skip_vmess_format: &'static str,
+    pub(crate) skip_transport: &'static str,
+    pub(crate) skip_unknown_transport: &'static str,
+    pub(crate) skip_tcp_header: &'static str,
+    pub(crate) skip_grpc_multi_mode: &'static str,
+    pub(crate) skip_encryption: &'static str,
+    pub(crate) skip_flow: &'static str,
+    pub(crate) skip_security: &'static str,
+    pub(crate) skip_reality_key: &'static str,
+    pub(crate) skip_shadowsocks_plugin: &'static str,
+    pub(crate) skip_shadowsocks_method: &'static str,
+    pub(crate) skip_service_record: &'static str,
     pub(crate) process_list: &'static str,
     pub(crate) helper_transport: &'static str,
     pub(crate) helper_unexpected: &'static str,
@@ -560,14 +611,8 @@ mod tests {
     fn interface_copy_uses_plain_punctuation_and_a_session_word() {
         assert_eq!(EN.no_session, "not started");
         assert_eq!(RU.no_session, "не начат");
-        for strings in [&EN, &RU] {
-            for text in [
-                strings.rules_subtitle,
-                strings.new_rule_subtitle,
-                strings.domain_help,
-            ] {
-                assert!(!text.contains('—'));
-            }
+        for table in [include_str!("en.rs"), include_str!("ru.rs")] {
+            assert!(!table.contains('\u{2014}'));
         }
     }
 

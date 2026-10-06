@@ -302,7 +302,12 @@ fn subscription_card(
                 );
             }
             for (reason, count) in &report.skipped {
-                ui.add(egui::Label::new(state.text(&t().skipped(*count, reason))).wrap());
+                ui.add(
+                    egui::Label::new(
+                        state.text(&t().skipped(*count, &errors::skip_reason(t(), reason))),
+                    )
+                    .wrap(),
+                );
             }
         }
         if subscription.support_url.is_some() || subscription.web_page_url.is_some() {
