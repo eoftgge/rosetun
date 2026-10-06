@@ -10,6 +10,8 @@ use crate::brand;
 use crate::state::{Action, Screen, State};
 use crate::{strings, theme};
 
+const INTRO_DURATION: f64 = 2.7;
+
 #[derive(Clone, Copy)]
 enum TabIcon {
     Connection,
@@ -128,7 +130,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
 }
 
 fn intro_progress(time: f64, started_at: f64) -> f32 {
-    ((time - started_at) / 0.9).clamp(0.0, 1.0) as f32
+    ((time - started_at) / INTRO_DURATION).clamp(0.0, 1.0) as f32
 }
 
 fn paint_brand(ui: &mut egui::Ui, bloom: f32) {
@@ -278,8 +280,8 @@ mod tests {
     #[test]
     fn intro_starts_with_first_header_frame_even_after_startup_delay() {
         assert_eq!(intro_progress(12.0, 12.0), 0.0);
-        assert!((intro_progress(12.45, 12.0) - 0.5).abs() < 0.001);
-        assert_eq!(intro_progress(12.9, 12.0), 1.0);
-        assert_eq!(intro_progress(13.5, 12.0), 1.0);
+        assert!((intro_progress(13.35, 12.0) - 0.5).abs() < 0.001);
+        assert!((intro_progress(14.7, 12.0) - 1.0).abs() < 0.001);
+        assert_eq!(intro_progress(15.0, 12.0), 1.0);
     }
 }
