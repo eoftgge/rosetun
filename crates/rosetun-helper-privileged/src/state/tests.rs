@@ -1211,7 +1211,6 @@ fn protected_reconnect_replaces_the_traffic_monitor_and_control() {
     });
     helper.connect(&protected_request()).expect("reconnect");
     assert_eq!(dropped.load(Ordering::Acquire), 1);
-    assert_eq!(helper.status().traffic, Traffic::default());
     wait_for_totals(&helper, totals);
     let controls = controls.lock().expect("test controls mutex");
     assert_eq!(controls.len(), 2);

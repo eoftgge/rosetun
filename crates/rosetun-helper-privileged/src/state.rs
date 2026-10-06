@@ -235,7 +235,10 @@ struct TrafficMonitor {
 }
 
 impl TrafficMonitor {
-    fn start(mut probe: Box<dyn TrafficProbe>, status: Arc<Mutex<Status>>) -> Self {
+    fn start(
+        mut probe: Box<dyn TrafficProbe>,
+        status: Arc<Mutex<Status>>,
+    ) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker_status = Arc::clone(&status);
@@ -289,13 +292,12 @@ impl TrafficMonitor {
                         }
                     }
                 }
-            })
-            .expect("traffic monitor thread starts");
-        Self {
+            })?;
+        Ok(Self {
             stop,
             thread: Some(thread),
             status,
-        }
+        })
     }
 
     /// Stops the thread, waits for it and clears the published traffic.
@@ -310,6 +312,13 @@ impl TrafficMonitor {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .traffic = Traffic::default();
+    }
+}
+
+impl Drop for TrafficMonitor {
+    fn drop(&mut self) {
+        // A forgotten stop must not leave the worker polling the engine forever.
+        self.stop.store(true, Ordering::Release);
     }
 }
 
@@ -513,7 +522,10 @@ impl Session {
             return;
         };
         if let Some(probe) = backend.traffic_probe(control) {
-            self.monitor = Some(TrafficMonitor::start(probe, Arc::clone(&self.status)));
+            match TrafficMonitor::start(probe, Arc::clone(&self.status)) {
+                Ok(monitor) => self.monitor = Some(monitor),
+                Err(error) => tracing::warn!(%error, "traffic monitor is unavailable"),
+            }
         }
     }
 
