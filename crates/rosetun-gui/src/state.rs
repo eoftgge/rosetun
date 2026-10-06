@@ -6,7 +6,7 @@ use rosetun_config::{
     RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, SubscriptionId,
 };
 use rosetun_core::{AddFromUrlError, AddOptions, UpdateReport, UpdateSubscriptionError};
-use rosetun_ipc::ClientError;
+use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
 use crate::actions::{self, PrimaryAction};
 use crate::display;
@@ -346,6 +346,17 @@ pub(crate) enum Job {
     MoveSubscription(SubscriptionId, usize),
 }
 
+/// The helper already put this failure into the status the card shows.
+fn reported_by_status(error: &HelperCommandError) -> bool {
+    matches!(
+        error,
+        HelperCommandError::Client(ClientError::Helper(HelperError {
+            code: ErrorCode::EngineFailed | ErrorCode::RoutingFailed,
+            ..
+        }))
+    )
+}
+
 impl State {
     /// The last status is kept for when the helper comes back, but it is not
     /// shown while the helper is unreachable: a helper that died has already
@@ -466,7 +477,11 @@ impl State {
             }
             WorkerEvent::Connect(result) => {
                 self.operations.helper = false;
-                self.helper_result(result);
+                if result.as_ref().err().is_some_and(reported_by_status) {
+                    self.operation_error = None;
+                } else {
+                    self.helper_result(result);
+                }
             }
             WorkerEvent::Disconnect(result) => {
                 self.operations.helper = false;
@@ -1461,6 +1476,53 @@ mod tests {
         state.reduce(WorkerEvent::SetKillSwitch(Err(StoreError::NoConfigDir)));
         assert!(!state.operations.kill_switch);
         assert!(state.operation_error.is_some());
+    }
+
+    #[test]
+    fn failed_connect_reported_by_status_has_no_second_error() {
+        for code in [ErrorCode::EngineFailed, ErrorCode::RoutingFailed] {
+            let mut state = State {
+                status: Status {
+                    state: ConnectionState::Failed {
+                        reason: "boom".into(),
+                    },
+                    ..Status::default()
+                },
+                operation_error: Some("old error".into()),
+                ..State::default()
+            };
+            state.operations.helper = true;
+            state.reduce(WorkerEvent::Connect(Err(HelperCommandError::Client(
+                ClientError::Helper(HelperError::new(code, "boom")),
+            ))));
+            assert!(!state.operations.helper);
+            assert!(state.operation_error.is_none());
+            assert!(matches!(state.status.state, ConnectionState::Failed { .. }));
+        }
+    }
+
+    #[test]
+    fn busy_connect_and_failed_disconnect_still_show_errors() {
+        let mut state = State::default();
+        state.operations.helper = true;
+        state.reduce(WorkerEvent::Connect(Err(HelperCommandError::Client(
+            ClientError::Helper(HelperError::new(ErrorCode::Busy, "retry")),
+        ))));
+        assert!(!state.operations.helper);
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("the helper is busy with another operation: retry")
+        );
+
+        state.operations.helper = true;
+        state.reduce(WorkerEvent::Disconnect(Err(HelperCommandError::Client(
+            ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, "boom")),
+        ))));
+        assert!(!state.operations.helper);
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some("the engine failed: boom")
+        );
     }
 
     #[test]
