@@ -235,6 +235,19 @@ mod tests {
     }
 
     #[test]
+    fn russian_input_errors_use_plain_wording() {
+        assert_eq!(
+            rule_input(&RU, &RuleInputError::SingleLabel),
+            "введите полный домен, например example.com; для зоны целиком используйте *.ru"
+        );
+        assert_eq!(
+            dns_input(&RU, &DnsInputError::InvalidPort),
+            "порт должен быть числом от 1 до 65535"
+        );
+        assert!(!include_str!("strings/ru.rs").contains('—'));
+    }
+
+    #[test]
     fn invalid_json_keeps_only_the_path_and_position() {
         let path = std::env::temp_dir().join(format!(
             "rosetun-gui-invalid-json-{}-{{detail}}.json",
