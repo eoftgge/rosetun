@@ -22,3 +22,4 @@ url.workspace = true
 [target.'cfg(windows)'.dependencies]
 rosetun-shell.workspace = true
 tray-icon.workspace = true
+rfd.workspace = true

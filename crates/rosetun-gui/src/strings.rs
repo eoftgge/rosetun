@@ -172,6 +172,12 @@ pub(crate) const DOMAIN_PLACEHOLDER: &str = "example.com or *.example.com";
 pub(crate) const DOMAIN_HELP: &str =
     "example.com — only this domain · *.example.com — the domain and its subdomains";
 pub(crate) const PROCESS_INPUT: &str = "Process name or full path to .exe";
+#[cfg(windows)]
+pub(crate) const BROWSE: &str = "Browse…";
+#[cfg(windows)]
+pub(crate) const CHOOSE_PROGRAM: &str = "Choose a program";
+#[cfg(windows)]
+pub(crate) const PROGRAMS: &str = "Programs";
 pub(crate) const PROCESS_PLACEHOLDER: &str = "app.exe or C:\\Apps\\app.exe";
 pub(crate) const PROCESS_FILTER: &str = "Filter by name or path";
 pub(crate) const REFRESH: &str = "Refresh";

@@ -251,6 +251,10 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                         && !dialog.busy
                     {
                         dialog.selected_process = Some(index);
+                        #[cfg(windows)]
+                        {
+                            dialog.browsed = None;
+                        }
                         if dialog.match_mode == ProcessMatchMode::Path && group.path.is_none() {
                             dialog.match_mode = ProcessMatchMode::Name;
                         }
@@ -285,6 +289,8 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
             rosetun_core::parse_process_input(&dialog.process),
             Ok(ProcessMatch::Path(_))
         );
+    #[cfg(windows)]
+    let full_path_available = full_path_available || dialog.browsed.is_some();
     ui.horizontal(|ui| {
         for (mode, label) in [
             (ProcessMatchMode::Name, strings::MATCH_BY_NAME),
@@ -297,30 +303,40 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 )
                 .clicked()
             {
-                dialog.match_mode = mode;
-                if let Some(group) = dialog
-                    .selected_process
-                    .and_then(|index| dialog.processes.get(index))
-                {
-                    dialog.process = match mode {
-                        ProcessMatchMode::Name => group.name.clone(),
-                        ProcessMatchMode::Path => {
-                            group.path.as_ref().unwrap().to_string_lossy().into_owned()
-                        }
-                    };
-                } else if mode == ProcessMatchMode::Name
-                    && let Ok(ProcessMatch::Path(path)) =
-                        rosetun_core::parse_process_input(&dialog.process)
-                    && let Some(name) = path.file_name()
-                {
-                    dialog.process = name.to_string_lossy().into_owned();
-                }
-                dialog.error = None;
+                dialog.set_process_match_mode(mode);
             }
         }
     });
     ui.add_space(12.0);
     ui.label(strings::PROCESS_INPUT);
+    #[cfg(windows)]
+    let input = ui
+        .horizontal(|ui| {
+            let height = 28.0;
+            let browse_width = 88.0;
+            let input_width = ui.available_width() - browse_width - ui.spacing().item_spacing.x;
+            let input = ui
+                .add_enabled_ui(!dialog.busy, |ui| {
+                    ui.add_sized(
+                        [input_width, height],
+                        egui::TextEdit::singleline(&mut dialog.process)
+                            .hint_text(strings::PROCESS_PLACEHOLDER),
+                    )
+                })
+                .inner;
+            if ui
+                .add_enabled(
+                    !dialog.busy && !dialog.browsing,
+                    egui::Button::new(strings::BROWSE).min_size(egui::vec2(browse_width, height)),
+                )
+                .clicked()
+            {
+                actions.push(Action::BrowseExecutable);
+            }
+            input
+        })
+        .inner;
+    #[cfg(not(windows))]
     let input = ui.add_enabled(
         !dialog.busy,
         egui::TextEdit::singleline(&mut dialog.process)
@@ -333,6 +349,10 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     }
     if input.changed() {
         dialog.selected_process = None;
+        #[cfg(windows)]
+        {
+            dialog.browsed = None;
+        }
         update_process_match_mode(&mut dialog.match_mode, &dialog.process);
         dialog.error = None;
     }

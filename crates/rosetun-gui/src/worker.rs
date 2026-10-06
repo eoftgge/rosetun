@@ -26,6 +26,9 @@ use rosetun_core::{
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
+#[cfg(windows)]
+use crate::strings;
+
 const CLIENT_NAME: &str = concat!("rosetun-gui/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +83,8 @@ pub(crate) enum WorkerEvent {
         request: u64,
         result: Result<Vec<RunningProcess>, ProcessListError>,
     },
+    #[cfg(windows)]
+    BrowsedExecutable(Option<PathBuf>),
     AddRule(Result<Rule, RuleSetError>),
     SetRuleTarget(Result<(), RuleSetError>),
     SetRuleEnabled(Result<(), RuleSetError>),
@@ -317,6 +322,22 @@ impl WorkerDispatcher {
                 &publisher.tx,
                 &publisher.repaint,
                 WorkerEvent::Processes { request, result },
+            );
+        });
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn browse_executable(&self) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let path = rfd::FileDialog::new()
+                .set_title(strings::CHOOSE_PROGRAM)
+                .add_filter(strings::PROGRAMS, &["exe"])
+                .pick_file();
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::BrowsedExecutable(path),
             );
         });
     }

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use rosetun_config::{
-    AppConfig, ConnectionState, DnsSettings, LogLevel, NodeId, RuleId, RuleMatcher, RuleSet,
-    RuleSetId, RuleTarget, Status, SubscriptionId,
+    AppConfig, ConnectionState, DnsSettings, LogLevel, NodeId, ProcessMatch, RuleId, RuleMatcher,
+    RuleSet, RuleSetId, RuleTarget, Status, SubscriptionId,
 };
 use rosetun_core::{AddFromUrlError, AddOptions, UpdateReport, UpdateSubscriptionError};
 use rosetun_ipc::ClientError;
@@ -103,6 +103,10 @@ pub(crate) struct AddRuleDialog {
     pub(crate) processes: Vec<ProcessGroup>,
     pub(crate) selected_process: Option<usize>,
     pub(crate) match_mode: ProcessMatchMode,
+    #[cfg(windows)]
+    pub(crate) browsing: bool,
+    #[cfg(windows)]
+    pub(crate) browsed: Option<PathBuf>,
     pub(crate) load_request: Option<u64>,
     pub(crate) processes_loaded: bool,
     pub(crate) processes_error: Option<String>,
@@ -123,6 +127,10 @@ impl AddRuleDialog {
             processes: Vec::new(),
             selected_process: None,
             match_mode: ProcessMatchMode::Name,
+            #[cfg(windows)]
+            browsing: false,
+            #[cfg(windows)]
+            browsed: None,
             load_request: None,
             processes_loaded: false,
             processes_error: None,
@@ -130,6 +138,51 @@ impl AddRuleDialog {
             error: None,
             focus_input: true,
         }
+    }
+
+    pub(crate) fn set_process_match_mode(&mut self, mode: ProcessMatchMode) {
+        self.match_mode = mode;
+        if let Some(group) = self
+            .selected_process
+            .and_then(|index| self.processes.get(index))
+        {
+            let value = match mode {
+                ProcessMatchMode::Name => Some(group.name.clone()),
+                ProcessMatchMode::Path => group
+                    .path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            };
+            if let Some(value) = value {
+                self.process = value;
+            }
+        } else {
+            #[cfg(windows)]
+            if let Some(path) = &self.browsed {
+                self.process = browsed_process_value(path, mode);
+                self.error = None;
+                return;
+            }
+            if mode == ProcessMatchMode::Name
+                && let Ok(ProcessMatch::Path(path)) =
+                    rosetun_core::parse_process_input(&self.process)
+                && let Some(name) = path.file_name()
+            {
+                self.process = name.to_string_lossy().into_owned();
+            }
+        }
+        self.error = None;
+    }
+}
+
+#[cfg(windows)]
+fn browsed_process_value(path: &std::path::Path, mode: ProcessMatchMode) -> String {
+    match mode {
+        ProcessMatchMode::Name => path
+            .file_name()
+            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
+            .into_owned(),
+        ProcessMatchMode::Path => path.to_string_lossy().into_owned(),
     }
 }
 
@@ -223,6 +276,8 @@ pub(crate) enum Action {
     CancelAddRule,
     SelectRuleInput(RuleInputKind),
     RefreshProcesses,
+    #[cfg(windows)]
+    BrowseExecutable,
     SubmitAddRule,
     SetRuleTarget(RuleId, RuleTarget),
     SetRuleEnabled(RuleId, bool),
@@ -270,6 +325,8 @@ pub(crate) enum Job {
     DeleteRuleSet(RuleSetId),
     SetDefaultTarget(RuleSetId, RuleTarget),
     LoadProcesses(u64),
+    #[cfg(windows)]
+    BrowseExecutable,
     AddRule(RuleSetId, RuleMatcher, RuleTarget),
     SetRuleTarget(RuleSetId, RuleId, RuleTarget),
     SetRuleEnabled(RuleSetId, RuleId, bool),
@@ -458,6 +515,24 @@ impl State {
                             dialog.processes_error = None;
                         }
                         Err(error) => dialog.processes_error = Some(error.to_string()),
+                    }
+                }
+            }
+            #[cfg(windows)]
+            WorkerEvent::BrowsedExecutable(path) => {
+                if let Some(dialog) = &mut self.rule_screen.add {
+                    if !dialog.browsing {
+                        return;
+                    }
+                    dialog.browsing = false;
+                    if dialog.kind == RuleInputKind::Process
+                        && let Some(path) = path
+                    {
+                        dialog.process = browsed_process_value(&path, dialog.match_mode);
+                        dialog.browsed = Some(path);
+                        dialog.selected_process = None;
+                        dialog.error = None;
+                        dialog.focus_input = true;
                     }
                 }
             }
@@ -849,6 +924,17 @@ impl State {
                 }
             }
             Action::RefreshProcesses => return self.load_processes(),
+            #[cfg(windows)]
+            Action::BrowseExecutable => {
+                if let Some(dialog) = &mut self.rule_screen.add
+                    && dialog.kind == RuleInputKind::Process
+                    && !dialog.busy
+                    && !dialog.browsing
+                {
+                    dialog.browsing = true;
+                    return Some(Job::BrowseExecutable);
+                }
+            }
             Action::SubmitAddRule => {
                 if self.can_edit_rules()
                     && let Some(dialog) = &self.rule_screen.add
@@ -1627,6 +1713,118 @@ mod tests {
             state.operation_error.as_deref(),
             Some("rule set does not exist")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn browse_executable_requires_an_idle_process_dialog() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        assert!(state.act(Action::BrowseExecutable).is_none());
+        state.act(Action::OpenAddRule);
+        assert!(state.act(Action::BrowseExecutable).is_none());
+        state.act(Action::SelectRuleInput(RuleInputKind::Process));
+        state.rule_screen.add.as_mut().unwrap().busy = true;
+        assert!(state.act(Action::BrowseExecutable).is_none());
+        state.rule_screen.add.as_mut().unwrap().busy = false;
+        assert!(matches!(
+            state.act(Action::BrowseExecutable),
+            Some(Job::BrowseExecutable)
+        ));
+        assert!(state.rule_screen.add.as_ref().unwrap().browsing);
+        assert!(state.act(Action::BrowseExecutable).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn browsed_executable_uses_the_selected_match_mode_and_clears_process_selection() {
+        for (mode, expected) in [
+            (ProcessMatchMode::Name, "Tool.exe"),
+            (ProcessMatchMode::Path, r"C:\Apps\Tool.exe"),
+        ] {
+            let mut state = state_with_rules();
+            state.act(Action::OpenRules);
+            state.act(Action::OpenAddRule);
+            state.act(Action::SelectRuleInput(RuleInputKind::Process));
+            let dialog = state.rule_screen.add.as_mut().unwrap();
+            dialog.match_mode = mode;
+            dialog.selected_process = Some(0);
+            dialog.processes.push(ProcessGroup {
+                name: "Other.exe".into(),
+                path: Some(r"C:\Apps\Other.exe".into()),
+                count: 1,
+            });
+            dialog.process = "Other.exe".into();
+            dialog.error = Some("previous error".into());
+            dialog.focus_input = false;
+            assert!(matches!(
+                state.act(Action::BrowseExecutable),
+                Some(Job::BrowseExecutable)
+            ));
+            let path = PathBuf::from(r"C:\Apps\Tool.exe");
+            state.reduce(WorkerEvent::BrowsedExecutable(Some(path.clone())));
+            let dialog = state.rule_screen.add.as_ref().unwrap();
+            assert!(!dialog.browsing);
+            assert_eq!(dialog.browsed.as_ref(), Some(&path));
+            assert_eq!(dialog.process, expected);
+            assert_eq!(dialog.selected_process, None);
+            assert!(dialog.error.is_none());
+            assert!(dialog.focus_input);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cancelled_or_late_browse_does_not_replace_input() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        state.act(Action::OpenAddRule);
+        state.act(Action::SelectRuleInput(RuleInputKind::Process));
+        state.rule_screen.add.as_mut().unwrap().process = "current.exe".into();
+        state.act(Action::BrowseExecutable);
+        state.reduce(WorkerEvent::BrowsedExecutable(None));
+        let dialog = state.rule_screen.add.as_ref().unwrap();
+        assert!(!dialog.browsing);
+        assert_eq!(dialog.process, "current.exe");
+        assert!(dialog.browsed.is_none());
+
+        state.act(Action::BrowseExecutable);
+        state.act(Action::SelectRuleInput(RuleInputKind::Domain));
+        state.reduce(WorkerEvent::BrowsedExecutable(Some(
+            r"C:\Apps\Tool.exe".into(),
+        )));
+        let dialog = state.rule_screen.add.as_ref().unwrap();
+        assert!(!dialog.browsing);
+        assert_eq!(dialog.process, "current.exe");
+        assert!(dialog.browsed.is_none());
+
+        state.act(Action::SelectRuleInput(RuleInputKind::Process));
+        state.act(Action::BrowseExecutable);
+        state.act(Action::CancelAddRule);
+        state.reduce(WorkerEvent::BrowsedExecutable(Some(
+            r"C:\Apps\Tool.exe".into(),
+        )));
+        assert!(state.rule_screen.add.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn browsed_executable_switches_between_name_and_path_without_a_running_process() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        state.act(Action::OpenAddRule);
+        state.act(Action::SelectRuleInput(RuleInputKind::Process));
+        state.act(Action::BrowseExecutable);
+        state.reduce(WorkerEvent::BrowsedExecutable(Some(
+            r"C:\Apps\Tool.exe".into(),
+        )));
+        let dialog = state.rule_screen.add.as_mut().unwrap();
+        assert_eq!(dialog.process, "Tool.exe");
+        assert!(dialog.selected_process.is_none());
+        dialog.set_process_match_mode(ProcessMatchMode::Path);
+        assert_eq!(dialog.process, r"C:\Apps\Tool.exe");
+        dialog.set_process_match_mode(ProcessMatchMode::Name);
+        assert_eq!(dialog.process, "Tool.exe");
     }
 
     #[test]
