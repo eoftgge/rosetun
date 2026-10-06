@@ -98,6 +98,10 @@ fn status(client: &mut HelperClient) -> ExitCode {
                 "traffic: up {} B/s down {} B/s",
                 status.traffic.up_bps, status.traffic.down_bps
             );
+            println!(
+                "total:   up {} B down {} B",
+                status.traffic.up_total, status.traffic.down_total
+            );
             ExitCode::SUCCESS
         }
         Err(error) => {

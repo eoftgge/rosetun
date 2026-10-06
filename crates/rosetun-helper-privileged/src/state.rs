@@ -3,11 +3,15 @@ mod dns;
 mod tests;
 
 use std::net::{IpAddr, ToSocketAddrs};
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use rosetun_config::{ConnectionState, Node, RuleSet, Settings, Status};
-use rosetun_engine::{EngineProcess, EngineRegistry, RenderRequest};
+use rosetun_config::{ConnectionState, Node, RuleSet, Settings, Status, Traffic};
+use rosetun_engine::{
+    ControlEndpoint, EngineProcess, EngineRegistry, RenderRequest, TrafficProbe, TrafficTotals,
+};
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 use rosetun_routing::{RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface};
 
@@ -17,7 +21,7 @@ const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub struct Helper {
-    status: Mutex<Status>,
+    status: Arc<Mutex<Status>>,
     session: Mutex<Session>,
 }
 
@@ -36,7 +40,10 @@ struct SuccessfulEndpoint {
 struct Session {
     engines: EngineRegistry,
     routing: Box<dyn RoutingBackend>,
+    status: Arc<Mutex<Status>>,
     process: Option<Box<dyn EngineProcess>>,
+    control: Option<ControlEndpoint>,
+    monitor: Option<TrafficMonitor>,
     guard: Option<RoutingGuard>,
     last_endpoint: Option<SuccessfulEndpoint>,
     stopping: bool,
@@ -52,12 +59,16 @@ impl std::fmt::Debug for Helper {
 
 impl Helper {
     pub fn new(engines: EngineRegistry, routing: Box<dyn RoutingBackend>) -> Self {
+        let status = Arc::new(Mutex::new(Status::default()));
         Self {
-            status: Mutex::new(Status::default()),
+            status: Arc::clone(&status),
             session: Mutex::new(Session {
                 engines,
                 routing,
+                status,
                 process: None,
+                control: None,
+                monitor: None,
                 guard: None,
                 last_endpoint: None,
                 stopping: false,
@@ -132,6 +143,7 @@ impl Helper {
                     status.engine = Some(request.settings.engine);
                     status.since_unix = Some(now_unix());
                 });
+                session.start_monitor(request.settings.engine);
                 Ok(())
             }
             Err(error) => {
@@ -215,6 +227,113 @@ impl Helper {
     }
 }
 
+/// Polls the engine once a second and publishes traffic into the status.
+struct TrafficMonitor {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+    status: Arc<Mutex<Status>>,
+}
+
+impl TrafficMonitor {
+    fn start(mut probe: Box<dyn TrafficProbe>, status: Arc<Mutex<Status>>) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker_status = Arc::clone(&status);
+        let thread = thread::Builder::new()
+            .name("engine-traffic".to_owned())
+            .spawn(move || {
+                let mut previous = None;
+                let mut failed = false;
+                loop {
+                    for _ in 0..10 {
+                        if worker_stop.load(Ordering::Acquire) {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                    if worker_stop.load(Ordering::Acquire) {
+                        return;
+                    }
+
+                    match probe.totals() {
+                        Ok(totals) => {
+                            if failed {
+                                tracing::info!("engine traffic polling recovered");
+                                failed = false;
+                            }
+                            let current = (totals, Instant::now());
+                            let (up_bps, down_bps) = previous
+                                .map(|previous| rates(previous, current))
+                                .unwrap_or_default();
+                            previous = Some(current);
+                            let mut status = worker_status
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            status.traffic = Traffic {
+                                up_bps,
+                                down_bps,
+                                up_total: totals.up,
+                                down_total: totals.down,
+                            };
+                        }
+                        Err(error) => {
+                            if !failed {
+                                tracing::warn!(%error, "engine traffic polling failed");
+                                failed = true;
+                            }
+                            let mut status = worker_status
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            status.traffic.up_bps = 0;
+                            status.traffic.down_bps = 0;
+                        }
+                    }
+                }
+            })
+            .expect("traffic monitor thread starts");
+        Self {
+            stop,
+            thread: Some(thread),
+            status,
+        }
+    }
+
+    /// Stops the thread, waits for it and clears the published traffic.
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            tracing::warn!("engine traffic monitor thread panicked");
+        }
+        self.status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .traffic = Traffic::default();
+    }
+}
+
+/// Bytes per second between two samples. A smaller total means the engine
+/// restarted, which reads as zero rather than a huge number.
+fn rates(previous: (TrafficTotals, Instant), current: (TrafficTotals, Instant)) -> (u64, u64) {
+    let elapsed = current
+        .1
+        .checked_duration_since(previous.1)
+        .unwrap_or_default()
+        .as_nanos();
+    if elapsed == 0 {
+        return (0, 0);
+    }
+    let rate = |before: u64, after: u64| {
+        let bytes = u128::from(after.saturating_sub(before));
+        u64::try_from(bytes * 1_000_000_000 / elapsed).unwrap_or(u64::MAX)
+    };
+    (
+        rate(previous.0.up, current.0.up),
+        rate(previous.0.down, current.0.down),
+    )
+}
+
 impl Session {
     fn start(
         &mut self,
@@ -258,12 +377,20 @@ impl Session {
             )
         })?;
         let dns_server = backend.tunnel_dns_server(&settings.tun);
+        let control = match ControlEndpoint::local() {
+            Ok(control) => Some(control),
+            Err(error) => {
+                tracing::warn!(%error, "traffic control endpoint is unavailable");
+                None
+            }
+        };
 
         let config = backend
             .render(&RenderRequest {
                 node: resolved_node.as_ref().unwrap_or(node),
                 rules,
                 settings,
+                control: control.as_ref(),
             })
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
@@ -331,6 +458,7 @@ impl Session {
                 .spawn(&binary, &config)
                 .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?,
         );
+        self.control = control;
 
         self.wait_for_engine_ready()?;
 
@@ -375,6 +503,18 @@ impl Session {
             address,
         });
         Ok(())
+    }
+
+    fn start_monitor(&mut self, kind: rosetun_config::EngineKind) {
+        let Some(control) = self.control.as_ref() else {
+            return;
+        };
+        let Some(backend) = self.engines.get(kind) else {
+            return;
+        };
+        if let Some(probe) = backend.traffic_probe(control) {
+            self.monitor = Some(TrafficMonitor::start(probe, Arc::clone(&self.status)));
+        }
     }
 
     fn wait_for_engine_ready(&mut self) -> Result<(), HelperError> {
@@ -502,12 +642,21 @@ impl Session {
     }
 
     fn stop_engine(&mut self) -> Result<(), HelperError> {
+        if let Some(monitor) = self.monitor.take() {
+            monitor.stop();
+        } else {
+            self.status
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .traffic = Traffic::default();
+        }
         if let Some(process) = self.process.as_mut() {
             process
                 .stop()
                 .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
         }
         self.process.take();
+        self.control.take();
         Ok(())
     }
 

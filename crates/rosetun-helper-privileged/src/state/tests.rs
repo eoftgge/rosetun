@@ -209,10 +209,6 @@ impl EngineProcess for StubProcess {
         Ok(true)
     }
 
-    fn traffic(&mut self) -> Result<Traffic, EngineError> {
-        Err(EngineError::StatsUnavailable)
-    }
-
     fn stop(&mut self) -> Result<(), EngineError> {
         Ok(())
     }
@@ -277,10 +273,6 @@ impl EngineProcess for ExitedProcess {
         Ok(false)
     }
 
-    fn traffic(&mut self) -> Result<Traffic, EngineError> {
-        Err(EngineError::StatsUnavailable)
-    }
-
     fn stop(&mut self) -> Result<(), EngineError> {
         Ok(())
     }
@@ -340,10 +332,6 @@ struct RunningThenExitedProcess {
 impl EngineProcess for RunningThenExitedProcess {
     fn is_running(&mut self) -> Result<bool, EngineError> {
         Ok(self.running.load(Ordering::Acquire))
-    }
-
-    fn traffic(&mut self) -> Result<Traffic, EngineError> {
-        Err(EngineError::StatsUnavailable)
     }
 
     fn stop(&mut self) -> Result<(), EngineError> {
@@ -493,14 +481,170 @@ impl EngineProcess for DnsProcess {
         Ok(true)
     }
 
-    fn traffic(&mut self) -> Result<Traffic, EngineError> {
-        Err(EngineError::StatsUnavailable)
-    }
-
     fn stop(&mut self) -> Result<(), EngineError> {
         self.stopped.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct TrafficEngine {
+    totals: TrafficTotals,
+    dropped: Arc<AtomicUsize>,
+    controls: Arc<Mutex<Vec<ControlEndpoint>>>,
+}
+
+impl EngineBackend for TrafficEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
+    }
+
+    fn tunnel_dns_server(
+        &self,
+        _tun: &rosetun_config::TunSettings,
+    ) -> Option<std::net::SocketAddr> {
+        None
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        Ok(PathBuf::from("sing-box"))
+    }
+
+    fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        self.controls
+            .lock()
+            .expect("test controls mutex")
+            .push(request.control.expect("session control endpoint").clone());
+        Ok(RenderedConfig {
+            file_name: "config.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+        })
+    }
+
+    fn traffic_probe(&self, _control: &ControlEndpoint) -> Option<Box<dyn TrafficProbe>> {
+        Some(Box::new(StubTrafficProbe {
+            totals: self.totals,
+            dropped: Arc::clone(&self.dropped),
+        }))
+    }
+
+    fn spawn(
+        &self,
+        _binary: &Path,
+        _config: &RenderedConfig,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        Ok(Box::new(StubProcess))
+    }
+}
+
+#[derive(Debug)]
+struct StubTrafficProbe {
+    totals: TrafficTotals,
+    dropped: Arc<AtomicUsize>,
+}
+
+impl TrafficProbe for StubTrafficProbe {
+    fn totals(&mut self) -> Result<TrafficTotals, EngineError> {
+        Ok(self.totals)
+    }
+}
+
+impl Drop for StubTrafficProbe {
+    fn drop(&mut self) {
+        self.dropped.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+fn wait_for_totals(helper: &Helper, totals: TrafficTotals) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let traffic = helper.status().traffic;
+        if traffic.up_total == totals.up && traffic.down_total == totals.down {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "traffic totals were not published"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn rates_handle_elapsed_time_resets_and_zero_interval() {
+    let instant = Instant::now();
+    let first = (TrafficTotals { up: 500, down: 900 }, instant);
+    let later = instant + Duration::from_millis(500);
+    assert_eq!(
+        rates(
+            first,
+            (
+                TrafficTotals {
+                    up: 1500,
+                    down: 1900
+                },
+                later
+            )
+        ),
+        (2000, 2000)
+    );
+    assert_eq!(
+        rates(first, (TrafficTotals { up: 100, down: 200 }, later)),
+        (0, 0)
+    );
+    assert_eq!(
+        rates(
+            first,
+            (
+                TrafficTotals {
+                    up: 1500,
+                    down: 1900
+                },
+                instant
+            )
+        ),
+        (0, 0)
+    );
+}
+
+#[test]
+fn traffic_monitor_publishes_totals_and_stops_on_disconnect() {
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let controls = Arc::new(Mutex::new(Vec::new()));
+    let totals = TrafficTotals {
+        up: 1234,
+        down: 5678,
+    };
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(TrafficEngine {
+        totals,
+        dropped: Arc::clone(&dropped),
+        controls: Arc::clone(&controls),
+    }));
+    let helper = Helper::new(engines, Box::new(UnusedRouting));
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper
+        .connect(&request)
+        .expect("connect with traffic probe");
+    wait_for_totals(&helper, totals);
+    assert_eq!(controls.lock().expect("test controls mutex").len(), 1);
+    assert_eq!(dropped.load(Ordering::Acquire), 0);
+
+    helper.disconnect().expect("disconnect stops monitor");
+    assert_eq!(helper.status().traffic, Traffic::default());
+    assert_eq!(dropped.load(Ordering::Acquire), 1);
 }
 
 fn shorten_dns_timeouts(helper: &Helper) {
@@ -741,6 +885,7 @@ fn connect_without_kill_switch_does_not_use_routing_backend() {
     let status = helper.status();
     assert!(matches!(status.state, ConnectionState::Connected));
     assert_eq!(status.node, Some(request.node.id));
+    assert_eq!(status.traffic, Traffic::default());
 
     helper.disconnect().expect("disconnect succeeds");
     assert!(matches!(
@@ -1044,6 +1189,38 @@ fn protected_reconnect_reuses_guard_and_cached_domain_endpoint() {
 
     helper.disconnect().expect("disconnect");
     assert_eq!(reverted.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn protected_reconnect_replaces_the_traffic_monitor_and_control() {
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let controls = Arc::new(Mutex::new(Vec::new()));
+    let totals = TrafficTotals { up: 100, down: 200 };
+    let (helper, _, _, _) = protected_helper(Box::new(TrafficEngine {
+        totals,
+        dropped: Arc::clone(&dropped),
+        controls: Arc::clone(&controls),
+    }));
+    helper.connect(&protected_request()).expect("first connect");
+    wait_for_totals(&helper, totals);
+
+    helper.with_status(|status| {
+        status.state = ConnectionState::FailedProtected {
+            reason: "engine failed".to_owned(),
+        };
+    });
+    helper.connect(&protected_request()).expect("reconnect");
+    assert_eq!(dropped.load(Ordering::Acquire), 1);
+    assert_eq!(helper.status().traffic, Traffic::default());
+    wait_for_totals(&helper, totals);
+    let controls = controls.lock().expect("test controls mutex");
+    assert_eq!(controls.len(), 2);
+    assert_ne!(controls[0].secret, controls[1].secret);
+    drop(controls);
+
+    helper.disconnect().expect("disconnect");
+    assert_eq!(helper.status().traffic, Traffic::default());
+    assert_eq!(dropped.load(Ordering::Acquire), 2);
 }
 
 #[test]
