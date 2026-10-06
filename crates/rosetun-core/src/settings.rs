@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use rosetun_config::{DnsSettings, LogLevel};
+use rosetun_config::{DnsSettings, LanguageSetting, LogLevel};
 use url::Host;
 
 use crate::{Store, StoreError};
@@ -79,6 +79,13 @@ pub fn set_interface_scale(store: &Store, percent: u16) -> Result<(), SettingsEr
 pub fn set_close_to_tray(store: &Store, enabled: bool) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.interface.close_to_tray = enabled;
+        Ok(())
+    })
+}
+
+pub fn set_language(store: &Store, language: LanguageSetting) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.language = language;
         Ok(())
     })
 }
@@ -195,6 +202,10 @@ mod tests {
 
         set_close_to_tray(&store, false).unwrap();
         expected.interface.close_to_tray = false;
+        assert_eq!(store.load().unwrap(), expected);
+
+        set_language(&store, LanguageSetting::Russian).unwrap();
+        expected.interface.language = LanguageSetting::Russian;
         assert_eq!(store.load().unwrap(), expected);
 
         let dns = parse_dns_input("1.1.1.1", "cloudflare-dns.com", "443", "/dns-query").unwrap();

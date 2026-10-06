@@ -21,6 +21,15 @@ use serde::{Deserialize, Serialize};
 
 pub const CONFIG_VERSION: u32 = 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LanguageSetting {
+    #[default]
+    System,
+    English,
+    Russian,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InterfaceSettings {
     /// Window scale in percent; see `rosetun_core::INTERFACE_SCALES`.
@@ -29,6 +38,8 @@ pub struct InterfaceSettings {
     /// The close button hides the window to the tray instead of quitting.
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
+    #[serde(default)]
+    pub language: LanguageSetting,
 }
 
 fn default_scale_percent() -> u16 {
@@ -44,6 +55,7 @@ impl Default for InterfaceSettings {
         Self {
             scale_percent: default_scale_percent(),
             close_to_tray: default_close_to_tray(),
+            language: LanguageSetting::System,
         }
     }
 }
@@ -147,7 +159,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, InterfaceSettings};
+    use super::{AppConfig, InterfaceSettings, LanguageSetting};
 
     #[test]
     fn old_configuration_without_interface_uses_default_scale() {
@@ -160,6 +172,16 @@ mod tests {
             serde_json::from_str("{}").expect("interface without scale");
         assert_eq!(interface.scale_percent, 100);
         assert!(interface.close_to_tray);
+    }
+
+    #[test]
+    fn old_interface_without_language_defaults_to_system() {
+        let config: AppConfig =
+            serde_json::from_str(r#"{"interface":{"scale_percent":125,"close_to_tray":false}}"#)
+                .expect("configuration without language setting");
+        assert_eq!(config.interface.language, LanguageSetting::System);
+        assert_eq!(config.interface.scale_percent, 125);
+        assert!(!config.interface.close_to_tray);
     }
 
     #[test]
