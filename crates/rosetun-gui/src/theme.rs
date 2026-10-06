@@ -158,7 +158,12 @@ pub(crate) fn outline_button(
             1.0,
             if enabled { BORDER_STRONG } else { BORDER },
         ));
-    ui.add_enabled(enabled, button)
+    ui.scope(|ui| {
+        // egui sizes a button by its state's stroke width; match hover's 1 px so it keeps its size.
+        ui.visuals_mut().widgets.inactive.bg_stroke.width = 1.0;
+        ui.add_enabled(enabled, button)
+    })
+    .inner
 }
 
 pub(crate) const TOGGLE_SIZE: egui::Vec2 = egui::vec2(38.0, 22.0);
