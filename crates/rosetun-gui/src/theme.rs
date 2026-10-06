@@ -3,9 +3,32 @@ use eframe::egui::{
 };
 
 pub(crate) const BRAND_FONT: &str = "brand";
+pub(crate) const UI_SEMIBOLD: &str = "ui-semibold";
 
 fn fonts() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "manrope-regular".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Manrope-Regular.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "manrope-semibold".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Manrope-SemiBold.ttf"
+        ))),
+    );
+    let proportional = fonts
+        .families
+        .get_mut(&FontFamily::Proportional)
+        .expect("default proportional font family");
+    let mut semibold = vec!["manrope-semibold".to_owned()];
+    semibold.extend(proportional.iter().cloned());
+    proportional.insert(0, "manrope-regular".to_owned());
+    fonts
+        .families
+        .insert(FontFamily::Name(UI_SEMIBOLD.into()), semibold);
     fonts.font_data.insert(
         "cormorant-garamond-semibold".to_owned(),
         std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
@@ -91,7 +114,7 @@ pub(crate) fn apply(ctx: &egui::Context) {
         ),
         (
             TextStyle::Heading,
-            FontId::new(24.0, FontFamily::Proportional),
+            FontId::new(24.0, FontFamily::Name(UI_SEMIBOLD.into())),
         ),
     ]
     .into();
