@@ -134,7 +134,7 @@ pub(crate) fn petal_points(petal: &Petal, origin: Pos2, x_scale: f32) -> [Pos2; 
 
 pub(crate) fn paint_petals(painter: &egui::Painter, rect: Rect, bloom: f32, intro: f32) {
     let painter = painter.with_clip_rect(rect);
-    let origin = rect.left_top() + egui::vec2(0.0, -4.0 * (1.0 - intro));
+    let origin = rect.left_top() + egui::vec2(0.0, -20.0 * (1.0 - intro));
     for petal in &PETALS {
         let points = petal_points(petal, origin, rect.width() / 1200.0).to_vec();
         let alpha = petal_alpha(petal.alpha, bloom, intro);
