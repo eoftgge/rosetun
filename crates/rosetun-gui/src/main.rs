@@ -11,6 +11,9 @@ mod app_icon;
 mod brand;
 mod display;
 mod errors;
+#[cfg(test)]
+#[path = "../build/icon_res.rs"]
+mod icon_res;
 mod icons;
 mod reorder;
 mod rules;
