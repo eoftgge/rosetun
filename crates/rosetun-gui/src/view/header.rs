@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use eframe::egui::{
-    self, Align, Color32, FontFamily, FontId, Id, Layout, Rect, Response, Sense, Shape, Stroke,
-    TextFormat, WidgetInfo, WidgetType, text::LayoutJob,
+    self, Align, Color32, FontFamily, FontId, Id, Layout, PointerButton, Rect, Response, Sense,
+    Shape, Stroke, TextFormat, ViewportCommand, WidgetInfo, WidgetType, text::LayoutJob,
 };
 use rosetun_config::ConnectionState;
 
@@ -10,7 +10,18 @@ use crate::brand;
 use crate::state::{Action, Screen, State};
 use crate::{strings, theme};
 
+/// The window draws its own title bar on Windows; elsewhere the system frame stays.
+pub(crate) const CUSTOM_FRAME: bool = cfg!(windows);
+
 const INTRO_DURATION: f64 = 2.7;
+
+#[derive(Clone, Copy)]
+enum WindowButton {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
 
 #[derive(Clone, Copy)]
 enum TabIcon {
@@ -21,6 +32,17 @@ enum TabIcon {
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let rect = ui.max_rect();
+    let drag = ui.interact(rect, Id::new("header_drag"), Sense::click_and_drag());
+    if CUSTOM_FRAME {
+        let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
+        if drag.drag_started_by(PointerButton::Primary) {
+            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        }
+        if drag.double_clicked() {
+            ui.ctx()
+                .send_viewport_cmd(ViewportCommand::Maximized(!maximized));
+        }
+    }
     let time = ui.input(|input| input.time);
     // Startup work can delay the first frame past the intro's duration.
     let started_at = ui.ctx().data_mut(|data| {
@@ -99,6 +121,25 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(18.0);
+                if CUSTOM_FRAME {
+                    if window_button(ui, WindowButton::Close).clicked() {
+                        ui.ctx().send_viewport_cmd(ViewportCommand::Close);
+                    }
+                    let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
+                    let kind = if maximized {
+                        WindowButton::Restore
+                    } else {
+                        WindowButton::Maximize
+                    };
+                    if window_button(ui, kind).clicked() {
+                        ui.ctx()
+                            .send_viewport_cmd(ViewportCommand::Maximized(!maximized));
+                    }
+                    if window_button(ui, WindowButton::Minimize).clicked() {
+                        ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true));
+                    }
+                    ui.add_space(12.0);
+                }
                 if !state.helper_available {
                     ui.colored_label(theme::ERROR, strings::HELPER_UNAVAILABLE);
                 }
@@ -177,6 +218,74 @@ fn paint_brand(ui: &mut egui::Ui, bloom: f32) {
         tagline,
         theme::TEXT_DIM,
     );
+}
+
+fn window_button(ui: &mut egui::Ui, kind: WindowButton) -> Response {
+    let label = match kind {
+        WindowButton::Minimize => strings::MINIMIZE,
+        WindowButton::Maximize => strings::MAXIMIZE,
+        WindowButton::Restore => strings::RESTORE,
+        WindowButton::Close => strings::CLOSE_WINDOW,
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(38.0, 32.0), Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
+    let hover = ui
+        .ctx()
+        .animate_bool_with_time(response.id, response.hovered(), 0.1);
+    if ui.is_rect_visible(rect) {
+        let background = if matches!(kind, WindowButton::Close) {
+            theme::ROSE
+        } else {
+            theme::INPUT
+        };
+        if hover > 0.0 {
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                Color32::TRANSPARENT.lerp_to_gamma(background, hover),
+            );
+        }
+        let color = if matches!(kind, WindowButton::Close) {
+            theme::TEXT_MUTED
+        } else {
+            theme::TEXT_DIM
+        }
+        .lerp_to_gamma(theme::TEXT, hover);
+        let glyph = Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0));
+        let point = |x: f32, y: f32| glyph.min + egui::vec2(x, y);
+        let stroke = Stroke::new(1.3, color);
+        let line = |a: (f32, f32), b: (f32, f32)| {
+            ui.painter()
+                .line_segment([point(a.0, a.1), point(b.0, b.1)], stroke);
+        };
+        let square = |min: (f32, f32), max: (f32, f32)| {
+            ui.painter().add(Shape::closed_line(
+                vec![
+                    point(min.0, min.1),
+                    point(max.0, min.1),
+                    point(max.0, max.1),
+                    point(min.0, max.1),
+                ],
+                stroke,
+            ));
+        };
+        match kind {
+            WindowButton::Minimize => line((2.0, 7.0), (12.0, 7.0)),
+            WindowButton::Maximize => square((2.5, 2.5), (11.5, 11.5)),
+            WindowButton::Restore => {
+                line((4.5, 2.5), (11.5, 2.5));
+                line((11.5, 2.5), (11.5, 9.5));
+                square((2.5, 4.5), (9.5, 11.5));
+            }
+            WindowButton::Close => {
+                line((3.0, 3.0), (11.0, 11.0));
+                line((11.0, 3.0), (3.0, 11.0));
+            }
+        }
+    }
+    response
+        .on_hover_text(label)
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn tab(ui: &mut egui::Ui, icon: TabIcon, label: &str, selected: bool) -> Response {

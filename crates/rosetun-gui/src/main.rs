@@ -73,6 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title(strings::TITLE)
+            .with_decorations(!view::header::CUSTOM_FRAME)
             .with_inner_size([1200.0, 780.0])
             .with_min_inner_size([960.0, 640.0]),
         renderer: eframe::Renderer::Glow,

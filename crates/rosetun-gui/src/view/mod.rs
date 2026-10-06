@@ -5,6 +5,7 @@ pub(crate) mod header;
 pub(crate) mod rules;
 pub(crate) mod settings;
 pub(crate) mod subscriptions;
+mod window_frame;
 
 use eframe::egui::{self, Stroke};
 
@@ -75,5 +76,6 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             add_rule::show(ctx, dialog, &mut actions);
         }
     }
+    window_frame::resize_edges(ui);
     actions
 }
