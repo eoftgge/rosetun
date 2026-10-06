@@ -241,6 +241,7 @@ pub(crate) struct Strings {
     pub(crate) reconnecting: &'static str,
     pub(crate) failed: &'static str,
     pub(crate) failed_protected: &'static str,
+    pub(crate) traffic_blocked: &'static str,
     pub(crate) helper_unavailable: &'static str,
     pub(crate) helper_unavailable_detail: &'static str,
     pub(crate) select_server: &'static str,

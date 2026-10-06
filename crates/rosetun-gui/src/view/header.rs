@@ -9,7 +9,7 @@ use rosetun_config::ConnectionState;
 use crate::brand;
 use crate::state::{Action, Screen, State};
 use crate::strings::t;
-use crate::{strings, theme};
+use crate::{strings, theme, widgets};
 
 /// The window draws its own title bar on Windows; elsewhere the system frame stays.
 pub(crate) const CUSTOM_FRAME: bool = cfg!(windows);
@@ -136,8 +136,15 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     }
                     ui.add_space(12.0);
                 }
-                if !state.helper_available {
-                    ui.colored_label(theme::ERROR, t().helper_unavailable);
+                let (text, color) = header_status(state);
+                let response = widgets::status_pill(ui, text, color);
+                let response = if state.helper_available {
+                    response
+                } else {
+                    response.on_hover_text(t().helper_unavailable_detail)
+                };
+                if response.clicked() {
+                    actions.push(Action::ShowConnection);
                 }
             });
             selected_rect
@@ -163,6 +170,30 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             0.0,
             theme::ROSE,
         );
+    }
+}
+
+fn header_status(state: &State) -> (&'static str, Color32) {
+    header_status_for(
+        state.helper_available,
+        state.visible_status().map(|status| &status.state),
+    )
+}
+
+fn header_status_for(
+    helper_available: bool,
+    connection: Option<&ConnectionState>,
+) -> (&'static str, Color32) {
+    if !helper_available {
+        return (t().helper_unavailable, theme::ERROR);
+    }
+    match connection {
+        None | Some(ConnectionState::Disconnected) => (t().disconnected, theme::DISCONNECTED),
+        Some(ConnectionState::Connecting) => (t().connecting_action, theme::ROSE_BRIGHT),
+        Some(ConnectionState::Reconnecting) => (t().reconnecting_action, theme::ROSE_BRIGHT),
+        Some(ConnectionState::Connected) => (t().connected, theme::CONNECTED),
+        Some(ConnectionState::Failed { .. }) => (t().failed, theme::ERROR),
+        Some(ConnectionState::FailedProtected { .. }) => (t().traffic_blocked, theme::ERROR),
     }
 }
 
@@ -380,7 +411,58 @@ fn paint_tab_icon(painter: &egui::Painter, rect: Rect, icon: TabIcon, color: Col
 
 #[cfg(test)]
 mod tests {
-    use super::intro_progress;
+    use super::{header_status_for, intro_progress};
+    use crate::{strings::t, theme};
+    use rosetun_config::ConnectionState;
+
+    #[test]
+    fn header_status_shows_all_connection_states() {
+        let states = [
+            (
+                ConnectionState::Disconnected,
+                (t().disconnected, theme::DISCONNECTED),
+            ),
+            (
+                ConnectionState::Connecting,
+                (t().connecting_action, theme::ROSE_BRIGHT),
+            ),
+            (
+                ConnectionState::Reconnecting,
+                (t().reconnecting_action, theme::ROSE_BRIGHT),
+            ),
+            (
+                ConnectionState::Connected,
+                (t().connected, theme::CONNECTED),
+            ),
+            (
+                ConnectionState::Failed {
+                    reason: String::new(),
+                },
+                (t().failed, theme::ERROR),
+            ),
+            (
+                ConnectionState::FailedProtected {
+                    reason: String::new(),
+                },
+                (t().traffic_blocked, theme::ERROR),
+            ),
+        ];
+        for (state, expected) in &states {
+            assert_eq!(header_status_for(true, Some(state)), *expected);
+            assert_eq!(
+                header_status_for(false, Some(state)),
+                (t().helper_unavailable, theme::ERROR),
+            );
+        }
+        assert_eq!(
+            header_status_for(true, None),
+            (t().disconnected, theme::DISCONNECTED)
+        );
+        assert_eq!(
+            header_status_for(false, None),
+            (t().helper_unavailable, theme::ERROR),
+        );
+    }
 
     #[test]
     fn intro_starts_with_first_header_frame_even_after_startup_delay() {
