@@ -30,9 +30,10 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
     let server = state.config.active_node().map(|(_, node)| {
         state
             .text(&node.name)
-            .chars()
-            .filter(|character| !character.is_control())
-            .collect::<String>()
+            .split(|character: char| character.is_whitespace() || character.is_control())
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
     });
     TrayView {
         color,
@@ -255,8 +256,7 @@ mod tests {
         assert_eq!(connected.color, theme::CONNECTED);
         assert_eq!(connected.primary_label, strings::DISCONNECT);
         assert!(connected.primary_enabled);
-        assert!(connected.tooltip.contains("Server"));
-        assert!(connected.tooltip.contains("Blue"));
+        assert!(connected.tooltip.contains("Server Blue"));
         assert_eq!(connected.tooltip.matches('\n').count(), 1);
         assert!(!connected.tooltip.contains('\r'));
         assert!(!connected.tooltip.contains('\t'));
