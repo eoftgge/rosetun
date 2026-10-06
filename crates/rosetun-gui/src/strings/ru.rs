@@ -167,7 +167,7 @@ pub(crate) static RU: Strings = Strings {
     failed: "Не удалось подключиться",
     failed_protected: "Не удалось подключиться · трафик заблокирован",
     helper_unavailable: "Служба недоступна",
-    helper_unavailable_detail: "Запустите службу Rosetun отдельно. Подписки доступны и без неё.",
+    helper_unavailable_detail: "Служба Rosetun не запущена. Перезагрузите компьютер или переустановите Rosetun. Подписки работают и без неё.",
     select_server: "Сначала выберите сервер",
     selected_server: "Выбранный сервер",
     session: "Сеанс",

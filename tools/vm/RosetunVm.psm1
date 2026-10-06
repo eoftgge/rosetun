@@ -752,7 +752,7 @@ function Test-RosetunProxyPath {
     )
     Invoke-RosetunGuest -ScriptBlock {
         param($dir, $url, $writeOut, $port)
-        $rendered = 'C:\ProgramData\Rosetun\run\sing-box\config.json'
+        $rendered = 'C:\rosetun\data\run\sing-box\config.json'
         $proxy = (Get-Content -Path $rendered -Raw | ConvertFrom-Json).outbounds |
             Where-Object { $_.tag -eq 'proxy' }
         $config = [ordered]@{

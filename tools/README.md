@@ -303,7 +303,7 @@ network comes back. The note column shows how long recovery took.
 | `C:\rosetun\` | Helper, CLI, `sing-box.exe`, `request.json` and the two derived requests, `curl-other.exe` |
 | `C:\rosetun\helper.log` | Log of the current helper run (`ROSETUN_LOG=debug`), sing-box output included |
 | `C:\rosetun\helper-<time>.log` | Logs of earlier helper runs, kept on every restart; after a killed helper or a failed scenario they are the evidence |
-| `C:\ProgramData\Rosetun\run\sing-box\config.json` | The config sing-box actually received |
+| `C:\rosetun\data\run\sing-box\config.json` | The config sing-box actually received |
 
 The helper runs as SYSTEM from the scheduled task `RosetunHelper`.
 
@@ -319,7 +319,7 @@ Get-RosetunHelperLog -Tail 100
 Get-RosetunHelperLog -Tail 400 | Select-String 'inbound connection|dns|ERROR|WARN'
 
 # What sing-box was given
-Invoke-RosetunGuest { Get-Content C:\ProgramData\Rosetun\run\sing-box\config.json }
+Invoke-RosetunGuest { Get-Content C:\rosetun\data\run\sing-box\config.json }
 
 # Does the proxy path work at all, with no TUN, WFP or DNS hijack? Run disconnected.
 Test-RosetunProxyPath | Format-List

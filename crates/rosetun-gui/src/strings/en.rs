@@ -167,7 +167,7 @@ pub(crate) static EN: Strings = Strings {
     failed: "Connection failed",
     failed_protected: "Connection failed · traffic blocked",
     helper_unavailable: "Helper unavailable",
-    helper_unavailable_detail: "Start the Rosetun helper externally. Subscriptions are still available.",
+    helper_unavailable_detail: "The Rosetun service is not running. Restart the computer or reinstall Rosetun. Subscriptions work without it.",
     select_server: "Select a server first",
     selected_server: "Selected server",
     session: "Session",
