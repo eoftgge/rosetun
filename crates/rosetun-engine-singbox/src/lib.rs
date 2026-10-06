@@ -204,7 +204,9 @@ impl TrafficProbe for ClashTrafficProbe {
             .get(&self.url)
             .header("Authorization", &self.authorization)
             .call()
-            .map_err(|_| EngineError::Stats("local control request failed".to_owned()))?;
+            .map_err(|error| {
+                EngineError::Stats(format!("local control request failed: {error}"))
+            })?;
         if response.status() != 200 {
             return Err(EngineError::Stats(format!(
                 "HTTP status {}",
