@@ -75,6 +75,19 @@ fn interface(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if selected != saved && state.can_edit_settings() {
             actions.push(Action::SetLanguage(selected));
         }
+        ui.add_space(12.0);
+        let mut reduce_motion = state.config.interface.reduce_motion;
+        if widgets::toggle_row(
+            ui,
+            t().reduce_motion,
+            t().reduce_motion_detail,
+            &mut reduce_motion,
+            state.can_edit_settings(),
+        )
+        .changed()
+        {
+            actions.push(Action::SetReduceMotion(reduce_motion));
+        }
     });
 }
 

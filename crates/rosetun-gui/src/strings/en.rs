@@ -114,6 +114,8 @@ pub(crate) static EN: Strings = Strings {
     interface: "Interface",
     scale: "Scale",
     zoom_hint: "Ctrl+Plus and Ctrl+Minus zoom until the app closes.",
+    reduce_motion: "Reduce motion",
+    reduce_motion_detail: "No smooth transitions or pulsing: states change at once.",
     #[cfg(windows)]
     windows: "Windows",
     #[cfg(windows)]

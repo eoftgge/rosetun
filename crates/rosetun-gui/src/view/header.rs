@@ -55,16 +55,27 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             time
         }
     });
+    let reduce_motion = state.config.interface.reduce_motion;
     let progress = intro_progress(time, started_at);
-    let intro = 1.0 - (1.0 - progress).powi(3);
+    let intro = if reduce_motion {
+        1.0
+    } else {
+        1.0 - (1.0 - progress).powi(3)
+    };
     let status = state.visible_status();
     let connected = status.is_some_and(|status| matches!(status.state, ConnectionState::Connected));
     let transitional = status.is_some_and(|status| status.state.is_transitional());
-    let settled = ui
-        .ctx()
-        .animate_bool_with_time(Id::new("header_bloom"), connected, 0.8);
-    let bloom = brand::bloom(settled, transitional, time);
-    if progress < 1.0 || transitional {
+    let settled = ui.ctx().animate_bool_with_time(
+        Id::new("header_bloom"),
+        connected,
+        if reduce_motion { 0.0 } else { 0.8 },
+    );
+    let bloom = if reduce_motion {
+        settled
+    } else {
+        brand::bloom(settled, transitional, time)
+    };
+    if !reduce_motion && (progress < 1.0 || transitional) {
         ui.ctx().request_repaint_after(Duration::from_millis(33));
     }
 
@@ -107,7 +118,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui.add_space(4.0);
                 }
                 let selected = state.screen == screen;
-                let response = tab(ui, icon, label, selected);
+                let response = tab(ui, icon, label, selected, reduce_motion);
                 if selected {
                     selected_rect = Some(response.rect);
                 } else if response.clicked() {
@@ -118,7 +129,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(18.0);
                 if CUSTOM_FRAME {
-                    if window_button(ui, WindowButton::Close).clicked() {
+                    if window_button(ui, WindowButton::Close, reduce_motion).clicked() {
                         ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                     }
                     let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
@@ -127,11 +138,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     } else {
                         WindowButton::Maximize
                     };
-                    if window_button(ui, kind).clicked() {
+                    if window_button(ui, kind, reduce_motion).clicked() {
                         ui.ctx()
                             .send_viewport_cmd(ViewportCommand::Maximized(!maximized));
                     }
-                    if window_button(ui, WindowButton::Minimize).clicked() {
+                    if window_button(ui, WindowButton::Minimize, reduce_motion).clicked() {
                         ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true));
                     }
                     ui.add_space(12.0);
@@ -152,15 +163,16 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .inner;
 
     if let Some(tab_rect) = selected_rect {
+        let duration = if reduce_motion { 0.0 } else { 0.2 };
         let left = ui.ctx().animate_value_with_time(
             Id::new("header_tab_underline_left"),
             tab_rect.left(),
-            0.2,
+            duration,
         );
         let width = ui.ctx().animate_value_with_time(
             Id::new("header_tab_underline_width"),
             tab_rect.width(),
-            0.2,
+            duration,
         );
         ui.painter().rect_filled(
             Rect::from_min_size(
@@ -247,7 +259,7 @@ fn paint_brand(ui: &mut egui::Ui, bloom: f32) {
     );
 }
 
-fn window_button(ui: &mut egui::Ui, kind: WindowButton) -> Response {
+fn window_button(ui: &mut egui::Ui, kind: WindowButton, reduce_motion: bool) -> Response {
     let label = match kind {
         WindowButton::Minimize => t().minimize,
         WindowButton::Maximize => t().maximize,
@@ -256,9 +268,11 @@ fn window_button(ui: &mut egui::Ui, kind: WindowButton) -> Response {
     };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(38.0, 32.0), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
-    let hover = ui
-        .ctx()
-        .animate_bool_with_time(response.id, response.hovered(), 0.1);
+    let hover = ui.ctx().animate_bool_with_time(
+        response.id,
+        response.hovered(),
+        if reduce_motion { 0.0 } else { 0.1 },
+    );
     if ui.is_rect_visible(rect) {
         let background = if matches!(kind, WindowButton::Close) {
             theme::ROSE
@@ -315,7 +329,13 @@ fn window_button(ui: &mut egui::Ui, kind: WindowButton) -> Response {
         .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-fn tab(ui: &mut egui::Ui, icon: TabIcon, label: &str, selected: bool) -> Response {
+fn tab(
+    ui: &mut egui::Ui,
+    icon: TabIcon,
+    label: &str,
+    selected: bool,
+    reduce_motion: bool,
+) -> Response {
     let font_id = FontId::new(15.0, FontFamily::Proportional);
     let text_width = ui
         .painter()
@@ -331,9 +351,11 @@ fn tab(ui: &mut egui::Ui, icon: TabIcon, label: &str, selected: bool) -> Respons
     );
     response
         .widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, label));
-    let t = ui
-        .ctx()
-        .animate_bool_with_time(response.id, selected || response.hovered(), 0.12);
+    let t = ui.ctx().animate_bool_with_time(
+        response.id,
+        selected || response.hovered(),
+        if reduce_motion { 0.0 } else { 0.12 },
+    );
     let text_color = theme::TEXT_MUTED.lerp_to_gamma(theme::TEXT, t);
     let icon_color = theme::TEXT_DIM.lerp_to_gamma(theme::ROSE, t);
     if ui.is_rect_visible(rect) {

@@ -324,6 +324,7 @@ pub(crate) enum Action {
     OpenSettings,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
+    SetReduceMotion(bool),
     #[cfg(windows)]
     SetAutostart(bool),
     #[cfg(windows)]
@@ -388,6 +389,7 @@ pub(crate) enum Job {
     Disconnect,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
+    SetReduceMotion(bool),
     #[cfg(windows)]
     LoadAutostart,
     #[cfg(windows)]
@@ -799,6 +801,7 @@ impl State {
             }
             #[cfg(windows)]
             WorkerEvent::SetCloseToTray(result) => self.finish_settings(result),
+            WorkerEvent::SetReduceMotion(result) => self.finish_settings(result),
             WorkerEvent::SetConnectOnStart(result) => self.finish_settings(result),
             WorkerEvent::SetAutoReconnect(result) => self.finish_settings(result),
             WorkerEvent::SetAutoUpdateSubscriptions(result) => self.finish_settings(result),
@@ -987,6 +990,11 @@ impl State {
             Action::SetLanguage(language) => {
                 if self.can_edit_settings() && self.config.interface.language != language {
                     return self.start_settings(Job::SetLanguage(language));
+                }
+            }
+            Action::SetReduceMotion(enabled) => {
+                if self.can_edit_settings() && self.config.interface.reduce_motion != enabled {
+                    return self.start_settings(Job::SetReduceMotion(enabled));
                 }
             }
             #[cfg(windows)]
@@ -2826,6 +2834,29 @@ mod tests {
                 .act(Action::SetLanguage(LanguageSetting::Russian))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn reduce_motion_setting_uses_a_settings_job_and_saved_value() {
+        let mut state = State::default();
+        assert!(state.act(Action::SetReduceMotion(true)).is_none());
+        state.config_ready = true;
+        assert!(state.act(Action::SetReduceMotion(false)).is_none());
+        assert!(matches!(
+            state.act(Action::SetReduceMotion(true)),
+            Some(Job::SetReduceMotion(true))
+        ));
+        assert!(state.operations.settings);
+        assert!(state.act(Action::SetReduceMotion(true)).is_none());
+        state.reduce(WorkerEvent::SetReduceMotion(Ok(())));
+        assert!(!state.operations.settings);
+        let mut config = state.config.clone();
+        config.interface.reduce_motion = true;
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config,
+        });
+        assert!(state.act(Action::SetReduceMotion(true)).is_none());
     }
 
     #[test]

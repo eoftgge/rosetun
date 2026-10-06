@@ -64,6 +64,7 @@ pub(crate) enum WorkerEvent {
     Disconnect(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
     SetLanguage(Result<(), SettingsError>),
+    SetReduceMotion(Result<(), SettingsError>),
     #[cfg(windows)]
     AutostartLoaded(std::io::Result<bool>),
     #[cfg(windows)]
@@ -203,6 +204,14 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             let result = set_language(&publisher.store, language);
             publisher.complete(WorkerEvent::SetLanguage(result));
+        });
+    }
+
+    pub(crate) fn set_reduce_motion(&self, enabled: bool) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = rosetun_core::set_reduce_motion(&publisher.store, enabled);
+            publisher.complete(WorkerEvent::SetReduceMotion(result));
         });
     }
 

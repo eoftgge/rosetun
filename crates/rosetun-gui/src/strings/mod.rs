@@ -189,6 +189,8 @@ pub(crate) struct Strings {
     pub(crate) interface: &'static str,
     pub(crate) scale: &'static str,
     pub(crate) zoom_hint: &'static str,
+    pub(crate) reduce_motion: &'static str,
+    pub(crate) reduce_motion_detail: &'static str,
     #[cfg(windows)]
     pub(crate) windows: &'static str,
     #[cfg(windows)]

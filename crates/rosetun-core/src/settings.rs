@@ -83,6 +83,13 @@ pub fn set_close_to_tray(store: &Store, enabled: bool) -> Result<(), SettingsErr
     })
 }
 
+pub fn set_reduce_motion(store: &Store, enabled: bool) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.reduce_motion = enabled;
+        Ok(())
+    })
+}
+
 pub fn set_connect_on_start(store: &Store, enabled: bool) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.interface.connect_on_start = enabled;
@@ -226,6 +233,10 @@ mod tests {
 
         set_close_to_tray(&store, false).unwrap();
         expected.interface.close_to_tray = false;
+        assert_eq!(store.load().unwrap(), expected);
+
+        set_reduce_motion(&store, true).unwrap();
+        expected.interface.reduce_motion = true;
         assert_eq!(store.load().unwrap(), expected);
 
         set_connect_on_start(&store, true).unwrap();

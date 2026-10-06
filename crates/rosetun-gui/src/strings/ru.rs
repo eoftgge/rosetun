@@ -114,6 +114,8 @@ pub(crate) static RU: Strings = Strings {
     interface: "Интерфейс",
     scale: "Масштаб",
     zoom_hint: "Ctrl+Plus и Ctrl+Minus меняют масштаб до закрытия программы.",
+    reduce_motion: "Уменьшить анимацию",
+    reduce_motion_detail: "Без плавных переходов и пульсации: состояния меняются сразу.",
     #[cfg(windows)]
     windows: "Windows",
     #[cfg(windows)]

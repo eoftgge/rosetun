@@ -46,6 +46,8 @@ pub struct InterfaceSettings {
     pub auto_update_subscriptions: bool,
     #[serde(default)]
     pub language: LanguageSetting,
+    #[serde(default)]
+    pub reduce_motion: bool,
 }
 
 fn default_scale_percent() -> u16 {
@@ -64,6 +66,7 @@ impl Default for InterfaceSettings {
             connect_on_start: false,
             auto_update_subscriptions: true,
             language: LanguageSetting::System,
+            reduce_motion: false,
         }
     }
 }

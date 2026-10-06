@@ -197,6 +197,7 @@ impl App {
             Job::Disconnect => self.workers.disconnect(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
             Job::SetLanguage(language) => self.workers.set_language(language),
+            Job::SetReduceMotion(enabled) => self.workers.set_reduce_motion(enabled),
             #[cfg(windows)]
             Job::LoadAutostart => self.workers.load_autostart(),
             #[cfg(windows)]

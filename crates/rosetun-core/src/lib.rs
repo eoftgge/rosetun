@@ -25,7 +25,7 @@ pub use selection::{
 pub use settings::{
     DnsInputError, INTERFACE_SCALES, SettingsError, parse_dns_input, set_auto_reconnect,
     set_auto_update_subscriptions, set_close_to_tray, set_connect_on_start, set_dns,
-    set_interface_scale, set_language, set_verbose_log,
+    set_interface_scale, set_language, set_reduce_motion, set_verbose_log,
 };
 pub use store::{Store, StoreError};
 pub use subscription_url::{
