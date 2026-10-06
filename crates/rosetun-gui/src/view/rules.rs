@@ -9,7 +9,9 @@ use crate::strings::t;
 use crate::{strings, theme};
 
 const HANDLE_WIDTH: f32 = 28.0;
-const TYPE_WIDTH: f32 = 100.0;
+const MIN_TYPE_WIDTH: f32 = 100.0;
+/// Gap between the type label and the value column.
+const TYPE_PADDING: f32 = 16.0;
 const TARGET_WIDTH: f32 = 172.0;
 const TARGET_COMBO_WIDTH: f32 = 140.0;
 // With the app theme, the visible ComboBox sits below the center of its allocated area.
@@ -19,6 +21,34 @@ const REMOVE_WIDTH: f32 = 44.0;
 const TABLE_INSET: f32 = 10.0;
 const ROW_HEIGHT: f32 = 52.0;
 const HEADER_HEIGHT: f32 = 24.0;
+
+#[derive(Clone, Copy)]
+struct TableWidths {
+    rule_type: f32,
+    value: f32,
+}
+
+/// Wide enough for the longest rule type label in the current language.
+fn type_width(ui: &egui::Ui) -> f32 {
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    [
+        t().domain,
+        t().keyword,
+        t().process,
+        strings::IP,
+        t().default,
+    ]
+    .into_iter()
+    .map(|label| {
+        ui.painter()
+            .layout_no_wrap(label.to_owned(), font_id.clone(), theme::TEXT)
+            .size()
+            .x
+    })
+    .fold(MIN_TYPE_WIDTH, |width, label_width| {
+        width.max(label_width + TYPE_PADDING)
+    })
+}
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     ui.heading(t().rules_title);
@@ -61,19 +91,23 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     let can_add = state.can_edit_rules();
     filter_controls(ui, &mut state.rule_screen.filter, set, can_add, actions);
     ui.add_space(16.0);
-    ui.colored_label(theme::TEXT_DIM, t().order_hint);
+    ui.add(egui::Label::new(RichText::new(t().order_hint).color(theme::TEXT_DIM)).wrap());
     ui.add_space(8.0);
 
     let visible = visible_rules(set, &state.rule_screen.filter);
-    let value_width = (ui.available_width()
-        - 2.0 * TABLE_INSET
-        - HANDLE_WIDTH
-        - TYPE_WIDTH
-        - TARGET_WIDTH
-        - ENABLED_WIDTH
-        - REMOVE_WIDTH)
-        .max(140.0);
-    table_header(ui, value_width);
+    let rule_type = type_width(ui);
+    let widths = TableWidths {
+        rule_type,
+        value: (ui.available_width()
+            - 2.0 * TABLE_INSET
+            - HANDLE_WIDTH
+            - rule_type
+            - TARGET_WIDTH
+            - ENABLED_WIDTH
+            - REMOVE_WIDTH)
+            .max(140.0),
+    };
+    table_header(ui, widths);
     if visible.is_empty() && !set.rules.is_empty() {
         ui.colored_label(theme::TEXT_MUTED, t().no_rules_match);
     }
@@ -81,10 +115,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         ui.spacing_mut().item_spacing.y = 0.0;
         for (index, rule) in visible {
             ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
-                rule_row(ui, state, set, rule, index, value_width, actions);
+                rule_row(ui, state, set, rule, index, widths, actions);
             });
         }
-        default_rule(ui, state, set, value_width, actions);
+        default_rule(ui, state, set, widths, actions);
     });
 }
 
@@ -223,15 +257,15 @@ fn target_cell(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) -> egui::
     })
 }
 
-fn table_header(ui: &mut egui::Ui, value_width: f32) {
+fn table_header(ui: &mut egui::Ui, widths: TableWidths) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(TABLE_INSET);
         table_cell(ui, HANDLE_WIDTH, HEADER_HEIGHT, |_| {});
-        table_cell(ui, TYPE_WIDTH, HEADER_HEIGHT, |ui| {
+        table_cell(ui, widths.rule_type, HEADER_HEIGHT, |ui| {
             ui.label(t().r#type);
         });
-        table_cell(ui, value_width, HEADER_HEIGHT, |ui| {
+        table_cell(ui, widths.value, HEADER_HEIGHT, |ui| {
             ui.label(t().value);
         });
         table_cell(ui, TARGET_WIDTH, HEADER_HEIGHT, |ui| {
@@ -255,7 +289,7 @@ fn rule_row(
     set: &RuleSet,
     rule: &Rule,
     index: usize,
-    value_width: f32,
+    widths: TableWidths,
     actions: &mut Vec<Action>,
 ) {
     let reorder = state.can_edit_rules() && !state.rule_screen.filter.is_active();
@@ -294,7 +328,7 @@ fn rule_row(
                                 .on_hover_text(t().reorder_disabled);
                         }
                     });
-                    table_cell(ui, TYPE_WIDTH, ROW_HEIGHT, |ui| {
+                    table_cell(ui, widths.rule_type, ROW_HEIGHT, |ui| {
                         ui.label(rule_type(rule));
                     });
                     let value_height = match &rule.matcher {
@@ -306,7 +340,7 @@ fn rule_row(
                         }
                         _ => ui.text_style_height(&egui::TextStyle::Body),
                     };
-                    value_cell(ui, value_width, value_height, |ui| {
+                    value_cell(ui, widths.value, value_height, |ui| {
                         rule_value(ui, state, rule);
                     });
                     target_cell(ui, |ui| {
@@ -414,7 +448,7 @@ fn default_rule(
     ui: &mut egui::Ui,
     state: &State,
     set: &RuleSet,
-    value_width: f32,
+    widths: TableWidths,
     actions: &mut Vec<Action>,
 ) {
     let response = ui.push_id("default_rule", |ui| {
@@ -429,14 +463,14 @@ fn default_rule(
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
                             table_cell(ui, HANDLE_WIDTH, ROW_HEIGHT, |_| {});
-                            table_cell(ui, TYPE_WIDTH, ROW_HEIGHT, |ui| {
+                            table_cell(ui, widths.rule_type, ROW_HEIGHT, |ui| {
                                 ui.label(t().default)
                                     .on_hover_text(t().default_rule_tooltip);
                             })
                             .on_hover_text(t().default_rule_tooltip);
                             let value_height = ui.text_style_height(&egui::TextStyle::Body)
                                 + ui.text_style_height(&egui::TextStyle::Small);
-                            value_cell(ui, value_width, value_height, |ui| {
+                            value_cell(ui, widths.value, value_height, |ui| {
                                 ui.add(
                                     egui::Label::new(RichText::new(t().all_other_traffic).strong())
                                         .truncate(),
@@ -662,7 +696,7 @@ mod tests {
                 ui.set_width(800.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    let type_cell = table_cell(ui, TYPE_WIDTH, ROW_HEIGHT, |ui| {
+                    let type_cell = table_cell(ui, MIN_TYPE_WIDTH, ROW_HEIGHT, |ui| {
                         ui.label("Process");
                     });
                     let body_height = ui.text_style_height(&egui::TextStyle::Body);

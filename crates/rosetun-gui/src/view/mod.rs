@@ -29,7 +29,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                 egui::Frame::new()
                     .fill(theme::PANEL)
                     .stroke(Stroke::new(1.0, theme::BORDER))
-                    .inner_margin(16),
+                    .inner_margin(egui::Margin {
+                        left: 16,
+                        right: 16,
+                        top: 16,
+                        bottom: 0,
+                    }),
             )
             .show(ui, |ui| subscriptions::show(ui, state, &mut actions));
     }

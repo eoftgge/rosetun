@@ -9,6 +9,33 @@ use crate::strings::t;
 use crate::{display, strings, theme};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    const FOOTER_HEIGHT: f32 = 72.0;
+
+    egui::Panel::bottom("subscriptions_footer")
+        .exact_size(FOOTER_HEIGHT)
+        .frame(egui::Frame::new())
+        .show(ui, |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let enabled = state.config_ready
+                    && !state.config.subscriptions.is_empty()
+                    && !state.operations.update_all
+                    && state.operations.updating.is_empty()
+                    && !state.operations.removing;
+                if theme::outline_button(
+                    ui,
+                    if state.operations.update_all {
+                        t().updating
+                    } else {
+                        t().update_all
+                    },
+                    enabled,
+                )
+                .clicked()
+                {
+                    actions.push(Action::UpdateAll);
+                }
+            });
+        });
     ui.label(
         RichText::new(t().subscriptions(state.config.subscriptions.len()))
             .color(theme::TEXT_DIM)
@@ -19,10 +46,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         actions.push(Action::OpenAdd);
     }
     ui.add_space(12.0);
-    let height = (ui.available_height() - 48.0).max(120.0);
     egui::ScrollArea::vertical()
         .id_salt("subscription_scroll")
-        .max_height(height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if state.config.subscriptions.is_empty() {
@@ -75,25 +100,6 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 }
             });
         });
-    ui.separator();
-    let enabled = state.config_ready
-        && !state.config.subscriptions.is_empty()
-        && !state.operations.update_all
-        && state.operations.updating.is_empty()
-        && !state.operations.removing;
-    if theme::outline_button(
-        ui,
-        if state.operations.update_all {
-            t().updating
-        } else {
-            t().update_all
-        },
-        enabled,
-    )
-    .clicked()
-    {
-        actions.push(Action::UpdateAll);
-    }
 }
 
 fn subscription_card(

@@ -191,7 +191,7 @@ pub(crate) static EN: Strings = Strings {
     value: "Value",
     target: "Target",
     enabled: "Enabled",
-    order_hint: "Order from top to bottom sets priority.",
+    order_hint: "Rules are checked from top to bottom, and the first match applies. Drag a rule to change the order.",
     reorder_disabled: "Clear the search and filters to reorder.",
     default: "Default",
     all_other_traffic: "All other traffic",
