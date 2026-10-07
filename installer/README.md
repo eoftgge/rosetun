@@ -18,3 +18,9 @@ The installer places these files under `C:\Program Files\Rosetun`:
 The `Rosetun` service starts automatically and restarts after a failure. From an elevated PowerShell session, `& 'C:\Program Files\Rosetun\rosetun-helper-privileged.exe' --install-service` installs or updates it, and the same executable with `--uninstall-service` removes it. Upgrades stop the GUI and service before replacing files; uninstall removes the service and installation directory but preserves `%APPDATA%\Rosetun`.
 
 The installer is not signed yet, so SmartScreen may warn when it starts: choose **More info** → **Run anyway**. Test installation, upgrades, connectivity and removal on a clean VM snapshot, without the matrix test rig.
+
+## Releases
+
+A signed `v<version>` tag matching the version in `Cargo.toml` builds and publishes a GitHub Release. Versions with `-alpha.N` or another prerelease suffix are marked as prereleases. Existing releases are never overwritten.
+
+Use **Run workflow** on the Release workflow for a test build: it uploads the installer, checksums and release notes as an artifact without publishing a release. Run `./installer/build.ps1 -Release` to build the same assets locally, including the sing-box source archive, `SHA256SUMS.txt` and bilingual release notes.
