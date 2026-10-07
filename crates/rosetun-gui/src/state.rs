@@ -4173,7 +4173,7 @@ mod tests {
         );
         assert!(matches!(
             state.act(Action::OpenFolder(AboutFolder::Config)),
-            Some(Job::OpenFolder(path)) if path == PathBuf::from("C:\\Users\\Test\\Rosetun")
+            Some(Job::OpenFolder(path)) if path.as_path() == std::path::Path::new("C:\\Users\\Test\\Rosetun")
         ));
         assert!(state.operations.settings);
         state.reduce(WorkerEvent::OpenFolder(Err(std::io::Error::new(
