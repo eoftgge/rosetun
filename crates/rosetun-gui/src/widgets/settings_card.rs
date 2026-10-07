@@ -174,6 +174,7 @@ mod tests {
         let mut rects = Vec::new();
         let mut title_width = 0.0;
         let mut control_rect = egui::Rect::NOTHING;
+        let mut tall_control = egui::Rect::NOTHING;
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -201,6 +202,15 @@ mod tests {
                             },
                         ));
                         rects.push(card.row_inner("Motion", Some("A detail"), |_| {}));
+                        rects.push(card.row_with_title(
+                            |ui| {
+                                ui.label("Reconnect automatically");
+                            },
+                            Some("This detail wraps onto several lines when the window is narrow, so the control must stay centered vertically beside it."),
+                            |ui| {
+                                tall_control = ui.allocate_exact_size(TOGGLE_SIZE, egui::Sense::hover()).0;
+                            },
+                        ));
                     });
                 });
             },
@@ -211,5 +221,6 @@ mod tests {
         assert_eq!(rects[0].width(), rects[1].width());
         assert!(title_width >= 200.0, "title width: {title_width}");
         assert!(control_rect.left() > rects[0].center().x);
+        assert!((tall_control.center().y - rects[2].center().y).abs() <= 2.0);
     }
 }

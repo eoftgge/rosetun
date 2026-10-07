@@ -20,9 +20,10 @@ use rosetun_core::{
     SubscriptionUpdateResult, Timeouts, UpdateReport, UpdateSubscriptionError,
     add_prepared_subscription, add_rule, add_rules, create_rule_set, delete_rule_set, move_rule,
     move_subscription, ping_all, prepare_subscription, remove_rule, remove_subscription,
-    rename_rule_set, rename_subscription, select_node, select_rule_set, set_default_target,
-    set_dns, set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
-    set_verbose_log, update_all, update_rule, update_subscription,
+    rename_rule_set, rename_subscription, reset_settings, select_node, select_rule_set,
+    set_default_target, set_dns, set_interface_scale, set_kill_switch, set_language,
+    set_rule_enabled, set_rule_target, set_verbose_log, update_all, update_rule,
+    update_subscription,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
@@ -82,6 +83,7 @@ pub(crate) enum WorkerEvent {
     SetAutoReconnect(Result<(), SettingsError>),
     SetAutoUpdateSubscriptions(Result<(), SettingsError>),
     SetDns(Result<(), SettingsError>),
+    ResetSettings(Result<(), SettingsError>),
     SetVerboseLog(Result<(), SettingsError>),
     #[cfg(windows)]
     OpenConfigFolder(Result<(), std::io::Error>),
@@ -297,6 +299,14 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             let result = set_dns(&publisher.store, dns);
             publisher.complete(WorkerEvent::SetDns(result));
+        });
+    }
+
+    pub(crate) fn reset_settings(&self) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = reset_settings(&publisher.store);
+            publisher.complete(WorkerEvent::ResetSettings(result));
         });
     }
 

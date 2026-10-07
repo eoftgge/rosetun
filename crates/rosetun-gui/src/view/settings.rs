@@ -1,5 +1,6 @@
 use eframe::egui::{self, RichText};
 use rosetun_config::LanguageSetting;
+use rosetun_core::DnsPreset;
 
 use crate::brand;
 use crate::errors;
@@ -184,51 +185,54 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         card.row(t().dns_through_tunnel, Some(t().dns_explanation), |_| {});
         card.body(|ui| {
             let editable = state.can_edit_settings();
-            let form = &mut state.settings_screen;
-            egui::Grid::new("dns_settings_fields")
-                .num_columns(2)
-                .spacing([16.0, 10.0])
-                .show(ui, |ui| {
-                    for (label, value, hint) in [
-                        (t().resolver_ip, &mut form.server, ""),
-                        (t().tls_name, &mut form.server_name, ""),
-                        (t().port, &mut form.port, strings::PORT_PLACEHOLDER),
-                        (t().dns_path, &mut form.path, strings::DNS_PATH_PLACEHOLDER),
-                    ] {
-                        ui.label(label);
-                        if ui
-                            .add_enabled(
-                                editable,
-                                egui::TextEdit::singleline(value)
-                                    .hint_text(hint)
-                                    .desired_width(300.0),
-                            )
-                            .changed()
-                        {
-                            form.dirty = true;
-                        }
-                        ui.end_row();
+            let saved = DnsPreset::matching(&state.config.settings.dns);
+            let custom = state.settings_screen.custom_dns;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let width = (ui.available_width() - 3.0 * 8.0) / 4.0;
+                for (index, (preset, (name, address))) in DnsPreset::ALL
+                    .into_iter()
+                    .zip(strings::DNS_PRESETS)
+                    .enumerate()
+                {
+                    if dns_choice(
+                        ui,
+                        index,
+                        width,
+                        saved == Some(preset) && !custom,
+                        editable,
+                        name,
+                        address,
+                    )
+                    .clicked()
+                    {
+                        actions.push(Action::SetDnsPreset(preset));
                     }
-                });
-            let parsed = form.parsed_dns();
-            if let Err(error) = &parsed {
-                ui.colored_label(theme::ERROR, errors::dns_input(t(), error));
-            }
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                if widgets::button_fill(
+                }
+                if dns_choice(
                     ui,
-                    t().save,
-                    editable && parsed.is_ok_and(|dns| dns != state.config.settings.dns),
+                    "custom",
+                    width,
+                    custom,
+                    editable,
+                    t().dns_custom,
+                    t().dns_custom_detail,
                 )
                 .clicked()
                 {
-                    actions.push(Action::SaveDns);
-                }
-                if widgets::outline_button(ui, t().reset_to_default, editable).clicked() {
-                    actions.push(Action::ResetDns);
+                    actions.push(Action::SelectCustomDns);
                 }
             });
+            if custom {
+                ui.add_space(16.0);
+                dns_form(ui, state, actions);
+            }
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new(t().dns_reachable)
+                    .small()
+                    .color(theme::TEXT_DIM),
+            );
             if state
                 .visible_status()
                 .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
@@ -241,6 +245,75 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             }
         });
     });
+}
+
+fn dns_choice(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    width: f32,
+    selected: bool,
+    enabled: bool,
+    title: &str,
+    detail: &str,
+) -> egui::Response {
+    widgets::choice_card(ui, id, width, selected, enabled, title, |ui| {
+        ui.set_min_height(44.0);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                RichText::new(title)
+                    .font(egui::FontId::new(
+                        13.0,
+                        egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+                    ))
+                    .color(theme::TEXT),
+            );
+            ui.add(egui::Label::new(RichText::new(detail).small().color(theme::TEXT_DIM)).wrap());
+        });
+    })
+}
+
+fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
+    let editable = state.can_edit_settings();
+    let form = &mut state.settings_screen;
+    egui::Grid::new("dns_settings_fields")
+        .num_columns(2)
+        .spacing([16.0, 10.0])
+        .show(ui, |ui| {
+            for (label, value, hint) in [
+                (t().resolver_ip, &mut form.server, ""),
+                (t().tls_name, &mut form.server_name, ""),
+                (t().port, &mut form.port, strings::PORT_PLACEHOLDER),
+                (t().dns_path, &mut form.path, strings::DNS_PATH_PLACEHOLDER),
+            ] {
+                ui.label(label);
+                if ui
+                    .add_enabled(
+                        editable,
+                        egui::TextEdit::singleline(value)
+                            .hint_text(hint)
+                            .desired_width(300.0),
+                    )
+                    .changed()
+                {
+                    form.dirty = true;
+                }
+                ui.end_row();
+            }
+        });
+    let parsed = form.parsed_dns();
+    if let Err(error) = &parsed {
+        ui.colored_label(theme::ERROR, errors::dns_input(t(), error));
+    }
+    ui.add_space(8.0);
+    if widgets::button_fill(
+        ui,
+        t().save,
+        editable && parsed.is_ok_and(|dns| dns != state.config.settings.dns),
+    )
+    .clicked()
+    {
+        actions.push(Action::SaveDns);
+    }
 }
 
 fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -308,6 +381,48 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetVerboseLog(on));
         }
     });
+    ui.add_space(16.0);
+    widgets::settings_card(ui, |card| {
+        card.row(t().reset_settings, Some(t().reset_settings_detail), |ui| {
+            let allowed = state.can_reset_settings();
+            let response = widgets::outline_button(
+                ui,
+                RichText::new(t().reset_to_default).color(theme::ERROR),
+                allowed,
+            );
+            if response.clicked() {
+                actions.push(Action::RequestResetSettings);
+            }
+            if !allowed {
+                response.on_disabled_hover_text(t().reset_disconnect_first);
+            }
+        });
+    });
+}
+
+pub(crate) fn reset_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
+    let response = egui::Modal::new(egui::Id::new("reset_settings"))
+        .frame(widgets::modal_frame())
+        .show(ctx, |ui| {
+            ui.set_width(480.0);
+            ui.heading(t().reset_settings_question);
+            ui.add_space(12.0);
+            ui.add(egui::Label::new(t().reset_settings_body).wrap());
+            ui.add_space(20.0);
+            ui.horizontal(|ui| {
+                if widgets::outline_button(ui, t().cancel, !state.operations.settings).clicked() {
+                    actions.push(Action::CancelResetSettings);
+                }
+                if widgets::button_fill(ui, t().reset_to_default, state.can_reset_settings())
+                    .clicked()
+                {
+                    actions.push(Action::ConfirmResetSettings);
+                }
+            });
+        });
+    if !state.operations.settings && response.should_close() {
+        actions.push(Action::CancelResetSettings);
+    }
 }
 
 fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {

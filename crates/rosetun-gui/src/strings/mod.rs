@@ -211,6 +211,9 @@ pub(crate) struct Strings {
     pub(crate) auto_update_subscriptions_detail: &'static str,
     pub(crate) dns_through_tunnel: &'static str,
     pub(crate) dns_explanation: &'static str,
+    pub(crate) dns_custom: &'static str,
+    pub(crate) dns_custom_detail: &'static str,
+    pub(crate) dns_reachable: &'static str,
     pub(crate) resolver_ip: &'static str,
     pub(crate) tls_name: &'static str,
     pub(crate) port: &'static str,
@@ -223,6 +226,11 @@ pub(crate) struct Strings {
     pub(crate) service_running: &'static str,
     pub(crate) service_stopped: &'static str,
     pub(crate) service_detail: &'static str,
+    pub(crate) reset_settings: &'static str,
+    pub(crate) reset_settings_detail: &'static str,
+    pub(crate) reset_settings_question: &'static str,
+    pub(crate) reset_settings_body: &'static str,
+    pub(crate) reset_disconnect_first: &'static str,
     pub(crate) verbose_log: &'static str,
     pub(crate) verbose_log_off_detail: &'static str,
     pub(crate) verbose_log_on_detail: &'static str,
@@ -230,6 +238,8 @@ pub(crate) struct Strings {
     pub(crate) verbose_log_hour_few: &'static str,
     pub(crate) verbose_log_hour_many: &'static str,
     pub(crate) about: &'static str,
+    pub(crate) about_version_with_helper: &'static str,
+    pub(crate) about_version_without_helper: &'static str,
     pub(crate) configuration_folder: &'static str,
     pub(crate) log_file: &'static str,
     #[cfg(windows)]
@@ -448,6 +458,11 @@ pub(crate) const BRAND: &str = "ROSETUN";
 pub(crate) const TAGLINE: &str = "Tunnel in bloom";
 pub(crate) const PORT_PLACEHOLDER: &str = "443";
 pub(crate) const DNS_PATH_PLACEHOLDER: &str = "/dns-query";
+pub(crate) const DNS_PRESETS: [(&str, &str); 3] = [
+    ("Cloudflare", "1.1.1.1"),
+    ("Google", "8.8.8.8"),
+    ("Quad9", "9.9.9.9"),
+];
 pub(crate) const LOG_FILE_NAME: &str = "rosetun-gui.log";
 pub(crate) const ERROR_MARK: &str = "!";
 pub(crate) const URL_PLACEHOLDER: &str = "https://provider.example/subscription";
@@ -518,19 +533,12 @@ fn en_count(n: u64, unit: &str) -> String {
 
 impl Strings {
     pub(crate) fn about_version(&self, app: &str, helper: Option<&str>) -> String {
-        let prefix = match self.language {
-            Language::English => "Version",
-            Language::Russian => "Версия",
-        };
         match helper {
-            Some(helper) => {
-                let service = match self.language {
-                    Language::English => "service",
-                    Language::Russian => "служба",
-                };
-                format!("{prefix} {app} · {service} {helper}")
-            }
-            None => format!("{prefix} {app}"),
+            Some(helper) => fill(
+                self.about_version_with_helper,
+                &[("app", app), ("helper", helper)],
+            ),
+            None => fill(self.about_version_without_helper, &[("app", app)]),
         }
     }
 
@@ -857,6 +865,20 @@ mod tests {
         ] {
             assert_eq!(resolve_language(setting, system_russian), expected);
         }
+    }
+
+    #[test]
+    fn about_version_includes_the_service_only_when_known() {
+        assert_eq!(EN.about_version("0.9.0", None), "Version 0.9.0");
+        assert_eq!(
+            EN.about_version("0.9.0", Some("0.9.1")),
+            "Version 0.9.0 · service 0.9.1"
+        );
+        assert_eq!(RU.about_version("0.9.0", None), "Версия 0.9.0");
+        assert_eq!(
+            RU.about_version("0.9.0", Some("0.9.1")),
+            "Версия 0.9.0 · служба 0.9.1"
+        );
     }
 
     #[test]

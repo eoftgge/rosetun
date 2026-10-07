@@ -112,6 +112,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             add_rule::show(ctx, dialog, &mut actions);
         }
     }
+    if state.settings_screen.reset_open {
+        settings::reset_dialog(ctx, state, &mut actions);
+    }
     window_frame::resize_edges(ui);
     actions
 }

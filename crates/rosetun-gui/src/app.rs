@@ -210,6 +210,7 @@ impl App {
                 self.workers.set_auto_update_subscriptions(enabled)
             }
             Job::SetDns(dns) => self.workers.set_dns(dns),
+            Job::ResetSettings => self.workers.reset_settings(),
             Job::SetVerboseLog(on) => self.workers.set_verbose_log(on),
             #[cfg(windows)]
             Job::OpenConfigFolder(folder) => self.workers.open_config_folder(folder),
