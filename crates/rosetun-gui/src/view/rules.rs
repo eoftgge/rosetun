@@ -665,6 +665,7 @@ fn target_button(
             for &choice in choices {
                 let item = ui
                     .scope(|ui| {
+                        ui.set_min_width(TARGET_WIDTH);
                         ui.spacing_mut().button_padding.x = TARGET_TEXT_X;
                         ui.visuals_mut().override_text_color = Some(target_color(choice));
                         widgets::menu_item(

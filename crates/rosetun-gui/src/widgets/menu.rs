@@ -21,7 +21,8 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
     } else {
         egui::Sense::hover()
     };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), sense);
+    // Popup max rects span the viewport; the caller's minimum width is the menu width.
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.min_rect().width(), 30.0), sense);
     if ui.is_rect_visible(rect) {
         let radius = item_radius(ui.ctx().pixels_per_point());
         let selected_fill = theme::ROSE_DARK.gamma_multiply(0.35);
@@ -136,30 +137,91 @@ mod tests {
 
     #[test]
     fn menu_popup_applies_compact_rectangular_item_style() {
+        for width in [150.0, 180.0, 240.0] {
+            let ctx = egui::Context::default();
+            crate::theme::apply(&ctx);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let trigger = ui.button("Menu");
+                    let popup = menu_popup(&trigger)
+                        .open(true)
+                        .show(|ui| {
+                            ui.set_min_width(width);
+                            assert_eq!(ui.spacing().button_padding, egui::vec2(10.0, 4.0));
+                            assert_eq!(ui.spacing().menu_margin, egui::Margin::same(4));
+                            assert_eq!(
+                                ui.visuals().widgets.hovered.corner_radius,
+                                egui::CornerRadius::same(4)
+                            );
+                            let item = menu_item(
+                                ui,
+                                MenuItem {
+                                    label: "Delete",
+                                    enabled: true,
+                                    selected: false,
+                                    danger: true,
+                                    note: None,
+                                },
+                            );
+                            assert_eq!(item.rect.height(), 30.0);
+                            assert_eq!(item.rect.width(), width);
+                            assert!(ui.available_width() > item.rect.width());
+                            let scoped_width = ui
+                                .scope(|ui| {
+                                    ui.set_min_width(width);
+                                    ui.spacing_mut().button_padding.x = 26.0;
+                                    menu_item(
+                                        ui,
+                                        MenuItem {
+                                            label: "Direct",
+                                            enabled: true,
+                                            selected: true,
+                                            danger: false,
+                                            note: Some("Active"),
+                                        },
+                                    )
+                                    .rect
+                                    .width()
+                                })
+                                .inner;
+                            assert_eq!(scoped_width, width);
+                        })
+                        .unwrap();
+                    assert!(
+                        popup.response.rect.width() <= width + 12.0,
+                        "popup width {} for item width {width}",
+                        popup.response.rect.width(),
+                    );
+                });
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn popup_wraps_long_subscription_urls_to_its_width() {
         let ctx = egui::Context::default();
         crate::theme::apply(&ctx);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let trigger = ui.button("Menu");
                 menu_popup(&trigger).open(true).show(|ui| {
-                    assert_eq!(ui.spacing().button_padding, egui::vec2(10.0, 4.0));
-                    assert_eq!(ui.spacing().menu_margin, egui::Margin::same(4));
-                    assert_eq!(
-                        ui.visuals().widgets.hovered.corner_radius,
-                        egui::CornerRadius::same(4)
+                    ui.set_width(180.0);
+                    ui.add(
+                        egui::Label::new("https://subscriptions.example.com/a/long/redacted/path")
+                            .wrap(),
                     );
                     let item = menu_item(
                         ui,
                         MenuItem {
-                            label: "Delete",
+                            label: "Rename",
                             enabled: true,
                             selected: false,
-                            danger: true,
+                            danger: false,
                             note: None,
                         },
                     );
-                    assert_eq!(item.rect.height(), 30.0);
-                    assert_eq!(item.rect.width(), ui.available_width());
+                    assert_eq!(item.rect.width(), 180.0);
                 });
             });
         });
