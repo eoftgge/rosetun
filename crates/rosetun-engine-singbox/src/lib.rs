@@ -635,7 +635,7 @@ mod tests {
             reader.read_line(&mut line).unwrap();
             assert!(line.starts_with(&format!("GET /proxies/{expected_tag}/delay?")));
             assert!(line.contains("/delay?"));
-            assert!(line.contains("url=http%3A%2F%2Fcp.cloudflare.com%2Fgenerate_204"));
+            assert!(line.contains("url=https%3A%2F%2Fcp.cloudflare.com%2Fgenerate_204"));
             assert!(line.contains("timeout=5000"));
             let mut authorized = false;
             loop {

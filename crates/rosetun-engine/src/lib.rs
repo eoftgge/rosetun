@@ -23,8 +23,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Fetched through each checked node. Cloudflare is already contacted for the
-/// exit lookup, so the check adds no new party.
-pub const PROBE_URL: &str = "http://cp.cloudflare.com/generate_204";
+/// exit lookup, so the check adds no new party. sing-box 1.14.1 discards HTTP
+/// URLs in its Clash delay API and substitutes its Google default instead.
+pub const PROBE_URL: &str = "https://cp.cloudflare.com/generate_204";
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A local-only control API that the engine serves for one session.
