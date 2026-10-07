@@ -78,30 +78,34 @@ impl SettingsCard<'_> {
                 ui.set_min_width((width - 40.0).max(0.0));
                 ui.set_min_height(32.0);
                 ui.spacing_mut().item_spacing.x = 16.0;
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.scope(control);
-                    let text_width = (ui.available_width() - 16.0).max(0.0);
-                    ui.add_space(16.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(text_width, 32.0),
-                        Layout::left_to_right(Align::Center),
-                        |ui| {
-                            ui.set_width(text_width);
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                title(ui);
-                                if let Some(detail) = detail {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(detail).small().color(TEXT_DIM),
-                                        )
-                                        .wrap(),
-                                    );
-                                }
-                            });
-                        },
-                    );
-                });
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 32.0),
+                    Layout::right_to_left(Align::Center),
+                    |ui| {
+                        ui.scope(control);
+                        let text_width = (ui.available_width() - 16.0).max(0.0);
+                        ui.add_space(16.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(text_width, 32.0),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.set_width(text_width);
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 2.0;
+                                    title(ui);
+                                    if let Some(detail) = detail {
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(detail).small().color(TEXT_DIM),
+                                            )
+                                            .wrap(),
+                                        );
+                                    }
+                                });
+                            },
+                        );
+                    },
+                );
             })
             .response
             .rect
@@ -217,10 +221,83 @@ mod tests {
         );
         output.textures_delta.clear();
         assert!(rects.iter().all(|rect| rect.height() >= 64.0));
+        assert!(rects[0].height() <= 96.0, "first row: {:?}", rects[0]);
+        assert!(rects[1].height() <= 96.0, "second row: {:?}", rects[1]);
         assert_eq!(rects[1].top() - rects[0].bottom(), 1.0);
         assert_eq!(rects[0].width(), rects[1].width());
         assert!(title_width >= 200.0, "title width: {title_width}");
         assert!(control_rect.left() > rects[0].center().x);
         assert!((tall_control.center().y - rects[2].center().y).abs() <= 2.0);
+    }
+
+    #[test]
+    fn service_and_log_cards_stay_compact_in_a_scrolling_settings_panel() {
+        for (width, height) in [(960.0, 640.0), (1200.0, 780.0)] {
+            let ctx = egui::Context::default();
+            let mut rows = Vec::new();
+            let mut log_height = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, height),
+                    )),
+                    ..egui::RawInput::default()
+                },
+                |ctx| {
+                    egui::Panel::left("settings_nav")
+                        .exact_size(240.0)
+                        .show(ctx, |_| {});
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(36, 28)))
+                        .show(ctx, |ui| {
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                settings_card(ui, |card| {
+                                    rows.push(card.row_inner(
+                                        "Rosetun service: not running",
+                                        Some("The service runs the tunnel with system rights."),
+                                        |_| {},
+                                    ));
+                                });
+                                ui.add_space(16.0);
+                                let top = ui.cursor().top();
+                                settings_card(ui, |card| {
+                                    rows.push(card.row_inner(
+                                        "Log",
+                                        Some("Useful when something breaks and you contact support."),
+                                        |ui| {
+                                            ui.allocate_exact_size(
+                                                egui::vec2(130.0, 32.0),
+                                                egui::Sense::hover(),
+                                            );
+                                        },
+                                    ));
+                                    rows.push(card.row_inner(
+                                        "Verbose log",
+                                        Some("Turns itself off after a day. While on, it records site addresses and applies on next connect."),
+                                        |ui| {
+                                            ui.allocate_exact_size(TOGGLE_SIZE, egui::Sense::hover());
+                                        },
+                                    ));
+                                });
+                                log_height = ui.cursor().top() - top;
+                            });
+                        });
+                },
+            );
+            output.textures_delta.clear();
+            assert!(
+                rows[0].height() <= 96.0,
+                "service: {rows:?} at {width}×{height}"
+            );
+            assert!(
+                rows[1].height() <= 96.0,
+                "log: {rows:?} at {width}×{height}"
+            );
+            assert!(
+                log_height <= 240.0,
+                "log card: {log_height} at {width}×{height}"
+            );
+        }
     }
 }
