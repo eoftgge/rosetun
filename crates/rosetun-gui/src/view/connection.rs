@@ -432,12 +432,13 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
         .show(ui, |ui| {
             ui.set_min_width(width - 28.0);
             ui.horizontal(|ui| {
+                let badge_height = 26.0;
                 if let Some((code, verified)) = country
                     .map(|code| (code, true))
                     .or_else(|| flag.as_deref().map(|code| (code, false)))
                 {
-                    let (badge, _) =
-                        ui.allocate_exact_size(egui::vec2(36.0, 26.0), egui::Sense::hover());
+                    let (badge, _) = ui
+                        .allocate_exact_size(egui::vec2(36.0, badge_height), egui::Sense::hover());
                     ui.painter().rect_stroke(
                         badge,
                         theme::RADIUS_INNER,
@@ -465,7 +466,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                 }
                 let name_width = (ui.available_width() - 100.0).max(0.0);
                 ui.allocate_ui_with_layout(
-                    egui::vec2(name_width, 0.0),
+                    egui::vec2(name_width, badge_height),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.set_width(name_width);
