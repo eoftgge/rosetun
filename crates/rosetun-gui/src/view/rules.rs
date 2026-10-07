@@ -248,40 +248,32 @@ fn template_card(
                             });
                         },
                         |ui| {
-                            ui.scope(|ui| {
-                                ui.spacing_mut().button_padding.x = 4.0;
-                                ui.spacing_mut().interact_size.y = 30.0;
-                                ui.style_mut().text_styles.insert(
-                                    egui::TextStyle::Button,
-                                    egui::FontId::new(11.0, egui::FontFamily::Proportional),
-                                );
-                                let button = if rule.is_some() {
-                                    widgets::outline_button(
-                                        ui,
-                                        t().template_added,
-                                        state.can_edit_rules(),
-                                    )
-                                    .on_hover_text(t().template_remove_hint)
+                            let button = if rule.is_some() {
+                                widgets::outline_button_compact(
+                                    ui,
+                                    t().template_added,
+                                    state.can_edit_rules(),
+                                )
+                                .on_hover_text(t().template_remove_hint)
+                            } else {
+                                widgets::button_fill_compact(
+                                    ui,
+                                    t().template_add,
+                                    state.can_edit_rules(),
+                                )
+                            };
+                            let button = if redundant {
+                                button.on_hover_text(t().template_redundant)
+                            } else {
+                                button
+                            };
+                            if button.clicked() {
+                                actions.push(if rule.is_some() {
+                                    Action::RemoveTemplate(template)
                                 } else {
-                                    widgets::button_fill(
-                                        ui,
-                                        t().template_add,
-                                        state.can_edit_rules(),
-                                    )
-                                };
-                                let button = if redundant {
-                                    button.on_hover_text(t().template_redundant)
-                                } else {
-                                    button
-                                };
-                                if button.clicked() {
-                                    actions.push(if rule.is_some() {
-                                        Action::RemoveTemplate(template)
-                                    } else {
-                                        Action::AddTemplate(template)
-                                    });
-                                }
-                            });
+                                    Action::AddTemplate(template)
+                                });
+                            }
                         },
                     );
                 })
