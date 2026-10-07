@@ -240,6 +240,8 @@ pub(crate) struct Strings {
     pub(crate) about: &'static str,
     pub(crate) about_version_with_helper: &'static str,
     pub(crate) about_version_without_helper: &'static str,
+    pub(crate) license_notice: &'static str,
+    pub(crate) licenses_folder: &'static str,
     pub(crate) configuration_folder: &'static str,
     pub(crate) log_file: &'static str,
     #[cfg(windows)]

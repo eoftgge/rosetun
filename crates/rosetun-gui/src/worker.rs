@@ -86,7 +86,7 @@ pub(crate) enum WorkerEvent {
     ResetSettings(Result<(), SettingsError>),
     SetVerboseLog(Result<(), SettingsError>),
     #[cfg(windows)]
-    OpenConfigFolder(Result<(), std::io::Error>),
+    OpenFolder(Result<(), std::io::Error>),
     SelectNode(Result<String, SelectNodeError>),
     SelectRuleSet(Result<(), SelectRuleSetError>),
     CreateRuleSet(Result<RuleSet, RuleSetError>),
@@ -323,14 +323,14 @@ impl WorkerDispatcher {
     }
 
     #[cfg(windows)]
-    pub(crate) fn open_config_folder(&self, folder: PathBuf) {
+    pub(crate) fn open_folder(&self, folder: PathBuf) {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
             let result = Command::new("explorer.exe").arg(folder).spawn().map(|_| ());
             emit(
                 &publisher.tx,
                 &publisher.repaint,
-                WorkerEvent::OpenConfigFolder(result),
+                WorkerEvent::OpenFolder(result),
             );
         });
     }

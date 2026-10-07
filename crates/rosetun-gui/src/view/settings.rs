@@ -4,7 +4,7 @@ use rosetun_core::DnsPreset;
 
 use crate::brand;
 use crate::errors;
-use crate::state::{Action, SettingsSection, State, now_unix};
+use crate::state::{AboutFolder, Action, SettingsSection, State, now_unix};
 use crate::strings::t;
 use crate::{strings, theme, widgets};
 
@@ -356,7 +356,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         card.row(t().log_title, Some(t().log_detail), |ui| {
             #[cfg(windows)]
             if widgets::outline_button(ui, t().open_folder, state.can_edit_settings()).clicked() {
-                actions.push(Action::OpenConfigFolder);
+                actions.push(Action::OpenFolder(AboutFolder::Config));
             }
             #[cfg(not(windows))]
             let _ = ui;
@@ -452,6 +452,15 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     ui.label(RichText::new(version).small().color(theme::TEXT_MUTED));
                 });
             });
+            ui.add_space(12.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(t().license_notice)
+                        .small()
+                        .color(theme::TEXT_MUTED),
+                )
+                .wrap(),
+            );
             if let Some(folder) = &state.settings_screen.config_folder {
                 ui.add_space(16.0);
                 about_path(
@@ -459,6 +468,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     state,
                     t().configuration_folder,
                     folder.to_string_lossy().as_ref(),
+                    AboutFolder::Config,
                     actions,
                 );
                 ui.add_space(8.0);
@@ -468,6 +478,18 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     state,
                     t().log_file,
                     log.to_string_lossy().as_ref(),
+                    AboutFolder::Config,
+                    actions,
+                );
+            }
+            if let Some(folder) = &state.settings_screen.licenses_folder {
+                ui.add_space(8.0);
+                about_path(
+                    ui,
+                    state,
+                    t().licenses_folder,
+                    folder.to_string_lossy().as_ref(),
+                    AboutFolder::Licenses,
                     actions,
                 );
             }
@@ -480,6 +502,7 @@ fn about_path(
     state: &State,
     label: &str,
     path: &str,
+    folder: AboutFolder,
     actions: &mut Vec<Action>,
 ) {
     ui.label(label);
@@ -500,9 +523,9 @@ fn about_path(
         );
         #[cfg(windows)]
         if widgets::outline_button(ui, t().open_folder, state.can_edit_settings()).clicked() {
-            actions.push(Action::OpenConfigFolder);
+            actions.push(Action::OpenFolder(folder));
         }
         #[cfg(not(windows))]
-        let _ = actions;
+        let _ = (actions, folder);
     });
 }

@@ -165,6 +165,8 @@ pub(crate) static RU: Strings = Strings {
     about: "О программе",
     about_version_with_helper: "Версия {app} · служба {helper}",
     about_version_without_helper: "Версия {app}",
+    license_notice: "© 2026 Sandaar. Rosetun распространяется свободно по лицензии GPL-3.0-or-later, без каких-либо гарантий.",
+    licenses_folder: "Лицензии",
     configuration_folder: "Папка конфигурации",
     log_file: "Файл журнала",
     #[cfg(windows)]

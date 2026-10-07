@@ -360,6 +360,7 @@ pub(crate) struct SettingsScreen {
     pub(crate) path: String,
     pub(crate) dirty: bool,
     pub(crate) config_folder: Option<PathBuf>,
+    pub(crate) licenses_folder: Option<PathBuf>,
     #[cfg(windows)]
     pub(crate) autostart: Option<bool>,
     opened: bool,
@@ -452,6 +453,12 @@ impl Default for State {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum AboutFolder {
+    Config,
+    Licenses,
+}
+
 pub(crate) enum Action {
     ShowConnection,
     OpenSettings,
@@ -474,7 +481,7 @@ pub(crate) enum Action {
     ConfirmResetSettings,
     SetVerboseLog(bool),
     #[cfg(windows)]
-    OpenConfigFolder,
+    OpenFolder(AboutFolder),
     OpenRules,
     OpenActiveRules,
     ChooseRuleSet(RuleSetId),
@@ -551,7 +558,7 @@ pub(crate) enum Job {
     ResetSettings,
     SetVerboseLog(bool),
     #[cfg(windows)]
-    OpenConfigFolder(PathBuf),
+    OpenFolder(PathBuf),
     SelectNode(SubscriptionId, NodeId),
     SelectRuleSet(Option<RuleSetId>),
     CreateRuleSet(String),
@@ -1055,7 +1062,7 @@ impl State {
             }
             WorkerEvent::SetVerboseLog(result) => self.finish_settings(result),
             #[cfg(windows)]
-            WorkerEvent::OpenConfigFolder(result) => {
+            WorkerEvent::OpenFolder(result) => {
                 self.operations.settings = false;
                 self.operation_error = result.err().map(|error| {
                     let message = fill(t().errors.open_folder, &[("detail", &error.to_string())]);
@@ -1357,11 +1364,15 @@ impl State {
                 }
             }
             #[cfg(windows)]
-            Action::OpenConfigFolder => {
+            Action::OpenFolder(folder) => {
+                let path = match folder {
+                    AboutFolder::Config => &self.settings_screen.config_folder,
+                    AboutFolder::Licenses => &self.settings_screen.licenses_folder,
+                };
                 if self.can_edit_settings()
-                    && let Some(folder) = &self.settings_screen.config_folder
+                    && let Some(path) = path
                 {
-                    return self.start_settings(Job::OpenConfigFolder(folder.clone()));
+                    return self.start_settings(Job::OpenFolder(path.clone()));
                 }
             }
             Action::OpenRules => {
@@ -4155,12 +4166,17 @@ mod tests {
             ..State::default()
         };
         state.settings_screen.config_folder = Some(PathBuf::from("C:\\Users\\Test\\Rosetun"));
+        assert!(
+            state
+                .act(Action::OpenFolder(AboutFolder::Licenses))
+                .is_none()
+        );
         assert!(matches!(
-            state.act(Action::OpenConfigFolder),
-            Some(Job::OpenConfigFolder(_))
+            state.act(Action::OpenFolder(AboutFolder::Config)),
+            Some(Job::OpenFolder(path)) if path == PathBuf::from("C:\\Users\\Test\\Rosetun")
         ));
         assert!(state.operations.settings);
-        state.reduce(WorkerEvent::OpenConfigFolder(Err(std::io::Error::new(
+        state.reduce(WorkerEvent::OpenFolder(Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "explorer unavailable",
         ))));
@@ -4169,5 +4185,12 @@ mod tests {
             state.operation_error.as_deref(),
             Some("could not open the folder: explorer unavailable")
         );
+
+        let licenses = PathBuf::from("C:\\Program Files\\Rosetun\\licenses");
+        state.settings_screen.licenses_folder = Some(licenses.clone());
+        assert!(matches!(
+            state.act(Action::OpenFolder(AboutFolder::Licenses)),
+            Some(Job::OpenFolder(path)) if path == licenses
+        ));
     }
 }
