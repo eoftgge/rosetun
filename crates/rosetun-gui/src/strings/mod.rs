@@ -262,6 +262,7 @@ pub(crate) struct Strings {
     pub(crate) protocol: &'static str,
     pub(crate) external_ip: &'static str,
     pub(crate) ip_own: &'static str,
+    pub(crate) ip_hidden: &'static str,
     pub(crate) ip_show: &'static str,
     pub(crate) ip_hide: &'static str,
     pub(crate) ip_unknown: &'static str,

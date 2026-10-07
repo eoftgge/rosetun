@@ -12,8 +12,6 @@ use crate::{display, strings, theme, widgets};
 use super::rose_button::{self, RosePhase};
 use super::rules::{target_color, target_label};
 
-const IP_MASK: &str = "•••.•••.•••.•••";
-
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if !state.config_ready {
         ui.colored_label(theme::TEXT_DIM, t().loading);
@@ -147,17 +145,20 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 ui.vertical(|ui| {
                     ui.set_min_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 14.0;
-                    ui.label(RichText::new(label).size(26.0).color(color));
-                    let session = visible_status
-                        .and_then(|status| status.since_unix)
-                        .map_or_else(
-                            || t().no_session.to_owned(),
-                            |since| display::session_text(Some(since), display::now_unix()),
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        ui.label(RichText::new(label).size(26.0).color(color));
+                        let session = visible_status
+                            .and_then(|status| status.since_unix)
+                            .map_or_else(
+                                || t().no_session.to_owned(),
+                                |since| display::session_text(Some(since), display::now_unix()),
+                            );
+                        ui.colored_label(
+                            theme::TEXT_MUTED,
+                            strings::plain_link(t().session, &session),
                         );
-                    ui.colored_label(
-                        theme::TEXT_MUTED,
-                        strings::plain_link(t().session, &session),
-                    );
+                    });
                     if let Some(status) = visible_status {
                         if let ConnectionState::Failed { reason }
                         | ConnectionState::FailedProtected { reason } = &status.state
@@ -213,85 +214,189 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     let engine = visible_status
                         .and_then(|status| status.engine)
                         .unwrap_or(state.config.settings.engine);
-                    let details_width = ui.available_width();
-                    let protocol_width = (details_width - 300.0).max(80.0);
-                    let ip_width = (details_width - protocol_width - 130.0).max(130.0);
-                    let (ip, ip_color, toggle) = match &state.exit {
-                        ExitLookup::Known { route, info } => {
-                            let address = if state.exit_revealed {
-                                info.ip.to_string()
-                            } else {
-                                IP_MASK.to_owned()
-                            };
-                            let address = if *route == ExitRoute::Direct {
-                                format!("{address} {}", t().ip_own)
-                            } else {
-                                address
-                            };
-                            let toggle = if state.exit_revealed {
-                                t().ip_hide
-                            } else {
-                                t().ip_show
-                            };
-                            (address, theme::TEXT, Some(toggle))
-                        }
-                        ExitLookup::Failed(_) => (t().ip_unknown.to_owned(), theme::TEXT_DIM, None),
-                        ExitLookup::None | ExitLookup::Pending(_) => {
-                            (t().ip_pending.to_owned(), theme::TEXT_DIM, None)
-                        }
-                    };
-                    egui::Grid::new("connection_details")
-                        .num_columns(3)
-                        .spacing(egui::vec2(20.0, 4.0))
-                        .show(ui, |ui| {
-                            ui.label(RichText::new(t().protocol).small().color(theme::TEXT_DIM));
-                            ui.label(RichText::new(t().engine).small().color(theme::TEXT_DIM));
-                            ui.label(
-                                RichText::new(t().external_ip)
-                                    .small()
-                                    .color(theme::TEXT_DIM),
-                            );
-                            ui.end_row();
-                            ui.add_sized(
-                                [protocol_width, 0.0],
-                                egui::Label::new(protocol).truncate(),
-                            );
-                            ui.label(engine.as_str())
-                                .on_hover_text(t().engine_detail(engine.as_str()));
+                    let (ip, ip_color, toggle) = exit_line(&state.exit, state.exit_revealed);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 8.0;
+                        ui.add_space(2.0);
+                        detail_row(ui, t().external_ip, |ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let row_height = ui.text_style_height(&egui::TextStyle::Body);
+                            let toggle_width = toggle.map_or(0.0, |text| {
+                                ui.painter()
+                                    .layout_no_wrap(
+                                        text.to_owned(),
+                                        egui::TextStyle::Body.resolve(ui.style()),
+                                        theme::ROSE_LIGHT,
+                                    )
+                                    .size()
+                                    .x
+                                    + 12.0
+                            });
+                            let address_width = (ui.available_width() - toggle_width).max(0.0);
                             ui.allocate_ui_with_layout(
-                                egui::vec2(ip_width, 0.0),
-                                egui::Layout::left_to_right(egui::Align::Center)
-                                    .with_main_wrap(true),
+                                egui::vec2(address_width, row_height),
+                                egui::Layout::left_to_right(egui::Align::Center),
                                 |ui| {
-                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    ui.set_width(address_width);
                                     ui.add(
-                                        egui::Label::new(
-                                            RichText::new(ip).monospace().color(ip_color),
-                                        )
-                                        .wrap(),
+                                        egui::Label::new(RichText::new(ip).color(ip_color))
+                                            .truncate(),
                                     );
-                                    if let Some(toggle) = toggle
-                                        && ui
-                                            .add(
-                                                egui::Label::new(
-                                                    RichText::new(toggle)
-                                                        .small()
-                                                        .color(theme::ROSE_LIGHT),
-                                                )
-                                                .sense(egui::Sense::click()),
-                                            )
-                                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                            .clicked()
-                                    {
-                                        actions.push(Action::ToggleExitReveal);
-                                    }
                                 },
                             );
-                            ui.end_row();
+                            if let Some(toggle) = toggle {
+                                ui.add_space(12.0);
+                                if ui
+                                    .add(
+                                        egui::Label::new(
+                                            RichText::new(toggle).color(theme::ROSE_LIGHT),
+                                        )
+                                        .sense(egui::Sense::click()),
+                                    )
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    actions.push(Action::ToggleExitReveal);
+                                }
+                            }
                         });
+                        detail_row(ui, t().protocol, |ui| {
+                            ui.add(egui::Label::new(&protocol).truncate())
+                                .on_hover_text(&protocol);
+                        });
+                        detail_row(ui, t().engine, |ui| {
+                            ui.add(egui::Label::new(engine.as_str()).truncate())
+                                .on_hover_text(t().engine_detail(engine.as_str()));
+                        });
+                    });
                 });
             });
         });
+}
+
+/// What the external IP line shows: the value, its colour and the reveal link,
+/// if any. A hidden address shows neither its digits nor its length.
+fn exit_line(exit: &ExitLookup, revealed: bool) -> (String, Color32, Option<&'static str>) {
+    match exit {
+        ExitLookup::Known { .. } if !revealed => (
+            t().ip_hidden.to_owned(),
+            theme::TEXT_MUTED,
+            Some(t().ip_show),
+        ),
+        ExitLookup::Known { route, info } => {
+            let address = info.ip.to_string();
+            let address = if *route == ExitRoute::Direct {
+                format!("{address} {}", t().ip_own)
+            } else {
+                address
+            };
+            (address, theme::TEXT, Some(t().ip_hide))
+        }
+        ExitLookup::Failed(_) => (t().ip_unknown.to_owned(), theme::TEXT_DIM, None),
+        ExitLookup::None | ExitLookup::Pending(_) => {
+            (t().ip_pending.to_owned(), theme::TEXT_DIM, None)
+        }
+    }
+}
+
+/// One line of the details list: a small label in a 96 px column, then the
+/// value, both centred on one row height.
+fn detail_row<R>(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let row_height = ui.text_style_height(&egui::TextStyle::Body);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        ui.allocate_ui_with_layout(
+            egui::vec2(96.0, row_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_width(96.0);
+                ui.label(RichText::new(label).small().color(theme::TEXT_DIM));
+            },
+        );
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), row_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            value,
+        )
+        .inner
+    })
+    .inner
+}
+
+#[cfg(test)]
+mod hero_details_tests {
+    use super::*;
+
+    fn known(route: ExitRoute) -> ExitLookup {
+        ExitLookup::Known {
+            route,
+            info: rosetun_core::ExitInfo {
+                ip: "203.0.113.7".parse().unwrap(),
+                country: None,
+            },
+        }
+    }
+
+    #[test]
+    fn external_ip_line_covers_routes_and_reveal_states() {
+        let cases = [
+            (
+                known(ExitRoute::Direct),
+                false,
+                t().ip_hidden.to_owned(),
+                theme::TEXT_MUTED,
+                Some(t().ip_show),
+            ),
+            (
+                known(ExitRoute::Tunnel),
+                false,
+                t().ip_hidden.to_owned(),
+                theme::TEXT_MUTED,
+                Some(t().ip_show),
+            ),
+            (
+                known(ExitRoute::Direct),
+                true,
+                format!("203.0.113.7 {}", t().ip_own),
+                theme::TEXT,
+                Some(t().ip_hide),
+            ),
+            (
+                known(ExitRoute::Tunnel),
+                true,
+                "203.0.113.7".to_owned(),
+                theme::TEXT,
+                Some(t().ip_hide),
+            ),
+        ];
+        for (exit, revealed, value, color, toggle) in cases {
+            assert_eq!(exit_line(&exit, revealed), (value, color, toggle));
+        }
+        let (hidden, _, _) = exit_line(&known(ExitRoute::Direct), false);
+        assert!(!hidden.contains("203"));
+        assert!(!hidden.contains(".7"));
+    }
+
+    #[test]
+    fn external_ip_line_without_an_address_has_no_toggle() {
+        for exit in [
+            ExitLookup::Failed(ExitRoute::Direct),
+            ExitLookup::None,
+            ExitLookup::Pending(ExitRoute::Tunnel),
+        ] {
+            for revealed in [false, true] {
+                let expected = if matches!(exit, ExitLookup::Failed(_)) {
+                    t().ip_unknown
+                } else {
+                    t().ip_pending
+                };
+                assert_eq!(
+                    exit_line(&exit, revealed),
+                    (expected.to_owned(), theme::TEXT_DIM, None)
+                );
+            }
+        }
+    }
 }
 
 /// The selected server as a wide button; returns true when clicked.
@@ -735,9 +840,13 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                     } else {
                         rosetun_core::rule_value_text(&rule.matcher)
                     };
-                    ui.add_sized(
-                        [width, 0.0],
-                        egui::Label::new(state.text(&value)).truncate(),
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(width, ui.text_style_height(&egui::TextStyle::Body)),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_width(width);
+                            ui.add(egui::Label::new(state.text(&value)).truncate());
+                        },
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.colored_label(target_color(rule.target), target_label(rule.target));

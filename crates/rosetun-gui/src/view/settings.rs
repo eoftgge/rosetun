@@ -331,14 +331,19 @@ fn about_path(
     ui.label(label);
     ui.horizontal(|ui| {
         let path = state.text(path);
-        ui.add_sized(
-            [
-                ui.available_width() - if cfg!(windows) { 180.0 } else { 0.0 },
-                20.0,
-            ],
-            egui::Label::new(RichText::new(&path).small().color(theme::TEXT_DIM)).truncate(),
-        )
-        .on_hover_text(&path);
+        let width = (ui.available_width() - if cfg!(windows) { 180.0 } else { 0.0 }).max(0.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, ui.text_style_height(&egui::TextStyle::Small)),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_width(width);
+                ui.add(
+                    egui::Label::new(RichText::new(&path).small().color(theme::TEXT_DIM))
+                        .truncate(),
+                )
+                .on_hover_text(&path);
+            },
+        );
         #[cfg(windows)]
         if widgets::outline_button(ui, t().open_folder, state.can_edit_settings()).clicked() {
             actions.push(Action::OpenConfigFolder);
