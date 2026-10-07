@@ -41,7 +41,10 @@ jobs:
             throw "Tag $env:TAG does not match Cargo.toml version $($releaseVersion.Version)."
           }
           gh release view $env:TAG --json id 2>$null | Out-Null
-          if ($LASTEXITCODE -eq 0) { throw "Release $env:TAG already exists." }
+          $exists = $LASTEXITCODE -eq 0
+          # GitHub fails a pwsh step whose last native command exited non-zero.
+          $global:LASTEXITCODE = 0
+          if ($exists) { throw "Release $env:TAG already exists." }
       - name: Install Rust
         shell: pwsh
         run: |
@@ -72,7 +75,7 @@ jobs:
       - uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         if: github.event_name == 'push' && github.event.repository.visibility == 'public'
         with:
-          subject-path: ${{ steps.build.outputs.setup }}
+          subject-path: target/installer/rosetun-*-setup.exe
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: github.event_name == 'workflow_dispatch'
         with:
