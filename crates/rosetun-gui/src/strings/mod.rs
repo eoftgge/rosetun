@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use rosetun_config::LanguageSetting;
+use rosetun_config::{LanguageSetting, RuleTemplate};
 
 mod en;
 mod ru;
@@ -378,6 +378,21 @@ pub(crate) struct Strings {
     pub(crate) no_rule_sets: &'static str,
     pub(crate) no_rules_match: &'static str,
     pub(crate) rules_next_connect: &'static str,
+    pub(crate) rules_templates: &'static str,
+    pub(crate) template_add: &'static str,
+    pub(crate) template_added: &'static str,
+    pub(crate) template_remove_hint: &'static str,
+    pub(crate) template_redundant: &'static str,
+    pub(crate) template_contents: &'static str,
+    pub(crate) caption_template: &'static str,
+    pub(crate) russian_sites_name: &'static str,
+    pub(crate) russian_sites_description: &'static str,
+    pub(crate) messengers_name: &'static str,
+    pub(crate) messengers_description: &'static str,
+    pub(crate) youtube_name: &'static str,
+    pub(crate) youtube_description: &'static str,
+    pub(crate) torrents_name: &'static str,
+    pub(crate) torrents_description: &'static str,
     pub(crate) new_rule_button: &'static str,
     pub(crate) new_rule: &'static str,
     pub(crate) new_rule_subtitle: &'static str,
@@ -483,6 +498,24 @@ fn en_count(n: u64, unit: &str) -> String {
 }
 
 impl Strings {
+    pub(crate) fn template_name(&self, template: RuleTemplate) -> &'static str {
+        match template {
+            RuleTemplate::RussianSites => self.russian_sites_name,
+            RuleTemplate::Messengers => self.messengers_name,
+            RuleTemplate::Youtube => self.youtube_name,
+            RuleTemplate::Torrents => self.torrents_name,
+        }
+    }
+
+    pub(crate) fn template_description(&self, template: RuleTemplate) -> &'static str {
+        match template {
+            RuleTemplate::RussianSites => self.russian_sites_description,
+            RuleTemplate::Messengers => self.messengers_description,
+            RuleTemplate::Youtube => self.youtube_description,
+            RuleTemplate::Torrents => self.torrents_description,
+        }
+    }
+
     pub(crate) fn connected_in(&self, code: &str) -> String {
         fill(self.connected_in_template, &[("code", code)])
     }

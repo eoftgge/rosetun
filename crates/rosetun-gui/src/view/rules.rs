@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
-use rosetun_config::{Rule, RuleId, RuleMatcher, RuleSet, RuleTarget};
+use rosetun_config::{Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 
 use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
@@ -68,8 +68,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         widgets::card_frame().show(ui, |ui| {
             ui.colored_label(theme::ROSE_LIGHT, t().rules_next_connect);
         });
-        ui.add_space(16.0);
+        ui.add_space(20.0);
     }
+    template_section(ui, state, set, actions);
+    ui.add_space(20.0);
     let can_add = state.can_edit_rules();
     filter_controls(ui, &mut state.rule_screen.filter, set, can_add, actions);
     ui.add_space(8.0);
@@ -101,6 +103,192 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         }
         default_rule(ui, state, set, value_width, actions);
     });
+}
+
+fn template_icon(template: RuleTemplate) -> Icon {
+    match template {
+        RuleTemplate::RussianSites => Icon::Globe,
+        RuleTemplate::Messengers => Icon::Chat,
+        RuleTemplate::Youtube => Icon::Play,
+        RuleTemplate::Torrents => Icon::Download,
+    }
+}
+
+fn template_section(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec<Action>) {
+    let font = egui::FontId::new(
+        egui::TextStyle::Body.resolve(ui.style()).size,
+        egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+    );
+    ui.label(
+        RichText::new(t().rules_templates)
+            .font(font)
+            .color(theme::TEXT_MUTED),
+    );
+    ui.add_space(8.0);
+    let width = ((ui.available_width() - 3.0 * 12.0) / 4.0).max(0.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        for template in RuleTemplate::ALL {
+            ui.push_id(template.key(), |ui| {
+                template_card(ui, state, set, template, width, actions);
+            });
+        }
+    });
+}
+
+fn template_card(
+    ui: &mut egui::Ui,
+    state: &State,
+    set: &RuleSet,
+    template: RuleTemplate,
+    width: f32,
+    actions: &mut Vec<Action>,
+) {
+    let rule = set.rules.iter().find(
+        |rule| matches!(&rule.matcher, RuleMatcher::Template(current) if *current == template),
+    );
+    let target = rule.map_or_else(|| template.default_target(), |rule| rule.target);
+    let redundant = rule.is_none() && target == set.default_target;
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 0.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_width(width);
+            ui.set_max_width(width);
+            let frame = widgets::card_frame().inner_margin(14).stroke(Stroke::new(
+                1.0,
+                if rule.is_some() {
+                    theme::ROSE_DARK
+                } else {
+                    theme::BORDER
+                },
+            ));
+            let response = frame
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        let badge = icons::icon_badge(ui, template_icon(template), 30.0);
+                        if redundant {
+                            badge.on_hover_text(t().template_redundant);
+                        }
+                        let font = egui::FontId::new(
+                            egui::TextStyle::Body.resolve(ui.style()).size,
+                            egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(state.text(t().template_name(template)))
+                                    .font(font)
+                                    .color(theme::TEXT),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(if redundant {
+                            t().template_redundant
+                        } else {
+                            t().template_name(template)
+                        });
+                    });
+                    ui.add_space(8.0);
+                    let description = state.text(t().template_description(template));
+                    let height = 2.0 * ui.text_style_height(&egui::TextStyle::Small);
+                    let mut job = egui::text::LayoutJob::simple(
+                        description.clone(),
+                        egui::TextStyle::Small.resolve(ui.style()),
+                        theme::TEXT_DIM,
+                        ui.available_width(),
+                    );
+                    job.wrap.max_rows = 2;
+                    job.wrap.overflow_character = Some('…');
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_min_height(height);
+                            ui.add(egui::Label::new(job).wrap())
+                                .on_hover_text(if redundant {
+                                    t().template_redundant.to_owned()
+                                } else {
+                                    description
+                                });
+                        },
+                    );
+                    ui.add_space(10.0);
+                    egui::Sides::new().shrink_left().height(30.0).show(
+                        ui,
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                let (rect, dot) = ui.allocate_exact_size(
+                                    egui::vec2(7.0, 7.0),
+                                    egui::Sense::hover(),
+                                );
+                                if redundant {
+                                    dot.on_hover_text(t().template_redundant);
+                                }
+                                ui.painter().circle_filled(
+                                    rect.center(),
+                                    3.5,
+                                    target_color(target),
+                                );
+                                let label = ui.add(
+                                    egui::Label::new(
+                                        RichText::new(target_label(target))
+                                            .small()
+                                            .color(target_color(target)),
+                                    )
+                                    .truncate(),
+                                );
+                                if redundant {
+                                    label.on_hover_text(t().template_redundant);
+                                }
+                            });
+                        },
+                        |ui| {
+                            ui.scope(|ui| {
+                                ui.spacing_mut().button_padding.x = 4.0;
+                                ui.spacing_mut().interact_size.y = 30.0;
+                                ui.style_mut().text_styles.insert(
+                                    egui::TextStyle::Button,
+                                    egui::FontId::new(11.0, egui::FontFamily::Proportional),
+                                );
+                                let button = if rule.is_some() {
+                                    widgets::outline_button(
+                                        ui,
+                                        t().template_added,
+                                        state.can_edit_rules(),
+                                    )
+                                    .on_hover_text(t().template_remove_hint)
+                                } else {
+                                    widgets::button_fill(
+                                        ui,
+                                        t().template_add,
+                                        state.can_edit_rules(),
+                                    )
+                                };
+                                let button = if redundant {
+                                    button.on_hover_text(t().template_redundant)
+                                } else {
+                                    button
+                                };
+                                if button.clicked() {
+                                    actions.push(if rule.is_some() {
+                                        Action::RemoveTemplate(template)
+                                    } else {
+                                        Action::AddTemplate(template)
+                                    });
+                                }
+                            });
+                        },
+                    );
+                })
+                .response;
+            if redundant {
+                response.on_hover_text(t().template_redundant);
+            }
+        },
+    );
 }
 
 fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -466,6 +654,7 @@ fn rule_icon(matcher: &RuleMatcher) -> Icon {
         RuleMatcher::Domain(_) => Icon::Globe,
         RuleMatcher::Process(_) => Icon::App,
         RuleMatcher::IpCidr(_) => Icon::Stack,
+        RuleMatcher::Template(template) => template_icon(*template),
     }
 }
 
@@ -612,12 +801,23 @@ fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
         RuleCaption::AnyFolder => t().caption_any_folder.to_owned(),
         RuleCaption::Path(path) => path,
         RuleCaption::Addresses => t().caption_addresses.to_owned(),
+        RuleCaption::Template => t().caption_template.to_owned(),
     };
     let caption = state.text(&caption);
-    let full_value = state.text(&rosetun_core::rule_value_text(&rule.matcher));
-    let tooltip = rosetun_core::rule_value_ascii(&rule.matcher)
-        .map(|ascii| format!("{full_value}\n{}", t().stored_as(&state.text(&ascii))))
-        .unwrap_or(full_value);
+    let tooltip = if let RuleMatcher::Template(template) = &rule.matcher {
+        let list = template
+            .matchers()
+            .iter()
+            .map(rosetun_core::rule_value_text)
+            .collect::<Vec<_>>()
+            .join(", ");
+        state.text(&strings::fill(t().template_contents, &[("list", &list)]))
+    } else {
+        let full_value = state.text(&rosetun_core::rule_value_text(&rule.matcher));
+        rosetun_core::rule_value_ascii(&rule.matcher)
+            .map(|ascii| format!("{full_value}\n{}", t().stored_as(&state.text(&ascii))))
+            .unwrap_or(full_value)
+    };
     let font = egui::FontId::new(
         egui::TextStyle::Body.resolve(ui.style()).size,
         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
@@ -827,7 +1027,12 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                         .find(|item| &item.id == set)
                         .and_then(|set| set.rules.iter().find(|item| &item.id == rule))
                     {
-                        ui.label(state.text(&rosetun_core::rule_value_text(&rule.matcher)));
+                        let value = if matches!(&rule.matcher, RuleMatcher::Template(_)) {
+                            rule_lines(&rule.matcher).0
+                        } else {
+                            rosetun_core::rule_value_text(&rule.matcher)
+                        };
+                        ui.label(state.text(&value));
                     }
                     ui.label(t().delete_rule_detail);
                 }
@@ -850,6 +1055,69 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut state = State::default();
+        state.config_ready = true;
+        for installed in [false, true] {
+            let mut set = RuleSet::new(
+                rosetun_config::RuleSetId::new("set"),
+                "Test",
+                RuleTarget::Proxy,
+            );
+            if installed {
+                set.rules = RuleTemplate::ALL
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, template)| Rule {
+                        id: RuleId::new(index.to_string()),
+                        enabled: true,
+                        matcher: RuleMatcher::Template(template),
+                        target: template.default_target(),
+                    })
+                    .collect();
+            }
+            for available in [440.0, 760.0] {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.set_width(available);
+                        let width = (available - 36.0) / 4.0;
+                        let mut rects = Vec::new();
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 12.0;
+                            for template in RuleTemplate::ALL {
+                                let rect = ui
+                                    .scope(|ui| {
+                                        template_card(
+                                            ui,
+                                            &state,
+                                            &set,
+                                            template,
+                                            width,
+                                            &mut Vec::new(),
+                                        );
+                                    })
+                                    .response
+                                    .rect;
+                                rects.push(rect);
+                            }
+                        });
+                        for rect in &rects {
+                            assert!(rect.width() <= width + 1.0, "{rect:?} vs {width}");
+                            assert!((rect.height() - rects[0].height()).abs() < 1.0);
+                        }
+                        for pair in rects.windows(2) {
+                            assert!(pair[0].right() + 11.0 <= pair[1].left(), "{pair:?}");
+                        }
+                    });
+                });
+                output.textures_delta.clear();
+            }
+        }
+    }
 
     #[test]
     fn table_cells_keep_columns_and_center_contents() {

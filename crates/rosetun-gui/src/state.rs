@@ -5,7 +5,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
     AppConfig, ConnectionState, DnsSettings, LanguageSetting, NodeId, ProcessMatch, RuleId,
-    RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
+    RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Status, Subscription,
+    SubscriptionId,
 };
 use rosetun_core::{AddFromUrlError, AddOptions, Ping, UpdateReport, UpdateSubscriptionError};
 use rosetun_ipc::{ClientError, ErrorCode, HelperError};
@@ -411,6 +412,8 @@ pub(crate) enum Action {
     CancelRuleDelete,
     ConfirmRuleDelete,
     SetDefaultTarget(RuleTarget),
+    AddTemplate(RuleTemplate),
+    RemoveTemplate(RuleTemplate),
     OpenAddRule,
     CancelAddRule,
     SelectRuleInput(RuleInputKind),
@@ -1329,6 +1332,30 @@ impl State {
                     && set.default_target != target
                 {
                     return self.start_rule_edit(Job::SetDefaultTarget(set.id.clone(), target));
+                }
+            }
+            Action::AddTemplate(template) => {
+                if self.can_edit_rules()
+                    && let Some(set) = self.selected_rules()
+                    && !set.rules.iter().any(|rule| {
+                        matches!(&rule.matcher, RuleMatcher::Template(current) if *current == template)
+                    })
+                {
+                    return self.start_rule_edit(Job::AddRule(
+                        set.id.clone(),
+                        RuleMatcher::Template(template),
+                        template.default_target(),
+                    ));
+                }
+            }
+            Action::RemoveTemplate(template) => {
+                if self.can_edit_rules()
+                    && let Some(set) = self.selected_rules()
+                    && let Some(rule) = set.rules.iter().find(|rule| {
+                        matches!(&rule.matcher, RuleMatcher::Template(current) if *current == template)
+                    })
+                {
+                    return self.start_rule_edit(Job::RemoveRule(set.id.clone(), rule.id.clone()));
                 }
             }
             Action::OpenAddRule => {
@@ -3145,6 +3172,53 @@ mod tests {
         assert_eq!(state.rule_screen.filter.target, Some(RuleTarget::Block));
         state.act(Action::SetRuleTargetFilter(None));
         assert_eq!(state.rule_screen.filter.target, None);
+    }
+
+    #[test]
+    fn add_template_requires_a_selected_set_and_no_existing_template_or_edit() {
+        let mut state = state_with_rules();
+        let template = RuleTemplate::RussianSites;
+        assert!(state.act(Action::AddTemplate(template)).is_none());
+        state.act(Action::OpenRules);
+        state.config.rule_sets[1].rules.clear();
+        assert!(matches!(
+            state.act(Action::AddTemplate(template)),
+            Some(Job::AddRule(set, RuleMatcher::Template(RuleTemplate::RussianSites), RuleTarget::Direct))
+                if set == RuleSetId::new("2")
+        ));
+        assert!(state.act(Action::AddTemplate(template)).is_none());
+        state.reduce(WorkerEvent::AddRule(Err(RuleSetError::DuplicateRule)));
+        assert!(state.operation_error.is_some());
+        state.config.rule_sets[1].rules.push(Rule {
+            id: RuleId::new("template"),
+            enabled: false,
+            matcher: RuleMatcher::Template(template),
+            target: RuleTarget::Block,
+        });
+        assert!(state.act(Action::AddTemplate(template)).is_none());
+    }
+
+    #[test]
+    fn remove_template_uses_the_rule_id_and_requires_presence() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        let template = RuleTemplate::Youtube;
+        assert!(state.act(Action::RemoveTemplate(template)).is_none());
+        state.config.rule_sets[1].rules.push(Rule {
+            id: RuleId::new("template"),
+            enabled: true,
+            matcher: RuleMatcher::Template(template),
+            target: RuleTarget::Proxy,
+        });
+        assert!(matches!(
+            state.act(Action::RemoveTemplate(template)),
+            Some(Job::RemoveRule(set, rule))
+                if set == RuleSetId::new("2") && rule == RuleId::new("template")
+        ));
+        assert!(state.act(Action::RemoveTemplate(template)).is_none());
+        state.reduce(WorkerEvent::RemoveRule(Ok(())));
+        state.config.rule_sets[1].rules.pop();
+        assert!(state.act(Action::RemoveTemplate(template)).is_none());
     }
 
     #[test]

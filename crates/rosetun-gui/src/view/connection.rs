@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use eframe::egui::{self, Color32, RichText};
-use rosetun_config::ConnectionState;
+use rosetun_config::{ConnectionState, RuleMatcher};
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
@@ -730,10 +730,14 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 shown += 1;
                 ui.horizontal(|ui| {
                     let width = (ui.available_width() - 90.0).max(0.0);
+                    let value = if matches!(&rule.matcher, RuleMatcher::Template(_)) {
+                        crate::rules::rule_lines(&rule.matcher).0
+                    } else {
+                        rosetun_core::rule_value_text(&rule.matcher)
+                    };
                     ui.add_sized(
                         [width, 0.0],
-                        egui::Label::new(state.text(&rosetun_core::rule_value_text(&rule.matcher)))
-                            .truncate(),
+                        egui::Label::new(state.text(&value)).truncate(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.colored_label(target_color(rule.target), target_label(rule.target));

@@ -12,6 +12,9 @@ pub(crate) enum Icon {
     App,
     Globe,
     Stack,
+    Chat,
+    Play,
+    Download,
 }
 
 pub(crate) fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool) -> egui::Response {
@@ -179,6 +182,63 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
                     color,
                 );
             }
+        }
+        Icon::Chat => {
+            let rect = egui::Rect::from_center_size(
+                center + egui::vec2(0.0, -1.0),
+                egui::vec2(14.0, 10.0),
+            );
+            painter.rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(rect.left() + 2.0, rect.bottom() - 1.0),
+                    egui::pos2(rect.left() + 2.0, rect.bottom() + 3.0),
+                    egui::pos2(rect.left() + 5.0, rect.bottom() - 1.0),
+                ],
+                color,
+                egui::Stroke::NONE,
+            ));
+        }
+        Icon::Play => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(center, egui::vec2(15.0, 11.0)),
+                2.0,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    center + egui::vec2(-2.0, -3.0),
+                    center + egui::vec2(-2.0, 3.0),
+                    center + egui::vec2(3.0, 0.0),
+                ],
+                color,
+                egui::Stroke::NONE,
+            ));
+        }
+        Icon::Download => {
+            painter.line_segment(
+                [
+                    center + egui::vec2(0.0, -6.0),
+                    center + egui::vec2(0.0, 2.0),
+                ],
+                stroke,
+            );
+            painter.add(egui::Shape::line(
+                vec![
+                    center + egui::vec2(-3.5, -1.5),
+                    center + egui::vec2(0.0, 2.0),
+                    center + egui::vec2(3.5, -1.5),
+                ],
+                stroke,
+            ));
+            painter.line_segment(
+                [
+                    center + egui::vec2(-6.0, 6.0),
+                    center + egui::vec2(6.0, 6.0),
+                ],
+                stroke,
+            );
         }
     }
 }

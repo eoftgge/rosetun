@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use rosetun_config::{ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
+use rosetun_config::{ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 use rosetun_processes::RunningProcess;
+
+use crate::strings::{Strings, t};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessGroup {
@@ -93,10 +95,15 @@ pub(crate) enum RuleCaption {
     /// The full path of a process rule.
     Path(String),
     Addresses,
+    Template,
 }
 
 /// What a rule row shows: the value in bold and the caption under it.
 pub(crate) fn rule_lines(matcher: &RuleMatcher) -> (String, RuleCaption) {
+    rule_lines_in(matcher, t())
+}
+
+fn rule_lines_in(matcher: &RuleMatcher, strings: &Strings) -> (String, RuleCaption) {
     let value = rosetun_core::rule_value_text(matcher);
     match matcher {
         RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(_)) => {
@@ -120,6 +127,10 @@ pub(crate) fn rule_lines(matcher: &RuleMatcher) -> (String, RuleCaption) {
             (name, RuleCaption::Path(value))
         }
         RuleMatcher::IpCidr(_) => (value, RuleCaption::Addresses),
+        RuleMatcher::Template(template) => (
+            strings.template_name(*template).to_owned(),
+            RuleCaption::Template,
+        ),
     }
 }
 
@@ -141,6 +152,12 @@ fn kind(rule: &Rule) -> TypeFilter {
         RuleMatcher::Domain(_) => TypeFilter::Domains,
         RuleMatcher::Process(_) => TypeFilter::Processes,
         RuleMatcher::IpCidr(_) => TypeFilter::Other,
+        RuleMatcher::Template(RuleTemplate::RussianSites | RuleTemplate::Youtube) => {
+            TypeFilter::Domains
+        }
+        RuleMatcher::Template(RuleTemplate::Messengers | RuleTemplate::Torrents) => {
+            TypeFilter::Processes
+        }
     }
 }
 
@@ -158,6 +175,14 @@ pub(crate) fn rule_counts(set: &RuleSet) -> RuleCounts {
 }
 
 pub(crate) fn visible_rules<'a>(set: &'a RuleSet, filter: &RuleFilter) -> Vec<(usize, &'a Rule)> {
+    visible_rules_in(set, filter, t())
+}
+
+fn visible_rules_in<'a>(
+    set: &'a RuleSet,
+    filter: &RuleFilter,
+    strings: &Strings,
+) -> Vec<(usize, &'a Rule)> {
     let search = filter.search.to_lowercase();
     set.rules
         .iter()
@@ -167,6 +192,10 @@ pub(crate) fn visible_rules<'a>(set: &'a RuleSet, filter: &RuleFilter) -> Vec<(u
                 && filter.target.is_none_or(|target| rule.target == target)
                 && (search.is_empty()
                     || rosetun_core::rule_value_text(&rule.matcher)
+                        .to_lowercase()
+                        .contains(&search)
+                    || rule_lines_in(&rule.matcher, strings)
+                        .0
                         .to_lowercase()
                         .contains(&search))
         })
@@ -305,6 +334,50 @@ mod tests {
                 (expected_value.to_owned(), expected_caption)
             );
         }
+    }
+
+    #[test]
+    fn templates_are_counted_as_websites_or_apps_and_searchable_in_russian() {
+        let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
+        set.rules = RuleTemplate::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, template)| Rule {
+                id: RuleId::new(index.to_string()),
+                enabled: true,
+                matcher: RuleMatcher::Template(template),
+                target: template.default_target(),
+            })
+            .collect();
+        assert_eq!(rule_counts(&set).domains, 2);
+        assert_eq!(rule_counts(&set).processes, 2);
+        let mut filter = RuleFilter {
+            kind: TypeFilter::Domains,
+            ..RuleFilter::default()
+        };
+        assert_eq!(indices(&set, &filter), vec![0, 2]);
+        filter.kind = TypeFilter::Processes;
+        assert_eq!(indices(&set, &filter), vec![1, 3]);
+        assert_eq!(
+            rule_lines_in(&set.rules[3].matcher, &crate::strings::RU),
+            ("Торренты".to_owned(), RuleCaption::Template)
+        );
+        filter.search = "торр".into();
+        assert_eq!(
+            visible_rules_in(&set, &filter, &crate::strings::RU)
+                .into_iter()
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
+        filter.search = "template:torrents".into();
+        assert_eq!(
+            visible_rules_in(&set, &filter, &crate::strings::RU)
+                .into_iter()
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
     }
 
     #[test]
