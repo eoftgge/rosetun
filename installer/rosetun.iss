@@ -2,6 +2,9 @@
 #ifndef AppVersion
   #error Run installer\build.ps1 instead of compiling this script directly
 #endif
+#ifndef FileVersion
+  #error Run installer\build.ps1 to provide the numeric file version
+#endif
 #ifndef LicensesDir
   #error Run installer\build.ps1 to provide the licenses directory
 #endif
@@ -16,7 +19,9 @@ AppId={{833B7718-C11A-4F97-9ABC-6967646F9DBB}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppName}
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#FileVersion}
+VersionInfoTextVersion={#AppVersion}
+VersionInfoProductTextVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 ; The helper runs as SYSTEM from this folder, so it must stay writable by
 ; administrators only, as Program Files is.

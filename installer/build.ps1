@@ -12,6 +12,10 @@ if (-not $versionMatch.Success) {
     throw 'Missing version in [workspace.package] in Cargo.toml.'
 }
 $version = $versionMatch.Groups['version'].Value
+$fileVersion = $version -replace '-.*$', ''
+if ($fileVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Invalid numeric installer file version $fileVersion from $version."
+}
 $cargoAboutVersion = '0.9.2'
 $installedCargoAbout = & cargo about --version 2>$null
 if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "cargo-about $cargoAboutVersion") {
@@ -121,7 +125,7 @@ if (-not $iscc -or -not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
 
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 $issPath = Join-Path $PSScriptRoot 'rosetun.iss'
-& $iscc /Qp "/DAppVersion=$version" "/DBuildDir=$buildDir" "/DSingBoxDir=$singBoxDir" "/DLicensesDir=$licensesDir" "/O$outputDir" $issPath
+& $iscc /Qp "/DAppVersion=$version" "/DFileVersion=$fileVersion" "/DBuildDir=$buildDir" "/DSingBoxDir=$singBoxDir" "/DLicensesDir=$licensesDir" "/O$outputDir" $issPath
 if ($LASTEXITCODE -ne 0) {
     throw "Compiling $issPath failed with ISCC exit code $LASTEXITCODE."
 }
