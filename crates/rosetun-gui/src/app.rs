@@ -223,6 +223,10 @@ impl App {
             #[cfg(windows)]
             Job::BrowseExecutable => self.workers.browse_executable(),
             Job::AddRule(set, matcher, target) => self.workers.add_rule(set, matcher, target),
+            Job::AddRules(set, matchers, target) => self.workers.add_rules(set, matchers, target),
+            Job::UpdateRule(set, rule, matcher, target) => {
+                self.workers.update_rule(set, rule, matcher, target)
+            }
             Job::SetRuleTarget(set, rule, target) => {
                 self.workers.set_rule_target(set, rule, target)
             }

@@ -364,8 +364,6 @@ pub(crate) struct Strings {
     pub(crate) proxy: &'static str,
     pub(crate) direct: &'static str,
     pub(crate) block: &'static str,
-    pub(crate) domain: &'static str,
-    pub(crate) process: &'static str,
     pub(crate) order_hint: &'static str,
     pub(crate) reorder_disabled: &'static str,
     pub(crate) all_other_traffic: &'static str,
@@ -397,24 +395,45 @@ pub(crate) struct Strings {
     pub(crate) new_rule_button: &'static str,
     pub(crate) new_rule: &'static str,
     pub(crate) new_rule_subtitle: &'static str,
-    pub(crate) domain_input: &'static str,
-    pub(crate) domain_placeholder: &'static str,
-    pub(crate) domain_help: &'static str,
-    pub(crate) process_input: &'static str,
+    pub(crate) edit: &'static str,
+    pub(crate) edit_rule: &'static str,
+    pub(crate) edit_rule_subtitle: &'static str,
+    pub(crate) saving: &'static str,
+    pub(crate) what_to_route: &'static str,
+    pub(crate) where_to_route: &'static str,
+    pub(crate) rule_kind_app: &'static str,
+    pub(crate) rule_kind_site: &'static str,
+    pub(crate) find_app: &'static str,
+    pub(crate) open_now: &'static str,
+    pub(crate) all_processes: &'static str,
+    pub(crate) found: &'static str,
+    pub(crate) show_all_processes: &'static str,
+    pub(crate) show_open_only: &'static str,
+    pub(crate) typed_process: &'static str,
+    pub(crate) sites_label: &'static str,
+    pub(crate) line_error: &'static str,
+    pub(crate) more_errors: &'static str,
+    pub(crate) add_rules_one: &'static str,
+    pub(crate) add_rules_few: &'static str,
+    pub(crate) add_rules_many: &'static str,
+    pub(crate) include_subdomains: &'static str,
+    pub(crate) include_subdomains_detail: &'static str,
+    pub(crate) target_detail_proxy: &'static str,
+    pub(crate) target_detail_direct: &'static str,
+    pub(crate) target_detail_block: &'static str,
+    pub(crate) advanced: &'static str,
+    pub(crate) full_path_detail: &'static str,
     #[cfg(windows)]
     pub(crate) browse: &'static str,
     #[cfg(windows)]
     pub(crate) choose_program: &'static str,
     #[cfg(windows)]
     pub(crate) programs: &'static str,
-    pub(crate) process_placeholder: &'static str,
-    pub(crate) process_filter: &'static str,
     pub(crate) refresh: &'static str,
     pub(crate) loading_processes: &'static str,
     pub(crate) no_running_processes: &'static str,
     pub(crate) no_processes_match: &'static str,
     pub(crate) path_unavailable: &'static str,
-    pub(crate) match_by_name: &'static str,
     pub(crate) match_by_full_path: &'static str,
     pub(crate) add_rule: &'static str,
     pub(crate) adding_rule: &'static str,
@@ -430,6 +449,7 @@ pub(crate) const DNS_PATH_PLACEHOLDER: &str = "/dns-query";
 pub(crate) const LOG_FILE_NAME: &str = "rosetun-gui.log";
 pub(crate) const ERROR_MARK: &str = "!";
 pub(crate) const URL_PLACEHOLDER: &str = "https://provider.example/subscription";
+pub(crate) const SITES_EXAMPLE: &str = "youtube.com\ninstagram.com\nchatgpt.com";
 pub(crate) const EXPAND: &str = "+";
 pub(crate) const COLLAPSE: &str = "−";
 pub(crate) const ENGLISH: &str = "English";
@@ -521,18 +541,43 @@ impl Strings {
         fill(self.connected_in_template, &[("code", code)])
     }
 
-    pub(crate) fn running_processes(&self, count: usize) -> String {
-        match self.language {
-            Language::English => format!("Running processes · {count}"),
-            Language::Russian => format!("Запущенные процессы · {count}"),
-        }
+    pub(crate) fn all_processes(&self, count: usize) -> String {
+        fill(self.all_processes, &[("n", &count.to_string())])
     }
 
-    pub(crate) fn will_match(&self, value: &str) -> String {
-        match self.language {
-            Language::English => format!("Will match: {value}"),
-            Language::Russian => format!("Сработает для: {value}"),
-        }
+    pub(crate) fn found(&self, count: usize) -> String {
+        fill(self.found, &[("n", &count.to_string())])
+    }
+
+    pub(crate) fn show_all_processes(&self, count: usize) -> String {
+        fill(self.show_all_processes, &[("n", &count.to_string())])
+    }
+
+    pub(crate) fn line_error(&self, line: usize, error: &str) -> String {
+        fill(
+            self.line_error,
+            &[("n", &line.to_string()), ("error", error)],
+        )
+    }
+
+    pub(crate) fn more_errors(&self, count: usize) -> String {
+        fill(self.more_errors, &[("k", &count.to_string())])
+    }
+
+    pub(crate) fn add_rules(&self, count: usize) -> String {
+        let template = if count == 1 {
+            self.add_rule
+        } else if self.language == Language::English {
+            self.add_rules_many
+        } else {
+            ru_plural(
+                count as u64,
+                self.add_rules_one,
+                self.add_rules_few,
+                self.add_rules_many,
+            )
+        };
+        fill(template, &[("n", &count.to_string())])
     }
 
     pub(crate) fn stored_as(&self, ascii: &str) -> String {
@@ -760,6 +805,20 @@ mod tests {
             assert_eq!(strings.bytes(1_954_210_119), gib);
             assert_eq!(strings.bytes(1_024_000), threshold);
         }
+    }
+
+    #[test]
+    fn add_rules_label_pluralizes_in_both_languages() {
+        for (count, expected) in [
+            (1, "Добавить правило"),
+            (2, "Добавить 2 правила"),
+            (5, "Добавить 5 правил"),
+            (21, "Добавить 21 правило"),
+        ] {
+            assert_eq!(RU.add_rules(count), expected);
+        }
+        assert_eq!(EN.add_rules(1), "Add rule");
+        assert_eq!(EN.add_rules(2), "Add 2 rules");
     }
 
     #[test]

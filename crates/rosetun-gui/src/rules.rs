@@ -45,6 +45,16 @@ pub(crate) fn group_processes(processes: Vec<RunningProcess>) -> Vec<ProcessGrou
     groups
 }
 
+/// Whether the rule dialog can show this rule for editing.
+pub(crate) fn editable(matcher: &RuleMatcher) -> bool {
+    matches!(
+        matcher,
+        RuleMatcher::Domain(
+            rosetun_config::DomainMatch::Exact(_) | rosetun_config::DomainMatch::Suffix(_)
+        ) | RuleMatcher::Process(_)
+    )
+}
+
 pub(crate) fn process_matches_filter(process: &ProcessGroup, filter: &str) -> bool {
     let filter = filter.to_lowercase();
     process.name.to_lowercase().contains(&filter)

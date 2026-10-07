@@ -14,15 +14,15 @@ use rosetun_config::{
     RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
-    AddFromUrlError, AddOptions, ExitInfo, ExitInfoError, MoveSubscriptionError, PING_PARALLEL,
-    PING_TIMEOUT, Ping, RemoveSubscriptionError, RenameSubscriptionError, RuleSetError,
-    SelectNodeError, SelectRuleSetError, SettingsError, Store, StoreError,
+    AddFromUrlError, AddOptions, AddedRules, ExitInfo, ExitInfoError, MoveSubscriptionError,
+    PING_PARALLEL, PING_TIMEOUT, Ping, RemoveSubscriptionError, RenameSubscriptionError,
+    RuleSetError, SelectNodeError, SelectRuleSetError, SettingsError, Store, StoreError,
     SubscriptionUpdateResult, Timeouts, UpdateReport, UpdateSubscriptionError,
-    add_prepared_subscription, add_rule, create_rule_set, delete_rule_set, move_rule,
+    add_prepared_subscription, add_rule, add_rules, create_rule_set, delete_rule_set, move_rule,
     move_subscription, ping_all, prepare_subscription, remove_rule, remove_subscription,
     rename_rule_set, rename_subscription, select_node, select_rule_set, set_default_target,
     set_dns, set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
-    set_verbose_log, update_all, update_subscription,
+    set_verbose_log, update_all, update_rule, update_subscription,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
@@ -98,6 +98,8 @@ pub(crate) enum WorkerEvent {
     #[cfg(windows)]
     BrowsedExecutable(Option<PathBuf>),
     AddRule(Result<Rule, RuleSetError>),
+    AddRules(Result<AddedRules, RuleSetError>),
+    UpdateRule(Result<(), RuleSetError>),
     SetRuleTarget(Result<(), RuleSetError>),
     SetRuleEnabled(Result<(), RuleSetError>),
     MoveRule(Result<(), RuleSetError>),
@@ -410,6 +412,28 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             let result = add_rule(&publisher.store, &set, matcher, target);
             publisher.complete(WorkerEvent::AddRule(result));
+        });
+    }
+
+    pub(crate) fn add_rules(&self, set: RuleSetId, matchers: Vec<RuleMatcher>, target: RuleTarget) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = add_rules(&publisher.store, &set, matchers, target);
+            publisher.complete(WorkerEvent::AddRules(result));
+        });
+    }
+
+    pub(crate) fn update_rule(
+        &self,
+        set: RuleSetId,
+        rule: RuleId,
+        matcher: RuleMatcher,
+        target: RuleTarget,
+    ) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = update_rule(&publisher.store, &set, &rule, matcher, target);
+            publisher.complete(WorkerEvent::UpdateRule(result));
         });
     }
 

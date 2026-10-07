@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AppConfig, ConnectionState, DnsSettings, LanguageSetting, NodeId, ProcessMatch, RuleId,
-    RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Status, Subscription,
+    AppConfig, ConnectionState, DnsSettings, DomainMatch, LanguageSetting, NodeId, ProcessMatch,
+    Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Status, Subscription,
     SubscriptionId,
 };
 use rosetun_core::{AddFromUrlError, AddOptions, Ping, UpdateReport, UpdateSubscriptionError};
@@ -173,8 +173,8 @@ pub(crate) enum DeleteDialog {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum RuleInputKind {
-    #[default]
     Domain,
+    #[default]
     Process,
 }
 
@@ -182,7 +182,11 @@ pub(crate) struct AddRuleDialog {
     pub(crate) set: RuleSetId,
     pub(crate) kind: RuleInputKind,
     pub(crate) target: RuleTarget,
-    pub(crate) domain: String,
+    pub(crate) domains: String,
+    pub(crate) subdomains: bool,
+    pub(crate) show_all: bool,
+    pub(crate) advanced: bool,
+    pub(crate) editing: Option<RuleId>,
     pub(crate) process: String,
     pub(crate) process_filter: String,
     pub(crate) processes: Vec<ProcessGroup>,
@@ -204,9 +208,13 @@ impl AddRuleDialog {
     fn new(set: RuleSetId) -> Self {
         Self {
             set,
-            kind: RuleInputKind::Domain,
+            kind: RuleInputKind::Process,
             target: RuleTarget::Proxy,
-            domain: String::new(),
+            domains: String::new(),
+            subdomains: true,
+            show_all: false,
+            advanced: false,
+            editing: None,
             process: String::new(),
             process_filter: String::new(),
             processes: Vec::new(),
@@ -223,6 +231,41 @@ impl AddRuleDialog {
             error: None,
             focus_input: true,
         }
+    }
+
+    fn for_rule(set: RuleSetId, rule: &Rule) -> Self {
+        let mut dialog = Self::new(set);
+        dialog.editing = Some(rule.id.clone());
+        dialog.target = rule.target;
+        match &rule.matcher {
+            RuleMatcher::Domain(domain) => {
+                dialog.kind = RuleInputKind::Domain;
+                dialog.subdomains = matches!(domain, DomainMatch::Suffix(_));
+                dialog.domains = rosetun_core::rule_value_text(&rule.matcher)
+                    .trim_start_matches("*.")
+                    .to_owned();
+            }
+            RuleMatcher::Process(process) => {
+                dialog.process = rosetun_core::rule_value_text(&rule.matcher);
+                match process {
+                    ProcessMatch::Name(name) => dialog.process_filter = name.clone(),
+                    ProcessMatch::Path(path) => {
+                        dialog.match_mode = ProcessMatchMode::Path;
+                        dialog.advanced = true;
+                        dialog.process_filter = path
+                            .file_name()
+                            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
+                            .into_owned();
+                        #[cfg(windows)]
+                        {
+                            dialog.browsed = Some(path.clone());
+                        }
+                    }
+                }
+            }
+            _ => unreachable!("only editable matchers open this dialog"),
+        }
+        dialog
     }
 
     pub(crate) fn set_process_match_mode(&mut self, mode: ProcessMatchMode) {
@@ -415,6 +458,7 @@ pub(crate) enum Action {
     AddTemplate(RuleTemplate),
     RemoveTemplate(RuleTemplate),
     OpenAddRule,
+    OpenEditRule(RuleId),
     CancelAddRule,
     SelectRuleInput(RuleInputKind),
     RefreshProcesses,
@@ -483,6 +527,8 @@ pub(crate) enum Job {
     #[cfg(windows)]
     BrowseExecutable,
     AddRule(RuleSetId, RuleMatcher, RuleTarget),
+    AddRules(RuleSetId, Vec<RuleMatcher>, RuleTarget),
+    UpdateRule(RuleSetId, RuleId, RuleMatcher, RuleTarget),
     SetRuleTarget(RuleSetId, RuleId, RuleTarget),
     SetRuleEnabled(RuleSetId, RuleId, bool),
     MoveRule(RuleSetId, RuleId, usize),
@@ -885,6 +931,10 @@ impl State {
                         && let Some(path) = path
                     {
                         dialog.process = browsed_process_value(&path, dialog.match_mode);
+                        dialog.process_filter = path
+                            .file_name()
+                            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
+                            .into_owned();
                         dialog.browsed = Some(path);
                         dialog.selected_process = None;
                         dialog.error = None;
@@ -892,28 +942,9 @@ impl State {
                     }
                 }
             }
-            WorkerEvent::AddRule(result) => {
-                self.operations.rules_edit = false;
-                if self.rule_screen.add.is_some() {
-                    match result {
-                        Ok(_) => {
-                            self.rule_screen.add = None;
-                            self.rule_screen.filter = RuleFilter::default();
-                        }
-                        Err(error) => {
-                            let message = self.text(&errors::rule_set(t(), &error));
-                            if let Some(dialog) = &mut self.rule_screen.add {
-                                dialog.busy = false;
-                                dialog.error = Some(message);
-                            }
-                        }
-                    }
-                } else {
-                    self.operation_error = result
-                        .err()
-                        .map(|error| self.text(&errors::rule_set(t(), &error)));
-                }
-            }
+            WorkerEvent::AddRule(result) => self.finish_dialog_rule_edit(result.map(|_| ())),
+            WorkerEvent::AddRules(result) => self.finish_dialog_rule_edit(result.map(|_| ())),
+            WorkerEvent::UpdateRule(result) => self.finish_dialog_rule_edit(result),
             WorkerEvent::SetRuleTarget(result) => self.finish_rule_edit(result),
             WorkerEvent::SetRuleEnabled(result) => self.finish_rule_edit(result),
             WorkerEvent::MoveRule(result) => self.finish_rule_edit(result),
@@ -1084,6 +1115,29 @@ impl State {
         self.operation_error = result
             .err()
             .map(|error| self.text(&errors::rule_set(t(), &error)));
+    }
+
+    fn finish_dialog_rule_edit(&mut self, result: Result<(), rosetun_core::RuleSetError>) {
+        self.operations.rules_edit = false;
+        if self.rule_screen.add.is_some() {
+            match result {
+                Ok(()) => {
+                    self.rule_screen.add = None;
+                    self.rule_screen.filter = RuleFilter::default();
+                }
+                Err(error) => {
+                    let message = self.text(&errors::rule_set(t(), &error));
+                    if let Some(dialog) = &mut self.rule_screen.add {
+                        dialog.busy = false;
+                        dialog.error = Some(message);
+                    }
+                }
+            }
+        } else {
+            self.operation_error = result
+                .err()
+                .map(|error| self.text(&errors::rule_set(t(), &error)));
+        }
     }
 
     fn start_rule_edit(&mut self, job: Job) -> Option<Job> {
@@ -1364,6 +1418,22 @@ impl State {
                     && let Some(set) = self.selected_rules()
                 {
                     self.rule_screen.add = Some(AddRuleDialog::new(set.id.clone()));
+                    return self.load_processes();
+                }
+            }
+            Action::OpenEditRule(id) => {
+                if self.can_edit_rules()
+                    && self.rule_screen.add.is_none()
+                    && let Some(set) = self.selected_rules()
+                    && let Some(rule) = set
+                        .rules
+                        .iter()
+                        .find(|rule| rule.id == id && crate::rules::editable(&rule.matcher))
+                {
+                    self.rule_screen.add = Some(AddRuleDialog::for_rule(set.id.clone(), rule));
+                    if self.rule_screen.add.as_ref().unwrap().kind == RuleInputKind::Process {
+                        return self.load_processes();
+                    }
                 }
             }
             Action::CancelAddRule => {
@@ -1380,6 +1450,7 @@ impl State {
                 if let Some(dialog) = &mut self.rule_screen.add
                     && !dialog.busy
                     && dialog.kind != kind
+                    && dialog.editing.is_none()
                 {
                     dialog.kind = kind;
                     dialog.error = None;
@@ -1407,18 +1478,38 @@ impl State {
                     && !dialog.busy
                     && self.rule_screen.selected_set.as_ref() == Some(&dialog.set)
                 {
-                    let matcher = match dialog.kind {
-                        RuleInputKind::Domain => rosetun_core::parse_domain_input(&dialog.domain)
-                            .ok()
-                            .map(RuleMatcher::Domain),
-                        RuleInputKind::Process => {
-                            rosetun_core::parse_process_input(&dialog.process)
-                                .ok()
-                                .map(RuleMatcher::Process)
+                    let matchers: Option<Vec<_>> = match dialog.kind {
+                        RuleInputKind::Domain => {
+                            let parsed = rosetun_core::parse_domain_lines(
+                                &dialog.domains,
+                                dialog.subdomains,
+                            );
+                            (parsed.errors.is_empty() && !parsed.domains.is_empty())
+                                .then(|| parsed.domains.into_iter().map(RuleMatcher::Domain).collect())
                         }
+                        RuleInputKind::Process => rosetun_core::parse_process_input(&dialog.process)
+                            .ok()
+                            .map(|process| vec![RuleMatcher::Process(process)]),
                     };
-                    if let Some(matcher) = matcher {
-                        let job = Job::AddRule(dialog.set.clone(), matcher, dialog.target);
+                    if let Some(mut matchers) = matchers {
+                        let job = if let Some(id) = &dialog.editing {
+                            if matchers.len() != 1 {
+                                return None;
+                            }
+                            let current = self
+                                .selected_rules()
+                                .and_then(|set| set.rules.iter().find(|rule| &rule.id == id))?;
+                            let matcher = matchers.pop().unwrap();
+                            if current.matcher == matcher && current.target == dialog.target {
+                                self.rule_screen.add = None;
+                                return None;
+                            }
+                            Job::UpdateRule(dialog.set.clone(), id.clone(), matcher, dialog.target)
+                        } else if dialog.kind == RuleInputKind::Domain {
+                            Job::AddRules(dialog.set.clone(), matchers, dialog.target)
+                        } else {
+                            Job::AddRule(dialog.set.clone(), matchers.pop().unwrap(), dialog.target)
+                        };
                         if let Some(dialog) = &mut self.rule_screen.add {
                             dialog.busy = true;
                             dialog.error = None;
@@ -2941,9 +3032,10 @@ mod tests {
         let mut state = state_with_rules();
         state.act(Action::OpenRules);
         assert!(state.act(Action::BrowseExecutable).is_none());
-        state.act(Action::OpenAddRule);
-        assert!(state.act(Action::BrowseExecutable).is_none());
-        state.act(Action::SelectRuleInput(RuleInputKind::Process));
+        assert!(matches!(
+            state.act(Action::OpenAddRule),
+            Some(Job::LoadProcesses(_))
+        ));
         state.rule_screen.add.as_mut().unwrap().busy = true;
         assert!(state.act(Action::BrowseExecutable).is_none());
         state.rule_screen.add.as_mut().unwrap().busy = false;
@@ -3053,11 +3145,8 @@ mod tests {
         let mut state = state_with_rules();
         state.act(Action::OpenRules);
         assert!(state.act(Action::RefreshProcesses).is_none());
-        state.act(Action::OpenAddRule);
-        let Some(Job::LoadProcesses(first)) =
-            state.act(Action::SelectRuleInput(RuleInputKind::Process))
-        else {
-            panic!("process tab must start a worker job");
+        let Some(Job::LoadProcesses(first)) = state.act(Action::OpenAddRule) else {
+            panic!("new rule must load the process tab");
         };
         assert!(state.act(Action::RefreshProcesses).is_none());
         state.reduce(WorkerEvent::Processes {
@@ -3076,10 +3165,7 @@ mod tests {
         state.act(Action::CancelAddRule);
         assert!(state.rule_screen.add.is_none());
 
-        state.act(Action::OpenAddRule);
-        let Some(Job::LoadProcesses(second)) =
-            state.act(Action::SelectRuleInput(RuleInputKind::Process))
-        else {
+        let Some(Job::LoadProcesses(second)) = state.act(Action::OpenAddRule) else {
             panic!("reopened dialog must start a new worker job");
         };
         assert_ne!(first, second);
@@ -3109,6 +3195,48 @@ mod tests {
     }
 
     #[test]
+    fn site_batch_requires_every_line_to_be_valid_and_obeys_subdomain_toggle() {
+        for (subdomains, expected) in [
+            (
+                true,
+                vec![
+                    RuleMatcher::Domain(DomainMatch::Suffix("youtube.com".into())),
+                    RuleMatcher::Domain(DomainMatch::Suffix("instagram.com".into())),
+                ],
+            ),
+            (
+                false,
+                vec![
+                    RuleMatcher::Domain(DomainMatch::Exact("www.youtube.com".into())),
+                    RuleMatcher::Domain(DomainMatch::Exact("instagram.com".into())),
+                ],
+            ),
+        ] {
+            let mut state = state_with_rules();
+            state.act(Action::OpenRules);
+            assert!(matches!(
+                state.act(Action::OpenAddRule),
+                Some(Job::LoadProcesses(_))
+            ));
+            assert_eq!(
+                state.rule_screen.add.as_ref().unwrap().kind,
+                RuleInputKind::Process
+            );
+            state.act(Action::SelectRuleInput(RuleInputKind::Domain));
+            let dialog = state.rule_screen.add.as_mut().unwrap();
+            dialog.domains = "https://www.youtube.com/watch?v=1\n192.168.1.1\ninstagram.com".into();
+            dialog.subdomains = subdomains;
+            assert!(state.act(Action::SubmitAddRule).is_none());
+            state.rule_screen.add.as_mut().unwrap().domains =
+                "https://www.youtube.com/watch?v=1\ninstagram.com".into();
+            assert!(matches!(
+                state.act(Action::SubmitAddRule),
+                Some(Job::AddRules(_, matchers, RuleTarget::Proxy)) if matchers == expected
+            ));
+        }
+    }
+
+    #[test]
     fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
         let mut state = state_with_rules();
         state.act(Action::OpenRules);
@@ -3117,18 +3245,19 @@ mod tests {
         state.rule_screen.filter.target = Some(RuleTarget::Direct);
         state.act(Action::OpenAddRule);
         assert!(state.act(Action::SubmitAddRule).is_none());
+        state.act(Action::SelectRuleInput(RuleInputKind::Domain));
         let dialog = state.rule_screen.add.as_mut().unwrap();
-        dialog.domain = "*.example.com".into();
+        dialog.domains = "*.example.com".into();
         dialog.target = RuleTarget::Direct;
         assert!(matches!(
             state.act(Action::SubmitAddRule),
-            Some(Job::AddRule(set, RuleMatcher::Domain(DomainMatch::Suffix(domain)), RuleTarget::Direct))
-                if set == RuleSetId::new("2") && domain == "example.com"
+            Some(Job::AddRules(set, matchers, RuleTarget::Direct))
+                if set == RuleSetId::new("2") && matchers == vec![RuleMatcher::Domain(DomainMatch::Suffix("example.com".into()))]
         ));
         assert!(state.act(Action::CancelAddRule).is_none());
-        state.reduce(WorkerEvent::AddRule(Err(RuleSetError::DuplicateRule)));
+        state.reduce(WorkerEvent::AddRules(Err(RuleSetError::DuplicateRule)));
         let dialog = state.rule_screen.add.as_ref().unwrap();
-        assert_eq!(dialog.domain, "*.example.com");
+        assert_eq!(dialog.domains, "*.example.com");
         assert_eq!(
             dialog.error.as_deref(),
             Some("this rule is already in the set")
@@ -3139,9 +3268,12 @@ mod tests {
         assert!(state.rule_screen.filter.is_active());
         assert!(matches!(
             state.act(Action::SubmitAddRule),
-            Some(Job::AddRule(_, _, _))
+            Some(Job::AddRules(_, _, _))
         ));
-        state.reduce(WorkerEvent::AddRule(Ok(rule_set("2").rules[0].clone())));
+        state.reduce(WorkerEvent::AddRules(Ok(rosetun_core::AddedRules {
+            added: vec![rule_set("2").rules[0].clone()],
+            skipped: 0,
+        })));
         assert!(state.rule_screen.add.is_none());
         assert!(!state.rule_screen.filter.is_active());
     }
@@ -3290,18 +3422,20 @@ mod tests {
                 .is_none()
         );
         state.act(Action::OpenAddRule);
+        state.act(Action::SelectRuleInput(RuleInputKind::Domain));
         let dialog = state.rule_screen.add.as_mut().unwrap();
-        dialog.domain = "new.example".into();
+        dialog.domains = "new.example".into();
+        dialog.subdomains = false;
         dialog.target = RuleTarget::Block;
         assert!(matches!(
             state.act(Action::SubmitAddRule),
-            Some(Job::AddRule(
-                _,
-                RuleMatcher::Domain(DomainMatch::Exact(_)),
-                RuleTarget::Block
-            ))
+            Some(Job::AddRules(_, matchers, RuleTarget::Block))
+                if matchers == vec![RuleMatcher::Domain(DomainMatch::Exact("new.example".into()))]
         ));
-        state.reduce(WorkerEvent::AddRule(Ok(rule_set("1").rules[0].clone())));
+        state.reduce(WorkerEvent::AddRules(Ok(rosetun_core::AddedRules {
+            added: vec![rule_set("1").rules[0].clone()],
+            skipped: 0,
+        })));
         state.act(Action::RequestDeleteRule(rule));
         assert!(matches!(
             state.act(Action::ConfirmRuleDelete),
