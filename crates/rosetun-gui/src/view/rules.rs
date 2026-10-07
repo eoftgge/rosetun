@@ -484,24 +484,7 @@ fn filter_controls(
         ui,
         |ui| {
             ui.horizontal_wrapped(|ui| {
-                let search = ui.add(
-                    egui::TextEdit::singleline(&mut filter.search)
-                        .hint_text(t().search_rules)
-                        .desired_width(260.0)
-                        .min_size(egui::vec2(260.0, 38.0))
-                        .margin(egui::Margin {
-                            left: 32,
-                            right: 8,
-                            top: 8,
-                            bottom: 8,
-                        }),
-                );
-                icons::paint(
-                    ui.painter(),
-                    egui::pos2(search.rect.left() + 16.0, search.rect.center().y),
-                    Icon::Search,
-                    theme::TEXT_DIM,
-                );
+                widgets::search_field(ui, &mut filter.search, t().search_rules, 260.0);
                 if let Some(kind) =
                     widgets::segmented(ui, "rule_type_filter", filter.kind, &options, false, true)
                 {
