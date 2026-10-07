@@ -2646,7 +2646,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "rosetun-config",
  "rosetun-core",
@@ -2661,7 +2661,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-config"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2670,7 +2670,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-core"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "idna",
  "rosetun-config",
@@ -2685,7 +2685,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-engine"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "getrandom 0.3.4",
  "rosetun-config",
@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-engine-singbox"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "rosetun-config",
  "rosetun-engine",
@@ -2706,7 +2706,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-engine-xray"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "rosetun-config",
  "rosetun-engine",
@@ -2714,7 +2714,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-gui"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "eframe",
  "raw-window-handle",
@@ -2734,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-helper-privileged"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "rosetun-config",
  "rosetun-engine",
@@ -2749,7 +2749,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-hwid"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "sha2",
  "thiserror 2.0.20",
@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-ipc"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "rosetun-config",
  "serde",
@@ -2770,7 +2770,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-processes"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "thiserror 2.0.20",
  "windows-sys 0.61.2",
@@ -2778,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-routing"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "rosetun-config",
  "thiserror 2.0.20",
@@ -2788,7 +2788,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-shell"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
  "windows-sys 0.61.2",
@@ -2796,7 +2796,7 @@ dependencies = [
 
 [[package]]
 name = "rosetun-subscription"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "percent-encoding",
