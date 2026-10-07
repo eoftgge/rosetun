@@ -5,6 +5,7 @@ use rosetun_config::{ConnectionState, RuleMatcher};
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
+use crate::icons::{self, Icon};
 use crate::state::{Action, ExitLookup, ExitRoute, State, primary_label};
 use crate::strings::t;
 use crate::{display, strings, theme, widgets};
@@ -847,31 +848,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 }
             },
         );
-        let mut selected = state.config.active_rule_set.clone();
-        let previous = selected.clone();
-        let current_name = state
-            .config
-            .active_rules()
-            .map(|rules| state.text(&rules.name))
-            .unwrap_or_else(|| t().default_rules.to_owned());
-        ui.add_enabled_ui(state.can_edit_rules(), |ui| {
-            egui::ComboBox::from_id_salt("active_rule_set")
-                .selected_text(current_name)
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut selected, None, t().default_rules);
-                    for rules in &state.config.rule_sets {
-                        ui.selectable_value(
-                            &mut selected,
-                            Some(rules.id.clone()),
-                            state.text(&rules.name),
-                        );
-                    }
-                });
-        });
-        if selected != previous {
-            actions.push(Action::SelectRuleSet(selected));
-        }
+        rule_set_picker(ui, state, actions);
         if let Some(rules) = state.config.active_rules() {
             let mut enabled = rules.rules.iter().filter(|rule| rule.enabled);
             let mut shown = 0;
@@ -931,6 +908,113 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                     .small()
                     .color(theme::TEXT_DIM),
             );
+        }
+    });
+}
+
+fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let name = state
+        .config
+        .active_rules()
+        .map(|rules| state.text(&rules.name))
+        .unwrap_or_else(|| t().default_rules.to_owned());
+    let font = egui::FontId::new(
+        egui::TextStyle::Body.resolve(ui.style()).size,
+        egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+    );
+    let available = ui.available_width();
+    let name_width = ui
+        .painter()
+        .layout_no_wrap(name.clone(), font.clone(), theme::TEXT)
+        .size()
+        .x;
+    let text_width = name_width.min((available - 22.0).max(0.0));
+    let enabled = state.can_edit_rules();
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(
+            text_width + 22.0,
+            ui.text_style_height(&egui::TextStyle::Body) + 8.0,
+        ),
+        sense,
+    );
+    if ui.is_rect_visible(rect) {
+        if enabled && response.hovered() {
+            ui.painter().rect_filled(
+                rect.expand2(egui::vec2(6.0, 0.0)),
+                theme::RADIUS_INNER,
+                theme::BORDER,
+            );
+        }
+        let color = if enabled {
+            theme::TEXT
+        } else {
+            theme::TEXT_DIM
+        };
+        let galley = egui::WidgetText::from(RichText::new(name).font(font).color(color))
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                text_width,
+                egui::TextStyle::Body,
+            );
+        ui.painter().galley(
+            egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0),
+            galley,
+            color,
+        );
+        icons::paint(
+            ui.painter(),
+            egui::pos2(rect.left() + text_width + 12.0, rect.center().y),
+            Icon::Chevron { open: true },
+            theme::TEXT_DIM,
+        );
+    }
+    if !enabled {
+        return;
+    }
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    widgets::menu_popup(&response).show(|ui| {
+        ui.set_min_width(response.rect.width().max(180.0));
+        if widgets::menu_item(
+            ui,
+            widgets::MenuItem {
+                label: t().default_rules,
+                enabled: true,
+                selected: state.config.active_rule_set.is_none(),
+                danger: false,
+                note: None,
+            },
+        )
+        .clicked()
+        {
+            if state.config.active_rule_set.is_some() {
+                actions.push(Action::SelectRuleSet(None));
+            }
+            ui.close();
+        }
+        for rules in &state.config.rule_sets {
+            if widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: &state.text(&rules.name),
+                    enabled: true,
+                    selected: state.config.active_rule_set.as_ref() == Some(&rules.id),
+                    danger: false,
+                    note: None,
+                },
+            )
+            .clicked()
+            {
+                if state.config.active_rule_set.as_ref() != Some(&rules.id) {
+                    actions.push(Action::SelectRuleSet(Some(rules.id.clone())));
+                }
+                ui.close();
+            }
         }
     });
 }
