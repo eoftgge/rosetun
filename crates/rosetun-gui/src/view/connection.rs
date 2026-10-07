@@ -441,56 +441,49 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                     .or_else(|| flag.as_deref().map(|code| (code, false)));
                 let block_height =
                     badge_height + 2.0 + ui.text_style_height(&egui::TextStyle::Small);
-                let block_width = (ui.available_width() - 100.0).max(0.0);
-                let name_width = (block_width
-                    - if badge.is_some() {
-                        36.0 + ui.spacing().item_spacing.x
-                    } else {
-                        0.0
-                    })
-                .max(0.0);
+                if let Some((code, verified)) = badge {
+                    let (area, _) = ui
+                        .allocate_exact_size(egui::vec2(36.0, block_height), egui::Sense::hover());
+                    let rect =
+                        egui::Rect::from_center_size(area.center(), egui::vec2(36.0, badge_height));
+                    ui.painter().rect_stroke(
+                        rect,
+                        theme::RADIUS_INNER,
+                        egui::Stroke::new(
+                            1.0,
+                            if verified {
+                                theme::ROSE_DARK
+                            } else {
+                                theme::BORDER_STRONG
+                            },
+                        ),
+                        egui::StrokeKind::Inside,
+                    );
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        code,
+                        egui::FontId::monospace(13.0),
+                        if verified {
+                            theme::ROSE_LIGHT
+                        } else {
+                            theme::TEXT_MUTED
+                        },
+                    );
+                }
+                let text_width = (ui.available_width() - 100.0).max(0.0);
                 ui.allocate_ui_with_layout(
-                    egui::vec2(block_width, block_height),
+                    egui::vec2(text_width, block_height),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        ui.set_width(block_width);
+                        ui.set_width(text_width);
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.allocate_ui_with_layout(
-                            egui::vec2(block_width, badge_height),
+                            egui::vec2(text_width, badge_height),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
-                                ui.set_width(block_width);
+                                ui.set_width(text_width);
                                 ui.set_min_height(badge_height);
-                                if let Some((code, verified)) = badge {
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(36.0, badge_height),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().rect_stroke(
-                                        rect,
-                                        theme::RADIUS_INNER,
-                                        egui::Stroke::new(
-                                            1.0,
-                                            if verified {
-                                                theme::ROSE_DARK
-                                            } else {
-                                                theme::BORDER_STRONG
-                                            },
-                                        ),
-                                        egui::StrokeKind::Inside,
-                                    );
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        code,
-                                        egui::FontId::monospace(13.0),
-                                        if verified {
-                                            theme::ROSE_LIGHT
-                                        } else {
-                                            theme::TEXT_MUTED
-                                        },
-                                    );
-                                }
                                 let name = state.config.active_node().map_or_else(
                                     || t().select_server.to_owned(),
                                     |(_, node)| {
@@ -501,59 +494,35 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                                         )
                                     },
                                 );
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(name_width, badge_height),
-                                    egui::Layout::left_to_right(egui::Align::Center),
-                                    |ui| {
-                                        ui.set_width(name_width);
-                                        ui.add(
-                                            egui::Label::new(
-                                                RichText::new(name)
-                                                    .font(name_font.clone())
-                                                    .color(theme::TEXT),
-                                            )
-                                            .truncate(),
-                                        );
-                                    },
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(name)
+                                            .font(name_font.clone())
+                                            .color(theme::TEXT),
+                                    )
+                                    .truncate(),
                                 );
                             },
                         );
                         ui.add_space(2.0);
-                        if let Some((subscription, node)) = state.config.active_node() {
-                            let subscription = state.text(&subscription.name);
-                            let address = state.text(&rosetun_core::node_address(node));
-                            let detail = format!("{subscription} · {address}");
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(
-                                    block_width,
-                                    ui.text_style_height(&egui::TextStyle::Small),
-                                ),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    if badge.is_some() {
-                                        ui.add_space(36.0);
-                                    }
-                                    ui.allocate_ui_with_layout(
-                                        egui::vec2(
-                                            name_width,
-                                            ui.text_style_height(&egui::TextStyle::Small),
-                                        ),
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        |ui| {
-                                            ui.set_width(name_width);
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(detail)
-                                                        .small()
-                                                        .color(theme::TEXT_DIM),
-                                                )
-                                                .truncate(),
-                                            );
-                                        },
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(text_width, ui.text_style_height(&egui::TextStyle::Small)),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_width(text_width);
+                                if let Some((subscription, node)) = state.config.active_node() {
+                                    let subscription = state.text(&subscription.name);
+                                    let address = state.text(&rosetun_core::node_address(node));
+                                    let detail = format!("{subscription} · {address}");
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(detail).small().color(theme::TEXT_DIM),
+                                        )
+                                        .truncate(),
                                     );
-                                },
-                            );
-                        }
+                                }
+                            },
+                        );
                     },
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

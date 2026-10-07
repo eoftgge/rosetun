@@ -73,18 +73,42 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
+                let font =
+                    egui::FontId::new(15.0, egui::FontFamily::Name(theme::UI_SEMIBOLD.into()));
+                let count = format!("· {}", state.config.subscriptions.len());
+                let title_width = ui
+                    .painter()
+                    .layout_no_wrap(
+                        t().subscriptions_title.to_owned(),
+                        font.clone(),
+                        theme::TEXT,
+                    )
+                    .size()
+                    .x;
+                let count_width = ui
+                    .painter()
+                    .layout_no_wrap(
+                        count.clone(),
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        theme::TEXT_DIM,
+                    )
+                    .size()
+                    .x;
+                let inset = ((ui.available_width()
+                    - title_width
+                    - count_width
+                    - 2.0 * ui.spacing().item_spacing.x)
+                    / 2.0)
+                    .max(0.0);
+                if inset > 0.0 {
+                    ui.add_space(inset);
+                }
                 ui.label(
                     RichText::new(t().subscriptions_title)
                         .color(theme::TEXT)
-                        .font(egui::FontId::new(
-                            15.0,
-                            egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
-                        )),
+                        .font(font),
                 );
-                ui.label(
-                    RichText::new(format!("· {}", state.config.subscriptions.len()))
-                        .color(theme::TEXT_DIM),
-                );
+                ui.label(RichText::new(count).color(theme::TEXT_DIM));
             });
         },
         |ui| {
