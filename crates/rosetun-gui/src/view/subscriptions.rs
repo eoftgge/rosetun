@@ -215,23 +215,29 @@ fn subscription_card(
                         (ui.available_width() - 2.0 * 28.0 - 2.0 * ui.spacing().item_spacing.x)
                             .max(0.0);
                     let name = provider_text(ui, state, &subscription.name, egui::TextStyle::Body);
-                    if ui
-                        .add_sized(
-                            [name_width, 22.0],
-                            egui::Label::new(RichText::new(&name).color(theme::TEXT).font(
-                                egui::FontId::new(
-                                    egui::TextStyle::Body.resolve(ui.style()).size,
-                                    egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
-                                ),
-                            ))
-                            .truncate()
-                            .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text(name)
-                        .clicked()
-                    {
-                        actions.push(Action::ToggleExpanded(subscription.id.clone()));
-                    }
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(name_width, 22.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_width(name_width);
+                            if ui
+                                .add(
+                                    egui::Label::new(RichText::new(&name).color(theme::TEXT).font(
+                                        egui::FontId::new(
+                                            egui::TextStyle::Body.resolve(ui.style()).size,
+                                            egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+                                        ),
+                                    ))
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_text(name)
+                                .clicked()
+                            {
+                                actions.push(Action::ToggleExpanded(subscription.id.clone()));
+                            }
+                        },
+                    );
                     if state.operations.update_all
                         || state.operations.updating.contains(&subscription.id)
                     {
@@ -305,7 +311,7 @@ fn subscription_card(
                 let summary =
                     strings::subscription_summary(&t().servers(subscription.nodes.len()), &age);
                 ui.horizontal(|ui| {
-                    ui.add_space(22.0);
+                    ui.add_space(22.0 + ui.spacing().item_spacing.x);
                     egui::Sides::new().shrink_left().show(
                         ui,
                         |ui| {
@@ -684,42 +690,43 @@ fn server_row(
         let ping_left = right - 70.0;
         let bars_left = ping_left - 8.0 - 13.0;
         name_right = bars_left - 10.0;
-        let result = state
+        if let Some(result) = state
             .pings
             .get(&(subscription.id.clone(), node.id.clone()))
             .copied()
-            .unwrap_or(PingResult::Pending);
-        let quality = ping_quality(result);
-        let bottom = rect.center().y + 5.5;
-        for (index, height) in [4.0, 7.0, 11.0].into_iter().enumerate() {
-            painter.rect_filled(
-                egui::Rect::from_min_size(
-                    egui::pos2(bars_left + index as f32 * 5.0, bottom - height),
-                    egui::vec2(3.0, height),
+        {
+            let quality = ping_quality(result);
+            let bottom = rect.center().y + 5.5;
+            for (index, height) in [4.0, 7.0, 11.0].into_iter().enumerate() {
+                painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(bars_left + index as f32 * 5.0, bottom - height),
+                        egui::vec2(3.0, height),
+                    ),
+                    1.0,
+                    if index < quality as usize {
+                        theme::TEXT_MUTED
+                    } else {
+                        theme::BORDER_STRONG
+                    },
+                );
+            }
+            let (ping_text, color) = match result {
+                PingResult::Answered(elapsed) => (
+                    strings::fill(t().ping_ms, &[("ms", &ping_millis(elapsed).to_string())]),
+                    theme::TEXT_DIM,
                 ),
-                1.0,
-                if index < quality as usize {
-                    theme::TEXT_MUTED
-                } else {
-                    theme::BORDER_STRONG
-                },
+                PingResult::NoAnswer => (t().ping_no_answer.to_owned(), theme::ERROR),
+                PingResult::Pending => (t().ping_pending.to_owned(), theme::TEXT_DIM),
+            };
+            painter.text(
+                egui::pos2(right, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                ping_text,
+                egui::TextStyle::Small.resolve(ui.style()),
+                color,
             );
         }
-        let (ping_text, color) = match result {
-            PingResult::Answered(elapsed) => (
-                strings::fill(t().ping_ms, &[("ms", &ping_millis(elapsed).to_string())]),
-                theme::TEXT_DIM,
-            ),
-            PingResult::NoAnswer => (t().ping_no_answer.to_owned(), theme::ERROR),
-            PingResult::Pending => (t().ping_pending.to_owned(), theme::TEXT_DIM),
-        };
-        painter.text(
-            egui::pos2(right, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            ping_text,
-            egui::TextStyle::Small.resolve(ui.style()),
-            color,
-        );
     }
     let name_color = if selected {
         theme::ROSE_LIGHT
