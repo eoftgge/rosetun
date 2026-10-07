@@ -77,6 +77,8 @@ Start-RosetunHelper
 # Proves the probe itself works. Without it, every "blocked" check below would
 # pass even if the probe were broken or the probe URL unreachable.
 Test-Step 'baseline' 'direct egress works before connect' { Test-RosetunDirectEgress }
+Test-Step 'baseline' 'direct DNS works before connect' { Test-RosetunDirectDns }
+Test-Step 'baseline' 'direct TCP DNS works before connect' { Test-RosetunDirectDns -Tcp }
 Test-Step 'baseline' 'IPv6 to the host works before connect' { Test-RosetunIpv6Egress }
 
 Write-Host 'Connect...'
@@ -112,6 +114,7 @@ Write-Host 'Engine killed...'
 Stop-RosetunEngine
 Test-Step 'engine killed' 'state is FailedProtected' { Wait-RosetunState 'FailedProtected' }
 Test-Step 'engine killed' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+Test-Step 'engine killed' 'direct DNS is blocked' { -not (Test-RosetunDirectDns) }
 # While sing-box runs, its strict route blocks IPv6 as well. Its filters die
 # with it, so only here is Rosetun's own IPv6 block the one being tested.
 Test-Step 'engine killed' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
@@ -208,6 +211,57 @@ Start-RosetunHelper
 Connect-RosetunTunnel | Out-Null
 Test-Step 'restart' 'connect succeeds, no stale adapter' { Wait-RosetunState 'Connected' }
 Disconnect-RosetunTunnel | Out-Null
+
+Write-Host 'DNS lock without the kill switch...'
+Connect-RosetunTunnel -RequestName 'request-dns-lock.json' | Out-Null
+Test-Step 'dns lock' 'state is Connected' { Wait-RosetunState 'Connected' }
+$egress = Wait-RosetunTunnelEgress
+Test-Step 'dns lock' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
+Test-Step 'dns lock' 'direct DNS is blocked' { -not (Test-RosetunDirectDns) }
+
+Write-Host 'DNS lock during automatic restart...'
+Set-RosetunEngineAvailable $false
+Stop-RosetunEngine
+Test-Step 'dns lock restart' 'state is Reconnecting' { Wait-RosetunState 'Reconnecting' }
+Test-Step 'dns lock restart' 'direct UDP DNS is blocked' { -not (Test-RosetunDirectDns) }
+Test-Step 'dns lock restart' 'direct TCP DNS is blocked' { -not (Test-RosetunDirectDns -Tcp) }
+Test-Step 'dns lock restart' 'non-DNS egress still works' { Test-RosetunDirectEgress }
+Set-RosetunEngineAvailable $true
+Test-Step 'dns lock restart' 'state returns to Connected within 45 s' {
+    Wait-RosetunState 'Connected' -TimeoutSeconds 45
+}
+
+Write-Host 'DNS lock after exhausted reconnects...'
+Set-RosetunEngineAvailable $false
+Stop-RosetunEngine
+Test-Step 'dns lock exhausted' 'state is Failed within 90 s' {
+    Wait-RosetunState 'Failed' -TimeoutSeconds 90
+}
+Test-Step 'dns lock exhausted' 'direct DNS works again' { Test-RosetunDirectDns }
+Set-RosetunEngineAvailable $true
+
+Write-Host 'DNS lock with automatic reconnect disabled...'
+Connect-RosetunTunnel -RequestName 'request-dns-lock-manual.json' | Out-Null
+Test-Step 'dns lock manual' 'state is Connected' { Wait-RosetunState 'Connected' }
+Stop-RosetunEngine
+Test-Step 'dns lock manual' 'state is Failed' { Wait-RosetunState 'Failed' }
+Test-Step 'dns lock manual' 'direct DNS works again' { Test-RosetunDirectDns }
+Disconnect-RosetunTunnel | Out-Null
+
+Write-Host 'Disconnect with the DNS lock...'
+Connect-RosetunTunnel -RequestName 'request-dns-lock.json' | Out-Null
+Disconnect-RosetunTunnel | Out-Null
+Test-Step 'dns lock disconnect' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
+Test-Step 'dns lock disconnect' 'direct DNS works again' { Test-RosetunDirectDns }
+
+Write-Host 'Helper killed with the DNS lock...'
+Connect-RosetunTunnel -RequestName 'request-dns-lock.json' | Out-Null
+Wait-RosetunState 'Connected' | Out-Null
+Stop-RosetunHelper
+Test-Step 'dns lock helper killed' 'direct DNS works again' {
+    Wait-RosetunCondition { Test-RosetunDirectDns }
+}
+Start-RosetunHelper
 
 # Result first, so a long note cannot push it off the screen.
 $results | Format-Table Result, Scenario, Check, Note -AutoSize

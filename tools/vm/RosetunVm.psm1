@@ -18,6 +18,9 @@ $script:Config = @{
     # Must be reachable from the guest without the tunnel; the baseline check
     # in the matrix fails loudly if it is not.
     ProbeUrl = 'https://1.1.1.1'
+    # Must answer DNS from the guest without the tunnel; the baseline check
+    # fails loudly if it does not.
+    DnsProbeServer = '1.1.1.1'
     # Fetched through the tunnel, so it must be reachable from the test node's
     # exit, which is the developer's own network. Cloudflare-hosted sites such as
     # www.example.com fail the TLS handshake there when the node bypasses the
@@ -244,6 +247,16 @@ function Publish-Rosetun {
         default_target = 'block'
     }
     $derived['request-process-rules.json'] = $processRules
+
+    $dnsLock = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+    $dnsLock.settings.kill_switch = $false
+    $dnsLock.settings.auto_reconnect = $true
+    $derived['request-dns-lock.json'] = $dnsLock
+
+    $dnsLockManual = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+    $dnsLockManual.settings.kill_switch = $false
+    $dnsLockManual.settings.auto_reconnect = $false
+    $derived['request-dns-lock-manual.json'] = $dnsLockManual
 
     $derivedDir = Join-Path $env:TEMP 'rosetun-derived-requests'
     New-Item -ItemType Directory -Force -Path $derivedDir | Out-Null
@@ -504,6 +517,39 @@ function Test-RosetunDirectEgress {
         & curl.exe --interface $address --max-time 5 --silent --output NUL $url 2>$null
         $LASTEXITCODE -eq 0
     } -ArgumentList $address, $script:Config.ProbeUrl
+}
+
+function Test-RosetunDirectDns {
+    param(
+        # Resolvers fall back to TCP for long answers; the lock must cover it too.
+        [switch]$Tcp
+    )
+    # A non-engine guest process probes port 53 through the physical adapter.
+    $address = Get-RosetunEgressAddress
+    Invoke-RosetunGuest -ScriptBlock {
+        param($address, $server, $tcp)
+        $local = [Net.IPEndPoint]::new([Net.IPAddress]::Parse($address), 0)
+        if ($tcp) {
+            $client = [Net.Sockets.TcpClient]::new($local)
+            try { return $client.ConnectAsync($server, 53).Wait(3000) }
+            catch { return $false }
+            finally { $client.Dispose() }
+        }
+        # A standard query for example.com, type A, recursion desired.
+        $ascii = [Text.Encoding]::ASCII
+        [byte[]]$query = @(0x52, 0x53, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 7) +
+            $ascii.GetBytes('example') + @(3) + $ascii.GetBytes('com') + @(0, 0, 1, 0, 1)
+        $client = [Net.Sockets.UdpClient]::new($local)
+        try {
+            $client.Client.ReceiveTimeout = 3000
+            [void]$client.Send($query, $query.Length, $server, 53)
+            $from = [Net.IPEndPoint]::new([Net.IPAddress]::Any, 0)
+            $reply = $client.Receive([ref]$from)
+            return $reply.Length -ge 12 -and $reply[0] -eq 0x52 -and $reply[1] -eq 0x53
+        }
+        catch { return $false }
+        finally { $client.Dispose() }
+    } -ArgumentList $address, $script:Config.DnsProbeServer, [bool]$Tcp
 }
 
 function Test-RosetunIpv6Egress {
