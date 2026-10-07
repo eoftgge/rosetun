@@ -3,10 +3,10 @@ use rosetun_config::{
     RuleTarget, Settings, TlsMode, Transport,
 };
 use rosetun_engine::errors::EngineError;
-use rosetun_engine::{RenderRequest, RenderedConfig, RuleCapabilities};
+use rosetun_engine::{ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities};
 use serde_json::{Map, Value, json};
 
-const TAG_PROXY: &str = "proxy";
+pub(crate) const TAG_PROXY: &str = "proxy";
 const TAG_DIRECT: &str = "direct";
 const TAG_DNS_PROXY: &str = "dns-proxy";
 
@@ -27,7 +27,7 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         "dns": dns_section(&request.settings.dns)?,
         "inbounds": [tun_inbound(request.settings)],
         "outbounds": [
-            proxy_outbound(request.node)?,
+            proxy_outbound(request.node, TAG_PROXY)?,
             json!({ "type": "direct", "tag": TAG_DIRECT }),
         ],
         "route": route,
@@ -47,6 +47,44 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         file_name: "config.json".to_owned(),
         body,
         unsupported,
+        unsupported_probes: Vec::new(),
+    })
+}
+
+pub(crate) fn render_probe(
+    request: &ProbeRenderRequest<'_>,
+) -> Result<RenderedConfig, EngineError> {
+    let mut outbounds = Vec::with_capacity(request.nodes.len() + 1);
+    let mut unsupported_probes = Vec::new();
+    for (tag, node) in request.nodes {
+        match proxy_outbound(node, tag) {
+            Ok(outbound) => outbounds.push(outbound),
+            Err(EngineError::Unsupported(_)) => unsupported_probes.push(tag.clone()),
+            Err(error) => return Err(error),
+        }
+    }
+    outbounds.push(json!({ "type": "direct", "tag": TAG_DIRECT }));
+
+    let route = match request.interface {
+        Some(interface) => json!({ "final": TAG_DIRECT, "default_interface": interface }),
+        None => json!({ "final": TAG_DIRECT, "auto_detect_interface": true }),
+    };
+    let config = json!({
+        "log": { "level": "info", "timestamp": true },
+        "outbounds": outbounds,
+        "route": route,
+        "experimental": { "clash_api": {
+            "external_controller": request.control.address.to_string(),
+            "secret": request.control.secret,
+        } },
+    });
+    let body = serde_json::to_vec_pretty(&config)
+        .map_err(|error| EngineError::Render(error.to_string()))?;
+    Ok(RenderedConfig {
+        file_name: "probe.json".to_owned(),
+        body,
+        unsupported: Vec::new(),
+        unsupported_probes,
     })
 }
 
@@ -117,9 +155,9 @@ fn tun_inbound(settings: &Settings) -> Value {
     })
 }
 
-fn proxy_outbound(node: &Node) -> Result<Value, EngineError> {
+fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
     let mut outbound = Map::new();
-    outbound.insert("tag".into(), TAG_PROXY.into());
+    outbound.insert("tag".into(), tag.into());
     outbound.insert("server".into(), node.server.clone().into());
     outbound.insert("server_port".into(), node.port.into());
 

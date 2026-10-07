@@ -19,7 +19,8 @@ use readiness::Readiness;
 use rosetun_config::EngineKind;
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess,
-    RenderRequest, RenderedConfig, TrafficProbe, TrafficTotals, errors::EngineError,
+    ProbeRenderRequest, RenderRequest, RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget,
+    errors::EngineError,
 };
 
 pub use render::render;
@@ -111,6 +112,59 @@ impl EngineBackend for SingBoxBackend {
         render::render(request)
     }
 
+    fn render_probe(
+        &self,
+        request: &ProbeRenderRequest<'_>,
+    ) -> Result<RenderedConfig, EngineError> {
+        render::render_probe(request)
+    }
+
+    fn url_test(
+        &self,
+        control: &ControlEndpoint,
+        target: UrlTestTarget<'_>,
+        url: &str,
+        timeout: Duration,
+    ) -> Result<Duration, EngineError> {
+        let tag = match target {
+            UrlTestTarget::Session => render::TAG_PROXY,
+            UrlTestTarget::Probe(tag) => tag,
+        };
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(timeout + Duration::from_secs(2)))
+                .http_status_as_error(false)
+                .proxy(None)
+                .build(),
+        );
+        let mut response = agent
+            .get(&format!("http://{}/proxies/{tag}/delay", control.address))
+            .query("url", url)
+            .query("timeout", &timeout.as_millis().to_string())
+            .header("Authorization", &format!("Bearer {}", control.secret))
+            .call()
+            .map_err(|_| EngineError::Stats("local URL test request failed".to_owned()))?;
+        if response.status() != 200 {
+            return Err(EngineError::Stats(format!(
+                "URL test HTTP status {}",
+                response.status().as_u16()
+            )));
+        }
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(1024)
+            .read_to_vec()
+            .map_err(|_| EngineError::Stats("failed to read URL test response".to_owned()))?;
+        #[derive(Deserialize)]
+        struct Delay {
+            delay: u64,
+        }
+        let delay: Delay = serde_json::from_slice(&body)
+            .map_err(|_| EngineError::Stats("invalid URL test response".to_owned()))?;
+        Ok(Duration::from_millis(delay.delay))
+    }
+
     fn traffic_probe(&self, control: &ControlEndpoint) -> Option<Box<dyn TrafficProbe>> {
         Some(Box::new(ClashTrafficProbe::new(control)))
     }
@@ -137,8 +191,9 @@ impl EngineBackend for SingBoxBackend {
 
         let (ready_sender, readiness) = Readiness::new();
 
+        let probe = config.file_name == "probe.json";
         if let Some(stdout) = child.stdout.take()
-            && let Err(error) = spawn_output_drain(stdout, "stdout", None)
+            && let Err(error) = spawn_output_drain(stdout, "stdout", None, probe)
         {
             stop_failed_spawn(&mut child);
             return Err(error.into());
@@ -149,7 +204,7 @@ impl EngineBackend for SingBoxBackend {
             return Err(std::io::Error::other("sing-box stderr pipe is unavailable").into());
         };
 
-        if let Err(error) = spawn_output_drain(stderr, "stderr", Some(ready_sender)) {
+        if let Err(error) = spawn_output_drain(stderr, "stderr", Some(ready_sender), probe) {
             stop_failed_spawn(&mut child);
             return Err(error.into());
         }
@@ -241,6 +296,7 @@ fn spawn_output_drain<R>(
     reader: R,
     stream: &'static str,
     mut ready_sender: Option<Sender<()>>,
+    probe: bool,
 ) -> std::io::Result<()>
 where
     R: Read + Send + 'static,
@@ -257,7 +313,9 @@ where
                         {
                             let _ = sender.send(());
                         }
-                        log_output_line(stream, &line);
+                        if !probe {
+                            log_output_line(stream, &line);
+                        }
                     }
                     Err(error) => {
                         tracing::debug!(
@@ -343,7 +401,7 @@ mod tests {
         RuleMatcher, RuleSet, RuleSetId, RuleTarget, Settings, StreamSettings, TlsMode,
         VlessParams,
     };
-    use rosetun_engine::RuleCapabilities;
+    use rosetun_engine::{PROBE_TIMEOUT, PROBE_URL, RuleCapabilities};
     use serde_json::Value;
 
     fn node() -> Node {
@@ -488,6 +546,129 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn probe_config_contains_only_outbounds_route_and_control() {
+        let control = ControlEndpoint {
+            address: "127.0.0.1:12345".parse().unwrap(),
+            secret: "private-secret".to_owned(),
+        };
+        let mut unsupported = node();
+        unsupported.outbound = Outbound::Unknown {
+            scheme: "unsupported".to_owned(),
+            params: Default::default(),
+        };
+        let nodes = vec![
+            ("probe-0".to_owned(), node()),
+            ("probe-1".to_owned(), node()),
+            ("probe-2".to_owned(), unsupported),
+        ];
+        for interface in [Some("Ethernet 2"), None] {
+            let config = render::render_probe(&ProbeRenderRequest {
+                nodes: &nodes,
+                control: &control,
+                interface,
+            })
+            .unwrap();
+            assert_eq!(config.file_name, "probe.json");
+            assert!(config.unsupported.is_empty());
+            assert_eq!(config.unsupported_probes, ["probe-2"]);
+            let value: Value = serde_json::from_slice(&config.body).unwrap();
+            assert!(value.get("dns").is_none());
+            assert!(value.get("inbounds").is_none());
+            assert_eq!(value["log"]["level"], "info");
+            assert_eq!(value["route"]["final"], "direct");
+            assert_eq!(value["route"]["default_interface"].as_str(), interface);
+            assert_eq!(
+                value["route"].get("auto_detect_interface").is_some(),
+                interface.is_none()
+            );
+            assert_eq!(
+                value["experimental"]["clash_api"],
+                serde_json::json!({
+                    "external_controller": "127.0.0.1:12345",
+                    "secret": "private-secret"
+                })
+            );
+            let outbounds = value["outbounds"].as_array().unwrap();
+            assert_eq!(outbounds.len(), 3);
+            assert_eq!(outbounds[0]["tag"], "probe-0");
+            assert_eq!(outbounds[1]["tag"], "probe-1");
+            assert_eq!(
+                outbounds[2],
+                serde_json::json!({ "type": "direct", "tag": "direct" })
+            );
+        }
+    }
+
+    fn delay_against_server(
+        status: u16,
+        target: UrlTestTarget<'_>,
+    ) -> Result<Duration, EngineError> {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control = ControlEndpoint {
+            address: listener.local_addr().unwrap(),
+            secret: "test-secret".to_owned(),
+        };
+        let expected_tag = match target {
+            UrlTestTarget::Session => "proxy",
+            UrlTestTarget::Probe(tag) => tag,
+        }
+        .to_owned();
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with(&format!("GET /proxies/{expected_tag}/delay?")));
+            assert!(line.contains("/delay?"));
+            assert!(line.contains("url=http%3A%2F%2Fcp.cloudflare.com%2Fgenerate_204"));
+            assert!(line.contains("timeout=5000"));
+            let mut authorized = false;
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("authorization")
+                {
+                    authorized = value.trim() == "Bearer test-secret";
+                }
+            }
+            assert!(authorized);
+            let body = r#"{"delay":42}"#;
+            write!(
+                reader.get_mut(),
+                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let result =
+            SingBoxBackend::new("unused").url_test(&control, target, PROBE_URL, PROBE_TIMEOUT);
+        server.join().unwrap();
+        result
+    }
+
+    #[test]
+    fn url_test_reads_delay_and_reports_failure() {
+        assert_eq!(
+            delay_against_server(200, UrlTestTarget::Session).unwrap(),
+            Duration::from_millis(42)
+        );
+        assert!(matches!(
+            delay_against_server(504, UrlTestTarget::Probe("probe-1")),
+            Err(EngineError::Stats(_))
+        ));
     }
 
     fn probe_against_server(status: u16, chunked: bool) -> Result<TrafficTotals, EngineError> {

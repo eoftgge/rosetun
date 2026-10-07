@@ -20,6 +20,12 @@ use errors::EngineError;
 use rosetun_config::{EngineKind, Node, RuleId, RuleSet, Settings};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// Fetched through each checked node. Cloudflare is already contacted for the
+/// exit lookup, so the check adds no new party.
+pub const PROBE_URL: &str = "http://cp.cloudflare.com/generate_204";
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A local-only control API that the engine serves for one session.
 #[derive(Clone, PartialEq, Eq)]
@@ -140,6 +146,23 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     fn locate_binary(&self) -> Result<PathBuf, EngineError>;
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError>;
 
+    fn render_probe(
+        &self,
+        _request: &ProbeRenderRequest<'_>,
+    ) -> Result<RenderedConfig, EngineError> {
+        Err(EngineError::Unsupported("server checks".to_owned()))
+    }
+
+    fn url_test(
+        &self,
+        _control: &ControlEndpoint,
+        _target: UrlTestTarget<'_>,
+        _url: &str,
+        _timeout: Duration,
+    ) -> Result<Duration, EngineError> {
+        Err(EngineError::Unsupported("URL tests".to_owned()))
+    }
+
     /// Reads traffic from the control API that `render` enabled for `control`.
     fn traffic_probe(&self, _control: &ControlEndpoint) -> Option<Box<dyn TrafficProbe>> {
         None
@@ -161,12 +184,31 @@ pub struct RenderRequest<'a> {
     pub verbose_log: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ProbeRenderRequest<'a> {
+    /// Nodes with their outbound tags. Server addresses are IP literals.
+    pub nodes: &'a [(String, Node)],
+    pub control: &'a ControlEndpoint,
+    /// The physical interface to dial through; `None` lets the engine pick.
+    pub interface: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum UrlTestTarget<'a> {
+    /// The proxy outbound of a running session.
+    Session,
+    /// An outbound of a probe config, by tag.
+    Probe(&'a str),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedConfig {
     pub file_name: String,
     pub body: Vec<u8>,
     /// Enabled rules that the backend cannot represent in its configuration.
     pub unsupported: Vec<RuleId>,
+    /// Probe outbound tags whose nodes the backend cannot represent.
+    pub unsupported_probes: Vec<String>,
 }
 
 impl RenderedConfig {

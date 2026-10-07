@@ -147,6 +147,7 @@ impl EngineBackend for UnsupportedRuleEngine {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
             unsupported: vec![RuleId::new("unsupported-rule")],
+            unsupported_probes: Vec::new(),
         })
     }
 
@@ -190,6 +191,7 @@ impl EngineBackend for StubEngine {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
             unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
         })
     }
 
@@ -251,6 +253,7 @@ impl EngineBackend for SpawnSignalingEngine {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
             unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
         })
     }
 
@@ -313,6 +316,7 @@ impl EngineBackend for ExitedEngine {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
             unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
         })
     }
 
@@ -376,6 +380,7 @@ impl EngineBackend for RunningThenExitedEngine {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
             unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
         })
     }
 
@@ -456,6 +461,7 @@ impl EngineBackend for ControlledEngine {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
             unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
         })
     }
 
@@ -680,6 +686,7 @@ impl EngineBackend for DnsEngine {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
             unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
         })
     }
 
@@ -757,6 +764,7 @@ impl EngineBackend for TrafficEngine {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
             unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
         })
     }
 
