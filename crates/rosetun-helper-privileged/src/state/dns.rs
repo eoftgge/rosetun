@@ -18,6 +18,7 @@ enum LastResult {
     Timeout,
     Rcode(u8),
     Unreachable,
+    Stopped,
 }
 
 impl std::fmt::Display for LastResult {
@@ -30,17 +31,38 @@ impl std::fmt::Display for LastResult {
             Self::Rcode(5) => formatter.write_str("REFUSED"),
             Self::Rcode(code) => write!(formatter, "RCODE {code}"),
             Self::Unreachable => formatter.write_str("port unreachable"),
+            Self::Stopped => formatter.write_str("stopped"),
         }
     }
 }
 
-fn query(id: u16) -> Vec<u8> {
-    let mut packet = Vec::with_capacity(29);
+fn query(id: u16, labels: &[&[u8]]) -> Vec<u8> {
+    let mut packet = Vec::with_capacity(50);
     packet.extend_from_slice(&id.to_be_bytes());
     packet.extend_from_slice(&[0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-    packet.extend_from_slice(b"\x07example\x03com\x00");
+    for label in labels {
+        packet.push(u8::try_from(label.len()).expect("DNS labels fit in a byte"));
+        packet.extend_from_slice(label);
+    }
+    packet.push(0);
     packet.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
     packet
+}
+
+fn random_word() -> u64 {
+    RandomState::new().build_hasher().finish()
+}
+
+fn fresh_label() -> String {
+    format!("{:016x}", random_word())
+}
+
+fn local_address(server: SocketAddr) -> SocketAddr {
+    if server.is_ipv4() {
+        (std::net::Ipv4Addr::UNSPECIFIED, 0).into()
+    } else {
+        (std::net::Ipv6Addr::UNSPECIFIED, 0).into()
+    }
 }
 
 fn word(packet: &[u8], offset: usize) -> Option<u16> {
@@ -159,14 +181,18 @@ fn attempt(
     id: u16,
     deadline: Instant,
     buffer: &mut [u8],
+    mut stopped: impl FnMut() -> bool,
 ) -> Result<LastResult, HelperError> {
+    if stopped() {
+        return Ok(LastResult::Stopped);
+    }
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Ok(LastResult::Timeout);
     }
 
     socket
-        .set_write_timeout(Some(remaining))
+        .set_write_timeout(Some(remaining.min(Duration::from_millis(250))))
         .map_err(socket_error)?;
     match socket.send_to(packet, server) {
         Ok(_) => {}
@@ -182,12 +208,15 @@ fn attempt(
     }
 
     loop {
+        if stopped() {
+            return Ok(LastResult::Stopped);
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Ok(LastResult::Timeout);
         }
         socket
-            .set_read_timeout(Some(remaining))
+            .set_read_timeout(Some(remaining.min(Duration::from_millis(250))))
             .map_err(socket_error)?;
 
         match socket.recv_from(buffer) {
@@ -204,7 +233,8 @@ fn attempt(
                     io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
                 ) =>
             {
-                return Ok(LastResult::Timeout);
+                // A slice expired; the overall attempt may still have time left.
+                continue;
             }
             // Windows reports an ICMP port unreachable for an earlier datagram
             // as a reset on the next receive.
@@ -230,20 +260,13 @@ pub(super) fn check(
     let deadline = started + timeout;
     ensure_running(&mut is_running)?;
 
-    let local: SocketAddr = if server.is_ipv4() {
-        (std::net::Ipv4Addr::UNSPECIFIED, 0).into()
-    } else {
-        (std::net::Ipv6Addr::UNSPECIFIED, 0).into()
-    };
-    let socket = UdpSocket::bind(local).map_err(socket_error)?;
+    let socket = UdpSocket::bind(local_address(server)).map_err(socket_error)?;
     let mut buffer = vec![0u8; 65_535];
     let mut attempts = 0usize;
     let mut last = LastResult::Timeout;
 
-    let mut hasher = RandomState::new().build_hasher();
-    hasher.write_usize(0);
-    let id = hasher.finish() as u16;
-    let packet = query(id);
+    let id = random_word() as u16;
+    let packet = query(id, &[b"example", b"com"]);
 
     while Instant::now() < deadline {
         ensure_running(&mut is_running)?;
@@ -251,7 +274,15 @@ pub(super) fn check(
         let attempt_deadline = (Instant::now() + attempt_timeout).min(deadline);
 
         attempts += 1;
-        last = attempt(&socket, server, &packet, id, attempt_deadline, &mut buffer)?;
+        last = attempt(
+            &socket,
+            server,
+            &packet,
+            id,
+            attempt_deadline,
+            &mut buffer,
+            || false,
+        )?;
 
         if matches!(last, LastResult::Rcode(0)) {
             ensure_running(&mut is_running)?;
@@ -285,6 +316,25 @@ pub(super) fn check(
     )))
 }
 
+/// A one-shot, cache-bypassing lookup; never reports names or replies to the log.
+pub(super) fn probe(server: SocketAddr, timeout: Duration, stopped: impl Fn() -> bool) -> bool {
+    if timeout.is_zero() || stopped() {
+        return false;
+    }
+    let deadline = Instant::now() + timeout;
+    let Ok(socket) = UdpSocket::bind(local_address(server)) else {
+        return false;
+    };
+    let id = random_word() as u16;
+    let label = fresh_label();
+    let packet = query(id, &[label.as_bytes(), b"example", b"com"]);
+    let mut buffer = vec![0u8; 65_535];
+    matches!(
+        attempt(&socket, server, &packet, id, deadline, &mut buffer, stopped),
+        Ok(LastResult::Rcode(0))
+    )
+}
+
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
@@ -295,6 +345,7 @@ pub(crate) mod test_support {
     #[derive(Debug, Clone, Copy)]
     pub(crate) enum Behavior {
         Noerror,
+        Nxdomain,
         Servfail,
         Silent,
         WrongIdThenNoerror,
@@ -340,10 +391,10 @@ pub(crate) mod test_support {
 
                     let mut response = buffer[..length].to_vec();
                     response[2] = 0x81;
-                    response[3] = if matches!(behavior, Behavior::Servfail) {
-                        0x82
-                    } else {
-                        0x80
+                    response[3] = match behavior {
+                        Behavior::Servfail => 0x82,
+                        Behavior::Nxdomain => 0x83,
+                        _ => 0x80,
                     };
 
                     if matches!(behavior, Behavior::WrongIdThenNoerror) {
@@ -389,7 +440,7 @@ mod tests {
     const ATTEMPT_TIMEOUT: Duration = Duration::from_millis(20);
 
     fn response(id: u16, rcode: u8) -> Vec<u8> {
-        let mut packet = query(id);
+        let mut packet = query(id, &[b"example", b"com"]);
         packet[2] = 0x81;
         packet[3] = 0x80 | rcode;
         packet
@@ -398,9 +449,30 @@ mod tests {
     #[test]
     fn example_query_matches_wire_bytes() {
         assert_eq!(
-            query(0x1234),
+            query(0x1234, &[b"example", b"com"]),
             b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\
               \x07example\x03com\x00\x00\x01\x00\x01",
+        );
+    }
+
+    #[test]
+    fn fresh_labels_are_lowercase_hex_and_distinct() {
+        let labels: std::collections::HashSet<_> = (0..100).map(|_| fresh_label()).collect();
+        assert_eq!(labels.len(), 100);
+        assert!(labels.iter().all(|label| {
+            label.len() == 16
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }));
+    }
+
+    #[test]
+    fn fresh_query_has_a_label_beneath_example_com() {
+        assert_eq!(
+            query(0x1234, &[b"0123456789abcdef", b"example", b"com"]),
+            b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\
+              \x100123456789abcdef\x07example\x03com\x00\x00\x01\x00\x01",
         );
     }
 
@@ -423,7 +495,7 @@ mod tests {
     fn wrong_id_queries_and_truncated_packets_are_ignored() {
         let packet = response(123, 0);
         assert_eq!(parse_reply(&packet, 456), None);
-        assert_eq!(parse_reply(&query(123), 123), None);
+        assert_eq!(parse_reply(&query(123, &[b"example", b"com"]), 123), None);
 
         for length in 0..packet.len() {
             assert_eq!(parse_reply(&packet[..length], 123), None);
@@ -518,6 +590,40 @@ mod tests {
         let server = Server::new(Behavior::WrongIdThenNoerror);
         check(server.address(), TIMEOUT, ATTEMPT_TIMEOUT, || Ok(true))
             .expect("correct reply follows wrong ID");
+    }
+
+    #[test]
+    fn one_shot_accepts_noerror_and_nxdomain_but_not_servfail() {
+        for (behavior, expected) in [
+            (Behavior::Noerror, true),
+            (Behavior::Nxdomain, true),
+            (Behavior::Servfail, false),
+        ] {
+            let server = Server::new(behavior);
+            assert_eq!(probe(server.address(), TIMEOUT, || false), expected);
+        }
+    }
+
+    #[test]
+    fn one_shot_silence_deadline_and_stop_are_bounded() {
+        let server = Server::new(Behavior::Silent);
+        let started = Instant::now();
+        assert!(!probe(server.address(), TIMEOUT, || false));
+        assert!(started.elapsed() < Duration::from_millis(300));
+        assert!(!probe(server.address(), Duration::from_secs(1), || true));
+
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_stop = std::sync::Arc::clone(&stop);
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            worker_stop.store(true, std::sync::atomic::Ordering::Release);
+        });
+        let started = Instant::now();
+        assert!(!probe(server.address(), Duration::from_secs(2), || {
+            stop.load(std::sync::atomic::Ordering::Acquire)
+        }));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        worker.join().expect("stop signal thread");
     }
 
     #[test]
