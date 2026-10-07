@@ -422,11 +422,9 @@ pub(crate) struct Strings {
     pub(crate) rule_kind_app: &'static str,
     pub(crate) rule_kind_site: &'static str,
     pub(crate) find_app: &'static str,
-    pub(crate) open_now: &'static str,
+    pub(crate) open_tab: &'static str,
     pub(crate) all_processes: &'static str,
     pub(crate) found: &'static str,
-    pub(crate) show_all_processes: &'static str,
-    pub(crate) show_open_only: &'static str,
     pub(crate) typed_process: &'static str,
     pub(crate) sites_label: &'static str,
     pub(crate) line_error: &'static str,
@@ -573,10 +571,6 @@ impl Strings {
 
     pub(crate) fn found(&self, count: usize) -> String {
         fill(self.found, &[("n", &count.to_string())])
-    }
-
-    pub(crate) fn show_all_processes(&self, count: usize) -> String {
-        fill(self.show_all_processes, &[("n", &count.to_string())])
     }
 
     pub(crate) fn line_error(&self, line: usize, error: &str) -> String {

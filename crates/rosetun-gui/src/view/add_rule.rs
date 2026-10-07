@@ -305,6 +305,17 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     }
     let total: usize = dialog.processes.iter().map(|group| group.count).sum();
     let filtering = !dialog.process_filter.trim().is_empty();
+    if !filtering {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 16.0;
+            if process_tab(ui, t().open_tab, !dialog.show_all, !dialog.busy).clicked() {
+                dialog.show_all = false;
+            }
+            if process_tab(ui, &t().all_processes(total), dialog.show_all, !dialog.busy).clicked() {
+                dialog.show_all = true;
+            }
+        });
+    }
     let shown: usize = dialog
         .processes
         .iter()
@@ -317,14 +328,13 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         })
         .map(|group| group.count)
         .sum();
-    let heading = if filtering {
-        t().found(shown)
-    } else if dialog.show_all {
-        t().all_processes(total)
-    } else {
-        t().open_now.to_owned()
-    };
-    ui.label(RichText::new(heading).small().color(theme::TEXT_DIM));
+    if filtering {
+        ui.label(
+            RichText::new(t().found(shown))
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+    }
     let list_height = (ui.available_height() - 36.0).clamp(0.0, MAX_PROCESS_LIST);
     egui::ScrollArea::vertical()
         .id_salt("running_processes")
@@ -424,25 +434,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         });
     egui::Sides::new().show(
         ui,
-        |ui| {
-            if !filtering {
-                let label = if dialog.show_all {
-                    t().show_open_only.to_owned()
-                } else {
-                    t().show_all_processes(total)
-                };
-                if ui
-                    .add_enabled(
-                        !dialog.busy,
-                        egui::Button::new(RichText::new(label).color(theme::ROSE_LIGHT))
-                            .frame(false),
-                    )
-                    .clicked()
-                {
-                    dialog.show_all = !dialog.show_all;
-                }
-            }
-        },
+        |_| {},
         |ui| {
             #[cfg(windows)]
             {
@@ -458,6 +450,61 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         },
     );
     rosetun_core::parse_process_input(&dialog.process).is_ok()
+}
+
+fn process_tab(ui: &mut egui::Ui, label: &str, selected: bool, enabled: bool) -> egui::Response {
+    let enabled = enabled && ui.is_enabled();
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let width = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), theme::TEXT)
+        .size()
+        .x;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(width, ui.text_style_height(&egui::TextStyle::Body) + 8.0),
+        sense,
+    );
+    if ui.is_rect_visible(rect) {
+        let color = if !enabled {
+            theme::DISABLED
+        } else if selected {
+            theme::TEXT
+        } else if response.hovered() {
+            theme::TEXT_MUTED
+        } else {
+            theme::TEXT_DIM
+        };
+        ui.painter().text(
+            rect.min + egui::vec2(0.0, 2.0),
+            egui::Align2::LEFT_TOP,
+            label,
+            font,
+            color,
+        );
+        if selected {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), rect.bottom() - 2.0),
+                    egui::vec2(width, 2.0),
+                ),
+                0.0,
+                theme::ROSE,
+            );
+        }
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, selected, label)
+    });
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
 }
 
 fn select_process(dialog: &mut AddRuleDialog, index: usize) {
