@@ -51,8 +51,23 @@ fn type_width(ui: &egui::Ui) -> f32 {
 }
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
-    ui.heading(t().rules_title);
-    ui.colored_label(theme::TEXT_MUTED, t().rules_subtitle);
+    egui::Sides::new().shrink_left().wrap().show(
+        ui,
+        |ui| {
+            ui.vertical(|ui| {
+                ui.heading(t().rules_tab_title);
+                ui.add(
+                    egui::Label::new(RichText::new(t().rules_subtitle).color(theme::TEXT_MUTED))
+                        .wrap(),
+                );
+            });
+        },
+        |ui| {
+            if state.config_ready && !state.config.rule_sets.is_empty() {
+                set_controls(ui, state, actions);
+            }
+        },
+    );
     ui.add_space(20.0);
     if !state.config_ready {
         ui.colored_label(theme::TEXT_DIM, t().loading);
@@ -67,8 +82,6 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         return;
     }
 
-    set_controls(ui, state, actions);
-    ui.add_space(20.0);
     let Some(set) = state
         .config
         .rule_sets
@@ -90,9 +103,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     }
     let can_add = state.can_edit_rules();
     filter_controls(ui, &mut state.rule_screen.filter, set, can_add, actions);
-    ui.add_space(16.0);
-    ui.add(egui::Label::new(RichText::new(t().order_hint).color(theme::TEXT_DIM)).wrap());
     ui.add_space(8.0);
+    ui.add(egui::Label::new(RichText::new(t().order_hint).small().color(theme::TEXT_DIM)).wrap());
+    ui.add_space(12.0);
 
     let visible = visible_rules(set, &state.rule_screen.filter);
     let rule_type = type_width(ui);
@@ -126,34 +139,163 @@ fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let Some(set) = state.selected_rules() else {
         return;
     };
-    ui.horizontal_wrapped(|ui| {
-        let mut selected = set.id.clone();
-        egui::ComboBox::from_id_salt("opened_rule_set")
-            .selected_text(state.text(&set.name))
-            .width(260.0)
-            .show_ui(ui, |ui| {
-                for item in &state.config.rule_sets {
-                    ui.selectable_value(&mut selected, item.id.clone(), state.text(&item.name));
+    let active = state.config.active_rule_set.as_ref() == Some(&set.id);
+    ui.horizontal(|ui| {
+        set_picker(ui, state, set, actions);
+        let menu =
+            icons::icon_button_sized(ui, Icon::More, true, 40.0).on_hover_text(t().more_actions);
+        egui::Popup::menu(&menu).show(|ui| {
+            ui.set_min_width(180.0);
+            if !active
+                && ui
+                    .add_enabled(state.can_edit_rules(), egui::Button::new(t().make_active))
+                    .clicked()
+            {
+                actions.push(Action::SelectRuleSet(Some(set.id.clone())));
+                ui.close();
+            }
+            if ui
+                .add_enabled(state.can_edit_rules(), egui::Button::new(t().new_set))
+                .clicked()
+            {
+                actions.push(Action::OpenCreateSet);
+                ui.close();
+            }
+            if ui
+                .add_enabled(state.can_edit_rules(), egui::Button::new(t().rename))
+                .clicked()
+            {
+                actions.push(Action::OpenRenameSet);
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    state.can_edit_rules(),
+                    egui::Button::new(RichText::new(t().delete).color(theme::ERROR)),
+                )
+                .clicked()
+            {
+                actions.push(Action::RequestDeleteSet);
+                ui.close();
+            }
+        });
+    });
+}
+
+fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec<Action>) {
+    let name = state.text(&set.name);
+    let font = egui::FontId::new(
+        egui::TextStyle::Body.resolve(ui.style()).size,
+        egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+    );
+    let label_width = ui
+        .painter()
+        .layout_no_wrap(
+            t().rule_set_label.to_owned(),
+            egui::TextStyle::Small.resolve(ui.style()),
+            theme::TEXT_DIM,
+        )
+        .size()
+        .x;
+    let name_width = ui
+        .painter()
+        .layout_no_wrap(name.clone(), font.clone(), theme::TEXT)
+        .size()
+        .x
+        .min(260.0);
+    let active = state.config.active_rule_set.as_ref() == Some(&set.id);
+    let active_width = if active {
+        ui.painter()
+            .layout_no_wrap(
+                t().active.to_owned(),
+                egui::TextStyle::Small.resolve(ui.style()),
+                theme::ROSE_LIGHT,
+            )
+            .size()
+            .x
+            + 12.0
+    } else {
+        0.0
+    };
+    let width = (12.0 + label_width + 10.0 + name_width + active_width + 36.0).max(220.0);
+    let response = ui
+        .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+            ui.style_mut().interaction.selectable_labels = false;
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(
+                rect,
+                theme::RADIUS,
+                if ui.response().hovered() {
+                    theme::BORDER
+                } else {
+                    theme::INPUT
+                },
+            );
+            painter.rect_stroke(
+                rect,
+                theme::RADIUS,
+                Stroke::new(1.0, theme::BORDER_STRONG),
+                egui::StrokeKind::Inside,
+            );
+            let center_y = rect.center().y;
+            let left = rect.left() + 12.0;
+            painter.text(
+                egui::pos2(left, center_y),
+                egui::Align2::LEFT_CENTER,
+                t().rule_set_label,
+                egui::TextStyle::Small.resolve(ui.style()),
+                theme::TEXT_DIM,
+            );
+            let name_left = left + label_width + 10.0;
+            let galley = egui::WidgetText::from(RichText::new(name).font(font).color(theme::TEXT))
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Truncate),
+                    name_width,
+                    egui::TextStyle::Body,
+                );
+            painter.galley(
+                egui::pos2(name_left, center_y - galley.size().y / 2.0),
+                galley,
+                theme::TEXT,
+            );
+            if active {
+                painter.text(
+                    egui::pos2(name_left + name_width + 12.0, center_y),
+                    egui::Align2::LEFT_CENTER,
+                    t().active,
+                    egui::TextStyle::Small.resolve(ui.style()),
+                    theme::ROSE_LIGHT,
+                );
+            }
+            icons::paint(
+                painter,
+                egui::pos2(rect.right() - 18.0, center_y),
+                Icon::Chevron { open: true },
+                theme::TEXT_DIM,
+            );
+        })
+        .response
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    egui::Popup::menu(&response).show(|ui| {
+        ui.set_min_width(width);
+        for item in &state.config.rule_sets {
+            let selected = item.id == set.id;
+            let is_active = state.config.active_rule_set.as_ref() == Some(&item.id);
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(selected, state.text(&item.name))
+                    .clicked()
+                {
+                    actions.push(Action::ChooseRuleSet(item.id.clone()));
+                    ui.close();
+                }
+                if is_active {
+                    ui.label(RichText::new(t().active).small().color(theme::ROSE_LIGHT));
                 }
             });
-        if selected != set.id {
-            actions.push(Action::ChooseRuleSet(selected));
-        }
-        if state.config.active_rule_set.as_ref() == Some(&set.id) {
-            ui.colored_label(theme::ROSE_LIGHT, t().active);
-        } else if widgets::outline_button(ui, t().use_for_connections, state.can_edit_rules())
-            .clicked()
-        {
-            actions.push(Action::SelectRuleSet(Some(set.id.clone())));
-        }
-        if widgets::outline_button(ui, t().new_set, state.can_edit_rules()).clicked() {
-            actions.push(Action::OpenCreateSet);
-        }
-        if widgets::outline_button(ui, t().rename, state.can_edit_rules()).clicked() {
-            actions.push(Action::OpenRenameSet);
-        }
-        if widgets::outline_button(ui, t().delete, state.can_edit_rules()).clicked() {
-            actions.push(Action::RequestDeleteSet);
         }
     });
 }
@@ -165,11 +307,6 @@ fn filter_controls(
     can_add: bool,
     actions: &mut Vec<Action>,
 ) {
-    ui.add(
-        egui::TextEdit::singleline(&mut filter.search)
-            .hint_text(t().search_rules)
-            .desired_width(330.0),
-    );
     let counts = rule_counts(set);
     let labels: Vec<_> = [
         (TypeFilter::All, t().all, counts.all()),
@@ -185,27 +322,56 @@ fn filter_controls(
         .iter()
         .map(|(kind, label)| (*kind, label.as_str()))
         .collect();
-    ui.horizontal_wrapped(|ui| {
-        if let Some(kind) =
-            widgets::segmented(ui, "rule_type_filter", filter.kind, &options, false, true)
-        {
-            actions.push(Action::SetRuleTypeFilter(kind));
-        }
-        ui.separator();
-        for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
-            let text = RichText::new(target_label(target)).color(target_color(target));
-            if ui
-                .add(egui::Button::new(text).selected(filter.target == Some(target)))
-                .clicked()
-            {
-                actions.push(Action::ToggleRuleTargetFilter(target));
-            }
-        }
-        ui.separator();
-        if widgets::button_fill(ui, t().new_rule_button, can_add).clicked() {
-            actions.push(Action::OpenAddRule);
-        }
-    });
+    let (_, add_rule) = egui::Sides::new().shrink_left().wrap().show(
+        ui,
+        |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let search = ui.add(
+                    egui::TextEdit::singleline(&mut filter.search)
+                        .hint_text(t().search_rules)
+                        .desired_width(260.0)
+                        .min_size(egui::vec2(260.0, 38.0))
+                        .margin(egui::Margin {
+                            left: 32,
+                            right: 8,
+                            top: 8,
+                            bottom: 8,
+                        }),
+                );
+                icons::paint(
+                    ui.painter(),
+                    egui::pos2(search.rect.left() + 16.0, search.rect.center().y),
+                    Icon::Search,
+                    theme::TEXT_DIM,
+                );
+                if let Some(kind) =
+                    widgets::segmented(ui, "rule_type_filter", filter.kind, &options, false, true)
+                {
+                    actions.push(Action::SetRuleTypeFilter(kind));
+                }
+                let mut selected = filter.target;
+                egui::ComboBox::from_id_salt("rule_target_filter")
+                    .selected_text(selected.map(target_label).unwrap_or(t().any_action))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut selected, None, t().any_action);
+                        for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
+                            ui.selectable_value(
+                                &mut selected,
+                                Some(target),
+                                RichText::new(target_label(target)).color(target_color(target)),
+                            );
+                        }
+                    });
+                if selected != filter.target {
+                    actions.push(Action::SetRuleTargetFilter(selected));
+                }
+            });
+        },
+        |ui| widgets::button_fill(ui, t().new_rule_button, can_add).clicked(),
+    );
+    if add_rule {
+        actions.push(Action::OpenAddRule);
+    }
 }
 
 fn table_cell(
@@ -637,7 +803,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
     let response = egui::Modal::new(egui::Id::new("delete_rules"))
         .frame(widgets::modal_frame())
         .show(ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(480.0);
             match dialog {
                 DeleteDialog::Set(id) => {
                     ui.heading(t().delete_rule_set);

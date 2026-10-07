@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
+use rosetun_config::{ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
 use rosetun_processes::RunningProcess;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,9 +98,9 @@ impl RuleCounts {
 
 fn kind(rule: &Rule) -> TypeFilter {
     match &rule.matcher {
-        RuleMatcher::Domain(DomainMatch::Exact(_) | DomainMatch::Suffix(_)) => TypeFilter::Domains,
+        RuleMatcher::Domain(_) => TypeFilter::Domains,
         RuleMatcher::Process(_) => TypeFilter::Processes,
-        RuleMatcher::Domain(DomainMatch::Keyword(_)) | RuleMatcher::IpCidr(_) => TypeFilter::Other,
+        RuleMatcher::IpCidr(_) => TypeFilter::Other,
     }
 }
 
@@ -231,20 +231,20 @@ mod tests {
         assert_eq!(
             rule_counts(&set),
             RuleCounts {
-                domains: 2,
+                domains: 3,
                 processes: 2,
-                other: 2
+                other: 1
             }
         );
         assert_eq!(rule_counts(&set).all(), 6);
         let mut filter = RuleFilter::default();
         assert_eq!(indices(&set, &filter), vec![0, 1, 2, 3, 4, 5]);
         filter.kind = TypeFilter::Domains;
-        assert_eq!(indices(&set, &filter), vec![0, 2]);
+        assert_eq!(indices(&set, &filter), vec![0, 2, 3]);
         filter.kind = TypeFilter::Processes;
         assert_eq!(indices(&set, &filter), vec![1, 5]);
         filter.kind = TypeFilter::Other;
-        assert_eq!(indices(&set, &filter), vec![3, 4]);
+        assert_eq!(indices(&set, &filter), vec![4]);
     }
 
     #[test]
@@ -258,7 +258,7 @@ mod tests {
         filter.search.clear();
         filter.target = Some(RuleTarget::Block);
         assert_eq!(indices(&set, &filter), vec![1, 3, 5]);
-        filter.kind = TypeFilter::Other;
+        filter.kind = TypeFilter::Domains;
         filter.search = "NEWS".into();
         assert_eq!(indices(&set, &filter), vec![3]);
         assert_eq!(visible_rules(&set, &filter)[0].1.id.as_str(), "3");

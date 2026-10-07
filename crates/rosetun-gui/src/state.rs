@@ -401,7 +401,7 @@ pub(crate) enum Action {
     OpenActiveRules,
     ChooseRuleSet(RuleSetId),
     SetRuleTypeFilter(TypeFilter),
-    ToggleRuleTargetFilter(RuleTarget),
+    SetRuleTargetFilter(Option<RuleTarget>),
     OpenCreateSet,
     OpenRenameSet,
     CancelSetName,
@@ -1238,14 +1238,7 @@ impl State {
                 }
             }
             Action::SetRuleTypeFilter(kind) => self.rule_screen.filter.kind = kind,
-            Action::ToggleRuleTargetFilter(target) => {
-                let filter = &mut self.rule_screen.filter.target;
-                *filter = if *filter == Some(target) {
-                    None
-                } else {
-                    Some(target)
-                };
-            }
+            Action::SetRuleTargetFilter(target) => self.rule_screen.filter.target = target,
             Action::OpenCreateSet => {
                 if self.can_edit_rules() && self.rule_screen.name.is_none() {
                     self.rule_screen.name = Some(NameDialog {
@@ -3130,6 +3123,15 @@ mod tests {
         assert!(state.act(Action::SubmitAddRule).is_none());
         state.act(Action::CancelAddRule);
         assert!(state.rule_screen.add.is_none());
+    }
+
+    #[test]
+    fn rule_target_filter_can_be_set_and_cleared() {
+        let mut state = state_with_rules();
+        state.act(Action::SetRuleTargetFilter(Some(RuleTarget::Block)));
+        assert_eq!(state.rule_screen.filter.target, Some(RuleTarget::Block));
+        state.act(Action::SetRuleTargetFilter(None));
+        assert_eq!(state.rule_screen.filter.target, None);
     }
 
     #[test]
