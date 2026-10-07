@@ -57,7 +57,7 @@ impl RoutingBackend for UnusedRouting {
     }
 
     fn preflight(&self) -> Result<(), RoutingError> {
-        panic!("routing preflight must not run when the kill switch is disabled");
+        panic!("routing must not run without the kill switch or a tunnel DNS server");
     }
 
     fn begin_protection(
@@ -65,7 +65,7 @@ impl RoutingBackend for UnusedRouting {
         _plan: &RoutingPlan,
         _engine_binary: &Path,
     ) -> Result<RoutingGuard, RoutingError> {
-        panic!("routing protection must not run when the kill switch is disabled");
+        panic!("routing must not run without the kill switch or a tunnel DNS server");
     }
 }
 
@@ -545,7 +545,7 @@ fn supervised_helper_with_dns(
         controls: Arc::clone(&controls),
         dns_server,
     }));
-    let routing: Box<dyn RoutingBackend> = if protected {
+    let routing: Box<dyn RoutingBackend> = if protected || dns_server.is_some() {
         Box::new(ReconnectRouting {
             prepared: Arc::clone(&prepared),
             reverted: Arc::clone(&reverted),
@@ -589,6 +589,27 @@ impl RoutingBackend for CountingRouting {
                 Ok(())
             },
         ))
+    }
+}
+
+#[derive(Debug)]
+struct FailingRouting;
+
+impl RoutingBackend for FailingRouting {
+    fn name(&self) -> &'static str {
+        "test-failing"
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Err(RoutingError::Unsupported)
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binary: &Path,
+    ) -> Result<RoutingGuard, RoutingError> {
+        panic!("preflight failure must prevent installation");
     }
 }
 
@@ -879,13 +900,9 @@ fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
             stopped: Arc::clone(&stopped),
         }));
 
-        let routing: Box<dyn RoutingBackend> = if kill_switch {
-            Box::new(CountingRouting {
-                reverted: Arc::clone(&reverted),
-            })
-        } else {
-            Box::new(UnusedRouting)
-        };
+        let routing: Box<dyn RoutingBackend> = Box::new(CountingRouting {
+            reverted: Arc::clone(&reverted),
+        });
         let helper = Helper::new(engines, routing, VerboseGate::default());
         shorten_dns_timeouts(&helper);
 
@@ -902,6 +919,19 @@ fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
             Some(server.address())
         );
         assert!(helper.session().expect("session").watchdog.is_some());
+        assert_eq!(
+            helper
+                .session()
+                .expect("session")
+                .guard
+                .as_ref()
+                .map(|guard| guard.scope),
+            Some(if kill_switch {
+                ProtectionScope::AllTraffic
+            } else {
+                ProtectionScope::DnsOnly
+            }),
+        );
     }
 }
 
@@ -909,43 +939,86 @@ fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
 fn fresh_dns_timeout_stops_engine_and_releases_protection() {
     use super::dns::test_support::{Behavior, Server};
 
-    let server = Server::new(Behavior::Silent);
-    let stopped = Arc::new(AtomicUsize::new(0));
-    let reverted = Arc::new(AtomicUsize::new(0));
-    let mut engines = EngineRegistry::new();
-    engines.register(Box::new(DnsEngine {
-        server: Some(server.address()),
-        stopped: Arc::clone(&stopped),
-    }));
+    for kill_switch in [false, true] {
+        let server = Server::new(Behavior::Silent);
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let reverted = Arc::new(AtomicUsize::new(0));
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(DnsEngine {
+            server: Some(server.address()),
+            stopped: Arc::clone(&stopped),
+        }));
 
-    let helper = Helper::new(
-        engines,
-        Box::new(CountingRouting {
-            reverted: Arc::clone(&reverted),
-        }),
-        VerboseGate::default(),
-    );
-    shorten_dns_timeouts(&helper);
+        let helper = Helper::new(
+            engines,
+            Box::new(CountingRouting {
+                reverted: Arc::clone(&reverted),
+            }),
+            VerboseGate::default(),
+        );
+        shorten_dns_timeouts(&helper);
 
-    let mut request = connect_request();
-    request.settings.kill_switch = true;
-    let error = helper.connect(&request).expect_err("DNS is silent");
+        let mut request = connect_request();
+        request.settings.kill_switch = kill_switch;
+        let error = helper.connect(&request).expect_err("DNS is silent");
 
-    assert_eq!(error.code, ErrorCode::EngineFailed);
-    assert!(error.message.contains("last: timeout"));
-    assert!(matches!(
-        helper.status().state,
-        ConnectionState::Failed { ref reason } if reason == &error.message
-    ));
-    assert_eq!(stopped.load(Ordering::Acquire), 1);
-    assert_eq!(reverted.load(Ordering::Acquire), 1);
+        assert_eq!(error.code, ErrorCode::EngineFailed);
+        assert!(error.message.contains("last: timeout"));
+        assert!(matches!(
+            helper.status().state,
+            ConnectionState::Failed { ref reason } if reason == &error.message
+        ));
+        assert_eq!(stopped.load(Ordering::Acquire), 1);
+        assert_eq!(reverted.load(Ordering::Acquire), 1);
 
-    let session = helper.session().expect("session");
-    assert!(session.guard.is_none());
-    assert!(session.process.is_none());
-    assert!(session.last_endpoint.is_none());
-    assert!(session.tunnel_dns.is_none());
-    assert!(session.watchdog.is_none());
+        let session = helper.session().expect("session");
+        assert!(session.guard.is_none());
+        assert!(session.process.is_none());
+        assert!(session.last_endpoint.is_none());
+        assert!(session.tunnel_dns.is_none());
+        assert!(session.watchdog.is_none());
+    }
+}
+
+#[test]
+fn dns_lock_failure_does_not_block_connect() {
+    use super::dns::test_support::{Behavior, Server};
+
+    for kill_switch in [false, true] {
+        let server = Server::new(Behavior::Noerror);
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(DnsEngine {
+            server: Some(server.address()),
+            stopped: Arc::clone(&stopped),
+        }));
+        let helper = Helper::new(engines, Box::new(FailingRouting), VerboseGate::default());
+        shorten_dns_timeouts(&helper);
+        let mut request = connect_request();
+        request.settings.kill_switch = kill_switch;
+
+        if kill_switch {
+            let error = helper
+                .connect(&request)
+                .expect_err("kill switch cannot be skipped");
+            assert_eq!(error.code, ErrorCode::RoutingFailed);
+            assert!(matches!(
+                helper.status().state,
+                ConnectionState::Failed { .. }
+            ));
+            assert!(helper.session().expect("session").watchdog.is_none());
+        } else {
+            helper
+                .connect(&request)
+                .expect("DNS lock failure is optional");
+            assert!(matches!(helper.status().state, ConnectionState::Connected));
+            let session = helper.session().expect("session");
+            assert!(session.guard.is_none());
+            assert_eq!(session.tunnel_dns, Some(server.address()));
+            assert!(session.watchdog.is_some());
+            assert_eq!(stopped.load(Ordering::Acquire), 0);
+        }
+    }
 }
 
 #[test]
@@ -1503,6 +1576,136 @@ fn dns_stall_reconnect_starts_a_fresh_watchdog_and_disconnect_cleans_up() {
 }
 
 #[test]
+fn dns_lock_survives_engine_restarts() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, controls, prepared, reverted) =
+        supervised_helper_with_dns(false, Some(server.address()));
+    shorten_dns_timeouts(&helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper
+        .connect(&request)
+        .expect("first connect with DNS lock");
+    assert_eq!(
+        helper
+            .session()
+            .expect("session")
+            .guard
+            .as_ref()
+            .map(|guard| guard.scope),
+        Some(ProtectionScope::DnsOnly)
+    );
+
+    controls.kill();
+    helper.supervise(Instant::now());
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(
+        helper
+            .session()
+            .expect("session")
+            .guard
+            .as_ref()
+            .map(|guard| guard.scope),
+        Some(ProtectionScope::DnsOnly)
+    );
+}
+
+#[test]
+fn dns_lock_is_released_when_reconnects_are_exhausted() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, controls, prepared, reverted) =
+        supervised_helper_with_dns(false, Some(server.address()));
+    shorten_dns_timeouts(&helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper
+        .connect(&request)
+        .expect("first connect with DNS lock");
+    controls.fail_next(RECONNECT_ATTEMPTS as usize);
+    controls.kill();
+    let now = Instant::now();
+    helper.supervise(now);
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Reconnecting
+    ));
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    for attempt in 2..=RECONNECT_ATTEMPTS {
+        helper.supervise(now + Duration::from_secs(u64::from(attempt) * 60));
+    }
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed { .. }
+    ));
+    assert_eq!(
+        prepared.load(Ordering::Acquire),
+        RECONNECT_ATTEMPTS as usize
+    );
+    assert_eq!(reverted.load(Ordering::Acquire), 1);
+    let session = helper.session().expect("session");
+    assert!(session.guard.is_none());
+    assert!(session.process.is_none());
+    assert!(session.tunnel_dns.is_none());
+    assert!(session.watchdog.is_none());
+}
+
+#[test]
+fn dns_lock_is_released_when_auto_reconnect_is_off() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, controls, _, reverted) = supervised_helper_with_dns(false, Some(server.address()));
+    shorten_dns_timeouts(&helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request.settings.auto_reconnect = false;
+    helper
+        .connect(&request)
+        .expect("first connect with DNS lock");
+    controls.kill();
+    helper.supervise(Instant::now());
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed { .. }
+    ));
+    assert_eq!(reverted.load(Ordering::Acquire), 1);
+    let session = helper.session().expect("session");
+    assert!(session.guard.is_none());
+    assert!(session.process.is_none());
+    assert!(session.tunnel_dns.is_none());
+    assert!(session.watchdog.is_none());
+}
+
+#[test]
+fn disconnect_releases_dns_lock() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, _, _, reverted) = supervised_helper_with_dns(false, Some(server.address()));
+    shorten_dns_timeouts(&helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).expect("connect with DNS lock");
+    helper.disconnect().expect("disconnect releases DNS lock");
+
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Disconnected
+    ));
+    assert_eq!(reverted.load(Ordering::Acquire), 1);
+    assert!(helper.session().expect("session").guard.is_none());
+}
+
+#[test]
 fn disabled_reconnect_leaves_both_session_types_failed() {
     for protected in [false, true] {
         let (helper, controls, _, reverted) = supervised_helper(protected);
@@ -1689,21 +1892,24 @@ fn protected_helper(
         let prepare_count = Arc::clone(&prepared);
         let authorize_count = Arc::clone(&authorized);
         let revert_count = Arc::clone(&reverted);
-        session.guard = Some(RoutingGuard::new_with_reconnector(
-            move |plan, _| {
-                assert!(plan.allow_lan);
-                prepare_count.fetch_add(1, Ordering::AcqRel);
-                Ok(())
-            },
-            move |_| {
-                authorize_count.fetch_add(1, Ordering::AcqRel);
-                Ok(())
-            },
-            move || {
-                revert_count.fetch_add(1, Ordering::AcqRel);
-                Ok(())
-            },
-        ));
+        session.guard = Some(Guard {
+            routing: RoutingGuard::new_with_reconnector(
+                move |plan, _| {
+                    assert!(plan.allow_lan);
+                    prepare_count.fetch_add(1, Ordering::AcqRel);
+                    Ok(())
+                },
+                move |_| {
+                    authorize_count.fetch_add(1, Ordering::AcqRel);
+                    Ok(())
+                },
+                move || {
+                    revert_count.fetch_add(1, Ordering::AcqRel);
+                    Ok(())
+                },
+            ),
+            scope: ProtectionScope::AllTraffic,
+        });
         session.last_endpoint = Some(SuccessfulEndpoint {
             // This domain must never be resolved during reconnect.
             server: "cached.invalid".to_owned(),

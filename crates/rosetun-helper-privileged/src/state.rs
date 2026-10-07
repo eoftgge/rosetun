@@ -15,7 +15,9 @@ use rosetun_engine::{
     ControlEndpoint, EngineProcess, EngineRegistry, RenderRequest, TrafficProbe, TrafficTotals,
 };
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
-use rosetun_routing::{RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface};
+use rosetun_routing::{
+    ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
+};
 
 use crate::log_gate::VerboseGate;
 use watchdog::{DnsWatchdog, WatchdogTiming};
@@ -73,6 +75,12 @@ struct Reconnect {
     cause: &'static str,
 }
 
+/// Routing protection that outlives one engine process.
+struct Guard {
+    routing: RoutingGuard,
+    scope: ProtectionScope,
+}
+
 struct Session {
     engines: EngineRegistry,
     routing: Box<dyn RoutingBackend>,
@@ -83,7 +91,7 @@ struct Session {
     monitor: Option<TrafficMonitor>,
     watchdog: Option<DnsWatchdog>,
     tunnel_dns: Option<SocketAddr>,
-    guard: Option<RoutingGuard>,
+    guard: Option<Guard>,
     last_endpoint: Option<SuccessfulEndpoint>,
     request: Option<ConnectRequest>,
     reconnect: Option<Reconnect>,
@@ -170,9 +178,12 @@ impl Helper {
                 None => Some("the engine process is missing".to_owned()),
             };
             if let Some(reason) = exited {
-                let protected = session.guard.is_some();
+                let protected = session.keeps_protection();
                 if !auto_reconnect {
                     tracing::warn!(%reason, protected, "the engine terminated itself");
+                    if !protected {
+                        session.teardown();
+                    }
                     self.with_status(|status| {
                         status.state = if protected {
                             ConnectionState::FailedProtected { reason }
@@ -256,22 +267,21 @@ impl Helper {
                     });
                     tracing::warn!(cause = reconnect.cause, attempt, %error, "tunnel reconnect failed; retrying");
                 } else {
-                    match mode {
-                        StartMode::Fresh => session.teardown(),
-                        StartMode::ProtectedReconnect => {
-                            if let Err(cleanup_error) = session.stop_engine() {
-                                tracing::error!(%cleanup_error, "failed to stop engine after protected reconnect failure");
-                            }
+                    let protected = session.keeps_protection();
+                    if protected {
+                        if let Err(cleanup_error) = session.stop_engine() {
+                            tracing::error!(%cleanup_error, "failed to stop engine after protected reconnect failure");
                         }
+                    } else {
+                        session.teardown();
                     }
                     tracing::warn!(cause = reconnect.cause, attempt, %error, "tunnel reconnect attempts exhausted");
                     let reason = error.message;
                     self.with_status(|status| {
-                        status.state = match mode {
-                            StartMode::Fresh => ConnectionState::Failed { reason },
-                            StartMode::ProtectedReconnect => {
-                                ConnectionState::FailedProtected { reason }
-                            }
+                        status.state = if protected {
+                            ConnectionState::FailedProtected { reason }
+                        } else {
+                            ConnectionState::Failed { reason }
                         };
                         status.since_unix = None;
                     });
@@ -327,25 +337,24 @@ impl Helper {
                 Ok(())
             }
             Err(error) => {
-                match mode {
-                    StartMode::Fresh => session.teardown(),
-                    StartMode::ProtectedReconnect => {
-                        if let Err(cleanup_error) = session.stop_engine() {
-                            tracing::error!(
-                                %cleanup_error,
-                                "failed to stop engine after protected reconnect failure"
-                            );
-                        }
+                let protected = mode == StartMode::ProtectedReconnect && session.keeps_protection();
+                if protected {
+                    if let Err(cleanup_error) = session.stop_engine() {
+                        tracing::error!(
+                            %cleanup_error,
+                            "failed to stop engine after protected reconnect failure"
+                        );
                     }
+                } else {
+                    session.teardown();
                 }
 
                 let reason = error.message.clone();
                 self.with_status(|status| {
-                    status.state = match mode {
-                        StartMode::Fresh => ConnectionState::Failed { reason },
-                        StartMode::ProtectedReconnect => {
-                            ConnectionState::FailedProtected { reason }
-                        }
+                    status.state = if protected {
+                        ConnectionState::FailedProtected { reason }
+                    } else {
+                        ConnectionState::Failed { reason }
                     };
                     status.since_unix = None;
                 });
@@ -552,6 +561,14 @@ fn rates(previous: (TrafficTotals, Instant), current: (TrafficTotals, Instant)) 
 }
 
 impl Session {
+    /// Only the kill switch keeps blocking after a failure. The DNS lock goes
+    /// with the session.
+    fn keeps_protection(&self) -> bool {
+        self.guard
+            .as_ref()
+            .is_some_and(|guard| guard.scope == ProtectionScope::AllTraffic)
+    }
+
     fn start(
         &mut self,
         node: &Node,
@@ -563,6 +580,13 @@ impl Session {
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
 
+        if mode == StartMode::Fresh
+            && let Some(guard) = self.guard.take()
+            && let Err(error) = guard.routing.revert()
+        {
+            tracing::error!(%error, "failed to roll back stale routing protection");
+        }
+
         if mode == StartMode::ProtectedReconnect {
             if self.guard.is_none() {
                 return Err(HelperError::new(
@@ -570,7 +594,7 @@ impl Session {
                     "protected reconnect is impossible: the routing guard is missing",
                 ));
             }
-            if !settings.kill_switch {
+            if !settings.kill_switch && self.keeps_protection() {
                 return Err(HelperError::new(
                     ErrorCode::InvalidState,
                     "disconnect first to turn protection off",
@@ -647,37 +671,73 @@ impl Session {
             "engine binary located"
         );
 
-        let tunnel = settings
-            .kill_switch
-            .then(|| TunnelInterface::try_from(&settings.tun))
+        let scope = match mode {
+            StartMode::Fresh => {
+                if settings.kill_switch {
+                    Some(ProtectionScope::AllTraffic)
+                } else if dns_server.is_some() {
+                    Some(ProtectionScope::DnsOnly)
+                } else {
+                    None
+                }
+            }
+            // The guard stays; only the kill switch may widen it.
+            StartMode::ProtectedReconnect => Some(if settings.kill_switch {
+                ProtectionScope::AllTraffic
+            } else {
+                ProtectionScope::DnsOnly
+            }),
+        };
+        let tunnel = scope
+            .map(|_| TunnelInterface::try_from(&settings.tun))
             .transpose()
             .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
 
-        if settings.kill_switch {
+        if let Some(scope) = scope {
             let plan = RoutingPlan {
+                scope,
                 allow_lan: settings.allow_lan,
             };
 
             match mode {
                 StartMode::Fresh => {
-                    self.routing.preflight().map_err(|error| {
-                        HelperError::new(ErrorCode::RoutingFailed, error.to_string())
-                    })?;
-                    self.guard = Some(self.routing.begin_protection(&plan, &binary).map_err(
-                        |error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()),
-                    )?);
+                    let result = self
+                        .routing
+                        .preflight()
+                        .and_then(|()| self.routing.begin_protection(&plan, &binary));
+                    match result {
+                        Ok(routing) => {
+                            self.guard = Some(Guard { routing, scope });
+                            tracing::info!(?scope, "routing protection installed");
+                        }
+                        Err(error) if scope == ProtectionScope::DnsOnly => {
+                            tracing::warn!(%error, "DNS lock is unavailable; connecting without it");
+                        }
+                        Err(error) => {
+                            return Err(HelperError::new(
+                                ErrorCode::RoutingFailed,
+                                error.to_string(),
+                            ));
+                        }
+                    }
                 }
                 StartMode::ProtectedReconnect => {
-                    self.guard
+                    let guard = self
+                        .guard
                         .as_mut()
-                        .expect("protected reconnect validated the guard")
+                        .expect("protected reconnect validated the guard");
+                    guard
+                        .routing
                         .prepare_reconnect(&plan, &binary)
                         .map_err(|error| {
                             HelperError::new(ErrorCode::RoutingFailed, error.to_string())
                         })?;
+                    guard.scope = scope;
                 }
             }
         }
+        // Without a guard there is no filter to authorize on the tunnel.
+        let tunnel = tunnel.filter(|_| self.guard.is_some());
 
         tracing::info!(engine = %backend.kind().as_str(), "spawning tunnel engine");
         self.process = Some(
@@ -838,12 +898,16 @@ impl Session {
                 ));
             }
 
-            let guard = self.guard.as_mut().ok_or_else(|| {
-                HelperError::new(
-                    ErrorCode::RoutingFailed,
-                    "routing protection disappeared before tunnel authorization",
-                )
-            })?;
+            let guard = self
+                .guard
+                .as_mut()
+                .map(|guard| &mut guard.routing)
+                .ok_or_else(|| {
+                    HelperError::new(
+                        ErrorCode::RoutingFailed,
+                        "routing protection disappeared before tunnel authorization",
+                    )
+                })?;
 
             match guard.authorize_tunnel(tunnel) {
                 Ok(()) => {
@@ -911,7 +975,7 @@ impl Session {
             tracing::error!(%error, "failed to stop the engine");
         }
         if let Some(guard) = self.guard.take()
-            && let Err(error) = guard.revert()
+            && let Err(error) = guard.routing.revert()
         {
             tracing::error!(%error, "failed to roll back routes");
         }
