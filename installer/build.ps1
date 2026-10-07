@@ -1,25 +1,27 @@
+param([switch]$Release)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$manifest = Get-Content -LiteralPath (Join-Path $root 'Cargo.toml') -Raw
-$workspacePackage = [regex]::Match($manifest, '(?ms)^\[workspace\.package\]\r?\n(?<section>.*?)(?=^\[|\z)')
-if (-not $workspacePackage.Success) {
-    throw 'Missing [workspace.package] in Cargo.toml.'
-}
-$versionMatch = [regex]::Match($workspacePackage.Groups['section'].Value, '(?m)^version\s*=\s*"(?<version>[^"]+)"\s*$')
-if (-not $versionMatch.Success) {
-    throw 'Missing version in [workspace.package] in Cargo.toml.'
-}
-$version = $versionMatch.Groups['version'].Value
-$fileVersion = $version -replace '-.*$', ''
-if ($fileVersion -notmatch '^\d+\.\d+\.\d+$') {
-    throw "Invalid numeric installer file version $fileVersion from $version."
-}
+. (Join-Path $PSScriptRoot 'version.ps1')
+$releaseVersion = Get-RosetunVersion
+$version = $releaseVersion.Version
+$fileVersion = $releaseVersion.FileVersion
 $cargoAboutVersion = '0.9.2'
 $installedCargoAbout = & cargo about --version 2>$null
 if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "cargo-about $cargoAboutVersion") {
-    throw "cargo-about $cargoAboutVersion is required. Install it with: cargo install cargo-about --locked --version $cargoAboutVersion --force"
+    if (-not $Release) {
+        throw "cargo-about $cargoAboutVersion is required. Install it with: cargo install cargo-about --locked --version $cargoAboutVersion --force"
+    }
+    & cargo install cargo-about --locked --version $cargoAboutVersion --force
+    if ($LASTEXITCODE -ne 0) {
+        throw "Installing cargo-about $cargoAboutVersion failed with cargo exit code $LASTEXITCODE."
+    }
+    $installedCargoAbout = & cargo about --version 2>$null
+    if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "cargo-about $cargoAboutVersion") {
+        throw "cargo-about $cargoAboutVersion is unavailable after installation."
+    }
 }
 
 # Update these together with Install-RosetunSingBox and SUPPORTED_SING_BOX_VERSION.
@@ -135,3 +137,43 @@ if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
 }
 Write-Host "Installer: $setup"
 Write-Host "SHA-256: $((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash)"
+
+if ($Release) {
+    $sourceArchive = Join-Path $outputDir "sing-box-$singBoxVersion-source.tar.gz"
+    $partialArchive = "$sourceArchive.download"
+    $sourceUrl = "https://github.com/SagerNet/sing-box/archive/refs/tags/v$singBoxVersion.tar.gz"
+    try {
+        & curl.exe --fail --location --silent --show-error --output $partialArchive $sourceUrl
+        if ($LASTEXITCODE -ne 0) {
+            throw "Downloading $sourceUrl failed with curl exit code $LASTEXITCODE."
+        }
+        Move-Item -LiteralPath $partialArchive -Destination $sourceArchive -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $partialArchive) {
+            Remove-Item -LiteralPath $partialArchive -Force
+        }
+    }
+
+    $setupHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sourceHash = (Get-FileHash -LiteralPath $sourceArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $checksums = @(
+        "$setupHash  $([IO.Path]::GetFileName($setup))"
+        "$sourceHash  $([IO.Path]::GetFileName($sourceArchive))"
+    )
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText((Join-Path $outputDir 'SHA256SUMS.txt'), ($checksums -join "`n") + "`n", $utf8)
+
+    $notes = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'release-notes.md'), [Text.Encoding]::UTF8)
+    $notes = $notes.Replace('{{version}}', $version)
+    $notes = $notes.Replace('{{setup}}', [IO.Path]::GetFileName($setup))
+    $notes = $notes.Replace('{{sha256}}', $setupHash)
+    $notes = $notes.Replace('{{sing_box_version}}', $singBoxVersion)
+    [IO.File]::WriteAllText((Join-Path $outputDir 'release-notes.md'), $notes, $utf8)
+
+    if ($env:GITHUB_OUTPUT) {
+        $outputs = "version=$version`nprerelease=$($releaseVersion.Prerelease.ToString().ToLowerInvariant())`nsetup=$setup`n"
+        [IO.File]::AppendAllText($env:GITHUB_OUTPUT, $outputs, $utf8)
+    }
+    Write-Host "Source archive: $sourceArchive"
+}
