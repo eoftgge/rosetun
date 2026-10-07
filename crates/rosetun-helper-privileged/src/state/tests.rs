@@ -420,7 +420,10 @@ impl EngineControls {
 }
 
 #[derive(Debug)]
-struct ControlledEngine(Arc<EngineControls>);
+struct ControlledEngine {
+    controls: Arc<EngineControls>,
+    dns_server: Option<SocketAddr>,
+}
 
 impl EngineBackend for ControlledEngine {
     fn kind(&self) -> EngineKind {
@@ -441,7 +444,7 @@ impl EngineBackend for ControlledEngine {
         &self,
         _tun: &rosetun_config::TunSettings,
     ) -> Option<std::net::SocketAddr> {
-        None
+        self.dns_server
     }
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
@@ -461,9 +464,9 @@ impl EngineBackend for ControlledEngine {
         _binary: &Path,
         _config: &RenderedConfig,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
-        self.0.spawns.fetch_add(1, Ordering::AcqRel);
+        self.controls.spawns.fetch_add(1, Ordering::AcqRel);
         if self
-            .0
+            .controls
             .outcomes
             .lock()
             .expect("test outcomes mutex")
@@ -473,7 +476,7 @@ impl EngineBackend for ControlledEngine {
             return Err(EngineError::BinaryNotFound("test engine".to_owned()));
         }
         let running = Arc::new(AtomicBool::new(true));
-        *self.0.running.lock().expect("test process mutex") = Some(Arc::clone(&running));
+        *self.controls.running.lock().expect("test process mutex") = Some(Arc::clone(&running));
         Ok(Box::new(RunningThenExitedProcess { running }))
     }
 }
@@ -522,11 +525,26 @@ fn supervised_helper(
     Arc<AtomicUsize>,
     Arc<AtomicUsize>,
 ) {
+    supervised_helper_with_dns(protected, None)
+}
+
+fn supervised_helper_with_dns(
+    protected: bool,
+    dns_server: Option<SocketAddr>,
+) -> (
+    Helper,
+    Arc<EngineControls>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+) {
     let controls = Arc::new(EngineControls::default());
     let prepared = Arc::new(AtomicUsize::new(0));
     let reverted = Arc::new(AtomicUsize::new(0));
     let mut engines = EngineRegistry::new();
-    engines.register(Box::new(ControlledEngine(Arc::clone(&controls))));
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(&controls),
+        dns_server,
+    }));
     let routing: Box<dyn RoutingBackend> = if protected {
         Box::new(ReconnectRouting {
             prepared: Arc::clone(&prepared),
@@ -879,6 +897,11 @@ fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
         assert_eq!(stopped.load(Ordering::Acquire), 0);
         assert_eq!(reverted.load(Ordering::Acquire), 0);
         assert!(helper.session().expect("session").last_endpoint.is_some());
+        assert_eq!(
+            helper.session().expect("session").tunnel_dns,
+            Some(server.address())
+        );
+        assert!(helper.session().expect("session").watchdog.is_some());
     }
 }
 
@@ -921,6 +944,8 @@ fn fresh_dns_timeout_stops_engine_and_releases_protection() {
     assert!(session.guard.is_none());
     assert!(session.process.is_none());
     assert!(session.last_endpoint.is_none());
+    assert!(session.tunnel_dns.is_none());
+    assert!(session.watchdog.is_none());
 }
 
 #[test]
@@ -953,6 +978,8 @@ fn protected_dns_timeout_stops_engine_but_retains_guard_and_cache() {
     let session = helper.session().expect("session");
     assert!(session.guard.is_some());
     assert!(session.process.is_none());
+    assert!(session.tunnel_dns.is_none());
+    assert!(session.watchdog.is_none());
     let cached = session.last_endpoint.as_ref().expect("retained cache");
     assert_eq!(cached.server, "cached.invalid");
     assert_eq!(
@@ -983,6 +1010,8 @@ fn backend_without_dns_server_connects_without_checking_dns() {
 
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(stopped.load(Ordering::Acquire), 0);
+    assert!(helper.session().expect("session").tunnel_dns.is_none());
+    assert!(helper.session().expect("session").watchdog.is_none());
 }
 
 #[test]
@@ -1358,6 +1387,119 @@ fn supervisor_reuses_protection_after_exit() {
     assert_eq!(controls.spawns(), 2);
     assert_eq!(prepared.load(Ordering::Acquire), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+fn signal_dns_stall(helper: &Helper) {
+    let mut session = helper.session().expect("session");
+    if let Some(watchdog) = session.watchdog.take() {
+        watchdog.stop();
+    }
+    session.watchdog = Some(DnsWatchdog::stalled_for_test());
+}
+
+#[test]
+fn dns_stall_reuses_supervisor_retry_pipeline_and_cause() {
+    for protected in [false, true] {
+        let (helper, controls, prepared, reverted) = supervised_helper(protected);
+        let mut request = connect_request();
+        request.settings.kill_switch = protected;
+        helper.connect(&request).expect("first connect");
+        let since = helper.status().since_unix;
+        controls.fail_next(1);
+        signal_dns_stall(&helper);
+
+        let now = Instant::now();
+        helper.supervise(now);
+        assert!(matches!(
+            helper.status().state,
+            ConnectionState::Reconnecting
+        ));
+        assert_eq!(helper.status().since_unix, since);
+        assert_eq!(controls.spawns(), 2);
+        let session = helper.session().expect("session");
+        let pending = session.reconnect.as_ref().expect("retry scheduled");
+        assert_eq!(pending.cause, "dns stalled");
+        assert_eq!(pending.failures, 1);
+        assert!(session.watchdog.is_none());
+        drop(session);
+
+        helper.supervise(now + Duration::from_secs(60));
+        assert!(matches!(helper.status().state, ConnectionState::Connected));
+        assert_eq!(helper.status().since_unix, since);
+        assert_eq!(controls.spawns(), 3);
+        assert_eq!(prepared.load(Ordering::Acquire), usize::from(protected) * 2);
+        assert_eq!(reverted.load(Ordering::Acquire), 0);
+        helper.supervise(now + Duration::from_secs(120));
+        assert_eq!(controls.spawns(), 3, "old stall must not recur");
+    }
+}
+
+#[test]
+fn disabled_auto_reconnect_consumes_stall_but_stays_connected() {
+    for protected in [false, true] {
+        let (helper, controls, _, reverted) = supervised_helper(protected);
+        let mut request = connect_request();
+        request.settings.kill_switch = protected;
+        request.settings.auto_reconnect = false;
+        helper.connect(&request).expect("first connect");
+        signal_dns_stall(&helper);
+
+        helper.supervise(Instant::now());
+        helper.supervise(Instant::now() + Duration::from_secs(60));
+        assert!(matches!(helper.status().state, ConnectionState::Connected));
+        assert!(helper.status().since_unix.is_some());
+        assert_eq!(controls.spawns(), 1);
+        assert_eq!(reverted.load(Ordering::Acquire), 0);
+        assert!(
+            !helper
+                .session()
+                .expect("session")
+                .watchdog
+                .as_ref()
+                .expect("test watchdog")
+                .take_stalled()
+        );
+    }
+}
+
+#[test]
+fn dns_stall_reconnect_starts_a_fresh_watchdog_and_disconnect_cleans_up() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, controls, _, _) = supervised_helper_with_dns(false, Some(server.address()));
+    shorten_dns_timeouts(&helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).expect("first DNS-checked connect");
+    assert_eq!(
+        helper.session().expect("session").tunnel_dns,
+        Some(server.address())
+    );
+    assert!(helper.session().expect("session").watchdog.is_some());
+    signal_dns_stall(&helper);
+
+    helper.supervise(Instant::now());
+    let session = helper.session().expect("session");
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(session.tunnel_dns, Some(server.address()));
+    assert!(
+        !session
+            .watchdog
+            .as_ref()
+            .expect("new watchdog")
+            .take_stalled()
+    );
+    drop(session);
+    assert_eq!(controls.spawns(), 2);
+
+    helper.disconnect().expect("disconnect stops watchdog");
+    let session = helper.session().expect("session");
+    assert!(session.watchdog.is_none());
+    assert!(session.tunnel_dns.is_none());
+    drop(session);
+    helper.supervise(Instant::now() + Duration::from_secs(60));
+    assert_eq!(controls.spawns(), 2);
 }
 
 #[test]

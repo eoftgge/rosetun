@@ -2,8 +2,9 @@ mod dns;
 mod path;
 #[cfg(test)]
 mod tests;
+mod watchdog;
 
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
@@ -17,11 +18,19 @@ use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 use rosetun_routing::{RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface};
 
 use crate::log_gate::VerboseGate;
+use watchdog::{DnsWatchdog, WatchdogTiming};
 
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
+const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
+    interval: Duration::from_secs(30),
+    dns_timeout: Duration::from_secs(5),
+    path_timeout: Duration::from_secs(5),
+    failures: 3,
+    path_server: SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1)), 80),
+};
 /// Failed automatic attempts before the helper gives up.
 const RECONNECT_ATTEMPTS: u32 = 5;
 /// Waits before the second to fifth attempt.
@@ -71,6 +80,8 @@ struct Session {
     process: Option<Box<dyn EngineProcess>>,
     control: Option<ControlEndpoint>,
     monitor: Option<TrafficMonitor>,
+    watchdog: Option<DnsWatchdog>,
+    tunnel_dns: Option<SocketAddr>,
     guard: Option<RoutingGuard>,
     last_endpoint: Option<SuccessfulEndpoint>,
     request: Option<ConnectRequest>,
@@ -78,6 +89,7 @@ struct Session {
     stopping: bool,
     dns_timeout: Duration,
     dns_attempt_timeout: Duration,
+    watchdog_timing: WatchdogTiming,
 }
 
 impl std::fmt::Debug for Helper {
@@ -104,6 +116,8 @@ impl Helper {
                 process: None,
                 control: None,
                 monitor: None,
+                watchdog: None,
+                tunnel_dns: None,
                 guard: None,
                 last_endpoint: None,
                 request: None,
@@ -111,6 +125,7 @@ impl Helper {
                 stopping: false,
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
+                watchdog_timing: WATCHDOG_TIMING,
             }),
         }
     }
@@ -187,6 +202,22 @@ impl Helper {
                     cause: "resume",
                 });
                 return;
+            } else if session
+                .watchdog
+                .as_ref()
+                .is_some_and(DnsWatchdog::take_stalled)
+            {
+                if !auto_reconnect {
+                    tracing::warn!("DNS through the tunnel stalled; auto-reconnect is disabled");
+                    return;
+                }
+                tracing::warn!("DNS through the tunnel stalled; reconnecting");
+                self.with_status(|status| status.state = ConnectionState::Reconnecting);
+                session.reconnect = Some(Reconnect {
+                    failures: 0,
+                    next_at: now,
+                    cause: "dns stalled",
+                });
             } else {
                 return;
             }
@@ -208,6 +239,7 @@ impl Helper {
                     status.since_unix.get_or_insert_with(now_unix);
                 });
                 session.start_monitor(request.settings.engine);
+                session.start_watchdog();
                 tracing::info!(cause = reconnect.cause, attempt, "tunnel reconnected");
             }
             Err(error) => {
@@ -290,6 +322,7 @@ impl Helper {
                 session.request = Some(request.clone());
                 self.resumed.store(false, Ordering::Release);
                 session.start_monitor(request.settings.engine);
+                session.start_watchdog();
                 Ok(())
             }
             Err(error) => {
@@ -683,6 +716,7 @@ impl Session {
             dns::check(server, self.dns_timeout, self.dns_attempt_timeout, || {
                 process.is_running()
             })?;
+            self.tunnel_dns = Some(server);
         } else {
             tracing::info!(
                 engine = %settings.engine.as_str(),
@@ -710,6 +744,16 @@ impl Session {
                 Ok(monitor) => self.monitor = Some(monitor),
                 Err(error) => tracing::warn!(%error, "traffic monitor is unavailable"),
             }
+        }
+    }
+
+    fn start_watchdog(&mut self) {
+        let Some(server) = self.tunnel_dns else {
+            return;
+        };
+        match DnsWatchdog::start(Arc::clone(&self.status), server, self.watchdog_timing) {
+            Ok(watchdog) => self.watchdog = Some(watchdog),
+            Err(error) => tracing::warn!(%error, "DNS watchdog is unavailable"),
         }
     }
 
@@ -839,6 +883,10 @@ impl Session {
 
     fn stop_engine(&mut self) -> Result<(), HelperError> {
         self.gate.close();
+        self.tunnel_dns = None;
+        if let Some(watchdog) = self.watchdog.take() {
+            watchdog.stop();
+        }
         if let Some(monitor) = self.monitor.take() {
             monitor.stop();
         } else {
