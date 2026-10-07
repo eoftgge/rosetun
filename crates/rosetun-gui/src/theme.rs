@@ -60,6 +60,8 @@ pub(crate) const ROSE_LIGHT: Color32 = Color32::from_rgb(0xE8, 0x6A, 0x80);
 pub(crate) const CONNECTED: Color32 = Color32::from_rgb(0xE0, 0x70, 0x5B);
 pub(crate) const DISCONNECTED: Color32 = Color32::from_rgb(0x8C, 0x81, 0x89);
 pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x2A);
+pub(crate) const WARNING: Color32 = Color32::from_rgb(0xE8, 0xB4, 0x57);
+pub(crate) const EXPIRED: Color32 = Color32::from_rgb(0xEF, 0x62, 0x62);
 
 /// Gap between blocks on the connection tab.
 pub(crate) const SECTION_GAP: f32 = 16.0;

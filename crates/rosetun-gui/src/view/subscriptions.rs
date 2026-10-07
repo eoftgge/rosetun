@@ -19,31 +19,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .frame(egui::Frame::new())
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.add_space(10.0);
-            let width = ui.available_width();
-            ui.allocate_ui_with_layout(
-                egui::vec2(width, 18.0),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    if state.config.interface.auto_update_subscriptions
-                        && !state.config.subscriptions.is_empty()
-                    {
-                        let text = shared_auto_update_hours(&state.config.subscriptions)
-                            .map(|hours| {
-                                strings::fill(
-                                    t().auto_update_every,
-                                    &[("hours", &hours.to_string())],
-                                )
-                            })
-                            .unwrap_or_else(|| t().auto_update_on.to_owned());
-                        ui.add(
-                            egui::Label::new(RichText::new(text).small().color(theme::TEXT_DIM))
-                                .truncate(),
-                        );
-                    }
-                },
-            );
-            ui.add_space(9.0);
+            ui.add_space(24.0);
             let (update_all, add) = egui::Sides::new()
                 .height(36.0)
                 .shrink_left()
@@ -75,44 +51,44 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             if add {
                 actions.push(Action::OpenAdd);
             }
+            ui.add_space(6.0);
+            let width = ui.available_width();
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 18.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    if state.config.interface.auto_update_subscriptions
+                        && !state.config.subscriptions.is_empty()
+                    {
+                        let text = shared_auto_update_hours(&state.config.subscriptions)
+                            .map(|hours| {
+                                strings::fill(
+                                    t().auto_update_every,
+                                    &[("hours", &hours.to_string())],
+                                )
+                            })
+                            .unwrap_or_else(|| t().auto_update_on.to_owned());
+                        ui.add(
+                            egui::Label::new(RichText::new(text).small().color(theme::TEXT_DIM))
+                                .truncate(),
+                        );
+                    }
+                },
+            );
         });
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        let font = egui::FontId::new(15.0, egui::FontFamily::Name(theme::UI_SEMIBOLD.into()));
-        let count = format!("· {}", state.config.subscriptions.len());
-        let title_width = ui
-            .painter()
-            .layout_no_wrap(
-                t().subscriptions_title.to_owned(),
-                font.clone(),
-                theme::TEXT,
-            )
-            .size()
-            .x;
-        let count_width = ui
-            .painter()
-            .layout_no_wrap(
-                count.clone(),
-                egui::TextStyle::Body.resolve(ui.style()),
-                theme::TEXT_DIM,
-            )
-            .size()
-            .x;
-        let inset = ((ui.available_width()
-            - title_width
-            - count_width
-            - 2.0 * ui.spacing().item_spacing.x)
-            / 2.0)
-            .max(0.0);
-        if inset > 0.0 {
-            ui.add_space(inset);
-        }
         ui.label(
             RichText::new(t().subscriptions_title)
                 .color(theme::TEXT)
-                .font(font),
+                .font(egui::FontId::new(
+                    15.0,
+                    egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+                )),
         );
-        ui.label(RichText::new(count).color(theme::TEXT_DIM));
+        ui.label(
+            RichText::new(format!("· {}", state.config.subscriptions.len())).color(theme::TEXT_DIM),
+        );
     });
     ui.add_space(12.0);
     egui::ScrollArea::vertical()
@@ -187,14 +163,14 @@ fn subscription_card(
         .active
         .as_ref()
         .is_some_and(|selection| selection.subscription == subscription.id);
-    let mut frame = widgets::card_frame().inner_margin(12).stroke(Stroke::new(
-        1.0,
-        if selected {
-            theme::ROSE_DARK
-        } else {
-            theme::BORDER
-        },
-    ));
+    let now = display::now_unix();
+    let updated = subscription
+        .updated_at_unix
+        .map(|timestamp| t().last_updated(&t().updated_ago(timestamp, now)))
+        .unwrap_or_else(|| t().never_updated.to_owned());
+    let mut frame = widgets::card_frame()
+        .inner_margin(12)
+        .stroke(Stroke::new(1.0, theme::BORDER));
     if dragged {
         frame = frame.fill(Color32::from_rgba_unmultiplied(
             theme::CARD.r(),
@@ -274,14 +250,14 @@ fn subscription_card(
                             },
                         )
                         .response
-                        .on_hover_text(t().updating);
+                        .on_hover_text(format!("{}\n{updated}", t().updating));
                     } else if icons::icon_button_sized(
                         ui,
                         Icon::Refresh,
                         !state.subscription_busy(&subscription.id),
                         28.0,
                     )
-                    .on_hover_text(t().update)
+                    .on_hover_text(format!("{}\n{updated}", t().update))
                     .clicked()
                     {
                         actions.push(Action::Update(subscription.id.clone()));
@@ -337,25 +313,37 @@ fn subscription_card(
                         }
                     });
                 });
-                let age = subscription
-                    .updated_at_unix
-                    .map(|timestamp| {
-                        t().last_updated(&t().updated_ago(timestamp, display::now_unix()))
-                    })
-                    .unwrap_or_else(|| t().never_updated.to_owned());
-                let summary =
-                    strings::subscription_summary(&t().servers(subscription.nodes.len()), &age);
                 ui.horizontal(|ui| {
                     ui.add_space(22.0 + ui.spacing().item_spacing.x);
                     egui::Sides::new().shrink_left().show(
                         ui,
                         |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(summary).small().color(theme::TEXT_DIM),
-                                )
-                                .truncate(),
+                            let muted = egui::TextFormat {
+                                font_id: egui::TextStyle::Small.resolve(ui.style()),
+                                color: theme::TEXT_DIM,
+                                ..Default::default()
+                            };
+                            let mut summary = egui::text::LayoutJob::default();
+                            summary.append(
+                                &t().servers(subscription.nodes.len()),
+                                0.0,
+                                muted.clone(),
                             );
+                            if let Some(expire) =
+                                subscription.info.as_ref().and_then(|info| info.expire_unix)
+                            {
+                                summary.append(" · ", 0.0, muted.clone());
+                                let (term, _) = t().term_left(expire, now);
+                                summary.append(
+                                    &term,
+                                    0.0,
+                                    egui::TextFormat {
+                                        color: expiry_color(expire, now),
+                                        ..muted
+                                    },
+                                );
+                            }
+                            ui.add(egui::Label::new(summary).truncate());
                         },
                         |ui| {
                             if !expanded && let Some(best) = state.best_ping(subscription) {
@@ -384,7 +372,6 @@ fn subscription_card(
                 }
                 ui.add_space(6.0);
                 if let Some(info) = &subscription.info {
-                    let now = display::now_unix();
                     let used = t().bytes(info.upload.saturating_add(info.download));
                     let traffic = info.total.map_or_else(
                         || strings::fill(t().quota_used, &[("used", &used)]),
@@ -407,12 +394,10 @@ fn subscription_card(
                         },
                         |ui| {
                             if let Some(expire) = info.expire_unix {
-                                let (term, expired) = t().term_left(expire, now);
-                                ui.label(RichText::new(term).small().color(if expired {
-                                    theme::ERROR
-                                } else {
-                                    theme::TEXT_DIM
-                                }));
+                                let (term, _) = t().term_left(expire, now);
+                                ui.label(
+                                    RichText::new(term).small().color(expiry_color(expire, now)),
+                                );
                             }
                         },
                     );
@@ -616,6 +601,16 @@ fn subscription_card(
         },
     )
     .response
+}
+
+fn expiry_color(expire: u64, now: u64) -> Color32 {
+    if expire <= now {
+        theme::EXPIRED
+    } else if expire - now < 7 * 86_400 {
+        theme::WARNING
+    } else {
+        theme::TEXT_DIM
+    }
 }
 
 /// How much of the plan is used up, 0.0..=1.0: traffic against the limit, or
@@ -994,6 +989,17 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expiry_colors_change_within_seven_days_and_after_expiry() {
+        let now = 1_000_000;
+        let week = 7 * 86_400;
+        assert_eq!(expiry_color(now + week, now), theme::TEXT_DIM);
+        assert_eq!(expiry_color(now + week - 1, now), theme::WARNING);
+        assert_eq!(expiry_color(now + 1, now), theme::WARNING);
+        assert_eq!(expiry_color(now, now), theme::EXPIRED);
+        assert_eq!(expiry_color(now - 1, now), theme::EXPIRED);
+    }
 
     #[test]
     fn ping_milliseconds_round_up_and_never_show_zero() {

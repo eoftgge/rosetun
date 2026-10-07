@@ -492,10 +492,6 @@ pub(crate) fn filter_count(label: &str, count: usize) -> String {
     format!("{label} {count}")
 }
 
-pub(crate) fn subscription_summary(servers: &str, updated: &str) -> String {
-    format!("{servers} · {updated}")
-}
-
 pub(crate) fn node_details(protocol: &str, tls: &str, transport: &str) -> String {
     format!("{protocol} · {tls} · {transport}")
 }
