@@ -41,6 +41,21 @@ impl SettingsCard<'_> {
         detail: Option<&str>,
         control: impl FnOnce(&mut egui::Ui),
     ) -> egui::Rect {
+        self.row_with_title(
+            |ui| {
+                ui.add(egui::Label::new(RichText::new(title).color(TEXT)).wrap());
+            },
+            detail,
+            control,
+        )
+    }
+
+    pub(crate) fn row_with_title(
+        &mut self,
+        title: impl FnOnce(&mut egui::Ui),
+        detail: Option<&str>,
+        control: impl FnOnce(&mut egui::Ui),
+    ) -> egui::Rect {
         if self.rows > 0 {
             let (line, _) = self.ui.allocate_exact_size(
                 egui::vec2(self.ui.available_width(), 1.0),
@@ -74,7 +89,7 @@ impl SettingsCard<'_> {
                             ui.set_width(text_width);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.add(egui::Label::new(RichText::new(title).color(TEXT)).wrap());
+                                title(ui);
                                 if let Some(detail) = detail {
                                     ui.add(
                                         egui::Label::new(
@@ -157,6 +172,8 @@ mod tests {
     fn rows_have_minimum_height_and_full_width_separators() {
         let ctx = egui::Context::default();
         let mut rects = Vec::new();
+        let mut title_width = 0.0;
+        let mut control_rect = egui::Rect::NOTHING;
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -168,7 +185,21 @@ mod tests {
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     settings_card(ui, |card| {
-                        rects.push(card.row_inner("Language", None, |_| {}));
+                        rects.push(card.row_with_title(
+                            |ui| {
+                                title_width = ui.available_width();
+                                ui.label("Language");
+                            },
+                            None,
+                            |ui| {
+                                control_rect = ui
+                                    .allocate_exact_size(
+                                        egui::vec2(200.0, 32.0),
+                                        egui::Sense::hover(),
+                                    )
+                                    .0;
+                            },
+                        ));
                         rects.push(card.row_inner("Motion", Some("A detail"), |_| {}));
                     });
                 });
@@ -178,5 +209,7 @@ mod tests {
         assert!(rects.iter().all(|rect| rect.height() >= 64.0));
         assert_eq!(rects[1].top() - rects[0].bottom(), 1.0);
         assert_eq!(rects[0].width(), rects[1].width());
+        assert!(title_width >= 200.0, "title width: {title_width}");
+        assert!(control_rect.left() > rects[0].center().x);
     }
 }

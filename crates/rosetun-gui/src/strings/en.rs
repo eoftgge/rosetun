@@ -108,23 +108,24 @@ pub(crate) static EN: Strings = Strings {
     connection: "Connection",
     rules: "Rules",
     settings: "Settings",
+    settings_saved_instantly: "Changes are saved instantly",
+    section_general: "General",
+    section_network: "Network and DNS",
+    section_service: "Service and log",
     minimize: "Minimize",
     maximize: "Maximize",
     restore: "Restore",
     close_window: "Close",
-    interface: "Interface",
     scale: "Scale",
     zoom_hint: "Ctrl+Plus and Ctrl+Minus zoom until the app closes.",
     reduce_motion: "Reduce motion",
     reduce_motion_detail: "No smooth transitions or pulsing: states change at once.",
     #[cfg(windows)]
-    windows: "Windows",
-    #[cfg(windows)]
     start_with_windows: "Start with Windows",
     #[cfg(windows)]
     start_with_windows_detail: "Opens in the tray when you sign in.",
     #[cfg(windows)]
-    keep_in_tray: "Keep running in the tray",
+    keep_in_tray: "Hide to tray on close",
     #[cfg(windows)]
     keep_in_tray_detail: "The close button hides the window. Quit from the tray menu.",
     connect_on_start: "Connect at startup",
@@ -142,6 +143,11 @@ pub(crate) static EN: Strings = Strings {
     save: "Save",
     reset_to_default: "Reset to default",
     log_title: "Log",
+    log_detail: "Useful when something breaks and you contact support.",
+    service_label: "Rosetun service:",
+    service_running: "running",
+    service_stopped: "not running",
+    service_detail: "The service runs the tunnel with system rights. Without it you can't connect.",
     verbose_log: "Verbose log",
     verbose_log_off_detail: "Records site addresses. Turn it on only to track down a problem: it turns itself off after a day. Applies on next connect.",
     verbose_log_on_detail: "Turns itself off in {hours}. While on, it records site addresses. Applies on next connect.",
@@ -149,7 +155,6 @@ pub(crate) static EN: Strings = Strings {
     verbose_log_hour_few: "hours",
     verbose_log_hour_many: "hours",
     about: "About",
-    helper_not_running: "Service not running",
     configuration_folder: "Configuration folder",
     log_file: "Log file",
     #[cfg(windows)]

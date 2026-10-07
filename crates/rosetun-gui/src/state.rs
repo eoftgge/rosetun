@@ -154,6 +154,16 @@ pub(crate) enum Screen {
     Settings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SettingsSection {
+    #[default]
+    General,
+    Connection,
+    Network,
+    Service,
+    About,
+}
+
 pub(crate) enum NameDialogKind {
     Create,
     Rename(RuleSetId),
@@ -339,6 +349,7 @@ pub(crate) struct RuleScreen {
 
 #[derive(Default)]
 pub(crate) struct SettingsScreen {
+    pub(crate) section: SettingsSection,
     pub(crate) server: String,
     pub(crate) server_name: String,
     pub(crate) port: String,
@@ -439,6 +450,7 @@ impl Default for State {
 pub(crate) enum Action {
     ShowConnection,
     OpenSettings,
+    OpenSettingsSection(SettingsSection),
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
     SetReduceMotion(bool),
@@ -1211,6 +1223,9 @@ impl State {
                     self.settings_screen.autostart = None;
                     return Some(Job::LoadAutostart);
                 }
+            }
+            Action::OpenSettingsSection(section) => {
+                self.settings_screen.section = section;
             }
             Action::SetInterfaceScale(percent) => {
                 if self.can_edit_settings()
@@ -3559,6 +3574,19 @@ mod tests {
         ));
         state.reduce(WorkerEvent::RemoveRule(Ok(())));
         assert!(state.rule_screen.delete.is_none());
+    }
+
+    #[test]
+    fn settings_section_survives_navigation_between_tabs() {
+        let mut state = State::default();
+        assert_eq!(state.settings_screen.section, SettingsSection::General);
+        state.act(Action::OpenSettings);
+        state.act(Action::OpenSettingsSection(SettingsSection::Service));
+        assert_eq!(state.settings_screen.section, SettingsSection::Service);
+        state.act(Action::ShowConnection);
+        state.act(Action::OpenSettings);
+        assert_eq!(state.screen, Screen::Settings);
+        assert_eq!(state.settings_screen.section, SettingsSection::Service);
     }
 
     #[test]

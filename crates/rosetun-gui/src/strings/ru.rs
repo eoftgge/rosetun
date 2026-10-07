@@ -108,23 +108,24 @@ pub(crate) static RU: Strings = Strings {
     connection: "Подключение",
     rules: "Правила",
     settings: "Настройки",
+    settings_saved_instantly: "Изменения сохраняются сразу",
+    section_general: "Основные",
+    section_network: "Сеть и DNS",
+    section_service: "Служба и журнал",
     minimize: "Свернуть",
     maximize: "Развернуть",
     restore: "Восстановить",
     close_window: "Закрыть",
-    interface: "Интерфейс",
     scale: "Масштаб",
     zoom_hint: "Ctrl+Plus и Ctrl+Minus меняют масштаб до закрытия программы.",
     reduce_motion: "Уменьшить анимацию",
     reduce_motion_detail: "Без плавных переходов и пульсации: состояния меняются сразу.",
     #[cfg(windows)]
-    windows: "Windows",
-    #[cfg(windows)]
     start_with_windows: "Запускать вместе с Windows",
     #[cfg(windows)]
     start_with_windows_detail: "Открывается в трее при входе в систему.",
     #[cfg(windows)]
-    keep_in_tray: "Оставаться в трее",
+    keep_in_tray: "Сворачивать в трей при закрытии",
     #[cfg(windows)]
     keep_in_tray_detail: "Крестик прячет окно. Выйти можно из меню в трее.",
     connect_on_start: "Подключаться при запуске",
@@ -142,6 +143,11 @@ pub(crate) static RU: Strings = Strings {
     save: "Сохранить",
     reset_to_default: "Сбросить",
     log_title: "Журнал",
+    log_detail: "Пригодится, если что-то не работает и вы пишете в поддержку.",
+    service_label: "Служба Rosetun:",
+    service_running: "работает",
+    service_stopped: "не запущена",
+    service_detail: "Служба управляет туннелем с правами системы. Без неё подключиться нельзя.",
     verbose_log: "Подробный журнал",
     verbose_log_off_detail: "Записывает адреса сайтов. Включайте, только чтобы найти проблему: через сутки выключится сам. Применится при следующем подключении.",
     verbose_log_on_detail: "Выключится сам через {hours}. Пока включён, записывает адреса сайтов. Применится при следующем подключении.",
@@ -149,7 +155,6 @@ pub(crate) static RU: Strings = Strings {
     verbose_log_hour_few: "часа",
     verbose_log_hour_many: "часов",
     about: "О программе",
-    helper_not_running: "Служба не запущена",
     configuration_folder: "Папка конфигурации",
     log_file: "Файл журнала",
     #[cfg(windows)]

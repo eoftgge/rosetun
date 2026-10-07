@@ -183,17 +183,18 @@ pub(crate) struct Strings {
     pub(crate) connection: &'static str,
     pub(crate) rules: &'static str,
     pub(crate) settings: &'static str,
+    pub(crate) settings_saved_instantly: &'static str,
+    pub(crate) section_general: &'static str,
+    pub(crate) section_network: &'static str,
+    pub(crate) section_service: &'static str,
     pub(crate) minimize: &'static str,
     pub(crate) maximize: &'static str,
     pub(crate) restore: &'static str,
     pub(crate) close_window: &'static str,
-    pub(crate) interface: &'static str,
     pub(crate) scale: &'static str,
     pub(crate) zoom_hint: &'static str,
     pub(crate) reduce_motion: &'static str,
     pub(crate) reduce_motion_detail: &'static str,
-    #[cfg(windows)]
-    pub(crate) windows: &'static str,
     #[cfg(windows)]
     pub(crate) start_with_windows: &'static str,
     #[cfg(windows)]
@@ -217,6 +218,11 @@ pub(crate) struct Strings {
     pub(crate) save: &'static str,
     pub(crate) reset_to_default: &'static str,
     pub(crate) log_title: &'static str,
+    pub(crate) log_detail: &'static str,
+    pub(crate) service_label: &'static str,
+    pub(crate) service_running: &'static str,
+    pub(crate) service_stopped: &'static str,
+    pub(crate) service_detail: &'static str,
     pub(crate) verbose_log: &'static str,
     pub(crate) verbose_log_off_detail: &'static str,
     pub(crate) verbose_log_on_detail: &'static str,
@@ -224,7 +230,6 @@ pub(crate) struct Strings {
     pub(crate) verbose_log_hour_few: &'static str,
     pub(crate) verbose_log_hour_many: &'static str,
     pub(crate) about: &'static str,
-    pub(crate) helper_not_running: &'static str,
     pub(crate) configuration_folder: &'static str,
     pub(crate) log_file: &'static str,
     #[cfg(windows)]
@@ -460,10 +465,6 @@ pub(crate) fn tray_tooltip(status: &str, server: Option<&str>) -> String {
     }
 }
 
-pub(crate) fn app_version() -> String {
-    format!("Rosetun {}", env!("CARGO_PKG_VERSION"))
-}
-
 pub(crate) fn scale(percent: u16) -> String {
     format!("{percent}%")
 }
@@ -516,6 +517,23 @@ fn en_count(n: u64, unit: &str) -> String {
 }
 
 impl Strings {
+    pub(crate) fn about_version(&self, app: &str, helper: Option<&str>) -> String {
+        let prefix = match self.language {
+            Language::English => "Version",
+            Language::Russian => "Версия",
+        };
+        match helper {
+            Some(helper) => {
+                let service = match self.language {
+                    Language::English => "service",
+                    Language::Russian => "служба",
+                };
+                format!("{prefix} {app} · {service} {helper}")
+            }
+            None => format!("{prefix} {app}"),
+        }
+    }
+
     pub(crate) fn template_name(&self, template: RuleTemplate) -> &'static str {
         match template {
             RuleTemplate::RussianSites => self.russian_sites_name,
