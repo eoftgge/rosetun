@@ -186,19 +186,26 @@ fn subscription_card(
         ));
     }
     ui.scope_builder(
-        egui::UiBuilder::new().id_salt("card").sense(if reorder {
-            egui::Sense::drag()
-        } else {
-            egui::Sense::hover()
-        }),
+        egui::UiBuilder::new()
+            .id_salt("card")
+            .sense(egui::Sense::hover()),
         |ui| {
-            if reorder {
-                ui.response().dnd_set_drag_payload(subscription.id.clone());
-            }
             let response = frame.show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 if dragged {
                     ui.multiply_opacity(0.5);
+                }
+                let header_rect = egui::Rect::from_min_size(
+                    ui.next_widget_position(),
+                    egui::vec2(ui.available_width(), 28.0),
+                );
+                if reorder {
+                    ui.interact(
+                        header_rect,
+                        ui.id().with("header_drag"),
+                        egui::Sense::drag(),
+                    )
+                    .dnd_set_drag_payload(subscription.id.clone());
                 }
                 ui.horizontal(|ui| {
                     if icons::icon_button(ui, Icon::Chevron { open: expanded }, true)
@@ -504,24 +511,31 @@ fn subscription_card(
                     },
                     |ui| {
                         let checking = state.operations.pinging.contains(&subscription.id);
-                        let enabled = state.config_ready
-                            && !subscription.nodes.is_empty()
-                            && !checking
-                            && !state.subscription_busy(&subscription.id)
-                            && state.can_ping();
-                        let response = link(
-                            ui,
-                            if checking {
-                                t().ping_checking
-                            } else {
-                                t().ping_check
-                            },
-                            enabled,
-                        );
                         if !state.can_ping() {
-                            response.on_hover_text(t().ping_tunnel_up);
-                        } else if response.clicked() {
-                            actions.push(Action::Ping(subscription.id.clone()));
+                            ui.label(
+                                RichText::new(t().ping_while_connected)
+                                    .small()
+                                    .color(theme::TEXT_DIM),
+                            )
+                            .on_hover_text(t().ping_tunnel_up);
+                        } else {
+                            let enabled = state.config_ready
+                                && !subscription.nodes.is_empty()
+                                && !checking
+                                && !state.subscription_busy(&subscription.id);
+                            if link(
+                                ui,
+                                if checking {
+                                    t().ping_checking
+                                } else {
+                                    t().ping_check
+                                },
+                                enabled,
+                            )
+                            .clicked()
+                            {
+                                actions.push(Action::Ping(subscription.id.clone()));
+                            }
                         }
                     },
                 );
@@ -554,6 +568,22 @@ fn subscription_card(
                     }
                 });
             });
+            if reorder
+                && ui
+                    .ctx()
+                    .pointer_hover_pos()
+                    .is_some_and(|pointer| response.response.rect.contains(pointer))
+            {
+                icons::paint(
+                    ui.painter(),
+                    egui::pos2(
+                        response.response.rect.left() + 6.0,
+                        response.response.rect.top() + 26.0,
+                    ),
+                    Icon::Grip,
+                    theme::TEXT_DIM,
+                );
+            }
             if selected {
                 let rect = response.response.rect;
                 ui.painter().rect_filled(

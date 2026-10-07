@@ -346,6 +346,7 @@ pub(crate) struct Strings {
     pub(crate) ping_no_answer: &'static str,
     pub(crate) ping_pending: &'static str,
     pub(crate) ping_best: &'static str,
+    pub(crate) ping_while_connected: &'static str,
     pub(crate) ping_tunnel_up: &'static str,
     pub(crate) support: &'static str,
     pub(crate) website: &'static str,

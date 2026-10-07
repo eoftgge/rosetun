@@ -271,6 +271,7 @@ pub(crate) static RU: Strings = Strings {
     ping_no_answer: "нет ответа",
     ping_pending: "…",
     ping_best: "лучший {ms} мс",
+    ping_while_connected: "Недоступно при подключении",
     ping_tunnel_up: "Пинг проверяется, пока туннель отключён: через туннель все серверы показались бы мгновенными.",
     support: "Поддержка",
     website: "Сайт",
