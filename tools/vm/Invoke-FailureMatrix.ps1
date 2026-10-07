@@ -56,7 +56,7 @@ function Format-Egress {
 
 if ($Build) {
     Write-Host 'Building...'
-    & cargo build --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
+    & cargo build -q --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
     if ($LASTEXITCODE -ne 0) {
         throw "cargo build failed with exit code $LASTEXITCODE."
     }

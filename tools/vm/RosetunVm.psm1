@@ -199,22 +199,23 @@ function Publish-Rosetun {
     $session = Connect-RosetunVm
     $dir = $script:Config.GuestDir
 
-    $temporaryRequest = $null
+    $request = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+    # The matrix deliberately kills the engine and checks FailedProtected before manual reconnect.
+    $request.settings | Add-Member -NotePropertyName auto_reconnect -NotePropertyValue $false -Force
     if ($UseHostNode) {
         $hostIp = (Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4).IPAddress
-        $request = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
         # Without the node the tunnel still comes up, and only the traffic
         # check fails, with nothing in the logs to say why.
         if (-not (Get-NetTCPConnection -LocalPort $request.node.port -State Listen -ErrorAction SilentlyContinue)) {
             throw "Nothing listens on port $($request.node.port) on the host. Start the test node first."
         }
         $request.node.server = $hostIp
-        $temporaryRequest = Join-Path $env:TEMP 'rosetun-request.json'
-        # Set-Content -Encoding utf8 on Windows PowerShell writes a BOM, which serde_json rejects.
-        [IO.File]::WriteAllText($temporaryRequest, ($request | ConvertTo-Json -Depth 20))
-        $RequestPath = $temporaryRequest
         Write-Host "Node server set to $hostIp"
     }
+    $temporaryRequest = Join-Path $env:TEMP 'rosetun-request.json'
+    # Set-Content -Encoding utf8 on Windows PowerShell writes a BOM, which serde_json rejects.
+    [IO.File]::WriteAllText($temporaryRequest, ($request | ConvertTo-Json -Depth 20))
+    $RequestPath = $temporaryRequest
     $derived = [ordered]@{}
 
     # The same request with a node that never answers: 192.0.2.1 is TEST-NET-1,
