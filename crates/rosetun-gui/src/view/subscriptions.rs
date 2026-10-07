@@ -11,115 +11,109 @@ use crate::strings::t;
 use crate::{display, strings, theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
-    const FOOTER_HEIGHT: f32 = 72.0;
+    const FOOTER_HEIGHT: f32 = 92.0;
 
     ui.style_mut().interaction.selectable_labels = false;
     egui::Panel::bottom("subscriptions_footer")
         .exact_size(FOOTER_HEIGHT)
         .frame(egui::Frame::new())
         .show(ui, |ui| {
-            egui::Sides::new()
-                .height(FOOTER_HEIGHT)
-                .shrink_right()
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(10.0);
+            let width = ui.available_width();
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 18.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    if state.config.interface.auto_update_subscriptions
+                        && !state.config.subscriptions.is_empty()
+                    {
+                        let text = shared_auto_update_hours(&state.config.subscriptions)
+                            .map(|hours| {
+                                strings::fill(
+                                    t().auto_update_every,
+                                    &[("hours", &hours.to_string())],
+                                )
+                            })
+                            .unwrap_or_else(|| t().auto_update_on.to_owned());
+                        ui.add(
+                            egui::Label::new(RichText::new(text).small().color(theme::TEXT_DIM))
+                                .truncate(),
+                        );
+                    }
+                },
+            );
+            ui.add_space(9.0);
+            let (update_all, add) = egui::Sides::new()
+                .height(36.0)
+                .shrink_left()
+                .truncate()
                 .show(
                     ui,
                     |ui| {
-                        ui.scope(|ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                            let enabled = state.config_ready
-                                && !state.config.subscriptions.is_empty()
-                                && !state.operations.update_all
-                                && state.operations.updating.is_empty()
-                                && !state.operations.removing;
-                            if widgets::outline_button(
-                                ui,
-                                if state.operations.update_all {
-                                    t().updating
-                                } else {
-                                    t().update_all
-                                },
-                                enabled,
-                            )
-                            .clicked()
-                            {
-                                actions.push(Action::UpdateAll);
-                            }
-                        });
-                    },
-                    |ui| {
-                        if state.config.interface.auto_update_subscriptions
+                        let enabled = state.config_ready
                             && !state.config.subscriptions.is_empty()
-                        {
-                            let text = shared_auto_update_hours(&state.config.subscriptions)
-                                .map(|hours| {
-                                    strings::fill(
-                                        t().auto_update_every,
-                                        &[("hours", &hours.to_string())],
-                                    )
-                                })
-                                .unwrap_or_else(|| t().auto_update_on.to_owned());
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(text).small().color(theme::TEXT_DIM),
-                                )
-                                .truncate(),
-                            );
-                        }
+                            && !state.operations.update_all
+                            && state.operations.updating.is_empty()
+                            && !state.operations.removing;
+                        widgets::outline_button(
+                            ui,
+                            if state.operations.update_all {
+                                t().updating
+                            } else {
+                                t().update_all
+                            },
+                            enabled,
+                        )
+                        .clicked()
                     },
+                    |ui| widgets::button_fill(ui, t().add_short, state.add.is_none()).clicked(),
                 );
+            if update_all {
+                actions.push(Action::UpdateAll);
+            }
+            if add {
+                actions.push(Action::OpenAdd);
+            }
         });
-    egui::Sides::new().shrink_left().show(
-        ui,
-        |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let font =
-                    egui::FontId::new(15.0, egui::FontFamily::Name(theme::UI_SEMIBOLD.into()));
-                let count = format!("· {}", state.config.subscriptions.len());
-                let title_width = ui
-                    .painter()
-                    .layout_no_wrap(
-                        t().subscriptions_title.to_owned(),
-                        font.clone(),
-                        theme::TEXT,
-                    )
-                    .size()
-                    .x;
-                let count_width = ui
-                    .painter()
-                    .layout_no_wrap(
-                        count.clone(),
-                        egui::TextStyle::Body.resolve(ui.style()),
-                        theme::TEXT_DIM,
-                    )
-                    .size()
-                    .x;
-                let inset = ((ui.available_width()
-                    - title_width
-                    - count_width
-                    - 2.0 * ui.spacing().item_spacing.x)
-                    / 2.0)
-                    .max(0.0);
-                if inset > 0.0 {
-                    ui.add_space(inset);
-                }
-                ui.label(
-                    RichText::new(t().subscriptions_title)
-                        .color(theme::TEXT)
-                        .font(font),
-                );
-                ui.label(RichText::new(count).color(theme::TEXT_DIM));
-            });
-        },
-        |ui| {
-            ui.scope(|ui| {
-                ui.spacing_mut().button_padding.y = 6.0;
-                if widgets::button_fill(ui, t().add_short, state.add.is_none()).clicked() {
-                    actions.push(Action::OpenAdd);
-                }
-            });
-        },
-    );
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let font = egui::FontId::new(15.0, egui::FontFamily::Name(theme::UI_SEMIBOLD.into()));
+        let count = format!("· {}", state.config.subscriptions.len());
+        let title_width = ui
+            .painter()
+            .layout_no_wrap(
+                t().subscriptions_title.to_owned(),
+                font.clone(),
+                theme::TEXT,
+            )
+            .size()
+            .x;
+        let count_width = ui
+            .painter()
+            .layout_no_wrap(
+                count.clone(),
+                egui::TextStyle::Body.resolve(ui.style()),
+                theme::TEXT_DIM,
+            )
+            .size()
+            .x;
+        let inset = ((ui.available_width()
+            - title_width
+            - count_width
+            - 2.0 * ui.spacing().item_spacing.x)
+            / 2.0)
+            .max(0.0);
+        if inset > 0.0 {
+            ui.add_space(inset);
+        }
+        ui.label(
+            RichText::new(t().subscriptions_title)
+                .color(theme::TEXT)
+                .font(font),
+        );
+        ui.label(RichText::new(count).color(theme::TEXT_DIM));
+    });
     ui.add_space(12.0);
     egui::ScrollArea::vertical()
         .id_salt("subscription_scroll")
