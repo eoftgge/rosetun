@@ -4,6 +4,12 @@ pub mod platform;
 pub use errors::RoutingError;
 pub use platform::backend;
 
+/// Choose the physical default route: a probe engine without its own TUN would
+/// otherwise follow the connected session's default route back into that tunnel.
+pub fn physical_default_interface(exclude_alias: &str) -> Option<String> {
+    platform::physical_default_interface(exclude_alias)
+}
+
 pub type PrepareClosure =
     Box<dyn FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send>;
 pub type AuthorizeClosure = Box<dyn FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send>;

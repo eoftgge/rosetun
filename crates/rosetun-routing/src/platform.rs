@@ -18,6 +18,18 @@ pub fn backend() -> Box<dyn crate::RoutingBackend> {
     }
 }
 
+pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
+    #[cfg(windows)]
+    {
+        windows::physical_default_interface(exclude_alias)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = exclude_alias;
+        None
+    }
+}
+
 #[cfg(target_os = "linux")]
 const PLATFORM_NAME: &str = "linux-netlink";
 #[cfg(target_os = "macos")]

@@ -1,9 +1,14 @@
 mod filters;
+mod physical;
 mod policy;
 mod session;
 mod tunnel;
 
 use session::DynamicSession;
+
+pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
+    physical::physical_default_interface(exclude_alias)
+}
 
 use crate::platform::windows::session::WfpProtectionSession;
 use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
