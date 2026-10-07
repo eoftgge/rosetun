@@ -32,7 +32,13 @@ pub(crate) fn toggle(ui: &mut egui::Ui, on: &mut bool, enabled: bool) -> egui::R
     }
 }
 
-fn paint_toggle(ui: &egui::Ui, rect: egui::Rect, on: bool, progress: f32, enabled: bool) {
+pub(super) fn paint_toggle(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    on: bool,
+    progress: f32,
+    enabled: bool,
+) {
     if !ui.is_rect_visible(rect) {
         return;
     }
