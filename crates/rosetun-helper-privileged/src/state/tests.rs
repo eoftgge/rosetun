@@ -593,6 +593,36 @@ impl RoutingBackend for CountingRouting {
 }
 
 #[derive(Debug)]
+struct RejectingTunnelRouting {
+    reverted: Arc<AtomicUsize>,
+}
+
+impl RoutingBackend for RejectingTunnelRouting {
+    fn name(&self) -> &'static str {
+        "test-rejecting-tunnel"
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binary: &Path,
+    ) -> Result<RoutingGuard, RoutingError> {
+        let reverted = Arc::clone(&self.reverted);
+        Ok(RoutingGuard::new_with_authorizer(
+            |_tunnel| Err(RoutingError::Route("test rejection".to_owned())),
+            move || {
+                reverted.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            },
+        ))
+    }
+}
+
+#[derive(Debug)]
 struct FailingRouting;
 
 impl RoutingBackend for FailingRouting {
@@ -1018,6 +1048,51 @@ fn dns_lock_failure_does_not_block_connect() {
             assert!(session.watchdog.is_some());
             assert_eq!(stopped.load(Ordering::Acquire), 0);
         }
+    }
+}
+
+#[test]
+fn dns_lock_is_dropped_when_the_tunnel_cannot_be_authorized() {
+    use super::dns::test_support::{Behavior, Server};
+
+    for kill_switch in [false, true] {
+        let server = Server::new(Behavior::Noerror);
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let reverted = Arc::new(AtomicUsize::new(0));
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(DnsEngine {
+            server: Some(server.address()),
+            stopped: Arc::clone(&stopped),
+        }));
+        let helper = Helper::new(
+            engines,
+            Box::new(RejectingTunnelRouting {
+                reverted: Arc::clone(&reverted),
+            }),
+            VerboseGate::default(),
+        );
+        shorten_dns_timeouts(&helper);
+        let mut request = connect_request();
+        request.settings.kill_switch = kill_switch;
+
+        if kill_switch {
+            let error = helper
+                .connect(&request)
+                .expect_err("kill switch cannot be skipped");
+            assert_eq!(error.code, ErrorCode::RoutingFailed);
+            assert!(matches!(
+                helper.status().state,
+                ConnectionState::Failed { .. }
+            ));
+            assert!(helper.session().expect("session").guard.is_none());
+        } else {
+            helper.connect(&request).expect("DNS lock is optional");
+            assert!(matches!(helper.status().state, ConnectionState::Connected));
+            let session = helper.session().expect("session");
+            assert!(session.guard.is_none());
+            assert_eq!(session.tunnel_dns, Some(server.address()));
+        }
+        assert_eq!(reverted.load(Ordering::Acquire), 1);
     }
 }
 

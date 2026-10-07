@@ -750,7 +750,25 @@ impl Session {
         self.wait_for_engine_ready()?;
 
         if let Some(tunnel) = tunnel.as_ref() {
-            self.wait_for_tunnel(tunnel)?;
+            match self.wait_for_tunnel(tunnel) {
+                Ok(()) => {}
+                // A lock that cannot authorize the tunnel would block DNS into it as well.
+                Err(error)
+                    if error.code == ErrorCode::RoutingFailed
+                        && self
+                            .guard
+                            .as_ref()
+                            .is_some_and(|guard| guard.scope == ProtectionScope::DnsOnly) =>
+                {
+                    tracing::warn!(reason = %error.message, "DNS lock cannot authorize the tunnel; connecting without it");
+                    if let Some(guard) = self.guard.take()
+                        && let Err(error) = guard.routing.revert()
+                    {
+                        tracing::error!(%error, "failed to roll back DNS lock");
+                    }
+                }
+                Err(error) => return Err(error),
+            }
 
             let running = self
                 .process
