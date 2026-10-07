@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: '1.96.0'
+  CARGO_TERM_COLOR: always
+  INNO_SETUP_VERSION: '6.7.1'
+
+jobs:
+  release:
+    runs-on: windows-2025
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Check tag and release availability
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . ./installer/version.ps1
+          $releaseVersion = Get-RosetunVersion
+          if ($env:TAG -ne "v$($releaseVersion.Version)") {
+            throw "Tag $env:TAG does not match Cargo.toml version $($releaseVersion.Version)."
+          }
+          gh release view $env:TAG --json id 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "Release $env:TAG already exists." }
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_TOOLCHAIN --profile minimal --component clippy,rustfmt
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to install Rust toolchain.' }
+          rustup default $env:RUST_TOOLCHAIN
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to select Rust toolchain.' }
+      - name: Run tests
+        run: cargo test --workspace --locked
+      - name: Install Inno Setup if needed
+        shell: pwsh
+        run: |
+          $locations = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $locations | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --version $env:INNO_SETUP_VERSION -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to install Inno Setup.' }
+            $iscc = $locations | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw 'ISCC.exe was not found after installing Inno Setup.' }
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "ISCC=$iscc`n", [Text.UTF8Encoding]::new($false))
+      - name: Build release assets
+        id: build
+        run: ./installer/build.ps1 -Release
+      - uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        if: github.event_name == 'push' && github.event.repository.visibility == 'public'
+        with:
+          subject-path: ${{ steps.build.outputs.setup }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: rosetun-${{ steps.build.outputs.version }}-preview
+          path: |
+            ${{ steps.build.outputs.setup }}
+            target/installer/SHA256SUMS.txt
+            target/installer/release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+      - name: Publish release
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.build.outputs.version }}
+          PRERELEASE: ${{ steps.build.outputs.prerelease }}
+          SETUP: ${{ steps.build.outputs.setup }}
+        run: |
+          $sources = @(Get-ChildItem -LiteralPath 'target/installer' -Filter 'sing-box-*-source.tar.gz' -File)
+          if ($sources.Count -ne 1) { throw 'Expected exactly one sing-box source archive.' }
+          $releaseArgs = @(
+            $env:TAG
+            $env:SETUP
+            $sources[0].FullName
+            'target/installer/SHA256SUMS.txt'
+            '--title'
+            "Rosetun $env:VERSION"
+            '--notes-file'
+            'target/installer/release-notes.md'
+            '--verify-tag'
+          )
+          if ($env:PRERELEASE -eq 'true') { $releaseArgs += '--prerelease' }
+          gh release create @releaseArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish the release.' }
