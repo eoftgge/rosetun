@@ -12,7 +12,7 @@ pub use node::{
     Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode, TlsParams,
     Transport, TrojanParams, VlessParams, VmessParams,
 };
-pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget};
+pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{ConnectionState, Status, Traffic};
 pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings};
 pub use subscription::{Selection, Subscription, SubscriptionInfo};

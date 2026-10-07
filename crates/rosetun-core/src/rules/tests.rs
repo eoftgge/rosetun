@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
+use rosetun_config::RuleTemplate;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -446,6 +447,48 @@ fn process_input_rejects_relative_paths_and_invalid_names() {
 }
 
 #[test]
+fn template_rules_are_unique_even_when_disabled() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
+    let matcher = RuleMatcher::Template(RuleTemplate::RussianSites);
+    let first = add_rule(&store, &set.id, matcher.clone(), RuleTarget::Direct).unwrap();
+    set_rule_enabled(&store, &set.id, &first.id, false).unwrap();
+    assert_no_write!(
+        store,
+        add_rule(&store, &set.id, matcher, RuleTarget::Block),
+        RuleSetError::DuplicateRule
+    );
+    assert!(
+        add_rule(
+            &store,
+            &set.id,
+            RuleMatcher::Template(RuleTemplate::Youtube),
+            RuleTarget::Proxy
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn template_contents_pass_rule_input_validation() {
+    for template in RuleTemplate::ALL {
+        for matcher in template.matchers() {
+            match matcher {
+                RuleMatcher::Domain(DomainMatch::Suffix(domain)) => assert_eq!(
+                    parse_domain_input(&format!("*.{domain}")),
+                    Ok(DomainMatch::Suffix(domain))
+                ),
+                RuleMatcher::Process(ProcessMatch::Name(name)) => {
+                    assert_eq!(parse_process_input(&name), Ok(ProcessMatch::Name(name)));
+                }
+                other => panic!("unexpected matcher in {}: {other:?}", template.key()),
+            }
+        }
+    }
+}
+
+#[test]
 fn rule_value_text_formats_every_matcher() {
     for (matcher, expected) in [
         (domain("example.com"), "example.com"),
@@ -468,6 +511,10 @@ fn rule_value_text_formats_every_matcher() {
         (
             RuleMatcher::IpCidr("192.0.2.0/24".to_owned()),
             "192.0.2.0/24",
+        ),
+        (
+            RuleMatcher::Template(RuleTemplate::RussianSites),
+            "template:russian_sites",
         ),
     ] {
         assert_eq!(rule_value_text(&matcher), expected);

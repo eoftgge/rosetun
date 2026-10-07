@@ -308,6 +308,7 @@ pub fn rule_value_text(matcher: &RuleMatcher) -> String {
         RuleMatcher::Process(ProcessMatch::Name(name)) => name.clone(),
         RuleMatcher::Process(ProcessMatch::Path(path)) => path.to_string_lossy().into_owned(),
         RuleMatcher::IpCidr(cidr) => cidr.clone(),
+        RuleMatcher::Template(template) => format!("template:{}", template.key()),
     }
 }
 

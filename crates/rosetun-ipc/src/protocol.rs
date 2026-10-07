@@ -69,7 +69,7 @@ impl ConnectRequest {
         let rule_set = match &config.active_rule_set {
             Some(_) => config
                 .active_rules()
-                .cloned()
+                .map(RuleSet::with_templates_expanded)
                 .ok_or(ConnectRequestError::RuleSetNotFound)?,
             None => RuleSet::new(RuleSetId::new("default"), "Default", RuleTarget::Proxy),
         };
@@ -157,7 +157,8 @@ pub enum ErrorCode {
 mod tests {
     use rosetun_config::{
         AppConfig, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
-        RuleTarget, Selection, StreamSettings, Subscription, SubscriptionId, TrojanParams,
+        RuleTarget, RuleTemplate, Selection, StreamSettings, Subscription, SubscriptionId,
+        TrojanParams,
     };
 
     use super::{ConnectRequest, ConnectRequestError};
@@ -256,6 +257,52 @@ mod tests {
             assert_eq!(error, expected);
             assert_eq!(error.to_string(), message);
         }
+    }
+
+    #[test]
+    fn request_expands_templates_in_place_before_sending_to_helper() {
+        let mut config = selected_config();
+        let template = Rule {
+            id: RuleId::new("template"),
+            enabled: false,
+            matcher: RuleMatcher::Template(RuleTemplate::Torrents),
+            target: RuleTarget::Block,
+        };
+        config.rule_sets[0].rules.insert(0, template.clone());
+        let request = ConnectRequest::from_config(&config).unwrap();
+        assert_eq!(request.rule_set.rules.len(), 8);
+        for (rule, matcher) in request.rule_set.rules[..7]
+            .iter()
+            .zip(RuleTemplate::Torrents.matchers())
+        {
+            assert_eq!(rule.id, template.id);
+            assert!(!rule.enabled);
+            assert_eq!(rule.target, template.target);
+            assert_eq!(rule.matcher, matcher);
+        }
+        assert_eq!(request.rule_set.rules[7], config.rule_sets[0].rules[1]);
+        assert!(
+            request
+                .rule_set
+                .rules
+                .iter()
+                .all(|rule| !matches!(rule.matcher, RuleMatcher::Template(_)))
+        );
+        assert_eq!(config.rule_sets[0].rules[0], template);
+    }
+
+    #[test]
+    fn request_expands_enabled_templates_for_routing() {
+        let mut config = selected_config();
+        config.rule_sets[0].rules[0].matcher = RuleMatcher::Template(RuleTemplate::Youtube);
+        config.rule_sets[0].rules[0].target = RuleTarget::Proxy;
+        let request = ConnectRequest::from_config(&config).unwrap();
+        assert_eq!(request.rule_set.rules.len(), 7);
+        assert_eq!(
+            request.rule_set.rules[0].matcher,
+            RuleTemplate::Youtube.matchers()[0]
+        );
+        assert!(request.rule_set.rules.iter().all(|rule| rule.enabled));
     }
 
     #[test]

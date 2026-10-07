@@ -256,8 +256,10 @@ pub(crate) fn route_section(
     let mut unsupported = Vec::new();
 
     for rule in rules.enabled() {
-        if capabilities.supports(&rule.matcher) {
-            route_rules.push(route_rule(rule));
+        if capabilities.supports(&rule.matcher)
+            && let Some(value) = route_rule(rule)
+        {
+            route_rules.push(value);
         } else {
             unsupported.push(rule.id.clone());
         }
@@ -290,7 +292,7 @@ pub(crate) fn route_section(
     )
 }
 
-fn route_rule(rule: &rosetun_config::Rule) -> Value {
+fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
     let mut value = Map::new();
     match &rule.matcher {
         RuleMatcher::Domain(DomainMatch::Exact(domain)) => {
@@ -311,6 +313,7 @@ fn route_rule(rule: &rosetun_config::Rule) -> Value {
         RuleMatcher::IpCidr(cidr) => {
             value.insert("ip_cidr".into(), json!([cidr]));
         }
+        RuleMatcher::Template(_) => return None,
     }
 
     match rule.target {
@@ -330,5 +333,28 @@ fn route_rule(rule: &rosetun_config::Rule) -> Value {
         }
     }
 
-    Value::Object(value)
+    Some(Value::Object(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use rosetun_config::{Rule, RuleSetId, RuleTemplate};
+
+    use super::*;
+
+    #[test]
+    fn unexpanded_template_is_reported_without_a_match_all_route() {
+        let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
+        let template = Rule {
+            id: RuleId::new("template"),
+            enabled: true,
+            matcher: RuleMatcher::Template(RuleTemplate::RussianSites),
+            target: RuleTarget::Direct,
+        };
+        assert_eq!(route_rule(&template), None);
+        set.rules.push(template.clone());
+        let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
+        assert_eq!(unsupported, vec![template.id]);
+        assert_eq!(route["rules"].as_array().unwrap().len(), 2);
+    }
 }
