@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a Rosetun improvement
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the feature without subscription or server links, credentials or private logs.
+        Опишите возможность без ссылок подписок и серверов, паролей и личных журналов.
+  - type: textarea
+    id: feature
+    attributes:
+      label: What do you need?
+      description: Describe the proposed behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: Why is it needed?
+      description: Explain the problem this would solve.
+    validations:
+      required: true

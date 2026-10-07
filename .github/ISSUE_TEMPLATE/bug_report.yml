@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a problem with Rosetun
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste subscription or server links: they can contain passwords.** Review any log before sharing it; Verbose log can record site addresses. Report vulnerabilities privately through Security, not here.
+
+        **Никогда не вставляйте ссылки подписок и серверов: в них могут быть пароли.** Просмотрите журнал перед отправкой: подробный журнал может содержать адреса сайтов. Об уязвимостях сообщайте приватно через Security.
+  - type: input
+    id: version
+    attributes:
+      label: Rosetun version (About)
+      placeholder: 0.1.0-alpha.1
+    validations:
+      required: true
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      placeholder: Windows 11, x64
+    validations:
+      required: true
+  - type: dropdown
+    id: kill-switch
+    attributes:
+      label: Kill switch
+      options:
+        - 'On'
+        - 'Off'
+        - 'Not sure'
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem without subscription links, server links or credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do before the problem occurred?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log (optional)
+      description: Review and redact it first. Verbose log may contain site addresses; never include subscription or server links.
