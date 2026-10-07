@@ -179,6 +179,14 @@ fn dispatch(
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
+        Request::ProbeNodes(request) => match helper.probe_nodes(request) {
+            Ok(results) => Response::Probe(results),
+            Err(error) => Response::Error(error),
+        },
+        Request::TunnelDelay => match helper.tunnel_delay() {
+            Ok(outcome) => Response::Delay(outcome),
+            Err(error) => Response::Error(error),
+        },
         Request::Disconnect => match helper.disconnect() {
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
@@ -227,6 +235,34 @@ mod tests {
         assert!(matches!(
             dispatch(&Request::Shutdown, &helper, &mut greeted, true),
             Response::Ok
+        ));
+    }
+
+    #[test]
+    fn server_check_and_delay_dispatch_return_helper_errors() {
+        let helper = Helper::new(
+            rosetun_engine::EngineRegistry::new(),
+            rosetun_routing::backend(),
+            crate::log_gate::VerboseGate::default(),
+        );
+        let mut greeted = true;
+        let probe = Request::ProbeNodes(Box::new(rosetun_ipc::ProbeRequest {
+            nodes: Vec::new(),
+            settings: rosetun_config::Settings::default(),
+        }));
+        assert!(matches!(
+            dispatch(&probe, &helper, &mut greeted, false),
+            Response::Error(HelperError {
+                code: ErrorCode::InvalidState,
+                ..
+            })
+        ));
+        assert!(matches!(
+            dispatch(&Request::TunnelDelay, &helper, &mut greeted, false),
+            Response::Error(HelperError {
+                code: ErrorCode::InvalidState,
+                ..
+            })
         ));
     }
 }

@@ -2163,3 +2163,344 @@ fn connect_request() -> ConnectRequest {
         settings: Settings::default(),
     }
 }
+
+#[derive(Debug)]
+struct ProbeEngine {
+    dir: PathBuf,
+    stopped: Arc<AtomicUsize>,
+    ready: bool,
+    fail_spawn: bool,
+    panic_url: bool,
+    outcomes: std::collections::HashMap<String, Option<u32>>,
+    blocked: Mutex<Option<(Sender<()>, Receiver<()>)>>,
+}
+
+impl EngineBackend for ProbeEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
+    }
+
+    fn tunnel_dns_server(&self, _: &rosetun_config::TunSettings) -> Option<SocketAddr> {
+        None
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        Ok(PathBuf::from("sing-box"))
+    }
+
+    fn render(&self, _: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        Ok(RenderedConfig {
+            file_name: "config.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
+        })
+    }
+
+    fn render_probe(
+        &self,
+        request: &rosetun_engine::ProbeRenderRequest<'_>,
+    ) -> Result<RenderedConfig, EngineError> {
+        Ok(RenderedConfig {
+            file_name: "probe.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+            unsupported_probes: request
+                .nodes
+                .iter()
+                .filter(|(_, node)| matches!(node.outbound, Outbound::Unknown { .. }))
+                .map(|(tag, _)| tag.clone())
+                .collect(),
+        })
+    }
+
+    fn probe_config_path(&self, config: &RenderedConfig) -> Option<PathBuf> {
+        Some(self.dir.join(&config.file_name))
+    }
+
+    fn url_test(
+        &self,
+        _: &ControlEndpoint,
+        target: rosetun_engine::UrlTestTarget<'_>,
+        _: &str,
+        _: Duration,
+    ) -> Result<Duration, EngineError> {
+        assert!(!self.panic_url, "test URL worker panicked");
+        let tag = match target {
+            rosetun_engine::UrlTestTarget::Session => "proxy",
+            rosetun_engine::UrlTestTarget::Probe(tag) => tag,
+        };
+        if let Some((entered, release)) = self.blocked.lock().unwrap().take() {
+            entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
+        self.outcomes
+            .get(tag)
+            .copied()
+            .flatten()
+            .map(|millis| Duration::from_millis(u64::from(millis)))
+            .ok_or_else(|| EngineError::Stats("test URL request failed".to_owned()))
+    }
+
+    fn spawn(
+        &self,
+        _: &Path,
+        config: &RenderedConfig,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        std::fs::write(self.dir.join(&config.file_name), &config.body)?;
+        if self.fail_spawn {
+            return Err(EngineError::Stats("test spawn failed".to_owned()));
+        }
+        Ok(Box::new(ProbeEngineProcess {
+            stopped: Arc::clone(&self.stopped),
+            ready: self.ready,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct ProbeEngineProcess {
+    stopped: Arc<AtomicUsize>,
+    ready: bool,
+}
+
+impl EngineProcess for ProbeEngineProcess {
+    fn is_running(&mut self) -> Result<bool, EngineError> {
+        Ok(true)
+    }
+
+    fn is_ready(&mut self) -> Result<bool, EngineError> {
+        if self.ready {
+            Ok(true)
+        } else {
+            Err(EngineError::Stats("not ready".to_owned()))
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), EngineError> {
+        self.stopped.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+}
+
+fn probe_fixture(
+    ready: bool,
+    blocked: Option<(Sender<()>, Receiver<()>)>,
+) -> (Helper, Arc<AtomicUsize>, PathBuf) {
+    probe_fixture_with_failures(ready, blocked, false, false)
+}
+
+fn probe_fixture_with_failures(
+    ready: bool,
+    blocked: Option<(Sender<()>, Receiver<()>)>,
+    fail_spawn: bool,
+    panic_url: bool,
+) -> (Helper, Arc<AtomicUsize>, PathBuf) {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "rosetun-probe-test-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ProbeEngine {
+        dir: dir.clone(),
+        stopped: Arc::clone(&stopped),
+        ready,
+        fail_spawn,
+        panic_url,
+        outcomes: [
+            ("probe-0".to_owned(), Some(17)),
+            ("probe-4".to_owned(), Some(45)),
+            ("proxy".to_owned(), Some(23)),
+        ]
+        .into(),
+        blocked: Mutex::new(blocked),
+    }));
+    (
+        Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default()),
+        stopped,
+        dir,
+    )
+}
+
+fn probe_request() -> rosetun_ipc::ProbeRequest {
+    let settings = Settings {
+        kill_switch: false,
+        ..Settings::default()
+    };
+    let node = connect_request().node;
+    rosetun_ipc::ProbeRequest {
+        nodes: vec![node],
+        settings,
+    }
+}
+
+#[test]
+fn probe_results_keep_request_order_and_cleanup_secrets() {
+    use rosetun_ipc::ProbeOutcome;
+
+    let (helper, stopped, dir) = probe_fixture(true, None);
+    let mut request = probe_request();
+    let mut failed = request.nodes[0].clone();
+    failed.id = NodeId::new("failed");
+    request.nodes.push(failed);
+    let mut unsupported = request.nodes[0].clone();
+    unsupported.id = NodeId::new("unsupported");
+    unsupported.outbound = Outbound::Unknown {
+        scheme: "unknown".into(),
+        params: Default::default(),
+    };
+    request.nodes.push(unsupported);
+    let mut unresolved = request.nodes[0].clone();
+    unresolved.id = NodeId::new("unresolved");
+    unresolved.server = "name.invalid".into();
+    request.nodes.push(unresolved);
+    let mut last = request.nodes[0].clone();
+    last.id = NodeId::new("last");
+    request.nodes.push(last);
+
+    let results = helper.probe_nodes(&request).unwrap();
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| &result.node)
+            .collect::<Vec<_>>(),
+        request
+            .nodes
+            .iter()
+            .map(|node| &node.id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.outcome)
+            .collect::<Vec<_>>(),
+        [
+            ProbeOutcome::Works { millis: 17 },
+            ProbeOutcome::Fails,
+            ProbeOutcome::Unsupported,
+            ProbeOutcome::Unresolved,
+            ProbeOutcome::Works { millis: 45 },
+        ]
+    );
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+    assert!(!dir.join("probe.json").exists());
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn probe_cleans_up_when_engine_is_not_ready() {
+    let (helper, stopped, dir) = probe_fixture(false, None);
+    assert_eq!(
+        helper.probe_nodes(&probe_request()).unwrap_err().code,
+        ErrorCode::EngineFailed
+    );
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+    assert!(!dir.join("probe.json").exists());
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn probe_cleans_up_after_spawn_error_and_worker_panic() {
+    let (helper, stopped, dir) = probe_fixture_with_failures(true, None, true, false);
+    assert_eq!(
+        helper.probe_nodes(&probe_request()).unwrap_err().code,
+        ErrorCode::EngineFailed
+    );
+    assert_eq!(stopped.load(Ordering::Acquire), 0);
+    assert!(!dir.join("probe.json").exists());
+    std::fs::remove_dir(dir).unwrap();
+
+    let (helper, stopped, dir) = probe_fixture_with_failures(true, None, false, true);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        helper.probe_nodes(&probe_request())
+    }));
+    assert!(outcome.is_err());
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+    assert!(!dir.join("probe.json").exists());
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn probing_does_not_block_tunnel_operations_and_rejects_second_probe() {
+    let (entered, entered_rx) = channel();
+    let (release_tx, release) = channel();
+    let (helper, stopped, dir) = probe_fixture(true, Some((entered, release)));
+    let helper = Arc::new(helper);
+    let request = probe_request();
+    let worker = {
+        let helper = Arc::clone(&helper);
+        let request = request.clone();
+        std::thread::spawn(move || helper.probe_nodes(&request))
+    };
+    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(
+        helper.probe_nodes(&request).unwrap_err().code,
+        ErrorCode::Busy
+    );
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Disconnected
+    ));
+    helper.connect(&connect_request()).unwrap();
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    helper.disconnect().unwrap();
+    release_tx.send(()).unwrap();
+    worker.join().unwrap().unwrap();
+    assert_eq!(stopped.load(Ordering::Acquire), 2);
+    assert!(!dir.join("probe.json").exists());
+    drop(helper);
+    std::fs::remove_file(dir.join("config.json")).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn probe_rejects_empty_and_oversized_batches() {
+    let (helper, _, dir) = probe_fixture(true, None);
+    let mut request = probe_request();
+    request.nodes.clear();
+    assert_eq!(
+        helper.probe_nodes(&request).unwrap_err().code,
+        ErrorCode::InvalidState
+    );
+    request.nodes = vec![connect_request().node; rosetun_ipc::MAX_PROBE_NODES + 1];
+    assert_eq!(
+        helper.probe_nodes(&request).unwrap_err().code,
+        ErrorCode::InvalidState
+    );
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn tunnel_delay_requires_connection_and_uses_its_control() {
+    use rosetun_ipc::ProbeOutcome;
+
+    let (helper, stopped, dir) = probe_fixture(true, None);
+    assert_eq!(
+        helper.tunnel_delay().unwrap_err().code,
+        ErrorCode::InvalidState
+    );
+    helper.connect(&connect_request()).unwrap();
+    assert_eq!(
+        helper.tunnel_delay().unwrap(),
+        ProbeOutcome::Works { millis: 23 }
+    );
+    helper.disconnect().unwrap();
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+    std::fs::remove_file(dir.join("config.json")).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}

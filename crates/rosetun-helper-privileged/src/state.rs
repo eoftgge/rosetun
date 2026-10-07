@@ -1,5 +1,6 @@
 mod dns;
 mod path;
+mod probe;
 #[cfg(test)]
 mod tests;
 mod watchdog;
@@ -52,6 +53,9 @@ const SLEEP_GAP: Duration = Duration::from_secs(30);
 pub struct Helper {
     status: Arc<Mutex<Status>>,
     session: Mutex<Session>,
+    engines: Arc<EngineRegistry>,
+    probe: Mutex<()>,
+    shutting_down: AtomicBool,
     resumed: AtomicBool,
 }
 
@@ -82,7 +86,7 @@ struct Guard {
 }
 
 struct Session {
-    engines: EngineRegistry,
+    engines: Arc<EngineRegistry>,
     routing: Box<dyn RoutingBackend>,
     gate: VerboseGate,
     status: Arc<Mutex<Status>>,
@@ -114,8 +118,12 @@ impl Helper {
         gate: VerboseGate,
     ) -> Self {
         let status = Arc::new(Mutex::new(Status::default()));
+        let engines = Arc::new(engines);
         Self {
             status: Arc::clone(&status),
+            engines: Arc::clone(&engines),
+            probe: Mutex::new(()),
+            shutting_down: AtomicBool::new(false),
             resumed: AtomicBool::new(false),
             session: Mutex::new(Session {
                 engines,
@@ -373,6 +381,7 @@ impl Helper {
     }
 
     pub fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Release);
         tracing::info!("starting helper session teardown");
         let mut session = self
             .session
@@ -383,6 +392,9 @@ impl Helper {
         session.reconnect = None;
         session.teardown();
         self.with_status(|status| *status = Status::default());
+        drop(session);
+        // The service must not exit with a live probe process or its secret config.
+        let _probe = self.probe.lock().unwrap_or_else(|error| error.into_inner());
         tracing::info!("helper session teardown completed");
     }
 
@@ -747,7 +759,13 @@ impl Session {
         );
         self.control = control;
 
-        self.wait_for_engine_ready()?;
+        wait_for_engine_ready(
+            self.process
+                .as_mut()
+                .expect("engine process was stored before readiness")
+                .as_mut(),
+        )?;
+        tracing::info!("engine startup readiness confirmed");
 
         if let Some(tunnel) = tunnel.as_ref() {
             match self.wait_for_tunnel(tunnel) {
@@ -833,63 +851,6 @@ impl Session {
         match DnsWatchdog::start(Arc::clone(&self.status), server, self.watchdog_timing) {
             Ok(watchdog) => self.watchdog = Some(watchdog),
             Err(error) => tracing::warn!(%error, "DNS watchdog is unavailable"),
-        }
-    }
-
-    fn wait_for_engine_ready(&mut self) -> Result<(), HelperError> {
-        let deadline = Instant::now() + TUNNEL_READY_TIMEOUT;
-
-        loop {
-            let process = self.process.as_mut().ok_or_else(|| {
-                HelperError::new(
-                    ErrorCode::EngineFailed,
-                    "engine process disappeared before startup readiness",
-                )
-            })?;
-
-            let running = process
-                .is_running()
-                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
-
-            if !running {
-                return Err(HelperError::new(
-                    ErrorCode::EngineFailed,
-                    "engine exited before startup readiness",
-                ));
-            }
-
-            let ready = process
-                .is_ready()
-                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
-
-            if ready {
-                // The process may have exited while the signal was being read.
-                let running = process.is_running().map_err(|error| {
-                    HelperError::new(ErrorCode::EngineFailed, error.to_string())
-                })?;
-
-                if !running {
-                    return Err(HelperError::new(
-                        ErrorCode::EngineFailed,
-                        "engine exited during startup readiness",
-                    ));
-                }
-
-                tracing::info!("engine startup readiness confirmed");
-                return Ok(());
-            }
-
-            if Instant::now() >= deadline {
-                return Err(HelperError::new(
-                    ErrorCode::EngineFailed,
-                    format!(
-                        "engine startup readiness was not confirmed within {} seconds",
-                        TUNNEL_READY_TIMEOUT.as_secs()
-                    ),
-                ));
-            }
-
-            std::thread::sleep(TUNNEL_READY_POLL_INTERVAL);
         }
     }
 
@@ -1000,6 +961,46 @@ impl Session {
     }
 }
 
+fn wait_for_engine_ready(process: &mut dyn EngineProcess) -> Result<(), HelperError> {
+    let deadline = Instant::now() + TUNNEL_READY_TIMEOUT;
+    loop {
+        let running = process
+            .is_running()
+            .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+        if !running {
+            return Err(HelperError::new(
+                ErrorCode::EngineFailed,
+                "engine exited before startup readiness",
+            ));
+        }
+        let ready = process
+            .is_ready()
+            .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+        if ready {
+            let running = process
+                .is_running()
+                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+            if !running {
+                return Err(HelperError::new(
+                    ErrorCode::EngineFailed,
+                    "engine exited during startup readiness",
+                ));
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(HelperError::new(
+                ErrorCode::EngineFailed,
+                format!(
+                    "engine startup readiness was not confirmed within {} seconds",
+                    TUNNEL_READY_TIMEOUT.as_secs()
+                ),
+            ));
+        }
+        thread::sleep(TUNNEL_READY_POLL_INTERVAL);
+    }
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         self.teardown();
@@ -1030,10 +1031,17 @@ fn protected_endpoint(
 }
 
 fn resolve(server: &str, port: u16) -> Result<Vec<IpAddr>, HelperError> {
+    let result = resolve_quiet(server, port);
+    if let Err(error) = &result {
+        tracing::warn!(%server, %error, "failed to resolve the VPN endpoint");
+    }
+    result
+}
+
+fn resolve_quiet(server: &str, port: u16) -> Result<Vec<IpAddr>, HelperError> {
     let addresses = (server, port)
         .to_socket_addrs()
         .map_err(|error| {
-            tracing::warn!(%server, %error, "failed to resolve the VPN endpoint");
             HelperError::new(
                 ErrorCode::RoutingFailed,
                 format!("failed to resolve VPN endpoint {server}: {error}"),

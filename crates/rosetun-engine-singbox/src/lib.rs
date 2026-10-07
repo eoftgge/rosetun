@@ -119,6 +119,10 @@ impl EngineBackend for SingBoxBackend {
         render::render_probe(request)
     }
 
+    fn probe_config_path(&self, config: &RenderedConfig) -> Option<PathBuf> {
+        Some(self.work_dir.join(&config.file_name))
+    }
+
     fn url_test(
         &self,
         control: &ControlEndpoint,
@@ -140,7 +144,7 @@ impl EngineBackend for SingBoxBackend {
         let mut response = agent
             .get(&format!("http://{}/proxies/{tag}/delay", control.address))
             .query("url", url)
-            .query("timeout", &timeout.as_millis().to_string())
+            .query("timeout", timeout.as_millis().to_string())
             .header("Authorization", &format!("Bearer {}", control.secret))
             .call()
             .map_err(|_| EngineError::Stats("local URL test request failed".to_owned()))?;
@@ -178,7 +182,10 @@ impl EngineBackend for SingBoxBackend {
         let config_path = self.work_dir.join(&config.file_name);
         std::fs::write(&config_path, &config.body)?;
 
-        tracing::info!(binary = %binary.display(), config = %config_path.display(), "starting sing-box");
+        let probe = config.file_name == "probe.json";
+        if !probe {
+            tracing::info!(binary = %binary.display(), config = %config_path.display(), "starting sing-box");
+        }
         let mut child = Command::new(binary)
             .arg("run")
             .arg("--disable-color")
@@ -191,7 +198,6 @@ impl EngineBackend for SingBoxBackend {
 
         let (ready_sender, readiness) = Readiness::new();
 
-        let probe = config.file_name == "probe.json";
         if let Some(stdout) = child.stdout.take()
             && let Err(error) = spawn_output_drain(stdout, "stdout", None, probe)
         {

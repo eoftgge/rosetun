@@ -153,6 +153,11 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
         Err(EngineError::Unsupported("server checks".to_owned()))
     }
 
+    /// Where `spawn` writes a probe config, so the helper can remove its secrets.
+    fn probe_config_path(&self, _config: &RenderedConfig) -> Option<PathBuf> {
+        None
+    }
+
     fn url_test(
         &self,
         _control: &ControlEndpoint,
