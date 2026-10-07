@@ -302,7 +302,7 @@ fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         set_picker(ui, state, set, actions);
         let menu =
             icons::icon_button_sized(ui, Icon::More, true, 40.0).on_hover_text(t().more_actions);
-        egui::Popup::menu(&menu).show(|ui| {
+        widgets::menu_popup(&menu).show(|ui| {
             ui.set_min_width(180.0);
             if !active
                 && ui
@@ -437,7 +437,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
         })
         .response
         .on_hover_cursor(egui::CursorIcon::PointingHand);
-    egui::Popup::menu(&response).show(|ui| {
+    widgets::menu_popup(&response).show(|ui| {
         ui.set_min_width(width);
         for item in &state.config.rule_sets {
             let selected = item.id == set.id;
@@ -635,7 +635,7 @@ fn target_button(
         }
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         let mut selected = None;
-        egui::Popup::menu(&response).show(|ui| {
+        widgets::menu_popup(&response).show(|ui| {
             ui.set_min_width(TARGET_WIDTH);
             for &choice in choices {
                 let (rect, item) =
@@ -771,7 +771,7 @@ fn rule_row(
                     )
                     .on_hover_text(t().more_actions);
                     if state.can_edit_rules() {
-                        egui::Popup::menu(&menu).show(|ui| {
+                        widgets::menu_popup(&menu).show(|ui| {
                             ui.set_min_width(160.0);
                             if crate::rules::editable(&rule.matcher)
                                 && ui.button(t().edit).clicked()

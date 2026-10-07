@@ -418,9 +418,6 @@ pub(crate) struct Strings {
     pub(crate) add_rules_many: &'static str,
     pub(crate) include_subdomains: &'static str,
     pub(crate) include_subdomains_detail: &'static str,
-    pub(crate) target_detail_proxy: &'static str,
-    pub(crate) target_detail_direct: &'static str,
-    pub(crate) target_detail_block: &'static str,
     pub(crate) advanced: &'static str,
     pub(crate) full_path_detail: &'static str,
     #[cfg(windows)]

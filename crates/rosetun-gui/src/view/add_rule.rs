@@ -593,11 +593,6 @@ fn target_cards(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
             .enumerate()
         {
             let width = (DIALOG_WIDTH - 16.0) / 3.0;
-            let detail = match target {
-                RuleTarget::Proxy => t().target_detail_proxy,
-                RuleTarget::Direct => t().target_detail_direct,
-                RuleTarget::Block => t().target_detail_block,
-            };
             let response = widgets::choice_card(
                 ui,
                 index,
@@ -605,12 +600,7 @@ fn target_cards(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
                 dialog.target == target,
                 !dialog.busy,
                 |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.horizontal(|ui| {
-                        let (dot, _) =
-                            ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
-                        ui.painter()
-                            .circle_filled(dot.center(), 3.5, target_color(target));
+                    ui.vertical_centered(|ui| {
                         ui.label(
                             RichText::new(target_label(target))
                                 .font(FontId::new(
@@ -620,10 +610,6 @@ fn target_cards(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
                                 .color(target_color(target)),
                         );
                     });
-                    ui.add(
-                        egui::Label::new(RichText::new(detail).small().color(theme::TEXT_DIM))
-                            .wrap(),
-                    );
                 },
             );
             if response.clicked() && !dialog.busy {

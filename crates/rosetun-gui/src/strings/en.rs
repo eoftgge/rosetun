@@ -343,9 +343,6 @@ pub(crate) static EN: Strings = Strings {
     add_rules_many: "Add {n} rules",
     include_subdomains: "Include subdomains",
     include_subdomains_detail: "youtube.com also covers m.youtube.com",
-    target_detail_proxy: "Hide it and get past blocks",
-    target_detail_direct: "No VPN, as usual",
-    target_detail_block: "Keep it off the internet",
     advanced: "Advanced",
     full_path_detail: "The rule applies only to the program in this folder",
     #[cfg(windows)]

@@ -1,6 +1,7 @@
 mod buttons;
 mod choice_card;
 mod frames;
+mod menu;
 mod search;
 mod segmented;
 mod status_pill;
@@ -9,6 +10,7 @@ mod toggle;
 pub(crate) use buttons::{button_fill, outline_button};
 pub(crate) use choice_card::choice_card;
 pub(crate) use frames::{card_frame, dismissible_error, modal_frame};
+pub(crate) use menu::menu_popup;
 pub(crate) use search::search_field;
 pub(crate) use segmented::segmented;
 pub(crate) use status_pill::status_pill;

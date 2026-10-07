@@ -343,9 +343,6 @@ pub(crate) static RU: Strings = Strings {
     add_rules_many: "Добавить {n} правил",
     include_subdomains: "Включая поддомены",
     include_subdomains_detail: "youtube.com сработает и для m.youtube.com",
-    target_detail_proxy: "Скрыть и обойти блокировки",
-    target_detail_direct: "Без VPN, как обычно",
-    target_detail_block: "Не пускать в интернет",
     advanced: "Дополнительно",
     full_path_detail: "Правило сработает только для программы из этой папки",
     #[cfg(windows)]
