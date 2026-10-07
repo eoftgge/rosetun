@@ -198,6 +198,117 @@ fn added_rules_are_enabled_first_and_unique_even_when_disabled() {
 }
 
 #[test]
+fn batch_add_preserves_input_order_at_the_top_and_skips_duplicates() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
+    let old = add_rule(&store, &set.id, domain("old.example"), RuleTarget::Block).unwrap();
+    let result = add_rules(
+        &store,
+        &set.id,
+        vec![
+            domain("first.example"),
+            domain("old.example"),
+            domain("second.example"),
+            domain("first.example"),
+        ],
+        RuleTarget::Direct,
+    )
+    .unwrap();
+    assert_eq!(result.skipped, 2);
+    assert_eq!(result.added.len(), 2);
+    assert_eq!(result.added[0].id, RuleId::new("2"));
+    assert_eq!(result.added[1].id, RuleId::new("3"));
+    assert_eq!(result.added[0].matcher, domain("first.example"));
+    assert_eq!(result.added[1].matcher, domain("second.example"));
+    assert!(
+        result
+            .added
+            .iter()
+            .all(|rule| rule.enabled && rule.target == RuleTarget::Direct)
+    );
+    assert_eq!(
+        store.load().unwrap().rule_sets[0].rules,
+        vec![result.added[0].clone(), result.added[1].clone(), old]
+    );
+    assert_no_write!(
+        store,
+        add_rules(
+            &store,
+            &set.id,
+            vec![domain("old.example"), domain("first.example")],
+            RuleTarget::Proxy
+        ),
+        RuleSetError::DuplicateRule
+    );
+    let before = fs::read(store.path()).unwrap();
+    assert_eq!(
+        add_rules(&store, &set.id, Vec::new(), RuleTarget::Proxy).unwrap(),
+        AddedRules {
+            added: Vec::new(),
+            skipped: 0
+        }
+    );
+    assert_eq!(fs::read(store.path()).unwrap(), before);
+}
+
+#[test]
+fn update_rule_keeps_identity_position_and_enabled_and_rejects_other_matchers() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
+    let first = add_rule(&store, &set.id, domain("first.example"), RuleTarget::Proxy).unwrap();
+    let middle = add_rule(&store, &set.id, domain("middle.example"), RuleTarget::Block).unwrap();
+    let last = add_rule(&store, &set.id, domain("last.example"), RuleTarget::Proxy).unwrap();
+    set_rule_enabled(&store, &set.id, &middle.id, false).unwrap();
+    assert_no_write!(
+        store,
+        update_rule(
+            &store,
+            &set.id,
+            &middle.id,
+            domain("first.example"),
+            RuleTarget::Direct
+        ),
+        RuleSetError::DuplicateRule
+    );
+    assert_no_write!(
+        store,
+        update_rule(
+            &store,
+            &set.id,
+            &RuleId::new("missing"),
+            domain("new.example"),
+            RuleTarget::Proxy
+        ),
+        RuleSetError::RuleNotFound
+    );
+    update_rule(
+        &store,
+        &set.id,
+        &middle.id,
+        domain("middle.example"),
+        RuleTarget::Direct,
+    )
+    .unwrap();
+    update_rule(
+        &store,
+        &set.id,
+        &middle.id,
+        domain("new.example"),
+        RuleTarget::Proxy,
+    )
+    .unwrap();
+    let rules = store.load().unwrap().rule_sets.remove(0).rules;
+    assert_eq!(rules[0], last);
+    assert_eq!(rules[1].id, middle.id);
+    assert!(!rules[1].enabled);
+    assert_eq!(rules[1].matcher, domain("new.example"));
+    assert_eq!(rules[1].target, RuleTarget::Proxy);
+    assert_eq!(rules[2], first);
+}
+
+#[test]
 fn new_ids_reuse_gaps_and_ignore_non_numeric_ids() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
@@ -347,6 +458,18 @@ fn domain_input_accepts_exact_suffix_urls_and_idns() {
     for (input, expected) in [
         ("example.com", DomainMatch::Exact("example.com".to_owned())),
         (
+            "youtube.com/watch?v=1",
+            DomainMatch::Exact("youtube.com".to_owned()),
+        ),
+        (
+            "*.example.com/x",
+            DomainMatch::Suffix("example.com".to_owned()),
+        ),
+        (
+            "example.com#top",
+            DomainMatch::Exact("example.com".to_owned()),
+        ),
+        (
             "*.Example.COM",
             DomainMatch::Suffix("example.com".to_owned()),
         ),
@@ -380,6 +503,7 @@ fn domain_input_rejects_ips_and_invalid_domains() {
     for input in [
         "a.*.com",
         "example.com:443",
+        "example.com:443/x",
         "ex ample.com",
         "",
         "  ",
@@ -393,6 +517,74 @@ fn domain_input_rejects_ips_and_invalid_domains() {
             "{input}"
         );
     }
+}
+
+#[test]
+fn domain_lines_keep_original_line_numbers_and_deduplicate() {
+    let parsed = parse_domain_lines(
+        "youtube.com\n  \r\nwww.youtube.com\n192.168.1.1\nru\nexample.org\nexample.org\n",
+        true,
+    );
+    assert_eq!(
+        parsed.domains,
+        vec![
+            DomainMatch::Suffix("youtube.com".into()),
+            DomainMatch::Suffix("example.org".into()),
+        ]
+    );
+    assert_eq!(
+        parsed.errors,
+        vec![
+            DomainLineError {
+                line: 4,
+                error: RuleInputError::IpAddress
+            },
+            DomainLineError {
+                line: 5,
+                error: RuleInputError::SingleLabel
+            },
+        ]
+    );
+    assert_eq!(
+        parse_domain_lines("one.example\n\nsecond.example\nthird.example", false).domains,
+        vec![
+            DomainMatch::Exact("one.example".into()),
+            DomainMatch::Exact("second.example".into()),
+            DomainMatch::Exact("third.example".into()),
+        ]
+    );
+    assert_eq!(
+        parse_domain_lines("example.com\n192.168.1.1", false).errors,
+        vec![DomainLineError {
+            line: 2,
+            error: RuleInputError::IpAddress
+        }]
+    );
+}
+
+#[test]
+fn domain_lines_handle_www_explicit_suffix_and_single_label() {
+    assert_eq!(
+        parse_domain_lines("https://www.youtube.com/watch?v=1\nwww.com", true).domains,
+        vec![
+            DomainMatch::Suffix("youtube.com".into()),
+            DomainMatch::Suffix("www.com".into()),
+        ]
+    );
+    assert_eq!(
+        parse_domain_lines("www.youtube.com\n*.example.com", false).domains,
+        vec![
+            DomainMatch::Exact("www.youtube.com".into()),
+            DomainMatch::Suffix("example.com".into()),
+        ]
+    );
+    assert_eq!(
+        parse_domain_lines("ru", true).errors,
+        vec![DomainLineError {
+            line: 1,
+            error: RuleInputError::SingleLabel
+        }]
+    );
 }
 
 #[test]

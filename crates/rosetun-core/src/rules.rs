@@ -148,6 +148,87 @@ pub fn add_rule(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddedRules {
+    pub added: Vec<Rule>,
+    /// Matchers already in the set or repeated in the input.
+    pub skipped: usize,
+}
+
+pub fn add_rules(
+    store: &Store,
+    set: &RuleSetId,
+    matchers: Vec<RuleMatcher>,
+    target: RuleTarget,
+) -> Result<AddedRules, RuleSetError> {
+    if matchers.is_empty() {
+        return Ok(AddedRules {
+            added: Vec::new(),
+            skipped: 0,
+        });
+    }
+    store.modify(|config| {
+        let set = rule_set_mut(config, set)?;
+        let mut added = Vec::new();
+        let mut skipped = 0;
+        for matcher in matchers {
+            if set
+                .rules
+                .iter()
+                .chain(added.iter())
+                .any(|rule: &Rule| same_matcher(&rule.matcher, &matcher, cfg!(windows)))
+            {
+                skipped += 1;
+                continue;
+            }
+            let id = next_id(
+                set.rules
+                    .iter()
+                    .chain(added.iter())
+                    .map(|rule| rule.id.as_str()),
+            );
+            added.push(Rule {
+                id: RuleId::new(id),
+                enabled: true,
+                matcher,
+                target,
+            });
+        }
+        if added.is_empty() {
+            return Err(RuleSetError::DuplicateRule);
+        }
+        set.rules.splice(0..0, added.iter().cloned());
+        Ok(AddedRules { added, skipped })
+    })
+}
+
+/// Replaces a rule's matcher and target, keeping its id, position and enabled flag.
+pub fn update_rule(
+    store: &Store,
+    set: &RuleSetId,
+    rule: &RuleId,
+    matcher: RuleMatcher,
+    target: RuleTarget,
+) -> Result<(), RuleSetError> {
+    store.modify(|config| {
+        let set = rule_set_mut(config, set)?;
+        if !set.rules.iter().any(|item| &item.id == rule) {
+            return Err(RuleSetError::RuleNotFound);
+        }
+        if set
+            .rules
+            .iter()
+            .any(|item| &item.id != rule && same_matcher(&item.matcher, &matcher, cfg!(windows)))
+        {
+            return Err(RuleSetError::DuplicateRule);
+        }
+        let existing = rule_mut(set, rule)?;
+        existing.matcher = matcher;
+        existing.target = target;
+        Ok(())
+    })
+}
+
 pub fn set_rule_target(
     store: &Store,
     set: &RuleSetId,
@@ -218,6 +299,53 @@ pub enum RuleInputError {
     RelativePath,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainLineError {
+    /// 1-based.
+    pub line: usize,
+    pub error: RuleInputError,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DomainLines {
+    pub domains: Vec<DomainMatch>,
+    pub errors: Vec<DomainLineError>,
+}
+
+/// One address per line, as the site tab of the rule dialog takes them.
+pub fn parse_domain_lines(input: &str, subdomains: bool) -> DomainLines {
+    let mut result = DomainLines::default();
+    for (index, line) in input.split('\n').enumerate() {
+        let line = line.trim_end_matches('\r').trim();
+        if line.is_empty() {
+            continue;
+        }
+        match parse_domain_input(line) {
+            Ok(domain) => {
+                let domain = match domain {
+                    DomainMatch::Exact(domain) if subdomains => {
+                        let domain = domain
+                            .strip_prefix("www.")
+                            .filter(|rest| rest.contains('.'))
+                            .unwrap_or(&domain)
+                            .to_owned();
+                        DomainMatch::Suffix(domain)
+                    }
+                    domain => domain,
+                };
+                if !result.domains.contains(&domain) {
+                    result.domains.push(domain);
+                }
+            }
+            Err(error) => result.errors.push(DomainLineError {
+                line: index + 1,
+                error,
+            }),
+        }
+    }
+    result
+}
+
 pub fn parse_domain_input(input: &str) -> Result<DomainMatch, RuleInputError> {
     let input = input.trim();
     if input.is_empty() {
@@ -236,6 +364,7 @@ pub fn parse_domain_input(input: &str) -> Result<DomainMatch, RuleInputError> {
         };
     }
 
+    let input = input.split(['/', '?', '#']).next().unwrap_or(input);
     let (host, suffix) = if let Some(host) = input.strip_prefix("*.") {
         (host, true)
     } else if let Some(host) = input.strip_prefix('.') {
