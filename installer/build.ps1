@@ -12,9 +12,9 @@ $cargoAboutVersion = '0.9.2'
 $installedCargoAbout = & cargo about --version 2>$null
 if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "cargo-about $cargoAboutVersion") {
     if (-not $Release) {
-        throw "cargo-about $cargoAboutVersion is required. Install it with: cargo install cargo-about --locked --version $cargoAboutVersion --force"
+        throw "cargo-about $cargoAboutVersion is required. Install it with: cargo install cargo-about --locked --version $cargoAboutVersion --features cli --force"
     }
-    & cargo install cargo-about --locked --version $cargoAboutVersion --force
+    & cargo install cargo-about --locked --version $cargoAboutVersion --features cli --force
     if ($LASTEXITCODE -ne 0) {
         throw "Installing cargo-about $cargoAboutVersion failed with cargo exit code $LASTEXITCODE."
     }
