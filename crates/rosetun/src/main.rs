@@ -11,7 +11,7 @@ use tracing_subscriber::prelude::*;
 
 use rosetun_config::{NodeId, SubscriptionId};
 use rosetun_core::terminal_text;
-use rosetun_ipc::{ConnectRequest, HelperClient};
+use rosetun_ipc::{ConnectRequest, HelperClient, ProbeOutcome, ProbeRequest};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -19,6 +19,10 @@ enum Command {
     Connect {
         request_path: Option<String>,
     },
+    Probe {
+        request_path: Option<String>,
+    },
+    Delay,
     Select {
         subscription_id: String,
         node_id: String,
@@ -70,6 +74,11 @@ fn main() -> ExitCode {
             Ok(request) => with_helper(|client| connect(client, request)),
             Err(message) => local_result(Err(message)),
         },
+        Command::Probe { request_path } => match prepare_connect_request(request_path.as_deref()) {
+            Ok(request) => with_helper(|client| probe(client, request)),
+            Err(message) => local_result(Err(message)),
+        },
+        Command::Delay => with_helper(delay),
         Command::Status => with_helper(status),
         Command::Disconnect => with_helper(disconnect),
         Command::Shutdown => with_helper(shutdown),
@@ -86,6 +95,52 @@ fn connect(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
             tracing::error!(%error, "failed to connect tunnel");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn probe(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
+    match client.probe_nodes(ProbeRequest {
+        nodes: vec![request.node],
+        settings: request.settings,
+    }) {
+        Ok(results) if results.len() == 1 => {
+            print_probe_outcome(results[0].outcome);
+            ExitCode::SUCCESS
+        }
+        Ok(_) => {
+            tracing::error!("helper returned an unexpected number of server check results");
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to check server");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn delay(client: &mut HelperClient) -> ExitCode {
+    match client.tunnel_delay() {
+        Ok(ProbeOutcome::Works { millis }) => {
+            println!("works {millis} ms");
+            ExitCode::SUCCESS
+        }
+        Ok(_) => {
+            println!("fails");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to check tunnel delay");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn print_probe_outcome(outcome: ProbeOutcome) {
+    match outcome {
+        ProbeOutcome::Works { millis } => println!("works {millis} ms"),
+        ProbeOutcome::Fails => println!("fails"),
+        ProbeOutcome::Unresolved => println!("unresolved"),
+        ProbeOutcome::Unsupported => println!("unsupported"),
     }
 }
 
@@ -163,10 +218,6 @@ fn local_result(result: Result<(), String>) -> ExitCode {
 }
 
 fn prepare_connect_request(request_path: Option<&str>) -> Result<ConnectRequest, String> {
-    if let Some(path) = request_path {
-        return read_connect_request(Path::new(path));
-    }
-
     if let Some(path) = request_path {
         return read_connect_request(Path::new(path));
     }
@@ -266,6 +317,11 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["connect", path] => Ok(Command::Connect {
             request_path: Some((*path).to_owned()),
         }),
+        ["probe"] => Ok(Command::Probe { request_path: None }),
+        ["probe", path] => Ok(Command::Probe {
+            request_path: Some((*path).to_owned()),
+        }),
+        ["delay"] => Ok(Command::Delay),
         ["select", subscription_id, node_id] => Ok(Command::Select {
             subscription_id: (*subscription_id).to_owned(),
             node_id: (*node_id).to_owned(),
@@ -277,6 +333,8 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
         ["connect", ..] => Err("connect accepts zero or one request JSON path".to_owned()),
+        ["probe", ..] => Err("probe accepts zero or one request JSON path".to_owned()),
+        ["delay", ..] => Err("delay does not accept arguments".to_owned()),
         ["select", ..] => Err("select requires exactly a subscription ID and a node ID".to_owned()),
         ["config", ..] => Err("config does not accept arguments".to_owned()),
         ["status", ..] => Err("status does not accept arguments".to_owned()),
@@ -300,6 +358,8 @@ fn print_usage() {
 Usage:
   rosetun [status]
   rosetun connect [request.json]
+  rosetun probe [request.json]
+  rosetun delay
   rosetun select <subscription-id> <node-id>
   rosetun sub add <url> [--name <name>] [--user-agent <ua>] [--no-hwid]
   rosetun sub update [<id>]
@@ -341,6 +401,14 @@ mod tests {
                 request_path: Some("request.json".to_owned()),
             })
         );
+        assert_eq!(parse(&["probe"]), Ok(Command::Probe { request_path: None }));
+        assert_eq!(
+            parse(&["probe", "request.json"]),
+            Ok(Command::Probe {
+                request_path: Some("request.json".to_owned()),
+            })
+        );
+        assert_eq!(parse(&["delay"]), Ok(Command::Delay));
         assert_eq!(
             parse(&["select", "subscription", "node"]),
             Ok(Command::Select {
@@ -364,6 +432,18 @@ mod tests {
                 Err("connect accepts zero or one request JSON path".to_owned())
             );
         }
+    }
+
+    #[test]
+    fn probe_rejects_multiple_paths_and_delay_rejects_arguments() {
+        assert_eq!(
+            parse(&["probe", "a", "b"]),
+            Err("probe accepts zero or one request JSON path".to_owned())
+        );
+        assert_eq!(
+            parse(&["delay", "extra"]),
+            Err("delay does not accept arguments".to_owned())
+        );
     }
 
     #[test]
