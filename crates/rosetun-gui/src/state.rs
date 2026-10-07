@@ -187,6 +187,7 @@ pub(crate) struct AddRuleDialog {
     pub(crate) show_all: bool,
     pub(crate) advanced: bool,
     pub(crate) editing: Option<RuleId>,
+    original_domain: Option<DomainMatch>,
     pub(crate) process: String,
     pub(crate) process_filter: String,
     pub(crate) processes: Vec<ProcessGroup>,
@@ -205,7 +206,7 @@ pub(crate) struct AddRuleDialog {
 }
 
 impl AddRuleDialog {
-    fn new(set: RuleSetId) -> Self {
+    pub(crate) fn new(set: RuleSetId) -> Self {
         Self {
             set,
             kind: RuleInputKind::Process,
@@ -215,6 +216,7 @@ impl AddRuleDialog {
             show_all: false,
             advanced: false,
             editing: None,
+            original_domain: None,
             process: String::new(),
             process_filter: String::new(),
             processes: Vec::new(),
@@ -244,6 +246,7 @@ impl AddRuleDialog {
                 dialog.domains = rosetun_core::rule_value_text(&rule.matcher)
                     .trim_start_matches("*.")
                     .to_owned();
+                dialog.original_domain = Some(domain.clone());
             }
             RuleMatcher::Process(process) => {
                 dialog.process = rosetun_core::rule_value_text(&rule.matcher);
@@ -266,6 +269,16 @@ impl AddRuleDialog {
             _ => unreachable!("only editable matchers open this dialog"),
         }
         dialog
+    }
+
+    pub(crate) fn unchanged_domain(&self) -> Option<DomainMatch> {
+        let original = self.original_domain.as_ref()?;
+        let matcher = RuleMatcher::Domain(original.clone());
+        let value = rosetun_core::rule_value_text(&matcher);
+        let value = value.strip_prefix("*.").unwrap_or(&value);
+        (self.domains.trim() == value
+            && self.subdomains == matches!(original, DomainMatch::Suffix(_)))
+        .then(|| original.clone())
     }
 
     pub(crate) fn set_process_match_mode(&mut self, mode: ProcessMatchMode) {
@@ -1480,12 +1493,17 @@ impl State {
                 {
                     let matchers: Option<Vec<_>> = match dialog.kind {
                         RuleInputKind::Domain => {
-                            let parsed = rosetun_core::parse_domain_lines(
-                                &dialog.domains,
-                                dialog.subdomains,
-                            );
-                            (parsed.errors.is_empty() && !parsed.domains.is_empty())
-                                .then(|| parsed.domains.into_iter().map(RuleMatcher::Domain).collect())
+                            if let Some(original) = dialog.unchanged_domain() {
+                                Some(vec![RuleMatcher::Domain(original)])
+                            } else {
+                                let parsed = rosetun_core::parse_domain_lines(
+                                    &dialog.domains,
+                                    dialog.subdomains,
+                                );
+                                (parsed.errors.is_empty() && !parsed.domains.is_empty()).then(|| {
+                                    parsed.domains.into_iter().map(RuleMatcher::Domain).collect()
+                                })
+                            }
                         }
                         RuleInputKind::Process => rosetun_core::parse_process_input(&dialog.process)
                             .ok()
@@ -3234,6 +3252,96 @@ mod tests {
                 Some(Job::AddRules(_, matchers, RuleTarget::Proxy)) if matchers == expected
             ));
         }
+    }
+
+    #[test]
+    fn editing_a_suffix_rule_populates_the_site_form_and_saves_only_changes() {
+        let mut state = state_with_rules();
+        let id = state.config.rule_sets[1].rules[0].id.clone();
+        state.config.rule_sets[1].rules[0].matcher =
+            RuleMatcher::Domain(DomainMatch::Suffix("example.com".into()));
+        state.config.rule_sets[1].rules[0].enabled = false;
+        state.act(Action::OpenRules);
+        assert!(state.act(Action::OpenEditRule(id.clone())).is_none());
+        let dialog = state.rule_screen.add.as_ref().unwrap();
+        assert_eq!(dialog.editing.as_ref(), Some(&id));
+        assert_eq!(dialog.kind, RuleInputKind::Domain);
+        assert_eq!(dialog.domains, "example.com");
+        assert!(dialog.subdomains);
+        state.act(Action::SelectRuleInput(RuleInputKind::Process));
+        assert_eq!(
+            state.rule_screen.add.as_ref().unwrap().kind,
+            RuleInputKind::Domain
+        );
+        assert!(state.act(Action::SubmitAddRule).is_none());
+        assert!(state.rule_screen.add.is_none());
+        assert!(!state.operations.rules_edit);
+
+        state.act(Action::OpenEditRule(id.clone()));
+        state.rule_screen.add.as_mut().unwrap().target = RuleTarget::Direct;
+        assert!(matches!(
+            state.act(Action::SubmitAddRule),
+            Some(Job::UpdateRule(set, rule, RuleMatcher::Domain(DomainMatch::Suffix(domain)), RuleTarget::Direct))
+                if set == RuleSetId::new("2") && rule == id && domain == "example.com"
+        ));
+        assert!(state.rule_screen.add.as_ref().unwrap().busy);
+        state.reduce(WorkerEvent::UpdateRule(Err(RuleSetError::DuplicateRule)));
+        let dialog = state.rule_screen.add.as_ref().unwrap();
+        assert!(!dialog.busy);
+        assert!(dialog.error.is_some());
+        state.reduce(WorkerEvent::UpdateRule(Ok(())));
+        assert!(state.rule_screen.add.is_none());
+    }
+
+    #[test]
+    fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
+        for domain in ["www.youtube.com", "ru"] {
+            let mut state = state_with_rules();
+            let id = state.config.rule_sets[1].rules[0].id.clone();
+            state.config.rule_sets[1].rules[0].matcher =
+                RuleMatcher::Domain(DomainMatch::Suffix(domain.into()));
+            state.act(Action::OpenRules);
+            state.act(Action::OpenEditRule(id.clone()));
+            assert_eq!(state.rule_screen.add.as_ref().unwrap().domains, domain);
+            assert!(state.act(Action::SubmitAddRule).is_none());
+            assert!(state.rule_screen.add.is_none());
+            state.act(Action::OpenEditRule(id.clone()));
+            state.rule_screen.add.as_mut().unwrap().target = RuleTarget::Block;
+            assert!(matches!(
+                state.act(Action::SubmitAddRule),
+                Some(Job::UpdateRule(_, _, RuleMatcher::Domain(DomainMatch::Suffix(value)), RuleTarget::Block))
+                    if value == domain
+            ));
+        }
+    }
+
+    #[test]
+    fn editing_a_path_rule_opens_advanced_and_rejects_templates() {
+        let mut state = state_with_rules();
+        let id = state.config.rule_sets[1].rules[1].id.clone();
+        state.config.rule_sets[1].rules[1].matcher =
+            RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(r"C:\Apps\Tool.exe")));
+        state.config.rule_sets[1].rules[2].matcher = RuleMatcher::Template(RuleTemplate::Youtube);
+        state.act(Action::OpenRules);
+        assert!(state.act(Action::OpenEditRule(RuleId::new("2"))).is_none());
+        assert!(state.rule_screen.add.is_none());
+        assert!(
+            state
+                .act(Action::OpenEditRule(RuleId::new("missing")))
+                .is_none()
+        );
+        let request = state.act(Action::OpenEditRule(id.clone()));
+        assert!(matches!(request, Some(Job::LoadProcesses(_))));
+        let dialog = state.rule_screen.add.as_ref().unwrap();
+        assert_eq!(dialog.editing.as_ref(), Some(&id));
+        assert_eq!(dialog.kind, RuleInputKind::Process);
+        assert_eq!(dialog.process_filter, "Tool.exe");
+        assert_eq!(dialog.process, r"C:\Apps\Tool.exe");
+        assert!(dialog.advanced);
+        assert_eq!(dialog.match_mode, ProcessMatchMode::Path);
+        assert!(dialog.selected_process.is_none());
+        assert!(state.act(Action::SubmitAddRule).is_none());
+        assert!(state.rule_screen.add.is_none());
     }
 
     #[test]

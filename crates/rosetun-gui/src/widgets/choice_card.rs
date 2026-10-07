@@ -30,11 +30,12 @@ pub(crate) fn choice_card(
                     ui.multiply_opacity(0.5);
                 }
                 let background = ui.painter().add(egui::Shape::Noop);
-                ui.set_width(width);
+                ui.set_width(width - 24.0);
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(12, 10))
                     .show(ui, |ui| {
-                        ui.set_min_width(width - 24.0);
+                        ui.set_width(width - 24.0);
+                        ui.set_max_width(width - 24.0);
                         add_contents(ui);
                     });
                 let response = ui.response();

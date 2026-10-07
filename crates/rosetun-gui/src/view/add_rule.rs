@@ -15,14 +15,19 @@ const PROCESS_ROW_HEIGHT: f32 = 44.0;
 const PROCESS_ROW_GAP: f32 = 4.0;
 const MIN_PROCESS_LIST: f32 = 2.0 * PROCESS_ROW_HEIGHT + PROCESS_ROW_GAP;
 const MAX_PROCESS_LIST: f32 = 5.0 * PROCESS_ROW_HEIGHT + 4.0 * PROCESS_ROW_GAP;
-const PROCESS_FOOTER_HEIGHT: f32 = 112.0;
+const PROCESS_FOOTER_HEIGHT: f32 = 100.0;
 const BUTTON_ROW_HEIGHT: f32 = 40.0;
-const ACTIONS_GAP: f32 = 12.0;
+const ACTIONS_GAP: f32 = 2.0;
 const BOTTOM_GAP: f32 = 24.0;
 
-fn process_body_height(top: f32, limit: f32) -> f32 {
+fn process_body_height(top: f32, limit: f32, advanced: bool) -> f32 {
+    let min_list = if advanced {
+        PROCESS_ROW_HEIGHT
+    } else {
+        MIN_PROCESS_LIST
+    };
     (limit - top).clamp(
-        PROCESS_FOOTER_HEIGHT + MIN_PROCESS_LIST,
+        PROCESS_FOOTER_HEIGHT + min_list,
         PROCESS_FOOTER_HEIGHT + MAX_PROCESS_LIST,
     )
 }
@@ -38,6 +43,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
         .show(ctx, |ui| {
             ui.set_width(DIALOG_WIDTH);
             ui.set_max_width(DIALOG_WIDTH);
+            ui.spacing_mut().item_spacing.y = 4.0;
             ui.heading(if dialog.editing.is_some() {
                 t().edit_rule
             } else {
@@ -52,7 +58,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                 .small()
                 .color(theme::TEXT_MUTED),
             );
-            ui.add_space(12.0);
+            ui.add_space(2.0);
             ui.label(
                 RichText::new(t().what_to_route)
                     .small()
@@ -71,7 +77,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
             ) {
                 actions.push(Action::SelectRuleInput(kind));
             }
-            ui.add_space(12.0);
+            ui.add_space(2.0);
             let valid = if dialog.kind == RuleInputKind::Process {
                 let frame = widgets::modal_frame();
                 let advanced_height = if dialog.advanced { 52.0 } else { 0.0 };
@@ -83,7 +89,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                     - 104.0
                     - advanced_height
                     - if dialog.error.is_some() { 28.0 } else { 0.0 };
-                let height = process_body_height(ui.cursor().top(), limit);
+                let height = process_body_height(ui.cursor().top(), limit, dialog.advanced);
                 ui.allocate_ui_with_layout(
                     egui::vec2(DIALOG_WIDTH, height),
                     egui::Layout::top_down(egui::Align::Min),
@@ -96,7 +102,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
             } else {
                 domain_input(ui, dialog)
             };
-            ui.add_space(12.0);
+            ui.add_space(0.0);
             ui.label(
                 RichText::new(t().where_to_route)
                     .small()
@@ -104,7 +110,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
             );
             target_cards(ui, dialog);
             if dialog.kind == RuleInputKind::Process {
-                ui.add_space(8.0);
+                ui.add_space(4.0);
                 if dialog.advanced {
                     let available = full_path_available(dialog);
                     let mut match_path = dialog.match_mode == ProcessMatchMode::Path;
@@ -228,6 +234,9 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
         !dialog.busy,
     );
     let parsed = rosetun_core::parse_domain_lines(&dialog.domains, dialog.subdomains);
+    if dialog.unchanged_domain().is_some() {
+        return true;
+    }
     for error in parsed.errors.iter().take(3) {
         let message = errors::rule_input(t(), &error.error);
         ui.label(
@@ -315,7 +324,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         t().open_now.to_owned()
     };
     ui.label(RichText::new(heading).small().color(theme::TEXT_DIM));
-    let list_height = (ui.available_height() - 44.0).clamp(0.0, MAX_PROCESS_LIST);
+    let list_height = (ui.available_height() - 36.0).clamp(0.0, MAX_PROCESS_LIST);
     egui::ScrollArea::vertical()
         .id_salt("running_processes")
         .max_height(list_height)
@@ -596,6 +605,7 @@ fn target_cards(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
                 dialog.target == target,
                 !dialog.busy,
                 |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
                     ui.horizontal(|ui| {
                         let (dot, _) =
                             ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
@@ -610,7 +620,10 @@ fn target_cards(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
                                 .color(target_color(target)),
                         );
                     });
-                    ui.label(RichText::new(detail).small().color(theme::TEXT_DIM));
+                    ui.add(
+                        egui::Label::new(RichText::new(detail).small().color(theme::TEXT_DIM))
+                            .wrap(),
+                    );
                 },
             );
             if response.clicked() && !dialog.busy {
@@ -629,15 +642,61 @@ mod tests {
 
     #[test]
     fn process_body_fits_available_space_with_bounds() {
-        assert_eq!(process_body_height(250.0, 500.0), 250.0);
+        assert_eq!(process_body_height(250.0, 500.0, false), 250.0);
         assert_eq!(
-            process_body_height(250.0, 900.0),
+            process_body_height(250.0, 900.0, false),
             PROCESS_FOOTER_HEIGHT + MAX_PROCESS_LIST
         );
         assert_eq!(
-            process_body_height(250.0, 300.0),
+            process_body_height(250.0, 300.0, false),
             PROCESS_FOOTER_HEIGHT + MIN_PROCESS_LIST
         );
+        assert_eq!(
+            process_body_height(250.0, 300.0, true),
+            PROCESS_FOOTER_HEIGHT + 44.0
+        );
+    }
+
+    #[test]
+    fn modal_fits_compact_and_standard_windows() {
+        use super::*;
+        use rosetun_config::RuleSetId;
+
+        for (width, height, advanced, site) in [
+            (960.0, 640.0, false, false),
+            (960.0, 640.0, true, false),
+            (960.0, 640.0, false, true),
+            (1200.0, 780.0, false, false),
+            (1200.0, 780.0, true, false),
+            (1200.0, 780.0, false, true),
+        ] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            if site {
+                dialog.kind = RuleInputKind::Domain;
+                dialog.domains = "youtube.com\n192.168.1.1\nru\n127.0.0.1\ninvalid host".into();
+            } else {
+                dialog.advanced = advanced;
+                dialog.process = r"C:\Apps\Tool.exe".into();
+                dialog.match_mode = ProcessMatchMode::Path;
+            }
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, height),
+                    )),
+                    ..egui::RawInput::default()
+                },
+                |ctx| show(ctx, &mut dialog, &mut Vec::new()),
+            );
+            output.textures_delta.clear();
+            let rect = ctx
+                .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+                .unwrap();
+            assert!(rect.bottom() <= height, "{rect:?} in {width}×{height}");
+        }
     }
 
     #[test]

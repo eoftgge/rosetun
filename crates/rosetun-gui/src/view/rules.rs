@@ -773,6 +773,12 @@ fn rule_row(
                     if state.can_edit_rules() {
                         egui::Popup::menu(&menu).show(|ui| {
                             ui.set_min_width(160.0);
+                            if crate::rules::editable(&rule.matcher)
+                                && ui.button(t().edit).clicked()
+                            {
+                                actions.push(Action::OpenEditRule(rule.id.clone()));
+                                ui.close();
+                            }
                             if ui
                                 .add_enabled(index > 0, egui::Button::new(t().move_to_top))
                                 .clicked()

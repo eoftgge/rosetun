@@ -268,6 +268,25 @@ mod tests {
     }
 
     #[test]
+    fn edit_dialog_supports_only_exact_suffix_and_process_matchers() {
+        for matcher in [
+            RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
+            RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
+            RuleMatcher::Process(ProcessMatch::Name("App.exe".into())),
+            RuleMatcher::Process(ProcessMatch::Path(PathBuf::from("C:\\Apps\\App.exe"))),
+        ] {
+            assert!(editable(&matcher));
+        }
+        for matcher in [
+            RuleMatcher::Domain(DomainMatch::Keyword("news".into())),
+            RuleMatcher::IpCidr("10.0.0.0/8".into()),
+            RuleMatcher::Template(rosetun_config::RuleTemplate::Youtube),
+        ] {
+            assert!(!editable(&matcher));
+        }
+    }
+
+    #[test]
     fn processes_group_by_path_or_name_and_sort_case_insensitively() {
         let groups = group_processes(vec![
             process(10, "zeta.exe", Some(r"C:\Apps\zeta.exe")),
