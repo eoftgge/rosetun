@@ -8,9 +8,18 @@ pub type PrepareClosure =
     Box<dyn FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send>;
 pub type AuthorizeClosure = Box<dyn FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtectionScope {
+    /// Kill switch: outside the tunnel only the engine, loopback and DHCP pass.
+    AllTraffic,
+    /// DNS lock: only port 53 is confined to the tunnel; other traffic is untouched.
+    DnsOnly,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutingPlan {
-    /// Allows non-engine applications to reach private destinations.
+    pub scope: ProtectionScope,
+    /// Allows non-engine applications to reach private destinations; ignored for DNS-only protection.
     pub allow_lan: bool,
 }
 

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::RoutingPlan;
+use crate::{ProtectionScope, RoutingPlan};
 
 const TUNNEL_WEIGHT: u8 = 4;
 const PRIVATE_DNS_BLOCK_WEIGHT: u8 = 3;
@@ -100,39 +100,22 @@ impl BootstrapPolicy {
     /// The engine enforces routing policy and may reach any destination.
     /// WFP identifies the exemption by executable path, not by process ID.
     pub(super) fn from_plan(plan: &RoutingPlan, engine_binary: &Path) -> Self {
-        let mut rules = Vec::with_capacity(if plan.allow_lan { 25 } else { 7 });
-
-        for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
-            rules.push(Rule {
-                family,
-                action: Action::Allow,
-                conditions: vec![Condition::Application(engine_binary.to_owned())],
-                weight: BOOTSTRAP_ALLOW_WEIGHT,
-            });
+        match plan.scope {
+            ProtectionScope::AllTraffic => Self::all_traffic(plan.allow_lan, engine_binary),
+            ProtectionScope::DnsOnly => Self::dns_only(engine_binary),
         }
+    }
 
-        rules.extend([
-            Rule {
-                family: AddressFamily::Ipv4,
-                action: Action::Allow,
-                conditions: vec![Condition::Loopback],
-                weight: BOOTSTRAP_ALLOW_WEIGHT,
-            },
-            Rule {
-                family: AddressFamily::Ipv6,
-                action: Action::Allow,
-                conditions: vec![Condition::Loopback],
-                weight: BOOTSTRAP_ALLOW_WEIGHT,
-            },
-            Rule {
-                family: AddressFamily::Ipv4,
-                action: Action::Allow,
-                conditions: vec![Condition::DhcpV4],
-                weight: BOOTSTRAP_ALLOW_WEIGHT,
-            },
-        ]);
+    fn all_traffic(allow_lan: bool, engine_binary: &Path) -> Self {
+        let mut rules = common_rules(engine_binary);
+        rules.push(Rule {
+            family: AddressFamily::Ipv4,
+            action: Action::Allow,
+            conditions: vec![Condition::DhcpV4],
+            weight: BOOTSTRAP_ALLOW_WEIGHT,
+        });
 
-        if plan.allow_lan {
+        if allow_lan {
             for subnet in LAN_SUBNETS {
                 rules.push(Rule {
                     family: subnet.family(),
@@ -164,6 +147,51 @@ impl BootstrapPolicy {
 
         Self { rules }
     }
+
+    fn dns_only(engine_binary: &Path) -> Self {
+        let mut rules = common_rules(engine_binary);
+        for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
+            for protocol in [17, 6] {
+                rules.push(Rule {
+                    family,
+                    action: Action::Block,
+                    conditions: vec![Condition::Protocol(protocol), Condition::RemotePort(53)],
+                    weight: BLOCK_WEIGHT,
+                });
+            }
+        }
+        Self { rules }
+    }
+}
+
+fn common_rules(engine_binary: &Path) -> Vec<Rule> {
+    // The engine's own requests follow its routing rules, as with the kill switch.
+    let mut rules = Vec::with_capacity(4);
+    for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
+        rules.push(Rule {
+            family,
+            action: Action::Allow,
+            conditions: vec![Condition::Application(engine_binary.to_owned())],
+            weight: BOOTSTRAP_ALLOW_WEIGHT,
+        });
+    }
+
+    // A local resolver is not a leak; its outbound requests face the same filter.
+    rules.extend([
+        Rule {
+            family: AddressFamily::Ipv4,
+            action: Action::Allow,
+            conditions: vec![Condition::Loopback],
+            weight: BOOTSTRAP_ALLOW_WEIGHT,
+        },
+        Rule {
+            family: AddressFamily::Ipv6,
+            action: Action::Allow,
+            conditions: vec![Condition::Loopback],
+            weight: BOOTSTRAP_ALLOW_WEIGHT,
+        },
+    ]);
+    rules
 }
 
 /// Builds the phase-2 authorization added after the TUN adapter has been
@@ -199,11 +227,39 @@ fn block_rule(family: AddressFamily) -> Rule {
 mod tests {
     use std::path::Path;
 
-    use super::{Action, AddressFamily, BootstrapPolicy, Condition, tunnel_authorization};
-    use crate::RoutingPlan;
+    use super::{
+        Action, AddressFamily, BootstrapPolicy, Condition, Rule, Subnet, tunnel_authorization,
+    };
+    use crate::{ProtectionScope, RoutingPlan};
 
     fn plan() -> RoutingPlan {
-        RoutingPlan { allow_lan: false }
+        RoutingPlan {
+            scope: ProtectionScope::AllTraffic,
+            allow_lan: false,
+        }
+    }
+
+    /// What WFP does with a non-engine IPv4 connection: the heaviest matching
+    /// rule decides; with no match the traffic leaves this sublayer allowed.
+    fn decide(rules: &[&Rule], destination: [u8; 4], protocol: u8, port: u16, luid: u64) -> Action {
+        rules
+            .iter()
+            .filter(|rule| {
+                rule.family == AddressFamily::Ipv4
+                    && rule.conditions.iter().all(|condition| match condition {
+                        Condition::RemoteSubnet(Subnet::V4 { address, prefix }) => {
+                            let mask = u32::MAX << (32 - *prefix);
+                            u32::from_be_bytes(destination) & mask
+                                == u32::from_be_bytes(*address) & mask
+                        }
+                        Condition::Protocol(value) => *value == protocol,
+                        Condition::RemotePort(value) => *value == port,
+                        Condition::LocalInterface(value) => *value == luid,
+                        _ => false,
+                    })
+            })
+            .max_by_key(|rule| rule.weight)
+            .map_or(Action::Allow, |rule| rule.action)
     }
 
     #[test]
@@ -267,45 +323,33 @@ mod tests {
 
     #[test]
     fn lan_dns_and_tunnel_have_the_required_priority() {
-        use super::Subnet;
-
         let bootstrap = BootstrapPolicy::from_plan(
-            &RoutingPlan { allow_lan: true },
+            &RoutingPlan {
+                scope: ProtectionScope::AllTraffic,
+                allow_lan: true,
+            },
             Path::new(r"C:\sing-box.exe"),
         );
         let authorization = tunnel_authorization(123);
-        let mut rules: Vec<_> = bootstrap.rules.iter().chain(&authorization).collect();
-        rules.sort_by_key(|rule| std::cmp::Reverse(rule.weight));
-
-        let decide = |destination: [u8; 4], protocol: u8, port: u16, luid: u64| {
-            rules
-                .iter()
-                .find(|rule| {
-                    rule.family == AddressFamily::Ipv4
-                        && rule.conditions.iter().all(|condition| match condition {
-                            Condition::RemoteSubnet(Subnet::V4 { address, prefix }) => {
-                                let mask = u32::MAX << (32 - *prefix);
-                                u32::from_be_bytes(destination) & mask
-                                    == u32::from_be_bytes(*address) & mask
-                            }
-                            Condition::Protocol(value) => *value == protocol,
-                            Condition::RemotePort(value) => *value == port,
-                            Condition::LocalInterface(value) => *value == luid,
-                            _ => false,
-                        })
-                })
-                .expect("catch-all filter")
-                .action
-        };
+        let rules: Vec<_> = bootstrap.rules.iter().chain(&authorization).collect();
 
         for protocol in [17, 6] {
-            assert_eq!(decide([172, 19, 0, 2], protocol, 53, 123), Action::Allow);
-            assert_eq!(decide([172, 19, 0, 2], protocol, 53, 999), Action::Block);
-            assert_eq!(decide([192, 168, 3, 1], protocol, 53, 999), Action::Block);
+            assert_eq!(
+                decide(&rules, [172, 19, 0, 2], protocol, 53, 123),
+                Action::Allow
+            );
+            assert_eq!(
+                decide(&rules, [172, 19, 0, 2], protocol, 53, 999),
+                Action::Block
+            );
+            assert_eq!(
+                decide(&rules, [192, 168, 3, 1], protocol, 53, 999),
+                Action::Block
+            );
         }
-        assert_eq!(decide([192, 168, 3, 1], 6, 80, 999), Action::Allow);
-        assert_eq!(decide([100, 64, 0, 1], 6, 80, 999), Action::Block);
-        assert_eq!(decide([1, 1, 1, 1], 6, 443, 999), Action::Block);
+        assert_eq!(decide(&rules, [192, 168, 3, 1], 6, 80, 999), Action::Allow);
+        assert_eq!(decide(&rules, [100, 64, 0, 1], 6, 80, 999), Action::Block);
+        assert_eq!(decide(&rules, [1, 1, 1, 1], 6, 443, 999), Action::Block);
 
         let dns_blocks: Vec<_> = bootstrap
             .rules
@@ -341,7 +385,13 @@ mod tests {
                 .all(|condition| !matches!(condition, Condition::RemoteSubnet(_)))
         }));
 
-        let enabled = BootstrapPolicy::from_plan(&RoutingPlan { allow_lan: true }, engine);
+        let enabled = BootstrapPolicy::from_plan(
+            &RoutingPlan {
+                scope: ProtectionScope::AllTraffic,
+                allow_lan: true,
+            },
+            engine,
+        );
         let permits: Vec<_> = enabled
             .rules
             .iter()
@@ -353,5 +403,79 @@ mod tests {
 
         assert_eq!(permits, super::LAN_SUBNETS);
         assert_eq!(enabled.rules.len(), 25);
+    }
+
+    #[test]
+    fn dns_only_confines_port_53_to_the_tunnel() {
+        let engine = Path::new(r"C:\sing-box.exe");
+        let policy = BootstrapPolicy::from_plan(
+            &RoutingPlan {
+                scope: ProtectionScope::DnsOnly,
+                allow_lan: false,
+            },
+            engine,
+        );
+        assert_eq!(policy.rules.len(), 8);
+        assert!(policy.rules.iter().all(|rule| !rule.conditions.is_empty()));
+        for rule in &policy.rules[..2] {
+            assert_eq!(rule.conditions, [Condition::Application(engine.to_owned())]);
+            assert_eq!(rule.action, Action::Allow);
+        }
+
+        let authorization = tunnel_authorization(123);
+        let rules: Vec<_> = policy.rules.iter().chain(&authorization).collect();
+        for protocol in [17, 6] {
+            assert_eq!(
+                decide(&rules, [172, 19, 0, 2], protocol, 53, 123),
+                Action::Allow
+            );
+            for destination in [[1, 1, 1, 1], [192, 168, 3, 1]] {
+                assert_eq!(
+                    decide(&rules, destination, protocol, 53, 999),
+                    Action::Block
+                );
+            }
+        }
+        assert_eq!(decide(&rules, [1, 1, 1, 1], 6, 443, 999), Action::Allow);
+        assert_eq!(decide(&rules, [1, 1, 1, 1], 17, 443, 999), Action::Allow);
+        assert_eq!(decide(&rules, [1, 1, 1, 1], 6, 853, 999), Action::Allow);
+        for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
+            let blocks: Vec<_> = policy
+                .rules
+                .iter()
+                .filter(|rule| rule.family == family && rule.action == Action::Block)
+                .collect();
+            assert_eq!(blocks.len(), 2);
+            for block in blocks {
+                assert!(matches!(
+                    block.conditions.as_slice(),
+                    [Condition::Protocol(17 | 6), Condition::RemotePort(53)]
+                ));
+                assert!(authorization.iter().all(|tun| tun.weight > block.weight));
+                assert!(
+                    policy.rules[..4]
+                        .iter()
+                        .all(|allow| allow.weight > block.weight)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dns_only_ignores_allow_lan() {
+        let plan = RoutingPlan {
+            scope: ProtectionScope::DnsOnly,
+            allow_lan: false,
+        };
+        let engine = Path::new(r"C:\sing-box.exe");
+        let disabled = BootstrapPolicy::from_plan(&plan, engine);
+        let enabled = BootstrapPolicy::from_plan(
+            &RoutingPlan {
+                allow_lan: true,
+                ..plan
+            },
+            engine,
+        );
+        assert_eq!(disabled, enabled);
     }
 }

@@ -94,6 +94,12 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<u64, Rou
         [Condition::RemoteSubnet(subnet)] => {
             conditions.push(subnet_condition(rule.family, *subnet, &mut v4, &mut v6)?);
         }
+        [Condition::Protocol(protocol), Condition::RemotePort(port)] => {
+            conditions.extend([
+                protocol_condition(*protocol),
+                port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
+            ]);
+        }
         [
             Condition::RemoteSubnet(subnet),
             Condition::Protocol(protocol),
