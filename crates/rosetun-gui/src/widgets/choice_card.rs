@@ -12,6 +12,7 @@ pub(crate) fn choice_card(
     width: f32,
     selected: bool,
     enabled: bool,
+    label: &str,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
     let enabled = enabled && ui.is_enabled();
@@ -60,7 +61,7 @@ pub(crate) fn choice_card(
         )
         .response;
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, selected, "")
+        egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, selected, label)
     });
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)

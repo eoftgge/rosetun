@@ -235,7 +235,7 @@ impl AddRuleDialog {
         }
     }
 
-    fn for_rule(set: RuleSetId, rule: &Rule) -> Self {
+    fn for_rule(set: RuleSetId, rule: &Rule) -> Option<Self> {
         let mut dialog = Self::new(set);
         dialog.editing = Some(rule.id.clone());
         dialog.target = rule.target;
@@ -266,9 +266,9 @@ impl AddRuleDialog {
                     }
                 }
             }
-            _ => unreachable!("only editable matchers open this dialog"),
+            _ => return None,
         }
-        dialog
+        Some(dialog)
     }
 
     pub(crate) fn unchanged_domain(&self) -> Option<DomainMatch> {
@@ -1442,8 +1442,9 @@ impl State {
                         .rules
                         .iter()
                         .find(|rule| rule.id == id && crate::rules::editable(&rule.matcher))
+                    && let Some(dialog) = AddRuleDialog::for_rule(set.id.clone(), rule)
                 {
-                    self.rule_screen.add = Some(AddRuleDialog::for_rule(set.id.clone(), rule));
+                    self.rule_screen.add = Some(dialog);
                     if self.rule_screen.add.as_ref().unwrap().kind == RuleInputKind::Process {
                         return self.load_processes();
                     }
@@ -3322,6 +3323,13 @@ mod tests {
         state.config.rule_sets[1].rules[1].matcher =
             RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(r"C:\Apps\Tool.exe")));
         state.config.rule_sets[1].rules[2].matcher = RuleMatcher::Template(RuleTemplate::Youtube);
+        assert!(
+            AddRuleDialog::for_rule(
+                state.config.rule_sets[1].id.clone(),
+                &state.config.rule_sets[1].rules[2],
+            )
+            .is_none()
+        );
         state.act(Action::OpenRules);
         assert!(state.act(Action::OpenEditRule(RuleId::new("2"))).is_none());
         assert!(state.rule_screen.add.is_none());

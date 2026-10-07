@@ -84,6 +84,10 @@ impl RuleTemplate {
                     "Discord.exe",
                     "DiscordPTB.exe",
                     "DiscordCanary.exe",
+                    // Current WhatsApp for Windows uses WhatsApp.Root.exe; older releases use
+                    // WhatsApp.exe. Its shared msedgewebview2.exe processes cannot be listed:
+                    // doing so would route every WebView2 app through the VPN. The domains
+                    // below catch the traffic those processes carry instead.
                     "WhatsApp.exe",
                     "WhatsApp.Root.exe",
                 ],

@@ -1,6 +1,7 @@
 use eframe::egui::{self, Color32, FontFamily, FontId, RichText, Stroke};
 use rosetun_config::{ProcessMatch, RuleTarget};
 
+use crate::display;
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::rules::{ProcessMatchMode, process_matches_filter, update_process_match_mode};
@@ -344,7 +345,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 let selected = dialog.selected_process.is_none() && !dialog.process.is_empty();
                 let response = process_row(
                     ui,
-                    typed,
+                    &display::safe_text(typed),
                     t().typed_process,
                     "+",
                     theme::BORDER_STRONG,
@@ -371,6 +372,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     dialog.error = None;
                 }
             }
+            let mut selection = None;
             for (index, group) in dialog.processes.iter().enumerate() {
                 if !process_matches_filter(group, &dialog.process_filter)
                     || (!filtering && !dialog.show_all && !group.windowed)
@@ -382,9 +384,9 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     |path| path.to_string_lossy().into_owned(),
                 );
                 let name = if group.count > 1 {
-                    strings::process_copies(&group.name, group.count)
+                    strings::process_copies(&display::safe_text(&group.name), group.count)
                 } else {
-                    group.name.clone()
+                    display::safe_text(&group.name)
                 };
                 let tile = group
                     .name
@@ -396,30 +398,18 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 let response = process_row(
                     ui,
                     &name,
-                    &path,
-                    &tile,
+                    &display::safe_text(&path),
+                    &display::safe_text(&tile),
                     tile_color(&group.name),
                     dialog.selected_process == Some(index),
                     !dialog.busy,
                 );
                 if response.clicked() && !dialog.busy {
-                    dialog.selected_process = Some(index);
-                    dialog.process_filter = group.name.clone();
-                    #[cfg(windows)]
-                    {
-                        dialog.browsed = None;
-                    }
-                    if dialog.match_mode == ProcessMatchMode::Path && group.path.is_none() {
-                        dialog.match_mode = ProcessMatchMode::Name;
-                    }
-                    dialog.process = match dialog.match_mode {
-                        ProcessMatchMode::Name => group.name.clone(),
-                        ProcessMatchMode::Path => {
-                            group.path.as_ref().unwrap().to_string_lossy().into_owned()
-                        }
-                    };
-                    dialog.error = None;
+                    selection = Some(index);
                 }
+            }
+            if let Some(index) = selection {
+                select_process(dialog, index);
             }
             if shown == 0 && !manual && dialog.processes_loaded {
                 ui.label(
@@ -442,7 +432,11 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     t().show_all_processes(total)
                 };
                 if ui
-                    .add_enabled(!dialog.busy, egui::Button::new(label).frame(false))
+                    .add_enabled(
+                        !dialog.busy,
+                        egui::Button::new(RichText::new(label).color(theme::ROSE_LIGHT))
+                            .frame(false),
+                    )
                     .clicked()
                 {
                     dialog.show_all = !dialog.show_all;
@@ -464,6 +458,23 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         },
     );
     rosetun_core::parse_process_input(&dialog.process).is_ok()
+}
+
+fn select_process(dialog: &mut AddRuleDialog, index: usize) {
+    let group = &dialog.processes[index];
+    dialog.selected_process = Some(index);
+    #[cfg(windows)]
+    {
+        dialog.browsed = None;
+    }
+    if dialog.match_mode == ProcessMatchMode::Path && group.path.is_none() {
+        dialog.match_mode = ProcessMatchMode::Name;
+    }
+    dialog.process = match dialog.match_mode {
+        ProcessMatchMode::Name => group.name.clone(),
+        ProcessMatchMode::Path => group.path.as_ref().unwrap().to_string_lossy().into_owned(),
+    };
+    dialog.error = None;
 }
 
 fn process_row(
@@ -543,7 +554,7 @@ fn process_row(
         egui::TextStyle::Small.resolve(ui.style()).clone(),
         theme::TEXT_DIM,
     );
-    let response = response.on_hover_text(detail);
+    let response = response.on_hover_text(display::safe_text(detail));
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {
@@ -599,6 +610,7 @@ fn target_cards(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
                 width,
                 dialog.target == target,
                 !dialog.busy,
+                target_label(target),
                 |ui| {
                     ui.vertical_centered(|ui| {
                         ui.label(
@@ -689,5 +701,25 @@ mod tests {
     fn tile_colours_are_stable_and_case_insensitive() {
         assert_eq!(tile_color("Telegram.exe"), tile_color("Telegram.exe"));
         assert_eq!(tile_color("Telegram.exe"), tile_color("TELEGRAM.EXE"));
+    }
+
+    #[test]
+    fn selecting_a_process_preserves_the_search_and_raw_matcher() {
+        use super::select_process;
+        use crate::rules::ProcessGroup;
+        use rosetun_config::RuleSetId;
+
+        let mut dialog = crate::state::AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.process_filter = "tele".into();
+        dialog.processes.push(ProcessGroup {
+            name: "Tele\u{202e}gram.exe".into(),
+            path: None,
+            count: 1,
+            windowed: true,
+        });
+        select_process(&mut dialog, 0);
+        assert_eq!(dialog.process_filter, "tele");
+        assert_eq!(dialog.process, "Tele\u{202e}gram.exe");
+        assert_eq!(dialog.selected_process, Some(0));
     }
 }

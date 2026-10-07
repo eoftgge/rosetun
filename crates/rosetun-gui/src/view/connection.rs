@@ -433,59 +433,67 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
             ui.set_min_width(width - 28.0);
             ui.horizontal(|ui| {
                 let badge_height = 26.0;
+                let name_font =
+                    egui::FontId::new(17.0, egui::FontFamily::Name(theme::UI_SEMIBOLD.into()));
+                let column_height = ui.fonts_mut(|fonts| fonts.row_height(&name_font))
+                    + ui.spacing().item_spacing.y
+                    + ui.text_style_height(&egui::TextStyle::Small);
                 if let Some((code, verified)) = country
                     .map(|code| (code, true))
                     .or_else(|| flag.as_deref().map(|code| (code, false)))
                 {
-                    let (badge, _) = ui
-                        .allocate_exact_size(egui::vec2(36.0, badge_height), egui::Sense::hover());
-                    ui.painter().rect_stroke(
-                        badge,
-                        theme::RADIUS_INNER,
-                        egui::Stroke::new(
-                            1.0,
-                            if verified {
-                                theme::ROSE_DARK
-                            } else {
-                                theme::BORDER_STRONG
-                            },
-                        ),
-                        egui::StrokeKind::Inside,
-                    );
-                    ui.painter().text(
-                        badge.center(),
-                        egui::Align2::CENTER_CENTER,
-                        code,
-                        egui::FontId::monospace(13.0),
-                        if verified {
-                            theme::ROSE_LIGHT
-                        } else {
-                            theme::TEXT_MUTED
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(36.0, column_height),
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            ui.add_space((column_height - badge_height) / 2.0);
+                            let (badge, _) = ui.allocate_exact_size(
+                                egui::vec2(36.0, badge_height),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect_stroke(
+                                badge,
+                                theme::RADIUS_INNER,
+                                egui::Stroke::new(
+                                    1.0,
+                                    if verified {
+                                        theme::ROSE_DARK
+                                    } else {
+                                        theme::BORDER_STRONG
+                                    },
+                                ),
+                                egui::StrokeKind::Inside,
+                            );
+                            ui.painter().text(
+                                badge.center(),
+                                egui::Align2::CENTER_CENTER,
+                                code,
+                                egui::FontId::monospace(13.0),
+                                if verified {
+                                    theme::ROSE_LIGHT
+                                } else {
+                                    theme::TEXT_MUTED
+                                },
+                            );
                         },
                     );
                 }
                 let name_width = (ui.available_width() - 100.0).max(0.0);
                 ui.allocate_ui_with_layout(
-                    egui::vec2(name_width, badge_height),
+                    egui::vec2(name_width, column_height),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.set_width(name_width);
                         if let Some((subscription, node)) = state.config.active_node() {
                             let name = display::drop_missing_glyphs(
                                 ui.ctx(),
-                                &egui::FontId::new(
-                                    17.0,
-                                    egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
-                                ),
+                                &name_font,
                                 &state.text(display::leading_flag(&node.name).1),
                             );
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(name)
-                                        .font(egui::FontId::new(
-                                            17.0,
-                                            egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
-                                        ))
+                                        .font(name_font.clone())
                                         .color(theme::TEXT),
                                 )
                                 .truncate(),
