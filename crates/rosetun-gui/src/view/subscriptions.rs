@@ -276,26 +276,36 @@ fn subscription_card(
                             .wrap(),
                         );
                         ui.separator();
-                        if ui
-                            .add_enabled(
-                                state.config_ready
+                        if widgets::menu_item(
+                            ui,
+                            widgets::MenuItem {
+                                label: t().rename,
+                                enabled: state.config_ready
                                     && !state.operations.renaming
                                     && state.rename.is_none()
                                     && state.remove.is_none(),
-                                egui::Button::new(t().rename),
-                            )
-                            .clicked()
+                                selected: false,
+                                danger: false,
+                                note: None,
+                            },
+                        )
+                        .clicked()
                         {
                             actions.push(Action::RequestRename(subscription.id.clone()));
                             ui.close();
                         }
-                        if ui
-                            .add_enabled(
-                                !state.subscription_busy(&subscription.id)
+                        if widgets::menu_item(
+                            ui,
+                            widgets::MenuItem {
+                                label: t().remove,
+                                enabled: !state.subscription_busy(&subscription.id)
                                     && !state.operations.removing,
-                                egui::Button::new(RichText::new(t().remove).color(theme::ERROR)),
-                            )
-                            .clicked()
+                                selected: false,
+                                danger: true,
+                                note: None,
+                            },
+                        )
+                        .clicked()
                         {
                             actions.push(Action::RequestRemove(subscription.id.clone()));
                             ui.close();

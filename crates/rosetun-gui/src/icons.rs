@@ -5,6 +5,7 @@ use crate::theme;
 #[derive(Clone, Copy)]
 pub(crate) enum Icon {
     Grip,
+    Check,
     Chevron { open: bool },
     Refresh,
     More,
@@ -77,16 +78,25 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
         Icon::Grip => {
             for x in [-2.0, 2.0] {
                 for y in [-4.0, 0.0, 4.0] {
-                    painter.rect_filled(
-                        egui::Rect::from_center_size(
-                            center + egui::vec2(x, y),
-                            egui::vec2(2.0, 2.0),
-                        ),
-                        0.0,
-                        color,
-                    );
+                    painter.circle_filled(center + egui::vec2(x, y), 1.0, color);
                 }
             }
+        }
+        Icon::Check => {
+            painter.line_segment(
+                [
+                    center + egui::vec2(-5.0, 0.0),
+                    center + egui::vec2(-1.5, 3.5),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    center + egui::vec2(-1.5, 3.5),
+                    center + egui::vec2(5.0, -3.5),
+                ],
+                stroke,
+            );
         }
         Icon::Chevron { open } => {
             let points = if open {

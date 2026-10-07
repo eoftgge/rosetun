@@ -305,34 +305,63 @@ fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         widgets::menu_popup(&menu).show(|ui| {
             ui.set_min_width(180.0);
             if !active
-                && ui
-                    .add_enabled(state.can_edit_rules(), egui::Button::new(t().make_active))
-                    .clicked()
+                && widgets::menu_item(
+                    ui,
+                    widgets::MenuItem {
+                        label: t().make_active,
+                        enabled: state.can_edit_rules(),
+                        selected: false,
+                        danger: false,
+                        note: None,
+                    },
+                )
+                .clicked()
             {
                 actions.push(Action::SelectRuleSet(Some(set.id.clone())));
                 ui.close();
             }
-            if ui
-                .add_enabled(state.can_edit_rules(), egui::Button::new(t().new_set))
-                .clicked()
+            if widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: t().new_set,
+                    enabled: state.can_edit_rules(),
+                    selected: false,
+                    danger: false,
+                    note: None,
+                },
+            )
+            .clicked()
             {
                 actions.push(Action::OpenCreateSet);
                 ui.close();
             }
-            if ui
-                .add_enabled(state.can_edit_rules(), egui::Button::new(t().rename))
-                .clicked()
+            if widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: t().rename,
+                    enabled: state.can_edit_rules(),
+                    selected: false,
+                    danger: false,
+                    note: None,
+                },
+            )
+            .clicked()
             {
                 actions.push(Action::OpenRenameSet);
                 ui.close();
             }
             ui.separator();
-            if ui
-                .add_enabled(
-                    state.can_edit_rules(),
-                    egui::Button::new(RichText::new(t().delete).color(theme::ERROR)),
-                )
-                .clicked()
+            if widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: t().delete,
+                    enabled: state.can_edit_rules(),
+                    selected: false,
+                    danger: true,
+                    note: None,
+                },
+            )
+            .clicked()
             {
                 actions.push(Action::RequestDeleteSet);
                 ui.close();
@@ -442,18 +471,21 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
         for item in &state.config.rule_sets {
             let selected = item.id == set.id;
             let is_active = state.config.active_rule_set.as_ref() == Some(&item.id);
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(selected, state.text(&item.name))
-                    .clicked()
-                {
-                    actions.push(Action::ChooseRuleSet(item.id.clone()));
-                    ui.close();
-                }
-                if is_active {
-                    ui.label(RichText::new(t().active).small().color(theme::ROSE_LIGHT));
-                }
-            });
+            if widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: &state.text(&item.name),
+                    enabled: true,
+                    selected,
+                    danger: false,
+                    note: is_active.then_some(t().active),
+                },
+            )
+            .clicked()
+            {
+                actions.push(Action::ChooseRuleSet(item.id.clone()));
+                ui.close();
+            }
         }
     });
 }
@@ -638,38 +670,29 @@ fn target_button(
         widgets::menu_popup(&response).show(|ui| {
             ui.set_min_width(TARGET_WIDTH);
             for &choice in choices {
-                let (rect, item) =
-                    ui.allocate_exact_size(egui::vec2(TARGET_WIDTH, 30.0), egui::Sense::click());
-                if ui.is_rect_visible(rect) {
-                    if choice == target {
-                        ui.painter()
-                            .rect_filled(rect, theme::RADIUS_INNER, theme::ROSE_DARK);
-                    } else if item.hovered() {
-                        ui.painter()
-                            .rect_filled(rect, theme::RADIUS_INNER, theme::BORDER);
-                    }
+                let item = ui
+                    .scope(|ui| {
+                        ui.spacing_mut().button_padding.x = TARGET_TEXT_X;
+                        ui.visuals_mut().override_text_color = Some(target_color(choice));
+                        widgets::menu_item(
+                            ui,
+                            widgets::MenuItem {
+                                label: target_label(choice),
+                                enabled: true,
+                                selected: choice == target,
+                                danger: false,
+                                note: None,
+                            },
+                        )
+                    })
+                    .inner;
+                if ui.is_rect_visible(item.rect) {
                     ui.painter().circle_filled(
-                        egui::pos2(rect.left() + TARGET_DOT_X, rect.center().y),
+                        egui::pos2(item.rect.left() + TARGET_DOT_X, item.rect.center().y),
                         3.5,
                         target_color(choice),
                     );
-                    ui.painter().text(
-                        egui::pos2(rect.left() + TARGET_TEXT_X, rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        target_label(choice),
-                        egui::TextStyle::Button.resolve(ui.style()),
-                        target_color(choice),
-                    );
                 }
-                let item = item.on_hover_cursor(egui::CursorIcon::PointingHand);
-                item.widget_info(|| {
-                    egui::WidgetInfo::selected(
-                        egui::WidgetType::SelectableLabel,
-                        true,
-                        choice == target,
-                        target_label(choice),
-                    )
-                });
                 if item.clicked() {
                     selected = (choice != target).then_some(choice);
                     ui.close();
@@ -774,23 +797,47 @@ fn rule_row(
                         widgets::menu_popup(&menu).show(|ui| {
                             ui.set_min_width(160.0);
                             if crate::rules::editable(&rule.matcher)
-                                && ui.button(t().edit).clicked()
+                                && widgets::menu_item(
+                                    ui,
+                                    widgets::MenuItem {
+                                        label: t().edit,
+                                        enabled: true,
+                                        selected: false,
+                                        danger: false,
+                                        note: None,
+                                    },
+                                )
+                                .clicked()
                             {
                                 actions.push(Action::OpenEditRule(rule.id.clone()));
                                 ui.close();
                             }
-                            if ui
-                                .add_enabled(index > 0, egui::Button::new(t().move_to_top))
-                                .clicked()
+                            if widgets::menu_item(
+                                ui,
+                                widgets::MenuItem {
+                                    label: t().move_to_top,
+                                    enabled: index > 0,
+                                    selected: false,
+                                    danger: false,
+                                    note: None,
+                                },
+                            )
+                            .clicked()
                             {
                                 actions.push(Action::MoveRuleToTop(rule.id.clone()));
                                 ui.close();
                             }
-                            if ui
-                                .add(egui::Button::new(
-                                    RichText::new(t().delete).color(theme::ERROR),
-                                ))
-                                .clicked()
+                            if widgets::menu_item(
+                                ui,
+                                widgets::MenuItem {
+                                    label: t().delete,
+                                    enabled: true,
+                                    selected: false,
+                                    danger: true,
+                                    note: None,
+                                },
+                            )
+                            .clicked()
                             {
                                 actions.push(Action::RequestDeleteRule(rule.id.clone()));
                                 ui.close();
