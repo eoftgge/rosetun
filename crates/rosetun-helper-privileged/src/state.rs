@@ -26,6 +26,7 @@ const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
 const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
     interval: Duration::from_secs(30),
+    retry: Duration::from_secs(5),
     dns_timeout: Duration::from_secs(5),
     path_timeout: Duration::from_secs(5),
     failures: 3,

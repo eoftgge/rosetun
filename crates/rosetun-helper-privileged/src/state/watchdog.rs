@@ -14,6 +14,7 @@ const WAIT_SLICE: Duration = Duration::from_millis(100);
 #[derive(Debug, Clone, Copy)]
 pub(super) struct WatchdogTiming {
     pub interval: Duration,
+    pub retry: Duration,
     pub dns_timeout: Duration,
     pub path_timeout: Duration,
     pub failures: u32,
@@ -48,6 +49,15 @@ impl DnsHealth {
 
     fn needs_path(&self) -> bool {
         self.failures.saturating_add(1) >= self.threshold
+    }
+
+    /// A failure that has not been explained yet is asked about again soon.
+    fn pause(&self, timing: &WatchdogTiming) -> Duration {
+        if self.failures != 0 && !self.signaled && !self.path_down {
+            timing.retry
+        } else {
+            timing.interval
+        }
     }
 
     fn observe(&mut self, dns_ok: bool, path_ok: Option<bool>) -> Verdict {
@@ -130,7 +140,7 @@ impl DnsWatchdog {
             .spawn(move || {
                 let mut health = DnsHealth::new(timing.failures);
                 loop {
-                    if !wait(&worker_stop, timing.interval) {
+                    if !wait(&worker_stop, health.pause(&timing)) {
                         return;
                     }
                     let connected = {
@@ -156,13 +166,18 @@ impl DnsWatchdog {
                         None
                     };
 
+                    let warned = health.signaled || health.path_down;
                     match health.observe(dns_ok, path_ok) {
                         Verdict::DnsFailing => {
-                            tracing::warn!("DNS through the tunnel stopped answering")
+                            tracing::debug!("DNS probe through the tunnel failed")
                         }
                         Verdict::DnsRecovered => {
                             worker_stalled.store(false, Ordering::Release);
-                            tracing::info!("DNS through the tunnel recovered");
+                            if warned {
+                                tracing::info!("DNS through the tunnel recovered");
+                            } else {
+                                tracing::debug!("DNS through the tunnel recovered");
+                            }
                         }
                         Verdict::PathDown => {
                             worker_stalled.store(false, Ordering::Release);
@@ -234,6 +249,7 @@ mod tests {
     fn timing() -> WatchdogTiming {
         WatchdogTiming {
             interval: Duration::from_millis(10),
+            retry: Duration::from_millis(10),
             dns_timeout: Duration::from_millis(10),
             path_timeout: Duration::from_millis(10),
             failures: 3,
@@ -280,6 +296,38 @@ mod tests {
         assert_eq!(health.observe(false, None), Verdict::DnsFailing);
         assert_eq!(health.observe(false, None), Verdict::Unchanged);
         assert_eq!(health.observe(false, Some(true)), Verdict::Stalled);
+    }
+
+    #[test]
+    fn pause_retries_only_while_a_failure_is_open() {
+        let timing = WatchdogTiming {
+            interval: Duration::from_millis(400),
+            ..timing()
+        };
+        let mut health = DnsHealth::new(3);
+        assert_eq!(health.pause(&timing), timing.interval);
+        health.observe(false, None);
+        assert_eq!(health.pause(&timing), timing.retry);
+        health.observe(false, None);
+        assert_eq!(health.pause(&timing), timing.retry);
+        health.observe(false, Some(false));
+        assert_eq!(health.pause(&timing), timing.interval);
+        health.observe(false, Some(true));
+        assert_eq!(health.pause(&timing), timing.interval);
+        health.observe(true, None);
+        assert_eq!(health.pause(&timing), timing.interval);
+    }
+
+    #[test]
+    fn failing_dns_is_rechecked_at_the_retry_pace() {
+        let mut timing = timing();
+        timing.interval = Duration::from_millis(400);
+        let watchdog = DnsWatchdog::start_with_probes(connected(), timing, |_| false, |_| true)
+            .expect("start watchdog");
+        let started = Instant::now();
+        wait_for(|| watchdog.stalled.load(Ordering::Acquire));
+        assert!(started.elapsed() < Duration::from_millis(700));
+        watchdog.stop();
     }
 
     #[test]
