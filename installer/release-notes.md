@@ -16,7 +16,7 @@ Rosetun includes the unmodified official sing-box {{sing_box_version}} build, li
 
 ## Русский
 
-Это альфа-версия. Ошибки возможны. Сообщайте о них в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях - приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Это альфа-версия. Ошибки возможны. Сообщайте о них в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях сообщайте приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
 ### Установка
 

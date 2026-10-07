@@ -10,7 +10,7 @@ Rosetun is a Windows VPN client powered by sing-box. A Windows service maintains
 
 ## Features
 
-- A **Kill switch** blocks traffic when the tunnel drops. Without it, a DNS lock keeps system DNS in the tunnel while connected.
+- A **Kill switch** blocks traffic when the tunnel drops. Without it, a DNS lock keeps system DNS from leaking outside the tunnel throughout the session, including while the engine restarts.
 - **Routing rules** for apps and websites, with **Quick templates** and actions **Through VPN**, **Direct** and **Block**.
 - Provider subscriptions in plain or base64-encoded link lists, Xray JSON and sing-box JSON. **Send device ID** (HWID) is optional for providers that require it.
 - VLESS, VMess, Trojan and Shadowsocks nodes; TCP, WebSocket, gRPC and HTTPUpgrade transports; plain, TLS and Reality security modes.
