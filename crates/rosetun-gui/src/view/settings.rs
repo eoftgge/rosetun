@@ -4,7 +4,7 @@ use rosetun_core::DnsPreset;
 
 use crate::brand;
 use crate::errors;
-use crate::state::{AboutFolder, Action, SettingsSection, State, now_unix};
+use crate::state::{AboutFolder, Action, SessionPart, SettingsSection, State, now_unix};
 use crate::strings::t;
 use crate::{strings, theme, widgets};
 
@@ -236,6 +236,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             if state
                 .visible_status()
                 .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
+                && state.pending_reconnect(SessionPart::Dns)
             {
                 ui.label(
                     RichText::new(t().next_connect)

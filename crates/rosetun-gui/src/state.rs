@@ -11,7 +11,7 @@ use rosetun_config::{
 use rosetun_core::{
     AddFromUrlError, AddOptions, DnsPreset, Ping, UpdateReport, UpdateSubscriptionError,
 };
-use rosetun_ipc::{ClientError, ErrorCode, HelperError};
+use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError};
 
 use crate::actions::{self, PrimaryAction};
 use crate::display;
@@ -380,6 +380,12 @@ impl SettingsScreen {
     }
 }
 
+pub(crate) enum SessionPart {
+    Rules,
+    Dns,
+    Protection,
+}
+
 pub(crate) struct State {
     pub(crate) config: AppConfig,
     pub(crate) config_ready: bool,
@@ -390,6 +396,8 @@ pub(crate) struct State {
     pub(crate) config_generation: u64,
     pub(crate) config_error: Option<ConfigWorkerError>,
     pub(crate) status: Status,
+    session_request: Option<ConnectRequest>,
+    session_snapshot_checked: bool,
     pub(crate) exit: ExitLookup,
     exit_route: Option<ExitRoute>,
     exit_generation: u64,
@@ -427,6 +435,8 @@ impl Default for State {
             config_generation: 0,
             config_error: None,
             status: Status::default(),
+            session_request: None,
+            session_snapshot_checked: false,
             exit: ExitLookup::None,
             exit_route: None,
             exit_generation: 0,
@@ -609,6 +619,20 @@ impl State {
     /// taken the engine and the kill-switch filters with it.
     pub(crate) fn visible_status(&self) -> Option<&Status> {
         self.helper_available.then_some(&self.status)
+    }
+
+    pub(crate) fn pending_reconnect(&self, part: SessionPart) -> bool {
+        let Some(session) = &self.session_request else {
+            return false;
+        };
+        let Ok(current) = ConnectRequest::from_config(&self.config) else {
+            return false;
+        };
+        match part {
+            SessionPart::Rules => session.rule_set != current.rule_set,
+            SessionPart::Dns => session.settings.dns != current.settings.dns,
+            SessionPart::Protection => session.settings.kill_switch != current.settings.kill_switch,
+        }
     }
 
     pub(crate) fn primary_action(&self) -> PrimaryAction {
@@ -863,12 +887,38 @@ impl State {
             }
             WorkerEvent::HelperUnavailable(error) => {
                 self.helper_available = false;
+                self.session_request = None;
+                self.session_snapshot_checked = false;
                 self.traffic_history.clear();
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;
             }
             WorkerEvent::Status(status) => {
                 self.status_received = true;
+                if self.helper_available {
+                    match status.state {
+                        ConnectionState::Disconnected
+                        | ConnectionState::Failed { .. }
+                        | ConnectionState::FailedProtected { .. } => {
+                            self.session_request = None;
+                            self.session_snapshot_checked = false;
+                        }
+                        ConnectionState::Connected
+                            if self.session_request.is_none()
+                                && !self.session_snapshot_checked
+                                && self.config_ready
+                                && !self.operations.helper =>
+                        {
+                            self.session_snapshot_checked = true;
+                            if let Ok(request) = ConnectRequest::from_config(&self.config)
+                                && status.node.as_ref() == Some(&request.selection.node)
+                            {
+                                self.session_request = Some(request);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 if self.helper_available
                     && matches!(
                         status.state,
@@ -908,10 +958,14 @@ impl State {
             }
             WorkerEvent::Connect(result) => {
                 self.operations.helper = false;
-                if result.as_ref().err().is_some_and(reported_by_status) {
-                    self.operation_error = None;
-                } else {
-                    self.helper_result(result);
+                match result {
+                    Ok(request) => {
+                        self.session_request = Some(request);
+                        self.session_snapshot_checked = true;
+                        self.operation_error = None;
+                    }
+                    Err(error) if reported_by_status(&error) => self.operation_error = None,
+                    Err(error) => self.helper_result(Err(error)),
                 }
             }
             WorkerEvent::Disconnect(result) => {
@@ -2749,6 +2803,138 @@ mod tests {
     }
 
     #[test]
+    fn successful_connect_has_no_pending_changes_until_dns_or_protection_changes() {
+        let mut state = state_for_auto_connect();
+        let request = ConnectRequest::from_config(&state.config).unwrap();
+        state.reduce(WorkerEvent::Connect(Ok(request.clone())));
+        assert_eq!(state.session_request, Some(request));
+        for part in [
+            SessionPart::Rules,
+            SessionPart::Dns,
+            SessionPart::Protection,
+        ] {
+            assert!(!state.pending_reconnect(part));
+        }
+
+        state.config.settings.dns = DnsPreset::Google.settings();
+        assert!(state.pending_reconnect(SessionPart::Dns));
+        assert!(!state.pending_reconnect(SessionPart::Rules));
+        assert!(!state.pending_reconnect(SessionPart::Protection));
+
+        state.config.settings.kill_switch = !state.config.settings.kill_switch;
+        assert!(state.pending_reconnect(SessionPart::Protection));
+        assert!(state.pending_reconnect(SessionPart::Dns));
+        assert!(!state.pending_reconnect(SessionPart::Rules));
+
+        state.config.active = None;
+        for part in [
+            SessionPart::Rules,
+            SessionPart::Dns,
+            SessionPart::Protection,
+        ] {
+            assert!(!state.pending_reconnect(part));
+        }
+    }
+
+    #[test]
+    fn active_status_during_connect_does_not_replace_the_submitted_request() {
+        let mut state = state_for_auto_connect();
+        let request = ConnectRequest::from_config(&state.config).unwrap();
+        state.operations.helper = true;
+        state.config.settings.dns = DnsPreset::Google.settings();
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        assert!(state.session_request.is_none());
+        state.reduce(WorkerEvent::Connect(Ok(request)));
+        assert!(state.pending_reconnect(SessionPart::Dns));
+    }
+
+    #[test]
+    fn rule_change_in_active_set_needs_reconnect_until_reverted() {
+        let mut state = state_for_auto_connect();
+        state.config.rule_sets.push(rule_set("1"));
+        state.config.active_rule_set = Some(RuleSetId::new("1"));
+        let request = ConnectRequest::from_config(&state.config).unwrap();
+        state.reduce(WorkerEvent::Connect(Ok(request)));
+
+        state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+        assert!(state.pending_reconnect(SessionPart::Rules));
+        assert!(!state.pending_reconnect(SessionPart::Dns));
+        state.config.rule_sets[0].rules[0].target = RuleTarget::Proxy;
+        assert!(!state.pending_reconnect(SessionPart::Rules));
+    }
+
+    #[test]
+    fn disconnected_and_failed_statuses_clear_session_request_but_reconnecting_does_not() {
+        for status in [
+            ConnectionState::Disconnected,
+            ConnectionState::Failed {
+                reason: "failed".into(),
+            },
+            ConnectionState::FailedProtected {
+                reason: "blocked".into(),
+            },
+        ] {
+            let mut state = state_for_auto_connect();
+            let request = ConnectRequest::from_config(&state.config).unwrap();
+            state.reduce(WorkerEvent::Connect(Ok(request)));
+            state.reduce(WorkerEvent::Status(Status {
+                state: ConnectionState::Reconnecting,
+                ..Status::default()
+            }));
+            assert!(state.session_request.is_some());
+            state.reduce(WorkerEvent::Status(Status {
+                state: status,
+                ..Status::default()
+            }));
+            assert!(state.session_request.is_none());
+            assert!(!state.pending_reconnect(SessionPart::Rules));
+        }
+    }
+
+    #[test]
+    fn active_status_seeds_session_only_once_and_only_for_the_selected_node() {
+        let mut matching = state_for_auto_connect();
+        matching.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        assert_eq!(
+            matching.session_request,
+            Some(ConnectRequest::from_config(&matching.config).unwrap())
+        );
+        assert!(!matching.pending_reconnect(SessionPart::Dns));
+
+        let mut mismatched = state_for_auto_connect();
+        mismatched.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("other")),
+            ..Status::default()
+        }));
+        assert!(mismatched.session_request.is_none());
+        mismatched.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        assert!(mismatched.session_request.is_none());
+
+        let mut missing_selection = state_for_auto_connect();
+        missing_selection.config.active = None;
+        missing_selection.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        assert!(missing_selection.session_request.is_none());
+        assert!(!missing_selection.pending_reconnect(SessionPart::Dns));
+    }
+
+    #[test]
     fn command_completion_clears_flags_and_maps_selection_errors() {
         let mut state = State::default();
         state.operations.helper = true;
@@ -2909,7 +3095,8 @@ mod tests {
         };
         assert!(state.act(Action::ConfirmProtectionOff).is_none());
         assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
-        state.reduce(WorkerEvent::Connect(Ok(())));
+        let request = ConnectRequest::from_config(&state_for_auto_connect().config).unwrap();
+        state.reduce(WorkerEvent::Connect(Ok(request)));
         state.act(Action::RequestProtectionOff);
         assert!(state.protection_confirmation);
         assert!(matches!(

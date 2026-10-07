@@ -4,7 +4,7 @@ use rosetun_config::{Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, RuleTemplat
 use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
 use crate::rules::{RuleCaption, RuleFilter, TypeFilter, rule_counts, rule_lines, visible_rules};
-use crate::state::{Action, DeleteDialog, NameDialogKind, State};
+use crate::state::{Action, DeleteDialog, NameDialogKind, SessionPart, State};
 use crate::strings::t;
 use crate::{strings, theme, widgets};
 
@@ -66,6 +66,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         .visible_status()
         .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
         && state.config.active_rule_set.as_ref() == Some(&set.id)
+        && state.pending_reconnect(SessionPart::Rules)
     {
         widgets::card_frame().show(ui, |ui| {
             ui.colored_label(theme::ROSE_LIGHT, t().rules_next_connect);

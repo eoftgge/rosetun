@@ -6,7 +6,7 @@ use rosetun_config::{ConnectionState, RuleMatcher};
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
 use crate::icons::{self, Icon};
-use crate::state::{Action, ExitLookup, ExitRoute, State, primary_label};
+use crate::state::{Action, ExitLookup, ExitRoute, SessionPart, State, primary_label};
 use crate::strings::t;
 use crate::{display, strings, theme, widgets};
 
@@ -812,7 +812,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         {
             actions.push(Action::SetConnectOnStart(connect_on_start));
         }
-        if tunnel_up(state) {
+        if tunnel_up(state) && state.pending_reconnect(SessionPart::Protection) {
             ui.label(
                 RichText::new(t().next_connect)
                     .small()
@@ -902,7 +902,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 .wrap(),
             );
         }
-        if tunnel_up(state) {
+        if tunnel_up(state) && state.pending_reconnect(SessionPart::Rules) {
             ui.label(
                 RichText::new(t().next_connect)
                     .small()
