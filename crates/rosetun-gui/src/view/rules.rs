@@ -11,6 +11,8 @@ use crate::{strings, theme, widgets};
 const HANDLE_WIDTH: f32 = 22.0;
 const ICON_WIDTH: f32 = 34.0;
 const TARGET_WIDTH: f32 = 150.0;
+const TARGET_DOT_X: f32 = 14.0;
+const TARGET_TEXT_X: f32 = 26.0;
 const TOGGLE_WIDTH: f32 = 38.0;
 const MENU_WIDTH: f32 = 32.0;
 const ROW_INSET: f32 = 12.0;
@@ -126,7 +128,7 @@ fn template_section(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &m
     );
     ui.add_space(8.0);
     let width = ((ui.available_width() - 3.0 * 12.0) / 4.0).max(0.0);
-    ui.horizontal(|ui| {
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
         for template in RuleTemplate::ALL {
             ui.push_id(template.key(), |ui| {
@@ -505,25 +507,7 @@ fn filter_controls(
                 {
                     actions.push(Action::SetRuleTypeFilter(kind));
                 }
-                let mut selected = filter.target;
-                let selected_text = selected
-                    .map(|target| RichText::new(target_label(target)).color(target_color(target)))
-                    .unwrap_or_else(|| RichText::new(t().any_action));
-                egui::ComboBox::from_id_salt("rule_target_filter")
-                    .selected_text(selected_text)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut selected, None, t().any_action);
-                        for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
-                            ui.selectable_value(
-                                &mut selected,
-                                Some(target),
-                                RichText::new(target_label(target)).color(target_color(target)),
-                            );
-                        }
-                    });
-                if selected != filter.target {
-                    actions.push(Action::SetRuleTargetFilter(selected));
-                }
+                target_filter(ui, filter, actions);
             });
         },
         |ui| widgets::button_fill(ui, t().new_rule_button, can_add).clicked(),
@@ -531,6 +515,48 @@ fn filter_controls(
     if add_rule {
         actions.push(Action::OpenAddRule);
     }
+}
+
+fn target_filter(
+    ui: &mut egui::Ui,
+    filter: &RuleFilter,
+    actions: &mut Vec<Action>,
+) -> egui::Response {
+    let mut selected = filter.target;
+    let response = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding.y = 6.0;
+            ui.spacing_mut().interact_size.y = 38.0;
+            let visuals = &mut ui.visuals_mut().widgets;
+            visuals.inactive.weak_bg_fill = theme::INPUT;
+            visuals.hovered.weak_bg_fill = theme::BORDER;
+            let border = Stroke::new(1.0, theme::BORDER_STRONG);
+            visuals.inactive.bg_stroke = border;
+            visuals.hovered.bg_stroke = border;
+            visuals.open.bg_stroke = border;
+            let selected_text = selected
+                .map(|target| RichText::new(target_label(target)).color(target_color(target)))
+                .unwrap_or_else(|| RichText::new(t().any_action));
+            egui::ComboBox::from_id_salt("rule_target_filter")
+                .width(166.0)
+                .selected_text(selected_text)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut selected, None, t().any_action);
+                    for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
+                        ui.selectable_value(
+                            &mut selected,
+                            Some(target),
+                            RichText::new(target_label(target)).color(target_color(target)),
+                        );
+                    }
+                })
+                .response
+        })
+        .inner;
+    if selected != filter.target {
+        actions.push(Action::SetRuleTargetFilter(selected));
+    }
+    response
 }
 
 fn table_cell(
@@ -598,10 +624,13 @@ fn target_button(
             } else {
                 theme::DISABLED
             };
-            ui.painter()
-                .circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 3.5, color);
+            ui.painter().circle_filled(
+                egui::pos2(rect.left() + TARGET_DOT_X, rect.center().y),
+                3.5,
+                color,
+            );
             ui.painter().text(
-                egui::pos2(rect.left() + 26.0, rect.center().y),
+                egui::pos2(rect.left() + TARGET_TEXT_X, rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 target_label(target),
                 egui::TextStyle::Button.resolve(ui.style()),
@@ -626,18 +655,38 @@ fn target_button(
         egui::Popup::menu(&response).show(|ui| {
             ui.set_min_width(TARGET_WIDTH);
             for &choice in choices {
-                let item = ui.add(
-                    egui::Button::new(
-                        RichText::new(format!("    {}", target_label(choice)))
-                            .color(target_color(choice)),
+                let (rect, item) =
+                    ui.allocate_exact_size(egui::vec2(TARGET_WIDTH, 30.0), egui::Sense::click());
+                if ui.is_rect_visible(rect) {
+                    if choice == target {
+                        ui.painter()
+                            .rect_filled(rect, theme::RADIUS_INNER, theme::ROSE_DARK);
+                    } else if item.hovered() {
+                        ui.painter()
+                            .rect_filled(rect, theme::RADIUS_INNER, theme::BORDER);
+                    }
+                    ui.painter().circle_filled(
+                        egui::pos2(rect.left() + TARGET_DOT_X, rect.center().y),
+                        3.5,
+                        target_color(choice),
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.left() + TARGET_TEXT_X, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        target_label(choice),
+                        egui::TextStyle::Button.resolve(ui.style()),
+                        target_color(choice),
+                    );
+                }
+                let item = item.on_hover_cursor(egui::CursorIcon::PointingHand);
+                item.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::SelectableLabel,
+                        true,
+                        choice == target,
+                        target_label(choice),
                     )
-                    .selected(choice == target),
-                );
-                ui.painter().circle_filled(
-                    egui::pos2(item.rect.left() + 14.0, item.rect.center().y),
-                    3.5,
-                    target_color(choice),
-                );
+                });
                 if item.clicked() {
                     selected = (choice != target).then_some(choice);
                     ui.close();
@@ -1057,6 +1106,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn action_filter_button_matches_the_search_field_height() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let response = target_filter(ui, &RuleFilter::default(), &mut Vec::new());
+                assert!(
+                    (response.rect.height() - 38.0).abs() < 1.0,
+                    "action filter: {:?}",
+                    response.rect
+                );
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
         let ctx = egui::Context::default();
         theme::apply(&ctx);
@@ -1086,7 +1152,7 @@ mod tests {
                         ui.set_width(available);
                         let width = (available - 36.0) / 4.0;
                         let mut rects = Vec::new();
-                        ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                             ui.spacing_mut().item_spacing.x = 12.0;
                             for template in RuleTemplate::ALL {
                                 let rect = ui
@@ -1108,6 +1174,11 @@ mod tests {
                         for rect in &rects {
                             assert!(rect.width() <= width + 1.0, "{rect:?} vs {width}");
                             assert!((rect.height() - rects[0].height()).abs() < 1.0);
+                            assert!(
+                                (rect.top() - rects[0].top()).abs() < 1.0,
+                                "cards are staggered: {rect:?} vs {:?}",
+                                rects[0]
+                            );
                         }
                         for pair in rects.windows(2) {
                             assert!(pair[0].right() + 11.0 <= pair[1].left(), "{pair:?}");
