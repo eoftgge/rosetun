@@ -1,6 +1,9 @@
-﻿; Compiled by installer\build.ps1, which passes AppVersion, BuildDir and SingBoxDir.
+﻿; Compiled by installer\build.ps1, which passes AppVersion, BuildDir, SingBoxDir and LicensesDir.
 #ifndef AppVersion
   #error Run installer\build.ps1 instead of compiling this script directly
+#endif
+#ifndef LicensesDir
+  #error Run installer\build.ps1 to provide the licenses directory
 #endif
 
 #define AppName "Rosetun"
@@ -53,8 +56,7 @@ Source: "{#BuildDir}\{#GuiExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\{#HelperExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\rosetun.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SingBoxDir}\sing-box.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SingBoxDir}\LICENSE"; DestDir: "{app}\licenses"; DestName: "sing-box.txt"
-Source: "..\crates\rosetun-gui\assets\fonts\OFL-*.txt"; DestDir: "{app}\licenses"
+Source: "{#LicensesDir}\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#GuiExe}"

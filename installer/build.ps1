@@ -12,6 +12,11 @@ if (-not $versionMatch.Success) {
     throw 'Missing version in [workspace.package] in Cargo.toml.'
 }
 $version = $versionMatch.Groups['version'].Value
+$cargoAboutVersion = '0.9.2'
+$installedCargoAbout = & cargo about --version 2>$null
+if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "cargo-about $cargoAboutVersion") {
+    throw "cargo-about $cargoAboutVersion is required. Install it with: cargo install cargo-about --locked --version $cargoAboutVersion --force"
+}
 
 # Update these together with Install-RosetunSingBox and SUPPORTED_SING_BOX_VERSION.
 $singBoxVersion = '1.14.1'
@@ -27,15 +32,25 @@ if ($singBoxVersion -ne $supportedVersion.Groups[1].Value) {
 
 $buildDir = Join-Path $root 'target/release'
 $outputDir = Join-Path $root 'target/installer'
+$licensesDir = Join-Path $outputDir 'licenses'
 $singBoxDir = Join-Path $outputDir 'sing-box'
 $binary = Join-Path $singBoxDir 'sing-box.exe'
 $license = Join-Path $singBoxDir 'LICENSE'
 
+if (Test-Path -LiteralPath $licensesDir) {
+    Remove-Item -LiteralPath $licensesDir -Recurse -Force
+}
+New-Item -ItemType Directory -Path $licensesDir -Force | Out-Null
+
 Push-Location $root
 try {
-    & cargo build --release --locked -p rosetun-gui -p rosetun-helper-privileged -p rosetun
+    & cargo build -q --release --locked -p rosetun-gui -p rosetun-helper-privileged -p rosetun
     if ($LASTEXITCODE -ne 0) {
         throw "Building release binaries failed with cargo exit code $LASTEXITCODE."
+    }
+    & cargo -q about generate --fail --locked installer/third-party.hbs -o (Join-Path $licensesDir 'third-party.html')
+    if ($LASTEXITCODE -ne 0) {
+        throw "Generating Rust crate licenses failed with cargo-about exit code $LASTEXITCODE."
     }
 }
 finally {
@@ -75,6 +90,22 @@ if (-not ((Test-Path -LiteralPath $binary -PathType Leaf) -and
     }
 }
 
+Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $licensesDir 'rosetun.txt')
+Copy-Item -LiteralPath $license -Destination (Join-Path $licensesDir 'sing-box.txt')
+Copy-Item -Path (Join-Path $root 'crates/rosetun-gui/assets/fonts/OFL-*.txt') -Destination $licensesDir
+$sourceNotice = @"
+sing-box $singBoxVersion is licensed under the GNU General Public License,
+version 3 or later (see sing-box.txt). Rosetun ships the unmodified official
+build sing-box-$singBoxVersion-windows-amd64, sing-box.exe SHA-256 $expectedHash.
+
+Corresponding source:
+https://github.com/SagerNet/sing-box/tree/v$singBoxVersion
+https://github.com/SagerNet/sing-box/archive/refs/tags/v$singBoxVersion.tar.gz
+
+Every Rosetun release on GitHub also carries a copy of that source archive.
+"@
+Set-Content -LiteralPath (Join-Path $licensesDir 'sing-box-source.txt') -Value $sourceNotice -Encoding utf8
+
 if ($env:ISCC) {
     $iscc = $env:ISCC
 }
@@ -90,7 +121,7 @@ if (-not $iscc -or -not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
 
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 $issPath = Join-Path $PSScriptRoot 'rosetun.iss'
-& $iscc /Qp "/DAppVersion=$version" "/DBuildDir=$buildDir" "/DSingBoxDir=$singBoxDir" "/O$outputDir" $issPath
+& $iscc /Qp "/DAppVersion=$version" "/DBuildDir=$buildDir" "/DSingBoxDir=$singBoxDir" "/DLicensesDir=$licensesDir" "/O$outputDir" $issPath
 if ($LASTEXITCODE -ne 0) {
     throw "Compiling $issPath failed with ISCC exit code $LASTEXITCODE."
 }

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rosetun Rust crate licenses</title>
+</head>
+<body>
+<h1>Rust crate licenses</h1>
+<p>Rosetun includes the following Rust crates.</p>
+{{#each licenses}}
+<section>
+<h2>{{name}}</h2>
+<ul>
+{{#each used_by}}
+<li>{{crate.name}} {{crate.version}}</li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+</section>
+{{/each}}
+</body>
+</html>
