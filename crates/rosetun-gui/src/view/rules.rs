@@ -1,54 +1,23 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
-use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget};
+use rosetun_config::{Rule, RuleId, RuleMatcher, RuleSet, RuleTarget};
 
 use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
-use crate::rules::{RuleFilter, TypeFilter, rule_counts, visible_rules};
+use crate::rules::{RuleCaption, RuleFilter, TypeFilter, rule_counts, rule_lines, visible_rules};
 use crate::state::{Action, DeleteDialog, NameDialogKind, State};
 use crate::strings::t;
 use crate::{strings, theme, widgets};
 
-const HANDLE_WIDTH: f32 = 28.0;
-const MIN_TYPE_WIDTH: f32 = 100.0;
-/// Gap between the type label and the value column.
-const TYPE_PADDING: f32 = 16.0;
-const TARGET_WIDTH: f32 = 172.0;
-const TARGET_COMBO_WIDTH: f32 = 140.0;
-// With the app theme, the visible ComboBox sits below the center of its allocated area.
-const TARGET_COMBO_TOP_OFFSET: f32 = 8.0;
-const ENABLED_WIDTH: f32 = 100.0;
-const REMOVE_WIDTH: f32 = 44.0;
-const TABLE_INSET: f32 = 10.0;
-const ROW_HEIGHT: f32 = 52.0;
-const HEADER_HEIGHT: f32 = 24.0;
-
-#[derive(Clone, Copy)]
-struct TableWidths {
-    rule_type: f32,
-    value: f32,
-}
-
-/// Wide enough for the longest rule type label in the current language.
-fn type_width(ui: &egui::Ui) -> f32 {
-    let font_id = egui::TextStyle::Body.resolve(ui.style());
-    [
-        t().domain,
-        t().keyword,
-        t().process,
-        strings::IP,
-        t().default,
-    ]
-    .into_iter()
-    .map(|label| {
-        ui.painter()
-            .layout_no_wrap(label.to_owned(), font_id.clone(), theme::TEXT)
-            .size()
-            .x
-    })
-    .fold(MIN_TYPE_WIDTH, |width, label_width| {
-        width.max(label_width + TYPE_PADDING)
-    })
-}
+const HANDLE_WIDTH: f32 = 22.0;
+const ICON_WIDTH: f32 = 34.0;
+const TARGET_WIDTH: f32 = 150.0;
+const TOGGLE_WIDTH: f32 = 38.0;
+const MENU_WIDTH: f32 = 32.0;
+const ROW_INSET: f32 = 12.0;
+const HANDLE_GAP: f32 = 10.0;
+const ICON_GAP: f32 = 12.0;
+const TARGET_GAP: f32 = 16.0;
+const MENU_GAP: f32 = 12.0;
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     egui::Sides::new().shrink_left().wrap().show(
@@ -108,30 +77,29 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     ui.add_space(12.0);
 
     let visible = visible_rules(set, &state.rule_screen.filter);
-    let rule_type = type_width(ui);
-    let widths = TableWidths {
-        rule_type,
-        value: (ui.available_width()
-            - 2.0 * TABLE_INSET
-            - HANDLE_WIDTH
-            - rule_type
-            - TARGET_WIDTH
-            - ENABLED_WIDTH
-            - REMOVE_WIDTH)
-            .max(140.0),
-    };
-    table_header(ui, widths);
+    let value_width = (ui.available_width()
+        - 2.0 * ROW_INSET
+        - HANDLE_WIDTH
+        - HANDLE_GAP
+        - ICON_WIDTH
+        - ICON_GAP
+        - TARGET_WIDTH
+        - TARGET_GAP
+        - TOGGLE_WIDTH
+        - MENU_GAP
+        - MENU_WIDTH)
+        .max(0.0);
     if visible.is_empty() && !set.rules.is_empty() {
         ui.colored_label(theme::TEXT_MUTED, t().no_rules_match);
     }
     ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.spacing_mut().item_spacing.y = 6.0;
         for (index, rule) in visible {
             ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
-                rule_row(ui, state, set, rule, index, widths, actions);
+                rule_row(ui, state, set, rule, index, value_width, actions);
             });
         }
-        default_rule(ui, state, set, widths, actions);
+        default_rule(ui, state, set, value_width, actions);
     });
 }
 
@@ -350,8 +318,11 @@ fn filter_controls(
                     actions.push(Action::SetRuleTypeFilter(kind));
                 }
                 let mut selected = filter.target;
+                let selected_text = selected
+                    .map(|target| RichText::new(target_label(target)).color(target_color(target)))
+                    .unwrap_or_else(|| RichText::new(t().any_action));
                 egui::ComboBox::from_id_salt("rule_target_filter")
-                    .selected_text(selected.map(target_label).unwrap_or(t().any_action))
+                    .selected_text(selected_text)
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut selected, None, t().any_action);
                         for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
@@ -398,55 +369,104 @@ fn value_cell(
     content_height: f32,
     content: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
-    table_cell(ui, width, ROW_HEIGHT, |ui| {
+    table_cell(ui, width, theme::RULE_ROW, |ui| {
         ui.vertical(|ui| {
             ui.set_width(width);
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.add_space(((ROW_HEIGHT - content_height) / 2.0).max(0.0));
+            ui.add_space(((theme::RULE_ROW - content_height) / 2.0).max(0.0));
             content(ui);
         });
     })
 }
 
-fn target_cell(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) -> egui::Response {
-    table_cell(ui, TARGET_WIDTH, ROW_HEIGHT, |ui| {
-        ui.add_space((TARGET_WIDTH - TARGET_COMBO_WIDTH) / 2.0);
-        ui.vertical(|ui| {
-            ui.set_width(TARGET_COMBO_WIDTH);
-            ui.spacing_mut().item_spacing.y = 0.0;
-            ui.add_space(
-                ((ROW_HEIGHT - ui.spacing().interact_size.y) / 2.0 - TARGET_COMBO_TOP_OFFSET)
-                    .max(0.0),
+/// A target picker: a dot and a word in the target's colour; a click opens the choices.
+fn target_button(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    target: RuleTarget,
+    choices: &[RuleTarget],
+    enabled: bool,
+) -> Option<RuleTarget> {
+    ui.push_id(egui::Id::new(id_salt), |ui| {
+        let enabled = enabled && ui.is_enabled();
+        let sense = if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(TARGET_WIDTH, 34.0), sense);
+        if ui.is_rect_visible(rect) {
+            if response.hovered() && enabled {
+                ui.painter().rect_filled(rect, theme::RADIUS, theme::BORDER);
+            }
+            ui.painter().rect_stroke(
+                rect,
+                theme::RADIUS,
+                Stroke::new(1.0, theme::BORDER_STRONG),
+                egui::StrokeKind::Inside,
             );
-            content(ui);
+            let color = if enabled {
+                target_color(target)
+            } else {
+                theme::DISABLED
+            };
+            ui.painter()
+                .circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 3.5, color);
+            ui.painter().text(
+                egui::pos2(rect.left() + 26.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                target_label(target),
+                egui::TextStyle::Button.resolve(ui.style()),
+                color,
+            );
+            icons::paint(
+                ui.painter(),
+                egui::pos2(rect.right() - 14.0, rect.center().y),
+                Icon::Chevron { open: true },
+                if enabled {
+                    theme::TEXT_DIM
+                } else {
+                    theme::DISABLED
+                },
+            );
+        }
+        if !enabled {
+            return None;
+        }
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let mut selected = None;
+        egui::Popup::menu(&response).show(|ui| {
+            ui.set_min_width(TARGET_WIDTH);
+            for &choice in choices {
+                let item = ui.add(
+                    egui::Button::new(
+                        RichText::new(format!("    {}", target_label(choice)))
+                            .color(target_color(choice)),
+                    )
+                    .selected(choice == target),
+                );
+                ui.painter().circle_filled(
+                    egui::pos2(item.rect.left() + 14.0, item.rect.center().y),
+                    3.5,
+                    target_color(choice),
+                );
+                if item.clicked() {
+                    selected = (choice != target).then_some(choice);
+                    ui.close();
+                }
+            }
         });
+        selected
     })
+    .inner
 }
 
-fn table_header(ui: &mut egui::Ui, widths: TableWidths) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.add_space(TABLE_INSET);
-        table_cell(ui, HANDLE_WIDTH, HEADER_HEIGHT, |_| {});
-        table_cell(ui, widths.rule_type, HEADER_HEIGHT, |ui| {
-            ui.label(t().r#type);
-        });
-        table_cell(ui, widths.value, HEADER_HEIGHT, |ui| {
-            ui.label(t().value);
-        });
-        table_cell(ui, TARGET_WIDTH, HEADER_HEIGHT, |ui| {
-            ui.add_sized(
-                [TARGET_WIDTH, HEADER_HEIGHT],
-                egui::Label::new(t().target).halign(egui::Align::Center),
-            );
-        });
-        table_cell(ui, ENABLED_WIDTH, HEADER_HEIGHT, |ui| {
-            ui.add_sized(
-                [ENABLED_WIDTH, HEADER_HEIGHT],
-                egui::Label::new(t().enabled).halign(egui::Align::Center),
-            );
-        });
-    });
+fn rule_icon(matcher: &RuleMatcher) -> Icon {
+    match matcher {
+        RuleMatcher::Domain(_) => Icon::Globe,
+        RuleMatcher::Process(_) => Icon::App,
+        RuleMatcher::IpCidr(_) => Icon::Stack,
+    }
 }
 
 fn rule_row(
@@ -455,13 +475,13 @@ fn rule_row(
     set: &RuleSet,
     rule: &Rule,
     index: usize,
-    widths: TableWidths,
+    value_width: f32,
     actions: &mut Vec<Action>,
 ) {
     let reorder = state.can_edit_rules() && !state.rule_screen.filter.is_active();
     let dragged =
         reorder && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| *id == rule.id);
-    let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(10, 0));
+    let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(12, 0));
     if dragged {
         frame = frame.fill(Color32::from_rgba_unmultiplied(
             theme::CARD.r(),
@@ -472,87 +492,84 @@ fn rule_row(
     } else if !rule.enabled {
         frame = frame.fill(theme::CARD.gamma_multiply(0.72));
     }
-    let response = egui::Frame::new()
-        .inner_margin(egui::Margin::symmetric(0, 2))
+    let response = frame
         .show(ui, |ui| {
-            frame.show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                if dragged {
-                    ui.multiply_opacity(0.5);
-                } else if !rule.enabled {
-                    ui.multiply_opacity(0.7);
-                }
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    table_cell(ui, HANDLE_WIDTH, ROW_HEIGHT, |ui| {
-                        if reorder {
-                            ui.dnd_drag_source(ui.id().with("handle"), rule.id.clone(), |ui| {
-                                icons::icon_button(ui, Icon::Grip, true);
-                            });
-                        } else {
-                            icons::icon_button(ui, Icon::Grip, false)
-                                .on_hover_text(t().reorder_disabled);
-                        }
-                    });
-                    table_cell(ui, widths.rule_type, ROW_HEIGHT, |ui| {
-                        ui.label(rule_type(rule));
-                    });
-                    let value_height = match &rule.matcher {
-                        RuleMatcher::Process(ProcessMatch::Path(path))
-                            if path.parent().is_some() =>
-                        {
-                            ui.text_style_height(&egui::TextStyle::Body)
-                                + ui.text_style_height(&egui::TextStyle::Small)
-                        }
-                        _ => ui.text_style_height(&egui::TextStyle::Body),
-                    };
-                    value_cell(ui, widths.value, value_height, |ui| {
-                        rule_value(ui, state, rule);
-                    });
-                    target_cell(ui, |ui| {
-                        let mut target = rule.target;
-                        if !state.can_edit_rules() {
-                            ui.disable();
-                        }
-                        egui::ComboBox::from_id_salt("target")
-                            .selected_text(
-                                RichText::new(target_label(target)).color(target_color(target)),
-                            )
-                            .width(TARGET_COMBO_WIDTH)
-                            .show_ui(ui, |ui| {
-                                for value in
-                                    [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
-                                {
-                                    ui.selectable_value(
-                                        &mut target,
-                                        value,
-                                        RichText::new(target_label(value))
-                                            .color(target_color(value)),
-                                    );
-                                }
-                            });
-                        if target != rule.target {
-                            actions.push(Action::SetRuleTarget(rule.id.clone(), target));
-                        }
-                    });
-                    table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |ui| {
-                        ui.add_space((ENABLED_WIDTH - 38.0) / 2.0);
-                        let mut enabled = rule.enabled;
-                        if widgets::toggle(ui, &mut enabled, state.can_edit_rules()).changed() {
-                            actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
-                        }
-                    });
-                    table_cell(ui, REMOVE_WIDTH, ROW_HEIGHT, |ui| {
-                        if ui
-                            .add_enabled(
-                                state.can_edit_rules(),
-                                egui::Button::new(strings::REMOVE_RULE),
-                            )
-                            .clicked()
-                        {
-                            actions.push(Action::RequestDeleteRule(rule.id.clone()));
-                        }
-                    });
+            ui.set_min_width(ui.available_width());
+            if dragged {
+                ui.multiply_opacity(0.5);
+            } else if !rule.enabled {
+                ui.multiply_opacity(0.7);
+            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                table_cell(ui, HANDLE_WIDTH, theme::RULE_ROW, |ui| {
+                    if reorder {
+                        ui.dnd_drag_source(ui.id().with("handle"), rule.id.clone(), |ui| {
+                            icons::icon_button(ui, Icon::Grip, true);
+                        });
+                    } else {
+                        icons::icon_button(ui, Icon::Grip, false)
+                            .on_hover_text(t().reorder_disabled);
+                    }
+                });
+                ui.add_space(HANDLE_GAP);
+                table_cell(ui, ICON_WIDTH, theme::RULE_ROW, |ui| {
+                    icons::icon_badge(ui, rule_icon(&rule.matcher), ICON_WIDTH);
+                });
+                ui.add_space(ICON_GAP);
+                let value_height = ui.text_style_height(&egui::TextStyle::Body)
+                    + ui.text_style_height(&egui::TextStyle::Small);
+                value_cell(ui, value_width, value_height, |ui| {
+                    rule_value(ui, state, rule);
+                });
+                table_cell(ui, TARGET_WIDTH, theme::RULE_ROW, |ui| {
+                    if let Some(target) = target_button(
+                        ui,
+                        "target",
+                        rule.target,
+                        &[RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block],
+                        state.can_edit_rules(),
+                    ) {
+                        actions.push(Action::SetRuleTarget(rule.id.clone(), target));
+                    }
+                });
+                ui.add_space(TARGET_GAP);
+                table_cell(ui, TOGGLE_WIDTH, theme::RULE_ROW, |ui| {
+                    let mut enabled = rule.enabled;
+                    if widgets::toggle(ui, &mut enabled, state.can_edit_rules()).changed() {
+                        actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
+                    }
+                });
+                ui.add_space(MENU_GAP);
+                table_cell(ui, MENU_WIDTH, theme::RULE_ROW, |ui| {
+                    let menu = icons::icon_button_sized(
+                        ui,
+                        Icon::More,
+                        state.can_edit_rules(),
+                        MENU_WIDTH,
+                    )
+                    .on_hover_text(t().more_actions);
+                    if state.can_edit_rules() {
+                        egui::Popup::menu(&menu).show(|ui| {
+                            ui.set_min_width(160.0);
+                            if ui
+                                .add_enabled(index > 0, egui::Button::new(t().move_to_top))
+                                .clicked()
+                            {
+                                actions.push(Action::MoveRuleToTop(rule.id.clone()));
+                                ui.close();
+                            }
+                            if ui
+                                .add(egui::Button::new(
+                                    RichText::new(t().delete).color(theme::ERROR),
+                                ))
+                                .clicked()
+                            {
+                                actions.push(Action::RequestDeleteRule(rule.id.clone()));
+                                ui.close();
+                            }
+                        });
+                    }
                 });
             });
         })
@@ -586,118 +603,107 @@ fn rule_row(
 }
 
 fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
-    if let RuleMatcher::Process(ProcessMatch::Path(path)) = &rule.matcher {
-        let filename = path
-            .file_name()
-            .map(|name| state.text(&name.to_string_lossy()))
-            .unwrap_or_else(|| state.text(&rosetun_core::rule_value_text(&rule.matcher)));
-        ui.add(egui::Label::new(RichText::new(&filename).size(16.0).strong()).truncate())
-            .on_hover_text(filename);
-        if let Some(parent) = path.parent() {
-            let folder = state.text(&parent.to_string_lossy());
-            ui.add(
-                egui::Label::new(RichText::new(&folder).small().color(theme::TEXT_DIM)).truncate(),
-            )
-            .on_hover_text(folder);
-        }
-    } else {
-        let value = state.text(&rosetun_core::rule_value_text(&rule.matcher));
-        let tooltip = rosetun_core::rule_value_ascii(&rule.matcher)
-            .map(|ascii| format!("{value}\n{}", t().stored_as(&state.text(&ascii))))
-            .unwrap_or_else(|| value.clone());
-        ui.add(egui::Label::new(&value).truncate())
-            .on_hover_text(tooltip);
-    }
+    let (value, caption) = rule_lines(&rule.matcher);
+    let value = state.text(&value);
+    let caption = match caption {
+        RuleCaption::ThisAddress => t().caption_this_address.to_owned(),
+        RuleCaption::WithSubdomains => t().caption_subdomains.to_owned(),
+        RuleCaption::Keyword => t().caption_keyword.to_owned(),
+        RuleCaption::AnyFolder => t().caption_any_folder.to_owned(),
+        RuleCaption::Path(path) => path,
+        RuleCaption::Addresses => t().caption_addresses.to_owned(),
+    };
+    let caption = state.text(&caption);
+    let full_value = state.text(&rosetun_core::rule_value_text(&rule.matcher));
+    let tooltip = rosetun_core::rule_value_ascii(&rule.matcher)
+        .map(|ascii| format!("{full_value}\n{}", t().stored_as(&state.text(&ascii))))
+        .unwrap_or(full_value);
+    let font = egui::FontId::new(
+        egui::TextStyle::Body.resolve(ui.style()).size,
+        egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+    );
+    ui.add(egui::Label::new(RichText::new(value).font(font).color(theme::TEXT)).truncate())
+        .on_hover_text(&tooltip);
+    ui.add(egui::Label::new(RichText::new(caption).small().color(theme::TEXT_DIM)).truncate())
+        .on_hover_text(tooltip);
 }
 
 fn default_rule(
     ui: &mut egui::Ui,
     state: &State,
     set: &RuleSet,
-    widths: TableWidths,
+    value_width: f32,
     actions: &mut Vec<Action>,
 ) {
     let response = ui.push_id("default_rule", |ui| {
-        egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(0, 2))
+        widgets::card_frame()
+            .fill(theme::PANEL)
+            .inner_margin(egui::Margin::symmetric(12, 0))
             .show(ui, |ui| {
-                widgets::card_frame()
-                    .fill(theme::PANEL)
-                    .inner_margin(egui::Margin::symmetric(10, 0))
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            table_cell(ui, HANDLE_WIDTH, ROW_HEIGHT, |_| {});
-                            table_cell(ui, widths.rule_type, ROW_HEIGHT, |ui| {
-                                ui.label(t().default)
-                                    .on_hover_text(t().default_rule_tooltip);
-                            })
-                            .on_hover_text(t().default_rule_tooltip);
-                            let value_height = ui.text_style_height(&egui::TextStyle::Body)
-                                + ui.text_style_height(&egui::TextStyle::Small);
-                            value_cell(ui, widths.value, value_height, |ui| {
-                                ui.add(
-                                    egui::Label::new(RichText::new(t().all_other_traffic).strong())
-                                        .truncate(),
-                                );
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(t().default_fallback)
-                                            .small()
-                                            .color(theme::TEXT_DIM),
-                                    )
-                                    .truncate(),
-                                )
-                                .on_hover_text(t().default_fallback);
-                            });
-                            target_cell(ui, |ui| {
-                                let mut target = set.default_target;
-                                if !state.can_edit_rules() {
-                                    ui.disable();
-                                }
-                                ui.visuals_mut().widgets.inactive.bg_fill = theme::PANEL;
-                                ui.visuals_mut().widgets.noninteractive.bg_fill = theme::PANEL;
-                                egui::ComboBox::from_id_salt("target")
-                                    .selected_text(
-                                        RichText::new(target_label(target))
-                                            .color(target_color(target)),
-                                    )
-                                    .width(TARGET_COMBO_WIDTH)
-                                    .show_ui(ui, |ui| {
-                                        for value in [RuleTarget::Proxy, RuleTarget::Direct] {
-                                            ui.selectable_value(
-                                                &mut target,
-                                                value,
-                                                RichText::new(target_label(value))
-                                                    .color(target_color(value)),
-                                            );
-                                        }
-                                        if set.default_target == RuleTarget::Block {
-                                            ui.selectable_value(
-                                                &mut target,
-                                                RuleTarget::Block,
-                                                RichText::new(t().block)
-                                                    .color(target_color(RuleTarget::Block)),
-                                            );
-                                        }
-                                    });
-                                if target != set.default_target {
-                                    actions.push(Action::SetDefaultTarget(target));
-                                }
-                            });
-                            table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |_| {});
-                            table_cell(ui, REMOVE_WIDTH, ROW_HEIGHT, |_| {});
-                        });
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    table_cell(ui, HANDLE_WIDTH, theme::RULE_ROW, |_| {});
+                    ui.add_space(HANDLE_GAP);
+                    table_cell(ui, ICON_WIDTH, theme::RULE_ROW, |ui| {
+                        icons::icon_badge(ui, Icon::Globe, ICON_WIDTH);
                     });
+                    ui.add_space(ICON_GAP);
+                    let value_height = ui.text_style_height(&egui::TextStyle::Body)
+                        + ui.text_style_height(&egui::TextStyle::Small);
+                    value_cell(ui, value_width, value_height, |ui| {
+                        let font = egui::FontId::new(
+                            egui::TextStyle::Body.resolve(ui.style()).size,
+                            egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(state.text(t().all_other_traffic))
+                                    .font(font)
+                                    .color(theme::TEXT),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(t().default_rule_tooltip);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(state.text(t().default_fallback))
+                                    .small()
+                                    .color(theme::TEXT_DIM),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(t().default_rule_tooltip);
+                    });
+                    table_cell(ui, TARGET_WIDTH, theme::RULE_ROW, |ui| {
+                        let choices = if set.default_target == RuleTarget::Block {
+                            &[RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block][..]
+                        } else {
+                            &[RuleTarget::Proxy, RuleTarget::Direct][..]
+                        };
+                        if let Some(target) = target_button(
+                            ui,
+                            "target",
+                            set.default_target,
+                            choices,
+                            state.can_edit_rules(),
+                        ) {
+                            actions.push(Action::SetDefaultTarget(target));
+                        }
+                    });
+                    ui.add_space(TARGET_GAP);
+                    table_cell(ui, TOGGLE_WIDTH, theme::RULE_ROW, |_| {});
+                    ui.add_space(MENU_GAP);
+                    table_cell(ui, MENU_WIDTH, theme::RULE_ROW, |_| {});
+                });
             })
             .response
     });
     let rect = response.inner.rect;
     ui.painter().line_segment(
         [
-            egui::pos2(rect.left(), rect.top() + 2.0),
-            egui::pos2(rect.right(), rect.top() + 2.0),
+            egui::pos2(rect.left(), rect.top()),
+            egui::pos2(rect.right(), rect.top()),
         ],
         Stroke::new(1.0, theme::BORDER_STRONG),
     );
@@ -717,15 +723,6 @@ fn default_rule(
         if let Some(payload) = response.inner.dnd_release_payload::<RuleId>() {
             actions.push(Action::DropRule((*payload).clone(), set.rules.len()));
         }
-    }
-}
-
-fn rule_type(rule: &Rule) -> &'static str {
-    match &rule.matcher {
-        RuleMatcher::Domain(DomainMatch::Exact(_) | DomainMatch::Suffix(_)) => t().domain,
-        RuleMatcher::Domain(DomainMatch::Keyword(_)) => t().keyword,
-        RuleMatcher::Process(_) => t().process,
-        RuleMatcher::IpCidr(_) => strings::IP,
     }
 }
 
@@ -863,65 +860,78 @@ mod tests {
                 ui.set_width(800.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    let type_cell = table_cell(ui, MIN_TYPE_WIDTH, ROW_HEIGHT, |ui| {
-                        ui.label("Process");
+                    let handle = table_cell(ui, HANDLE_WIDTH, theme::RULE_ROW, |_| {});
+                    ui.add_space(HANDLE_GAP);
+                    let badge = table_cell(ui, ICON_WIDTH, theme::RULE_ROW, |ui| {
+                        icons::icon_badge(ui, Icon::App, ICON_WIDTH);
                     });
+                    ui.add_space(ICON_GAP);
                     let body_height = ui.text_style_height(&egui::TextStyle::Body);
                     let small_height = ui.text_style_height(&egui::TextStyle::Small);
-                    let mut single_label = egui::Rect::NOTHING;
-                    let single = value_cell(ui, 160.0, body_height, |ui| {
-                        single_label = ui.add(egui::Label::new("app.exe").truncate()).rect;
-                    });
                     let mut first_line = egui::Rect::NOTHING;
                     let mut second_line = egui::Rect::NOTHING;
-                    let double = value_cell(ui, 160.0, body_height + small_height, |ui| {
+                    let value = value_cell(ui, 160.0, body_height + small_height, |ui| {
                         first_line = ui.add(egui::Label::new("app.exe").truncate()).rect;
                         second_line = ui
-                            .add(egui::Label::new(RichText::new("C:\\Apps").small()).truncate())
+                            .add(
+                                egui::Label::new(RichText::new("C:\\Apps\\app.exe").small())
+                                    .truncate(),
+                            )
                             .rect;
                     });
-                    assert!((single.rect.left() - type_cell.rect.right()).abs() < 1.0);
-                    assert!((double.rect.left() - single.rect.right()).abs() < 1.0);
-                    assert!((single.rect.width() - 160.0).abs() < 1.0);
-                    assert!((single_label.center().y - single.rect.center().y).abs() < 3.0);
-                    assert!(
-                        ((first_line.top() + second_line.bottom()) / 2.0 - double.rect.center().y)
-                            .abs()
-                            < 3.0
-                    );
-                    let mut combo_rect = egui::Rect::NOTHING;
-                    let target_cell = target_cell(ui, |ui| {
-                        combo_rect = egui::ComboBox::from_id_salt("target")
-                            .selected_text("Proxy")
-                            .width(TARGET_COMBO_WIDTH)
-                            .show_ui(ui, |_| {})
+                    let mut button_rect = egui::Rect::NOTHING;
+                    let target_cell = table_cell(ui, TARGET_WIDTH, theme::RULE_ROW, |ui| {
+                        button_rect = ui
+                            .scope(|ui| {
+                                target_button(
+                                    ui,
+                                    "test_target",
+                                    RuleTarget::Proxy,
+                                    &[RuleTarget::Proxy, RuleTarget::Direct],
+                                    true,
+                                );
+                            })
                             .response
                             .rect;
                     });
+                    ui.add_space(TARGET_GAP);
                     let mut checked = true;
                     let mut toggle_rect = egui::Rect::NOTHING;
-                    let enabled_cell = table_cell(ui, ENABLED_WIDTH, ROW_HEIGHT, |ui| {
-                        ui.add_space((ENABLED_WIDTH - 38.0) / 2.0);
+                    let toggle_cell = table_cell(ui, TOGGLE_WIDTH, theme::RULE_ROW, |ui| {
                         toggle_rect = widgets::toggle(ui, &mut checked, true).rect;
                     });
+                    ui.add_space(MENU_GAP);
+                    let menu_cell = table_cell(ui, MENU_WIDTH, theme::RULE_ROW, |ui| {
+                        icons::icon_button_sized(ui, Icon::More, true, MENU_WIDTH);
+                    });
+                    assert!((badge.rect.left() - handle.rect.right() - HANDLE_GAP).abs() < 1.0);
+                    assert!((value.rect.left() - badge.rect.right() - ICON_GAP).abs() < 1.0);
+                    assert!((target_cell.rect.left() - value.rect.right()).abs() < 1.0);
                     assert!(
-                        (combo_rect.center().x - target_cell.rect.center().x).abs() < 3.0,
-                        "combo horizontal: {:?} vs {:?}",
-                        combo_rect,
+                        (toggle_cell.rect.left() - target_cell.rect.right() - TARGET_GAP).abs()
+                            < 1.0
+                    );
+                    assert!(
+                        (menu_cell.rect.left() - toggle_cell.rect.right() - MENU_GAP).abs() < 1.0
+                    );
+                    assert!((value.rect.height() - theme::RULE_ROW).abs() < 1.0);
+                    assert!(
+                        ((first_line.top() + second_line.bottom()) / 2.0 - value.rect.center().y)
+                            .abs()
+                            < 3.0
+                    );
+                    assert!(
+                        (button_rect.center().y - target_cell.rect.center().y).abs() < 3.0,
+                        "button: {button_rect:?} vs {:?}",
                         target_cell.rect
                     );
+                    assert!((button_rect.center().x - target_cell.rect.center().x).abs() < 3.0);
                     assert!(
-                        (combo_rect.center().y - target_cell.rect.center().y).abs() < 3.0,
-                        "combo vertical: {:?} vs {:?}",
-                        combo_rect,
-                        target_cell.rect
+                        (toggle_rect.center().y - toggle_cell.rect.center().y).abs() < 3.0,
+                        "toggle: {toggle_rect:?} vs {:?}",
+                        toggle_cell.rect
                     );
-                    assert!(
-                        (toggle_rect.center().x - enabled_cell.rect.center().x).abs() < 3.0,
-                        "checkbox horizontal: {:?} vs {:?}",
-                        toggle_rect,
-                        enabled_cell.rect
-                    );
+                    assert!((toggle_rect.center().x - toggle_cell.rect.center().x).abs() < 3.0);
                 });
             });
         });

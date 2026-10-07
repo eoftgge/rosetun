@@ -421,6 +421,7 @@ pub(crate) enum Action {
     SetRuleTarget(RuleId, RuleTarget),
     SetRuleEnabled(RuleId, bool),
     DropRule(RuleId, usize),
+    MoveRuleToTop(RuleId),
     Primary,
     RequestProtectionOff,
     KeepBlocked,
@@ -1433,6 +1434,18 @@ impl State {
                     && let Some(to) = drop_target(from, slot, set.rules.len())
                 {
                     return self.start_rule_edit(Job::MoveRule(set.id.clone(), rule, to));
+                }
+            }
+            Action::MoveRuleToTop(rule) => {
+                if self.can_edit_rules()
+                    && let Some(set) = self.selected_rules()
+                    && set
+                        .rules
+                        .iter()
+                        .position(|item| item.id == rule)
+                        .is_some_and(|index| index > 0)
+                {
+                    return self.start_rule_edit(Job::MoveRule(set.id.clone(), rule, 0));
                 }
             }
             Action::Primary => {
@@ -3132,6 +3145,24 @@ mod tests {
         assert_eq!(state.rule_screen.filter.target, Some(RuleTarget::Block));
         state.act(Action::SetRuleTargetFilter(None));
         assert_eq!(state.rule_screen.filter.target, None);
+    }
+
+    #[test]
+    fn move_rule_to_top_checks_position_and_busy_state_but_not_filters() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        assert!(state.act(Action::MoveRuleToTop(RuleId::new("0"))).is_none());
+        state.rule_screen.filter.search = "third".into();
+        assert!(matches!(
+            state.act(Action::MoveRuleToTop(RuleId::new("2"))),
+            Some(Job::MoveRule(set, rule, 0))
+                if set == RuleSetId::new("2") && rule == RuleId::new("2")
+        ));
+        assert!(state.act(Action::MoveRuleToTop(RuleId::new("1"))).is_none());
+        state.reduce(WorkerEvent::MoveRule(Ok(())));
+        assert!(state.act(Action::MoveRuleToTop(RuleId::new("0"))).is_none());
+        state.rule_screen.selected_set = None;
+        assert!(state.act(Action::MoveRuleToTop(RuleId::new("2"))).is_none());
     }
 
     #[test]

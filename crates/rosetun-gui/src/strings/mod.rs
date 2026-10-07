@@ -353,6 +353,7 @@ pub(crate) struct Strings {
     pub(crate) delete_active_rule_set_warning: &'static str,
     pub(crate) delete_rule: &'static str,
     pub(crate) delete_rule_detail: &'static str,
+    pub(crate) move_to_top: &'static str,
     pub(crate) search_rules: &'static str,
     pub(crate) all: &'static str,
     pub(crate) domains: &'static str,
@@ -364,16 +365,15 @@ pub(crate) struct Strings {
     pub(crate) block: &'static str,
     pub(crate) domain: &'static str,
     pub(crate) process: &'static str,
-    pub(crate) keyword: &'static str,
-    pub(crate) r#type: &'static str,
-    pub(crate) value: &'static str,
-    pub(crate) target: &'static str,
-    pub(crate) enabled: &'static str,
     pub(crate) order_hint: &'static str,
     pub(crate) reorder_disabled: &'static str,
-    pub(crate) default: &'static str,
     pub(crate) all_other_traffic: &'static str,
     pub(crate) default_fallback: &'static str,
+    pub(crate) caption_this_address: &'static str,
+    pub(crate) caption_subdomains: &'static str,
+    pub(crate) caption_keyword: &'static str,
+    pub(crate) caption_any_folder: &'static str,
+    pub(crate) caption_addresses: &'static str,
     pub(crate) default_rule_tooltip: &'static str,
     pub(crate) no_rule_sets: &'static str,
     pub(crate) no_rules_match: &'static str,
@@ -416,8 +416,6 @@ pub(crate) const ERROR_MARK: &str = "!";
 pub(crate) const URL_PLACEHOLDER: &str = "https://provider.example/subscription";
 pub(crate) const EXPAND: &str = "+";
 pub(crate) const COLLAPSE: &str = "−";
-pub(crate) const IP: &str = "IP";
-pub(crate) const REMOVE_RULE: &str = "×";
 pub(crate) const ENGLISH: &str = "English";
 pub(crate) const RUSSIAN: &str = "Русский";
 

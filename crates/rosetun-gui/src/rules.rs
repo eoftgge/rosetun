@@ -83,6 +83,46 @@ impl RuleFilter {
     }
 }
 
+/// The line under a rule's value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuleCaption {
+    ThisAddress,
+    WithSubdomains,
+    Keyword,
+    AnyFolder,
+    /// The full path of a process rule.
+    Path(String),
+    Addresses,
+}
+
+/// What a rule row shows: the value in bold and the caption under it.
+pub(crate) fn rule_lines(matcher: &RuleMatcher) -> (String, RuleCaption) {
+    let value = rosetun_core::rule_value_text(matcher);
+    match matcher {
+        RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(_)) => {
+            (value, RuleCaption::ThisAddress)
+        }
+        RuleMatcher::Domain(rosetun_config::DomainMatch::Suffix(_)) => (
+            value.strip_prefix("*.").unwrap_or(&value).to_owned(),
+            RuleCaption::WithSubdomains,
+        ),
+        RuleMatcher::Domain(rosetun_config::DomainMatch::Keyword(keyword)) => {
+            (keyword.clone(), RuleCaption::Keyword)
+        }
+        RuleMatcher::Process(ProcessMatch::Name(_)) => (value, RuleCaption::AnyFolder),
+        RuleMatcher::Process(ProcessMatch::Path(_)) => {
+            let name = value
+                .rsplit(['/', '\\'])
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or(&value)
+                .to_owned();
+            (name, RuleCaption::Path(value))
+        }
+        RuleMatcher::IpCidr(_) => (value, RuleCaption::Addresses),
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct RuleCounts {
     pub(crate) domains: usize,
@@ -223,6 +263,48 @@ mod tests {
         assert_eq!(mode, ProcessMatchMode::Path);
         update_process_match_mode(&mut mode, "curl.exe");
         assert_eq!(mode, ProcessMatchMode::Name);
+    }
+
+    #[test]
+    fn rule_lines_show_value_and_caption_for_each_matcher() {
+        let cases = [
+            (
+                RuleMatcher::Domain(DomainMatch::Exact("xn--d1acufc.xn--p1ai".into())),
+                "домен.рф",
+                RuleCaption::ThisAddress,
+            ),
+            (
+                RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
+                "example.com",
+                RuleCaption::WithSubdomains,
+            ),
+            (
+                RuleMatcher::Domain(DomainMatch::Keyword("news".into())),
+                "news",
+                RuleCaption::Keyword,
+            ),
+            (
+                RuleMatcher::Process(ProcessMatch::Name("app.exe".into())),
+                "app.exe",
+                RuleCaption::AnyFolder,
+            ),
+            (
+                RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(r"C:\Apps\app.exe"))),
+                "app.exe",
+                RuleCaption::Path(r"C:\Apps\app.exe".into()),
+            ),
+            (
+                RuleMatcher::IpCidr("10.0.0.0/8".into()),
+                "10.0.0.0/8",
+                RuleCaption::Addresses,
+            ),
+        ];
+        for (matcher, expected_value, expected_caption) in cases {
+            assert_eq!(
+                rule_lines(&matcher),
+                (expected_value.to_owned(), expected_caption)
+            );
+        }
     }
 
     #[test]
