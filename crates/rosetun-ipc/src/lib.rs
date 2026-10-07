@@ -9,7 +9,7 @@ pub mod transport;
 pub use client::{ClientError, HelperClient};
 pub use codec::{CodecError, MAX_FRAME_BYTES, read_frame, write_frame};
 pub use protocol::{
-    ConnectRequest, ConnectRequestError, ErrorCode, Event, Frame, HelperError, PROTOCOL_VERSION,
-    Request, Response,
+    ConnectRequest, ConnectRequestError, ErrorCode, Event, Frame, HelperError, MAX_PROBE_NODES,
+    PROTOCOL_VERSION, ProbeOutcome, ProbeRequest, ProbeResult, Request, Response,
 };
 pub use transport::{Connection, Listener, connect, default_endpoint};

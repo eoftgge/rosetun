@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use crate::{ConnectRequest, Connection, Frame, HelperError, PROTOCOL_VERSION, Request, Response};
+use crate::{
+    ConnectRequest, Connection, Frame, HelperError, PROTOCOL_VERSION, ProbeOutcome, ProbeRequest,
+    ProbeResult, Request, Response,
+};
 use rosetun_config::Status;
 
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +59,20 @@ impl HelperClient {
 
     pub fn connect_tunnel(&mut self, request: ConnectRequest) -> Result<(), ClientError> {
         self.expect_ok(Request::Connect(Box::new(request)))
+    }
+
+    pub fn probe_nodes(&mut self, request: ProbeRequest) -> Result<Vec<ProbeResult>, ClientError> {
+        match self.request(Request::ProbeNodes(Box::new(request)))? {
+            Response::Probe(results) => Ok(results),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
+    pub fn tunnel_delay(&mut self) -> Result<ProbeOutcome, ClientError> {
+        match self.request(Request::TunnelDelay)? {
+            Response::Delay(outcome) => Ok(outcome),
+            _ => Err(ClientError::Unexpected),
+        }
     }
 
     pub fn disconnect_tunnel(&mut self) -> Result<(), ClientError> {

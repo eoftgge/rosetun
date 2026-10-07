@@ -45,10 +45,12 @@ pub fn read_frame<R: BufRead>(reader: &mut R) -> Result<Option<Frame>, CodecErro
 mod tests {
     use std::io::BufReader;
 
-    use rosetun_config::ConnectionState;
+    use rosetun_config::{
+        ConnectionState, Node, NodeId, Outbound, Settings, StreamSettings, TrojanParams,
+    };
 
     use super::*;
-    use crate::{Event, Request};
+    use crate::{Event, ProbeOutcome, ProbeRequest, ProbeResult, Request, Response};
 
     fn roundtrip(frame: &Frame) -> Frame {
         let mut buffer = Vec::new();
@@ -66,6 +68,47 @@ mod tests {
             body: Request::Status,
         };
         assert_eq!(roundtrip(&frame), frame);
+    }
+
+    #[test]
+    fn probe_requests_and_responses_survive_roundtrip() {
+        let request = Frame::Request {
+            id: 9,
+            body: Request::ProbeNodes(Box::new(ProbeRequest {
+                nodes: vec![Node {
+                    id: NodeId::new("secret-node-uuid"),
+                    name: "Test node".to_owned(),
+                    server: "example.com".to_owned(),
+                    port: 443,
+                    outbound: Outbound::Trojan(TrojanParams {
+                        password: "test-password".to_owned(),
+                    }),
+                    stream: StreamSettings::default(),
+                    raw: None,
+                }],
+                settings: Settings::default(),
+            })),
+        };
+        assert_eq!(roundtrip(&request), request);
+        let delay_request = Frame::Request {
+            id: 10,
+            body: Request::TunnelDelay,
+        };
+        assert_eq!(roundtrip(&delay_request), delay_request);
+
+        let results = Frame::Response {
+            id: 9,
+            body: Response::Probe(vec![ProbeResult {
+                node: NodeId::new("secret-node-uuid"),
+                outcome: ProbeOutcome::Works { millis: 42 },
+            }]),
+        };
+        assert_eq!(roundtrip(&results), results);
+        let delay = Frame::Response {
+            id: 10,
+            body: Response::Delay(ProbeOutcome::Fails),
+        };
+        assert_eq!(roundtrip(&delay), delay);
     }
 
     #[test]

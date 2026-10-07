@@ -1,10 +1,12 @@
 use rosetun_config::{
-    AppConfig, LogLevel, Node, RuleSet, RuleSetId, RuleTarget, Selection, Settings, Status, Traffic,
+    AppConfig, LogLevel, Node, NodeId, RuleSet, RuleSetId, RuleTarget, Selection, Settings, Status,
+    Traffic,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
+pub const MAX_PROBE_NODES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -15,6 +17,8 @@ pub enum Request {
     },
     Status,
     Connect(Box<ConnectRequest>),
+    ProbeNodes(Box<ProbeRequest>),
+    TunnelDelay,
     Disconnect,
     ApplyRules {
         rule_set: RuleSet,
@@ -83,6 +87,40 @@ impl ConnectRequest {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeRequest {
+    pub nodes: Vec<Node>,
+    pub settings: Settings,
+}
+
+impl std::fmt::Debug for ProbeRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProbeRequest")
+            .field("node_count", &self.nodes.len())
+            .field("engine", &self.settings.engine)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeResult {
+    pub node: NodeId,
+    pub outcome: ProbeOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeOutcome {
+    /// The request through the node answered after this many milliseconds.
+    Works { millis: u32 },
+    /// The request through the node failed or timed out.
+    Fails,
+    /// The node's name could not be resolved.
+    Unresolved,
+    /// The engine cannot express this node.
+    Unsupported,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Response {
@@ -91,6 +129,8 @@ pub enum Response {
         protocol_version: u32,
     },
     Status(Status),
+    Probe(Vec<ProbeResult>),
+    Delay(ProbeOutcome),
     Ok,
     Error(HelperError),
 }
@@ -161,7 +201,7 @@ mod tests {
         TrojanParams,
     };
 
-    use super::{ConnectRequest, ConnectRequestError};
+    use super::{ConnectRequest, ConnectRequestError, ProbeRequest, Request};
 
     fn selected_config() -> AppConfig {
         let subscription_id = SubscriptionId::new("subscription");
@@ -341,5 +381,23 @@ mod tests {
 
         assert!(!debug.contains("test-secret"));
         assert!(!debug.contains(&config.subscriptions[0].url));
+    }
+
+    #[test]
+    fn probe_debug_only_contains_count_and_engine() {
+        let config = selected_config();
+        let mut node = config.subscriptions[0].nodes[0].clone();
+        node.id = NodeId::new("secret-node-uuid");
+        let request = ProbeRequest {
+            nodes: vec![node.clone()],
+            settings: config.settings,
+        };
+        let debug = format!("{:?}", Request::ProbeNodes(Box::new(request)));
+
+        assert!(debug.contains("node_count: 1"));
+        assert!(debug.contains("engine:"));
+        assert!(!debug.contains("test-secret"));
+        assert!(!debug.contains("example.com"));
+        assert!(!debug.contains(node.id.as_str()));
     }
 }
