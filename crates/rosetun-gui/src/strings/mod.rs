@@ -358,7 +358,6 @@ pub(crate) struct Strings {
     pub(crate) open_link: &'static str,
     pub(crate) no_rules_yet: &'static str,
     pub(crate) active: &'static str,
-    pub(crate) rule_set_label: &'static str,
     pub(crate) make_active: &'static str,
     pub(crate) new_set: &'static str,
     pub(crate) create_rule_set: &'static str,

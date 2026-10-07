@@ -369,15 +369,6 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
         egui::TextStyle::Body.resolve(ui.style()).size,
         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
     );
-    let label_width = ui
-        .painter()
-        .layout_no_wrap(
-            t().rule_set_label.to_owned(),
-            egui::TextStyle::Small.resolve(ui.style()),
-            theme::TEXT_DIM,
-        )
-        .size()
-        .x;
     let name_width = ui
         .painter()
         .layout_no_wrap(name.clone(), font.clone(), theme::TEXT)
@@ -398,7 +389,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
     } else {
         0.0
     };
-    let width = (12.0 + label_width + 10.0 + name_width + active_width + 36.0).max(220.0);
+    let width = (12.0 + name_width + active_width + 36.0).max(220.0);
     let response = ui
         .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
             ui.style_mut().interaction.selectable_labels = false;
@@ -421,14 +412,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
             );
             let center_y = rect.center().y;
             let left = rect.left() + 12.0;
-            painter.text(
-                egui::pos2(left, center_y),
-                egui::Align2::LEFT_CENTER,
-                t().rule_set_label,
-                egui::TextStyle::Small.resolve(ui.style()),
-                theme::TEXT_DIM,
-            );
-            let name_left = left + label_width + 10.0;
+            let name_left = left;
             let galley = egui::WidgetText::from(RichText::new(name).font(font).color(theme::TEXT))
                 .into_galley(
                     ui,
@@ -441,10 +425,11 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
                 galley,
                 theme::TEXT,
             );
+            let icon_right = 18.0;
             if active {
                 painter.text(
-                    egui::pos2(name_left + name_width + 12.0, center_y),
-                    egui::Align2::LEFT_CENTER,
+                    egui::pos2(rect.right() - 10.0 - icon_right, center_y),
+                    egui::Align2::RIGHT_CENTER,
                     t().active,
                     egui::TextStyle::Small.resolve(ui.style()),
                     theme::ROSE_LIGHT,
@@ -452,7 +437,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
             }
             icons::paint(
                 painter,
-                egui::pos2(rect.right() - 18.0, center_y),
+                egui::pos2(rect.right() - icon_right, center_y),
                 Icon::Chevron { open: true },
                 theme::TEXT_DIM,
             );

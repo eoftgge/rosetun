@@ -283,7 +283,6 @@ pub(crate) static EN: Strings = Strings {
     open_link: "Open ›",
     no_rules_yet: "No rules yet: everything goes by the default action",
     active: "Active",
-    rule_set_label: "Set",
     make_active: "Make active",
     new_set: "New set",
     create_rule_set: "Create rule set",

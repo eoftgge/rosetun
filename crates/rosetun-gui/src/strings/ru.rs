@@ -283,7 +283,6 @@ pub(crate) static RU: Strings = Strings {
     open_link: "Открыть ›",
     no_rules_yet: "Правил пока нет: всё идёт по действию по умолчанию",
     active: "Активный",
-    rule_set_label: "Набор",
     make_active: "Сделать активным",
     new_set: "Новый набор",
     create_rule_set: "Создать набор правил",
