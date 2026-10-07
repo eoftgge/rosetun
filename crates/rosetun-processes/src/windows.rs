@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io;
 use std::mem::size_of;
@@ -5,17 +6,27 @@ use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::PathBuf;
 
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM};
+use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
+    GetWindowThreadProcessId, IsWindowVisible, WS_EX_TOOLWINDOW,
+};
 
 use crate::{ProcessListError, RunningProcess};
 
 pub(super) fn running_processes() -> Result<Vec<RunningProcess>, ProcessListError> {
+    let mut windowed = HashSet::<u32>::new();
+    // SAFETY: EnumWindows calls synchronously and does not retain lparam. The
+    // pointer addresses a live HashSet exclusively borrowed for the entire call.
+    unsafe { EnumWindows(Some(collect_windowed_pid), (&raw mut windowed) as LPARAM) };
+
     // SAFETY: windows-sys declares the Windows system ABI. This call takes no
     // pointers or borrowed handles; the returned snapshot is owned by us.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
@@ -47,6 +58,7 @@ pub(super) fn running_processes() -> Result<Vec<RunningProcess>, ProcessListErro
                 pid,
                 name: String::from_utf16_lossy(&entry.szExeFile[..name_end]),
                 path: process_path(pid, &mut paths),
+                has_window: windowed.contains(&pid),
             });
         }
         // SAFETY: The snapshot remains owned for the loop, and the same sized
@@ -54,6 +66,43 @@ pub(super) fn running_processes() -> Result<Vec<RunningProcess>, ProcessListErro
         found = unsafe { Process32NextW(snapshot.as_raw_handle() as HANDLE, &mut entry) };
     }
     Ok(processes)
+}
+
+unsafe extern "system" fn collect_windowed_pid(hwnd: HWND, param: LPARAM) -> i32 {
+    // SAFETY: EnumWindows supplies valid HWNDs during the synchronous callback;
+    // the read-only Win32 queries use their ABI and do not retain the handle.
+    if unsafe { IsWindowVisible(hwnd) } == 0
+        || !unsafe { GetWindow(hwnd, GW_OWNER) }.is_null()
+        || unsafe { GetWindowTextLengthW(hwnd) } == 0
+        || unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_TOOLWINDOW as isize != 0
+    {
+        return 1;
+    }
+    let mut cloaked = 0_u32;
+    // SAFETY: hwnd is valid for this callback; cloaked is writable for the call
+    // and its byte count matches the Windows ABI. The call retains no pointer.
+    if unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED as u32,
+            (&raw mut cloaked).cast(),
+            size_of::<u32>() as u32,
+        )
+    } != 0
+        || cloaked != 0
+    {
+        return 1;
+    }
+    let mut pid = 0;
+    // SAFETY: hwnd belongs to the current enumeration and pid remains writable
+    // for the duration of the Windows ABI call; neither address is retained.
+    unsafe { GetWindowThreadProcessId(hwnd, &raw mut pid) };
+    if pid != 0 {
+        // SAFETY: param is the live, exclusive HashSet pointer passed to the
+        // synchronous EnumWindows call; no other code accesses it until return.
+        unsafe { &mut *(param as *mut HashSet<u32>) }.insert(pid);
+    }
+    1
 }
 
 fn process_path(pid: u32, buffer: &mut [u16]) -> Option<PathBuf> {

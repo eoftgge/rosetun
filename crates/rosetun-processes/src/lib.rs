@@ -11,6 +11,7 @@ pub struct RunningProcess {
     pub pid: u32,
     pub name: String,
     pub path: Option<PathBuf>,
+    pub has_window: bool,
 }
 
 #[derive(Debug, thiserror::Error)]

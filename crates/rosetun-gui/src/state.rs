@@ -2973,6 +2973,7 @@ mod tests {
                 name: "Other.exe".into(),
                 path: Some(r"C:\Apps\Other.exe".into()),
                 count: 1,
+                windowed: false,
             });
             dialog.process = "Other.exe".into();
             dialog.error = Some("previous error".into());
@@ -3065,6 +3066,7 @@ mod tests {
                 pid: 100,
                 name: "Telegram.exe".into(),
                 path: Some(r"C:\Apps\Telegram.exe".into()),
+                has_window: true,
             }]),
         });
         let dialog = state.rule_screen.add.as_ref().unwrap();
@@ -3087,6 +3089,7 @@ mod tests {
                 pid: 101,
                 name: "Old.exe".into(),
                 path: None,
+                has_window: false,
             }]),
         });
         assert!(state.rule_screen.add.as_ref().unwrap().processes.is_empty());

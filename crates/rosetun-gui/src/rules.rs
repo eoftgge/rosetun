@@ -11,22 +11,28 @@ pub(crate) struct ProcessGroup {
     pub(crate) name: String,
     pub(crate) path: Option<PathBuf>,
     pub(crate) count: usize,
+    pub(crate) windowed: bool,
 }
 
 pub(crate) fn group_processes(processes: Vec<RunningProcess>) -> Vec<ProcessGroup> {
     let mut groups = BTreeMap::<(bool, String), ProcessGroup>::new();
     for process in processes {
+        let windowed = process.has_window && process.pid != std::process::id();
         let key = match &process.path {
             Some(path) => (true, path.to_string_lossy().to_lowercase()),
             None => (false, process.name.to_lowercase()),
         };
         groups
             .entry(key)
-            .and_modify(|group| group.count += 1)
+            .and_modify(|group| {
+                group.count += 1;
+                group.windowed |= windowed;
+            })
             .or_insert(ProcessGroup {
                 name: process.name,
                 path: process.path,
                 count: 1,
+                windowed,
             });
     }
     let mut groups: Vec<_> = groups.into_values().collect();
@@ -247,6 +253,7 @@ mod tests {
             pid,
             name: name.into(),
             path: path.map(PathBuf::from),
+            has_window: false,
         }
     }
 
@@ -269,6 +276,22 @@ mod tests {
         assert_eq!(groups[2].name, "Beta.exe");
         assert_eq!(groups[2].count, 1);
         assert_eq!(groups[3].name, "zeta.exe");
+    }
+
+    #[test]
+    fn grouped_process_is_windowed_when_any_other_pid_has_a_window() {
+        let mut visible = process(11, "Editor.exe", Some(r"C:\Apps\Editor.exe"));
+        visible.has_window = true;
+        let mut self_process = process(std::process::id(), "Rosetun.exe", None);
+        self_process.has_window = true;
+        let groups = group_processes(vec![
+            process(10, "Editor.exe", Some(r"C:\Apps\Editor.exe")),
+            visible,
+            self_process,
+        ]);
+        assert!(groups[0].windowed);
+        assert_eq!(groups[0].count, 2);
+        assert!(!groups[1].windowed);
     }
 
     #[test]
