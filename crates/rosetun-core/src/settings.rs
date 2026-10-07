@@ -1,11 +1,43 @@
 use std::net::IpAddr;
 
-use rosetun_config::{DnsSettings, LanguageSetting, Settings};
+use rosetun_config::{DnsSettings, InterfaceSettings, LanguageSetting, Settings};
 use url::Host;
 
 use crate::{Store, StoreError};
 
 pub const INTERFACE_SCALES: [u16; 6] = [80, 90, 100, 110, 125, 150];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsPreset {
+    Cloudflare,
+    Google,
+    Quad9,
+}
+
+impl DnsPreset {
+    pub const ALL: [Self; 3] = [Self::Cloudflare, Self::Google, Self::Quad9];
+
+    pub fn settings(self) -> DnsSettings {
+        let (server, server_name) = match self {
+            Self::Cloudflare => ("1.1.1.1", "cloudflare-dns.com"),
+            Self::Google => ("8.8.8.8", "dns.google"),
+            Self::Quad9 => ("9.9.9.9", "dns.quad9.net"),
+        };
+        DnsSettings {
+            server: server.parse().expect("preset IP address"),
+            server_name: server_name.to_owned(),
+            port: None,
+            path: None,
+        }
+    }
+
+    /// The preset these settings are, if any.
+    pub fn matching(dns: &DnsSettings) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|preset| preset.settings() == *dns)
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
@@ -125,6 +157,16 @@ pub fn set_dns(store: &Store, dns: DnsSettings) -> Result<(), SettingsError> {
     })
 }
 
+/// Puts the settings screen back to defaults: `settings` and `interface`.
+/// Subscriptions, rule sets, the active selections and the window placement stay.
+pub fn reset_settings(store: &Store) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.settings = Settings::default();
+        config.interface = InterfaceSettings::default();
+        Ok(())
+    })
+}
+
 /// Turns the verbose log on for a day from `now_unix`, or off.
 pub fn set_verbose_log(store: &Store, on: bool, now_unix: u64) -> Result<(), SettingsError> {
     store.modify(|config| {
@@ -210,6 +252,69 @@ mod tests {
                 Err(DnsInputError::InvalidPath)
             );
         }
+    }
+
+    #[test]
+    fn dns_presets_match_only_their_exact_settings() {
+        assert_eq!(DnsPreset::Cloudflare.settings(), DnsSettings::default());
+        for preset in DnsPreset::ALL {
+            assert_eq!(DnsPreset::matching(&preset.settings()), Some(preset));
+            let mut custom = preset.settings();
+            custom.port = Some(443);
+            assert_eq!(DnsPreset::matching(&custom), None);
+        }
+        let custom = parse_dns_input("1.0.0.1", "cloudflare-dns.com", "", "").unwrap();
+        assert_eq!(DnsPreset::matching(&custom), None);
+    }
+
+    #[test]
+    fn reset_restores_settings_but_keeps_subscriptions_rules_and_selections() {
+        let file = TestFile::new();
+        let store = Store::at(&file.0);
+        let mut before: AppConfig = serde_json::from_str(
+            r#"{
+                "subscriptions": [{
+                    "id": "sub", "name": "Provider", "url": "https://example.com/sub",
+                    "nodes": [{
+                        "id": "node", "name": "Server", "server": "example.com",
+                        "port": 443, "outbound": {"vless": {"uuid": "11111111-1111-1111-1111-111111111111"}}
+                    }]
+                }],
+                "rule_sets": [{
+                    "id": "rules", "name": "My rules",
+                    "rules": [{
+                        "id": "rule", "matcher": {"domain": {"exact": "example.com"}},
+                        "target": "proxy"
+                    }]
+                }],
+                "active": {"subscription": "sub", "node": "node"},
+                "active_rule_set": "rules"
+            }"#,
+        )
+        .unwrap();
+        before.settings.dns = DnsPreset::Google.settings();
+        before.settings.kill_switch = true;
+        before.settings.auto_reconnect = false;
+        before.settings.verbose_log_until = Some(42);
+        before.interface.scale_percent = 125;
+        before.interface.language = LanguageSetting::Russian;
+        before.interface.close_to_tray = false;
+        store
+            .modify::<_, StoreError>(|config| {
+                *config = before.clone();
+                Ok(())
+            })
+            .unwrap();
+
+        reset_settings(&store).unwrap();
+        let after = store.load().unwrap();
+        assert_eq!(after.settings, Settings::default());
+        assert_eq!(after.interface, InterfaceSettings::default());
+        assert_eq!(after.subscriptions, before.subscriptions);
+        assert_eq!(after.rule_sets, before.rule_sets);
+        assert_eq!(after.active, before.active);
+        assert_eq!(after.active_rule_set, before.active_rule_set);
+        assert_eq!(after.version, before.version);
     }
 
     #[test]
