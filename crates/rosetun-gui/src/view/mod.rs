@@ -87,7 +87,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                     }
                     match state.screen {
                         Screen::Connection => connection::show(ui, state, &mut actions),
-                        Screen::Traffic => traffic::show(ui, state),
+                        Screen::Traffic => traffic::show(ui, state, &mut actions),
                         Screen::Rules => rules::show(ui, state, &mut actions),
                         Screen::Settings => settings::show(ui, state, &mut actions),
                     }

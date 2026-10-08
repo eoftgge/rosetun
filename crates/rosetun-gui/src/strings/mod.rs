@@ -292,6 +292,10 @@ pub(crate) struct Strings {
     pub(crate) traffic_up: &'static str,
     pub(crate) traffic_open_hint: &'static str,
     pub(crate) traffic_rates_template: &'static str,
+    pub(crate) traffic_range_1m: &'static str,
+    pub(crate) traffic_range_5m: &'static str,
+    pub(crate) traffic_range_15m: &'static str,
+    pub(crate) traffic_chart_caption_template: &'static str,
     pub(crate) traffic_session: &'static str,
     pub(crate) traffic_empty: &'static str,
     pub(crate) no_session: &'static str,
@@ -654,11 +658,11 @@ impl Strings {
         fill(self.traffic_rates_template, &[("down", down), ("up", up)])
     }
 
-    pub(crate) fn traffic_peak(&self, rate: &str) -> String {
-        match self.language {
-            Language::English => format!("peak {rate}"),
-            Language::Russian => format!("пик {rate}"),
-        }
+    pub(crate) fn traffic_chart_caption(&self, range: &str, peak: &str) -> String {
+        fill(
+            self.traffic_chart_caption_template,
+            &[("range", range), ("peak", peak)],
+        )
     }
 
     pub(crate) fn temporary_count(&self, count: usize) -> String {
@@ -878,6 +882,31 @@ mod tests {
             assert_eq!(strings.bytes(157_286_400), mib);
             assert_eq!(strings.bytes(1_954_210_119), gib);
             assert_eq!(strings.bytes(1_024_000), threshold);
+        }
+    }
+
+    #[test]
+    fn traffic_labels_format_both_directions_and_caption() {
+        for (strings, range, down, up, rates, caption) in [
+            (
+                &EN,
+                EN.traffic_range_5m,
+                "1 MiB/s",
+                "2 MiB/s",
+                "↓ 1 MiB/s · ↑ 2 MiB/s",
+                "Last 5 min · peak 2 MiB/s",
+            ),
+            (
+                &RU,
+                RU.traffic_range_5m,
+                "1 МБ/с",
+                "2 МБ/с",
+                "↓ 1 МБ/с · ↑ 2 МБ/с",
+                "За 5 мин · пик 2 МБ/с",
+            ),
+        ] {
+            assert_eq!(strings.traffic_rates(down, up), rates);
+            assert_eq!(strings.traffic_chart_caption(range, up), caption);
         }
     }
 

@@ -409,82 +409,6 @@ fn detail_row<R>(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::U
     .inner
 }
 
-#[cfg(test)]
-mod hero_details_tests {
-    use super::*;
-
-    fn known(route: ExitRoute) -> ExitLookup {
-        ExitLookup::Known {
-            route,
-            info: rosetun_core::ExitInfo {
-                ip: "203.0.113.7".parse().unwrap(),
-                country: None,
-            },
-        }
-    }
-
-    #[test]
-    fn external_ip_line_covers_routes_and_reveal_states() {
-        let cases = [
-            (
-                known(ExitRoute::Direct),
-                false,
-                t().ip_hidden.to_owned(),
-                theme::TEXT_MUTED,
-                Some(t().ip_show),
-            ),
-            (
-                known(ExitRoute::Tunnel),
-                false,
-                t().ip_hidden.to_owned(),
-                theme::TEXT_MUTED,
-                Some(t().ip_show),
-            ),
-            (
-                known(ExitRoute::Direct),
-                true,
-                format!("203.0.113.7 {}", t().ip_own),
-                theme::TEXT,
-                Some(t().ip_hide),
-            ),
-            (
-                known(ExitRoute::Tunnel),
-                true,
-                "203.0.113.7".to_owned(),
-                theme::TEXT,
-                Some(t().ip_hide),
-            ),
-        ];
-        for (exit, revealed, value, color, toggle) in cases {
-            assert_eq!(exit_line(&exit, revealed), (value, color, toggle));
-        }
-        let (hidden, _, _) = exit_line(&known(ExitRoute::Direct), false);
-        assert!(!hidden.contains("203"));
-        assert!(!hidden.contains(".7"));
-    }
-
-    #[test]
-    fn external_ip_line_without_an_address_has_no_toggle() {
-        for exit in [
-            ExitLookup::Failed(ExitRoute::Direct),
-            ExitLookup::None,
-            ExitLookup::Pending(ExitRoute::Tunnel),
-        ] {
-            for revealed in [false, true] {
-                let expected = if matches!(exit, ExitLookup::Failed(_)) {
-                    t().ip_unknown
-                } else {
-                    t().ip_pending
-                };
-                assert_eq!(
-                    exit_line(&exit, revealed),
-                    (expected.to_owned(), theme::TEXT_DIM, None)
-                );
-            }
-        }
-    }
-}
-
 /// The selected server as a wide button; returns true when clicked.
 fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
     let country = match (state.visible_status(), &state.exit) {
@@ -973,5 +897,81 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
         });
     if !state.operations.helper && response.should_close() {
         actions.push(Action::KeepBlocked);
+    }
+}
+
+#[cfg(test)]
+mod hero_details_tests {
+    use super::*;
+
+    fn known(route: ExitRoute) -> ExitLookup {
+        ExitLookup::Known {
+            route,
+            info: rosetun_core::ExitInfo {
+                ip: "203.0.113.7".parse().unwrap(),
+                country: None,
+            },
+        }
+    }
+
+    #[test]
+    fn external_ip_line_covers_routes_and_reveal_states() {
+        let cases = [
+            (
+                known(ExitRoute::Direct),
+                false,
+                t().ip_hidden.to_owned(),
+                theme::TEXT_MUTED,
+                Some(t().ip_show),
+            ),
+            (
+                known(ExitRoute::Tunnel),
+                false,
+                t().ip_hidden.to_owned(),
+                theme::TEXT_MUTED,
+                Some(t().ip_show),
+            ),
+            (
+                known(ExitRoute::Direct),
+                true,
+                format!("203.0.113.7 {}", t().ip_own),
+                theme::TEXT,
+                Some(t().ip_hide),
+            ),
+            (
+                known(ExitRoute::Tunnel),
+                true,
+                "203.0.113.7".to_owned(),
+                theme::TEXT,
+                Some(t().ip_hide),
+            ),
+        ];
+        for (exit, revealed, value, color, toggle) in cases {
+            assert_eq!(exit_line(&exit, revealed), (value, color, toggle));
+        }
+        let (hidden, _, _) = exit_line(&known(ExitRoute::Direct), false);
+        assert!(!hidden.contains("203"));
+        assert!(!hidden.contains(".7"));
+    }
+
+    #[test]
+    fn external_ip_line_without_an_address_has_no_toggle() {
+        for exit in [
+            ExitLookup::Failed(ExitRoute::Direct),
+            ExitLookup::None,
+            ExitLookup::Pending(ExitRoute::Tunnel),
+        ] {
+            for revealed in [false, true] {
+                let expected = if matches!(exit, ExitLookup::Failed(_)) {
+                    t().ip_unknown
+                } else {
+                    t().ip_pending
+                };
+                assert_eq!(
+                    exit_line(&exit, revealed),
+                    (expected.to_owned(), theme::TEXT_DIM, None)
+                );
+            }
+        }
     }
 }

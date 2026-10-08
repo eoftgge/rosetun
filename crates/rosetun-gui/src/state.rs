@@ -36,7 +36,7 @@ const AUTO_UPDATE_RANGE: RangeInclusive<u64> = 1..=168;
 const AUTO_UPDATE_RETRY: u64 = 60 * 60;
 /// How often the schedule is checked.
 const AUTO_UPDATE_CHECK: u64 = 60;
-const TRAFFIC_HISTORY: usize = 60;
+const TRAFFIC_HISTORY: usize = 900;
 
 /// Hours between automatic updates of one subscription.
 pub(crate) fn auto_update_hours(subscription: &Subscription) -> u64 {
@@ -170,6 +170,24 @@ pub(crate) enum Screen {
     Traffic,
     Rules,
     Settings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum TrafficRange {
+    #[default]
+    OneMinute,
+    FiveMinutes,
+    FifteenMinutes,
+}
+
+impl TrafficRange {
+    pub(crate) fn samples_per_bar(self) -> usize {
+        match self {
+            Self::OneMinute => 1,
+            Self::FiveMinutes => 5,
+            Self::FifteenMinutes => 15,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -433,8 +451,9 @@ pub(crate) struct State {
     exit_route: Option<ExitRoute>,
     exit_generation: u64,
     pub(crate) exit_revealed: bool,
-    /// Rates of the last minute, one sample per status; newest last.
+    /// Rates of the last 15 minutes, one sample per status; newest last.
     pub(crate) traffic_history: VecDeque<(u64, u64)>,
+    pub(crate) traffic_range: TrafficRange,
     pub(crate) helper_available: bool,
     pub(crate) helper_version: Option<String>,
     pub(crate) helper_error: Option<ClientError>,
@@ -485,6 +504,7 @@ impl Default for State {
             exit_generation: 0,
             exit_revealed: false,
             traffic_history: VecDeque::new(),
+            traffic_range: TrafficRange::default(),
             helper_available: false,
             helper_version: None,
             helper_error: None,
@@ -515,6 +535,7 @@ pub(crate) enum AboutFolder {
 pub(crate) enum Action {
     ShowConnection,
     OpenTraffic,
+    SetTrafficRange(TrafficRange),
     OpenSettings,
     OpenSettingsSection(SettingsSection),
     SetInterfaceScale(u16),
@@ -1690,6 +1711,7 @@ impl State {
         match action {
             Action::ShowConnection => self.screen = Screen::Connection,
             Action::OpenTraffic => self.screen = Screen::Traffic,
+            Action::SetTrafficRange(range) => self.traffic_range = range,
             Action::OpenSettings => {
                 if !self.settings_screen.opened {
                     self.settings_screen.opened = true;
@@ -3539,7 +3561,7 @@ mod tests {
     }
 
     #[test]
-    fn traffic_history_tracks_a_minute_and_clears_when_tunnel_or_helper_stops() {
+    fn traffic_history_tracks_15_minutes_and_clears_when_tunnel_or_helper_stops() {
         let mut state = State {
             helper_available: true,
             ..State::default()
@@ -3555,7 +3577,7 @@ mod tests {
         }
         assert_eq!(state.traffic_history.len(), TRAFFIC_HISTORY);
         assert_eq!(state.traffic_history.front(), Some(&(1, 2)));
-        assert_eq!(state.traffic_history.back(), Some(&(60, 61)));
+        assert_eq!(state.traffic_history.back(), Some(&(900, 901)));
 
         state.reduce(WorkerEvent::Status(Status {
             state: ConnectionState::Reconnecting,
@@ -3577,6 +3599,30 @@ mod tests {
             ..Status::default()
         }));
         assert!(state.traffic_history.is_empty());
+    }
+
+    #[test]
+    fn opening_traffic_and_selecting_range_only_changes_ui_state() {
+        let mut state = State::default();
+        assert_eq!(state.traffic_range, TrafficRange::OneMinute);
+        assert!(state.act(Action::OpenTraffic).is_none());
+        assert_eq!(state.screen, Screen::Traffic);
+        assert!(
+            state
+                .act(Action::SetTrafficRange(TrafficRange::FiveMinutes))
+                .is_none()
+        );
+        assert_eq!(state.traffic_range, TrafficRange::FiveMinutes);
+        assert!(
+            state
+                .act(Action::SetTrafficRange(TrafficRange::FifteenMinutes))
+                .is_none()
+        );
+        assert_eq!(state.traffic_range, TrafficRange::FifteenMinutes);
+        assert!(state.act(Action::ShowConnection).is_none());
+        assert_eq!(state.screen, Screen::Connection);
+        assert!(state.act(Action::OpenTraffic).is_none());
+        assert_eq!(state.traffic_range, TrafficRange::FifteenMinutes);
     }
 
     #[test]
