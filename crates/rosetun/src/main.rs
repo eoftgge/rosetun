@@ -19,6 +19,9 @@ enum Command {
     Connect {
         request_path: Option<String>,
     },
+    Apply {
+        request_path: Option<String>,
+    },
     Probe {
         request_path: Option<String>,
     },
@@ -74,6 +77,10 @@ fn main() -> ExitCode {
             Ok(request) => with_helper(|client| connect(client, request)),
             Err(message) => local_result(Err(message)),
         },
+        Command::Apply { request_path } => match prepare_connect_request(request_path.as_deref()) {
+            Ok(request) => with_helper(|client| apply(client, request)),
+            Err(message) => local_result(Err(message)),
+        },
         Command::Probe { request_path } => match prepare_connect_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| probe(client, request)),
             Err(message) => local_result(Err(message)),
@@ -93,6 +100,19 @@ fn connect(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
         }
         Err(error) => {
             tracing::error!(%error, "failed to connect tunnel");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn apply(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
+    match client.apply_tunnel(request) {
+        Ok(()) => {
+            println!("session changes applied");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to apply session changes");
             ExitCode::FAILURE
         }
     }
@@ -148,6 +168,10 @@ fn status(client: &mut HelperClient) -> ExitCode {
     match client.status() {
         Ok(status) => {
             println!("state: {:?}", status.state);
+            println!(
+                "node: {}",
+                terminal_text(status.node.as_ref().map(NodeId::as_str).unwrap_or("none"))
+            );
             println!("engine:      {:?}", status.engine);
             println!(
                 "traffic: up {} B/s down {} B/s",
@@ -317,6 +341,10 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["connect", path] => Ok(Command::Connect {
             request_path: Some((*path).to_owned()),
         }),
+        ["apply"] => Ok(Command::Apply { request_path: None }),
+        ["apply", path] => Ok(Command::Apply {
+            request_path: Some((*path).to_owned()),
+        }),
         ["probe"] => Ok(Command::Probe { request_path: None }),
         ["probe", path] => Ok(Command::Probe {
             request_path: Some((*path).to_owned()),
@@ -333,6 +361,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
         ["connect", ..] => Err("connect accepts zero or one request JSON path".to_owned()),
+        ["apply", ..] => Err("apply accepts zero or one request JSON path".to_owned()),
         ["probe", ..] => Err("probe accepts zero or one request JSON path".to_owned()),
         ["delay", ..] => Err("delay does not accept arguments".to_owned()),
         ["select", ..] => Err("select requires exactly a subscription ID and a node ID".to_owned()),
@@ -358,6 +387,7 @@ fn print_usage() {
 Usage:
   rosetun [status]
   rosetun connect [request.json]
+  rosetun apply [request.json]
   rosetun probe [request.json]
   rosetun delay
   rosetun select <subscription-id> <node-id>
@@ -401,6 +431,13 @@ mod tests {
                 request_path: Some("request.json".to_owned()),
             })
         );
+        assert_eq!(parse(&["apply"]), Ok(Command::Apply { request_path: None }));
+        assert_eq!(
+            parse(&["apply", "request.json"]),
+            Ok(Command::Apply {
+                request_path: Some("request.json".to_owned()),
+            })
+        );
         assert_eq!(parse(&["probe"]), Ok(Command::Probe { request_path: None }));
         assert_eq!(
             parse(&["probe", "request.json"]),
@@ -430,6 +467,19 @@ mod tests {
             assert_eq!(
                 parse(&arguments),
                 Err("connect accepts zero or one request JSON path".to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn apply_rejects_more_than_one_path() {
+        for arguments in [
+            vec!["apply", "a", "b"],
+            vec!["apply", "request.json", "extra", "another"],
+        ] {
+            assert_eq!(
+                parse(&arguments),
+                Err("apply accepts zero or one request JSON path".to_owned())
             );
         }
     }
