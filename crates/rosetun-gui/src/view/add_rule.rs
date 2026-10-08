@@ -142,13 +142,23 @@ pub(crate) fn show(
             }
             if dialog.editing.is_none() {
                 ui.add_space(4.0);
-                let checkbox = ui.add_enabled(
-                    can_temporary && !dialog.busy,
-                    egui::Checkbox::new(&mut dialog.temporary_only, t().temporary_only),
-                );
-                if !can_temporary {
-                    checkbox.on_hover_text(t().temporary_needs_connection);
-                }
+                let response = ui
+                    .horizontal(|ui| {
+                        ui.label(t().temporary_only);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            widgets::toggle(
+                                ui,
+                                &mut dialog.temporary_only,
+                                can_temporary && !dialog.busy,
+                            );
+                        });
+                    })
+                    .response;
+                response.on_hover_text(if can_temporary {
+                    t().temporary_hint
+                } else {
+                    t().temporary_needs_connection
+                });
             }
             if let Some(error) = &dialog.error {
                 ui.add_space(6.0);
