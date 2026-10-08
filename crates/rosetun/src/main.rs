@@ -9,13 +9,16 @@ use std::process::ExitCode;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
-use rosetun_config::{NodeId, SubscriptionId};
+use rosetun_config::{
+    DomainMatch, NodeId, ProcessMatch, Rule, RuleMatcher, RuleTarget, SubscriptionId,
+};
 use rosetun_core::terminal_text;
 use rosetun_ipc::{ConnectRequest, HelperClient, ProbeOutcome, ProbeRequest};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
     Status,
+    Temporary,
     Connect {
         request_path: Option<String>,
     },
@@ -87,6 +90,7 @@ fn main() -> ExitCode {
         },
         Command::Delay => with_helper(delay),
         Command::Status => with_helper(status),
+        Command::Temporary => with_helper(temporary),
         Command::Disconnect => with_helper(disconnect),
         Command::Shutdown => with_helper(shutdown),
     }
@@ -165,9 +169,13 @@ fn print_probe_outcome(outcome: ProbeOutcome) {
 }
 
 fn status(client: &mut HelperClient) -> ExitCode {
-    match client.status() {
-        Ok(status) => {
+    let result = client
+        .status()
+        .and_then(|status| client.temporary_rules().map(|rules| (status, rules.len())));
+    match result {
+        Ok((status, temporary_count)) => {
             println!("state: {:?}", status.state);
+            println!("temporary rules: {temporary_count}");
             println!(
                 "node: {}",
                 terminal_text(status.node.as_ref().map(NodeId::as_str).unwrap_or("none"))
@@ -188,6 +196,45 @@ fn status(client: &mut HelperClient) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn temporary(client: &mut HelperClient) -> ExitCode {
+    match client.temporary_rules() {
+        Ok(rules) if rules.is_empty() => {
+            println!("none");
+            ExitCode::SUCCESS
+        }
+        Ok(rules) => {
+            for rule in &rules {
+                println!("{}", temporary_rule_line(rule));
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to get temporary rules");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn temporary_rule_line(rule: &Rule) -> String {
+    let target = match rule.target {
+        RuleTarget::Proxy => "proxy",
+        RuleTarget::Direct => "direct",
+        RuleTarget::Block => "block",
+    };
+    let value = match &rule.matcher {
+        RuleMatcher::Domain(DomainMatch::Exact(value)) => format!("domain exact {value}"),
+        RuleMatcher::Domain(DomainMatch::Suffix(value)) => format!("domain suffix {value}"),
+        RuleMatcher::Domain(DomainMatch::Keyword(value)) => format!("domain keyword {value}"),
+        RuleMatcher::Process(ProcessMatch::Name(value)) => format!("process name {value}"),
+        RuleMatcher::Process(ProcessMatch::Path(value)) => {
+            format!("process path {}", value.display())
+        }
+        RuleMatcher::IpCidr(value) => format!("ip {value}"),
+        RuleMatcher::Template(_) => "template".to_owned(),
+    };
+    format!("{target}: {}", terminal_text(&value))
 }
 
 fn disconnect(client: &mut HelperClient) -> ExitCode {
@@ -337,6 +384,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
 
     match arguments.as_slice() {
         [] | ["status"] => Ok(Command::Status),
+        ["temporary"] => Ok(Command::Temporary),
         ["connect"] => Ok(Command::Connect { request_path: None }),
         ["connect", path] => Ok(Command::Connect {
             request_path: Some((*path).to_owned()),
@@ -367,6 +415,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["select", ..] => Err("select requires exactly a subscription ID and a node ID".to_owned()),
         ["config", ..] => Err("config does not accept arguments".to_owned()),
         ["status", ..] => Err("status does not accept arguments".to_owned()),
+        ["temporary", ..] => Err("temporary does not accept arguments".to_owned()),
         ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),
         ["shutdown", ..] => Err("shutdown does not accept arguments".to_owned()),
         [_, ..] => Err("unknown command".to_owned()),
@@ -386,6 +435,7 @@ fn print_usage() {
         "\
 Usage:
   rosetun [status]
+  rosetun temporary
   rosetun connect [request.json]
   rosetun apply [request.json]
   rosetun probe [request.json]
@@ -407,7 +457,8 @@ Options for sub add may appear in any order after the URL."
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, parse_command_arguments};
+    use super::{Command, parse_command_arguments, temporary_rule_line};
+    use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleTarget};
 
     fn parse(arguments: &[&str]) -> Result<Command, String> {
         let arguments: Vec<String> = arguments
@@ -421,6 +472,7 @@ mod tests {
     fn valid_commands_are_parsed() {
         assert_eq!(parse(&[]), Ok(Command::Status));
         assert_eq!(parse(&["status"]), Ok(Command::Status));
+        assert_eq!(parse(&["temporary"]), Ok(Command::Temporary));
         assert_eq!(
             parse(&["connect"]),
             Ok(Command::Connect { request_path: None })
@@ -456,6 +508,28 @@ mod tests {
         assert_eq!(parse(&["config"]), Ok(Command::Config));
         assert_eq!(parse(&["disconnect"]), Ok(Command::Disconnect));
         assert_eq!(parse(&["shutdown"]), Ok(Command::Shutdown));
+    }
+
+    #[test]
+    fn temporary_rule_values_are_sanitized_for_one_line_output() {
+        let mut rule = Rule {
+            id: RuleId::new("temporary"),
+            enabled: true,
+            matcher: RuleMatcher::Domain(DomainMatch::Exact("example.com\nspoofed".into())),
+            target: RuleTarget::Direct,
+        };
+        assert_eq!(
+            temporary_rule_line(&rule),
+            "direct: domain exact example.com spoofed"
+        );
+        rule.matcher = RuleMatcher::Process(ProcessMatch::Path("C:\\apps\\foo\u{202e}.exe".into()));
+        assert_eq!(
+            temporary_rule_line(&rule),
+            "direct: process path C:\\apps\\foo .exe"
+        );
+        rule.matcher = RuleMatcher::IpCidr("192.0.2.0/24".into());
+        rule.target = RuleTarget::Block;
+        assert_eq!(temporary_rule_line(&rule), "block: ip 192.0.2.0/24");
     }
 
     #[test]
@@ -512,7 +586,7 @@ mod tests {
 
     #[test]
     fn commands_without_parameters_reject_extra_arguments() {
-        for command in ["status", "config", "disconnect", "shutdown"] {
+        for command in ["status", "temporary", "config", "disconnect", "shutdown"] {
             for arguments in [vec![command, "extra"], vec![command, "extra", "another"]] {
                 assert_eq!(
                     parse(&arguments),
