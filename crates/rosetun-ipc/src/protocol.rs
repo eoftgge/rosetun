@@ -1,12 +1,13 @@
 use rosetun_config::{
-    AppConfig, LogLevel, Node, NodeId, RuleSet, RuleSetId, RuleTarget, Selection, Settings, Status,
-    Traffic,
+    AppConfig, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId, RuleTarget, Selection, Settings,
+    Status, Traffic,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const MAX_PROBE_NODES: usize = 256;
+pub const MAX_TEMPORARY_RULES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -16,6 +17,7 @@ pub enum Request {
         protocol_version: u32,
     },
     Status,
+    TemporaryRules,
     Connect(Box<ConnectRequest>),
     ProbeNodes(Box<ProbeRequest>),
     TunnelDelay,
@@ -40,6 +42,8 @@ pub struct ConnectRequest {
     pub selection: Selection,
     pub node: Node,
     pub rule_set: RuleSet,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub temporary_rules: Vec<Rule>,
     pub settings: Settings,
 }
 
@@ -54,6 +58,7 @@ impl std::fmt::Debug for ConnectRequest {
             .field("auto_route", &self.settings.tun.auto_route)
             .field("rule_set_id", &self.rule_set.id)
             .field("rule_count", &self.rule_set.rules.len())
+            .field("temporary_rule_count", &self.temporary_rules.len())
             .finish_non_exhaustive()
     }
 }
@@ -80,8 +85,17 @@ impl ConnectRequest {
             selection: selection.clone(),
             node: node.clone(),
             rule_set,
+            temporary_rules: Vec::new(),
             settings: config.settings.clone(),
         })
+    }
+
+    pub fn effective_rule_set(&self) -> RuleSet {
+        let mut rules = self.rule_set.clone();
+        rules
+            .rules
+            .splice(0..0, self.temporary_rules.iter().cloned());
+        rules
     }
 }
 
@@ -127,6 +141,7 @@ pub enum Response {
         protocol_version: u32,
     },
     Status(Status),
+    TemporaryRules(Vec<Rule>),
     Probe(Vec<ProbeResult>),
     Delay(ProbeOutcome),
     Ok,
@@ -272,6 +287,7 @@ mod tests {
         assert_eq!(&request.node, config.active_node().unwrap().1);
         assert_eq!(&request.rule_set, config.active_rules().unwrap());
         assert_eq!(request.settings, config.settings);
+        assert!(request.temporary_rules.is_empty());
     }
 
     #[test]
@@ -372,13 +388,50 @@ mod tests {
     }
 
     #[test]
-    fn request_debug_does_not_expose_credentials_or_subscription_url() {
+    fn temporary_rules_precede_base_rules_without_changing_them() {
+        let mut request = ConnectRequest::from_config(&selected_config()).unwrap();
+        request.temporary_rules = vec![
+            Rule {
+                id: RuleId::new("first"),
+                enabled: true,
+                matcher: RuleMatcher::IpCidr("198.51.100.0/24".into()),
+                target: RuleTarget::Direct,
+            },
+            Rule {
+                id: RuleId::new("second"),
+                enabled: false,
+                matcher: RuleMatcher::IpCidr("203.0.113.0/24".into()),
+                target: RuleTarget::Block,
+            },
+        ];
+        let base = request.rule_set.clone();
+
+        let effective = request.effective_rule_set();
+        assert_eq!(effective.rules[..2], request.temporary_rules);
+        assert_eq!(effective.rules[2..], base.rules);
+        assert_eq!(effective.id, base.id);
+        assert_eq!(effective.default_target, base.default_target);
+        assert_eq!(request.rule_set, base);
+    }
+
+    #[test]
+    fn request_debug_does_not_expose_credentials_or_rule_values() {
         let config = selected_config();
-        let request = ConnectRequest::from_config(&config).unwrap();
+        let mut request = ConnectRequest::from_config(&config).unwrap();
+        request.temporary_rules.push(Rule {
+            id: RuleId::new("temporary"),
+            enabled: true,
+            matcher: RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(
+                "private.example.com".into(),
+            )),
+            target: RuleTarget::Direct,
+        });
         for debug in [
             format!("{request:?}"),
             format!("{:?}", Request::Apply(Box::new(request))),
         ] {
+            assert!(debug.contains("temporary_rule_count: 1"));
+            assert!(!debug.contains("private.example.com"));
             assert!(!debug.contains("test-secret"));
             assert!(!debug.contains(&config.subscriptions[0].url));
         }

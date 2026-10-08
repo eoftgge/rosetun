@@ -4,7 +4,7 @@ use crate::{
     ConnectRequest, Connection, Frame, HelperError, PROTOCOL_VERSION, ProbeOutcome, ProbeRequest,
     ProbeResult, Request, Response,
 };
-use rosetun_config::Status;
+use rosetun_config::{Rule, Status};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -53,6 +53,13 @@ impl HelperClient {
     pub fn status(&mut self) -> Result<Status, ClientError> {
         match self.request(Request::Status)? {
             Response::Status(status) => Ok(status),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
+    pub fn temporary_rules(&mut self) -> Result<Vec<Rule>, ClientError> {
+        match self.request(Request::TemporaryRules)? {
+            Response::TemporaryRules(rules) => Ok(rules),
             _ => Err(ClientError::Unexpected),
         }
     }

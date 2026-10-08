@@ -46,8 +46,8 @@ mod tests {
     use std::io::BufReader;
 
     use rosetun_config::{
-        ConnectionState, Node, NodeId, Outbound, RuleSet, RuleSetId, RuleTarget, Selection,
-        Settings, StreamSettings, SubscriptionId, TrojanParams,
+        ConnectionState, DomainMatch, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
+        RuleSetId, RuleTarget, Selection, Settings, StreamSettings, SubscriptionId, TrojanParams,
     };
 
     use super::*;
@@ -94,10 +94,57 @@ mod tests {
                     raw: None,
                 },
                 rule_set: RuleSet::new(RuleSetId::new("rules"), "Rules", RuleTarget::Proxy),
+                temporary_rules: vec![Rule {
+                    id: RuleId::new("temporary"),
+                    enabled: true,
+                    matcher: RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
+                    target: RuleTarget::Direct,
+                }],
                 settings: Settings::default(),
             })),
         };
         assert_eq!(roundtrip(&frame), frame);
+    }
+
+    #[test]
+    fn temporary_rules_frames_survive_roundtrip() {
+        let request = Frame::Request {
+            id: 11,
+            body: Request::TemporaryRules,
+        };
+        assert_eq!(roundtrip(&request), request);
+        let response = Frame::Response {
+            id: 11,
+            body: Response::TemporaryRules(vec![Rule {
+                id: RuleId::new("temporary"),
+                enabled: true,
+                matcher: RuleMatcher::IpCidr("192.0.2.0/24".into()),
+                target: RuleTarget::Block,
+            }]),
+        };
+        assert_eq!(roundtrip(&response), response);
+    }
+
+    #[test]
+    fn old_connect_request_json_defaults_to_no_temporary_rules() {
+        let old = serde_json::json!({
+            "selection": { "subscription": "subscription", "node": "node" },
+            "node": {
+                "id": "node", "name": "Test node", "server": "example.com", "port": 443,
+                "outbound": { "trojan": { "password": "test-password" } },
+                "stream": { "transport": "tcp", "tls": "plain" }
+            },
+            "rule_set": { "id": "rules", "name": "Rules", "rules": [], "default_target": "proxy" },
+            "settings": serde_json::to_value(Settings::default()).unwrap()
+        });
+        let request: ConnectRequest = serde_json::from_value(old.clone()).unwrap();
+        assert!(request.temporary_rules.is_empty());
+        assert!(
+            serde_json::to_value(&request)
+                .unwrap()
+                .get("temporary_rules")
+                .is_none()
+        );
     }
 
     #[test]
