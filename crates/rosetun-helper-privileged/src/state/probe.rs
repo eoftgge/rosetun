@@ -215,36 +215,39 @@ impl Helper {
             )
         })?;
 
-        for chunk in supported.chunks(URL_TEST_WORKERS) {
-            thread::scope(|scope| {
-                let workers = chunk
-                    .iter()
-                    .map(|(tag, _)| {
-                        scope.spawn(|| {
+        let next = AtomicUsize::new(0);
+        thread::scope(|scope| {
+            let workers = (0..supported.len().min(URL_TEST_WORKERS))
+                .map(|_| {
+                    let next = &next;
+                    let supported = &supported;
+                    let control = &control;
+                    scope.spawn(move || {
+                        let mut outcomes = Vec::new();
+                        while let Some((tag, _)) =
+                            supported.get(next.fetch_add(1, Ordering::Relaxed))
+                        {
                             let index = tag["probe-".len()..]
                                 .parse::<usize>()
                                 .expect("generated tag");
-                            let outcome = match backend.url_test(
-                                &control,
+                            let outcome = probe_outcome(backend.url_test(
+                                control,
                                 UrlTestTarget::Probe(tag),
                                 PROBE_URL,
                                 PROBE_TIMEOUT,
-                            ) {
-                                Ok(delay) => ProbeOutcome::Works {
-                                    millis: u32::try_from(delay.as_millis()).unwrap_or(u32::MAX),
-                                },
-                                Err(_) => ProbeOutcome::Fails,
-                            };
-                            (index, outcome)
-                        })
+                            ));
+                            outcomes.push((index, outcome));
+                        }
+                        outcomes
                     })
-                    .collect::<Vec<_>>();
-                for worker in workers {
-                    let (index, outcome) = worker.join().expect("URL test worker panicked");
+                })
+                .collect::<Vec<_>>();
+            for worker in workers {
+                for (index, outcome) in worker.join().expect("URL test worker panicked") {
                     results[index].outcome = outcome;
                 }
-            });
-        }
+            }
+        });
         Ok(results)
     }
 
@@ -278,14 +281,21 @@ impl Helper {
                     "the connected engine is unavailable",
                 )
             })?;
-        Ok(
-            match backend.url_test(&control, UrlTestTarget::Session, PROBE_URL, PROBE_TIMEOUT) {
-                Ok(delay) => ProbeOutcome::Works {
-                    millis: u32::try_from(delay.as_millis()).unwrap_or(u32::MAX),
-                },
-                Err(_) => ProbeOutcome::Fails,
-            },
-        )
+        Ok(probe_outcome(backend.url_test(
+            &control,
+            UrlTestTarget::Session,
+            PROBE_URL,
+            PROBE_TIMEOUT,
+        )))
+    }
+}
+
+fn probe_outcome<E>(result: Result<Duration, E>) -> ProbeOutcome {
+    match result {
+        Ok(delay) => ProbeOutcome::Works {
+            millis: u32::try_from(delay.as_millis()).unwrap_or(u32::MAX),
+        },
+        Err(_) => ProbeOutcome::Fails,
     }
 }
 

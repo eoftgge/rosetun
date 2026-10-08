@@ -2168,6 +2168,7 @@ fn connect_request() -> ConnectRequest {
 struct ProbeEngine {
     dir: PathBuf,
     stopped: Arc<AtomicUsize>,
+    completed: Arc<AtomicUsize>,
     ready: bool,
     fail_spawn: bool,
     panic_url: bool,
@@ -2240,10 +2241,12 @@ impl EngineBackend for ProbeEngine {
             rosetun_engine::UrlTestTarget::Session => "proxy",
             rosetun_engine::UrlTestTarget::Probe(tag) => tag,
         };
-        if let Some((entered, release)) = self.blocked.lock().unwrap().take() {
+        let blocked = self.blocked.lock().unwrap().take();
+        if let Some((entered, release)) = blocked {
             entered.send(()).unwrap();
             release.recv().unwrap();
         }
+        self.completed.fetch_add(1, Ordering::AcqRel);
         self.outcomes
             .get(tag)
             .copied()
@@ -2306,6 +2309,22 @@ fn probe_fixture_with_failures(
     fail_spawn: bool,
     panic_url: bool,
 ) -> (Helper, Arc<AtomicUsize>, PathBuf) {
+    probe_fixture_with_counter(
+        ready,
+        blocked,
+        fail_spawn,
+        panic_url,
+        Arc::new(AtomicUsize::new(0)),
+    )
+}
+
+fn probe_fixture_with_counter(
+    ready: bool,
+    blocked: Option<(Sender<()>, Receiver<()>)>,
+    fail_spawn: bool,
+    panic_url: bool,
+    completed: Arc<AtomicUsize>,
+) -> (Helper, Arc<AtomicUsize>, PathBuf) {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
         "rosetun-probe-test-{}-{}",
@@ -2318,6 +2337,7 @@ fn probe_fixture_with_failures(
     engines.register(Box::new(ProbeEngine {
         dir: dir.clone(),
         stopped: Arc::clone(&stopped),
+        completed,
         ready,
         fail_spawn,
         panic_url,
@@ -2397,6 +2417,50 @@ fn probe_results_keep_request_order_and_cleanup_secrets() {
             ProbeOutcome::Works { millis: 45 },
         ]
     );
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+    assert!(!dir.join("probe.json").exists());
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn probe_workers_advance_past_a_blocked_url_test() {
+    use rosetun_ipc::ProbeOutcome;
+    use std::time::Instant;
+
+    let (entered, entered_rx) = channel();
+    let (release_tx, release) = channel();
+    let completed = Arc::new(AtomicUsize::new(0));
+    let (helper, stopped, dir) = probe_fixture_with_counter(
+        true,
+        Some((entered, release)),
+        false,
+        false,
+        Arc::clone(&completed),
+    );
+    let mut request = probe_request();
+    request.nodes = (0..20)
+        .map(|index| {
+            let mut node = request.nodes[0].clone();
+            node.id = NodeId::new(format!("node-{index}"));
+            node
+        })
+        .collect();
+    let worker = std::thread::spawn(move || helper.probe_nodes(&request));
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while completed.load(Ordering::Acquire) < 19 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let completed_while_blocked = completed.load(Ordering::Acquire);
+    release_tx.send(()).unwrap();
+    let results = worker.join().unwrap().unwrap();
+    assert_eq!(completed_while_blocked, 19);
+    assert_eq!(results.len(), 20);
+    assert!(results.iter().all(|result| matches!(
+        result.outcome,
+        ProbeOutcome::Works { .. } | ProbeOutcome::Fails
+    )));
+    assert_eq!(completed.load(Ordering::Acquire), 20);
     assert_eq!(stopped.load(Ordering::Acquire), 1);
     assert!(!dir.join("probe.json").exists());
     std::fs::remove_dir(dir).unwrap();
