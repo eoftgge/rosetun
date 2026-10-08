@@ -175,6 +175,10 @@ fn dispatch(
             }
         }
         Request::Status => Response::Status(helper.status()),
+        Request::TemporaryRules => match helper.temporary_rules() {
+            Ok(rules) => Response::TemporaryRules(rules),
+            Err(error) => Response::Error(error),
+        },
         Request::Connect(connect) => match helper.connect(connect) {
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),

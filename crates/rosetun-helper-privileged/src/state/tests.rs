@@ -1,6 +1,6 @@
 use rosetun_config::{
-    EngineKind, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget, Selection,
-    SubscriptionId, Traffic, VlessParams,
+    DomainMatch, EngineKind, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget,
+    RuleTemplate, Selection, SubscriptionId, Traffic, VlessParams,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
@@ -402,6 +402,7 @@ struct EngineControls {
     outcomes: Mutex<VecDeque<bool>>,
     readiness: Mutex<VecDeque<bool>>,
     rendered_rules: Mutex<Vec<RuleSet>>,
+    render_block: Mutex<Option<(Sender<()>, Receiver<()>)>>,
 }
 
 impl EngineControls {
@@ -466,6 +467,10 @@ impl EngineBackend for ControlledEngine {
     }
 
     fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        if let Some((entered, release)) = self.controls.render_block.lock().unwrap().take() {
+            entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
         self.controls
             .rendered_rules
             .lock()
@@ -2227,6 +2232,21 @@ fn request_with_new_rules(request: &ConnectRequest) -> ConnectRequest {
     updated
 }
 
+fn temporary_rule() -> Rule {
+    Rule {
+        id: RuleId::new("temporary-domain"),
+        enabled: true,
+        matcher: RuleMatcher::Domain(DomainMatch::Exact("example.com".to_owned())),
+        target: RuleTarget::Direct,
+    }
+}
+
+#[test]
+fn temporary_rules_are_empty_without_a_session() {
+    let (helper, _, _, _) = supervised_helper(true);
+    assert!(helper.temporary_rules().unwrap().is_empty());
+}
+
 #[test]
 fn apply_requires_a_connected_and_unlocked_session() {
     let (helper, controls, _, _) = supervised_helper(false);
@@ -2343,6 +2363,98 @@ fn apply_rules_restarts_under_the_guard_and_supervisor_uses_new_rules() {
         controls.rendered_rules.lock().unwrap().last(),
         Some(&changed.rule_set)
     );
+}
+
+#[test]
+fn apply_temporary_rule_precedes_base_and_survives_supervisor_restart() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let base = Rule {
+        id: RuleId::new("base-domain"),
+        enabled: true,
+        matcher: RuleMatcher::Domain(DomainMatch::Exact("example.com".to_owned())),
+        target: RuleTarget::Block,
+    };
+    request.rule_set.rules.push(base.clone());
+    helper.connect(&request).expect("connect");
+    let since = helper.status().since_unix;
+    let mut changed = request.clone();
+    changed.temporary_rules.push(temporary_rule());
+
+    helper.apply(&changed).expect("apply temporary rule");
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(helper.status().since_unix, since);
+    assert_eq!(helper.temporary_rules().unwrap(), changed.temporary_rules);
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
+    let rendered = controls.rendered_rules.lock().unwrap();
+    assert_eq!(
+        rendered.last().unwrap().rules,
+        vec![temporary_rule(), base.clone()]
+    );
+    assert_eq!(request.rule_set.rules, vec![base.clone()]);
+    drop(rendered);
+
+    controls.kill();
+    helper.supervise(Instant::now());
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.temporary_rules().unwrap(), changed.temporary_rules);
+    assert_eq!(controls.spawns(), 3);
+    assert_eq!(
+        controls
+            .rendered_rules
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .rules,
+        vec![temporary_rule(), base]
+    );
+}
+
+#[test]
+fn temporary_rules_end_on_disconnect_and_new_connect() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.temporary_rules.push(temporary_rule());
+    helper
+        .connect(&request)
+        .expect("connect with temporary rule");
+    assert_eq!(helper.temporary_rules().unwrap(), request.temporary_rules);
+
+    helper.disconnect().expect("disconnect");
+    assert!(helper.temporary_rules().unwrap().is_empty());
+    let mut next = request.clone();
+    next.temporary_rules.clear();
+    helper.connect(&next).expect("new session");
+    assert!(helper.temporary_rules().unwrap().is_empty());
+    assert_eq!(
+        controls.rendered_rules.lock().unwrap().last(),
+        Some(&next.rule_set)
+    );
+}
+
+#[test]
+fn temporary_rules_end_when_reconnect_attempts_are_exhausted() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.temporary_rules.push(temporary_rule());
+    helper.connect(&request).expect("connect");
+    controls.fail_next(RECONNECT_ATTEMPTS as usize);
+    controls.kill();
+    let now = Instant::now();
+    for attempt in 1..=RECONNECT_ATTEMPTS {
+        helper.supervise(now + Duration::from_secs(u64::from(attempt) * 60));
+    }
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { .. }
+    ));
+    assert!(helper.temporary_rules().unwrap().is_empty());
 }
 
 #[test]
@@ -2484,6 +2596,69 @@ fn apply_unsupported_rules_does_not_restart_or_change_request() {
 }
 
 #[test]
+fn invalid_temporary_rules_leave_connect_and_apply_untouched() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let mut too_many = request.clone();
+    too_many.temporary_rules = vec![temporary_rule(); MAX_TEMPORARY_RULES + 1];
+    let mut template = request.clone();
+    template.temporary_rules.push(Rule {
+        matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+        enabled: false,
+        ..temporary_rule()
+    });
+
+    for invalid in [&too_many, &template] {
+        let error = helper.connect(invalid).expect_err("invalid connect");
+        assert_eq!(error.code, ErrorCode::UnsupportedRules);
+        assert!(matches!(
+            helper.status().state,
+            ConnectionState::Disconnected
+        ));
+        assert_eq!(controls.spawns(), 0);
+    }
+
+    helper.connect(&request).expect("connect");
+    for invalid in [&too_many, &template] {
+        let error = helper.apply(invalid).expect_err("invalid apply");
+        assert_eq!(error.code, ErrorCode::UnsupportedRules);
+        assert!(matches!(helper.status().state, ConnectionState::Connected));
+        assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+        assert!(helper.temporary_rules().unwrap().is_empty());
+        assert_eq!(controls.spawns(), 1);
+        assert_eq!(prepared.load(Ordering::Acquire), 0);
+    }
+}
+
+#[test]
+fn temporary_rules_are_busy_while_apply_holds_the_session() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let helper = Arc::new(helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let mut changed = request.clone();
+    changed.temporary_rules.push(temporary_rule());
+    let (entered, entered_rx) = channel();
+    let (release_tx, release) = channel();
+    *controls.render_block.lock().unwrap() = Some((entered, release));
+
+    let worker = {
+        let helper = Arc::clone(&helper);
+        std::thread::spawn(move || helper.apply(&changed))
+    };
+    entered_rx.recv().expect("apply reached config render");
+    assert_eq!(helper.temporary_rules().unwrap_err().code, ErrorCode::Busy);
+    release_tx.send(()).expect("release apply");
+    worker
+        .join()
+        .expect("apply thread")
+        .expect("apply succeeds");
+    assert_eq!(helper.temporary_rules().unwrap(), vec![temporary_rule()]);
+}
+
+#[test]
 fn apply_failed_start_rolls_back_to_original_node_and_endpoint() {
     let (helper, controls, prepared, reverted) = supervised_helper(true);
     let mut request = connect_request();
@@ -2516,6 +2691,26 @@ fn apply_failed_start_rolls_back_to_original_node_and_endpoint() {
     assert_eq!(controls.spawns(), 3);
     assert_eq!(prepared.load(Ordering::Acquire), 2);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn failed_apply_rolls_back_temporary_rules() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.temporary_rules.push(temporary_rule());
+    helper.connect(&request).expect("connect");
+    let mut changed = request.clone();
+    changed.temporary_rules.clear();
+    controls.fail_readiness_next(1);
+
+    helper.apply(&changed).expect_err("new start fails");
+    assert_eq!(controls.spawns(), 3);
+    assert_eq!(helper.temporary_rules().unwrap(), request.temporary_rules);
+    assert_eq!(
+        controls.rendered_rules.lock().unwrap().last(),
+        Some(&request.effective_rule_set())
+    );
 }
 
 #[test]

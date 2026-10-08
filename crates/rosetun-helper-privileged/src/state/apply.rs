@@ -7,12 +7,13 @@ use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
     Helper, RECONNECT_BACKOFF, Reconnect, StartMode, node_with_endpoint, normalize_server,
-    probe::resolve_nodes, render_config,
+    probe::resolve_nodes, render_config, validate_temporary_rules,
 };
 
 impl Helper {
     pub fn apply(&self, request: &ConnectRequest) -> Result<(), HelperError> {
         let mut session = self.session()?;
+        validate_temporary_rules(request)?;
         if !matches!(
             self.with_status(|status| status.state.clone()),
             ConnectionState::Connected
@@ -75,7 +76,7 @@ impl Helper {
         render_config(
             backend,
             &node_with_endpoint(&request.node, endpoint),
-            &request.rule_set,
+            &request.effective_rule_set(),
             &request.settings,
             None,
             false,
@@ -102,6 +103,8 @@ impl Helper {
         tracing::info!(
             server = current.node != request.node || current.selection != request.selection,
             rules = current.rule_set != request.rule_set,
+            temporary = current.temporary_rules != request.temporary_rules,
+            temporary_rules = request.temporary_rules.len(),
             dns = current.settings.dns != request.settings.dns,
             "applying session changes"
         );
@@ -113,7 +116,7 @@ impl Helper {
         };
         match session.start(
             &request.node,
-            &request.rule_set,
+            &request.effective_rule_set(),
             &request.settings,
             mode,
             Some(endpoint),
@@ -134,7 +137,7 @@ impl Helper {
                 tracing::warn!(code = ?error.code, "session changes failed; restoring previous session");
                 let rollback = session.start(
                     &current.node,
-                    &current.rule_set,
+                    &current.effective_rule_set(),
                     &current.settings,
                     mode,
                     Some(previous_endpoint),

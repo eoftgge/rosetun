@@ -12,12 +12,14 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
-use rosetun_config::{ConnectionState, Node, RuleSet, Settings, Status, Traffic};
+use rosetun_config::{
+    ConnectionState, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic,
+};
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
     TrafficProbe, TrafficTotals,
 };
-use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
+use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, MAX_TEMPORARY_RULES};
 use rosetun_routing::{
     ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
 };
@@ -153,6 +155,15 @@ impl Helper {
         self.with_status(|status| status.clone())
     }
 
+    pub fn temporary_rules(&self) -> Result<Vec<Rule>, HelperError> {
+        let session = self.session()?;
+        Ok(session
+            .request
+            .as_ref()
+            .map(|request| request.temporary_rules.clone())
+            .unwrap_or_default())
+    }
+
     /// The machine woke from sleep; the supervisor restarts a live tunnel.
     pub fn notify_resume(&self) {
         self.resumed.store(true, Ordering::Release);
@@ -256,7 +267,7 @@ impl Helper {
         };
         match session.start(
             &request.node,
-            &request.rule_set,
+            &request.effective_rule_set(),
             &request.settings,
             mode,
             None,
@@ -309,6 +320,7 @@ impl Helper {
 
     pub fn connect(&self, request: &ConnectRequest) -> Result<(), HelperError> {
         let mut session = self.session()?;
+        validate_temporary_rules(request)?;
         let state = self.with_status(|status| status.state.clone());
 
         let mode = match state {
@@ -340,7 +352,7 @@ impl Helper {
 
         match session.start(
             &request.node,
-            &request.rule_set,
+            &request.effective_rule_set(),
             &request.settings,
             mode,
             None,
@@ -444,6 +456,21 @@ impl Helper {
             .unwrap_or_else(|error| error.into_inner());
         apply(&mut status)
     }
+}
+
+fn validate_temporary_rules(request: &ConnectRequest) -> Result<(), HelperError> {
+    if request.temporary_rules.len() > MAX_TEMPORARY_RULES
+        || request
+            .temporary_rules
+            .iter()
+            .any(|rule| matches!(rule.matcher, RuleMatcher::Template(_)))
+    {
+        return Err(HelperError::new(
+            ErrorCode::UnsupportedRules,
+            "temporary rules exceed the limit or contain a template",
+        ));
+    }
+    Ok(())
 }
 
 /// Runs `supervise` every tick and reports a resume when the wall clock jumps.
