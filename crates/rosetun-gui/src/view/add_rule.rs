@@ -13,7 +13,7 @@ use crate::{strings, theme, widgets};
 const DIALOG_WIDTH: f32 = 640.0;
 const DIALOG_TOP: f32 = 100.0;
 const COMPACT_DIALOG_HEIGHT: f32 = 600.0;
-const DURATION_HEIGHT: f32 = 80.0;
+const TEMPORARY_HINT_HEIGHT: f32 = 20.0;
 const ERROR_HEIGHT: f32 = 28.0;
 const PROCESS_ROW_HEIGHT: f32 = 44.0;
 const PROCESS_ROW_GAP: f32 = 4.0;
@@ -107,8 +107,8 @@ pub(crate) fn show(
                     - BUTTON_ROW_HEIGHT
                     - ACTIONS_GAP
                     - 104.0
-                    - if dialog.editing.is_none() {
-                        DURATION_HEIGHT
+                    - if dialog.editing.is_none() && dialog.temporary_only {
+                        TEMPORARY_HINT_HEIGHT
                     } else {
                         0.0
                     }
@@ -138,31 +138,6 @@ pub(crate) fn show(
                     .color(theme::TEXT_DIM),
             );
             target_cards(ui, dialog);
-            if dialog.editing.is_none() {
-                ui.add_space(4.0);
-                ui.label(RichText::new(t().how_long).small().color(theme::TEXT_DIM));
-                if let Some(temporary) = widgets::segmented(
-                    ui,
-                    "rule_duration",
-                    dialog.temporary_only,
-                    &[
-                        (false, t().duration_permanent),
-                        (true, t().duration_until_disconnect),
-                    ],
-                    true,
-                    can_temporary && !dialog.busy,
-                ) {
-                    dialog.temporary_only = temporary;
-                }
-                let (hint, color) = if !can_temporary {
-                    (t().duration_needs_connection, theme::TEXT_DIM)
-                } else if dialog.temporary_only {
-                    (t().duration_temporary_hint, theme::ROSE_LIGHT)
-                } else {
-                    (t().duration_permanent_hint, theme::TEXT_DIM)
-                };
-                ui.label(RichText::new(hint).small().color(color));
-            }
             if dialog.kind == RuleInputKind::Process {
                 ui.add_space(4.0);
                 if dialog.advanced {
@@ -192,11 +167,20 @@ pub(crate) fn show(
                 ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
             }
             ui.add_space(ACTIONS_GAP);
+            let can_submit = valid && !dialog.busy && (!dialog.temporary_only || can_temporary);
             egui::Sides::new().show(
                 ui,
                 |ui| {
-                    if dialog.kind == RuleInputKind::Process {
-                        ui.horizontal(|ui| {
+                    ui.horizontal(|ui| {
+                        if dialog.editing.is_none() {
+                            temporary_chip(
+                                ui,
+                                &mut dialog.temporary_only,
+                                can_temporary,
+                                dialog.busy,
+                            );
+                        }
+                        if dialog.kind == RuleInputKind::Process {
                             let chevron = icons::icon_button_sized(
                                 ui,
                                 Icon::Chevron {
@@ -215,8 +199,8 @@ pub(crate) fn show(
                             if chevron.clicked() || link.clicked() {
                                 dialog.advanced = !dialog.advanced;
                             }
-                        });
-                    }
+                        }
+                    });
                 },
                 |ui| {
                     ui.horizontal(|ui| {
@@ -240,21 +224,91 @@ pub(crate) fn show(
                         } else {
                             t().add_rule.to_owned()
                         };
-                        if widgets::button_fill(
-                            ui,
-                            &label,
-                            valid && !dialog.busy && (!dialog.temporary_only || can_temporary),
-                        )
-                        .clicked()
-                        {
+                        if widgets::button_fill(ui, &label, can_submit).clicked() {
                             actions.push(Action::SubmitAddRule);
                         }
                     });
                 },
             );
+            if dialog.editing.is_none() && dialog.temporary_only {
+                ui.label(
+                    RichText::new(t().temporary_dialog_hint)
+                        .small()
+                        .color(theme::ROSE_LIGHT),
+                );
+            }
         });
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAddRule);
+    }
+}
+
+fn temporary_chip(ui: &mut egui::Ui, temporary_only: &mut bool, can_temporary: bool, busy: bool) {
+    let color = if !can_temporary {
+        theme::TEXT_DIM
+    } else if *temporary_only {
+        theme::ROSE_LIGHT
+    } else {
+        theme::TEXT_MUTED
+    };
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let text = ui
+        .painter()
+        .layout_no_wrap(t().temporary_chip.to_owned(), font, color);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(12.0 * 2.0 + 14.0 + 6.0 + text.size().x, 32.0),
+        if can_temporary && !busy {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect(
+            rect,
+            16.0,
+            if *temporary_only {
+                theme::INPUT
+            } else {
+                Color32::TRANSPARENT
+            },
+            Stroke::new(
+                1.0,
+                if *temporary_only {
+                    theme::ROSE
+                } else {
+                    theme::BORDER_STRONG
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        icons::paint(
+            ui.painter(),
+            egui::pos2(rect.left() + 19.0, rect.center().y),
+            Icon::Clock,
+            color,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                rect.left() + 12.0 + 14.0 + 6.0,
+                rect.center().y - text.size().y / 2.0,
+            ),
+            text,
+            color,
+        );
+    }
+    let response = if can_temporary && !busy {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    };
+    let response = response.on_hover_text(if can_temporary {
+        t().temporary_hint
+    } else {
+        t().temporary_needs_connection
+    });
+    if response.clicked() {
+        *temporary_only = !*temporary_only;
     }
 }
 
@@ -766,21 +820,21 @@ mod tests {
         use super::*;
         use rosetun_config::{RuleId, RuleSetId};
 
-        for (width, height, advanced, site, can_temporary, editing, error) in [
-            (960.0, 640.0, false, false, true, false, false),
-            (960.0, 640.0, true, false, true, false, false),
-            (960.0, 640.0, false, true, true, false, false),
-            (960.0, 640.0, true, false, false, false, false),
-            (960.0, 640.0, false, false, true, false, true),
-            (960.0, 640.0, true, false, true, true, false),
-            (1200.0, 780.0, false, false, true, false, false),
-            (1200.0, 780.0, true, false, true, false, false),
-            (1200.0, 780.0, false, true, false, false, false),
+        for (width, height, advanced, site, can_temporary, temporary, editing, error) in [
+            (960.0, 640.0, false, false, true, true, false, false),
+            (960.0, 640.0, true, false, true, true, false, false),
+            (960.0, 640.0, false, true, true, true, false, false),
+            (960.0, 640.0, true, false, false, true, false, false),
+            (960.0, 640.0, false, false, true, true, false, true),
+            (960.0, 640.0, true, false, true, false, true, false),
+            (1200.0, 780.0, false, false, true, false, false, false),
+            (1200.0, 780.0, true, false, true, true, false, false),
+            (1200.0, 780.0, false, true, false, true, false, false),
         ] {
             let ctx = egui::Context::default();
             theme::apply(&ctx);
             let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
-            dialog.temporary_only = !can_temporary;
+            dialog.temporary_only = temporary;
             if error {
                 dialog.error = Some("This rule is already in the set.".into());
             }
@@ -806,9 +860,7 @@ mod tests {
                 |ctx| show(ctx, &mut dialog, can_temporary, &mut Vec::new()),
             );
             output.textures_delta.clear();
-            if !can_temporary {
-                assert!(!dialog.temporary_only);
-            }
+            assert_eq!(dialog.temporary_only, can_temporary && temporary);
             let rect = ctx
                 .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
                 .unwrap();
