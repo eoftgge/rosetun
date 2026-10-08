@@ -6,8 +6,6 @@ Rosetun is a Windows VPN client powered by sing-box. A Windows service maintains
 
 <a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download.svg" alt="Download Rosetun for Windows" height="56"></a>
 
-![CI](https://github.com/eoftgge/rosetun/actions/workflows/ci.yml/badge.svg)
-
 **Alpha software:** expect bugs. Settings may be reset between alpha releases.
 
 ## Features
@@ -67,3 +65,5 @@ See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 Rosetun is licensed under **GPL-3.0-or-later**, © 2026 Sandaar. See [LICENSE](LICENSE). The bundled sing-box executable is the unmodified official build and is licensed under GPL-3.0-or-later. The Manrope and Cormorant Garamond fonts use OFL-1.1. Notices for Rust crates are installed as `licenses/third-party.html`.
 
 Rosetun is not affiliated with sing-box or SagerNet.
+
+![CI](https://github.com/eoftgge/rosetun/actions/workflows/ci.yml/badge.svg)

@@ -6,8 +6,6 @@ Rosetun: VPN-клиент для Windows на базе sing-box. Служба Wi
 
 <a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download-ru.svg" alt="Скачать Rosetun для Windows" height="56"></a>
 
-![CI](https://github.com/eoftgge/rosetun/actions/workflows/ci.yml/badge.svg)
-
 **Альфа-версия:** ошибки возможны. Настройки могут сбрасываться между альфа-версиями.
 
 ## Возможности
@@ -67,3 +65,5 @@ GUI (пользователь) ──именованный канал──► 
 Лицензия Rosetun: **GPL-3.0-or-later**, © 2026 Sandaar. Текст в [LICENSE](LICENSE). В составе программы идёт официальная сборка sing-box без изменений, также под GPL-3.0-or-later. Шрифты Manrope и Cormorant Garamond распространяются под OFL-1.1. Уведомления о лицензиях крейтов Rust устанавливаются в `licenses/third-party.html`.
 
 Rosetun не связан с sing-box или SagerNet.
+
+![CI](https://github.com/eoftgge/rosetun/actions/workflows/ci.yml/badge.svg)
