@@ -245,6 +245,7 @@ impl App {
             Job::Update(id) => self.workers.update(id),
             Job::Ping(id) => self.workers.ping(id),
             Job::FullCheck(id) => self.workers.full_check(id),
+            Job::TunnelDelay => self.workers.tunnel_delay(),
             Job::LookupExit { generation, route } => self.workers.lookup_exit(generation, route),
             Job::UpdateAll => self.workers.update_all(),
             Job::Remove(id) => self.workers.remove(id),
@@ -303,6 +304,9 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_exit_lookup() {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_tunnel_delay(display::now_unix()) {
             self.dispatch(job);
         }
         let language =

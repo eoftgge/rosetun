@@ -26,8 +26,8 @@ use rosetun_core::{
     update_subscription,
 };
 use rosetun_ipc::{
-    ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeRequest,
-    ProbeResult,
+    ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeOutcome,
+    ProbeRequest, ProbeResult,
 };
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
@@ -129,6 +129,7 @@ pub(crate) enum WorkerEvent {
         subscription: SubscriptionId,
         result: Result<Vec<ProbeResult>, HelperCommandError>,
     },
+    TunnelDelay(Result<ProbeOutcome, HelperCommandError>),
     UpdateAll(Result<Vec<SubscriptionUpdateResult>, StoreError>),
     Remove {
         id: SubscriptionId,
@@ -590,6 +591,14 @@ impl WorkerDispatcher {
                 subscription: id,
                 result,
             });
+        });
+    }
+
+    pub(crate) fn tunnel_delay(&self) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = with_helper(|client| client.tunnel_delay());
+            publisher.complete(WorkerEvent::TunnelDelay(result));
         });
     }
 

@@ -2,11 +2,12 @@ use std::collections::VecDeque;
 
 use eframe::egui::{self, Color32, RichText};
 use rosetun_config::{ConnectionState, RuleMatcher};
+use rosetun_ipc::ProbeOutcome;
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
 use crate::icons::{self, Icon};
-use crate::state::{Action, ExitLookup, ExitRoute, SessionPart, State, primary_label};
+use crate::state::{Action, ExitLookup, ExitRoute, SessionPart, State, TunnelDelay, primary_label};
 use crate::strings::t;
 use crate::{display, strings, theme, widgets};
 
@@ -261,6 +262,49 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 }
                             }
                         });
+                        if visible_status.is_some_and(|status| {
+                            matches!(status.state, ConnectionState::Connected)
+                        }) {
+                            detail_row(ui, t().delay, |ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                let (text, color) = match state.tunnel_delay {
+                                    TunnelDelay::Done(ProbeOutcome::Works { millis }) => (
+                                        strings::fill(
+                                            t().ping_ms,
+                                            &[("ms", &millis.max(1).to_string())],
+                                        ),
+                                        theme::TEXT,
+                                    ),
+                                    TunnelDelay::Done(_) => {
+                                        (t().ping_no_answer.to_owned(), theme::ERROR)
+                                    }
+                                    TunnelDelay::Idle | TunnelDelay::Measuring => {
+                                        (t().ping_pending.to_owned(), theme::TEXT_DIM)
+                                    }
+                                };
+                                let enabled = !matches!(state.tunnel_delay, TunnelDelay::Measuring);
+                                let response = ui
+                                    .add(egui::Label::new(RichText::new(text).color(color)).sense(
+                                        if enabled {
+                                            egui::Sense::click()
+                                        } else {
+                                            egui::Sense::hover()
+                                        },
+                                    ))
+                                    .on_hover_text(t().delay_hint);
+                                let refresh = if matches!(state.tunnel_delay, TunnelDelay::Done(_))
+                                {
+                                    icons::icon_button_sized(ui, Icon::Refresh, enabled, 18.0)
+                                        .on_hover_text(t().delay_hint)
+                                        .clicked()
+                                } else {
+                                    false
+                                };
+                                if response.clicked() || refresh {
+                                    actions.push(Action::MeasureDelay);
+                                }
+                            });
+                        }
                         detail_row(ui, t().protocol, |ui| {
                             ui.add(egui::Label::new(&protocol).truncate())
                                 .on_hover_text(&protocol);

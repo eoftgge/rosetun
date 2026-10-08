@@ -203,6 +203,8 @@ pub(crate) static EN: Strings = Strings {
     server_change: "Change ›",
     protocol: "Protocol",
     external_ip: "External IP",
+    delay: "Delay",
+    delay_hint: "A request through the current server to cp.cloudflare.com",
     ip_own: "(yours)",
     ip_hidden: "Hidden",
     ip_show: "Show",

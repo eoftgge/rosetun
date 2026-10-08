@@ -278,6 +278,8 @@ pub(crate) struct Strings {
     pub(crate) server_change: &'static str,
     pub(crate) protocol: &'static str,
     pub(crate) external_ip: &'static str,
+    pub(crate) delay: &'static str,
+    pub(crate) delay_hint: &'static str,
     pub(crate) ip_own: &'static str,
     pub(crate) ip_hidden: &'static str,
     pub(crate) ip_show: &'static str,

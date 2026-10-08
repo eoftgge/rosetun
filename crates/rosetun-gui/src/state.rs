@@ -137,6 +137,13 @@ pub(crate) enum PingResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TunnelDelay {
+    Idle,
+    Measuring,
+    Done(ProbeOutcome),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExitRoute {
     /// Connected: the server's exit.
     Tunnel,
@@ -404,6 +411,8 @@ pub(crate) struct State {
     pub(crate) config_generation: u64,
     pub(crate) config_error: Option<ConfigWorkerError>,
     pub(crate) status: Status,
+    pub(crate) tunnel_delay: TunnelDelay,
+    delay_attempted_since: Option<u64>,
     session_request: Option<ConnectRequest>,
     session_snapshot_checked: bool,
     pub(crate) exit: ExitLookup,
@@ -443,6 +452,8 @@ impl Default for State {
             config_generation: 0,
             config_error: None,
             status: Status::default(),
+            tunnel_delay: TunnelDelay::Idle,
+            delay_attempted_since: None,
             session_request: None,
             session_snapshot_checked: false,
             exit: ExitLookup::None,
@@ -536,6 +547,7 @@ pub(crate) enum Action {
     RevealServer,
     RevealDone,
     ToggleExitReveal,
+    MeasureDelay,
     SelectRuleSet(Option<RuleSetId>),
     SetKillSwitch(bool),
     ToggleExpanded(SubscriptionId),
@@ -602,6 +614,7 @@ pub(crate) enum Job {
     Update(SubscriptionId),
     Ping(SubscriptionId),
     FullCheck(SubscriptionId),
+    TunnelDelay,
     LookupExit {
         generation: u64,
         route: ExitRoute,
@@ -749,6 +762,27 @@ impl State {
             generation: self.exit_generation,
             route,
         })
+    }
+
+    pub(crate) fn take_tunnel_delay(&mut self, now: u64) -> Option<Job> {
+        if !self.status_received
+            || !matches!(
+                self.visible_status().map(|status| &status.state),
+                Some(ConnectionState::Connected)
+            )
+        {
+            return None;
+        }
+        let since = self.status.since_unix?;
+        if now.saturating_sub(since) < 3
+            || self.delay_attempted_since == Some(since)
+            || !matches!(self.tunnel_delay, TunnelDelay::Idle)
+        {
+            return None;
+        }
+        self.delay_attempted_since = Some(since);
+        self.tunnel_delay = TunnelDelay::Measuring;
+        Some(Job::TunnelDelay)
     }
 
     pub(crate) fn can_ping(&self) -> bool {
@@ -927,9 +961,13 @@ impl State {
                 self.helper_version = Some(version);
                 self.helper_error = None;
                 self.status_received = false;
+                self.tunnel_delay = TunnelDelay::Idle;
+                self.delay_attempted_since = None;
             }
             WorkerEvent::HelperUnavailable(error) => {
                 self.helper_available = false;
+                self.tunnel_delay = TunnelDelay::Idle;
+                self.delay_attempted_since = None;
                 self.session_request = None;
                 self.session_snapshot_checked = false;
                 self.traffic_history.clear();
@@ -937,6 +975,13 @@ impl State {
                 self.protection_confirmation = false;
             }
             WorkerEvent::Status(status) => {
+                if !self.helper_available
+                    || !matches!(status.state, ConnectionState::Connected)
+                    || status.since_unix != self.status.since_unix
+                {
+                    self.tunnel_delay = TunnelDelay::Idle;
+                    self.delay_attempted_since = None;
+                }
                 self.status_received = true;
                 if self.helper_available {
                     match status.state {
@@ -1257,6 +1302,25 @@ impl State {
                         );
                     }
                 }
+            }
+            WorkerEvent::TunnelDelay(result) => {
+                if !self.status_received
+                    || !matches!(
+                        self.visible_status().map(|status| &status.state),
+                        Some(ConnectionState::Connected)
+                    )
+                    || !matches!(self.tunnel_delay, TunnelDelay::Measuring)
+                {
+                    return;
+                }
+                self.tunnel_delay = match result {
+                    Ok(outcome) => TunnelDelay::Done(outcome),
+                    Err(HelperCommandError::Client(ClientError::Helper(HelperError {
+                        code: ErrorCode::InvalidState | ErrorCode::Busy,
+                        ..
+                    }))) => TunnelDelay::Idle,
+                    Err(_) => TunnelDelay::Done(ProbeOutcome::Fails),
+                };
             }
             WorkerEvent::UpdateAll(result) => {
                 self.operations.update_all = false;
@@ -1870,6 +1934,16 @@ impl State {
             Action::ToggleExitReveal => {
                 if matches!(self.exit, ExitLookup::Known { .. }) {
                     self.exit_revealed = !self.exit_revealed;
+                }
+            }
+            Action::MeasureDelay => {
+                if self.status_received
+                    && matches!(self.visible_status().map(|status| &status.state), Some(ConnectionState::Connected))
+                    && !matches!(self.tunnel_delay, TunnelDelay::Measuring)
+                {
+                    self.delay_attempted_since = self.status.since_unix;
+                    self.tunnel_delay = TunnelDelay::Measuring;
+                    return Some(Job::TunnelDelay);
                 }
             }
             Action::SelectRuleSet(id) => {
@@ -2893,6 +2967,85 @@ mod tests {
             state.best_ping(&state.config.subscriptions[0]),
             Some(Duration::from_millis(118))
         );
+    }
+
+    #[test]
+    fn tunnel_delay_starts_after_three_seconds_once_per_session() {
+        let mut state = state_for_auto_connect();
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            since_unix: Some(1_000),
+            ..Status::default()
+        }));
+        assert!(state.take_tunnel_delay(1_002).is_none());
+        assert!(matches!(
+            state.take_tunnel_delay(1_003),
+            Some(Job::TunnelDelay)
+        ));
+        assert_eq!(state.tunnel_delay, TunnelDelay::Measuring);
+        assert!(state.take_tunnel_delay(1_004).is_none());
+        state.reduce(WorkerEvent::TunnelDelay(Ok(ProbeOutcome::Works {
+            millis: 85,
+        })));
+        assert_eq!(
+            state.tunnel_delay,
+            TunnelDelay::Done(ProbeOutcome::Works { millis: 85 })
+        );
+        assert!(state.take_tunnel_delay(1_100).is_none());
+
+        state.reduce(WorkerEvent::Status(Status::default()));
+        assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
+        assert!(state.take_tunnel_delay(1_200).is_none());
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            since_unix: Some(1_200),
+            ..Status::default()
+        }));
+        assert!(state.take_tunnel_delay(1_202).is_none());
+        assert!(matches!(
+            state.take_tunnel_delay(1_203),
+            Some(Job::TunnelDelay)
+        ));
+    }
+
+    #[test]
+    fn tunnel_delay_manual_refresh_and_stale_completion() {
+        let mut state = state_for_auto_connect();
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            since_unix: Some(1_000),
+            ..Status::default()
+        }));
+        assert!(matches!(
+            state.act(Action::MeasureDelay),
+            Some(Job::TunnelDelay)
+        ));
+        assert!(state.act(Action::MeasureDelay).is_none());
+        state.reduce(WorkerEvent::TunnelDelay(Err(HelperCommandError::Client(
+            ClientError::Helper(HelperError::new(ErrorCode::Busy, "")),
+        ))));
+        assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
+        assert!(state.operation_error.is_none());
+        assert!(state.take_tunnel_delay(1_003).is_none());
+        assert!(matches!(
+            state.act(Action::MeasureDelay),
+            Some(Job::TunnelDelay)
+        ));
+        state.reduce(WorkerEvent::TunnelDelay(Err(HelperCommandError::Client(
+            ClientError::Closed,
+        ))));
+        assert_eq!(state.tunnel_delay, TunnelDelay::Done(ProbeOutcome::Fails));
+        assert!(matches!(
+            state.act(Action::MeasureDelay),
+            Some(Job::TunnelDelay)
+        ));
+        state.reduce(WorkerEvent::Status(Status::default()));
+        assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
+        assert!(state.act(Action::MeasureDelay).is_none());
+        state.reduce(WorkerEvent::TunnelDelay(Ok(ProbeOutcome::Works {
+            millis: 25,
+        })));
+        assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
     }
 
     #[test]
