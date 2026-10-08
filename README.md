@@ -16,6 +16,7 @@ Rosetun is a Windows VPN client powered by sing-box. A Windows service maintains
 - VLESS, VMess, Trojan and Shadowsocks nodes; TCP, WebSocket, gRPC and HTTPUpgrade transports; plain, TLS and Reality security modes.
 - **DNS through the tunnel** via a configurable DNS-over-HTTPS resolver.
 - **Reconnect automatically** after sleep or an engine failure, with a DNS watchdog while connected.
+- **Server checks:** a quick TCP check and a full check that sends a real request through each server, even while connected.
 - System tray, **Start with Windows**, and English and Russian interfaces.
 
 ## Install
@@ -32,7 +33,8 @@ Compare `Get-FileHash .\rosetun-<version>-setup.exe -Algorithm SHA256` with the 
 
 Rosetun makes these network requests:
 
-- To the VPN server for the tunnel; **Check ping** also makes a TCP connection attempt to each server being checked before connection.
+- To the VPN server for the tunnel; **Quick check** also makes a TCP connection attempt to each server being checked while the tunnel is down.
+- **Full check** and the current server's delay on the connection screen each send one HTTPS request to `https://cp.cloudflare.com/generate_204` through the server being checked or the current server. Full check connects directly to each server, outside the tunnel.
 - To your subscription provider to fetch or update subscriptions, using `User-Agent: Rosetun/<version>` by default. When **Send device ID** is on, the request also includes `x-hwid`, `x-device-os`, `x-ver-os` and `x-device-model`. Subscription URLs may contain credentials; an HTTP subscription sends its token without encryption.
 - To the configured DNS-over-HTTPS resolver through the tunnel. The service also checks DNS by querying `example.com` during connection and random names beneath `example.com` while the tunnel is up.
 - To `https://1.1.1.1/cdn-cgi/trace` through the tunnel for the exit country and public IP shown on the connection screen. The exit IP is hidden by default and is not written to the log.
