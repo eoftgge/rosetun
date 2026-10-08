@@ -202,6 +202,45 @@ pub fn add_rules(
     })
 }
 
+/// Builds a session overlay without writing it to the configuration.
+pub fn temporary_rules(
+    existing: &[Rule],
+    matchers: Vec<RuleMatcher>,
+    target: RuleTarget,
+) -> AddedRules {
+    let mut added = Vec::new();
+    let mut skipped = 0;
+    let mut candidate = 1_u64;
+    for matcher in matchers {
+        if existing
+            .iter()
+            .chain(added.iter())
+            .any(|rule: &Rule| same_matcher(&rule.matcher, &matcher, cfg!(windows)))
+        {
+            skipped += 1;
+            continue;
+        }
+        let id = loop {
+            let id = format!("t{candidate}");
+            candidate += 1;
+            if !existing
+                .iter()
+                .chain(added.iter())
+                .any(|rule: &Rule| rule.id.as_str() == id)
+            {
+                break id;
+            }
+        };
+        added.push(Rule {
+            id: RuleId::new(id),
+            enabled: true,
+            matcher,
+            target,
+        });
+    }
+    AddedRules { added, skipped }
+}
+
 /// Replaces a rule's matcher and target, keeping its id, position and enabled flag.
 pub fn update_rule(
     store: &Store,

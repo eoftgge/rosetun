@@ -198,6 +198,40 @@ fn added_rules_are_enabled_first_and_unique_even_when_disabled() {
 }
 
 #[test]
+fn temporary_rules_skip_existing_and_repeated_matchers_without_reusing_ids() {
+    let existing = [rule("t1", "old.example"), rule("t3", "other.example")];
+    let result = temporary_rules(
+        &existing,
+        vec![
+            domain("first.example"),
+            domain("old.example"),
+            domain("second.example"),
+            domain("first.example"),
+        ],
+        RuleTarget::Direct,
+    );
+    assert_eq!(result.skipped, 2);
+    assert_eq!(result.added.len(), 2);
+    assert_eq!(result.added[0].id, RuleId::new("t2"));
+    assert_eq!(result.added[1].id, RuleId::new("t4"));
+    assert_eq!(result.added[0].matcher, domain("first.example"));
+    assert_eq!(result.added[1].matcher, domain("second.example"));
+    assert!(
+        result
+            .added
+            .iter()
+            .all(|rule| rule.enabled && rule.target == RuleTarget::Direct)
+    );
+    assert_eq!(
+        temporary_rules(&existing, vec![domain("old.example")], RuleTarget::Proxy),
+        AddedRules {
+            added: Vec::new(),
+            skipped: 1
+        }
+    );
+}
+
+#[test]
 fn batch_add_preserves_input_order_at_the_top_and_skips_duplicates() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
