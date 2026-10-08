@@ -191,10 +191,10 @@ fn dispatch(
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
-        Request::ApplyRules { .. } => Response::Error(HelperError::new(
-            ErrorCode::NotImplemented,
-            "live rule updates require an engine config reload",
-        )),
+        Request::Apply(request) => match helper.apply(request) {
+            Ok(()) => Response::Ok,
+            Err(error) => Response::Error(error),
+        },
         Request::Subscribe => Response::Error(HelperError::new(
             ErrorCode::NotImplemented,
             "events are not pushed yet; poll with status",

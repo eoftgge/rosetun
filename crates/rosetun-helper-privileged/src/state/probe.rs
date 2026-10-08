@@ -299,7 +299,7 @@ fn probe_outcome<E>(result: Result<Duration, E>) -> ProbeOutcome {
     }
 }
 
-fn resolve_nodes(nodes: &[Node]) -> Vec<Option<IpAddr>> {
+pub(super) fn resolve_nodes(nodes: &[Node]) -> Vec<Option<IpAddr>> {
     let mut endpoints = vec![None; nodes.len()];
     let mut jobs = Vec::new();
     for (index, node) in nodes.iter().enumerate() {

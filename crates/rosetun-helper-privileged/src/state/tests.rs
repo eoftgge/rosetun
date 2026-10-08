@@ -1,6 +1,6 @@
 use rosetun_config::{
-    EngineKind, NodeId, Outbound, RuleId, RuleSetId, RuleTarget, Selection, SubscriptionId,
-    Traffic, VlessParams,
+    EngineKind, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget, Selection,
+    SubscriptionId, Traffic, VlessParams,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
@@ -400,6 +400,8 @@ struct EngineControls {
     spawns: AtomicUsize,
     running: Mutex<Option<Arc<AtomicBool>>>,
     outcomes: Mutex<VecDeque<bool>>,
+    readiness: Mutex<VecDeque<bool>>,
+    rendered_rules: Mutex<Vec<RuleSet>>,
 }
 
 impl EngineControls {
@@ -407,6 +409,13 @@ impl EngineControls {
         self.outcomes
             .lock()
             .expect("test outcomes mutex")
+            .extend(std::iter::repeat_n(false, count));
+    }
+
+    fn fail_readiness_next(&self, count: usize) {
+        self.readiness
+            .lock()
+            .expect("test readiness mutex")
             .extend(std::iter::repeat_n(false, count));
     }
 
@@ -456,11 +465,22 @@ impl EngineBackend for ControlledEngine {
         Ok(PathBuf::from("sing-box"))
     }
 
-    fn render(&self, _request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+    fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        self.controls
+            .rendered_rules
+            .lock()
+            .expect("test rendered rules mutex")
+            .push(request.rules.clone());
         Ok(RenderedConfig {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
-            unsupported: Vec::new(),
+            unsupported: request
+                .rules
+                .rules
+                .iter()
+                .filter(|rule| rule.id == RuleId::new("unsupported-rule"))
+                .map(|rule| rule.id.clone())
+                .collect(),
             unsupported_probes: Vec::new(),
         })
     }
@@ -483,7 +503,38 @@ impl EngineBackend for ControlledEngine {
         }
         let running = Arc::new(AtomicBool::new(true));
         *self.controls.running.lock().expect("test process mutex") = Some(Arc::clone(&running));
-        Ok(Box::new(RunningThenExitedProcess { running }))
+        let ready = self
+            .controls
+            .readiness
+            .lock()
+            .expect("test readiness mutex")
+            .pop_front()
+            .unwrap_or(true);
+        Ok(Box::new(ControlledProcess { running, ready }))
+    }
+}
+
+#[derive(Debug)]
+struct ControlledProcess {
+    running: Arc<AtomicBool>,
+    ready: bool,
+}
+
+impl EngineProcess for ControlledProcess {
+    fn is_running(&mut self) -> Result<bool, EngineError> {
+        Ok(self.running.load(Ordering::Acquire))
+    }
+
+    fn is_ready(&mut self) -> Result<bool, EngineError> {
+        if !self.ready {
+            self.running.store(false, Ordering::Release);
+        }
+        Ok(self.ready)
+    }
+
+    fn stop(&mut self) -> Result<(), EngineError> {
+        self.running.store(false, Ordering::Release);
+        Ok(())
     }
 }
 
@@ -2162,6 +2213,392 @@ fn connect_request() -> ConnectRequest {
         rule_set: RuleSet::new(RuleSetId::new("base"), "base", RuleTarget::Proxy),
         settings: Settings::default(),
     }
+}
+
+fn request_with_new_rules(request: &ConnectRequest) -> ConnectRequest {
+    let mut updated = request.clone();
+    updated.rule_set.rules.push(Rule {
+        id: RuleId::new("block-example"),
+        enabled: true,
+        matcher: RuleMatcher::IpCidr("192.0.2.0/24".to_owned()),
+        target: RuleTarget::Block,
+    });
+    updated
+}
+
+#[test]
+fn apply_requires_a_connected_and_unlocked_session() {
+    let (helper, controls, _, _) = supervised_helper(false);
+    let request = connect_request();
+    assert_eq!(
+        helper.apply(&request).unwrap_err().code,
+        ErrorCode::InvalidState
+    );
+    let session = helper.session().expect("session");
+    assert_eq!(helper.apply(&request).unwrap_err().code, ErrorCode::Busy);
+    drop(session);
+    assert_eq!(controls.spawns(), 0);
+}
+
+#[test]
+fn apply_identical_request_does_not_restart_the_engine() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let since = helper.status().since_unix;
+
+    helper.apply(&request).expect("no changes");
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(helper.status().since_unix, since);
+}
+
+#[test]
+fn apply_rejects_each_protection_change_without_a_restart() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let mut changes = Vec::new();
+    let mut engine = request.clone();
+    engine.settings.engine = EngineKind::Xray;
+    changes.push(engine);
+    let mut tun = request.clone();
+    tun.settings.tun.name = "other-tun".to_owned();
+    changes.push(tun);
+    let mut kill_switch = request.clone();
+    kill_switch.settings.kill_switch = false;
+    changes.push(kill_switch);
+    let mut allow_lan = request.clone();
+    allow_lan.settings.allow_lan = true;
+    changes.push(allow_lan);
+
+    for changed in changes {
+        assert!(super::apply::needs_reconnect(
+            &request.settings,
+            &changed.settings
+        ));
+        let error = helper.apply(&changed).expect_err("reconnect required");
+        assert_eq!(error.code, ErrorCode::InvalidState);
+        assert_eq!(error.message, "reconnect to change protection settings");
+        assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+    }
+    assert!(!super::apply::needs_reconnect(
+        &request.settings,
+        &request.settings
+    ));
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn apply_metadata_only_updates_supervisor_without_restarting() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.auto_reconnect = false;
+    helper.connect(&request).expect("connect");
+    let mut changed = request.clone();
+    changed.settings.autostart = !request.settings.autostart;
+    helper.apply(&changed).expect("update autostart");
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
+
+    changed.settings.auto_reconnect = true;
+    helper.apply(&changed).expect("update auto-reconnect");
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
+    controls.kill();
+    helper.supervise(Instant::now());
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+}
+
+#[test]
+fn apply_rules_restarts_under_the_guard_and_supervisor_uses_new_rules() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let changed = request_with_new_rules(&request);
+    let since = helper.status().since_unix;
+
+    helper.apply(&changed).expect("apply rules");
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.status().since_unix, since);
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
+
+    controls.kill();
+    helper.supervise(Instant::now());
+    assert_eq!(controls.spawns(), 3);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(
+        controls.rendered_rules.lock().unwrap().last(),
+        Some(&changed.rule_set)
+    );
+}
+
+#[test]
+fn apply_new_ip_and_named_node_updates_status_without_releasing_protection() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let since = helper.status().since_unix;
+    let mut changed = request.clone();
+    changed.node.id = NodeId::new("second-node");
+    changed.selection.node = changed.node.id.clone();
+    changed.node.server = "127.0.0.2".to_owned();
+    helper.apply(&changed).expect("apply IP node");
+    assert_eq!(helper.status().node, Some(changed.node.id.clone()));
+    assert_eq!(helper.status().since_unix, since);
+
+    let mut named = changed.clone();
+    named.node.id = NodeId::new("local-node");
+    named.selection.node = named.node.id.clone();
+    named.node.server = "localhost".to_owned();
+    helper.apply(&named).expect("resolve name through tunnel");
+    assert_eq!(helper.status().node, Some(named.node.id.clone()));
+    assert_eq!(helper.status().since_unix, since);
+    assert_eq!(controls.spawns(), 3);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(
+        helper
+            .session()
+            .unwrap()
+            .last_endpoint
+            .as_ref()
+            .unwrap()
+            .server,
+        "localhost"
+    );
+}
+
+#[test]
+fn apply_reuses_normalized_cached_server_name() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let address = helper
+        .session()
+        .unwrap()
+        .last_endpoint
+        .as_ref()
+        .unwrap()
+        .address;
+    helper.session().unwrap().last_endpoint = Some(SuccessfulEndpoint {
+        server: "cached.invalid".to_owned(),
+        address,
+    });
+    let mut changed = request.clone();
+    changed.node.server = "CACHED.INVALID.".to_owned();
+    changed.node.port = 8443;
+
+    helper.apply(&changed).expect("reuse cached address");
+    assert_eq!(
+        helper
+            .session()
+            .unwrap()
+            .last_endpoint
+            .as_ref()
+            .unwrap()
+            .address,
+        address
+    );
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn apply_dns_lock_reuses_guard() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, controls, prepared, reverted) =
+        supervised_helper_with_dns(false, Some(server.address()));
+    shorten_dns_timeouts(&helper);
+    let request = connect_request();
+    helper.connect(&request).expect("connect under DNS lock");
+
+    helper
+        .apply(&request_with_new_rules(&request))
+        .expect("apply under DNS lock");
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(
+        helper.session().unwrap().guard.as_ref().unwrap().scope,
+        ProtectionScope::DnsOnly
+    );
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn apply_unresolvable_node_leaves_the_running_session_intact() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let mut changed = request.clone();
+    changed.node.server = "name.invalid".to_owned();
+
+    let error = helper.apply(&changed).expect_err("name cannot be resolved");
+    assert_eq!(error.code, ErrorCode::RoutingFailed);
+    assert_eq!(
+        error.message,
+        "cannot resolve the new server through the tunnel"
+    );
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn apply_unsupported_rules_does_not_restart_or_change_request() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let mut changed = request_with_new_rules(&request);
+    changed.rule_set.rules[0].id = RuleId::new("unsupported-rule");
+
+    let error = helper.apply(&changed).expect_err("unsupported rules");
+    assert_eq!(error.code, ErrorCode::UnsupportedRules);
+    assert!(error.message.contains("unsupported-rule"));
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+}
+
+#[test]
+fn apply_failed_start_rolls_back_to_original_node_and_endpoint() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let since = helper.status().since_unix;
+    let previous = helper
+        .session()
+        .unwrap()
+        .last_endpoint
+        .as_ref()
+        .unwrap()
+        .address;
+    let mut changed = request.clone();
+    changed.node.id = NodeId::new("second-node");
+    changed.node.server = "127.0.0.2".to_owned();
+    changed.selection.node = changed.node.id.clone();
+    controls.fail_readiness_next(1);
+
+    let error = helper.apply(&changed).expect_err("new engine not ready");
+    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert!(error.message.starts_with("changes were not applied: "));
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.status().node, Some(request.node.id.clone()));
+    assert_eq!(helper.status().since_unix, since);
+    let session = helper.session().unwrap();
+    assert_eq!(session.request.as_ref(), Some(&request));
+    assert_eq!(session.last_endpoint.as_ref().unwrap().address, previous);
+    drop(session);
+    assert_eq!(controls.spawns(), 3);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn apply_failed_start_and_rollback_schedule_original_request() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let since = helper.status().since_unix;
+    let changed = request_with_new_rules(&request);
+    controls.fail_readiness_next(2);
+
+    let error = helper.apply(&changed).expect_err("both starts fail");
+    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Reconnecting
+    ));
+    assert_eq!(helper.status().since_unix, since);
+    let session = helper.session().unwrap();
+    assert_eq!(session.request.as_ref(), Some(&request));
+    let reconnect = session.reconnect.as_ref().expect("retry scheduled");
+    assert_eq!(reconnect.failures, 1);
+    assert_eq!(reconnect.cause, "apply failed");
+    drop(session);
+    assert_eq!(controls.spawns(), 3);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+
+    helper.supervise(Instant::now() + Duration::from_secs(60));
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.status().since_unix, since);
+    assert_eq!(helper.status().node, Some(request.node.id.clone()));
+    assert_eq!(controls.spawns(), 4);
+    assert_eq!(prepared.load(Ordering::Acquire), 3);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(
+        controls.rendered_rules.lock().unwrap().last(),
+        Some(&request.rule_set)
+    );
+}
+
+#[test]
+fn apply_failed_start_and_rollback_without_reconnect_remain_protected() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.auto_reconnect = false;
+    helper.connect(&request).expect("connect");
+    controls.fail_readiness_next(2);
+
+    let error = helper.apply(&request_with_new_rules(&request)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { .. }
+    ));
+    assert!(helper.status().since_unix.is_none());
+    let session = helper.session().unwrap();
+    assert!(session.request.is_none());
+    assert!(session.guard.is_some());
+    drop(session);
+    assert_eq!(controls.spawns(), 3);
+    assert_eq!(prepared.load(Ordering::Acquire), 2);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn apply_failed_start_and_rollback_without_a_guard_tear_down() {
+    let (helper, controls, _, _) = supervised_helper(false);
+    let mut request = connect_request();
+    request.settings.auto_reconnect = false;
+    helper.connect(&request).expect("connect");
+    controls.fail_readiness_next(2);
+
+    helper
+        .apply(&request_with_new_rules(&request))
+        .expect_err("both starts fail");
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed { .. }
+    ));
+    assert!(helper.status().since_unix.is_none());
+    assert!(helper.session().unwrap().request.is_none());
+    assert_eq!(controls.spawns(), 3);
 }
 
 #[derive(Debug)]

@@ -1,3 +1,4 @@
+mod apply;
 mod dns;
 mod path;
 mod probe;
@@ -13,7 +14,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{ConnectionState, Node, RuleSet, Settings, Status, Traffic};
 use rosetun_engine::{
-    ControlEndpoint, EngineProcess, EngineRegistry, RenderRequest, TrafficProbe, TrafficTotals,
+    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
+    TrafficProbe, TrafficTotals,
 };
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 use rosetun_routing::{
@@ -252,7 +254,13 @@ impl Helper {
         } else {
             StartMode::Fresh
         };
-        match session.start(&request.node, &request.rule_set, &request.settings, mode) {
+        match session.start(
+            &request.node,
+            &request.rule_set,
+            &request.settings,
+            mode,
+            None,
+        ) {
             Ok(()) => {
                 self.with_status(|status| {
                     status.state = ConnectionState::Connected;
@@ -330,7 +338,13 @@ impl Helper {
         session.reconnect = None;
         self.with_status(|status| status.state = ConnectionState::Connecting);
 
-        match session.start(&request.node, &request.rule_set, &request.settings, mode) {
+        match session.start(
+            &request.node,
+            &request.rule_set,
+            &request.settings,
+            mode,
+            None,
+        ) {
             Ok(()) => {
                 self.with_status(|status| {
                     status.state = ConnectionState::Connected;
@@ -587,6 +601,7 @@ impl Session {
         rules: &RuleSet,
         settings: &Settings,
         mode: StartMode,
+        endpoint: Option<IpAddr>,
     ) -> Result<(), HelperError> {
         // Dispose of the old process before borrowing the backend or spawning another.
         // A stop failure retains its handle and prevents a second engine from starting.
@@ -614,7 +629,9 @@ impl Session {
             }
         }
 
-        let endpoint = if mode == StartMode::ProtectedReconnect {
+        let endpoint = if endpoint.is_some() {
+            endpoint
+        } else if mode == StartMode::ProtectedReconnect {
             Some(protected_endpoint(node, self.last_endpoint.as_ref())?)
         } else if settings.engine == rosetun_config::EngineKind::SingBox {
             Some(select_endpoint(&resolve(&node.server, node.port)?)?)
@@ -647,31 +664,14 @@ impl Session {
         } else {
             self.gate.close();
         }
-        let config = backend
-            .render(&RenderRequest {
-                node: resolved_node.as_ref().unwrap_or(node),
-                rules,
-                settings,
-                control: control.as_ref(),
-                verbose_log: verbose_until.is_some(),
-            })
-            .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
-
-        if !config.unsupported.is_empty() {
-            let rule_ids = config
-                .unsupported
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(HelperError::new(
-                ErrorCode::UnsupportedRules,
-                format!(
-                    "engine {} cannot represent enabled rules: {rule_ids}",
-                    backend.kind().as_str()
-                ),
-            ));
-        }
+        let config = render_config(
+            backend,
+            resolved_node.as_ref().unwrap_or(node),
+            rules,
+            settings,
+            control.as_ref(),
+            verbose_until.is_some(),
+        )?;
 
         let binary = backend
             .locate_binary()
@@ -772,7 +772,8 @@ impl Session {
                 Ok(()) => {}
                 // A lock that cannot authorize the tunnel would block DNS into it as well.
                 Err(error)
-                    if error.code == ErrorCode::RoutingFailed
+                    if mode == StartMode::Fresh
+                        && error.code == ErrorCode::RoutingFailed
                         && self
                             .guard
                             .as_ref()
@@ -959,6 +960,42 @@ impl Session {
             tracing::error!(%error, "failed to roll back routes");
         }
     }
+}
+
+fn render_config(
+    backend: &dyn EngineBackend,
+    node: &Node,
+    rules: &RuleSet,
+    settings: &Settings,
+    control: Option<&ControlEndpoint>,
+    verbose_log: bool,
+) -> Result<RenderedConfig, HelperError> {
+    let config = backend
+        .render(&RenderRequest {
+            node,
+            rules,
+            settings,
+            control,
+            verbose_log,
+        })
+        .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+
+    if !config.unsupported.is_empty() {
+        let rule_ids = config
+            .unsupported
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(HelperError::new(
+            ErrorCode::UnsupportedRules,
+            format!(
+                "engine {} cannot represent enabled rules: {rule_ids}",
+                backend.kind().as_str()
+            ),
+        ));
+    }
+    Ok(config)
 }
 
 fn wait_for_engine_ready(process: &mut dyn EngineProcess) -> Result<(), HelperError> {
