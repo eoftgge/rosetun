@@ -12,6 +12,9 @@ use crate::{strings, theme, widgets};
 
 const DIALOG_WIDTH: f32 = 640.0;
 const DIALOG_TOP: f32 = 100.0;
+const COMPACT_DIALOG_HEIGHT: f32 = 600.0;
+const DURATION_HEIGHT: f32 = 80.0;
+const ERROR_HEIGHT: f32 = 28.0;
 const PROCESS_ROW_HEIGHT: f32 = 44.0;
 const PROCESS_ROW_GAP: f32 = 4.0;
 const MIN_PROCESS_LIST: f32 = 2.0 * PROCESS_ROW_HEIGHT + PROCESS_ROW_GAP;
@@ -39,12 +42,23 @@ pub(crate) fn show(
     can_temporary: bool,
     actions: &mut Vec<Action>,
 ) {
+    if !can_temporary {
+        dialog.temporary_only = false;
+    }
     let id = egui::Id::new("add_rule");
+    let top = if dialog.editing.is_some() {
+        DIALOG_TOP
+    } else {
+        let error_height = if dialog.error.is_some() {
+            ERROR_HEIGHT
+        } else {
+            0.0
+        };
+        DIALOG_TOP
+            .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0))
+    };
     let response = egui::Modal::new(id)
-        .area(
-            egui::Modal::default_area(id)
-                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, DIALOG_TOP)),
-        )
+        .area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, top)))
         .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(DIALOG_WIDTH);
@@ -93,9 +107,17 @@ pub(crate) fn show(
                     - BUTTON_ROW_HEIGHT
                     - ACTIONS_GAP
                     - 104.0
-                    - if dialog.editing.is_none() { 28.0 } else { 0.0 }
+                    - if dialog.editing.is_none() {
+                        DURATION_HEIGHT
+                    } else {
+                        0.0
+                    }
                     - advanced_height
-                    - if dialog.error.is_some() { 28.0 } else { 0.0 };
+                    - if dialog.error.is_some() {
+                        ERROR_HEIGHT
+                    } else {
+                        0.0
+                    };
                 let height = process_body_height(ui.cursor().top(), limit, dialog.advanced);
                 ui.allocate_ui_with_layout(
                     egui::vec2(DIALOG_WIDTH, height),
@@ -116,6 +138,31 @@ pub(crate) fn show(
                     .color(theme::TEXT_DIM),
             );
             target_cards(ui, dialog);
+            if dialog.editing.is_none() {
+                ui.add_space(4.0);
+                ui.label(RichText::new(t().how_long).small().color(theme::TEXT_DIM));
+                if let Some(temporary) = widgets::segmented(
+                    ui,
+                    "rule_duration",
+                    dialog.temporary_only,
+                    &[
+                        (false, t().duration_permanent),
+                        (true, t().duration_until_disconnect),
+                    ],
+                    true,
+                    can_temporary && !dialog.busy,
+                ) {
+                    dialog.temporary_only = temporary;
+                }
+                let (hint, color) = if !can_temporary {
+                    (t().duration_needs_connection, theme::TEXT_DIM)
+                } else if dialog.temporary_only {
+                    (t().duration_temporary_hint, theme::ROSE_LIGHT)
+                } else {
+                    (t().duration_permanent_hint, theme::TEXT_DIM)
+                };
+                ui.label(RichText::new(hint).small().color(color));
+            }
             if dialog.kind == RuleInputKind::Process {
                 ui.add_space(4.0);
                 if dialog.advanced {
@@ -139,26 +186,6 @@ pub(crate) fn show(
                         });
                     }
                 }
-            }
-            if dialog.editing.is_none() {
-                ui.add_space(4.0);
-                let response = ui
-                    .horizontal(|ui| {
-                        ui.label(t().temporary_only);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            widgets::toggle(
-                                ui,
-                                &mut dialog.temporary_only,
-                                can_temporary && !dialog.busy,
-                            );
-                        });
-                    })
-                    .response;
-                response.on_hover_text(if can_temporary {
-                    t().temporary_hint
-                } else {
-                    t().temporary_needs_connection
-                });
             }
             if let Some(error) = &dialog.error {
                 ui.add_space(6.0);
@@ -737,19 +764,29 @@ mod tests {
     #[test]
     fn modal_fits_compact_and_standard_windows() {
         use super::*;
-        use rosetun_config::RuleSetId;
+        use rosetun_config::{RuleId, RuleSetId};
 
-        for (width, height, advanced, site) in [
-            (960.0, 640.0, false, false),
-            (960.0, 640.0, true, false),
-            (960.0, 640.0, false, true),
-            (1200.0, 780.0, false, false),
-            (1200.0, 780.0, true, false),
-            (1200.0, 780.0, false, true),
+        for (width, height, advanced, site, can_temporary, editing, error) in [
+            (960.0, 640.0, false, false, true, false, false),
+            (960.0, 640.0, true, false, true, false, false),
+            (960.0, 640.0, false, true, true, false, false),
+            (960.0, 640.0, true, false, false, false, false),
+            (960.0, 640.0, false, false, true, false, true),
+            (960.0, 640.0, true, false, true, true, false),
+            (1200.0, 780.0, false, false, true, false, false),
+            (1200.0, 780.0, true, false, true, false, false),
+            (1200.0, 780.0, false, true, false, false, false),
         ] {
             let ctx = egui::Context::default();
             theme::apply(&ctx);
             let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            dialog.temporary_only = !can_temporary;
+            if error {
+                dialog.error = Some("This rule is already in the set.".into());
+            }
+            if editing {
+                dialog.editing = Some(RuleId::new("1"));
+            }
             if site {
                 dialog.kind = RuleInputKind::Domain;
                 dialog.domains = "youtube.com\n192.168.1.1\nru\n127.0.0.1\ninvalid host".into();
@@ -766,12 +803,16 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, true, &mut Vec::new()),
+                |ctx| show(ctx, &mut dialog, can_temporary, &mut Vec::new()),
             );
             output.textures_delta.clear();
+            if !can_temporary {
+                assert!(!dialog.temporary_only);
+            }
             let rect = ctx
                 .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
                 .unwrap();
+            assert!(rect.top() >= 0.0, "{rect:?} in {width}×{height}");
             assert!(rect.bottom() <= height, "{rect:?} in {width}×{height}");
         }
     }

@@ -1105,6 +1105,11 @@ impl State {
                 self.protection_confirmation = false;
             }
             WorkerEvent::Status(status) => {
+                if (!self.helper_available || !matches!(status.state, ConnectionState::Connected))
+                    && let Some(dialog) = &mut self.rule_screen.add
+                {
+                    dialog.temporary_only = false;
+                }
                 if !self.helper_available
                     || !matches!(status.state, ConnectionState::Connected)
                     || status.since_unix != self.status.since_unix
@@ -3776,6 +3781,22 @@ mod tests {
         assert!(!state.can_change_temporary());
         assert!(state.act(Action::SubmitAddRule).is_none());
         assert!(state.temporary_rules.is_empty());
+    }
+
+    #[test]
+    fn disconnect_resets_the_open_rule_dialog_to_permanent() {
+        let mut state = connected_state_for_apply();
+        temporary_dialog(&mut state, "session.example");
+        assert!(state.rule_screen.add.as_ref().unwrap().temporary_only);
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Disconnected,
+            ..Status::default()
+        }));
+        assert!(!state.rule_screen.add.as_ref().unwrap().temporary_only);
+        assert!(matches!(
+            state.act(Action::SubmitAddRule),
+            Some(Job::AddRules(_, _, RuleTarget::Direct))
+        ));
     }
 
     #[test]
