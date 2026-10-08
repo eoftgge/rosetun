@@ -396,6 +396,7 @@ impl SettingsScreen {
 }
 
 pub(crate) enum SessionPart {
+    Server,
     Rules,
     Dns,
     Protection,
@@ -415,6 +416,7 @@ pub(crate) struct State {
     delay_last_auto: Option<u64>,
     session_request: Option<ConnectRequest>,
     session_snapshot_checked: bool,
+    apply_after_choice: bool,
     pub(crate) exit: ExitLookup,
     exit_route: Option<ExitRoute>,
     exit_generation: u64,
@@ -456,6 +458,7 @@ impl Default for State {
             delay_last_auto: None,
             session_request: None,
             session_snapshot_checked: false,
+            apply_after_choice: false,
             exit: ExitLookup::None,
             exit_route: None,
             exit_generation: 0,
@@ -540,6 +543,7 @@ pub(crate) enum Action {
     DropRule(RuleId, usize),
     MoveRuleToTop(RuleId),
     Primary,
+    Apply,
     RequestProtectionOff,
     KeepBlocked,
     ConfirmProtectionOff,
@@ -574,6 +578,7 @@ pub(crate) enum Action {
 
 pub(crate) enum Job {
     Connect,
+    Apply(Box<ConnectRequest>),
     Disconnect,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
@@ -656,10 +661,50 @@ impl State {
             return false;
         };
         match part {
+            SessionPart::Server => session.selection != current.selection,
             SessionPart::Rules => session.rule_set != current.rule_set,
             SessionPart::Dns => session.settings.dns != current.settings.dns,
             SessionPart::Protection => session.settings.kill_switch != current.settings.kill_switch,
         }
+    }
+
+    fn apply_request(&self) -> Option<ConnectRequest> {
+        let session = self.session_request.as_ref()?;
+        let mut request = ConnectRequest::from_config(&self.config).ok()?;
+        request.settings.engine = session.settings.engine;
+        request.settings.tun = session.settings.tun.clone();
+        request.settings.kill_switch = session.settings.kill_switch;
+        request.settings.allow_lan = session.settings.allow_lan;
+        Some(request)
+    }
+
+    pub(crate) fn can_apply(&self) -> bool {
+        if !self.helper_available
+            || !self.config_ready
+            || self.operations.helper
+            || !matches!(
+                self.visible_status().map(|status| &status.state),
+                Some(ConnectionState::Connected)
+            )
+        {
+            return false;
+        }
+        let Some(session) = &self.session_request else {
+            return false;
+        };
+        let Ok(current) = ConnectRequest::from_config(&self.config) else {
+            return false;
+        };
+        session.selection != current.selection
+            || session.rule_set != current.rule_set
+            || session.settings.dns != current.settings.dns
+    }
+
+    pub(crate) fn take_apply(&mut self) -> Option<Job> {
+        if !std::mem::take(&mut self.apply_after_choice) || !self.can_apply() {
+            return None;
+        }
+        self.act(Action::Apply)
     }
 
     pub(crate) fn primary_action(&self) -> PrimaryAction {
@@ -985,6 +1030,7 @@ impl State {
                 self.delay_last_auto = None;
                 self.session_request = None;
                 self.session_snapshot_checked = false;
+                self.apply_after_choice = false;
                 self.traffic_history.clear();
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;
@@ -1005,6 +1051,7 @@ impl State {
                         | ConnectionState::FailedProtected { .. } => {
                             self.session_request = None;
                             self.session_snapshot_checked = false;
+                            self.apply_after_choice = false;
                         }
                         ConnectionState::Connected
                             if self.session_request.is_none()
@@ -1071,6 +1118,22 @@ impl State {
                     Err(error) => self.helper_result(Err(error)),
                 }
             }
+            WorkerEvent::Apply(result) => {
+                self.operations.helper = false;
+                match result {
+                    Ok(request) => {
+                        self.session_request = Some(request);
+                        self.operation_error = None;
+                        self.exit_route = None;
+                        self.tunnel_delay = TunnelDelay::Idle;
+                        self.delay_last_auto = None;
+                    }
+                    Err(error) => {
+                        let reason = errors::helper_command(t(), &error);
+                        self.operation_error = Some(self.text(&t().apply_failed(&reason)));
+                    }
+                }
+            }
             WorkerEvent::Disconnect(result) => {
                 self.operations.helper = false;
                 if result.is_ok() {
@@ -1080,12 +1143,22 @@ impl State {
             }
             WorkerEvent::SelectNode(result) => {
                 self.operations.selection = false;
+                self.apply_after_choice = result.is_ok()
+                    && matches!(
+                        self.visible_status().map(|status| &status.state),
+                        Some(ConnectionState::Connected)
+                    );
                 self.operation_error = result
                     .err()
                     .map(|error| self.text(&errors::select_node(t(), &error)));
             }
             WorkerEvent::SelectRuleSet(result) => {
                 self.operations.rules = false;
+                self.apply_after_choice = result.is_ok()
+                    && matches!(
+                        self.visible_status().map(|status| &status.state),
+                        Some(ConnectionState::Connected)
+                    );
                 self.operation_error = result
                     .err()
                     .map(|error| self.text(&errors::select_rule_set(t(), &error)));
@@ -1903,6 +1976,13 @@ impl State {
                 self.operations.helper = true;
                 self.operation_error = None;
                 return Some(job);
+            }
+            Action::Apply => {
+                if self.can_apply() && let Some(request) = self.apply_request() {
+                    self.operations.helper = true;
+                    self.operation_error = None;
+                    return Some(Job::Apply(Box::new(request)));
+                }
             }
             Action::RequestProtectionOff => {
                 if self.helper_available
@@ -3335,6 +3415,21 @@ mod tests {
         assert!(state.config_error.is_none());
     }
 
+    fn connected_state_for_apply() -> State {
+        let mut state = state_for_auto_connect();
+        state.config.rule_sets.push(rule_set("1"));
+        state.config.active_rule_set = Some(RuleSetId::new("1"));
+        let request = ConnectRequest::from_config(&state.config).unwrap();
+        state.reduce(WorkerEvent::Connect(Ok(request)));
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            since_unix: Some(now_unix().saturating_sub(30)),
+            ..Status::default()
+        }));
+        state
+    }
+
     #[test]
     fn successful_connect_has_no_pending_changes_until_dns_or_protection_changes() {
         let mut state = state_for_auto_connect();
@@ -3342,6 +3437,7 @@ mod tests {
         state.reduce(WorkerEvent::Connect(Ok(request.clone())));
         assert_eq!(state.session_request, Some(request));
         for part in [
+            SessionPart::Server,
             SessionPart::Rules,
             SessionPart::Dns,
             SessionPart::Protection,
@@ -3361,12 +3457,172 @@ mod tests {
 
         state.config.active = None;
         for part in [
+            SessionPart::Server,
             SessionPart::Rules,
             SessionPart::Dns,
             SessionPart::Protection,
         ] {
             assert!(!state.pending_reconnect(part));
         }
+    }
+
+    #[test]
+    fn selecting_a_server_applies_once_with_the_running_protection() {
+        let mut state = connected_state_for_apply();
+        let mut other = state.config.subscriptions[0].nodes[0].clone();
+        other.id = NodeId::new("other");
+        state.config.subscriptions[0].nodes.push(other);
+        let selection = Selection {
+            subscription: SubscriptionId::new("1"),
+            node: NodeId::new("other"),
+        };
+        let original = state.session_request.clone().unwrap();
+        state.config.settings.kill_switch = !original.settings.kill_switch;
+        state.config.settings.allow_lan = !original.settings.allow_lan;
+
+        assert!(matches!(
+            state.act(Action::SelectNode(
+                selection.subscription.clone(),
+                selection.node.clone()
+            )),
+            Some(Job::SelectNode(_, _))
+        ));
+        state.config.active = Some(selection.clone());
+        state.reduce(WorkerEvent::SelectNode(Ok("Other".into())));
+        assert!(state.pending_reconnect(SessionPart::Server));
+        let Some(Job::Apply(request)) = state.take_apply() else {
+            panic!("server choice must apply");
+        };
+        assert_eq!(request.selection, selection);
+        assert_eq!(request.settings.kill_switch, original.settings.kill_switch);
+        assert_eq!(request.settings.allow_lan, original.settings.allow_lan);
+        assert!(state.operations.helper);
+        assert!(
+            state
+                .act(Action::SelectNode(
+                    SubscriptionId::new("1"),
+                    NodeId::new("node")
+                ))
+                .is_none()
+        );
+        assert!(state.take_apply().is_none());
+    }
+
+    #[test]
+    fn server_choice_during_reconnect_does_not_apply() {
+        let mut state = connected_state_for_apply();
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Reconnecting,
+            ..Status::default()
+        }));
+        let mut other = state.config.subscriptions[0].nodes[0].clone();
+        other.id = NodeId::new("other");
+        state.config.subscriptions[0].nodes.push(other);
+        state.config.active.as_mut().unwrap().node = NodeId::new("other");
+        state.reduce(WorkerEvent::SelectNode(Ok("Other".into())));
+        assert!(state.pending_reconnect(SessionPart::Server));
+        assert!(!state.can_apply());
+        assert!(state.take_apply().is_none());
+    }
+
+    #[test]
+    fn choosing_rule_set_applies_but_editing_a_rule_waits_for_apply() {
+        let mut state = connected_state_for_apply();
+        state.config.rule_sets.push(rule_set("2"));
+        assert!(matches!(
+            state.act(Action::SelectRuleSet(Some(RuleSetId::new("2")))),
+            Some(Job::SelectRuleSet(_))
+        ));
+        state.config.active_rule_set = Some(RuleSetId::new("2"));
+        state.reduce(WorkerEvent::SelectRuleSet(Ok(())));
+        let Some(Job::Apply(request)) = state.take_apply() else {
+            panic!("rule-set choice must apply");
+        };
+        state.reduce(WorkerEvent::Apply(Ok(*request)));
+
+        state.config.rule_sets[1].rules[0].target = RuleTarget::Direct;
+        assert!(state.pending_reconnect(SessionPart::Rules));
+        assert!(state.take_apply().is_none());
+        assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
+        assert!(state.act(Action::Apply).is_none());
+    }
+
+    #[test]
+    fn selecting_the_same_server_consumes_auto_apply_without_a_job() {
+        let mut state = connected_state_for_apply();
+        state.reduce(WorkerEvent::SelectNode(Ok("Test".into())));
+        assert!(state.take_apply().is_none());
+        assert!(!state.apply_after_choice);
+    }
+
+    #[test]
+    fn protection_only_cannot_apply() {
+        let mut state = connected_state_for_apply();
+        state.config.settings.kill_switch = !state.config.settings.kill_switch;
+        assert!(state.pending_reconnect(SessionPart::Protection));
+        assert!(!state.can_apply());
+        assert!(state.act(Action::Apply).is_none());
+    }
+
+    #[test]
+    fn applying_changes_refreshes_the_session_exit_and_delay() {
+        let mut state = connected_state_for_apply();
+        let mut other = state.config.subscriptions[0].nodes[0].clone();
+        other.id = NodeId::new("other");
+        state.config.subscriptions[0].nodes.push(other);
+        state.config.active.as_mut().unwrap().node = NodeId::new("other");
+        state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+        state.config.settings.dns = DnsPreset::Google.settings();
+        assert!(state.pending_reconnect(SessionPart::Server));
+        assert!(state.pending_reconnect(SessionPart::Rules));
+        assert!(state.pending_reconnect(SessionPart::Dns));
+        assert!(matches!(
+            state.take_exit_lookup(),
+            Some(Job::LookupExit { .. })
+        ));
+        state.exit = ExitLookup::Failed(ExitRoute::Tunnel);
+        state.tunnel_delay = TunnelDelay::Done(ProbeOutcome::Fails);
+        state.delay_last_auto = Some(now_unix());
+        let Some(Job::Apply(request)) = state.act(Action::Apply) else {
+            panic!("DNS change must apply");
+        };
+        state.reduce(WorkerEvent::Apply(Ok(*request.clone())));
+        assert_eq!(state.session_request.as_ref(), Some(request.as_ref()));
+        assert!(!state.pending_reconnect(SessionPart::Server));
+        assert!(!state.pending_reconnect(SessionPart::Rules));
+        assert!(!state.pending_reconnect(SessionPart::Dns));
+        assert!(matches!(
+            state.take_exit_lookup(),
+            Some(Job::LookupExit {
+                route: ExitRoute::Tunnel,
+                ..
+            })
+        ));
+        assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
+        assert!(state.delay_last_auto.is_none());
+        assert!(!state.operations.helper);
+    }
+
+    #[test]
+    fn failed_apply_preserves_session_and_shows_error() {
+        let mut state = connected_state_for_apply();
+        let original = state.session_request.clone();
+        state.config.settings.dns = DnsPreset::Google.settings();
+        assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
+        state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
+            ClientError::Helper(HelperError::new(ErrorCode::Busy, "busy")),
+        ))));
+        assert_eq!(state.session_request, original);
+        assert!(state.pending_reconnect(SessionPart::Dns));
+        assert!(
+            state
+                .operation_error
+                .as_deref()
+                .unwrap()
+                .starts_with("Changes were not applied: ")
+        );
+        assert!(!state.operations.helper);
+        assert!(state.can_apply());
     }
 
     #[test]
@@ -3386,7 +3642,7 @@ mod tests {
     }
 
     #[test]
-    fn rule_change_in_active_set_needs_reconnect_until_reverted() {
+    fn rule_change_in_active_set_remains_pending_until_reverted() {
         let mut state = state_for_auto_connect();
         state.config.rule_sets.push(rule_set("1"));
         state.config.active_rule_set = Some(RuleSetId::new("1"));

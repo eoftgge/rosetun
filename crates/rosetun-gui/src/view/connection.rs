@@ -109,14 +109,15 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 .map_or((t().status_unknown, theme::DISCONNECTED), |status| {
                     state_style(&status.state)
                 });
-            let selection_changed = visible_status.filter(|status| {
-                (status.state.is_active() || status.state.is_transitional())
-                    && state
-                        .config
-                        .active
-                        .as_ref()
-                        .is_none_or(|selection| status.node.as_ref() != Some(&selection.node))
-            });
+            let server_pending = state.pending_reconnect(SessionPart::Server);
+            let selection_changed =
+                visible_status.filter(|status| {
+                    (status.state.is_active() || status.state.is_transitional())
+                        && (server_pending
+                            || state.config.active.as_ref().is_none_or(|selection| {
+                                status.node.as_ref() != Some(&selection.node)
+                            }))
+                });
             ui.horizontal_top(|ui| {
                 ui.allocate_ui_with_layout(
                     egui::vec2(240.0, 260.0),
@@ -185,6 +186,8 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         actions.push(Action::RevealServer);
                     }
                     if selection_changed.is_some() {
+                        let applying = server_pending && state.operations.helper;
+                        let can_apply = server_pending && state.can_apply();
                         let message = state.config.active_node().map_or_else(
                             || t().selection_cleared.to_owned(),
                             |(_, node)| {
@@ -193,15 +196,32 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                     &egui::TextStyle::Body.resolve(ui.style()),
                                     &state.text(&node.name),
                                 );
-                                t().selected_pending(&name)
+                                if applying {
+                                    t().switching_to(&name)
+                                } else if can_apply {
+                                    t().selected_not_applied(&name)
+                                } else {
+                                    t().selected_pending(&name)
+                                }
                             },
                         );
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(message).small().color(theme::ROSE_LIGHT),
-                            )
-                            .wrap(),
-                        );
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            ui.label(RichText::new(message).small().color(theme::ROSE_LIGHT));
+                            if can_apply {
+                                ui.label(
+                                    RichText::new(t().apply_separator)
+                                        .small()
+                                        .color(theme::ROSE_LIGHT),
+                                );
+                                if widgets::link(ui, t().apply, true)
+                                    .on_hover_text(t().apply_hint)
+                                    .clicked()
+                                {
+                                    actions.push(Action::Apply);
+                                }
+                            }
+                        });
                     }
                     let protocol = state.config.active_node().map_or_else(
                         || t().ping_pending.to_owned(),
@@ -916,11 +936,33 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
             );
         }
         if tunnel_up(state) && state.pending_reconnect(SessionPart::Rules) {
-            ui.label(
-                RichText::new(t().next_connect)
-                    .small()
-                    .color(theme::TEXT_DIM),
-            );
+            if state.can_apply() {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(
+                        RichText::new(t().not_applied)
+                            .small()
+                            .color(theme::TEXT_DIM),
+                    );
+                    ui.label(
+                        RichText::new(t().apply_separator)
+                            .small()
+                            .color(theme::TEXT_DIM),
+                    );
+                    if widgets::link(ui, t().apply, true)
+                        .on_hover_text(t().apply_hint)
+                        .clicked()
+                    {
+                        actions.push(Action::Apply);
+                    }
+                });
+            } else {
+                ui.label(
+                    RichText::new(t().next_connect)
+                        .small()
+                        .color(theme::TEXT_DIM),
+                );
+            }
         }
     });
 }

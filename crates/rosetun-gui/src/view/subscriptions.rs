@@ -927,35 +927,6 @@ fn provider_text(ui: &egui::Ui, state: &State, value: &str, style: egui::TextSty
     display::drop_missing_glyphs(ui.ctx(), &style.resolve(ui.style()), &state.text(value))
 }
 
-fn link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
-    let response = ui.add(
-        egui::Label::new(RichText::new(text).small().color(if enabled {
-            theme::ROSE_LIGHT
-        } else {
-            theme::TEXT_DIM
-        }))
-        .sense(if enabled {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        }),
-    );
-    if enabled && response.hovered() {
-        ui.painter().line_segment(
-            [
-                response.rect.left_bottom() + egui::vec2(0.0, -1.0),
-                response.rect.right_bottom() + egui::vec2(0.0, -1.0),
-            ],
-            Stroke::new(1.0, theme::ROSE_LIGHT),
-        );
-    }
-    if enabled {
-        response.on_hover_cursor(egui::CursorIcon::PointingHand)
-    } else {
-        response
-    }
-}
-
 fn menu_link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     let font = egui::TextStyle::Small.resolve(ui.style());
     let text_width = ui
@@ -1012,7 +983,7 @@ fn menu_link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
 
 fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, value: &str) {
     if display::safe_web_url(value).is_some() {
-        let response = link(ui, label, true);
+        let response = widgets::link(ui, label, true);
         if response.clicked() {
             display::open_web_link(ui.ctx(), value);
         }

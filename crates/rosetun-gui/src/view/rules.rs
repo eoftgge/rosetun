@@ -69,7 +69,24 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         && state.pending_reconnect(SessionPart::Rules)
     {
         widgets::card_frame().show(ui, |ui| {
-            ui.colored_label(theme::ROSE_LIGHT, t().rules_next_connect);
+            if state.can_apply() {
+                egui::Sides::new().shrink_left().wrap().show(
+                    ui,
+                    |ui| {
+                        ui.colored_label(theme::ROSE_LIGHT, t().rules_not_applied);
+                    },
+                    |ui| {
+                        if widgets::button_fill_compact(ui, t().apply, true)
+                            .on_hover_text(t().apply_hint)
+                            .clicked()
+                        {
+                            actions.push(Action::Apply);
+                        }
+                    },
+                );
+            } else {
+                ui.colored_label(theme::ROSE_LIGHT, t().next_connect);
+            }
         });
         ui.add_space(20.0);
     }

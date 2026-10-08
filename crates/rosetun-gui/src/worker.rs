@@ -55,10 +55,6 @@ pub(crate) enum ConfigWorkerError {
     Metadata(std::io::Error),
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Keep the exact request in the connect completion"
-)]
 pub(crate) enum WorkerEvent {
     Config {
         generation: u64,
@@ -76,6 +72,7 @@ pub(crate) enum WorkerEvent {
         result: Result<ExitInfo, ExitInfoError>,
     },
     Connect(Result<ConnectRequest, HelperCommandError>),
+    Apply(Result<ConnectRequest, HelperCommandError>),
     Disconnect(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
     SetLanguage(Result<(), SettingsError>),
@@ -199,6 +196,24 @@ impl WorkerDispatcher {
                 Err(error) => tracing::warn!(%error, "Connect command failed"),
             }
             publisher.complete(WorkerEvent::Connect(result));
+        });
+    }
+
+    pub(crate) fn apply(&self, request: Box<ConnectRequest>) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            tracing::info!("Apply command started");
+            let result = with_helper(|client| client.apply_tunnel(request.as_ref().clone()))
+                .map(|()| *request);
+            match &result {
+                Ok(_) => tracing::info!("Apply command succeeded"),
+                Err(error) => tracing::warn!(%error, "Apply command failed"),
+            }
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::Apply(result),
+            );
         });
     }
 

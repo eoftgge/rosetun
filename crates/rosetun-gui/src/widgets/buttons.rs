@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, Stroke};
+use eframe::egui::{self, Color32, RichText, Stroke};
 
 use crate::theme::{self, BORDER, BORDER_STRONG, CARD, ROSE};
 
@@ -63,6 +63,35 @@ fn compact_button(ui: &mut egui::Ui, text: &str, enabled: bool, outlined: bool) 
         ui.add_enabled(enabled, button)
     })
     .inner
+}
+
+pub(crate) fn link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    let response = ui.add(
+        egui::Label::new(RichText::new(text).small().color(if enabled {
+            theme::ROSE_LIGHT
+        } else {
+            theme::TEXT_DIM
+        }))
+        .sense(if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        }),
+    );
+    if enabled && response.hovered() {
+        ui.painter().line_segment(
+            [
+                response.rect.left_bottom() + egui::vec2(0.0, -1.0),
+                response.rect.right_bottom() + egui::vec2(0.0, -1.0),
+            ],
+            Stroke::new(1.0, theme::ROSE_LIGHT),
+        );
+    }
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
 }
 
 #[cfg(test)]

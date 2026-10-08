@@ -238,11 +238,33 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                 .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
                 && state.pending_reconnect(SessionPart::Dns)
             {
-                ui.label(
-                    RichText::new(t().next_connect)
-                        .small()
-                        .color(theme::ROSE_LIGHT),
-                );
+                if state.can_apply() {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        ui.label(
+                            RichText::new(t().not_applied)
+                                .small()
+                                .color(theme::ROSE_LIGHT),
+                        );
+                        ui.label(
+                            RichText::new(t().apply_separator)
+                                .small()
+                                .color(theme::ROSE_LIGHT),
+                        );
+                        if widgets::link(ui, t().apply, true)
+                            .on_hover_text(t().apply_hint)
+                            .clicked()
+                        {
+                            actions.push(Action::Apply);
+                        }
+                    });
+                } else {
+                    ui.label(
+                        RichText::new(t().next_connect)
+                            .small()
+                            .color(theme::ROSE_LIGHT),
+                    );
+                }
             }
         });
     });

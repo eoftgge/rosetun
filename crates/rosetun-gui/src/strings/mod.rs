@@ -297,6 +297,11 @@ pub(crate) struct Strings {
     pub(crate) kill_switch_detail: &'static str,
     pub(crate) default_rules: &'static str,
     pub(crate) next_connect: &'static str,
+    pub(crate) apply: &'static str,
+    pub(crate) apply_separator: &'static str,
+    pub(crate) not_applied: &'static str,
+    pub(crate) rules_not_applied: &'static str,
+    pub(crate) apply_hint: &'static str,
     pub(crate) turn_off_protection: &'static str,
     pub(crate) keep_blocked: &'static str,
     pub(crate) protection_warning: &'static str,
@@ -407,7 +412,6 @@ pub(crate) struct Strings {
     pub(crate) default_rule_tooltip: &'static str,
     pub(crate) no_rule_sets: &'static str,
     pub(crate) no_rules_match: &'static str,
-    pub(crate) rules_next_connect: &'static str,
     pub(crate) rules_templates: &'static str,
     pub(crate) template_add: &'static str,
     pub(crate) template_added: &'static str,
@@ -645,6 +649,27 @@ impl Strings {
         match self.language {
             Language::English => format!("and {count} more"),
             Language::Russian => format!("и ещё {count}"),
+        }
+    }
+
+    pub(crate) fn switching_to(&self, name: &str) -> String {
+        match self.language {
+            Language::English => format!("Switching to {name}…"),
+            Language::Russian => format!("Переключение на {name}…"),
+        }
+    }
+
+    pub(crate) fn selected_not_applied(&self, name: &str) -> String {
+        match self.language {
+            Language::English => format!("Selected {name}"),
+            Language::Russian => format!("Выбран {name}"),
+        }
+    }
+
+    pub(crate) fn apply_failed(&self, reason: &str) -> String {
+        match self.language {
+            Language::English => format!("Changes were not applied: {reason}"),
+            Language::Russian => format!("Изменения не применены: {reason}"),
         }
     }
 

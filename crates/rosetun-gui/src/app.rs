@@ -198,6 +198,7 @@ impl App {
     fn dispatch(&self, job: Job) {
         match job {
             Job::Connect => self.workers.connect(),
+            Job::Apply(request) => self.workers.apply(request),
             Job::Disconnect => self.workers.disconnect(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
             Job::SetLanguage(language) => self.workers.set_language(language),
@@ -303,6 +304,9 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_auto_update(display::now_unix()) {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_apply() {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_exit_lookup() {
