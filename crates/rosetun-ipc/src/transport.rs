@@ -550,6 +550,9 @@ mod tests {
         let listener = Listener::bind(&endpoint).expect("listener is bound");
         let (first_accept_failed, first_accept_failed_rx) = mpsc::channel();
 
+        // Close the client before starting the server so ConnectNamedPipe sees a closed pipe.
+        drop(open(&endpoint, false).expect("first client connects"));
+
         let server = std::thread::spawn(move || {
             let error = listener
                 .accept()
@@ -581,7 +584,6 @@ mod tests {
                 .expect("second response is written");
         });
 
-        drop(open(&endpoint, false).expect("first client connects"));
         first_accept_failed_rx
             .recv()
             .expect("server observed the failed first accept");
