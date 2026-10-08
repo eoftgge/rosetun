@@ -437,6 +437,11 @@ function Connect-RosetunTunnel {
     Invoke-RosetunCli -Quiet:$Quiet 'connect' (Join-Path $script:Config.GuestDir $RequestName)
 }
 
+function Invoke-RosetunProbe {
+    param([string]$RequestName = 'request.json')
+    Invoke-RosetunCli -Quiet 'probe' (Join-Path $script:Config.GuestDir $RequestName)
+}
+
 function Disconnect-RosetunTunnel {
     Invoke-RosetunCli 'disconnect'
 }

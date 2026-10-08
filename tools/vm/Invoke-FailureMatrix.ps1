@@ -92,7 +92,7 @@ Test-Step 'connect' 'tunnel carries traffic within 5 s, DNS included' -Note (For
 }
 Test-Step 'connect' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
 Test-Step 'connect' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
-$probe = Invoke-RosetunCli -Quiet 'probe' 'C:\rosetun\request.json'
+$probe = Invoke-RosetunProbe
 Test-Step 'connect' 'server check works while connected' -Note "exit $($probe.ExitCode)" {
     $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
 }
@@ -126,7 +126,7 @@ Test-Step 'engine killed' 'direct DNS is blocked' { -not (Test-RosetunDirectDns)
 # While sing-box runs, its strict route blocks IPv6 as well. Its filters die
 # with it, so only here is Rosetun's own IPv6 block the one being tested.
 Test-Step 'engine killed' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
-$probe = Invoke-RosetunCli -Quiet 'probe' 'C:\rosetun\request.json'
+$probe = Invoke-RosetunProbe
 Test-Step 'engine killed' 'server check works under protection' -Note "exit $($probe.ExitCode)" {
     $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
 }
@@ -231,7 +231,7 @@ Test-Step 'dns lock' 'state is Connected' { Wait-RosetunState 'Connected' }
 $egress = Wait-RosetunTunnelEgress
 Test-Step 'dns lock' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
 Test-Step 'dns lock' 'direct DNS is blocked' { -not (Test-RosetunDirectDns) }
-$probe = Invoke-RosetunCli -Quiet 'probe' 'C:\rosetun\request-dns-lock.json'
+$probe = Invoke-RosetunProbe 'request-dns-lock.json'
 Test-Step 'dns lock' 'server check works with the DNS lock' -Note "exit $($probe.ExitCode)" {
     $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
 }
