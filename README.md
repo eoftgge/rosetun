@@ -16,6 +16,7 @@ Rosetun is a Windows VPN client powered by sing-box. A Windows service maintains
 - VLESS, VMess, Trojan and Shadowsocks nodes; TCP, WebSocket, gRPC and HTTPUpgrade transports; plain, TLS and Reality security modes.
 - **DNS through the tunnel** via a configurable DNS-over-HTTPS resolver.
 - Change the server, rules or DNS while connected: Rosetun restarts the tunnel in a second or two without disconnecting, and the kill switch keeps traffic blocked meanwhile.
+- **Temporary rules:** add a rule only until disconnect; it applies at once and is never saved.
 - **Reconnect automatically** after sleep or an engine failure, with a DNS watchdog while connected.
 - **Server checks:** a quick TCP check and a full check that sends a real request through each server, even while connected.
 - System tray, **Start with Windows**, and English and Russian interfaces.
