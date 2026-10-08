@@ -61,6 +61,10 @@ impl HelperClient {
         self.expect_ok(Request::Connect(Box::new(request)))
     }
 
+    pub fn apply_tunnel(&mut self, request: ConnectRequest) -> Result<(), ClientError> {
+        self.expect_ok(Request::Apply(Box::new(request)))
+    }
+
     pub fn probe_nodes(&mut self, request: ProbeRequest) -> Result<Vec<ProbeResult>, ClientError> {
         match self.request(Request::ProbeNodes(Box::new(request)))? {
             Response::Probe(results) => Ok(results),

@@ -5,7 +5,7 @@ use rosetun_config::{
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const MAX_PROBE_NODES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,9 +20,7 @@ pub enum Request {
     ProbeNodes(Box<ProbeRequest>),
     TunnelDelay,
     Disconnect,
-    ApplyRules {
-        rule_set: RuleSet,
-    },
+    Apply(Box<ConnectRequest>),
     Subscribe,
     Shutdown,
 }
@@ -377,10 +375,13 @@ mod tests {
     fn request_debug_does_not_expose_credentials_or_subscription_url() {
         let config = selected_config();
         let request = ConnectRequest::from_config(&config).unwrap();
-        let debug = format!("{request:?}");
-
-        assert!(!debug.contains("test-secret"));
-        assert!(!debug.contains(&config.subscriptions[0].url));
+        for debug in [
+            format!("{request:?}"),
+            format!("{:?}", Request::Apply(Box::new(request))),
+        ] {
+            assert!(!debug.contains("test-secret"));
+            assert!(!debug.contains(&config.subscriptions[0].url));
+        }
     }
 
     #[test]

@@ -46,11 +46,14 @@ mod tests {
     use std::io::BufReader;
 
     use rosetun_config::{
-        ConnectionState, Node, NodeId, Outbound, Settings, StreamSettings, TrojanParams,
+        ConnectionState, Node, NodeId, Outbound, RuleSet, RuleSetId, RuleTarget, Selection,
+        Settings, StreamSettings, SubscriptionId, TrojanParams,
     };
 
     use super::*;
-    use crate::{Event, ProbeOutcome, ProbeRequest, ProbeResult, Request, Response};
+    use crate::{
+        ConnectRequest, Event, ProbeOutcome, ProbeRequest, ProbeResult, Request, Response,
+    };
 
     fn roundtrip(frame: &Frame) -> Frame {
         let mut buffer = Vec::new();
@@ -66,6 +69,33 @@ mod tests {
         let frame = Frame::Request {
             id: 7,
             body: Request::Status,
+        };
+        assert_eq!(roundtrip(&frame), frame);
+    }
+
+    #[test]
+    fn apply_request_survives_roundtrip() {
+        let frame = Frame::Request {
+            id: 8,
+            body: Request::Apply(Box::new(ConnectRequest {
+                selection: Selection {
+                    subscription: SubscriptionId::new("subscription"),
+                    node: NodeId::new("node"),
+                },
+                node: Node {
+                    id: NodeId::new("node"),
+                    name: "Test node".to_owned(),
+                    server: "example.com".to_owned(),
+                    port: 443,
+                    outbound: Outbound::Trojan(TrojanParams {
+                        password: "test-password".to_owned(),
+                    }),
+                    stream: StreamSettings::default(),
+                    raw: None,
+                },
+                rule_set: RuleSet::new(RuleSetId::new("rules"), "Rules", RuleTarget::Proxy),
+                settings: Settings::default(),
+            })),
         };
         assert_eq!(roundtrip(&frame), frame);
     }
