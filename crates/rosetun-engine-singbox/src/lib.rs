@@ -433,6 +433,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn render_debug_omits_node_credentials_and_config_body() {
+        let node = node();
+        let rules = rules();
+        let settings = Settings::default();
+        let control = ControlEndpoint {
+            address: "127.0.0.1:12345".parse().unwrap(),
+            secret: "private-secret".to_owned(),
+        };
+        let request = RenderRequest {
+            node: &node,
+            rules: &rules,
+            settings: &settings,
+            control: Some(&control),
+            verbose_log: false,
+        };
+        let config = render::render(&request).unwrap();
+        let nodes = vec![("probe-0".to_owned(), node.clone())];
+        let probe = ProbeRenderRequest {
+            nodes: &nodes,
+            control: &control,
+            interface: None,
+        };
+        let probe_config = render::render_probe(&probe).unwrap();
+        for printed in [
+            format!("{request:?}"),
+            format!("{probe:?}"),
+            format!("{config:?}"),
+            format!("{probe_config:?}"),
+        ] {
+            for secret in [
+                "11111111-2222-3333-4444-555555555555",
+                "PUBKEY",
+                "203.0.113.10",
+                "Sakura-02",
+                "private-secret",
+            ] {
+                assert!(!printed.contains(secret), "Debug leaked {secret}");
+            }
+        }
+        assert!(format!("{config:?}").contains("body_len"));
+        assert!(format!("{probe_config:?}").contains("body_len"));
+    }
+
     fn rules() -> RuleSet {
         RuleSet {
             id: RuleSetId::new("base"),

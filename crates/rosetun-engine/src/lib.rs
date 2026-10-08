@@ -181,7 +181,7 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     ) -> Result<Box<dyn EngineProcess>, EngineError>;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct RenderRequest<'a> {
     pub node: &'a Node,
     pub rules: &'a RuleSet,
@@ -190,13 +190,37 @@ pub struct RenderRequest<'a> {
     pub verbose_log: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+impl std::fmt::Debug for RenderRequest<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderRequest")
+            .field("node_id", &self.node.id)
+            .field("engine", &self.settings.engine)
+            .field("kill_switch", &self.settings.kill_switch)
+            .field("rule_set_id", &self.rules.id)
+            .field("rule_count", &self.rules.rules.len())
+            .field("control", &self.control)
+            .field("verbose_log", &self.verbose_log)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct ProbeRenderRequest<'a> {
     /// Nodes with their outbound tags. Server addresses are IP literals.
     pub nodes: &'a [(String, Node)],
     pub control: &'a ControlEndpoint,
     /// The physical interface to dial through; `None` lets the engine pick.
     pub interface: Option<&'a str>,
+}
+
+impl std::fmt::Debug for ProbeRenderRequest<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProbeRenderRequest")
+            .field("node_count", &self.nodes.len())
+            .field("control", &self.control)
+            .field("interface", &self.interface)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -207,7 +231,7 @@ pub enum UrlTestTarget<'a> {
     Probe(&'a str),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RenderedConfig {
     pub file_name: String,
     pub body: Vec<u8>,
@@ -215,6 +239,17 @@ pub struct RenderedConfig {
     pub unsupported: Vec<RuleId>,
     /// Probe outbound tags whose nodes the backend cannot represent.
     pub unsupported_probes: Vec<String>,
+}
+
+impl std::fmt::Debug for RenderedConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderedConfig")
+            .field("file_name", &self.file_name)
+            .field("body_len", &self.body.len())
+            .field("unsupported", &self.unsupported)
+            .field("unsupported_probes", &self.unsupported_probes)
+            .finish()
+    }
 }
 
 impl RenderedConfig {
