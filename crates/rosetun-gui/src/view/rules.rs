@@ -68,26 +68,15 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         && state.config.active_rule_set.as_ref() == Some(&set.id)
         && state.pending_reconnect(SessionPart::Rules)
     {
-        widgets::card_frame().show(ui, |ui| {
-            if state.can_apply() {
-                egui::Sides::new().shrink_left().wrap().show(
-                    ui,
-                    |ui| {
-                        ui.colored_label(theme::ROSE_LIGHT, t().rules_not_applied);
-                    },
-                    |ui| {
-                        if widgets::button_fill_compact(ui, t().apply, true)
-                            .on_hover_text(t().apply_hint)
-                            .clicked()
-                        {
-                            actions.push(Action::Apply);
-                        }
-                    },
-                );
-            } else {
-                ui.colored_label(theme::ROSE_LIGHT, t().next_connect);
-            }
-        });
+        widgets::card_frame()
+            .inner_margin(egui::Margin::symmetric(16, 8))
+            .show(ui, |ui| {
+                if state.can_apply() {
+                    apply_notice(ui, actions);
+                } else {
+                    ui.colored_label(theme::ROSE_LIGHT, t().next_connect);
+                }
+            });
         ui.add_space(20.0);
     }
     template_section(ui, state, set, actions);
@@ -123,6 +112,21 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         }
         default_rule(ui, state, set, value_width, actions);
     });
+}
+
+fn apply_notice(ui: &mut egui::Ui, actions: &mut Vec<Action>) -> (egui::Response, egui::Response) {
+    ui.spacing_mut().interact_size.y = 28.0;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        let label = ui.colored_label(theme::ROSE_LIGHT, t().rules_not_applied);
+        let button =
+            widgets::button_fill_compact(ui, t().apply, true).on_hover_text(t().apply_hint);
+        if button.clicked() {
+            actions.push(Action::Apply);
+        }
+        (label, button)
+    })
+    .inner
 }
 
 fn template_icon(template: RuleTemplate) -> Icon {
@@ -1136,6 +1140,27 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_notice_centers_text_against_the_button() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (label, button) = widgets::card_frame()
+                    .inner_margin(egui::Margin::symmetric(16, 8))
+                    .show(ui, |ui| apply_notice(ui, &mut Vec::new()))
+                    .inner;
+                assert!(
+                    (label.rect.center().y - button.rect.center().y).abs() < 1.0,
+                    "text: {:?}, button: {:?}",
+                    label.rect,
+                    button.rect
+                );
+            });
+        });
+        output.textures_delta.clear();
+    }
 
     #[test]
     fn action_filter_button_matches_the_search_field_height() {
