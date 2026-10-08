@@ -33,7 +33,12 @@ fn process_body_height(top: f32, limit: f32, advanced: bool) -> f32 {
     )
 }
 
-pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) {
+pub(crate) fn show(
+    ctx: &egui::Context,
+    dialog: &mut AddRuleDialog,
+    can_temporary: bool,
+    actions: &mut Vec<Action>,
+) {
     let id = egui::Id::new("add_rule");
     let response = egui::Modal::new(id)
         .area(
@@ -88,6 +93,7 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                     - BUTTON_ROW_HEIGHT
                     - ACTIONS_GAP
                     - 104.0
+                    - if dialog.editing.is_none() { 28.0 } else { 0.0 }
                     - advanced_height
                     - if dialog.error.is_some() { 28.0 } else { 0.0 };
                 let height = process_body_height(ui.cursor().top(), limit, dialog.advanced);
@@ -132,6 +138,16 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                             ProcessMatchMode::Name
                         });
                     }
+                }
+            }
+            if dialog.editing.is_none() {
+                ui.add_space(4.0);
+                let checkbox = ui.add_enabled(
+                    can_temporary && !dialog.busy,
+                    egui::Checkbox::new(&mut dialog.temporary_only, t().temporary_only),
+                );
+                if !can_temporary {
+                    checkbox.on_hover_text(t().temporary_needs_connection);
                 }
             }
             if let Some(error) = &dialog.error {
@@ -187,7 +203,13 @@ pub(crate) fn show(ctx: &egui::Context, dialog: &mut AddRuleDialog, actions: &mu
                         } else {
                             t().add_rule.to_owned()
                         };
-                        if widgets::button_fill(ui, &label, valid && !dialog.busy).clicked() {
+                        if widgets::button_fill(
+                            ui,
+                            &label,
+                            valid && !dialog.busy && (!dialog.temporary_only || can_temporary),
+                        )
+                        .clicked()
+                        {
                             actions.push(Action::SubmitAddRule);
                         }
                     });
@@ -734,7 +756,7 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, &mut Vec::new()),
+                |ctx| show(ctx, &mut dialog, true, &mut Vec::new()),
             );
             output.textures_delta.clear();
             let rect = ctx

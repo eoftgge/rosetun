@@ -376,12 +376,15 @@ pub(crate) struct Strings {
     pub(crate) rules_subtitle: &'static str,
     pub(crate) open_link: &'static str,
     pub(crate) no_rules_yet: &'static str,
+    pub(crate) temporary_count: &'static str,
     pub(crate) active: &'static str,
     pub(crate) make_active: &'static str,
     pub(crate) new_set: &'static str,
     pub(crate) create_rule_set: &'static str,
     pub(crate) rename: &'static str,
     pub(crate) delete: &'static str,
+    pub(crate) keep_permanently: &'static str,
+    pub(crate) temporary_hint: &'static str,
     pub(crate) basic: &'static str,
     pub(crate) set_name: &'static str,
     pub(crate) rename_rule_set: &'static str,
@@ -467,6 +470,8 @@ pub(crate) struct Strings {
     pub(crate) match_by_full_path: &'static str,
     pub(crate) add_rule: &'static str,
     pub(crate) adding_rule: &'static str,
+    pub(crate) temporary_only: &'static str,
+    pub(crate) temporary_needs_connection: &'static str,
     pub(crate) language_title: &'static str,
     pub(crate) language_system: &'static str,
 }
@@ -643,6 +648,10 @@ impl Strings {
             Language::English => format!("peak {rate}"),
             Language::Russian => format!("пик {rate}"),
         }
+    }
+
+    pub(crate) fn temporary_count(&self, count: usize) -> String {
+        fill(self.temporary_count, &[("n", &count.to_string())])
     }
 
     pub(crate) fn more_rules(&self, count: usize) -> String {

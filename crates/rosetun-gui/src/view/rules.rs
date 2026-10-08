@@ -3,7 +3,10 @@ use rosetun_config::{Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, RuleTemplat
 
 use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
-use crate::rules::{RuleCaption, RuleFilter, TypeFilter, rule_counts, rule_lines, visible_rules};
+use crate::rules::{
+    RuleCaption, RuleFilter, TypeFilter, rule_counts, rule_counts_slice, rule_lines, visible_rules,
+    visible_rules_slice,
+};
 use crate::state::{Action, DeleteDialog, NameDialogKind, SessionPart, State};
 use crate::strings::t;
 use crate::{strings, theme, widgets};
@@ -81,12 +84,25 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     }
     template_section(ui, state, set, actions);
     ui.add_space(20.0);
+    let temporary = if state.config.active_rule_set.as_ref() == Some(&set.id) {
+        state.temporary_rules.as_slice()
+    } else {
+        &[]
+    };
     let can_add = state.can_edit_rules();
-    filter_controls(ui, &mut state.rule_screen.filter, set, can_add, actions);
+    filter_controls(
+        ui,
+        &mut state.rule_screen.filter,
+        set,
+        temporary,
+        can_add,
+        actions,
+    );
     ui.add_space(8.0);
     ui.add(egui::Label::new(RichText::new(t().order_hint).small().color(theme::TEXT_DIM)).wrap());
     ui.add_space(12.0);
 
+    let visible_temporary = visible_rules_slice(temporary, &state.rule_screen.filter);
     let visible = visible_rules(set, &state.rule_screen.filter);
     let value_width = (ui.available_width()
         - 2.0 * ROW_INSET
@@ -100,14 +116,22 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         - MENU_GAP
         - MENU_WIDTH)
         .max(0.0);
-    if visible.is_empty() && !set.rules.is_empty() {
+    if visible.is_empty()
+        && visible_temporary.is_empty()
+        && (!set.rules.is_empty() || !temporary.is_empty())
+    {
         ui.colored_label(theme::TEXT_MUTED, t().no_rules_match);
     }
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
+        for (_, rule) in visible_temporary {
+            ui.push_id(("temporary", rule.id.as_str()), |ui| {
+                rule_row(ui, state, set, rule, None, value_width, actions);
+            });
+        }
         for (index, rule) in visible {
             ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
-                rule_row(ui, state, set, rule, index, value_width, actions);
+                rule_row(ui, state, set, rule, Some(index), value_width, actions);
             });
         }
         default_rule(ui, state, set, value_width, actions);
@@ -493,10 +517,15 @@ fn filter_controls(
     ui: &mut egui::Ui,
     filter: &mut RuleFilter,
     set: &RuleSet,
+    temporary: &[Rule],
     can_add: bool,
     actions: &mut Vec<Action>,
 ) {
-    let counts = rule_counts(set);
+    let mut counts = rule_counts(set);
+    let extra = rule_counts_slice(temporary);
+    counts.domains += extra.domains;
+    counts.processes += extra.processes;
+    counts.other += extra.other;
     let labels: Vec<_> = [
         (TypeFilter::All, t().all, counts.all()),
         (TypeFilter::Domains, t().domains, counts.domains),
@@ -718,11 +747,12 @@ fn rule_row(
     state: &State,
     set: &RuleSet,
     rule: &Rule,
-    index: usize,
+    index: Option<usize>,
     value_width: f32,
     actions: &mut Vec<Action>,
 ) {
-    let reorder = state.can_edit_rules() && !state.rule_screen.filter.is_active();
+    let temporary = index.is_none();
+    let reorder = !temporary && state.can_edit_rules() && !state.rule_screen.filter.is_active();
     let dragged =
         reorder && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| *id == rule.id);
     let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(12, 0));
@@ -751,14 +781,19 @@ fn rule_row(
                         ui.dnd_drag_source(ui.id().with("handle"), rule.id.clone(), |ui| {
                             icons::icon_button(ui, Icon::Grip, true);
                         });
-                    } else {
+                    } else if !temporary {
                         icons::icon_button(ui, Icon::Grip, false)
                             .on_hover_text(t().reorder_disabled);
                     }
                 });
                 ui.add_space(HANDLE_GAP);
                 table_cell(ui, ICON_WIDTH, theme::RULE_ROW, |ui| {
-                    icons::icon_badge(ui, rule_icon(&rule.matcher), ICON_WIDTH);
+                    if temporary {
+                        icons::icon_badge_colored(ui, Icon::Clock, ICON_WIDTH, theme::TEXT_DIM)
+                            .on_hover_text(t().temporary_hint);
+                    } else {
+                        icons::icon_badge(ui, rule_icon(&rule.matcher), ICON_WIDTH);
+                    }
                 });
                 ui.add_space(ICON_GAP);
                 let value_height = ui.text_style_height(&egui::TextStyle::Body)
@@ -772,7 +807,7 @@ fn rule_row(
                         "target",
                         rule.target,
                         &[RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block],
-                        state.can_edit_rules(),
+                        !temporary && state.can_edit_rules(),
                     ) {
                         actions.push(Action::SetRuleTarget(rule.id.clone(), target));
                     }
@@ -780,52 +815,72 @@ fn rule_row(
                 ui.add_space(TARGET_GAP);
                 table_cell(ui, TOGGLE_WIDTH, theme::RULE_ROW, |ui| {
                     let mut enabled = rule.enabled;
-                    if widgets::toggle(ui, &mut enabled, state.can_edit_rules()).changed() {
+                    if widgets::toggle(ui, &mut enabled, !temporary && state.can_edit_rules())
+                        .changed()
+                    {
                         actions.push(Action::SetRuleEnabled(rule.id.clone(), enabled));
                     }
                 });
                 ui.add_space(MENU_GAP);
                 table_cell(ui, MENU_WIDTH, theme::RULE_ROW, |ui| {
-                    let menu = icons::icon_button_sized(
-                        ui,
-                        Icon::More,
-                        state.can_edit_rules(),
-                        MENU_WIDTH,
-                    )
-                    .on_hover_text(t().more_actions);
-                    if state.can_edit_rules() {
+                    let can_open = if temporary {
+                        state.can_change_temporary() && !state.operations.rules_edit
+                    } else {
+                        state.can_edit_rules()
+                    };
+                    let menu = icons::icon_button_sized(ui, Icon::More, can_open, MENU_WIDTH)
+                        .on_hover_text(t().more_actions);
+                    if can_open {
                         widgets::menu_popup(&menu).show(|ui| {
                             ui.set_min_width(160.0);
-                            if crate::rules::editable(&rule.matcher)
-                                && widgets::menu_item(
+                            if temporary {
+                                if widgets::menu_item(
                                     ui,
                                     widgets::MenuItem {
-                                        label: t().edit,
-                                        enabled: true,
+                                        label: t().keep_permanently,
+                                        enabled: state.can_edit_rules(),
                                         selected: false,
                                         danger: false,
                                         note: None,
                                     },
                                 )
                                 .clicked()
-                            {
-                                actions.push(Action::OpenEditRule(rule.id.clone()));
-                                ui.close();
-                            }
-                            if widgets::menu_item(
-                                ui,
-                                widgets::MenuItem {
-                                    label: t().move_to_top,
-                                    enabled: index > 0,
-                                    selected: false,
-                                    danger: false,
-                                    note: None,
-                                },
-                            )
-                            .clicked()
-                            {
-                                actions.push(Action::MoveRuleToTop(rule.id.clone()));
-                                ui.close();
+                                {
+                                    actions.push(Action::KeepTemporary(rule.id.clone()));
+                                    ui.close();
+                                }
+                            } else {
+                                if crate::rules::editable(&rule.matcher)
+                                    && widgets::menu_item(
+                                        ui,
+                                        widgets::MenuItem {
+                                            label: t().edit,
+                                            enabled: true,
+                                            selected: false,
+                                            danger: false,
+                                            note: None,
+                                        },
+                                    )
+                                    .clicked()
+                                {
+                                    actions.push(Action::OpenEditRule(rule.id.clone()));
+                                    ui.close();
+                                }
+                                if widgets::menu_item(
+                                    ui,
+                                    widgets::MenuItem {
+                                        label: t().move_to_top,
+                                        enabled: index.is_some_and(|index| index > 0),
+                                        selected: false,
+                                        danger: false,
+                                        note: None,
+                                    },
+                                )
+                                .clicked()
+                                {
+                                    actions.push(Action::MoveRuleToTop(rule.id.clone()));
+                                    ui.close();
+                                }
                             }
                             if widgets::menu_item(
                                 ui,
@@ -839,7 +894,11 @@ fn rule_row(
                             )
                             .clicked()
                             {
-                                actions.push(Action::RequestDeleteRule(rule.id.clone()));
+                                actions.push(if temporary {
+                                    Action::RemoveTemporary(rule.id.clone())
+                                } else {
+                                    Action::RequestDeleteRule(rule.id.clone())
+                                });
                                 ui.close();
                             }
                         });
@@ -850,6 +909,7 @@ fn rule_row(
         .response;
 
     if reorder
+        && let Some(index) = index
         && let Some(dragged_id) = response.dnd_hover_payload::<RuleId>()
         && let Some(from) = set.rules.iter().position(|item| item.id == *dragged_id)
         && let Some(pointer) = ui.ctx().pointer_hover_pos()

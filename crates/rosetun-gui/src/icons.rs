@@ -8,6 +8,7 @@ pub(crate) enum Icon {
     Check,
     Chevron { open: bool },
     Refresh,
+    Clock,
     More,
     Search,
     App,
@@ -63,11 +64,20 @@ pub(crate) fn icon_button_sized(
 
 /// A type mark: the icon on an INPUT square, not clickable.
 pub(crate) fn icon_badge(ui: &mut egui::Ui, icon: Icon, size: f32) -> egui::Response {
+    icon_badge_colored(ui, icon, size, theme::TEXT_MUTED)
+}
+
+pub(crate) fn icon_badge_colored(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    size: f32,
+    color: Color32,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     if ui.is_rect_visible(rect) {
         ui.painter()
             .rect_filled(rect, theme::RADIUS_INNER, theme::INPUT);
-        paint(ui.painter(), rect.center(), icon, theme::TEXT_MUTED);
+        paint(ui.painter(), rect.center(), icon, color);
     }
     response
 }
@@ -133,6 +143,11 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
                 color,
                 egui::Stroke::NONE,
             ));
+        }
+        Icon::Clock => {
+            painter.circle_stroke(center, 6.5, stroke);
+            painter.line_segment([center, center + egui::vec2(0.0, -4.0)], stroke);
+            painter.line_segment([center, center + egui::vec2(3.5, 2.0)], stroke);
         }
         Icon::More => {
             for x in [-5.0, 0.0, 5.0] {

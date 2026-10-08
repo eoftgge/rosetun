@@ -178,8 +178,12 @@ fn kind(rule: &Rule) -> TypeFilter {
 }
 
 pub(crate) fn rule_counts(set: &RuleSet) -> RuleCounts {
+    rule_counts_slice(&set.rules)
+}
+
+pub(crate) fn rule_counts_slice(rules: &[Rule]) -> RuleCounts {
     let mut counts = RuleCounts::default();
-    for rule in &set.rules {
+    for rule in rules {
         match kind(rule) {
             TypeFilter::Domains => counts.domains += 1,
             TypeFilter::Processes => counts.processes += 1,
@@ -191,16 +195,23 @@ pub(crate) fn rule_counts(set: &RuleSet) -> RuleCounts {
 }
 
 pub(crate) fn visible_rules<'a>(set: &'a RuleSet, filter: &RuleFilter) -> Vec<(usize, &'a Rule)> {
-    visible_rules_in(set, filter, t())
+    visible_rules_in(&set.rules, filter, t())
+}
+
+pub(crate) fn visible_rules_slice<'a>(
+    rules: &'a [Rule],
+    filter: &RuleFilter,
+) -> Vec<(usize, &'a Rule)> {
+    visible_rules_in(rules, filter, t())
 }
 
 fn visible_rules_in<'a>(
-    set: &'a RuleSet,
+    rules: &'a [Rule],
     filter: &RuleFilter,
     strings: &Strings,
 ) -> Vec<(usize, &'a Rule)> {
     let search = filter.search.to_lowercase();
-    set.rules
+    rules
         .iter()
         .enumerate()
         .filter(|(_, rule)| {
@@ -416,7 +427,7 @@ mod tests {
         );
         filter.search = "торр".into();
         assert_eq!(
-            visible_rules_in(&set, &filter, &crate::strings::RU)
+            visible_rules_in(&set.rules, &filter, &crate::strings::RU)
                 .into_iter()
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>(),
@@ -424,7 +435,7 @@ mod tests {
         );
         filter.search = "template:torrents".into();
         assert_eq!(
-            visible_rules_in(&set, &filter, &crate::strings::RU)
+            visible_rules_in(&set.rules, &filter, &crate::strings::RU)
                 .into_iter()
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>(),
@@ -452,6 +463,36 @@ mod tests {
         assert_eq!(indices(&set, &filter), vec![1, 5]);
         filter.kind = TypeFilter::Other;
         assert_eq!(indices(&set, &filter), vec![4]);
+    }
+
+    #[test]
+    fn temporary_rules_use_the_same_filters_and_counts() {
+        let rules = vec![Rule {
+            id: RuleId::new("t1"),
+            enabled: true,
+            matcher: RuleMatcher::Domain(DomainMatch::Exact("session.example".into())),
+            target: RuleTarget::Direct,
+        }];
+        assert_eq!(rule_counts_slice(&rules).domains, 1);
+        let filter = RuleFilter {
+            search: "SESSION".into(),
+            kind: TypeFilter::Domains,
+            target: Some(RuleTarget::Direct),
+        };
+        assert_eq!(
+            visible_rules_slice(&rules, &filter)[0].1.id,
+            RuleId::new("t1")
+        );
+        assert!(
+            visible_rules_slice(
+                &rules,
+                &RuleFilter {
+                    target: Some(RuleTarget::Block),
+                    ..filter
+                }
+            )
+            .is_empty()
+        );
     }
 
     #[test]

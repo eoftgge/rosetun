@@ -213,6 +213,7 @@ pub(crate) struct AddRuleDialog {
     pub(crate) subdomains: bool,
     pub(crate) show_all: bool,
     pub(crate) advanced: bool,
+    pub(crate) temporary_only: bool,
     pub(crate) editing: Option<RuleId>,
     original_domain: Option<DomainMatch>,
     pub(crate) process: String,
@@ -242,6 +243,7 @@ impl AddRuleDialog {
             subdomains: true,
             show_all: false,
             advanced: false,
+            temporary_only: false,
             editing: None,
             original_domain: None,
             process: String::new(),
@@ -415,6 +417,15 @@ pub(crate) struct State {
     pub(crate) tunnel_delay: TunnelDelay,
     delay_last_auto: Option<u64>,
     session_request: Option<ConnectRequest>,
+    pub(crate) temporary_rules: Vec<Rule>,
+    temporary_rules_loaded: bool,
+    temporary_load: Option<u64>,
+    next_temporary_load: u64,
+    temporary_retry: bool,
+    temporary_waiting_status: bool,
+    temporary_before_apply: Option<Vec<Rule>>,
+    keep_temporary: Option<RuleId>,
+    keep_apply: Option<RuleId>,
     session_snapshot_checked: bool,
     apply_after_choice: bool,
     pub(crate) exit: ExitLookup,
@@ -457,6 +468,15 @@ impl Default for State {
             tunnel_delay: TunnelDelay::Idle,
             delay_last_auto: None,
             session_request: None,
+            temporary_rules: Vec::new(),
+            temporary_rules_loaded: false,
+            temporary_load: None,
+            next_temporary_load: 0,
+            temporary_retry: true,
+            temporary_waiting_status: false,
+            temporary_before_apply: None,
+            keep_temporary: None,
+            keep_apply: None,
             session_snapshot_checked: false,
             apply_after_choice: false,
             exit: ExitLookup::None,
@@ -538,6 +558,9 @@ pub(crate) enum Action {
     #[cfg(windows)]
     BrowseExecutable,
     SubmitAddRule,
+    AddTemporary(Vec<RuleMatcher>, RuleTarget),
+    RemoveTemporary(RuleId),
+    KeepTemporary(RuleId),
     SetRuleTarget(RuleId, RuleTarget),
     SetRuleEnabled(RuleId, bool),
     DropRule(RuleId, usize),
@@ -579,6 +602,7 @@ pub(crate) enum Action {
 pub(crate) enum Job {
     Connect,
     Apply(Box<ConnectRequest>),
+    LoadTemporaryRules(u64),
     Disconnect,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
@@ -675,18 +699,24 @@ impl State {
         request.settings.tun = session.settings.tun.clone();
         request.settings.kill_switch = session.settings.kill_switch;
         request.settings.allow_lan = session.settings.allow_lan;
+        request.temporary_rules = self.temporary_rules.clone();
         Some(request)
     }
 
-    pub(crate) fn can_apply(&self) -> bool {
-        if !self.helper_available
-            || !self.config_ready
-            || self.operations.helper
-            || !matches!(
+    pub(crate) fn can_change_temporary(&self) -> bool {
+        self.helper_available
+            && self.config_ready
+            && self.temporary_rules_loaded
+            && !self.operations.helper
+            && self.session_request.is_some()
+            && matches!(
                 self.visible_status().map(|status| &status.state),
                 Some(ConnectionState::Connected)
             )
-        {
+    }
+
+    pub(crate) fn can_apply(&self) -> bool {
+        if !self.can_change_temporary() {
             return false;
         }
         let Some(session) = &self.session_request else {
@@ -701,10 +731,47 @@ impl State {
     }
 
     pub(crate) fn take_apply(&mut self) -> Option<Job> {
-        if !std::mem::take(&mut self.apply_after_choice) || !self.can_apply() {
+        if !self.apply_after_choice || !self.temporary_rules_loaded {
             return None;
         }
+        self.apply_after_choice = false;
         self.act(Action::Apply)
+    }
+
+    pub(crate) fn take_temporary_load(&mut self) -> Option<Job> {
+        if !self.helper_available
+            || !self.status_received
+            || !matches!(self.status.state, ConnectionState::Connected)
+            || self.temporary_rules_loaded
+            || self.temporary_load.is_some()
+            || !self.temporary_retry
+            || self.operations.helper
+        {
+            return None;
+        }
+        self.next_temporary_load += 1;
+        self.temporary_load = Some(self.next_temporary_load);
+        self.temporary_retry = false;
+        Some(Job::LoadTemporaryRules(self.next_temporary_load))
+    }
+
+    pub(crate) fn take_keep_apply(&mut self) -> Option<Job> {
+        if !self.can_change_temporary() {
+            return None;
+        }
+        let id = self.keep_apply.take()?;
+        self.act(Action::RemoveTemporary(id))
+    }
+
+    fn clear_temporary(&mut self) {
+        self.temporary_rules.clear();
+        self.temporary_rules_loaded = false;
+        self.temporary_load = None;
+        self.temporary_retry = true;
+        self.temporary_waiting_status = false;
+        self.temporary_before_apply = None;
+        self.keep_temporary = None;
+        self.keep_apply = None;
     }
 
     pub(crate) fn primary_action(&self) -> PrimaryAction {
@@ -1021,11 +1088,13 @@ impl State {
                 self.helper_version = Some(version);
                 self.helper_error = None;
                 self.status_received = false;
+                self.clear_temporary();
                 self.tunnel_delay = TunnelDelay::Idle;
                 self.delay_last_auto = None;
             }
             WorkerEvent::HelperUnavailable(error) => {
                 self.helper_available = false;
+                self.clear_temporary();
                 self.tunnel_delay = TunnelDelay::Idle;
                 self.delay_last_auto = None;
                 self.session_request = None;
@@ -1044,6 +1113,12 @@ impl State {
                     self.delay_last_auto = None;
                 }
                 self.status_received = true;
+                if self.temporary_waiting_status
+                    && matches!(status.state, ConnectionState::Connected)
+                {
+                    self.temporary_retry = true;
+                    self.temporary_waiting_status = false;
+                }
                 if self.helper_available {
                     match status.state {
                         ConnectionState::Disconnected
@@ -1052,6 +1127,7 @@ impl State {
                             self.session_request = None;
                             self.session_snapshot_checked = false;
                             self.apply_after_choice = false;
+                            self.clear_temporary();
                         }
                         ConnectionState::Connected
                             if self.session_request.is_none()
@@ -1060,9 +1136,12 @@ impl State {
                                 && !self.operations.helper =>
                         {
                             self.session_snapshot_checked = true;
-                            if let Ok(request) = ConnectRequest::from_config(&self.config)
+                            if let Ok(mut request) = ConnectRequest::from_config(&self.config)
                                 && status.node.as_ref() == Some(&request.selection.node)
                             {
+                                if self.temporary_rules_loaded {
+                                    request.temporary_rules = self.temporary_rules.clone();
+                                }
                                 self.session_request = Some(request);
                             }
                         }
@@ -1090,6 +1169,35 @@ impl State {
                 }
                 self.status = status;
             }
+            WorkerEvent::TemporaryRules { request, result } => {
+                if self.temporary_load != Some(request)
+                    || !self.helper_available
+                    || matches!(
+                        self.status.state,
+                        ConnectionState::Disconnected
+                            | ConnectionState::Failed { .. }
+                            | ConnectionState::FailedProtected { .. }
+                    )
+                {
+                    return;
+                }
+                self.temporary_load = None;
+                match result {
+                    Ok(rules) => {
+                        if let Some(session) = &mut self.session_request {
+                            session.temporary_rules = rules.clone();
+                        }
+                        self.temporary_rules = rules;
+                        self.temporary_rules_loaded = true;
+                        self.operation_error = None;
+                    }
+                    Err(HelperCommandError::Client(ClientError::Helper(HelperError {
+                        code: ErrorCode::Busy,
+                        ..
+                    }))) => self.temporary_waiting_status = true,
+                    Err(error) => self.helper_result(Err(error)),
+                }
+            }
             WorkerEvent::Exit {
                 generation,
                 route,
@@ -1110,6 +1218,9 @@ impl State {
                 self.operations.helper = false;
                 match result {
                     Ok(request) => {
+                        self.temporary_rules = request.temporary_rules.clone();
+                        self.temporary_rules_loaded = true;
+                        self.temporary_load = None;
                         self.session_request = Some(request);
                         self.session_snapshot_checked = true;
                         self.operation_error = None;
@@ -1120,8 +1231,20 @@ impl State {
             }
             WorkerEvent::Apply(result) => {
                 self.operations.helper = false;
+                let before = self.temporary_before_apply.take();
+                if !self.helper_available
+                    || matches!(
+                        self.status.state,
+                        ConnectionState::Disconnected
+                            | ConnectionState::Failed { .. }
+                            | ConnectionState::FailedProtected { .. }
+                    )
+                {
+                    return;
+                }
                 match result {
                     Ok(request) => {
+                        self.temporary_rules = request.temporary_rules.clone();
                         self.session_request = Some(request);
                         self.operation_error = None;
                         self.exit_route = None;
@@ -1129,6 +1252,9 @@ impl State {
                         self.delay_last_auto = None;
                     }
                     Err(error) => {
+                        if let Some(before) = before {
+                            self.temporary_rules = before;
+                        }
                         let reason = errors::helper_command(t(), &error);
                         self.operation_error = Some(self.text(&t().apply_failed(&reason)));
                     }
@@ -1228,7 +1354,17 @@ impl State {
                 }
             }
             WorkerEvent::AddRule(result) => self.finish_dialog_rule_edit(result.map(|_| ())),
-            WorkerEvent::AddRules(result) => self.finish_dialog_rule_edit(result.map(|_| ())),
+            WorkerEvent::AddRules(result) => {
+                if let Some(id) = self.keep_temporary.take() {
+                    let success = result.is_ok();
+                    self.finish_rule_edit(result.map(|_| ()));
+                    if success && self.temporary_rules_loaded {
+                        self.keep_apply = Some(id);
+                    }
+                } else {
+                    self.finish_dialog_rule_edit(result.map(|_| ()));
+                }
+            }
             WorkerEvent::UpdateRule(result) => self.finish_dialog_rule_edit(result),
             WorkerEvent::SetRuleTarget(result) => self.finish_rule_edit(result),
             WorkerEvent::SetRuleEnabled(result) => self.finish_rule_edit(result),
@@ -1891,6 +2027,10 @@ impl State {
                             .map(|process| vec![RuleMatcher::Process(process)]),
                     };
                     if let Some(mut matchers) = matchers {
+                        if dialog.temporary_only && dialog.editing.is_none() {
+                            let target = dialog.target;
+                            return self.act(Action::AddTemporary(matchers, target));
+                        }
                         let job = if let Some(id) = &dialog.editing {
                             if matchers.len() != 1 {
                                 return None;
@@ -1915,6 +2055,76 @@ impl State {
                         }
                         return self.start_rule_edit(job);
                     }
+                }
+            }
+            Action::AddTemporary(matchers, target) => {
+                if self.can_change_temporary()
+                    && self.can_edit_rules()
+                    && let Some(dialog) = &self.rule_screen.add
+                    && dialog.temporary_only
+                    && dialog.editing.is_none()
+                    && !dialog.busy
+                    && self.config.active_rule_set.as_ref() == Some(&dialog.set)
+                    && self.rule_screen.selected_set.as_ref() == Some(&dialog.set)
+                    && let Some(set) = self.selected_rules()
+                {
+                    let existing: Vec<_> = self
+                        .temporary_rules
+                        .iter()
+                        .chain(set.rules.iter())
+                        .cloned()
+                        .collect();
+                    let added = rosetun_core::temporary_rules(&existing, matchers, target).added;
+                    if added.is_empty() {
+                        let message = self.text(&errors::rule_set(
+                            t(),
+                            &rosetun_core::RuleSetError::DuplicateRule,
+                        ));
+                        if let Some(dialog) = &mut self.rule_screen.add {
+                            dialog.error = Some(message);
+                        }
+                        return None;
+                    }
+                    let before = std::mem::take(&mut self.temporary_rules);
+                    self.temporary_rules = added.into_iter().chain(before.iter().cloned()).collect();
+                    if let Some(request) = self.apply_request() {
+                        self.temporary_before_apply = Some(before);
+                        self.operations.helper = true;
+                        self.operation_error = None;
+                        self.rule_screen.add = None;
+                        self.rule_screen.filter = RuleFilter::default();
+                        return Some(Job::Apply(Box::new(request)));
+                    }
+                    self.temporary_rules = before;
+                }
+            }
+            Action::RemoveTemporary(id) => {
+                if self.can_change_temporary()
+                    && !self.operations.rules_edit
+                    && let Some(index) = self.temporary_rules.iter().position(|rule| rule.id == id)
+                {
+                    let before = self.temporary_rules.clone();
+                    self.temporary_rules.remove(index);
+                    if let Some(request) = self.apply_request() {
+                        self.temporary_before_apply = Some(before);
+                        self.operations.helper = true;
+                        self.operation_error = None;
+                        return Some(Job::Apply(Box::new(request)));
+                    }
+                    self.temporary_rules = before;
+                }
+            }
+            Action::KeepTemporary(id) => {
+                if self.can_change_temporary()
+                    && self.can_edit_rules()
+                    && self.keep_apply.is_none()
+                    && self.config.active_rule_set == self.rule_screen.selected_set
+                    && let Some(set) = self.selected_rules()
+                    && let Some(rule) = self.temporary_rules.iter().find(|rule| rule.id == id)
+                {
+                    let job = Job::AddRules(set.id.clone(), vec![rule.matcher.clone()], rule.target);
+                    self.keep_temporary = Some(id);
+                    return self.start_rule_edit(job);
                 }
             }
             Action::SetRuleTarget(rule, target) => {
@@ -3430,6 +3640,339 @@ mod tests {
         state
     }
 
+    fn temporary_rule(id: &str, domain: &str) -> Rule {
+        Rule {
+            id: RuleId::new(id),
+            enabled: true,
+            matcher: RuleMatcher::Domain(DomainMatch::Exact(domain.into())),
+            target: RuleTarget::Direct,
+        }
+    }
+
+    fn temporary_dialog(state: &mut State, domain: &str) {
+        let id = RuleSetId::new("1");
+        state.rule_screen.selected_set = Some(id.clone());
+        let mut dialog = AddRuleDialog::new(id);
+        dialog.kind = RuleInputKind::Domain;
+        dialog.domains = domain.into();
+        dialog.subdomains = false;
+        dialog.target = RuleTarget::Direct;
+        dialog.temporary_only = true;
+        state.rule_screen.add = Some(dialog);
+    }
+
+    #[test]
+    fn temporary_rules_load_once_and_retry_busy_after_the_next_status() {
+        let mut state = state_for_auto_connect();
+        state.reduce(WorkerEvent::HelperAvailable {
+            version: "test".into(),
+        });
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load() else {
+            panic!("connected status must load temporary rules");
+        };
+        assert!(state.take_temporary_load().is_none());
+        state.reduce(WorkerEvent::TemporaryRules {
+            request,
+            result: Err(HelperCommandError::Client(ClientError::Helper(
+                HelperError::new(ErrorCode::Busy, "busy"),
+            ))),
+        });
+        assert!(state.take_temporary_load().is_none());
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        let Some(Job::LoadTemporaryRules(next)) = state.take_temporary_load() else {
+            panic!("busy load must retry on the next status");
+        };
+        assert_ne!(request, next);
+        let rule = temporary_rule("t1", "session.example");
+        state.reduce(WorkerEvent::TemporaryRules {
+            request,
+            result: Ok(vec![temporary_rule("t2", "stale.example")]),
+        });
+        state.reduce(WorkerEvent::TemporaryRules {
+            request: next,
+            result: Ok(vec![rule.clone()]),
+        });
+        assert_eq!(state.temporary_rules, vec![rule.clone()]);
+        assert_eq!(
+            state.session_request.as_ref().unwrap().temporary_rules,
+            vec![rule]
+        );
+        assert!(state.take_temporary_load().is_none());
+    }
+
+    #[test]
+    fn temporary_rules_loaded_before_config_are_kept_in_the_session_snapshot() {
+        let mut state = state_for_auto_connect();
+        state.config_ready = false;
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load() else {
+            panic!("connected status must load temporary rules");
+        };
+        let rule = temporary_rule("t1", "session.example");
+        state.reduce(WorkerEvent::TemporaryRules {
+            request,
+            result: Ok(vec![rule.clone()]),
+        });
+        state.config_ready = true;
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        assert_eq!(state.session_request.unwrap().temporary_rules, vec![rule]);
+    }
+
+    #[test]
+    fn adding_temporary_rule_applies_immediately_without_saving() {
+        let mut state = connected_state_for_apply();
+        temporary_dialog(&mut state, "session.example");
+        let config = state.config.clone();
+        state.config.settings.dns = DnsPreset::Google.settings();
+        let Some(Job::Apply(request)) = state.act(Action::SubmitAddRule) else {
+            panic!("temporary rule must apply immediately");
+        };
+        assert_eq!(
+            request.temporary_rules,
+            vec![temporary_rule("t1", "session.example")]
+        );
+        assert_eq!(state.temporary_rules, request.temporary_rules);
+        assert!(state.rule_screen.add.is_none());
+        assert_eq!(state.config.rule_sets, config.rule_sets);
+        assert_eq!(request.settings.dns, state.config.settings.dns);
+        assert!(!state.pending_reconnect(SessionPart::Rules));
+        assert!(state.operations.helper);
+        state.reduce(WorkerEvent::Apply(Ok(*request.clone())));
+        assert_eq!(state.session_request.as_ref(), Some(request.as_ref()));
+        assert_eq!(state.temporary_rules, request.temporary_rules);
+        assert!(!state.pending_reconnect(SessionPart::Rules));
+        assert!(!state.pending_reconnect(SessionPart::Dns));
+    }
+
+    #[test]
+    fn temporary_rule_guards_and_duplicate_dialog_error() {
+        let mut state = connected_state_for_apply();
+        temporary_dialog(&mut state, "first.example");
+        assert!(state.act(Action::SubmitAddRule).is_none());
+        assert!(state.rule_screen.add.as_ref().unwrap().error.is_some());
+        assert!(state.temporary_rules.is_empty());
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Disconnected,
+            ..Status::default()
+        }));
+        temporary_dialog(&mut state, "session.example");
+        assert!(!state.can_change_temporary());
+        assert!(state.act(Action::SubmitAddRule).is_none());
+        assert!(state.temporary_rules.is_empty());
+    }
+
+    #[test]
+    fn new_temporary_rules_precede_existing_ones_and_survive_other_applies() {
+        let mut state = connected_state_for_apply();
+        let old = temporary_rule("t1", "old.example");
+        state.temporary_rules.push(old.clone());
+        state
+            .session_request
+            .as_mut()
+            .unwrap()
+            .temporary_rules
+            .push(old.clone());
+        temporary_dialog(&mut state, "first.example.org\nsecond.example.org");
+        let Some(Job::Apply(request)) = state.act(Action::SubmitAddRule) else {
+            panic!("new temporary rules must apply");
+        };
+        assert_eq!(request.temporary_rules[0].id, RuleId::new("t2"));
+        assert_eq!(request.temporary_rules[1].id, RuleId::new("t3"));
+        assert_eq!(request.temporary_rules[2], old);
+        state.reduce(WorkerEvent::Apply(Ok(*request)));
+        state.config.settings.dns = DnsPreset::Google.settings();
+        let Some(Job::Apply(request)) = state.act(Action::Apply) else {
+            panic!("DNS changes must apply with the temporary overlay");
+        };
+        assert_eq!(request.temporary_rules, state.temporary_rules);
+    }
+
+    #[test]
+    fn failed_temporary_apply_restores_the_last_helper_snapshot() {
+        let mut state = connected_state_for_apply();
+        let rule = temporary_rule("t1", "existing.example");
+        state.temporary_rules.push(rule.clone());
+        state
+            .session_request
+            .as_mut()
+            .unwrap()
+            .temporary_rules
+            .push(rule.clone());
+        temporary_dialog(&mut state, "session.example");
+        assert!(matches!(
+            state.act(Action::SubmitAddRule),
+            Some(Job::Apply(_))
+        ));
+        assert_eq!(state.temporary_rules.len(), 2);
+        state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
+            ClientError::Helper(HelperError::new(ErrorCode::Busy, "busy")),
+        ))));
+        assert_eq!(state.temporary_rules, vec![rule.clone()]);
+        assert_eq!(state.session_request.unwrap().temporary_rules, vec![rule]);
+        assert!(
+            state
+                .operation_error
+                .unwrap()
+                .starts_with("Changes were not applied: ")
+        );
+    }
+
+    #[test]
+    fn removing_temporary_rule_applies_and_rolls_back_on_error() {
+        let mut state = connected_state_for_apply();
+        let rule = temporary_rule("t1", "session.example");
+        state.temporary_rules.push(rule.clone());
+        state
+            .session_request
+            .as_mut()
+            .unwrap()
+            .temporary_rules
+            .push(rule.clone());
+        let Some(Job::Apply(request)) = state.act(Action::RemoveTemporary(rule.id.clone())) else {
+            panic!("remove must apply");
+        };
+        assert!(request.temporary_rules.is_empty());
+        assert!(state.temporary_rules.is_empty());
+        state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
+            ClientError::Helper(HelperError::new(ErrorCode::Busy, "busy")),
+        ))));
+        assert_eq!(state.temporary_rules, vec![rule.clone()]);
+        let Some(Job::Apply(request)) = state.act(Action::RemoveTemporary(rule.id)) else {
+            panic!("remove must remain retryable");
+        };
+        state.reduce(WorkerEvent::Apply(Ok(*request)));
+        assert!(state.temporary_rules.is_empty());
+        assert!(state.session_request.unwrap().temporary_rules.is_empty());
+    }
+
+    #[test]
+    fn keeping_temporary_rule_saves_first_then_applies_without_the_overlay() {
+        let mut state = connected_state_for_apply();
+        let rule = temporary_rule("t1", "session.example");
+        state.temporary_rules.push(rule.clone());
+        state
+            .session_request
+            .as_mut()
+            .unwrap()
+            .temporary_rules
+            .push(rule.clone());
+        state.rule_screen.selected_set = Some(RuleSetId::new("1"));
+        assert!(matches!(
+            state.act(Action::KeepTemporary(rule.id.clone())),
+            Some(Job::AddRules(set, matchers, RuleTarget::Direct))
+                if set == RuleSetId::new("1") && matchers == vec![rule.matcher.clone()]
+        ));
+        assert!(state.take_keep_apply().is_none());
+        let permanent = Rule {
+            id: RuleId::new("4"),
+            ..rule.clone()
+        };
+        state.config.rule_sets[0].rules.insert(0, permanent.clone());
+        state.reduce(WorkerEvent::AddRules(Ok(rosetun_core::AddedRules {
+            added: vec![permanent],
+            skipped: 0,
+        })));
+        let Some(Job::Apply(request)) = state.take_keep_apply() else {
+            panic!("keep must apply after the permanent rule is saved");
+        };
+        assert!(request.temporary_rules.is_empty());
+        assert_eq!(request.rule_set.rules[0].id, RuleId::new("4"));
+        state.reduce(WorkerEvent::Apply(Ok(*request)));
+        assert!(state.temporary_rules.is_empty());
+        assert!(!state.pending_reconnect(SessionPart::Rules));
+    }
+
+    #[test]
+    fn keep_failure_leaves_temporary_rule_in_place() {
+        let mut state = connected_state_for_apply();
+        let rule = temporary_rule("t1", "session.example");
+        state.temporary_rules.push(rule.clone());
+        state.rule_screen.selected_set = Some(RuleSetId::new("1"));
+        assert!(matches!(
+            state.act(Action::KeepTemporary(rule.id.clone())),
+            Some(Job::AddRules(_, _, _))
+        ));
+        state.reduce(WorkerEvent::AddRules(Err(
+            rosetun_core::RuleSetError::DuplicateRule,
+        )));
+        assert!(state.take_keep_apply().is_none());
+        assert_eq!(state.temporary_rules, vec![rule]);
+        assert!(state.operation_error.is_some());
+    }
+
+    #[test]
+    fn terminal_status_clears_temporary_rules_and_ignores_late_loads() {
+        for status in [
+            ConnectionState::Disconnected,
+            ConnectionState::Failed {
+                reason: "failed".into(),
+            },
+            ConnectionState::FailedProtected {
+                reason: "blocked".into(),
+            },
+        ] {
+            let mut state = connected_state_for_apply();
+            state
+                .temporary_rules
+                .push(temporary_rule("t1", "session.example"));
+            state.reduce(WorkerEvent::Status(Status {
+                state: status,
+                ..Status::default()
+            }));
+            assert!(state.temporary_rules.is_empty());
+            assert!(!state.temporary_rules_loaded);
+        }
+        let mut state = state_for_auto_connect();
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            ..Status::default()
+        }));
+        let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load() else {
+            panic!("connected status must load temporary rules");
+        };
+        state.reduce(WorkerEvent::HelperUnavailable(ClientError::Helper(
+            HelperError::new(ErrorCode::Internal, "gone"),
+        )));
+        state.reduce(WorkerEvent::TemporaryRules {
+            request,
+            result: Ok(vec![temporary_rule("t1", "stale.example")]),
+        });
+        assert!(state.temporary_rules.is_empty());
+    }
+
+    #[test]
+    fn late_apply_cannot_restore_rules_after_disconnect() {
+        let mut state = connected_state_for_apply();
+        temporary_dialog(&mut state, "session.example");
+        let Some(Job::Apply(request)) = state.act(Action::SubmitAddRule) else {
+            panic!("temporary rule must apply");
+        };
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Disconnected,
+            ..Status::default()
+        }));
+        state.reduce(WorkerEvent::Apply(Ok(*request)));
+        assert!(state.temporary_rules.is_empty());
+        assert!(state.session_request.is_none());
+    }
+
     #[test]
     fn successful_connect_has_no_pending_changes_until_dns_or_protection_changes() {
         let mut state = state_for_auto_connect();
@@ -3545,6 +4088,28 @@ mod tests {
         assert!(state.take_apply().is_none());
         assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
         assert!(state.act(Action::Apply).is_none());
+    }
+
+    #[test]
+    fn selected_rule_set_waits_for_the_helper_overlay_before_applying() {
+        let mut state = connected_state_for_apply();
+        state.temporary_rules_loaded = false;
+        state.config.rule_sets.push(rule_set("2"));
+        state.config.active_rule_set = Some(RuleSetId::new("2"));
+        state.reduce(WorkerEvent::SelectRuleSet(Ok(())));
+        assert!(state.take_apply().is_none());
+        assert!(state.apply_after_choice);
+        state.temporary_load = Some(1);
+        let temporary = temporary_rule("t1", "session.example");
+        state.reduce(WorkerEvent::TemporaryRules {
+            request: 1,
+            result: Ok(vec![temporary.clone()]),
+        });
+        let Some(Job::Apply(request)) = state.take_apply() else {
+            panic!("rule-set choice must apply after loading temporary rules");
+        };
+        assert_eq!(request.temporary_rules, vec![temporary]);
+        assert_eq!(request.rule_set.id, RuleSetId::new("2"));
     }
 
     #[test]

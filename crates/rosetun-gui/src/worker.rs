@@ -73,6 +73,10 @@ pub(crate) enum WorkerEvent {
     },
     Connect(Result<ConnectRequest, HelperCommandError>),
     Apply(Result<ConnectRequest, HelperCommandError>),
+    TemporaryRules {
+        request: u64,
+        result: Result<Vec<Rule>, HelperCommandError>,
+    },
     Disconnect(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
     SetLanguage(Result<(), SettingsError>),
@@ -213,6 +217,18 @@ impl WorkerDispatcher {
                 &publisher.tx,
                 &publisher.repaint,
                 WorkerEvent::Apply(result),
+            );
+        });
+    }
+
+    pub(crate) fn load_temporary_rules(&self, request: u64) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = with_helper(|client| client.temporary_rules());
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::TemporaryRules { request, result },
             );
         });
     }
