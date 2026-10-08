@@ -258,6 +258,30 @@ function Publish-Rosetun {
     $dnsLockManual.settings.auto_reconnect = $false
     $derived['request-dns-lock-manual.json'] = $dnsLockManual
 
+    $applyRules = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+    $applyRules.rule_set.rules = @($applyRules.rule_set.rules | Where-Object { $_.id -ne 'direct-domain' })
+    if ($applyRules.rule_set.rules.Count -eq $request.rule_set.rules.Count) {
+        throw 'The request has no direct-domain rule for the apply scenarios.'
+    }
+    $derived['request-apply-rules.json'] = $applyRules
+
+    $applyNode = $applyRules | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $applyNode.node.id = 'home-server-2'
+    $applyNode.selection.node = 'home-server-2'
+    $derived['request-apply-node.json'] = $applyNode
+
+    $applyUnreachable = $applyNode | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $applyUnreachable.node.port = 9
+    $derived['request-apply-unreachable.json'] = $applyUnreachable
+
+    $applyUnprotected = $applyNode | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $applyUnprotected.settings.kill_switch = $false
+    $derived['request-apply-unprotected.json'] = $applyUnprotected
+
+    $dnsLockApply = $dnsLock | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $dnsLockApply.rule_set.rules = @($dnsLockApply.rule_set.rules | Where-Object { $_.id -ne 'direct-domain' })
+    $derived['request-dns-lock-apply.json'] = $dnsLockApply
+
     $derivedDir = Join-Path $env:TEMP 'rosetun-derived-requests'
     New-Item -ItemType Directory -Force -Path $derivedDir | Out-Null
 
@@ -440,6 +464,14 @@ function Connect-RosetunTunnel {
 function Invoke-RosetunProbe {
     param([string]$RequestName = 'request.json')
     Invoke-RosetunCli -Quiet 'probe' (Join-Path $script:Config.GuestDir $RequestName)
+}
+
+function Invoke-RosetunApply {
+    param(
+        [string]$RequestName = 'request.json',
+        [switch]$Quiet
+    )
+    Invoke-RosetunCli -Quiet:$Quiet 'apply' (Join-Path $script:Config.GuestDir $RequestName)
 }
 
 function Disconnect-RosetunTunnel {

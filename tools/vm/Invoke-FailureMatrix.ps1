@@ -101,6 +101,51 @@ Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
     $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
 }
 
+$initialNodeId = (Get-Content -Path $RequestPath -Raw | ConvertFrom-Json).node.id
+Write-Host 'Apply session changes under the kill switch...'
+$apply = Invoke-RosetunApply 'request-apply-rules.json' -Quiet
+Test-Step 'apply rules' 'apply succeeds' -Note "exit $($apply.ExitCode)" { $apply.ExitCode -eq 0 }
+Test-Step 'apply rules' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
+$status = Invoke-RosetunCli -Quiet 'status'
+Test-Step 'apply rules' 'node is unchanged' {
+    $status.ExitCode -eq 0 -and $status.Output -match ('(?m)^node: {0}$' -f [regex]::Escape($initialNodeId))
+}
+$egress = Wait-RosetunTunnelEgress
+Test-Step 'apply rules' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
+Test-Step 'apply rules' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+Test-Step 'apply rules' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
+
+$apply = Invoke-RosetunApply 'request-apply-node.json' -Quiet
+Test-Step 'apply node' 'apply succeeds' -Note "exit $($apply.ExitCode)" { $apply.ExitCode -eq 0 }
+Test-Step 'apply node' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
+$status = Invoke-RosetunCli -Quiet 'status'
+Test-Step 'apply node' 'new node is reported' {
+    $status.ExitCode -eq 0 -and $status.Output -match '(?m)^node: home-server-2$'
+}
+$egress = Wait-RosetunTunnelEgress
+Test-Step 'apply node' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
+
+$watch = [Diagnostics.Stopwatch]::StartNew()
+$apply = Invoke-RosetunApply 'request-apply-unreachable.json' -Quiet
+$watch.Stop()
+Test-Step 'apply unreachable' 'apply fails within 60 s' `
+    -Note "exit $($apply.ExitCode) after $([int]$watch.Elapsed.TotalSeconds) s" {
+    $apply.ExitCode -ne 0 -and $watch.Elapsed.TotalSeconds -le 60
+}
+Test-Step 'apply unreachable' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
+$status = Invoke-RosetunCli -Quiet 'status'
+Test-Step 'apply unreachable' 'previous node is reported' {
+    $status.ExitCode -eq 0 -and $status.Output -match '(?m)^node: home-server-2$'
+}
+$egress = Wait-RosetunTunnelEgress
+Test-Step 'apply unreachable' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
+Test-Step 'apply unreachable' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+
+$apply = Invoke-RosetunApply 'request-apply-unprotected.json' -Quiet
+Test-Step 'apply protection' 'apply fails' -Note "exit $($apply.ExitCode)" { $apply.ExitCode -ne 0 }
+Test-Step 'apply protection' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
+Test-Step 'apply protection' 'direct egress stays blocked' { -not (Test-RosetunDirectEgress) }
+
 # Like a Wi-Fi reconnect: the engine has to follow the network on its own,
 # and the helper notices nothing.
 Write-Host 'Network change with the tunnel up...'
@@ -231,6 +276,12 @@ Test-Step 'dns lock' 'state is Connected' { Wait-RosetunState 'Connected' }
 $egress = Wait-RosetunTunnelEgress
 Test-Step 'dns lock' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
 Test-Step 'dns lock' 'direct DNS is blocked' { -not (Test-RosetunDirectDns) }
+$apply = Invoke-RosetunApply 'request-dns-lock-apply.json' -Quiet
+Test-Step 'dns lock apply' 'apply succeeds' -Note "exit $($apply.ExitCode)" { $apply.ExitCode -eq 0 }
+Test-Step 'dns lock apply' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
+Test-Step 'dns lock apply' 'direct DNS is blocked' { -not (Test-RosetunDirectDns) }
+$egress = Wait-RosetunTunnelEgress
+Test-Step 'dns lock apply' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
 $probe = Invoke-RosetunProbe 'request-dns-lock.json'
 Test-Step 'dns lock' 'server check works with the DNS lock' -Note "exit $($probe.ExitCode)" {
     $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
