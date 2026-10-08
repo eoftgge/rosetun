@@ -4,14 +4,12 @@ This is an alpha release. Bugs are expected. Report them in [Issues](https://git
 
 ## What's new
 
-- **Server checks.** The **Check** menu on a subscription card offers a **Quick check** (TCP connection time, available when disconnected) and a **Full check** (an HTTPS request through each server, available while connected). A server that accepts a TCP connection but fails the full check is marked "not working". Right-click a server to check just that one.
-- **Delay** of the current server on the connection screen, measured a few seconds after connecting; click it to measure again.
-- A compact rule set menu on the connection screen.
-- **Open** and **All processes** tabs in the add-rule dialog.
-- Drag subscriptions by their header; the card shows time remaining before expiry (amber in the last 7 days, red once expired).
-- "Applies on next connect" appears only after a setting really changed.
+- **Change the server, rules or DNS while connected.** Choosing another server or rule set applies at once; after editing rules or DNS, select **Apply**. The tunnel restarts for a second or two without disconnecting, and the kill switch keeps traffic blocked meanwhile. If the new server does not work, Rosetun returns to the previous one.
+- **Temporary rules.** Mark a new rule **Temporary** to keep it only until you disconnect. It applies at once, is never saved, and survives automatic reconnects. **Keep permanently** in the rule's menu turns it into an ordinary rule.
+- **Traffic tab.** Download and upload speed, session totals and a chart over 1, 5 or 15 minutes. The connection screen keeps one line with the current speed.
+- Server checks are now called **Ping** and **Real delay**.
 
-Each full check sends one HTTPS request to `https://cp.cloudflare.com/generate_204` through each checked server; measuring delay sends one through the current server. Settings and subscriptions from 0.1.0-alpha.1 are kept.
+When you switch to a server given by name while connected, its address is resolved through the current tunnel. Settings and subscriptions from 0.1.0-alpha.2 are kept.
 
 ## Install
 
@@ -31,14 +29,12 @@ Rosetun includes the unmodified official sing-box {{sing_box_version}} build, li
 
 ### Что нового
 
-- **Проверка серверов.** Меню **Проверить** в карточке подписки предлагает **Быструю проверку** (время установки TCP-соединения, доступна без подключения) и **Полную проверку** (HTTPS-запрос через каждый сервер, работает и при подключении). Если TCP-соединение установлено, но запрос через сервер не прошёл, полная проверка покажет «не работает». Чтобы проверить один сервер, нажмите на него правой кнопкой.
-- **Задержка** текущего сервера на главном экране: измеряется через несколько секунд после подключения, по клику измеряется заново.
-- Компактное меню набора правил на главном экране.
-- Вкладки **Открытые** и **Все процессы** в окне добавления правила.
-- Подписки перетаскиваются за заголовок; карточка показывает, сколько времени осталось до окончания подписки (жёлтым в последние 7 дней, красным после истечения).
-- «Применится при следующем подключении» появляется, только если настройка действительно изменилась.
+- **Смена сервера, правил и DNS при подключении.** Другой сервер или набор правил применяется сразу; после правки правил или DNS нажмите **Применить**. Туннель перезапускается на секунду или две без отключения, а kill switch в это время держит трафик заблокированным. Если новый сервер не работает, Rosetun вернётся к прежнему.
+- **Временные правила.** Отметьте новое правило как **Временное**, и оно будет действовать только до отключения. Правило применяется сразу, никуда не сохраняется и переживает автоматическое переподключение. **Сохранить навсегда** в меню правила превращает его в обычное.
+- **Вкладка «Трафик».** Скорость загрузки и отдачи, итоги за сеанс и график за 1, 5 или 15 минут. На экране подключения осталась одна строка с текущей скоростью.
+- Проверки серверов теперь называются **Пинг** и **Реальная задержка**.
 
-Полная проверка отправляет по одному HTTPS-запросу к `https://cp.cloudflare.com/generate_204` через каждый проверяемый сервер; замер задержки — один через текущий сервер. Настройки и подписки из 0.1.0-alpha.1 сохраняются.
+Если при подключении переключиться на сервер, заданный именем, его адрес определяется через текущий туннель. Настройки и подписки из 0.1.0-alpha.2 сохраняются.
 
 ### Установка
 
