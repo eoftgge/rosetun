@@ -146,6 +146,52 @@ Test-Step 'apply protection' 'apply fails' -Note "exit $($apply.ExitCode)" { $ap
 Test-Step 'apply protection' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
 Test-Step 'apply protection' 'direct egress stays blocked' { -not (Test-RosetunDirectEgress) }
 
+Write-Host 'Temporary rule under the kill switch...'
+$apply = Invoke-RosetunApply 'request-temporary.json' -Quiet
+Test-Step 'temporary' 'apply succeeds' -Note "exit $($apply.ExitCode)" { $apply.ExitCode -eq 0 }
+Test-Step 'temporary' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
+$status = Invoke-RosetunCli -Quiet 'status'
+Test-Step 'temporary' 'one rule is reported' {
+    $status.ExitCode -eq 0 -and $status.Output -match '(?m)^temporary rules: 1$'
+}
+$rules = Invoke-RosetunCli -Quiet 'temporary'
+Test-Step 'temporary' 'rule is returned' {
+    $rules.ExitCode -eq 0 -and $rules.Output -match '(?m)^direct: domain exact 2ip\.io$'
+}
+$egress = Wait-RosetunTunnelEgress -Url 'https://2ip.io' -TimeoutSeconds 15 -SkipRevocationCheck
+# The base default is block, so this domain can pass only through the temporary direct rule.
+Test-Step 'temporary' 'domain goes direct' -Note (Format-Egress $egress) { $egress.Ok }
+Test-Step 'temporary' 'unmatched domain is blocked' {
+    -not (Test-RosetunTunnelEgress -Url 'https://ya.ru')
+}
+Test-Step 'temporary' 'physical egress stays blocked' { -not (Test-RosetunDirectEgress) }
+
+Stop-RosetunEngine
+Test-Step 'temporary restart' 'state returns to Connected' {
+    Wait-RosetunState 'Connected' -TimeoutSeconds 90
+}
+$status = Invoke-RosetunCli -Quiet 'status'
+Test-Step 'temporary restart' 'one rule is reported' {
+    $status.ExitCode -eq 0 -and $status.Output -match '(?m)^temporary rules: 1$'
+}
+$egress = Wait-RosetunTunnelEgress -Url 'https://2ip.io' -TimeoutSeconds 15 -SkipRevocationCheck
+Test-Step 'temporary restart' 'domain still goes direct' -Note (Format-Egress $egress) { $egress.Ok }
+Test-Step 'temporary restart' 'physical egress stays blocked' { -not (Test-RosetunDirectEgress) }
+
+Disconnect-RosetunTunnel | Out-Null
+$connect = Connect-RosetunTunnel -Quiet
+Test-Step 'temporary disconnect' 'original request connects' -Note "exit $($connect.ExitCode)" {
+    $connect.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+}
+$status = Invoke-RosetunCli -Quiet 'status'
+Test-Step 'temporary disconnect' 'no temporary rules remain' {
+    $status.ExitCode -eq 0 -and $status.Output -match '(?m)^temporary rules: 0$'
+}
+$rules = Invoke-RosetunCli -Quiet 'temporary'
+Test-Step 'temporary disconnect' 'rule list is empty' {
+    $rules.ExitCode -eq 0 -and $rules.Output -match '(?m)^none$'
+}
+
 # Like a Wi-Fi reconnect: the engine has to follow the network on its own,
 # and the helper notices nothing.
 Write-Host 'Network change with the tunnel up...'

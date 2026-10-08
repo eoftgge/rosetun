@@ -278,6 +278,16 @@ function Publish-Rosetun {
     $applyUnprotected.settings.kill_switch = $false
     $derived['request-apply-unprotected.json'] = $applyUnprotected
 
+    $temporary = $applyNode | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $temporary.rule_set.default_target = 'block'
+    $temporary.settings.auto_reconnect = $true
+    $temporaryRules = @($request.rule_set.rules | Where-Object { $_.id -eq 'direct-domain' })
+    if ($temporaryRules.Count -ne 1) {
+        throw 'The request must have exactly one direct-domain rule for the temporary scenario.'
+    }
+    $temporary | Add-Member -NotePropertyName temporary_rules -NotePropertyValue $temporaryRules -Force
+    $derived['request-temporary.json'] = $temporary
+
     $dnsLockApply = $dnsLock | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $dnsLockApply.rule_set.rules = @($dnsLockApply.rule_set.rules | Where-Object { $_.id -ne 'direct-domain' })
     $derived['request-dns-lock-apply.json'] = $dnsLockApply
@@ -628,22 +638,27 @@ function Test-RosetunTunnelEgress {
         # Runs the probe from a copy of curl under another process name, for
         # checking process rules.
         [switch]$OtherProcess,
-        [switch]$Detailed
+        [switch]$Detailed,
+        [switch]$SkipRevocationCheck
     )
     $curl = if ($OtherProcess) { Join-Path $script:Config.GuestDir 'curl-other.exe' } else { 'curl.exe' }
     # A hostname on purpose: this also exercises the hijacked DNS path. The
     # local address proves the connection went through the tunnel; without the
     # kill switch a connection that bypasses it succeeds as well.
     $result = Invoke-RosetunGuest -ScriptBlock {
-        param($url, $tunAlias, $curl)
+        param($url, $tunAlias, $curl, $skipRevocationCheck)
         # A missing binary would fail the probe and pass a "blocked" check.
         if (-not (Get-Command -Name $curl -ErrorAction SilentlyContinue)) {
             throw "$curl was not found in the guest."
         }
         $tunAddresses = @(Get-NetIPAddress -InterfaceAlias $tunAlias -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             ForEach-Object { $_.IPAddress })
-        $output = @(& $curl --max-time 10 --silent --show-error --output NUL --write-out 'local=%{local_ip}' $url 2>&1 |
-            ForEach-Object { "$_" })
+        $flags = @('--max-time', '10', '--silent', '--show-error', '--output', 'NUL', '--write-out', 'local=%{local_ip}')
+        if ($skipRevocationCheck) {
+            # The kill switch blocks Windows certificate revocation lookups outside the tunnel.
+            $flags += '--ssl-no-revoke'
+        }
+        $output = @(& $curl @flags $url 2>&1 | ForEach-Object { "$_" })
         $exitCode = $LASTEXITCODE
         $localIp = ($output | Where-Object { $_ -like 'local=*' } | Select-Object -First 1) -replace '^local=', ''
         [pscustomobject]@{
@@ -653,7 +668,7 @@ function Test-RosetunTunnelEgress {
             TunAddresses = $tunAddresses -join ','
             Error        = ($output | Where-Object { $_ -notlike 'local=*' -and $_ }) -join ' '
         }
-    } -ArgumentList $Url, $script:Config.TunAlias, $curl
+    } -ArgumentList $Url, $script:Config.TunAlias, $curl, [bool]$SkipRevocationCheck
 
     if ($Detailed) {
         return $result
@@ -666,11 +681,12 @@ function Wait-RosetunTunnelEgress {
     # that needs time after Connected shows up as a number, not a failure.
     param(
         [string]$Url = $script:Config.TunnelProbeUrl,
-        [int]$TimeoutSeconds = 30
+        [int]$TimeoutSeconds = 30,
+        [switch]$SkipRevocationCheck
     )
     $watch = [Diagnostics.Stopwatch]::StartNew()
     do {
-        $last = Test-RosetunTunnelEgress -Url $Url -Detailed
+        $last = Test-RosetunTunnelEgress -Url $Url -Detailed -SkipRevocationCheck:$SkipRevocationCheck
         if ($last.Ok) {
             break
         }
