@@ -181,6 +181,7 @@ pub(crate) struct Strings {
     pub(crate) language: Language,
     pub(crate) errors: ErrorStrings,
     pub(crate) connection: &'static str,
+    pub(crate) traffic: &'static str,
     pub(crate) rules: &'static str,
     pub(crate) settings: &'static str,
     pub(crate) settings_saved_instantly: &'static str,
@@ -289,6 +290,8 @@ pub(crate) struct Strings {
     pub(crate) session: &'static str,
     pub(crate) traffic_down: &'static str,
     pub(crate) traffic_up: &'static str,
+    pub(crate) traffic_open_hint: &'static str,
+    pub(crate) traffic_rates_template: &'static str,
     pub(crate) traffic_session: &'static str,
     pub(crate) traffic_empty: &'static str,
     pub(crate) no_session: &'static str,
@@ -645,6 +648,10 @@ impl Strings {
 
     pub(crate) fn last_updated(&self, age: &str) -> String {
         fill(self.last_updated_template, &[("age", age)])
+    }
+
+    pub(crate) fn traffic_rates(&self, down: &str, up: &str) -> String {
+        fill(self.traffic_rates_template, &[("down", down), ("up", up)])
     }
 
     pub(crate) fn traffic_peak(&self, rate: &str) -> String {

@@ -27,6 +27,7 @@ enum WindowButton {
 #[derive(Clone, Copy)]
 enum TabIcon {
     Connection,
+    Traffic,
     Rules,
     Settings,
 }
@@ -102,6 +103,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     t().connection,
                     Screen::Connection,
                     Action::ShowConnection,
+                ),
+                (
+                    TabIcon::Traffic,
+                    t().traffic,
+                    Screen::Traffic,
+                    Action::OpenTraffic,
                 ),
                 (TabIcon::Rules, t().rules, Screen::Rules, Action::OpenRules),
                 (
@@ -421,6 +428,10 @@ fn paint_tab_icon(painter: &egui::Painter, rect: Rect, icon: TabIcon, color: Col
             ));
             line(&[(10.0, 6.0), (10.0, 11.0)]);
             line(&[(7.5, 9.0), (10.0, 6.0), (12.5, 9.0)]);
+        }
+        TabIcon::Traffic => {
+            line(&[(2.0, 15.0), (6.5, 9.5), (10.0, 12.5), (14.0, 5.5), (18.0, 9.0)]);
+            line(&[(2.0, 18.0), (18.0, 18.0)]);
         }
         TabIcon::Rules => {
             line(&[(2.0, 10.0), (7.0, 10.0), (12.0, 4.5), (18.0, 4.5)]);

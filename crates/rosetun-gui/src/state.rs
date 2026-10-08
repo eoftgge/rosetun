@@ -167,6 +167,7 @@ pub(crate) enum ExitLookup {
 pub(crate) enum Screen {
     #[default]
     Connection,
+    Traffic,
     Rules,
     Settings,
 }
@@ -513,6 +514,7 @@ pub(crate) enum AboutFolder {
 
 pub(crate) enum Action {
     ShowConnection,
+    OpenTraffic,
     OpenSettings,
     OpenSettingsSection(SettingsSection),
     SetInterfaceScale(u16),
@@ -1687,6 +1689,7 @@ impl State {
     pub(crate) fn act(&mut self, action: Action) -> Option<Job> {
         match action {
             Action::ShowConnection => self.screen = Screen::Connection,
+            Action::OpenTraffic => self.screen = Screen::Traffic,
             Action::OpenSettings => {
                 if !self.settings_screen.opened {
                     self.settings_screen.opened = true;

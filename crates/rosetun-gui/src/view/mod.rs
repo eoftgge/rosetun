@@ -6,6 +6,7 @@ pub(crate) mod rose_button;
 pub(crate) mod rules;
 pub(crate) mod settings;
 pub(crate) mod subscriptions;
+pub(crate) mod traffic;
 mod window_frame;
 
 use eframe::egui::{self, Align, RichText, Stroke};
@@ -86,6 +87,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                     }
                     match state.screen {
                         Screen::Connection => connection::show(ui, state, &mut actions),
+                        Screen::Traffic => traffic::show(ui, state),
                         Screen::Rules => rules::show(ui, state, &mut actions),
                         Screen::Settings => settings::show(ui, state, &mut actions),
                     }
