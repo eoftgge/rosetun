@@ -514,31 +514,95 @@ fn subscription_card(
                     },
                     |ui| {
                         let checking = state.operations.pinging.contains(&subscription.id);
-                        if !state.can_ping() {
+                        if checking {
                             ui.label(
-                                RichText::new(t().ping_while_connected)
+                                RichText::new(t().ping_checking)
                                     .small()
                                     .color(theme::TEXT_DIM),
-                            )
-                            .on_hover_text(t().ping_tunnel_up);
+                            );
                         } else {
                             let enabled = state.config_ready
                                 && !subscription.nodes.is_empty()
-                                && !checking
                                 && !state.subscription_busy(&subscription.id);
-                            if link(
-                                ui,
-                                if checking {
-                                    t().ping_checking
+                            let font = egui::TextStyle::Small.resolve(ui.style());
+                            let text_width = ui
+                                .painter()
+                                .layout_no_wrap(
+                                    t().check_menu.to_owned(),
+                                    font.clone(),
+                                    theme::ROSE_LIGHT,
+                                )
+                                .size()
+                                .x;
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(
+                                    text_width + 20.0,
+                                    ui.text_style_height(&egui::TextStyle::Small),
+                                ),
+                                if enabled {
+                                    egui::Sense::click()
                                 } else {
-                                    t().ping_check
+                                    egui::Sense::hover()
                                 },
-                                enabled,
-                            )
-                            .clicked()
-                            {
-                                actions.push(Action::Ping(subscription.id.clone()));
+                            );
+                            if ui.is_rect_visible(rect) {
+                                let color = if enabled {
+                                    theme::ROSE_LIGHT
+                                } else {
+                                    theme::TEXT_DIM
+                                };
+                                ui.painter().text(
+                                    rect.left_center(),
+                                    egui::Align2::LEFT_CENTER,
+                                    t().check_menu,
+                                    font,
+                                    color,
+                                );
+                                icons::paint(
+                                    ui.painter(),
+                                    egui::pos2(rect.right() - 7.0, rect.center().y),
+                                    Icon::Chevron { open: true },
+                                    color,
+                                );
                             }
+                            let menu = response.on_hover_text(t().check_hint);
+                            widgets::menu_popup(&menu).show(|ui| {
+                                ui.set_min_width(200.0);
+                                if widgets::menu_item(
+                                    ui,
+                                    widgets::MenuItem {
+                                        label: t().check_quick,
+                                        enabled: enabled && state.can_ping(),
+                                        selected: false,
+                                        danger: false,
+                                        note: Some(if state.can_ping() {
+                                            t().check_tcp
+                                        } else {
+                                            t().check_while_connected
+                                        }),
+                                    },
+                                )
+                                .clicked()
+                                {
+                                    actions.push(Action::Ping(subscription.id.clone()));
+                                    ui.close();
+                                }
+                                if widgets::menu_item(
+                                    ui,
+                                    widgets::MenuItem {
+                                        label: t().check_full,
+                                        enabled: enabled && state.can_full_check(),
+                                        selected: false,
+                                        danger: false,
+                                        note: Some(t().check_via_server),
+                                    },
+                                )
+                                .clicked()
+                                {
+                                    actions.push(Action::FullCheck(subscription.id.clone()));
+                                    ui.close();
+                                }
+                            });
                         }
                     },
                 );
@@ -632,12 +696,16 @@ fn quota_fraction(info: &SubscriptionInfo, now: u64) -> Option<f32> {
 /// Signal bars for a ping: 3 under 80 ms, 2 up to 150 ms, 1 above, 0 without an answer.
 fn ping_quality(result: PingResult) -> u8 {
     match result {
-        PingResult::Answered(elapsed) => match ping_millis(elapsed) {
+        PingResult::Answered(elapsed) | PingResult::Works(elapsed) => match ping_millis(elapsed) {
             0..80 => 3,
             80..=150 => 2,
             _ => 1,
         },
-        PingResult::NoAnswer | PingResult::Pending => 0,
+        PingResult::NoAnswer
+        | PingResult::Fails
+        | PingResult::Unresolved
+        | PingResult::Unsupported
+        | PingResult::Pending => 0,
     }
 }
 
@@ -740,7 +808,22 @@ fn server_row(
     }
     let mut name_right = right;
     if show_pings {
-        let ping_left = right - 70.0;
+        let font = egui::TextStyle::Small.resolve(ui.style());
+        let ping_width = [
+            t().ping_no_answer,
+            t().ping_fails,
+            t().ping_unresolved,
+            t().ping_unsupported,
+        ]
+        .into_iter()
+        .map(|text| {
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), font.clone(), theme::TEXT_DIM)
+                .size()
+                .x
+        })
+        .fold(70.0_f32, f32::max);
+        let ping_left = right - ping_width;
         let bars_left = ping_left - 8.0 - 13.0;
         name_right = bars_left - 10.0;
         if let Some(result) = state
@@ -764,14 +847,42 @@ fn server_row(
                     },
                 );
             }
-            let (ping_text, color) = match result {
+            let (ping_text, color, hint) = match result {
                 PingResult::Answered(elapsed) => (
                     strings::fill(t().ping_ms, &[("ms", &ping_millis(elapsed).to_string())]),
                     theme::TEXT_DIM,
+                    Some(t().ping_tcp_hint),
                 ),
-                PingResult::NoAnswer => (t().ping_no_answer.to_owned(), theme::ERROR),
-                PingResult::Pending => (t().ping_pending.to_owned(), theme::TEXT_DIM),
+                PingResult::Works(elapsed) => (
+                    strings::fill(t().ping_ms, &[("ms", &ping_millis(elapsed).to_string())]),
+                    theme::TEXT_DIM,
+                    Some(t().ping_full_hint),
+                ),
+                PingResult::NoAnswer => (t().ping_no_answer.to_owned(), theme::ERROR, None),
+                PingResult::Fails => (
+                    t().ping_fails.to_owned(),
+                    theme::ERROR,
+                    Some(t().ping_fails_hint),
+                ),
+                PingResult::Unresolved => (
+                    t().ping_unresolved.to_owned(),
+                    theme::TEXT_DIM,
+                    Some(t().ping_unresolved_hint),
+                ),
+                PingResult::Unsupported => (t().ping_unsupported.to_owned(), theme::TEXT_DIM, None),
+                PingResult::Pending => (t().ping_pending.to_owned(), theme::TEXT_DIM, None),
             };
+            if let Some(hint) = hint {
+                ui.interact(
+                    egui::Rect::from_min_max(
+                        egui::pos2(ping_left, rect.top()),
+                        egui::pos2(right, rect.bottom()),
+                    ),
+                    ui.id().with(("ping", node.id.as_str())),
+                    egui::Sense::hover(),
+                )
+                .on_hover_text(hint);
+            }
             painter.text(
                 egui::pos2(right, rect.center().y),
                 egui::Align2::RIGHT_CENTER,
@@ -1017,6 +1128,12 @@ mod tests {
             (PingResult::Answered(Duration::from_millis(80)), 2),
             (PingResult::Answered(Duration::from_millis(150)), 2),
             (PingResult::Answered(Duration::from_millis(151)), 1),
+            (PingResult::Works(Duration::from_millis(79)), 3),
+            (PingResult::Works(Duration::from_millis(150)), 2),
+            (PingResult::Works(Duration::from_millis(151)), 1),
+            (PingResult::Fails, 0),
+            (PingResult::Unresolved, 0),
+            (PingResult::Unsupported, 0),
             (PingResult::NoAnswer, 0),
             (PingResult::Pending, 0),
         ] {

@@ -244,6 +244,7 @@ impl App {
             Job::Add { input, options } => self.workers.add(input, options),
             Job::Update(id) => self.workers.update(id),
             Job::Ping(id) => self.workers.ping(id),
+            Job::FullCheck(id) => self.workers.full_check(id),
             Job::LookupExit { generation, route } => self.workers.lookup_exit(generation, route),
             Job::UpdateAll => self.workers.update_all(),
             Job::Remove(id) => self.workers.remove(id),

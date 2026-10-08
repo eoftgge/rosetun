@@ -11,7 +11,7 @@ use rosetun_config::{
 use rosetun_core::{
     AddFromUrlError, AddOptions, DnsPreset, Ping, UpdateReport, UpdateSubscriptionError,
 };
-use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError};
+use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError, ProbeOutcome, ProbeResult};
 
 use crate::actions::{self, PrimaryAction};
 use crate::display;
@@ -124,8 +124,16 @@ pub(crate) enum UpdateOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PingResult {
     Pending,
+    /// TCP connect time.
     Answered(Duration),
+    /// No TCP answer.
     NoAnswer,
+    /// A request through the node answered.
+    Works(Duration),
+    /// A request through the node failed.
+    Fails,
+    Unresolved,
+    Unsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -537,6 +545,7 @@ pub(crate) enum Action {
     SubmitAdd,
     Update(SubscriptionId),
     Ping(SubscriptionId),
+    FullCheck(SubscriptionId),
     UpdateAll,
     RequestRemove(SubscriptionId),
     CancelRemove,
@@ -592,6 +601,7 @@ pub(crate) enum Job {
     },
     Update(SubscriptionId),
     Ping(SubscriptionId),
+    FullCheck(SubscriptionId),
     LookupExit {
         generation: u64,
         route: ExitRoute,
@@ -763,17 +773,50 @@ impl State {
                 ))
     }
 
+    pub(crate) fn can_full_check(&self) -> bool {
+        self.helper_available && self.config_ready
+    }
+
     pub(crate) fn best_ping(&self, subscription: &Subscription) -> Option<Duration> {
         subscription
             .nodes
             .iter()
             .filter_map(
                 |node| match self.pings.get(&(subscription.id.clone(), node.id.clone())) {
-                    Some(PingResult::Answered(elapsed)) => Some(*elapsed),
+                    Some(PingResult::Answered(elapsed) | PingResult::Works(elapsed)) => {
+                        Some(*elapsed)
+                    }
                     _ => None,
                 },
             )
             .min()
+    }
+
+    fn start_check(&mut self, id: SubscriptionId, full: bool) -> Option<Job> {
+        if !(if full {
+            self.can_full_check()
+        } else {
+            self.can_ping()
+        }) || self.operations.pinging.contains(&id)
+            || self.subscription_busy(&id)
+        {
+            return None;
+        }
+        let subscription = self
+            .config
+            .subscriptions
+            .iter()
+            .find(|subscription| subscription.id == id && !subscription.nodes.is_empty())?;
+        for node in &subscription.nodes {
+            self.pings
+                .insert((id.clone(), node.id.clone()), PingResult::Pending);
+        }
+        self.operations.pinging.insert(id.clone());
+        Some(if full {
+            Job::FullCheck(id)
+        } else {
+            Job::Ping(id)
+        })
     }
 
     pub(crate) fn subscription_busy(&self, id: &SubscriptionId) -> bool {
@@ -1165,6 +1208,53 @@ impl State {
                 for ((id, _), result) in &mut self.pings {
                     if id == &subscription && *result == PingResult::Pending {
                         *result = PingResult::NoAnswer;
+                    }
+                }
+            }
+            WorkerEvent::FullCheck {
+                subscription,
+                result,
+            } => {
+                if !self.operations.pinging.remove(&subscription) {
+                    return;
+                }
+                self.pings
+                    .retain(|(id, _), ping| id != &subscription || *ping != PingResult::Pending);
+                match result {
+                    Ok(results) => {
+                        for ProbeResult { node, outcome } in results {
+                            if self
+                                .config
+                                .subscriptions
+                                .iter()
+                                .any(|sub| sub.id == subscription && sub.node(&node).is_some())
+                            {
+                                let ping = match outcome {
+                                    ProbeOutcome::Works { millis } => {
+                                        PingResult::Works(Duration::from_millis(u64::from(millis)))
+                                    }
+                                    ProbeOutcome::Fails => PingResult::Fails,
+                                    ProbeOutcome::Unresolved => PingResult::Unresolved,
+                                    ProbeOutcome::Unsupported => PingResult::Unsupported,
+                                };
+                                self.pings.insert((subscription.clone(), node), ping);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.operation_error = Some(
+                            if matches!(
+                                &error,
+                                HelperCommandError::Client(ClientError::Helper(HelperError {
+                                    code: ErrorCode::Busy,
+                                    ..
+                                }))
+                            ) {
+                                t().full_check_busy.to_owned()
+                            } else {
+                                self.text(&errors::helper_command(t(), &error))
+                            },
+                        );
                     }
                 }
             }
@@ -1859,23 +1949,8 @@ impl State {
                     return Some(Job::Update(id));
                 }
             }
-            Action::Ping(id) => {
-                if self.can_ping()
-                    && !self.operations.pinging.contains(&id)
-                    && !self.subscription_busy(&id)
-                    && let Some(subscription) =
-                        self.config.subscriptions.iter().find(|subscription| {
-                            subscription.id == id && !subscription.nodes.is_empty()
-                        })
-                {
-                    for node in &subscription.nodes {
-                        self.pings
-                            .insert((id.clone(), node.id.clone()), PingResult::Pending);
-                    }
-                    self.operations.pinging.insert(id.clone());
-                    return Some(Job::Ping(id));
-                }
-            }
+            Action::Ping(id) => return self.start_check(id, false),
+            Action::FullCheck(id) => return self.start_check(id, true),
             Action::UpdateAll => {
                 if self.config_ready
                     && !self.config.subscriptions.is_empty()
@@ -2686,6 +2761,112 @@ mod tests {
     }
 
     #[test]
+    fn full_check_runs_while_connected_and_maps_outcomes() {
+        let mut state = state_for_auto_connect();
+        let id = SubscriptionId::new("1");
+        let mut second = state.config.subscriptions[0].nodes[0].clone();
+        second.id = NodeId::new("second");
+        state.config.subscriptions[0].nodes.push(second);
+        state.status.state = ConnectionState::Connected;
+        assert!(!state.can_ping());
+        assert!(state.can_full_check());
+        assert!(matches!(
+            state.act(Action::FullCheck(id.clone())),
+            Some(Job::FullCheck(_))
+        ));
+        assert_eq!(
+            state.pings[&(id.clone(), NodeId::new("node"))],
+            PingResult::Pending
+        );
+        assert_eq!(
+            state.pings[&(id.clone(), NodeId::new("second"))],
+            PingResult::Pending
+        );
+        assert!(state.act(Action::FullCheck(id.clone())).is_none());
+        state.reduce(WorkerEvent::FullCheck {
+            subscription: id.clone(),
+            result: Ok(vec![
+                ProbeResult {
+                    node: NodeId::new("node"),
+                    outcome: ProbeOutcome::Works { millis: 85 },
+                },
+                ProbeResult {
+                    node: NodeId::new("second"),
+                    outcome: ProbeOutcome::Fails,
+                },
+                ProbeResult {
+                    node: NodeId::new("removed"),
+                    outcome: ProbeOutcome::Unresolved,
+                },
+            ]),
+        });
+        assert_eq!(
+            state.pings[&(id.clone(), NodeId::new("node"))],
+            PingResult::Works(Duration::from_millis(85))
+        );
+        assert_eq!(
+            state.pings[&(id.clone(), NodeId::new("second"))],
+            PingResult::Fails
+        );
+        assert!(
+            !state
+                .pings
+                .contains_key(&(id.clone(), NodeId::new("removed")))
+        );
+        assert!(!state.operations.pinging.contains(&id));
+    }
+
+    #[test]
+    fn full_check_clears_missing_results_and_pending_on_error() {
+        let mut state = state_for_auto_connect();
+        let id = SubscriptionId::new("1");
+        let mut second = state.config.subscriptions[0].nodes[0].clone();
+        second.id = NodeId::new("second");
+        state.config.subscriptions[0].nodes.push(second);
+        state.act(Action::FullCheck(id.clone()));
+        state.reduce(WorkerEvent::FullCheck {
+            subscription: id.clone(),
+            result: Ok(vec![ProbeResult {
+                node: NodeId::new("node"),
+                outcome: ProbeOutcome::Unresolved,
+            }]),
+        });
+        assert_eq!(
+            state.pings[&(id.clone(), NodeId::new("node"))],
+            PingResult::Unresolved
+        );
+        assert!(
+            !state
+                .pings
+                .contains_key(&(id.clone(), NodeId::new("second")))
+        );
+        state.act(Action::FullCheck(id.clone()));
+        state.reduce(WorkerEvent::FullCheck {
+            subscription: id.clone(),
+            result: Err(HelperCommandError::Client(ClientError::Helper(
+                HelperError::new(ErrorCode::Busy, ""),
+            ))),
+        });
+        assert!(!state.pings.contains_key(&(id.clone(), NodeId::new("node"))));
+        assert!(!state.operations.pinging.contains(&id));
+        assert_eq!(state.operation_error.as_deref(), Some(t().full_check_busy));
+
+        state.act(Action::FullCheck(id.clone()));
+        state.reduce(WorkerEvent::FullCheck {
+            subscription: id.clone(),
+            result: Err(HelperCommandError::Client(ClientError::Closed)),
+        });
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some(
+                errors::helper_command(t(), &HelperCommandError::Client(ClientError::Closed))
+                    .as_str()
+            )
+        );
+        assert!(!state.pings.contains_key(&(id, NodeId::new("second"))));
+    }
+
+    #[test]
     fn best_ping_ignores_unanswered_nodes_and_chooses_smallest_answer() {
         let mut state = state_for_auto_connect();
         let id = SubscriptionId::new("1");
@@ -2698,12 +2879,19 @@ mod tests {
             PingResult::Answered(Duration::from_millis(118)),
         );
         state.pings.insert(
-            (id, NodeId::new("second")),
-            PingResult::Answered(Duration::from_millis(40)),
+            (id.clone(), NodeId::new("second")),
+            PingResult::Works(Duration::from_millis(40)),
         );
         assert_eq!(
             state.best_ping(&state.config.subscriptions[0]),
             Some(Duration::from_millis(40))
+        );
+        state
+            .pings
+            .insert((id, NodeId::new("second")), PingResult::Fails);
+        assert_eq!(
+            state.best_ping(&state.config.subscriptions[0]),
+            Some(Duration::from_millis(118))
         );
     }
 

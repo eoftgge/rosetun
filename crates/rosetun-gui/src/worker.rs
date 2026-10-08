@@ -25,7 +25,10 @@ use rosetun_core::{
     set_rule_enabled, set_rule_target, set_verbose_log, update_all, update_rule,
     update_subscription,
 };
-use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, HelperClient};
+use rosetun_ipc::{
+    ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeRequest,
+    ProbeResult,
+};
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
 use crate::state::ExitRoute;
@@ -122,6 +125,10 @@ pub(crate) enum WorkerEvent {
         result: Ping,
     },
     PingDone(SubscriptionId),
+    FullCheck {
+        subscription: SubscriptionId,
+        result: Result<Vec<ProbeResult>, HelperCommandError>,
+    },
     UpdateAll(Result<Vec<SubscriptionUpdateResult>, StoreError>),
     Remove {
         id: SubscriptionId,
@@ -556,6 +563,36 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn full_check(&self, id: SubscriptionId) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = publisher
+                .store
+                .load()
+                .map_err(HelperCommandError::Store)
+                .and_then(|config| {
+                    let Some(subscription) = config.subscriptions.iter().find(|sub| sub.id == id)
+                    else {
+                        return Ok(Vec::new());
+                    };
+                    let request = ProbeRequest {
+                        nodes: subscription
+                            .nodes
+                            .iter()
+                            .take(MAX_PROBE_NODES)
+                            .cloned()
+                            .collect(),
+                        settings: config.settings.clone(),
+                    };
+                    with_helper(|client| client.probe_nodes(request))
+                });
+            publisher.complete(WorkerEvent::FullCheck {
+                subscription: id,
+                result,
+            });
+        });
+    }
+
     pub(crate) fn lookup_exit(&self, generation: u64, route: ExitRoute) {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
@@ -729,9 +766,9 @@ fn file_stamp(path: &Path) -> Result<FileStamp, std::io::Error> {
     }
 }
 
-fn with_helper(
-    operation: impl FnOnce(&mut HelperClient) -> Result<(), ClientError>,
-) -> Result<(), HelperCommandError> {
+fn with_helper<T>(
+    operation: impl FnOnce(&mut HelperClient) -> Result<T, ClientError>,
+) -> Result<T, HelperCommandError> {
     let mut client = HelperClient::connect(&rosetun_ipc::default_endpoint(), CLIENT_NAME)?;
     operation(&mut client).map_err(Into::into)
 }
