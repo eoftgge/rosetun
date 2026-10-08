@@ -13,7 +13,7 @@ pub(crate) use buttons::{
 };
 pub(crate) use choice_card::choice_card;
 pub(crate) use frames::{card_frame, dismissible_error, modal_frame};
-pub(crate) use menu::{MenuItem, menu_item, menu_popup};
+pub(crate) use menu::{MenuItem, context_menu_popup, menu_item, menu_popup};
 pub(crate) use search::search_field;
 pub(crate) use segmented::segmented;
 pub(crate) use settings_card::settings_card;

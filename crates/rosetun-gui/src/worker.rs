@@ -10,8 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, DnsSettings, LanguageSetting, NodeId, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
-    RuleTarget, Status, Subscription, SubscriptionId,
+    AppConfig, DnsSettings, LanguageSetting, Node, NodeId, Rule, RuleId, RuleMatcher, RuleSet,
+    RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, AddedRules, ExitInfo, ExitInfoError, MoveSubscriptionError,
@@ -528,7 +528,7 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn ping(&self, id: SubscriptionId) {
+    pub(crate) fn ping(&self, id: SubscriptionId, node: Option<NodeId>) {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
             let subscription = publisher.store.load().ok().and_then(|config| {
@@ -538,33 +538,31 @@ impl WorkerDispatcher {
                     .find(|subscription| subscription.id == id)
             });
             if let Some(subscription) = subscription {
-                let node_ids: Vec<_> = subscription
-                    .nodes
-                    .iter()
-                    .map(|node| node.id.clone())
-                    .collect();
-                let targets: Vec<_> = subscription
-                    .nodes
+                let nodes = check_nodes(&subscription, node.as_ref());
+                let node_ids: Vec<_> = nodes.iter().map(|node| node.id.clone()).collect();
+                let targets: Vec<_> = nodes
                     .iter()
                     .map(|node| (node.server.clone(), node.port))
                     .collect();
-                ping_all(&targets, PING_PARALLEL, PING_TIMEOUT, |index, result| {
-                    emit(
-                        &publisher.tx,
-                        &publisher.repaint,
-                        WorkerEvent::Ping {
-                            subscription: id.clone(),
-                            node: node_ids[index].clone(),
-                            result,
-                        },
-                    );
-                });
+                if !targets.is_empty() {
+                    ping_all(&targets, PING_PARALLEL, PING_TIMEOUT, |index, result| {
+                        emit(
+                            &publisher.tx,
+                            &publisher.repaint,
+                            WorkerEvent::Ping {
+                                subscription: id.clone(),
+                                node: node_ids[index].clone(),
+                                result,
+                            },
+                        );
+                    });
+                }
             }
             emit(&publisher.tx, &publisher.repaint, WorkerEvent::PingDone(id));
         });
     }
 
-    pub(crate) fn full_check(&self, id: SubscriptionId) {
+    pub(crate) fn full_check(&self, id: SubscriptionId, node: Option<NodeId>) {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
             let result = publisher
@@ -576,15 +574,18 @@ impl WorkerDispatcher {
                     else {
                         return Ok(Vec::new());
                     };
+                    let nodes = check_nodes(subscription, node.as_ref())
+                        .into_iter()
+                        .take(MAX_PROBE_NODES)
+                        .cloned()
+                        .collect();
                     let request = ProbeRequest {
-                        nodes: subscription
-                            .nodes
-                            .iter()
-                            .take(MAX_PROBE_NODES)
-                            .cloned()
-                            .collect(),
+                        nodes,
                         settings: config.settings.clone(),
                     };
+                    if request.nodes.is_empty() {
+                        return Ok(Vec::new());
+                    }
                     with_helper(|client| client.probe_nodes(request))
                 });
             publisher.complete(WorkerEvent::FullCheck {
@@ -775,6 +776,14 @@ fn file_stamp(path: &Path) -> Result<FileStamp, std::io::Error> {
     }
 }
 
+fn check_nodes<'a>(subscription: &'a Subscription, selected: Option<&NodeId>) -> Vec<&'a Node> {
+    subscription
+        .nodes
+        .iter()
+        .filter(|node| selected.is_none_or(|id| &node.id == id))
+        .collect()
+}
+
 fn with_helper<T>(
     operation: impl FnOnce(&mut HelperClient) -> Result<T, ClientError>,
 ) -> Result<T, HelperCommandError> {
@@ -818,6 +827,46 @@ fn emit(tx: &Sender<WorkerEvent>, repaint: &egui::Context, event: WorkerEvent) -
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn check_nodes_selects_one_node_or_all_and_skips_removed_nodes() {
+        let first = Node {
+            id: NodeId::new("first"),
+            name: "First".into(),
+            server: "127.0.0.1".into(),
+            port: 443,
+            outbound: rosetun_config::Outbound::Vless(rosetun_config::VlessParams {
+                uuid: "00000000-0000-0000-0000-000000000000".into(),
+                flow: None,
+            }),
+            stream: Default::default(),
+            raw: None,
+        };
+        let mut second = first.clone();
+        second.id = NodeId::new("second");
+        let subscription = Subscription {
+            id: SubscriptionId::new("test"),
+            name: "Test".into(),
+            url: "https://example.com/sub".into(),
+            nodes: vec![first, second],
+            auto_update: false,
+            updated_at_unix: None,
+            user_agent: None,
+            send_hwid: true,
+            info: None,
+            update_interval_hours: None,
+            support_url: None,
+            web_page_url: None,
+            announce: None,
+            notices: vec![],
+        };
+        assert_eq!(check_nodes(&subscription, None).len(), 2);
+        assert_eq!(
+            check_nodes(&subscription, Some(&NodeId::new("second")))[0].id,
+            NodeId::new("second")
+        );
+        assert!(check_nodes(&subscription, Some(&NodeId::new("removed"))).is_empty());
+    }
 
     #[test]
     fn subscription_errors_do_not_log_urls_or_tokens() {

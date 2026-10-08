@@ -557,7 +557,9 @@ pub(crate) enum Action {
     SubmitAdd,
     Update(SubscriptionId),
     Ping(SubscriptionId),
+    PingNode(SubscriptionId, NodeId),
     FullCheck(SubscriptionId),
+    FullCheckNode(SubscriptionId, NodeId),
     UpdateAll,
     RequestRemove(SubscriptionId),
     CancelRemove,
@@ -613,7 +615,9 @@ pub(crate) enum Job {
     },
     Update(SubscriptionId),
     Ping(SubscriptionId),
+    PingNode(SubscriptionId, NodeId),
     FullCheck(SubscriptionId),
+    FullCheckNode(SubscriptionId, NodeId),
     TunnelDelay,
     LookupExit {
         generation: u64,
@@ -826,7 +830,7 @@ impl State {
             .min()
     }
 
-    fn start_check(&mut self, id: SubscriptionId, full: bool) -> Option<Job> {
+    fn start_check(&mut self, id: SubscriptionId, node: Option<NodeId>, full: bool) -> Option<Job> {
         if !(if full {
             self.can_full_check()
         } else {
@@ -841,15 +845,24 @@ impl State {
             .subscriptions
             .iter()
             .find(|subscription| subscription.id == id && !subscription.nodes.is_empty())?;
-        for node in &subscription.nodes {
-            self.pings
-                .insert((id.clone(), node.id.clone()), PingResult::Pending);
+        if node
+            .as_ref()
+            .is_some_and(|selected| subscription.node(selected).is_none())
+        {
+            return None;
+        }
+        for current in &subscription.nodes {
+            if node.as_ref().is_none_or(|selected| selected == &current.id) {
+                self.pings
+                    .insert((id.clone(), current.id.clone()), PingResult::Pending);
+            }
         }
         self.operations.pinging.insert(id.clone());
-        Some(if full {
-            Job::FullCheck(id)
-        } else {
-            Job::Ping(id)
+        Some(match (full, node) {
+            (false, None) => Job::Ping(id),
+            (false, Some(node)) => Job::PingNode(id, node),
+            (true, None) => Job::FullCheck(id),
+            (true, Some(node)) => Job::FullCheckNode(id, node),
         })
     }
 
@@ -2023,8 +2036,10 @@ impl State {
                     return Some(Job::Update(id));
                 }
             }
-            Action::Ping(id) => return self.start_check(id, false),
-            Action::FullCheck(id) => return self.start_check(id, true),
+            Action::Ping(id) => return self.start_check(id, None, false),
+            Action::PingNode(id, node) => return self.start_check(id, Some(node), false),
+            Action::FullCheck(id) => return self.start_check(id, None, true),
+            Action::FullCheckNode(id, node) => return self.start_check(id, Some(node), true),
             Action::UpdateAll => {
                 if self.config_ready
                     && !self.config.subscriptions.is_empty()
@@ -2832,6 +2847,151 @@ mod tests {
         });
         assert!(!state.pings.contains_key(&(id, first)));
         assert!(state.best_ping(&state.config.subscriptions[0]).is_none());
+    }
+
+    #[test]
+    fn single_node_ping_preserves_other_results_and_rejects_busy_checks() {
+        let mut state = state_for_auto_connect();
+        let id = SubscriptionId::new("1");
+        let first = NodeId::new("node");
+        let mut other = state.config.subscriptions[0].nodes[0].clone();
+        other.id = NodeId::new("second");
+        state.config.subscriptions[0].nodes.push(other);
+        let second = NodeId::new("second");
+        let previous = PingResult::Works(Duration::from_millis(44));
+        state.pings.insert((id.clone(), second.clone()), previous);
+
+        assert!(matches!(
+            state.act(Action::PingNode(id.clone(), first.clone())),
+            Some(Job::PingNode(subscription, node)) if subscription == id && node == first
+        ));
+        assert_eq!(
+            state.pings[&(id.clone(), first.clone())],
+            PingResult::Pending
+        );
+        assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+        assert!(state.act(Action::Ping(id.clone())).is_none());
+        assert!(
+            state
+                .act(Action::FullCheckNode(id.clone(), second.clone()))
+                .is_none()
+        );
+
+        state.reduce(WorkerEvent::PingDone(id.clone()));
+        assert_eq!(
+            state.pings[&(id.clone(), first.clone())],
+            PingResult::NoAnswer
+        );
+        assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+        assert!(matches!(
+            state.act(Action::PingNode(id.clone(), first.clone())),
+            Some(Job::PingNode(_, _))
+        ));
+        state.reduce(WorkerEvent::Ping {
+            subscription: id.clone(),
+            node: first.clone(),
+            result: Ping::Answered(Duration::from_millis(90)),
+        });
+        state.reduce(WorkerEvent::PingDone(id.clone()));
+        assert_eq!(
+            state.pings[&(id.clone(), first)],
+            PingResult::Answered(Duration::from_millis(90))
+        );
+        assert_eq!(state.pings[&(id, second)], previous);
+    }
+
+    #[test]
+    fn single_node_check_rejects_missing_nodes_and_connected_quick_checks() {
+        let mut state = state_for_auto_connect();
+        let id = SubscriptionId::new("1");
+        let node = NodeId::new("node");
+        let missing = NodeId::new("missing");
+        assert!(
+            state
+                .act(Action::PingNode(id.clone(), missing.clone()))
+                .is_none()
+        );
+        assert!(
+            state
+                .act(Action::FullCheckNode(id.clone(), missing))
+                .is_none()
+        );
+        assert!(state.pings.is_empty());
+        assert!(!state.operations.pinging.contains(&id));
+
+        state.status.state = ConnectionState::Connected;
+        assert!(
+            state
+                .act(Action::PingNode(id.clone(), node.clone()))
+                .is_none()
+        );
+        assert!(matches!(
+            state.act(Action::FullCheckNode(id.clone(), node.clone())),
+            Some(Job::FullCheckNode(subscription, selected)) if subscription == id && selected == node
+        ));
+    }
+
+    #[test]
+    fn single_node_full_check_preserves_other_results_and_ignores_removed_node() {
+        let mut state = state_for_auto_connect();
+        let id = SubscriptionId::new("1");
+        let first = NodeId::new("node");
+        let mut other = state.config.subscriptions[0].nodes[0].clone();
+        other.id = NodeId::new("second");
+        state.config.subscriptions[0].nodes.push(other);
+        let second = NodeId::new("second");
+        let previous = PingResult::Answered(Duration::from_millis(55));
+        state.pings.insert((id.clone(), second.clone()), previous);
+
+        assert!(matches!(
+            state.act(Action::FullCheckNode(id.clone(), first.clone())),
+            Some(Job::FullCheckNode(_, _))
+        ));
+        assert_eq!(
+            state.pings[&(id.clone(), first.clone())],
+            PingResult::Pending
+        );
+        assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+        state.reduce(WorkerEvent::FullCheck {
+            subscription: id.clone(),
+            result: Err(HelperCommandError::Client(ClientError::Closed)),
+        });
+        assert!(!state.pings.contains_key(&(id.clone(), first.clone())));
+        assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+        assert!(!state.operations.pinging.contains(&id));
+
+        state.act(Action::FullCheckNode(id.clone(), first.clone()));
+        state.reduce(WorkerEvent::FullCheck {
+            subscription: id.clone(),
+            result: Ok(vec![ProbeResult {
+                node: first.clone(),
+                outcome: ProbeOutcome::Works { millis: 76 },
+            }]),
+        });
+        assert_eq!(
+            state.pings[&(id.clone(), first.clone())],
+            PingResult::Works(Duration::from_millis(76))
+        );
+        assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+
+        state.act(Action::FullCheckNode(id.clone(), first.clone()));
+        state.config.subscriptions[0]
+            .nodes
+            .retain(|node| node.id != first);
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: state.config.clone(),
+        });
+        state.reduce(WorkerEvent::FullCheck {
+            subscription: id.clone(),
+            result: Ok(vec![ProbeResult {
+                node: first.clone(),
+                outcome: ProbeOutcome::Fails,
+            }]),
+        });
+        assert!(!state.pings.contains_key(&(id.clone(), first)));
+        assert_eq!(state.pings[&(id.clone(), second)], previous);
+        assert!(!state.operations.pinging.contains(&id));
     }
 
     #[test]

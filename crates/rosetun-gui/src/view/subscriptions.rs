@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, Stroke};
-use rosetun_config::{Node, Subscription, SubscriptionId, SubscriptionInfo};
+use rosetun_config::{Node, NodeId, Subscription, SubscriptionId, SubscriptionInfo};
 
 use crate::errors;
 use crate::icons::{self, Icon};
@@ -567,41 +567,7 @@ fn subscription_card(
                             }
                             let menu = response.on_hover_text(t().check_hint);
                             widgets::menu_popup(&menu).show(|ui| {
-                                ui.set_min_width(200.0);
-                                if widgets::menu_item(
-                                    ui,
-                                    widgets::MenuItem {
-                                        label: t().check_quick,
-                                        enabled: enabled && state.can_ping(),
-                                        selected: false,
-                                        danger: false,
-                                        note: Some(if state.can_ping() {
-                                            t().check_tcp
-                                        } else {
-                                            t().check_while_connected
-                                        }),
-                                    },
-                                )
-                                .clicked()
-                                {
-                                    actions.push(Action::Ping(subscription.id.clone()));
-                                    ui.close();
-                                }
-                                if widgets::menu_item(
-                                    ui,
-                                    widgets::MenuItem {
-                                        label: t().check_full,
-                                        enabled: enabled && state.can_full_check(),
-                                        selected: false,
-                                        danger: false,
-                                        note: Some(t().check_via_server),
-                                    },
-                                )
-                                .clicked()
-                                {
-                                    actions.push(Action::FullCheck(subscription.id.clone()));
-                                    ui.close();
-                                }
+                                check_menu_items(ui, state, subscription, None, enabled, actions);
                             });
                         }
                     },
@@ -709,6 +675,96 @@ fn ping_quality(result: PingResult) -> u8 {
     }
 }
 
+fn ping_text_width(ui: &egui::Ui) -> f32 {
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    [
+        t().ping_no_answer,
+        t().ping_fails,
+        t().ping_unresolved,
+        t().ping_unsupported,
+    ]
+    .into_iter()
+    .map(|text| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font.clone(), theme::TEXT_DIM)
+            .size()
+            .x
+    })
+    .fold(70.0_f32, f32::max)
+}
+
+fn hover_ping_hint(
+    result: Option<PingResult>,
+    pointer: Option<egui::Pos2>,
+    region: Option<egui::Rect>,
+) -> Option<&'static str> {
+    if !pointer
+        .zip(region)
+        .is_some_and(|(point, rect)| rect.contains(point))
+    {
+        return None;
+    }
+    match result? {
+        PingResult::Answered(_) => Some(t().ping_tcp_hint),
+        PingResult::Works(_) => Some(t().ping_full_hint),
+        PingResult::Fails => Some(t().ping_fails_hint),
+        PingResult::Unresolved => Some(t().ping_unresolved_hint),
+        PingResult::NoAnswer | PingResult::Unsupported | PingResult::Pending => None,
+    }
+}
+
+fn check_menu_items(
+    ui: &mut egui::Ui,
+    state: &State,
+    subscription: &Subscription,
+    node: Option<&NodeId>,
+    available: bool,
+    actions: &mut Vec<Action>,
+) {
+    ui.set_min_width(200.0);
+    let can_ping = state.can_ping();
+    if widgets::menu_item(
+        ui,
+        widgets::MenuItem {
+            label: t().check_quick,
+            enabled: available && can_ping,
+            selected: false,
+            danger: false,
+            note: Some(if can_ping {
+                t().check_tcp
+            } else {
+                t().check_while_connected
+            }),
+        },
+    )
+    .clicked()
+    {
+        actions.push(match node {
+            Some(node) => Action::PingNode(subscription.id.clone(), node.clone()),
+            None => Action::Ping(subscription.id.clone()),
+        });
+        ui.close();
+    }
+    if widgets::menu_item(
+        ui,
+        widgets::MenuItem {
+            label: t().check_full,
+            enabled: available && state.can_full_check(),
+            selected: false,
+            danger: false,
+            note: Some(t().check_via_server),
+        },
+    )
+    .clicked()
+    {
+        actions.push(match node {
+            Some(node) => Action::FullCheckNode(subscription.id.clone(), node.clone()),
+            None => Action::FullCheck(subscription.id.clone()),
+        });
+        ui.close();
+    }
+}
+
 fn server_row(
     ui: &mut egui::Ui,
     state: &State,
@@ -722,7 +778,7 @@ fn server_row(
     let selected = state.config.active.as_ref().is_some_and(|selection| {
         selection.subscription == subscription.id && selection.node == node.id
     });
-    let sense = if enabled {
+    let sense = if state.config_ready {
         egui::Sense::click()
     } else {
         egui::Sense::hover()
@@ -732,16 +788,33 @@ fn server_row(
     let (code, remainder) = display::leading_flag(&node.name);
     let name = provider_text(ui, state, remainder, egui::TextStyle::Body);
     let full_name = state.text(&node.name);
-    let tooltip = strings::server_tooltip(
-        &full_name,
-        &strings::node_details(
-            rosetun_core::node_protocol(node),
-            rosetun_core::node_tls(node),
-            rosetun_core::node_transport(node),
-        ),
-        &state.text(&rosetun_core::node_address(node)),
-    );
-    let response = response.on_hover_text(tooltip);
+    let ping_result = state
+        .pings
+        .get(&(subscription.id.clone(), node.id.clone()))
+        .copied();
+    let right = rect.right() - 10.0;
+    let ping_left = show_pings.then(|| right - ping_text_width(ui));
+    let ping_region = ping_left.map(|left| {
+        egui::Rect::from_min_max(
+            egui::pos2(left, rect.top()),
+            egui::pos2(right, rect.bottom()),
+        )
+    });
+    let response = if let Some(hint) =
+        hover_ping_hint(ping_result, ui.ctx().pointer_hover_pos(), ping_region)
+    {
+        response.on_hover_text(hint)
+    } else {
+        response.on_hover_text(strings::server_tooltip(
+            &full_name,
+            &strings::node_details(
+                rosetun_core::node_protocol(node),
+                rosetun_core::node_tls(node),
+                rosetun_core::node_transport(node),
+            ),
+            &state.text(&rosetun_core::node_address(node)),
+        ))
+    };
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::SelectableLabel,
@@ -763,9 +836,15 @@ fn server_row(
         response.scroll_to_me(Some(egui::Align::Center));
         actions.push(Action::RevealDone);
     }
-    if response.clicked() {
+    if enabled && response.clicked() {
         actions.push(Action::SelectNode(subscription.id.clone(), node.id.clone()));
     }
+    let available = state.config_ready
+        && !state.operations.pinging.contains(&subscription.id)
+        && !state.subscription_busy(&subscription.id);
+    widgets::context_menu_popup(&response).show(|ui| {
+        check_menu_items(ui, state, subscription, Some(&node.id), available, actions);
+    });
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -783,7 +862,6 @@ fn server_row(
         painter.rect_filled(rect, theme::RADIUS_INNER, color);
     }
     let mut name_left = rect.left() + 10.0;
-    let right = rect.right() - 10.0;
     if show_flags {
         if let Some(code) = code {
             let badge = egui::Rect::from_min_size(
@@ -807,30 +885,10 @@ fn server_row(
         name_left += 38.0;
     }
     let mut name_right = right;
-    if show_pings {
-        let font = egui::TextStyle::Small.resolve(ui.style());
-        let ping_width = [
-            t().ping_no_answer,
-            t().ping_fails,
-            t().ping_unresolved,
-            t().ping_unsupported,
-        ]
-        .into_iter()
-        .map(|text| {
-            ui.painter()
-                .layout_no_wrap(text.to_owned(), font.clone(), theme::TEXT_DIM)
-                .size()
-                .x
-        })
-        .fold(70.0_f32, f32::max);
-        let ping_left = right - ping_width;
+    if let Some(ping_left) = ping_left {
         let bars_left = ping_left - 8.0 - 13.0;
         name_right = bars_left - 10.0;
-        if let Some(result) = state
-            .pings
-            .get(&(subscription.id.clone(), node.id.clone()))
-            .copied()
-        {
+        if let Some(result) = ping_result {
             let quality = ping_quality(result);
             let bottom = rect.center().y + 5.5;
             for (index, height) in [4.0, 7.0, 11.0].into_iter().enumerate() {
@@ -847,42 +905,17 @@ fn server_row(
                     },
                 );
             }
-            let (ping_text, color, hint) = match result {
-                PingResult::Answered(elapsed) => (
+            let (ping_text, color) = match result {
+                PingResult::Answered(elapsed) | PingResult::Works(elapsed) => (
                     strings::fill(t().ping_ms, &[("ms", &ping_millis(elapsed).to_string())]),
                     theme::TEXT_DIM,
-                    Some(t().ping_tcp_hint),
                 ),
-                PingResult::Works(elapsed) => (
-                    strings::fill(t().ping_ms, &[("ms", &ping_millis(elapsed).to_string())]),
-                    theme::TEXT_DIM,
-                    Some(t().ping_full_hint),
-                ),
-                PingResult::NoAnswer => (t().ping_no_answer.to_owned(), theme::ERROR, None),
-                PingResult::Fails => (
-                    t().ping_fails.to_owned(),
-                    theme::ERROR,
-                    Some(t().ping_fails_hint),
-                ),
-                PingResult::Unresolved => (
-                    t().ping_unresolved.to_owned(),
-                    theme::TEXT_DIM,
-                    Some(t().ping_unresolved_hint),
-                ),
-                PingResult::Unsupported => (t().ping_unsupported.to_owned(), theme::TEXT_DIM, None),
-                PingResult::Pending => (t().ping_pending.to_owned(), theme::TEXT_DIM, None),
+                PingResult::NoAnswer => (t().ping_no_answer.to_owned(), theme::ERROR),
+                PingResult::Fails => (t().ping_fails.to_owned(), theme::ERROR),
+                PingResult::Unresolved => (t().ping_unresolved.to_owned(), theme::TEXT_DIM),
+                PingResult::Unsupported => (t().ping_unsupported.to_owned(), theme::TEXT_DIM),
+                PingResult::Pending => (t().ping_pending.to_owned(), theme::TEXT_DIM),
             };
-            if let Some(hint) = hint {
-                ui.interact(
-                    egui::Rect::from_min_max(
-                        egui::pos2(ping_left, rect.top()),
-                        egui::pos2(right, rect.bottom()),
-                    ),
-                    ui.id().with(("ping", node.id.as_str())),
-                    egui::Sense::hover(),
-                )
-                .on_hover_text(hint);
-            }
             painter.text(
                 egui::pos2(right, rect.center().y),
                 egui::Align2::RIGHT_CENTER,
@@ -1119,6 +1152,40 @@ mod tests {
         assert_eq!(ping_millis(Duration::from_millis(1)), 1);
         assert_eq!(ping_millis(Duration::from_micros(1_001)), 2);
         assert_eq!(ping_millis(Duration::from_millis(118)), 118);
+    }
+
+    #[test]
+    fn result_hint_replaces_server_tooltip_only_over_the_result() {
+        let rect = egui::Rect::from_min_max(egui::pos2(80.0, 0.0), egui::pos2(150.0, 30.0));
+        let latency = Some(PingResult::Answered(Duration::from_millis(85)));
+        let works = Some(PingResult::Works(Duration::from_millis(85)));
+        let inside = Some(egui::pos2(100.0, 15.0));
+        assert_eq!(
+            hover_ping_hint(latency, inside, Some(rect)),
+            Some(t().ping_tcp_hint)
+        );
+        assert_eq!(
+            hover_ping_hint(works, inside, Some(rect)),
+            Some(t().ping_full_hint)
+        );
+        assert_eq!(
+            hover_ping_hint(Some(PingResult::Fails), inside, Some(rect)),
+            Some(t().ping_fails_hint)
+        );
+        assert_eq!(
+            hover_ping_hint(Some(PingResult::Unresolved), inside, Some(rect)),
+            Some(t().ping_unresolved_hint)
+        );
+        assert_eq!(
+            hover_ping_hint(latency, Some(egui::pos2(30.0, 15.0)), Some(rect)),
+            None
+        );
+        assert_eq!(hover_ping_hint(latency, inside, None), None);
+        assert_eq!(hover_ping_hint(latency, None, Some(rect)), None);
+        assert_eq!(
+            hover_ping_hint(Some(PingResult::Pending), inside, Some(rect)),
+            None
+        );
     }
 
     #[test]

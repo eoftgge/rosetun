@@ -110,8 +110,16 @@ fn item_radius(pixels_per_point: f32) -> egui::CornerRadius {
 }
 
 pub(crate) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
+    style_popup(egui::Popup::menu(response), response)
+}
+
+pub(crate) fn context_menu_popup(response: &egui::Response) -> egui::Popup<'_> {
+    style_popup(egui::Popup::context_menu(response), response)
+}
+
+fn style_popup<'a>(popup: egui::Popup<'a>, response: &egui::Response) -> egui::Popup<'a> {
     let radius = item_radius(response.ctx.pixels_per_point());
-    egui::Popup::menu(response).style(move |style: &mut egui::Style| {
+    popup.style(move |style: &mut egui::Style| {
         egui::containers::menu::menu_style(style);
         style.spacing.button_padding = egui::vec2(10.0, 4.0);
         style.spacing.menu_margin = egui::Margin::same(4);
@@ -196,6 +204,39 @@ mod tests {
             });
             output.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn context_menu_uses_the_same_item_style() {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let row = ui.button("Server");
+                context_menu_popup(&row).open(true).show(|ui| {
+                    ui.set_min_width(200.0);
+                    assert_eq!(ui.spacing().button_padding, egui::vec2(10.0, 4.0));
+                    assert_eq!(ui.spacing().menu_margin, egui::Margin::same(4));
+                    assert_eq!(
+                        ui.visuals().widgets.hovered.corner_radius,
+                        egui::CornerRadius::same(4)
+                    );
+                    let item = menu_item(
+                        ui,
+                        MenuItem {
+                            label: "Quick check",
+                            enabled: true,
+                            selected: false,
+                            danger: false,
+                            note: Some("TCP"),
+                        },
+                    );
+                    assert_eq!(item.rect.height(), 30.0);
+                    assert_eq!(item.rect.width(), 200.0);
+                });
+            });
+        });
+        output.textures_delta.clear();
     }
 
     #[test]
