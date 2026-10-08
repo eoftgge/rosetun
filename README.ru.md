@@ -4,6 +4,8 @@
 
 Rosetun: VPN-клиент для Windows на базе sing-box. Служба Windows держит kill switch и замок DNS; правила разделяют трафик по программам и сайтам, а подписки провайдеров поставляют серверы.
 
+<a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download-ru.svg" alt="Скачать Rosetun для Windows" height="56"></a>
+
 ![CI](https://github.com/eoftgge/rosetun/actions/workflows/ci.yml/badge.svg)
 
 **Альфа-версия:** ошибки возможны. Настройки могут сбрасываться между альфа-версиями.
