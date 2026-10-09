@@ -37,6 +37,10 @@ pub(crate) fn store(s: &Strings, error: &StoreError) -> String {
                 ("detail", s.errors.config_value),
             ],
         ),
+        StoreError::Invalid {
+            source: ConfigError::UnsupportedVersion { .. },
+            ..
+        } => s.errors.config_version.to_owned(),
         StoreError::Invalid { path, source } => fill(
             s.errors.config_invalid,
             &[
@@ -638,20 +642,8 @@ mod tests {
                 expected: 2,
             },
         };
-        assert_eq!(
-            store(&EN, &error),
-            format!(
-                "invalid configuration in config.json: {}",
-                EN.errors.config_version
-            )
-        );
-        assert_eq!(
-            store(&RU, &error),
-            format!(
-                "неверная конфигурация в config.json: {}",
-                RU.errors.config_version
-            )
-        );
+        assert_eq!(store(&EN, &error), EN.errors.config_version);
+        assert_eq!(store(&RU, &error), RU.errors.config_version);
         for language in [&EN, &RU] {
             let message = store(language, &error);
             assert!(message.contains("Rosetun"));
