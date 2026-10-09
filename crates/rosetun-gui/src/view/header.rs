@@ -543,7 +543,16 @@ mod tests {
             header_status_for(false, None, Some("NL")),
             (tr!("helper-unavailable").to_owned(), theme::ERROR),
         );
-        assert_eq!(crate::strings::RU.connected_in("NL"), "Подключено · NL");
+        let mut args = fluent_bundle::FluentArgs::new();
+        args.set("code", "NL");
+        assert_eq!(
+            crate::i18n::tr_in(
+                crate::i18n::Language::Russian,
+                "connected-in-template",
+                &args
+            ),
+            "Подключено · NL"
+        );
     }
 
     #[test]

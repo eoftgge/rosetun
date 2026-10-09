@@ -1,4 +1,7 @@
+use fluent_bundle::FluentArgs;
 use rosetun_config::{ConnectStage, FailureKind, RuleTemplate};
+
+use super::{Language, tr_in};
 
 pub(crate) fn about_version(app: &str, helper: Option<&str>) -> String {
     match helper {
@@ -161,17 +164,24 @@ pub(crate) fn verbose_log_on_detail(hours: u64) -> String {
 }
 
 pub(crate) fn updated_ago(timestamp: u64, now: u64) -> String {
+    updated_ago_in(super::language(), timestamp, now)
+}
+
+pub(crate) fn updated_ago_in(language: Language, timestamp: u64, now: u64) -> String {
     let elapsed = now.saturating_sub(timestamp);
-    let (key, count) = match elapsed {
-        0..60 => return tr!("updated-ago-just-now"),
+    let (unit, count) = match elapsed {
+        0..60 => return tr_in(language, "updated-ago-just-now", &FluentArgs::new()),
         60..3600 => (0, elapsed / 60),
         3600..86400 => (1, elapsed / 3600),
         _ => (2, elapsed / 86400),
     };
-    match key {
-        0 => tr!("updated-ago-minute", count = count, n = count.to_string()),
-        1 => tr!("updated-ago-hour", count = count, n = count.to_string()),
-        _ => tr!("updated-ago-day", count = count, n = count.to_string()),
+    let mut args = FluentArgs::new();
+    args.set("count", count);
+    args.set("n", count.to_string());
+    match unit {
+        0 => tr_in(language, "updated-ago-minute", &args),
+        1 => tr_in(language, "updated-ago-hour", &args),
+        _ => tr_in(language, "updated-ago-day", &args),
     }
 }
 

@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use rosetun_config::{LanguageSetting, RuleTemplate};
 
+#[allow(dead_code)] // The tables remain only for equivalence tests until the final removal.
 mod en;
+#[allow(dead_code)] // The tables remain only for equivalence tests until the final removal.
 mod ru;
 
 #[cfg(test)]
@@ -26,6 +28,7 @@ pub(crate) fn set_language(language: Language) {
     );
 }
 
+#[allow(dead_code)] // Used by the old table lookup until its removal.
 pub(crate) fn language() -> Language {
     match CURRENT.load(Ordering::Relaxed) {
         1 => Language::Russian,
@@ -34,6 +37,7 @@ pub(crate) fn language() -> Language {
 }
 
 /// The table of the current interface language.
+#[allow(dead_code)] // Used by the old table lookup until its removal.
 pub(crate) fn t() -> &'static Strings {
     match language() {
         Language::English => &en::EN,

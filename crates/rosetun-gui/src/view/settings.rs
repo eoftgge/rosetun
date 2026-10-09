@@ -6,7 +6,6 @@ use crate::brand;
 use crate::display;
 use crate::errors;
 use crate::state::{AboutFolder, Action, SessionPart, SettingsSection, State, now_unix};
-use crate::strings::t;
 use crate::{strings, theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
@@ -597,7 +596,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     });
             }
         });
-        let (status, detail) = update_status(state, now_unix(), t());
+        let (status, detail) = update_status(state, now_unix(), crate::i18n::language());
         card.row(&status, Some(&detail), |ui| {
             let response =
                 widgets::outline_button(ui, tr!("check-updates-now"), state.can_check_updates());
@@ -668,52 +667,82 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     );
 }
 
-fn update_status(state: &State, now: u64, s: &strings::Strings) -> (String, String) {
+fn status_argument<'a>(name: &'static str, value: &'a str) -> fluent_bundle::FluentArgs<'a> {
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set(name, value);
+    args
+}
+
+fn update_status(state: &State, now: u64, language: crate::i18n::Language) -> (String, String) {
+    use crate::i18n::tr_in;
+    let empty = fluent_bundle::FluentArgs::new();
     let age = state
         .config
         .interface
         .last_update_check
-        .map(|timestamp| s.updated_ago(timestamp, now));
+        .map(|timestamp| crate::i18n::updated_ago_in(language, timestamp, now));
     if state.update_check_pending {
         return (
-            s.update_checking.to_owned(),
-            s.update_checking_detail.to_owned(),
+            tr_in(language, "update-checking", &empty),
+            tr_in(language, "update-checking-detail", &empty),
         );
     }
     if state.update_check_failed {
         let detail = if state.config.interface.check_updates {
-            s.update_failed_detail
+            tr_in(language, "update-failed-detail", &empty)
         } else {
-            s.update_check_manually
+            tr_in(language, "update-check-manually", &empty)
         };
-        return (s.update_failed.to_owned(), detail.to_owned());
+        return (tr_in(language, "update-failed", &empty), detail);
     }
     if !state.config.interface.check_updates {
         let detail = age.as_ref().map_or_else(
-            || s.update_check_manually.to_owned(),
-            |age| s.update_last_checked(age),
+            || tr_in(language, "update-check-manually", &empty),
+            |age| {
+                tr_in(
+                    language,
+                    "update-last-checked",
+                    &status_argument("age", age),
+                )
+            },
         );
-        return (s.update_checks_off.to_owned(), detail);
+        return (tr_in(language, "update-checks-off", &empty), detail);
     }
     if let Some(release) = &state.newest_release {
         if state.available_update().is_none() {
             let detail = age.as_ref().map_or_else(
-                || s.update_skipped_next.to_owned(),
-                |age| s.update_skipped_detail(age),
+                || tr_in(language, "update-skipped-next", &empty),
+                |age| {
+                    tr_in(
+                        language,
+                        "update-skipped-detail",
+                        &status_argument("age", age),
+                    )
+                },
             );
-            return (s.update_skipped(&release.version), detail);
+            return (
+                tr_in(
+                    language,
+                    "update-skipped",
+                    &status_argument("version", &release.version),
+                ),
+                detail,
+            );
         }
         let detail = age.as_ref().map_or_else(
-            || s.update_not_checked_detail.to_owned(),
-            |age| s.update_checked(age),
+            || tr_in(language, "update-not-checked-detail", &empty),
+            |age| tr_in(language, "update-checked", &status_argument("age", age)),
         );
-        return (s.update_found.to_owned(), detail);
+        return (tr_in(language, "update-found", &empty), detail);
     }
     match age {
-        Some(age) => (s.update_up_to_date.to_owned(), s.update_checked(&age)),
+        Some(age) => (
+            tr_in(language, "update-up-to-date", &empty),
+            tr_in(language, "update-checked", &status_argument("age", &age)),
+        ),
         None => (
-            s.update_not_checked.to_owned(),
-            s.update_not_checked_detail.to_owned(),
+            tr_in(language, "update-not-checked", &empty),
+            tr_in(language, "update-not-checked-detail", &empty),
         ),
     }
 }
@@ -754,25 +783,34 @@ fn about_path(
 #[cfg(test)]
 mod update_status_tests {
     use super::{State, update_status};
-    use crate::strings::{EN, RU};
+    use crate::i18n::Language;
     use rosetun_core::Release;
 
     #[test]
     fn status_prioritizes_checking_failure_and_disabled_checks() {
         let mut state = State::default();
         state.config_ready = true;
-        assert_eq!(update_status(&state, 200, &EN).0, "Not checked yet");
+        assert_eq!(
+            update_status(&state, 200, Language::English).0,
+            "Not checked yet"
+        );
         state.config.interface.last_update_check = Some(80);
-        assert_eq!(update_status(&state, 200, &EN).1, "Checked 2 minutes ago.");
+        assert_eq!(
+            update_status(&state, 200, Language::English).1,
+            "Checked 2 minutes ago."
+        );
         state.newest_release = Some(Release {
             version: "999.0.0-alpha.4".into(),
             url: "https://example.com/release".into(),
             prerelease: true,
         });
-        assert_eq!(update_status(&state, 200, &EN).0, "New version available");
+        assert_eq!(
+            update_status(&state, 200, Language::English).0,
+            "New version available"
+        );
         state.config.interface.skipped_version = Some("999.0.0-alpha.4".into());
         assert_eq!(
-            update_status(&state, 200, &EN),
+            update_status(&state, 200, Language::English),
             (
                 "Version 999.0.0-alpha.4 skipped".into(),
                 "We'll tell you about the next one. Checked 2 minutes ago.".into(),
@@ -780,16 +818,16 @@ mod update_status_tests {
         );
         state.config.interface.check_updates = false;
         assert_eq!(
-            update_status(&state, 200, &EN).0,
+            update_status(&state, 200, Language::English).0,
             "Automatic checks are off"
         );
         state.update_check_failed = true;
         assert_eq!(
-            update_status(&state, 200, &EN),
+            update_status(&state, 200, Language::English),
             ("Couldn't check".into(), "You can check manually.".into(),)
         );
         state.update_check_pending = true;
-        assert_eq!(update_status(&state, 200, &EN).0, "Checking…");
+        assert_eq!(update_status(&state, 200, Language::English).0, "Checking…");
     }
 
     #[test]
@@ -804,7 +842,7 @@ mod update_status_tests {
             prerelease: true,
         });
         assert_eq!(
-            update_status(&state, 200, &RU),
+            update_status(&state, 200, Language::Russian),
             (
                 "Версия 999.0.0-alpha.4 пропущена".into(),
                 "Напомним, когда выйдет следующая. Проверено 2 минуты назад.".into(),

@@ -21,7 +21,6 @@ use crate::reorder::drop_target;
 use crate::rules::{
     ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes, visible_rules,
 };
-use crate::strings::{fill, t};
 use crate::worker::{ConfigWorkerError, FailureInterference, HelperCommandError, WorkerEvent};
 
 pub(crate) fn now_unix() -> u64 {
@@ -1776,7 +1775,8 @@ impl State {
                         } else if cancelled {
                             self.operation_error = None;
                         } else {
-                            self.operation_error = Some(self.text(&t().apply_failed(&reason)));
+                            self.operation_error =
+                                Some(self.text(&crate::i18n::apply_failed(&reason)));
                         }
                     }
                 }
@@ -1790,10 +1790,9 @@ impl State {
                 match result {
                     Ok(failed) => {
                         self.failed_edits = Some(failed);
-                        self.apply_failure = Some(self.text(&fill(
-                            t().apply_failed_restored_template,
-                            &[("reason", &reason)],
-                        )));
+                        self.apply_failure = Some(
+                            self.text(&tr!("apply-failed-restored-template", reason = &reason)),
+                        );
                         self.operation_error = None;
                         self.settings_screen.dirty = false;
                         if self.settings_screen.opened {
@@ -1802,9 +1801,10 @@ impl State {
                     }
                     Err(error) => {
                         let storage = errors::rule_set(crate::i18n::language(), &error);
-                        self.operation_error = Some(self.text(&fill(
-                            t().apply_rollback_failed_template,
-                            &[("reason", &reason), ("error", &storage)],
+                        self.operation_error = Some(self.text(&tr!(
+                            "apply-rollback-failed-template",
+                            reason = &reason,
+                            error = &storage
                         )));
                     }
                 }
@@ -1982,8 +1982,7 @@ impl State {
                 Ok(enabled) => self.settings_screen.autostart = Some(enabled),
                 Err(error) => {
                     self.settings_screen.autostart = None;
-                    let message =
-                        fill(t().errors.autostart_read, &[("detail", &error.to_string())]);
+                    let message = tr!("error-autostart-read", detail = error.to_string());
                     self.operation_error = Some(self.text(&message));
                 }
             },
@@ -1992,10 +1991,7 @@ impl State {
                 self.operations.settings = false;
                 self.settings_screen.autostart = result.as_ref().ok().copied();
                 self.operation_error = result.err().map(|error| {
-                    let message = fill(
-                        t().errors.autostart_write,
-                        &[("detail", &error.to_string())],
-                    );
+                    let message = tr!("error-autostart-write", detail = error.to_string());
                     self.text(&message)
                 });
             }
@@ -2032,7 +2028,7 @@ impl State {
             WorkerEvent::OpenFolder(result) => {
                 self.operations.settings = false;
                 self.operation_error = result.err().map(|error| {
-                    let message = fill(t().errors.open_folder, &[("detail", &error.to_string())]);
+                    let message = tr!("error-open-folder", detail = error.to_string());
                     self.text(&message)
                 });
             }
@@ -2121,7 +2117,7 @@ impl State {
                                     ..
                                 }))
                             ) {
-                                t().full_check_busy.to_owned()
+                                tr!("full-check-busy").to_owned()
                             } else {
                                 self.text(&errors::helper_command(crate::i18n::language(), &error))
                             },
@@ -2500,7 +2496,7 @@ impl State {
                 if self.can_edit_rules() && self.rule_screen.name.is_none() {
                     self.rule_screen.name = Some(NameDialog {
                         kind: NameDialogKind::Create,
-                        name: t().basic.to_owned(),
+                        name: tr!("basic").to_owned(),
                         error: None,
                         focus: true,
                     });
@@ -3501,7 +3497,7 @@ mod tests {
         assert!(!state.operations.renaming);
         assert_eq!(
             state.rename.as_ref().unwrap().error.as_deref(),
-            Some(t().errors.subscription_name_empty)
+            Some(tr!("error-subscription-name-empty")).as_deref()
         );
         assert!(state.act(Action::SubmitRename).is_some());
         state.reduce(WorkerEvent::RenameSubscription(Ok(())));
@@ -3561,15 +3557,15 @@ mod tests {
         };
         state.status.state = ConnectionState::Reconnecting;
         assert_eq!(state.primary_action(), PrimaryAction::Disconnect);
-        assert_eq!(primary_label(&state), t().disconnect);
+        assert_eq!(primary_label(&state), tr!("disconnect"));
 
         state.operations.helper = true;
         assert_eq!(state.primary_action(), PrimaryAction::Disabled);
-        assert_eq!(primary_label(&state), t().working);
+        assert_eq!(primary_label(&state), tr!("working"));
 
         state.operations.helper = false;
         state.status.state = ConnectionState::Connecting;
-        assert_eq!(primary_label(&state), t().connecting_action);
+        assert_eq!(primary_label(&state), tr!("connecting-action"));
     }
 
     #[test]
@@ -4312,7 +4308,10 @@ mod tests {
         });
         assert!(!state.pings.contains_key(&(id.clone(), NodeId::new("node"))));
         assert!(!state.operations.pinging.contains(&id));
-        assert_eq!(state.operation_error.as_deref(), Some(t().full_check_busy));
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some(tr!("full-check-busy")).as_deref()
+        );
 
         state.act(Action::FullCheck(id.clone()));
         state.reduce(WorkerEvent::FullCheck {
@@ -5769,7 +5768,10 @@ mod tests {
             ConnectRequestError::NodeNotFound,
         ))));
         assert!(!state.operations.helper);
-        assert_eq!(state.operation_error.as_deref(), Some(t().select_server));
+        assert_eq!(
+            state.operation_error.as_deref(),
+            Some(tr!("select-server")).as_deref()
+        );
         state.operations.selection = true;
         state.reduce(WorkerEvent::SelectNode(Err(
             rosetun_core::SelectNodeError::NodeNotFound,
@@ -6160,7 +6162,7 @@ mod tests {
     fn set_name_dialog_keeps_errors_and_success_selects_created_set() {
         let mut state = state_with_rules();
         state.act(Action::OpenCreateSet);
-        assert_eq!(state.rule_screen.name.as_ref().unwrap().name, t().basic);
+        assert_eq!(state.rule_screen.name.as_ref().unwrap().name, tr!("basic"));
         state.rule_screen.name.as_mut().unwrap().name = "   ".into();
         assert!(state.act(Action::SubmitSetName).is_none());
         state.rule_screen.name.as_mut().unwrap().name = "  Work  ".into();
