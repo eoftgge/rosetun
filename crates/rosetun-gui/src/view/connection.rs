@@ -102,7 +102,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             ui.set_min_width(ui.available_width());
             let visible_status = state.visible_status();
             let (label, color) = visible_status
-                .map_or((t().status_unknown, theme::DISCONNECTED), |status| {
+                .map_or((tr!("status-unknown"), theme::DISCONNECTED), |status| {
                     state_style(&status.state)
                 });
             let server_pending = state.pending_reconnect(SessionPart::Server);
@@ -125,14 +125,14 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             visible_status.map(|status| &status.state),
                         );
                         let button_label = if phase == RosePhase::Unavailable {
-                            t().unavailable
+                            t().unavailable.to_owned()
                         } else {
                             primary_label(state)
                         };
                         if rose_button::rose_button(
                             ui,
                             phase,
-                            button_label,
+                            &button_label,
                             action != PrimaryAction::Disabled,
                             state.config.interface.reduce_motion,
                         ) {
@@ -932,14 +932,14 @@ fn tunnel_up(state: &State) -> bool {
         .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
 }
 
-pub(crate) fn state_style(state: &ConnectionState) -> (&'static str, Color32) {
+pub(crate) fn state_style(state: &ConnectionState) -> (String, Color32) {
     match state {
-        ConnectionState::Disconnected => (t().disconnected, theme::DISCONNECTED),
-        ConnectionState::Connecting => (t().connecting, theme::ROSE_BRIGHT),
-        ConnectionState::Connected => (t().connected, theme::CONNECTED),
-        ConnectionState::Reconnecting => (t().reconnecting, theme::ROSE_BRIGHT),
-        ConnectionState::Failed { .. } => (t().failed, theme::ERROR),
-        ConnectionState::FailedProtected { .. } => (t().failed_protected, theme::ERROR),
+        ConnectionState::Disconnected => (tr!("disconnected"), theme::DISCONNECTED),
+        ConnectionState::Connecting => (tr!("connecting"), theme::ROSE_BRIGHT),
+        ConnectionState::Connected => (tr!("connected"), theme::CONNECTED),
+        ConnectionState::Reconnecting => (tr!("reconnecting"), theme::ROSE_BRIGHT),
+        ConnectionState::Failed { .. } => (tr!("failed"), theme::ERROR),
+        ConnectionState::FailedProtected { .. } => (tr!("failed-protected"), theme::ERROR),
     }
 }
 

@@ -12,7 +12,7 @@ use crate::tray;
 #[cfg(windows)]
 use crate::window_memory::WindowMemory;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
-use crate::{display, strings, theme, view};
+use crate::{display, i18n, strings, theme, view};
 
 #[cfg(windows)]
 /// Far outside every monitor: the first frame of a hidden start is drawn here.
@@ -77,6 +77,7 @@ impl App {
             .map_or(rosetun_config::LanguageSetting::System, |config| {
                 config.interface.language
             });
+        i18n::set_language(i18n::resolve_language(setting, system_russian));
         strings::set_language(strings::resolve_language(setting, system_russian));
         let applied_scale = initial_scale(&store);
         cc.egui_ctx
@@ -361,9 +362,13 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         let language =
-            strings::resolve_language(self.state.config.interface.language, self.system_russian);
-        if self.state.config_ready && language != strings::language() {
-            strings::set_language(language);
+            i18n::resolve_language(self.state.config.interface.language, self.system_russian);
+        if self.state.config_ready && language != i18n::language() {
+            i18n::set_language(language);
+            strings::set_language(strings::resolve_language(
+                self.state.config.interface.language,
+                self.system_russian,
+            ));
             ctx.request_repaint();
         }
         #[cfg(windows)]

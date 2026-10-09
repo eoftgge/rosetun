@@ -8,7 +8,6 @@ use crate::actions::PrimaryAction;
 use crate::app::ShellEvent;
 use crate::rose_icon::{self, RoseIcon};
 use crate::state::{State, primary_label};
-use crate::strings::t;
 use crate::{strings, theme, view};
 
 const OPEN_ID: &str = "rosetun.tray.open";
@@ -20,17 +19,17 @@ const QUIT_ID: &str = "rosetun.tray.quit";
 pub(crate) struct TrayView {
     pub(crate) color: egui::Color32,
     pub(crate) tooltip: String,
-    pub(crate) primary_label: &'static str,
+    pub(crate) primary_label: String,
     pub(crate) primary_enabled: bool,
-    pub(crate) open_label: &'static str,
-    pub(crate) hide_label: &'static str,
-    pub(crate) quit_label: &'static str,
+    pub(crate) open_label: String,
+    pub(crate) hide_label: String,
+    pub(crate) quit_label: String,
 }
 
 pub(crate) fn tray_view(state: &State) -> TrayView {
     let (status, color) = state
         .visible_status()
-        .map_or((t().status_unknown, theme::DISCONNECTED), |status| {
+        .map_or((tr!("status-unknown"), theme::DISCONNECTED), |status| {
             view::connection::state_style(&status.state)
         });
     let server = state.config.active_node().map(|(_, node)| {
@@ -43,12 +42,12 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
     });
     TrayView {
         color,
-        tooltip: fit_tooltip(&strings::tray_tooltip(status, server.as_deref())),
+        tooltip: fit_tooltip(&strings::tray_tooltip(&status, server.as_deref())),
         primary_label: primary_label(state),
         primary_enabled: state.primary_action() != PrimaryAction::Disabled,
-        open_label: t().tray_open,
-        hide_label: t().tray_hide,
-        quit_label: t().tray_quit,
+        open_label: tr!("tray-open"),
+        hide_label: tr!("tray-hide"),
+        quit_label: tr!("tray-quit"),
     }
 }
 
@@ -90,10 +89,10 @@ pub(crate) struct Tray {
 
 impl Tray {
     pub(crate) fn new(events: Sender<ShellEvent>, ctx: egui::Context) -> Result<Self, TrayError> {
-        let open = MenuItem::with_id(OPEN_ID, t().tray_open, true, None);
-        let hide = MenuItem::with_id(HIDE_ID, t().tray_hide, true, None);
-        let primary = MenuItem::with_id(PRIMARY_ID, t().connect, false, None);
-        let quit = MenuItem::with_id(QUIT_ID, t().tray_quit, true, None);
+        let open = MenuItem::with_id(OPEN_ID, tr!("tray-open"), true, None);
+        let hide = MenuItem::with_id(HIDE_ID, tr!("tray-hide"), true, None);
+        let primary = MenuItem::with_id(PRIMARY_ID, tr!("connect"), false, None);
+        let quit = MenuItem::with_id(QUIT_ID, tr!("tray-quit"), true, None);
         let menu = Menu::with_items(&[
             &open,
             &hide,
@@ -187,7 +186,7 @@ impl Tray {
             .as_ref()
             .is_none_or(|shown| shown.primary_label != view.primary_label)
         {
-            self.primary.set_text(view.primary_label);
+            self.primary.set_text(view.primary_label.as_str());
         }
         if self
             .shown
@@ -201,21 +200,21 @@ impl Tray {
             .as_ref()
             .is_none_or(|shown| shown.open_label != view.open_label)
         {
-            self.open.set_text(view.open_label);
+            self.open.set_text(view.open_label.as_str());
         }
         if self
             .shown
             .as_ref()
             .is_none_or(|shown| shown.hide_label != view.hide_label)
         {
-            self.hide.set_text(view.hide_label);
+            self.hide.set_text(view.hide_label.as_str());
         }
         if self
             .shown
             .as_ref()
             .is_none_or(|shown| shown.quit_label != view.quit_label)
         {
-            self.quit.set_text(view.quit_label);
+            self.quit.set_text(view.quit_label.as_str());
         }
         self.shown = Some(view.clone());
     }
@@ -225,7 +224,6 @@ impl Tray {
 mod tests {
     use super::{fit_tooltip, tray_view};
     use crate::state::State;
-    use crate::strings::t;
     use crate::{strings, theme};
     use rosetun_config::{ConnectionState, Status};
     use rosetun_core::Store;
@@ -254,10 +252,10 @@ mod tests {
         assert_eq!(unknown.color, theme::DISCONNECTED);
         assert_eq!(
             unknown.tooltip,
-            strings::tray_tooltip(t().status_unknown, None)
+            strings::tray_tooltip(&tr!("status-unknown"), None)
         );
         assert!(!unknown.primary_enabled);
-        assert_eq!(unknown.hide_label, t().tray_hide);
+        assert_eq!(unknown.hide_label, tr!("tray-hide"));
 
         state.helper_available = true;
         state.status = Status {
@@ -274,7 +272,7 @@ mod tests {
         fs::remove_file(path).unwrap();
         let connected = tray_view(&state);
         assert_eq!(connected.color, theme::CONNECTED);
-        assert_eq!(connected.primary_label, t().disconnect);
+        assert_eq!(connected.primary_label, tr!("disconnect"));
         assert!(connected.primary_enabled);
         assert!(connected.tooltip.contains("Server Blue"));
         assert_eq!(connected.tooltip.matches('\n').count(), 1);

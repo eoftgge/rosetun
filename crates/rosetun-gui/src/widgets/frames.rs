@@ -1,6 +1,5 @@
 use eframe::egui::{self, CornerRadius, Stroke};
 
-use crate::strings::t;
 use crate::theme::{BORDER, BORDER_STRONG, CARD, ERROR, MODAL, RADIUS};
 
 pub(crate) fn card_frame() -> egui::Frame {
@@ -44,7 +43,7 @@ pub(crate) fn dismissible_error_with_action(
                             clicked = crate::widgets::link(ui, label, enabled).clicked();
                         }
                     },
-                    |ui| ui.button(t().dismiss).clicked(),
+                    |ui| ui.button(tr!("dismiss")).clicked(),
                 )
                 .1
         })

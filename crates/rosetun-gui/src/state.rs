@@ -3169,23 +3169,23 @@ pub(crate) fn redact(config: &AppConfig, value: &str) -> String {
         })
 }
 
-pub(crate) fn primary_label(state: &State) -> &'static str {
+pub(crate) fn primary_label(state: &State) -> String {
     if !state.helper_available {
-        return t().connect;
+        return tr!("connect");
     }
     if state.operations.helper || state.status.state.is_transitional() {
         match state.status.state {
-            ConnectionState::Reconnecting if state.operations.helper => t().working,
-            ConnectionState::Reconnecting => t().disconnect,
+            ConnectionState::Reconnecting if state.operations.helper => tr!("working"),
+            ConnectionState::Reconnecting => tr!("disconnect"),
             ConnectionState::Connected | ConnectionState::FailedProtected { .. }
                 if state.operations.helper =>
             {
-                t().working
+                tr!("working")
             }
-            _ => t().connecting_action,
+            _ => tr!("connecting-action"),
         }
     } else if state.primary_action() == PrimaryAction::Disabled {
-        t().connect
+        tr!("connect")
     } else {
         state.primary_action().label()
     }

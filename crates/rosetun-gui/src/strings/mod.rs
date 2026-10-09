@@ -73,6 +73,7 @@ pub(crate) fn fill(template: &str, values: &[(&str, &str)]) -> String {
     output
 }
 
+#[allow(dead_code)] // Fluent replaces these fields incrementally; equivalence tests still use them.
 pub(crate) struct ErrorStrings {
     pub(crate) config_dir: &'static str,
     pub(crate) config_access: &'static str,
@@ -186,6 +187,7 @@ pub(crate) struct ErrorStrings {
     pub(crate) open_folder: &'static str,
 }
 
+#[allow(dead_code)] // Fluent replaces these fields incrementally; equivalence tests still use them.
 pub(crate) struct Strings {
     pub(crate) language: Language,
     pub(crate) errors: ErrorStrings,

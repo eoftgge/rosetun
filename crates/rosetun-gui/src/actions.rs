@@ -1,4 +1,3 @@
-use crate::strings::t;
 use rosetun_config::{ConnectionState, Status};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,13 +10,13 @@ pub(crate) enum PrimaryAction {
 }
 
 impl PrimaryAction {
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> String {
         match self {
-            Self::Disabled => t().connecting_action,
-            Self::Connect => t().connect,
-            Self::Disconnect => t().disconnect,
-            Self::Retry => t().retry,
-            Self::Reconnect => t().reconnect,
+            Self::Disabled => tr!("connecting-action"),
+            Self::Connect => tr!("connect"),
+            Self::Disconnect => tr!("disconnect"),
+            Self::Retry => tr!("retry"),
+            Self::Reconnect => tr!("reconnect"),
         }
     }
 }

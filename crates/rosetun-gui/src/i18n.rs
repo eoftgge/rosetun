@@ -32,6 +32,11 @@ static ENGLISH: OnceLock<FluentBundle<FluentResource>> = OnceLock::new();
 static RUSSIAN: OnceLock<FluentBundle<FluentResource>> = OnceLock::new();
 static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
+#[cfg(test)]
+thread_local! {
+    static TEST_LANGUAGE: std::cell::Cell<Option<Language>> = const { std::cell::Cell::new(None) };
+}
+
 pub(crate) fn set_language(language: Language) {
     CURRENT.store(
         match language {
@@ -43,6 +48,10 @@ pub(crate) fn set_language(language: Language) {
 }
 
 pub(crate) fn language() -> Language {
+    #[cfg(test)]
+    if let Some(language) = TEST_LANGUAGE.with(std::cell::Cell::get) {
+        return language;
+    }
     match CURRENT.load(Ordering::Relaxed) {
         1 => Language::Russian,
         _ => Language::English,
@@ -134,7 +143,7 @@ mod tests {
         use rosetun_config::{ConnectStage, FailureKind, RuleTemplate};
 
         for (selected, old) in [(Language::English, &EN), (Language::Russian, &RU)] {
-            set_language(selected);
+            TEST_LANGUAGE.with(|slot| slot.set(Some(selected)));
             for sample in ["example.com", "D:\\Example", "1,5 МБ/с", "{retry} · {name}"] {
                 assert_eq!(about_version(sample, None), old.about_version(sample, None));
                 assert_eq!(
@@ -241,7 +250,7 @@ mod tests {
                 );
             }
         }
-        set_language(Language::English);
+        TEST_LANGUAGE.with(|slot| slot.set(None));
     }
 
     #[test]
