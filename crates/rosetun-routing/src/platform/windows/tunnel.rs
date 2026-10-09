@@ -5,16 +5,13 @@ use std::{
 };
 
 use crate::{RoutingError, TunnelInterface};
-use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
-use windows_sys::Win32::NetworkManagement::IpHelper::{GetIfEntry2, MIB_IF_ROW2};
-use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusNotPresent;
 use windows_sys::Win32::{
     Foundation::ERROR_BUFFER_OVERFLOW,
     NetworkManagement::{
         IpHelper::{ConvertInterfaceAliasToLuid, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH},
         Ndis::{IfOperStatusUp, NET_LUID_LH},
     },
-    Networking::WinSock::{AF_INET, SOCKADDR_IN},
+    Networking::WinSock::{AF_INET, AF_UNSPEC, SOCKADDR_IN},
 };
 
 pub(super) fn adapter_present(alias: &str) -> std::io::Result<bool> {
@@ -29,7 +26,11 @@ pub(super) fn adapter_present(alias: &str) -> std::io::Result<bool> {
     // SAFETY: alias is NUL-terminated and luid is writable for the synchronous call.
     let status = unsafe { ConvertInterfaceAliasToLuid(alias.as_ptr(), &mut luid) };
     match status {
-        0 => interface_present(luid),
+        // SAFETY: Value is the plain 64-bit view of the LUID union.
+        0 => Ok(find_adapter(AF_UNSPEC as u32, |adapter| unsafe {
+            (adapter.Luid.Value == luid.Value).then_some(())
+        })?
+            .is_some()),
         windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER => Ok(false),
         _ => Err(std::io::Error::from_raw_os_error(status as i32)),
     }
@@ -79,20 +80,51 @@ pub(super) fn resolve_luid(tunnel: &TunnelInterface) -> Result<TunnelLuid, Routi
     Ok(TunnelLuid(luid))
 }
 
-/// The alias of a removed adapter still resolves to a LUID, so only an
-/// interface that Windows reports as present counts.
-fn interface_present(luid: NET_LUID_LH) -> std::io::Result<bool> {
-    let mut row = MIB_IF_ROW2 {
-        InterfaceLuid: luid,
-        ..Default::default()
-    };
-    // SAFETY: row is initialised with the LUID and writable for the synchronous call.
-    let status = unsafe { GetIfEntry2(&mut row) };
-    match status {
-        0 => Ok(row.OperStatus != IfOperStatusNotPresent),
-        ERROR_FILE_NOT_FOUND => Ok(false),
-        _ => Err(std::io::Error::from_raw_os_error(status as i32)),
+/// Visits the adapters Windows reports as present, until `visit` returns `Some`.
+/// The alias of a removed adapter still resolves to a LUID, but such an
+/// adapter is not in this list.
+fn find_adapter<T>(
+    family: u32,
+    mut visit: impl FnMut(&IP_ADAPTER_ADDRESSES_LH) -> Option<T>,
+) -> std::io::Result<Option<T>> {
+    let mut buffer_size = 16 * 1024_u32;
+    // The list can grow between the size query and the read, so retry a few times.
+    for _ in 0..3 {
+        let entries = (buffer_size as usize).div_ceil(size_of::<IP_ADAPTER_ADDRESSES_LH>());
+        let mut buffer = Vec::<MaybeUninit<IP_ADAPTER_ADDRESSES_LH>>::with_capacity(entries);
+        // SAFETY: MaybeUninit needs no initialisation; Windows fills the buffer
+        // and it is only read after a successful call.
+        unsafe { buffer.set_len(entries) };
+        // SAFETY: the buffer holds buffer_size bytes, aligned for the struct, and
+        // stays alive while the returned linked list is walked below.
+        let status = unsafe {
+            GetAdaptersAddresses(
+                family,
+                0,
+                ptr::null(),
+                buffer.as_mut_ptr().cast(),
+                &mut buffer_size,
+            )
+        };
+        match status {
+            0 => {
+                let mut adapter = buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+                while !adapter.is_null() {
+                    // SAFETY: every node points into the buffer filled above.
+                    let current = unsafe { &*adapter };
+                    if let Some(found) = visit(current) {
+                        return Ok(Some(found));
+                    }
+                    adapter = current.Next;
+                }
+                return Ok(None);
+            }
+            ERROR_BUFFER_OVERFLOW => continue,
+            windows_sys::Win32::Foundation::ERROR_NO_DATA => return Ok(None),
+            _ => return Err(std::io::Error::from_raw_os_error(status as i32)),
+        }
     }
+    Err(std::io::Error::other("adapter list kept changing size"))
 }
 
 fn validate_adapter(tunnel: &TunnelInterface, luid: NET_LUID_LH) -> Result<(), RoutingError> {
