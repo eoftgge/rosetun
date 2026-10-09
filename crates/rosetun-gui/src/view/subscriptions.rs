@@ -703,11 +703,7 @@ fn check_menu_items(
             enabled: available && can_ping,
             selected: false,
             danger: false,
-            note: Some(if can_ping {
-                t().check_tcp
-            } else {
-                t().check_while_connected
-            }),
+            note: None,
         },
     )
     .clicked()
@@ -725,7 +721,7 @@ fn check_menu_items(
             enabled: available && state.can_full_check(),
             selected: false,
             danger: false,
-            note: Some(t().check_via_server),
+            note: None,
         },
     )
     .clicked()
