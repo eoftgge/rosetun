@@ -103,6 +103,15 @@ fn main() -> std::process::ExitCode {
 }
 
 #[cfg(windows)]
+fn install_failure_output(error: &install_dir::Failure) -> String {
+    format!(
+        "path={}\n{}",
+        install_dir::one_line(&error.path.to_string_lossy()),
+        error.message()
+    )
+}
+
+#[cfg(windows)]
 fn install_command(
     path: &Path,
     action: &str,
@@ -117,7 +126,7 @@ fn install_command(
             std::process::ExitCode::SUCCESS
         }
         Err(error) => {
-            println!("{}", error.message());
+            println!("{}", install_failure_output(&error));
             std::process::ExitCode::from(error.reason as u8)
         }
     }
@@ -266,6 +275,22 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn install_failure_has_one_escaped_path_line() {
+        let error = install_dir::verify(Path::new("D:\\Example\\Ro\nsetun"), true).unwrap_err();
+        let output = install_failure_output(&error);
+        assert_eq!(output.lines().count(), 2);
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.starts_with("path="))
+                .count(),
+            1
+        );
+        assert_eq!(output.lines().next(), Some(r"path=D:\Example\Ro\nsetun"));
+    }
 
     #[test]
     fn modes_accept_only_one_known_flag() {

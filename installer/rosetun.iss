@@ -62,8 +62,12 @@ english.DirSystem=Do not install inside a user profile or the Windows folder. Ch
 russian.DirSystem=Нельзя устанавливать в профиль пользователя или папку Windows. Выберите Program Files или безопасную папку на другом диске.
 english.DirReparse=This path contains a link or junction. Choose a regular folder.
 russian.DirReparse=Путь содержит ссылку или точку соединения. Выберите обычную папку.
-english.DirWritable=This folder, an ancestor, or an existing file can be changed by standard users. The SYSTEM service would be unsafe there. Choose Program Files or a new folder directly under a drive root.
-russian.DirWritable=Эту папку, одну из папок выше или существующий файл могут менять обычные пользователи. Для службы с правами SYSTEM это небезопасно. Выберите Program Files или новую папку прямо в корне диска.
+english.DirWritable=This folder, an ancestor, or an existing file can be changed by standard users. The SYSTEM service would be unsafe there. Choose Program Files or another folder.
+russian.DirWritable=Эту папку, одну из папок выше или существующий файл могут менять обычные пользователи. Для службы с правами SYSTEM это небезопасно. Выберите Program Files или другую папку.
+english.DirWhere=Problem folder: %1
+russian.DirWhere=Проблема в папке: %1
+english.DirRootHint=Standard users have broad rights on the root of this drive. Install to Program Files, or remove those rights from the drive root if you know why they were added.
+russian.DirRootHint=У обычных пользователей широкие права на корень этого диска. Установите в Program Files или уберите эти права с корня диска, если знаете, зачем их добавляли.
 english.DirOccupied=The folder is not empty. Choose an empty or new folder.
 russian.DirOccupied=Папка не пустая. Выберите пустую или новую папку.
 english.DirUnknown=Could not verify or secure the folder. Choose another folder or check its permissions.
@@ -115,6 +119,7 @@ const
 
 var
   InstallHelperExtracted: Boolean;
+  InstallFailurePath: String;
   DeleteUserData: Boolean;
   UserDataPath: String;
   InstallFailureCode: Integer;
@@ -128,6 +133,15 @@ end;
 function GetCustomSetupExitCode(): Integer;
 begin
   Result := InstallFailureCode;
+end;
+
+function IsDriveRoot(const Path: String): Boolean;
+begin
+  Result := False;
+  if Length(Path) <> 3 then
+    Exit;
+  Result := (Pos(Copy(Path, 1, 1), 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz') > 0)
+    and (Path[2] = ':') and (Path[3] = '\');
 end;
 
 function InstallDirMessage(Code: Integer): String;
@@ -144,6 +158,12 @@ begin
   end;
   if Code = 2 then
     Result := FmtMessage(Result, [IntToStr(Code)]);
+  if ((Code = 6) or (Code = 7) or (Code = 8)) and (InstallFailurePath <> '') then
+  begin
+    Result := Result + #13#10 + FmtMessage(CustomMessage('DirWhere'), [InstallFailurePath]);
+    if IsDriveRoot(InstallFailurePath) then
+      Result := Result + #13#10 + CustomMessage('DirRootHint');
+  end;
 end;
 
 function RunInstallHelper(const Mode, Dir: String): Integer;
@@ -153,6 +173,7 @@ var
   NormalDir: String;
 begin
   Result := 10;
+  InstallFailurePath := '';
   if Pos('"', Dir) > 0 then
   begin
     Result := 2;
@@ -171,7 +192,11 @@ begin
       Mode + ' "' + NormalDir + '"', '', SW_HIDE, ewWaitUntilTerminated, Result, Output) then
     begin
       for I := 0 to GetArrayLength(Output.StdOut) - 1 do
+      begin
+        if Copy(Output.StdOut[I], 1, 5) = 'path=' then
+          InstallFailurePath := Copy(Output.StdOut[I], 6, Length(Output.StdOut[I]) - 5);
         Log(Output.StdOut[I]);
+      end;
       for I := 0 to GetArrayLength(Output.StdErr) - 1 do
         Log(Output.StdErr[I]);
       if Output.Error then
