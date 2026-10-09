@@ -283,6 +283,7 @@ pub(crate) static RU: Strings = Strings {
     check_quick: "Пинг TCP",
     check_full: "Проверка URL",
     check_hint: "Пинг TCP: время соединения с сервером.\nПроверка URL: запрос через сервер, работает и при подключении.",
+    ping_while_connected: "Недоступно при подключении: через туннель все серверы показались бы мгновенными",
     ping_checking: "Проверка…",
     ping_ms: "{ms} мс",
     ping_no_answer: "нет ответа",

@@ -358,6 +358,7 @@ pub(crate) struct Strings {
     pub(crate) check_quick: &'static str,
     pub(crate) check_full: &'static str,
     pub(crate) check_hint: &'static str,
+    pub(crate) ping_while_connected: &'static str,
     pub(crate) ping_checking: &'static str,
     pub(crate) ping_ms: &'static str,
     pub(crate) ping_no_answer: &'static str,

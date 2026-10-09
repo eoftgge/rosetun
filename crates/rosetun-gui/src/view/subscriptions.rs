@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, Stroke};
-use rosetun_config::{Node, NodeId, Subscription, SubscriptionId, SubscriptionInfo};
+use rosetun_config::{
+    ConnectionState, Node, NodeId, Subscription, SubscriptionId, SubscriptionInfo,
+};
 
 use crate::errors;
 use crate::icons::{self, Icon};
@@ -696,7 +698,7 @@ fn check_menu_items(
 ) {
     ui.set_min_width(200.0);
     let can_ping = state.can_ping();
-    if widgets::menu_item(
+    let ping = widgets::menu_item(
         ui,
         widgets::MenuItem {
             label: t().check_quick,
@@ -705,9 +707,13 @@ fn check_menu_items(
             danger: false,
             note: None,
         },
-    )
-    .clicked()
-    {
+    );
+    let ping = if matches!(state.status.state, ConnectionState::Connected) {
+        ping.on_disabled_hover_text(t().ping_while_connected)
+    } else {
+        ping
+    };
+    if ping.clicked() {
         actions.push(match node {
             Some(node) => Action::PingNode(subscription.id.clone(), node.clone()),
             None => Action::Ping(subscription.id.clone()),

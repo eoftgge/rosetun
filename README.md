@@ -18,7 +18,7 @@ Rosetun is a Windows VPN client powered by sing-box. A Windows service maintains
 - Change the server, rules or DNS while connected: Rosetun restarts the tunnel in a second or two without disconnecting, and the kill switch keeps traffic blocked meanwhile.
 - **Temporary rules:** add a rule only until disconnect; it applies at once and is never saved.
 - **Reconnect automatically** after sleep or an engine failure, with a DNS watchdog while connected.
-- **Server checks:** a TCP ping and a real delay test that sends a request through each server, even while connected.
+- **Server checks:** a TCP ping and a URL test that sends a request through each server, even while connected.
 - System tray, **Start with Windows**, and English and Russian interfaces.
 
 ## Install
@@ -35,8 +35,8 @@ Compare `Get-FileHash .\rosetun-<version>-setup.exe -Algorithm SHA256` with the 
 
 Rosetun makes these network requests:
 
-- To the VPN server for the tunnel; **Ping** also makes a TCP connection attempt to each server being checked while the tunnel is down.
-- **Real delay** and the current server's delay on the connection screen each send one HTTPS request to `https://cp.cloudflare.com/generate_204` through the server being checked or the current server. Real delay connects directly to each server, outside the tunnel.
+- To the VPN server for the tunnel; **TCP ping** also makes a TCP connection attempt to each server being checked while the tunnel is down.
+- **URL test** and the current server's delay on the connection screen each send one HTTPS request to `https://cp.cloudflare.com/generate_204` through the server being checked or the current server. URL test connects directly to each server, outside the tunnel.
 - To your subscription provider to fetch or update subscriptions, using `User-Agent: Rosetun/<version>` by default. When **Send device ID** is on, the request also includes `x-hwid`, `x-device-os`, `x-ver-os` and `x-device-model`. Subscription URLs may contain credentials; an HTTP subscription sends its token without encryption.
 - To the configured DNS-over-HTTPS resolver through the tunnel. The service also checks DNS by querying `example.com` during connection and random names beneath `example.com` while the tunnel is up.
 - To `https://1.1.1.1/cdn-cgi/trace` through the tunnel for the exit country and public IP shown on the connection screen. The exit IP is hidden by default and is not written to the log.
