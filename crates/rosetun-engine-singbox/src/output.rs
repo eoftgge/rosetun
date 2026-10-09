@@ -81,6 +81,66 @@ pub(super) fn classify_failure(line: &str) -> Option<OutboundFailure> {
     None
 }
 
+/// Keep the server dial target and the cause, but not destinations visited through the tunnel.
+pub(super) fn hide_destinations(line: &str) -> String {
+    let mut hidden = line.to_owned();
+    replace_between(&mut hidden, "open connection to ", " using");
+    for marker in [
+        "connection to ",
+        "connection from ",
+        "exchange failed for ",
+        "lookup ",
+    ] {
+        replace_token(&mut hidden, marker);
+    }
+    hidden
+}
+
+fn replace_between(line: &mut String, marker: &str, delimiter: &str) {
+    let mut cursor = 0;
+    while let Some(relative) = line[cursor..].find(marker) {
+        let start = cursor + relative + marker.len();
+        let end = line[start..]
+            .find(delimiter)
+            .map_or_else(|| token_end(line, start), |offset| start + offset);
+        if end == start || line[start..end] == *"[hidden]" {
+            cursor = start;
+            continue;
+        }
+        line.replace_range(start..end, "[hidden]");
+        cursor = start + "[hidden]".len();
+    }
+}
+
+fn replace_token(line: &mut String, marker: &str) {
+    let mut cursor = 0;
+    while let Some(relative) = line[cursor..].find(marker) {
+        let start = cursor + relative + marker.len();
+        let end = token_end(line, start);
+        if end == start || line[start..end] == *"[hidden]" {
+            cursor = start;
+            continue;
+        }
+        let (token_end, suffix) = if line.as_bytes()[end - 1] == b':' {
+            (end - 1, ":")
+        } else {
+            (end, "")
+        };
+        if token_end == start {
+            cursor = end;
+            continue;
+        }
+        line.replace_range(start..token_end, "[hidden]");
+        cursor = start + "[hidden]".len() + suffix.len();
+    }
+}
+
+fn token_end(line: &str, start: usize) -> usize {
+    line[start..]
+        .find(char::is_whitespace)
+        .map_or(line.len(), |offset| start + offset)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LineLevel {
     Trace,
@@ -113,6 +173,45 @@ pub(super) fn line_level(line: &str) -> Option<LineLevel> {
 #[cfg(test)]
 mod tests {
     use super::{LineLevel, line_level};
+
+    #[test]
+    fn hides_destinations_but_not_the_server_or_failure_cause() {
+        let line = "ERROR [123 5.0s] connection: open connection to 198.51.100.20:443 using outbound/vless[proxy]: dial tcp 203.0.113.10:443: i/o timeout";
+        let hidden = super::hide_destinations(line);
+        assert_eq!(
+            hidden,
+            "ERROR [123 5.0s] connection: open connection to [hidden] using outbound/vless[proxy]: dial tcp 203.0.113.10:443: i/o timeout"
+        );
+        assert_eq!(super::hide_destinations(&hidden), hidden);
+    }
+
+    #[test]
+    fn hides_other_connection_and_dns_destinations() {
+        for (line, expected) in [
+            (
+                "ERROR connection to example.com:443: reset",
+                "ERROR connection to [hidden]: reset",
+            ),
+            (
+                "ERROR connection from 198.51.100.20:5544 using outbound/direct: EOF",
+                "ERROR connection from [hidden] using outbound/direct: EOF",
+            ),
+            (
+                "ERROR dns: exchange failed for example.com. IN A: timeout",
+                "ERROR dns: exchange failed for [hidden] IN A: timeout",
+            ),
+            (
+                "ERROR dns: lookup example.com: no such host",
+                "ERROR dns: lookup [hidden]: no such host",
+            ),
+            (
+                "+0900 2026-10-10 01:15:47 ERROR connection: open connection to [2001:db8::20]:443 using outbound/vless[proxy]: dial tcp 203.0.113.10:443: EOF",
+                "+0900 2026-10-10 01:15:47 ERROR connection: open connection to [hidden] using outbound/vless[proxy]: dial tcp 203.0.113.10:443: EOF",
+            ),
+        ] {
+            assert_eq!(super::hide_destinations(line), expected, "{line}");
+        }
+    }
 
     #[test]
     fn classifies_only_proxy_outbound_failures() {

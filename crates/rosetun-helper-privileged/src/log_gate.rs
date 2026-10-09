@@ -17,6 +17,10 @@ impl VerboseGate {
         self.0.store(0, Ordering::Release);
     }
 
+    pub(crate) fn deadline(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.0)
+    }
+
     pub(crate) fn allows(&self, metadata: &tracing::Metadata<'_>) -> bool {
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)

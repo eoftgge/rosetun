@@ -901,7 +901,7 @@ impl Session {
         check_cancelled(&self.cancelled)?;
         self.process = Some(
             backend
-                .spawn(&binary, &config)
+                .spawn_with_log_gate(&binary, &config, self.gate.deadline())
                 .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?,
         );
         self.control = control;

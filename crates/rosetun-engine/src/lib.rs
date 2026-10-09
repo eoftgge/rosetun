@@ -20,6 +20,7 @@ use errors::EngineError;
 use rosetun_config::{EngineKind, Node, RuleId, RuleSet, Settings};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, atomic::AtomicU64};
 use std::time::Duration;
 
 /// Fetched through each checked node. Cloudflare is already contacted for the
@@ -179,6 +180,18 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
         binary: &Path,
         config: &RenderedConfig,
     ) -> Result<Box<dyn EngineProcess>, EngineError>;
+
+    /// Shared deadline for logging destinations; the helper can close the gate
+    /// while the process is still draining its output during shutdown.
+    fn spawn_with_log_gate(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+        verbose_until_unix: Arc<AtomicU64>,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        let _ = verbose_until_unix;
+        self.spawn(binary, config)
+    }
 }
 
 #[derive(Clone, Copy)]

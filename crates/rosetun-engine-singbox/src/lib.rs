@@ -5,16 +5,18 @@ mod readiness;
 mod render;
 mod version;
 
+use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread;
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
@@ -182,6 +184,15 @@ impl EngineBackend for SingBoxBackend {
         binary: &Path,
         config: &RenderedConfig,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        self.spawn_with_log_gate(binary, config, Arc::new(AtomicU64::new(0)))
+    }
+
+    fn spawn_with_log_gate(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+        verbose_until_unix: Arc<AtomicU64>,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
         std::fs::create_dir_all(&self.work_dir)?;
         let config_path = self.work_dir.join(&config.file_name);
         std::fs::write(&config_path, &config.body)?;
@@ -205,8 +216,15 @@ impl EngineBackend for SingBoxBackend {
         let failures = Arc::new(output::FailureCounters::default());
 
         if let Some(stdout) = child.stdout.take()
-            && let Err(error) =
-                spawn_output_drain(stdout, "stdout", None, probe, None, Arc::clone(&failures))
+            && let Err(error) = spawn_output_drain(
+                stdout,
+                "stdout",
+                None,
+                probe,
+                None,
+                Arc::clone(&failures),
+                Arc::clone(&verbose_until_unix),
+            )
         {
             stop_failed_spawn(&mut child);
             return Err(error.into());
@@ -224,6 +242,7 @@ impl EngineBackend for SingBoxBackend {
             probe,
             Some(Arc::clone(&slow_tunnel)),
             Arc::clone(&failures),
+            verbose_until_unix,
         ) {
             stop_failed_spawn(&mut child);
             return Err(error.into());
@@ -324,6 +343,7 @@ fn spawn_output_drain<R>(
     probe: bool,
     slow_tunnel: Option<Arc<AtomicBool>>,
     failures: Arc<output::FailureCounters>,
+    verbose_until_unix: Arc<AtomicU64>,
 ) -> std::io::Result<()>
 where
     R: Read + Send + 'static,
@@ -347,7 +367,7 @@ where
                             let _ = sender.send(());
                         }
                         if !probe {
-                            log_output_line(stream, &line);
+                            log_output_line(stream, &line, &verbose_until_unix);
                         }
                     }
                     Err(error) => {
@@ -366,15 +386,31 @@ where
         .map(|_| ())
 }
 
-fn log_output_line(stream: &'static str, line: &str) {
+fn log_output_line(stream: &'static str, line: &str, verbose_until_unix: &AtomicU64) {
     use rosetun_engine::ENGINE_OUTPUT_TARGET as TARGET;
-    match output::line_level(line) {
+    let line = safe_output_line(line, verbose_until_unix, now_unix());
+    match output::line_level(&line) {
         Some(LineLevel::Trace) => tracing::trace!(target: TARGET, stream, "{line}"),
         Some(LineLevel::Debug) => tracing::debug!(target: TARGET, stream, "{line}"),
         Some(LineLevel::Info) | None => tracing::info!(target: TARGET, stream, "{line}"),
         Some(LineLevel::Warn) => tracing::warn!(target: TARGET, stream, "{line}"),
         Some(LineLevel::Error) => tracing::error!(target: TARGET, stream, "{line}"),
     }
+}
+
+fn safe_output_line<'a>(line: &'a str, until_unix: &AtomicU64, now_unix: u64) -> Cow<'a, str> {
+    if now_unix < until_unix.load(Ordering::Acquire) {
+        Cow::Borrowed(line)
+    } else {
+        Cow::Owned(output::hide_destinations(line))
+    }
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default()
 }
 
 fn find_in_neighbours() -> Option<PathBuf> {
@@ -468,6 +504,29 @@ mod tests {
             },
             raw: None,
         }
+    }
+
+    #[test]
+    fn engine_output_masks_destinations_after_verbose_log_expires() {
+        let line = "ERROR connection: open connection to 198.51.100.20:443 using outbound/vless[proxy]: dial tcp 203.0.113.10:443: i/o timeout";
+        let deadline = std::sync::atomic::AtomicU64::new(100);
+        assert_eq!(super::safe_output_line(line, &deadline, 99), line);
+        assert!(!super::safe_output_line(line, &deadline, 100).contains("198.51.100.20"));
+        deadline.store(0, std::sync::atomic::Ordering::Release);
+        assert!(!super::safe_output_line(line, &deadline, 99).contains("198.51.100.20"));
+        assert!(super::safe_output_line(line, &deadline, 99).contains("203.0.113.10:443"));
+    }
+
+    #[test]
+    fn outbound_failure_is_counted_before_its_destination_is_hidden() {
+        let line = "ERROR connection: open connection to 198.51.100.20:443 using outbound/vless[proxy]: dial tcp 203.0.113.10:443: i/o timeout";
+        let failures = super::output::FailureCounters::default();
+        failures.observe(line);
+        let deadline = std::sync::atomic::AtomicU64::new(0);
+        let safe = super::safe_output_line(line, &deadline, 100);
+        assert_eq!(failures.snapshot().unreachable, 1);
+        assert!(!safe.contains("198.51.100.20"));
+        assert!(safe.contains("dial tcp 203.0.113.10:443: i/o timeout"));
     }
 
     #[test]
