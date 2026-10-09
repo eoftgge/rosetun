@@ -3,6 +3,8 @@ use eframe::egui::{self, Pos2, Rect, Shape, Stroke};
 use crate::theme;
 
 const PETAL: [(f32, f32); 4] = [(0.0, -20.0), (12.0, 0.0), (0.0, 22.0), (-12.0, 0.0)];
+/// Keeps the header petals behind the navigation instead of competing with it.
+const HEADER_PETAL_FADE: f32 = 0.65;
 const SPIRAL: [(f32, f32); 9] = [
     (24.0, 31.0),
     (18.0, 27.0),
@@ -148,7 +150,7 @@ pub(crate) fn paint_petals(painter: &egui::Painter, rect: Rect, bloom: f32, intr
     let origin = rect.left_top() + egui::vec2(0.0, -20.0 * (1.0 - intro));
     for petal in &PETALS {
         let points = petal_points(petal, origin, rect.width() / 1200.0).to_vec();
-        let alpha = petal_alpha(petal.alpha, bloom, intro);
+        let alpha = petal_alpha(petal.alpha, bloom, intro) * HEADER_PETAL_FADE;
         if petal.outline {
             painter.add(Shape::closed_line(
                 points,
