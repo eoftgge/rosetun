@@ -1123,7 +1123,7 @@ fn fresh_dns_timeout_stops_engine_and_releases_protection() {
         request.settings.kill_switch = kill_switch;
         let error = helper.connect(&request).expect_err("DNS is silent");
 
-        assert_eq!(error.code, ErrorCode::EngineFailed);
+        assert_eq!(error.code, ErrorCode::DnsTimeout);
         assert!(error.message.contains("last: timeout"));
         assert!(matches!(
             helper.status().state,
@@ -1243,7 +1243,7 @@ fn protected_dns_timeout_stops_engine_but_retains_guard_and_cache() {
         .connect(&protected_request())
         .expect_err("DNS is silent");
 
-    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert_eq!(error.code, ErrorCode::DnsTimeout);
     assert!(error.message.contains("last: timeout"));
     assert!(matches!(
         helper.status().state,

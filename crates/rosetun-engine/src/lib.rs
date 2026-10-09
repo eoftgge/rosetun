@@ -263,6 +263,43 @@ pub struct StartupHints {
     pub slow_tunnel_creation: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboundFailure {
+    Unreachable,
+    Rejected,
+    Closed,
+}
+
+/// Saturating monotonic diagnostic counters, scoped to one engine process.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct OutboundFailures {
+    pub unreachable: u64,
+    pub rejected: u64,
+    pub closed: u64,
+}
+
+impl OutboundFailures {
+    pub fn delta(self, previous: Self) -> Self {
+        Self {
+            unreachable: self.unreachable.saturating_sub(previous.unreachable),
+            rejected: self.rejected.saturating_sub(previous.rejected),
+            closed: self.closed.saturating_sub(previous.closed),
+        }
+    }
+
+    pub fn threshold(self, events: u64) -> Option<OutboundFailure> {
+        if self.rejected >= events {
+            Some(OutboundFailure::Rejected)
+        } else if self.unreachable >= events {
+            Some(OutboundFailure::Unreachable)
+        } else if self.closed >= events {
+            Some(OutboundFailure::Closed)
+        } else {
+            None
+        }
+    }
+}
+
 pub trait EngineProcess: Send + std::fmt::Debug {
     fn is_running(&mut self) -> Result<bool, EngineError>;
 
@@ -279,6 +316,10 @@ pub trait EngineProcess: Send + std::fmt::Debug {
     /// Non-blocking, latched hints from startup diagnostics.
     fn startup_hints(&self) -> StartupHints {
         StartupHints::default()
+    }
+
+    fn outbound_failures(&self) -> OutboundFailures {
+        OutboundFailures::default()
     }
 }
 

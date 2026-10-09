@@ -5,7 +5,7 @@ use rosetun_config::{
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 
@@ -198,6 +198,10 @@ pub enum ErrorCode {
     HandshakeRequired,
     NotPrivileged,
     EngineFailed,
+    ServerUnreachable,
+    ServerRejected,
+    ServerClosed,
+    DnsTimeout,
     RoutingFailed,
     Busy,
     InvalidState,
@@ -208,6 +212,22 @@ pub enum ErrorCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn classified_errors_round_trip() {
+        for code in [
+            super::ErrorCode::ServerUnreachable,
+            super::ErrorCode::ServerRejected,
+            super::ErrorCode::ServerClosed,
+            super::ErrorCode::DnsTimeout,
+        ] {
+            let value = serde_json::to_string(&code).unwrap();
+            assert_eq!(
+                serde_json::from_str::<super::ErrorCode>(&value).unwrap(),
+                code
+            );
+        }
+        assert_eq!(super::PROTOCOL_VERSION, 6);
+    }
     use rosetun_config::{
         AppConfig, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
         RuleTarget, RuleTemplate, Selection, StreamSettings, Subscription, SubscriptionId,

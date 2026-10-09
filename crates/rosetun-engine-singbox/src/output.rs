@@ -1,4 +1,85 @@
 use crate::readiness::strip_ansi_csi;
+use rosetun_engine::{OutboundFailure, OutboundFailures};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[derive(Debug, Default)]
+pub(super) struct FailureCounters {
+    unreachable: AtomicU64,
+    rejected: AtomicU64,
+    closed: AtomicU64,
+}
+
+impl FailureCounters {
+    pub(super) fn observe(&self, line: &str) {
+        let counter = match classify_failure(line) {
+            Some(OutboundFailure::Unreachable) => &self.unreachable,
+            Some(OutboundFailure::Rejected) => &self.rejected,
+            Some(OutboundFailure::Closed) => &self.closed,
+            None => return,
+        };
+        let _ = counter.fetch_update(Ordering::Release, Ordering::Relaxed, |value| {
+            Some(value.saturating_add(1))
+        });
+    }
+
+    pub(super) fn snapshot(&self) -> OutboundFailures {
+        OutboundFailures {
+            unreachable: self.unreachable.load(Ordering::Acquire),
+            rejected: self.rejected.load(Ordering::Acquire),
+            closed: self.closed.load(Ordering::Acquire),
+        }
+    }
+}
+
+pub(super) fn classify_failure(line: &str) -> Option<OutboundFailure> {
+    if line_level(line) != Some(LineLevel::Error) && line_level(line) != Some(LineLevel::Warn) {
+        return None;
+    }
+    let plain = strip_ansi_csi(line).to_ascii_lowercase();
+    let proxy = plain.split_whitespace().any(|word| {
+        word.starts_with("outbound/")
+            && !word.starts_with("outbound/direct[")
+            && word.ends_with("[proxy]:")
+    });
+    if !proxy {
+        return None;
+    }
+    if [
+        "tls: handshake failure",
+        "tls: bad certificate",
+        "tls: protocol version",
+        "reality verification failed",
+        "certificate",
+        "authentication failed",
+        "invalid password",
+        "handshake failed",
+    ]
+    .iter()
+    .any(|marker| plain.contains(marker))
+    {
+        return Some(OutboundFailure::Rejected);
+    }
+    if [
+        "i/o timeout",
+        "connection refused",
+        "connectex:",
+        "network is unreachable",
+        "no route to host",
+        "context deadline exceeded",
+    ]
+    .iter()
+    .any(|marker| plain.contains(marker))
+    {
+        return Some(OutboundFailure::Unreachable);
+    }
+    if [" eof", "connection reset", "forcibly closed", "broken pipe"]
+        .iter()
+        .any(|marker| plain.contains(marker))
+    {
+        return Some(OutboundFailure::Closed);
+    }
+    None
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LineLevel {
@@ -32,6 +113,53 @@ pub(super) fn line_level(line: &str) -> Option<LineLevel> {
 #[cfg(test)]
 mod tests {
     use super::{LineLevel, line_level};
+
+    #[test]
+    fn classifies_only_proxy_outbound_failures() {
+        use rosetun_engine::OutboundFailure::*;
+        for (cause, expected) in [
+            ("dial tcp 192.0.2.1:443: i/o timeout", Unreachable),
+            ("connection refused", Unreachable),
+            ("tls: handshake failure", Rejected),
+            ("REALITY verification failed", Rejected),
+            ("EOF", Closed),
+            ("connection reset by peer", Closed),
+        ] {
+            for prefix in [
+                "ERROR ",
+                "\x1b[31mERROR\x1b[0m[0001] ",
+                "+0900 2026-10-10 12:00:00 WARN ",
+            ] {
+                assert_eq!(
+                    super::classify_failure(&format!("{prefix}outbound/vless[proxy]: {cause}")),
+                    Some(expected)
+                );
+            }
+        }
+        for line in [
+            "ERROR outbound/direct[direct]: connection refused",
+            "ERROR dns: EOF",
+            "INFO outbound/vless[proxy]: EOF",
+            "ERROR outbound/vless[proxy]: unknown error",
+            "ERROR inbound/tun[tun-in]: EOF",
+        ] {
+            assert_eq!(super::classify_failure(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn failure_counters_are_monotonic_and_saturating() {
+        let counters = super::FailureCounters::default();
+        counters.observe("ERROR outbound/vless[proxy]: EOF");
+        let first = counters.snapshot();
+        assert_eq!(first.closed, 1);
+        assert_eq!(counters.snapshot().delta(first).closed, 0);
+        counters
+            .closed
+            .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+        counters.observe("ERROR outbound/vless[proxy]: EOF");
+        assert_eq!(counters.snapshot().closed, u64::MAX);
+    }
 
     #[test]
     fn recognizes_every_startup_fixture_line() {

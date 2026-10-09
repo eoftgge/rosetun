@@ -202,9 +202,11 @@ impl EngineBackend for SingBoxBackend {
 
         let (ready_sender, readiness) = Readiness::new();
         let slow_tunnel = Arc::new(AtomicBool::new(false));
+        let failures = Arc::new(output::FailureCounters::default());
 
         if let Some(stdout) = child.stdout.take()
-            && let Err(error) = spawn_output_drain(stdout, "stdout", None, probe, None)
+            && let Err(error) =
+                spawn_output_drain(stdout, "stdout", None, probe, None, Arc::clone(&failures))
         {
             stop_failed_spawn(&mut child);
             return Err(error.into());
@@ -221,6 +223,7 @@ impl EngineBackend for SingBoxBackend {
             Some(ready_sender),
             probe,
             Some(Arc::clone(&slow_tunnel)),
+            Arc::clone(&failures),
         ) {
             stop_failed_spawn(&mut child);
             return Err(error.into());
@@ -230,6 +233,7 @@ impl EngineBackend for SingBoxBackend {
             child,
             readiness,
             slow_tunnel,
+            failures,
         }))
     }
 }
@@ -319,6 +323,7 @@ fn spawn_output_drain<R>(
     mut ready_sender: Option<Sender<()>>,
     probe: bool,
     slow_tunnel: Option<Arc<AtomicBool>>,
+    failures: Arc<output::FailureCounters>,
 ) -> std::io::Result<()>
 where
     R: Read + Send + 'static,
@@ -329,6 +334,7 @@ where
             for line in BufReader::new(reader).lines() {
                 match line {
                     Ok(line) => {
+                        failures.observe(&line);
                         if readiness::is_slow_tunnel_message(&line)
                             && let Some(hint) = &slow_tunnel
                         {
@@ -382,9 +388,13 @@ struct SingBoxProcess {
     child: Child,
     readiness: Readiness,
     slow_tunnel: Arc<AtomicBool>,
+    failures: Arc<output::FailureCounters>,
 }
 
 impl EngineProcess for SingBoxProcess {
+    fn outbound_failures(&self) -> rosetun_engine::OutboundFailures {
+        self.failures.snapshot()
+    }
     fn startup_hints(&self) -> rosetun_engine::StartupHints {
         rosetun_engine::StartupHints {
             slow_tunnel_creation: self.slow_tunnel.load(Ordering::Acquire),

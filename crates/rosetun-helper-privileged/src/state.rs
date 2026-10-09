@@ -29,7 +29,7 @@ use watchdog::{DnsWatchdog, WatchdogTiming};
 
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(10);
+const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(60);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
 const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
     interval: Duration::from_secs(30),
@@ -852,8 +852,9 @@ impl Session {
                     "engine process disappeared before DNS check",
                 )
             })?;
-            dns::check(server, self.dns_timeout, self.dns_attempt_timeout, || {
-                process.is_running()
+            dns::check_observed(server, self.dns_timeout, self.dns_attempt_timeout, || {
+                let running = process.is_running()?;
+                Ok((running, process.outbound_failures()))
             })?;
             self.tunnel_dns = Some(server);
         } else {

@@ -246,12 +246,32 @@ fn attempt(
     }
 }
 
+#[cfg(test)]
 pub(super) fn check(
     server: SocketAddr,
     timeout: Duration,
     attempt_timeout: Duration,
     mut is_running: impl FnMut() -> Result<bool, EngineError>,
 ) -> Result<(), HelperError> {
+    check_observed(server, timeout, attempt_timeout, || {
+        is_running().map(|running| (running, rosetun_engine::OutboundFailures::default()))
+    })
+}
+
+pub(super) fn check_observed(
+    server: SocketAddr,
+    timeout: Duration,
+    attempt_timeout: Duration,
+    mut observe: impl FnMut() -> Result<(bool, rosetun_engine::OutboundFailures), EngineError>,
+) -> Result<(), HelperError> {
+    let mut initial = None;
+    let failure = std::cell::Cell::new(None);
+    let mut is_running = || {
+        let (running, counters) = observe()?;
+        let baseline = *initial.get_or_insert(counters);
+        failure.set(counters.delta(baseline).threshold(3));
+        Ok(running)
+    };
     if timeout.is_zero() || attempt_timeout.is_zero() {
         return Err(failed("DNS check timeouts must be nonzero"));
     }
@@ -264,6 +284,7 @@ pub(super) fn check(
     let mut buffer = vec![0u8; 65_535];
     let mut attempts = 0usize;
     let mut last = LastResult::Timeout;
+    let mut polling_error = None;
 
     let id = random_word() as u16;
     let packet = query(id, &[b"example", b"com"]);
@@ -281,7 +302,13 @@ pub(super) fn check(
             id,
             attempt_deadline,
             &mut buffer,
-            || false,
+            || match ensure_running(&mut is_running) {
+                Ok(()) => false,
+                Err(error) => {
+                    polling_error = Some(error);
+                    true
+                }
+            },
         )?;
 
         if matches!(last, LastResult::Rcode(0)) {
@@ -295,6 +322,10 @@ pub(super) fn check(
             return Ok(());
         }
 
+        if let Some(error) = polling_error.take() {
+            return Err(error);
+        }
+
         tracing::debug!(
             %server,
             attempt = attempts,
@@ -304,16 +335,33 @@ pub(super) fn check(
 
         ensure_running(&mut is_running)?;
 
+        // A valid DNS reply above wins over diagnostics from concurrent traffic.
+        if let Some(category) = failure.get() {
+            let code = match category {
+                rosetun_engine::OutboundFailure::Unreachable => ErrorCode::ServerUnreachable,
+                rosetun_engine::OutboundFailure::Rejected => ErrorCode::ServerRejected,
+                rosetun_engine::OutboundFailure::Closed => ErrorCode::ServerClosed,
+            };
+            return Err(HelperError::new(
+                code,
+                format!("proxy server failed during the DNS check: {category:?}"),
+            ));
+        }
+
         // Pace immediate negative replies instead of flooding the resolver.
         std::thread::sleep(attempt_deadline.saturating_duration_since(Instant::now()));
     }
 
     ensure_running(&mut is_running)?;
-    Err(failed(format!(
-        "DNS through the tunnel did not answer within {} seconds \
+    tracing::warn!(attempts, result = %last, elapsed_ms = started.elapsed().as_millis(), "DNS through the tunnel check timed out");
+    Err(HelperError::new(
+        ErrorCode::DnsTimeout,
+        format!(
+            "DNS through the tunnel did not answer within {} seconds \
          (last: {last}); the resolver may be unreachable from the node",
-        timeout.as_secs_f64(),
-    )))
+            timeout.as_secs_f64(),
+        ),
+    ))
 }
 
 /// A one-shot, cache-bypassing lookup; never reports names or replies to the log.
@@ -433,6 +481,57 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn repeated_snapshot_does_not_count_a_line_twice() {
+        let server = Server::new(Behavior::Silent);
+        let counters = rosetun_engine::OutboundFailures {
+            unreachable: 1,
+            ..Default::default()
+        };
+        let error = check_observed(server.address(), TIMEOUT, ATTEMPT_TIMEOUT, || {
+            Ok((true, counters))
+        })
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::DnsTimeout);
+    }
+
+    #[test]
+    fn three_events_in_one_category_fail_before_dns_deadline() {
+        for (category, code) in [
+            (0, ErrorCode::ServerUnreachable),
+            (1, ErrorCode::ServerRejected),
+            (2, ErrorCode::ServerClosed),
+        ] {
+            let server = Server::new(Behavior::Silent);
+            let mut calls = 0;
+            let error = check_observed(
+                server.address(),
+                Duration::from_secs(1),
+                ATTEMPT_TIMEOUT,
+                || {
+                    calls += 1;
+                    let count = if calls == 1 { 0 } else { 3 };
+                    let counters = match category {
+                        0 => rosetun_engine::OutboundFailures {
+                            unreachable: count,
+                            ..Default::default()
+                        },
+                        1 => rosetun_engine::OutboundFailures {
+                            rejected: count,
+                            ..Default::default()
+                        },
+                        _ => rosetun_engine::OutboundFailures {
+                            closed: count,
+                            ..Default::default()
+                        },
+                    };
+                    Ok((true, counters))
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.code, code);
+        }
+    }
     use super::test_support::{Behavior, Server};
     use super::*;
 
@@ -570,7 +669,7 @@ mod tests {
         let error = check(server.address(), TIMEOUT, ATTEMPT_TIMEOUT, || Ok(true))
             .expect_err("SERVFAIL fails");
 
-        assert_eq!(error.code, ErrorCode::EngineFailed);
+        assert_eq!(error.code, ErrorCode::DnsTimeout);
         assert!(error.message.contains("within 0.08 seconds"));
         assert!(error.message.contains("last: SERVFAIL"));
     }
@@ -581,7 +680,7 @@ mod tests {
         let error = check(server.address(), TIMEOUT, ATTEMPT_TIMEOUT, || Ok(true))
             .expect_err("silence fails");
 
-        assert_eq!(error.code, ErrorCode::EngineFailed);
+        assert_eq!(error.code, ErrorCode::DnsTimeout);
         assert!(error.message.contains("last: timeout"));
     }
 
