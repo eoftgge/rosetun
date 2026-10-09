@@ -62,8 +62,8 @@ english.DirSystem=Do not install inside a user profile or the Windows folder. Ch
 russian.DirSystem=Нельзя устанавливать в профиль пользователя или папку Windows. Выберите Program Files или безопасную папку на другом диске.
 english.DirReparse=This path contains a link or junction. Choose a regular folder.
 russian.DirReparse=Путь содержит ссылку или точку соединения. Выберите обычную папку.
-english.DirWritable=This folder or an ancestor can be changed by standard users. The SYSTEM service would be unsafe there. Choose Program Files or a new folder directly under a drive root.
-russian.DirWritable=Эту папку или одну из папок выше могут менять обычные пользователи. Для службы с правами SYSTEM это небезопасно. Выберите Program Files или новую папку прямо в корне диска.
+english.DirWritable=This folder, an ancestor, or an existing file can be changed by standard users. The SYSTEM service would be unsafe there. Choose Program Files or a new folder directly under a drive root.
+russian.DirWritable=Эту папку, одну из папок выше или существующий файл могут менять обычные пользователи. Для службы с правами SYSTEM это небезопасно. Выберите Program Files или новую папку прямо в корне диска.
 english.DirOccupied=The folder is not empty. Choose an empty or new folder.
 russian.DirOccupied=Папка не пустая. Выберите пустую или новую папку.
 english.DirUnknown=Could not verify or secure the folder. Choose another folder or check its permissions.
@@ -103,7 +103,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#GuiExe}"; Tasks: desktopico
 [Run]
 ; Without runasoriginaluser the GUI would inherit the installer's elevation and
 ; keep its configuration in the wrong profile.
-Filename: "{app}\{#GuiExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\{#GuiExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser; Check: ShouldLaunchGui
 
 [UninstallDelete]
 ; Created by the service, not by the installer.
@@ -117,6 +117,18 @@ var
   InstallHelperExtracted: Boolean;
   DeleteUserData: Boolean;
   UserDataPath: String;
+  InstallFailureCode: Integer;
+  InstallFinalized: Boolean;
+
+function ShouldLaunchGui(): Boolean;
+begin
+  Result := InstallFinalized and (InstallFailureCode = 0);
+end;
+
+function GetCustomSetupExitCode(): Integer;
+begin
+  Result := InstallFailureCode;
+end;
 
 function InstallDirMessage(Code: Integer): String;
 begin
@@ -233,6 +245,16 @@ begin
   end;
   if CurStep = ssPostInstall then
   begin
+    ResultCode := RunInstallHelper('--finalize-install-dir', WizardDirValue());
+    if ResultCode <> 0 then
+    begin
+      SuppressibleMsgBox(FmtMessage(CustomMessage('DirFailed'), [InstallDirMessage(ResultCode),
+        CustomMessage('DirUpgrade')]), mbError, MB_OK, IDOK);
+      Log('Install directory finalization failed with exit code ' + IntToStr(ResultCode));
+      InstallFailureCode := 3;
+      Exit;
+    end;
+    InstallFinalized := True;
     WizardForm.StatusLabel.Caption := CustomMessage('PreparingEngine');
     // Defender scans a new executable on its first launch, which can outlast
     // the helper's timeouts. Doing it here keeps the scan out of the first connect.

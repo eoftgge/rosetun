@@ -145,6 +145,7 @@ struct Component {
     owner: Principal,
     aces: Vec<Ace>,
     target: bool,
+    child: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,7 +246,16 @@ fn decide(facts: &Facts) -> Result<(), Failure> {
             ace.allow
                 && !ace.principal.trusted()
                 && ace.flags & INHERIT_ONLY == 0
-                && ace.mask & (DANGEROUS | if component.target { 0x0000_0006 } else { 0 }) != 0
+                && ace.mask
+                    & (DANGEROUS
+                        | if component.child {
+                            0x0000_0116
+                        } else if component.target {
+                            0x0000_0006
+                        } else {
+                            0
+                        })
+                    != 0
         }) {
             return Err(Failure::at(Reason::Permissions, &component.path));
         }
@@ -576,7 +586,37 @@ fn canonical(path: &Path, candidate: &Path) -> Result<PathBuf, Failure> {
     Ok(PathBuf::from(name))
 }
 
-fn collect(path: &Path, include_contents: bool) -> Result<Facts, Failure> {
+fn collect_children(facts: &mut Facts, installer: &LocalAllocation) -> Result<(), Failure> {
+    let mut pending = vec![facts.path.clone()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).map_err(|error| inspection(&dir, error))? {
+            let path = entry.map_err(|error| inspection(&dir, error))?.path();
+            let attrs =
+                attributes(&path)?.ok_or_else(|| inspection(&path, "install file disappeared"))?;
+            if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(Failure::at(Reason::Reparse, &path));
+            }
+            let (owner, aces) = security(&path, installer)?;
+            facts.components.push(Component {
+                path: path.clone(),
+                reparse: false,
+                owner,
+                aces,
+                target: false,
+                child: true,
+            });
+            if facts.components.len() > 100_000 {
+                return Err(inspection(&path, "install tree is too large to inspect"));
+            }
+            if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
+                pending.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect(path: &Path, include_contents: bool, check_children: bool) -> Result<Facts, Failure> {
     let path = normalize_path(path)?;
     let root = PathBuf::from(&path.to_str().expect("normalized path")[..3]);
     let root_wide = wide(&root);
@@ -701,6 +741,7 @@ fn collect(path: &Path, include_contents: bool) -> Result<Facts, Failure> {
             owner,
             aces,
             target: is_target,
+            child: false,
         });
     }
     if !include_contents {
@@ -710,17 +751,30 @@ fn collect(path: &Path, include_contents: bool) -> Result<Facts, Failure> {
         facts.target = Target::Service;
     }
     decide(&facts)?;
+    if check_children && matches!(facts.target, Target::ExistingInstall | Target::Service) {
+        collect_children(&mut facts, &installer)?;
+        decide(&facts)?;
+    }
     Ok(facts)
 }
 
 pub(crate) fn verify(path: &Path, include_contents: bool) -> Result<(), Failure> {
-    collect(path, include_contents).map(|_| ())
+    collect(path, include_contents, true).map(|_| ())
 }
 
 pub(crate) fn secure(path: &Path) -> Result<(), Failure> {
-    let facts = collect(path, true)?;
+    let facts = collect(path, true, true)?;
     data_dir::secure_install(&facts.path, facts.target == Target::Empty)
         .map_err(|error| inspection(&facts.path, error))?;
+    verify(&facts.path, false)
+}
+
+pub(crate) fn finalize(path: &Path) -> Result<(), Failure> {
+    // Setup has already verified and secured the tree before copying files.
+    // Freshly copied files can have the elevated user's SID as owner; repair
+    // their ownership before the service is allowed to execute any of them.
+    let facts = collect(path, false, false)?;
+    data_dir::secure_install(&facts.path, false).map_err(|error| inspection(&facts.path, error))?;
     verify(&facts.path, false)
 }
 
@@ -745,6 +799,7 @@ mod tests {
                     mask: 0x0000_0004, // FILE_ADD_SUBDIRECTORY
                 }],
                 target: false,
+                child: false,
             }],
             target: Target::Missing,
         }
@@ -887,6 +942,7 @@ mod tests {
                 mask: GENERIC_ALL,
             }],
             target: true,
+            child: false,
         });
         assert!(decide(&case).is_ok());
         case.components[1].reparse = true;
@@ -907,6 +963,7 @@ mod tests {
                 mask: GENERIC_WRITE,
             }],
             target: true,
+            child: false,
         });
         fails(case.clone(), Reason::Permissions);
         case.components[1].aces[0].mask = 0x0000_0002; // FILE_ADD_FILE
@@ -915,5 +972,31 @@ mod tests {
         fails(case.clone(), Reason::Permissions);
         case.components[1].aces.clear();
         assert!(decide(&case).is_ok());
+    }
+
+    #[test]
+    fn previous_install_contents_must_not_allow_writes_or_user_ownership() {
+        let mut case = facts();
+        case.target = Target::ExistingInstall;
+        case.components.push(Component {
+            path: case.path.join("sing-box.exe"),
+            reparse: false,
+            owner: Principal::Administrators,
+            aces: vec![Ace {
+                allow: true,
+                principal: Principal::Other,
+                flags: 0,
+                mask: 0x0000_0002, // FILE_WRITE_DATA
+            }],
+            target: false,
+            child: true,
+        });
+        fails(case.clone(), Reason::Permissions);
+        case.components[1].aces[0].flags = INHERIT_ONLY;
+        assert!(decide(&case).is_ok());
+        case.components[1].owner = Principal::Other;
+        fails(case.clone(), Reason::Owner);
+        case.components[1].reparse = true;
+        fails(case, Reason::Reparse);
     }
 }
