@@ -4,6 +4,10 @@ use std::{
     ptr,
 };
 
+use crate::{RoutingError, TunnelInterface};
+use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+use windows_sys::Win32::NetworkManagement::IpHelper::{GetIfEntry2, MIB_IF_ROW2};
+use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusNotPresent;
 use windows_sys::Win32::{
     Foundation::ERROR_BUFFER_OVERFLOW,
     NetworkManagement::{
@@ -12,8 +16,6 @@ use windows_sys::Win32::{
     },
     Networking::WinSock::{AF_INET, SOCKADDR_IN},
 };
-
-use crate::{RoutingError, TunnelInterface};
 
 pub(super) fn adapter_present(alias: &str) -> std::io::Result<bool> {
     if alias.contains('\0') {
@@ -27,7 +29,7 @@ pub(super) fn adapter_present(alias: &str) -> std::io::Result<bool> {
     // SAFETY: alias is NUL-terminated and luid is writable for the synchronous call.
     let status = unsafe { ConvertInterfaceAliasToLuid(alias.as_ptr(), &mut luid) };
     match status {
-        0 => Ok(true),
+        0 => interface_present(luid),
         windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER => Ok(false),
         _ => Err(std::io::Error::from_raw_os_error(status as i32)),
     }
@@ -75,6 +77,22 @@ pub(super) fn resolve_luid(tunnel: &TunnelInterface) -> Result<TunnelLuid, Routi
 
     validate_adapter(tunnel, luid)?;
     Ok(TunnelLuid(luid))
+}
+
+/// The alias of a removed adapter still resolves to a LUID, so only an
+/// interface that Windows reports as present counts.
+fn interface_present(luid: NET_LUID_LH) -> std::io::Result<bool> {
+    let mut row = MIB_IF_ROW2 {
+        InterfaceLuid: luid,
+        ..Default::default()
+    };
+    // SAFETY: row is initialised with the LUID and writable for the synchronous call.
+    let status = unsafe { GetIfEntry2(&mut row) };
+    match status {
+        0 => Ok(row.OperStatus != IfOperStatusNotPresent),
+        ERROR_FILE_NOT_FOUND => Ok(false),
+        _ => Err(std::io::Error::from_raw_os_error(status as i32)),
+    }
 }
 
 fn validate_adapter(tunnel: &TunnelInterface, luid: NET_LUID_LH) -> Result<(), RoutingError> {
