@@ -6,7 +6,6 @@ use crate::errors;
 use crate::icons::{self, Icon};
 use crate::rules::{ProcessMatchMode, process_matches_filter, update_process_match_mode};
 use crate::state::{Action, AddRuleDialog, RuleInputKind};
-use crate::strings::t;
 use crate::view::rules::{target_color, target_label};
 use crate::{strings, theme, widgets};
 
@@ -352,7 +351,7 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
         return true;
     }
     for error in parsed.errors.iter().take(3) {
-        let message = errors::rule_input(t(), &error.error);
+        let message = errors::rule_input(crate::i18n::language(), &error.error);
         ui.label(
             RichText::new(crate::i18n::line_error(error.line, &message))
                 .small()

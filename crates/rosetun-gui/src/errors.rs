@@ -9,174 +9,286 @@ use rosetun_ipc::{ClientError, ConnectRequestError, ErrorCode};
 use rosetun_processes::ProcessListError;
 
 use crate::display;
-use crate::strings::{Strings, fill};
+use crate::i18n::{Language, tr_in};
 use crate::worker::{ConfigWorkerError, HelperCommandError};
+use fluent_bundle::FluentArgs;
 
-pub(crate) fn store(s: &Strings, error: &StoreError) -> String {
+fn arguments<'a>(values: &[(&'a str, &'a str)]) -> FluentArgs<'a> {
+    let mut args = FluentArgs::new();
+    for &(name, value) in values {
+        args.set(name, value);
+    }
+    args
+}
+
+fn skipped_arguments<'a>(count: usize, reason: &'a str) -> FluentArgs<'a> {
+    let mut args = FluentArgs::new();
+    args.set("count", count.to_string());
+    args.set("reason", reason);
+    args
+}
+
+pub(crate) fn store(language: Language, error: &StoreError) -> String {
     match error {
-        StoreError::NoConfigDir => s.errors.config_dir.to_owned(),
-        StoreError::Io { path, source } => fill(
-            s.errors.config_access,
-            &[
+        StoreError::NoConfigDir => tr_in(language, "error-config-dir", &FluentArgs::new()),
+        StoreError::Io { path, source } => tr_in(
+            language,
+            "error-config-access",
+            &arguments(&[
                 ("path", &path.display().to_string()),
                 ("detail", &source.to_string()),
-            ],
+            ]),
         ),
-        StoreError::Parse { path, source } => fill(
-            s.errors.config_json,
-            &[
+        StoreError::Parse { path, source } => tr_in(
+            language,
+            "error-config-json",
+            &arguments(&[
                 ("path", &path.display().to_string()),
                 ("line", &source.line().to_string()),
                 ("column", &source.column().to_string()),
-            ],
+            ]),
         ),
-        StoreError::Format { path } => fill(
-            s.errors.config_invalid,
-            &[
+        StoreError::Format { path } => tr_in(
+            language,
+            "error-config-invalid",
+            &arguments(&[
                 ("path", &path.display().to_string()),
-                ("detail", s.errors.config_value),
-            ],
+                (
+                    "detail",
+                    &tr_in(language, "error-config-value", &FluentArgs::new()),
+                ),
+            ]),
         ),
         StoreError::Invalid {
             source: ConfigError::UnsupportedVersion { .. },
             ..
-        } => s.errors.config_version.to_owned(),
-        StoreError::Invalid { path, source } => fill(
-            s.errors.config_invalid,
-            &[
+        } => tr_in(language, "error-config-version", &FluentArgs::new()),
+        StoreError::Invalid { path, source } => tr_in(
+            language,
+            "error-config-invalid",
+            &arguments(&[
                 ("path", &path.display().to_string()),
-                ("detail", &config(s, source)),
-            ],
+                ("detail", &config(language, source)),
+            ]),
         ),
     }
 }
 
-fn config(s: &Strings, error: &ConfigError) -> String {
+fn config(language: Language, error: &ConfigError) -> String {
     match error {
-        ConfigError::UnsupportedVersion { .. } => s.errors.config_version.to_owned(),
-        ConfigError::DanglingSelection { subscription, node } => fill(
-            s.errors.config_dangling_node,
-            &[
+        ConfigError::UnsupportedVersion { .. } => {
+            tr_in(language, "error-config-version", &FluentArgs::new())
+        }
+        ConfigError::DanglingSelection { subscription, node } => tr_in(
+            language,
+            "error-config-dangling-node",
+            &arguments(&[
                 ("subscription", subscription.as_str()),
                 ("node", node.as_str()),
-            ],
+            ]),
         ),
-        ConfigError::DanglingRuleSet(id) => {
-            fill(s.errors.config_dangling_rule_set, &[("id", id.as_str())])
+        ConfigError::DanglingRuleSet(id) => tr_in(
+            language,
+            "error-config-dangling-rule-set",
+            &arguments(&[("id", id.as_str())]),
+        ),
+    }
+}
+
+pub(crate) fn config_worker(language: Language, error: &ConfigWorkerError) -> String {
+    match error {
+        ConfigWorkerError::Store(error) => store(language, error),
+        ConfigWorkerError::Metadata(error) => tr_in(
+            language,
+            "error-config-inspect",
+            &arguments(&[("detail", &error.to_string())]),
+        ),
+    }
+}
+
+pub(crate) fn settings(language: Language, error: &SettingsError) -> String {
+    match error {
+        SettingsError::Store(error) => store(language, error),
+        SettingsError::UnsupportedScale => {
+            tr_in(language, "error-unsupported-scale", &FluentArgs::new())
         }
     }
 }
 
-pub(crate) fn config_worker(s: &Strings, error: &ConfigWorkerError) -> String {
+pub(crate) fn rule_set(language: Language, error: &RuleSetError) -> String {
     match error {
-        ConfigWorkerError::Store(error) => store(s, error),
-        ConfigWorkerError::Metadata(error) => {
-            fill(s.errors.config_inspect, &[("detail", &error.to_string())])
+        RuleSetError::Store(error) => store(language, error),
+        RuleSetError::SetNotFound => {
+            tr_in(language, "error-rule-set-not-found", &FluentArgs::new())
+        }
+        RuleSetError::RuleNotFound => tr_in(language, "error-rule-not-found", &FluentArgs::new()),
+        RuleSetError::EmptyName => tr_in(language, "error-rule-set-name-empty", &FluentArgs::new()),
+        RuleSetError::DuplicateRule => tr_in(language, "error-duplicate-rule", &FluentArgs::new()),
+    }
+}
+
+pub(crate) fn rule_input(language: Language, error: &RuleInputError) -> String {
+    match error {
+        RuleInputError::InvalidDomain => {
+            tr_in(language, "error-invalid-domain", &FluentArgs::new())
+        }
+        RuleInputError::IpAddress => tr_in(language, "error-domain-is-ip", &FluentArgs::new()),
+        RuleInputError::SingleLabel => {
+            tr_in(language, "error-single-label-domain", &FluentArgs::new())
+        }
+        RuleInputError::InvalidProcess => {
+            tr_in(language, "error-invalid-process", &FluentArgs::new())
+        }
+        RuleInputError::RelativePath => tr_in(language, "error-relative-path", &FluentArgs::new()),
+    }
+}
+
+pub(crate) fn dns_input(language: Language, error: &DnsInputError) -> String {
+    match error {
+        DnsInputError::InvalidServer => {
+            tr_in(language, "error-invalid-resolver-ip", &FluentArgs::new())
+        }
+        DnsInputError::InvalidServerName => {
+            tr_in(language, "error-invalid-resolver-name", &FluentArgs::new())
+        }
+        DnsInputError::InvalidPort => tr_in(language, "error-invalid-port", &FluentArgs::new()),
+        DnsInputError::InvalidPath => tr_in(language, "error-invalid-dns-path", &FluentArgs::new()),
+    }
+}
+
+pub(crate) fn select_node(language: Language, error: &SelectNodeError) -> String {
+    match error {
+        SelectNodeError::Store(error) => store(language, error),
+        SelectNodeError::SubscriptionNotFound => {
+            tr_in(language, "error-subscription-not-found", &FluentArgs::new())
+        }
+        SelectNodeError::NodeNotFound => {
+            tr_in(language, "error-node-not-found", &FluentArgs::new())
         }
     }
 }
 
-pub(crate) fn settings(s: &Strings, error: &SettingsError) -> String {
+pub(crate) fn select_rule_set(language: Language, error: &SelectRuleSetError) -> String {
     match error {
-        SettingsError::Store(error) => store(s, error),
-        SettingsError::UnsupportedScale => s.errors.unsupported_scale.to_owned(),
+        SelectRuleSetError::Store(error) => store(language, error),
+        SelectRuleSetError::NotFound => {
+            tr_in(language, "error-rule-set-not-found", &FluentArgs::new())
+        }
     }
 }
 
-pub(crate) fn rule_set(s: &Strings, error: &RuleSetError) -> String {
+pub(crate) fn subscription_url(language: Language, error: &SubscriptionUrlError) -> String {
     match error {
-        RuleSetError::Store(error) => store(s, error),
-        RuleSetError::SetNotFound => s.errors.rule_set_not_found.to_owned(),
-        RuleSetError::RuleNotFound => s.errors.rule_not_found.to_owned(),
-        RuleSetError::EmptyName => s.errors.rule_set_name_empty.to_owned(),
-        RuleSetError::DuplicateRule => s.errors.duplicate_rule.to_owned(),
-    }
-}
-
-pub(crate) fn rule_input(s: &Strings, error: &RuleInputError) -> String {
-    match error {
-        RuleInputError::InvalidDomain => s.errors.invalid_domain.to_owned(),
-        RuleInputError::IpAddress => s.errors.domain_is_ip.to_owned(),
-        RuleInputError::SingleLabel => s.errors.single_label_domain.to_owned(),
-        RuleInputError::InvalidProcess => s.errors.invalid_process.to_owned(),
-        RuleInputError::RelativePath => s.errors.relative_path.to_owned(),
-    }
-}
-
-pub(crate) fn dns_input(s: &Strings, error: &DnsInputError) -> String {
-    match error {
-        DnsInputError::InvalidServer => s.errors.invalid_resolver_ip.to_owned(),
-        DnsInputError::InvalidServerName => s.errors.invalid_resolver_name.to_owned(),
-        DnsInputError::InvalidPort => s.errors.invalid_port.to_owned(),
-        DnsInputError::InvalidPath => s.errors.invalid_dns_path.to_owned(),
-    }
-}
-
-pub(crate) fn select_node(s: &Strings, error: &SelectNodeError) -> String {
-    match error {
-        SelectNodeError::Store(error) => store(s, error),
-        SelectNodeError::SubscriptionNotFound => s.errors.subscription_not_found.to_owned(),
-        SelectNodeError::NodeNotFound => s.errors.node_not_found.to_owned(),
-    }
-}
-
-pub(crate) fn select_rule_set(s: &Strings, error: &SelectRuleSetError) -> String {
-    match error {
-        SelectRuleSetError::Store(error) => store(s, error),
-        SelectRuleSetError::NotFound => s.errors.rule_set_not_found.to_owned(),
-    }
-}
-
-pub(crate) fn subscription_url(s: &Strings, error: &SubscriptionUrlError) -> String {
-    match error {
-        SubscriptionUrlError::Invalid => s.errors.invalid_subscription_url,
-        SubscriptionUrlError::MissingHost => s.errors.missing_host,
-        SubscriptionUrlError::EncryptedHappLink => s.errors.encrypted_happ_link,
-        SubscriptionUrlError::UnsupportedScheme => s.errors.url_scheme,
-        SubscriptionUrlError::InvalidImportLink => s.errors.import_link_invalid,
-        SubscriptionUrlError::ImportLinkWithoutUrl => s.errors.import_link_without_url,
-        SubscriptionUrlError::ImportLinkWithMultipleUrls => s.errors.import_link_multiple_urls,
-        SubscriptionUrlError::TooManyNestedLinks => s.errors.import_link_nested,
+        SubscriptionUrlError::Invalid => tr_in(
+            language,
+            "error-invalid-subscription-url",
+            &FluentArgs::new(),
+        ),
+        SubscriptionUrlError::MissingHost => {
+            tr_in(language, "error-missing-host", &FluentArgs::new())
+        }
+        SubscriptionUrlError::EncryptedHappLink => {
+            tr_in(language, "error-encrypted-happ-link", &FluentArgs::new())
+        }
+        SubscriptionUrlError::UnsupportedScheme => {
+            tr_in(language, "error-url-scheme", &FluentArgs::new())
+        }
+        SubscriptionUrlError::InvalidImportLink => {
+            tr_in(language, "error-import-link-invalid", &FluentArgs::new())
+        }
+        SubscriptionUrlError::ImportLinkWithoutUrl => tr_in(
+            language,
+            "error-import-link-without-url",
+            &FluentArgs::new(),
+        ),
+        SubscriptionUrlError::ImportLinkWithMultipleUrls => tr_in(
+            language,
+            "error-import-link-multiple-urls",
+            &FluentArgs::new(),
+        ),
+        SubscriptionUrlError::TooManyNestedLinks => {
+            tr_in(language, "error-import-link-nested", &FluentArgs::new())
+        }
     }
     .to_owned()
 }
 
-pub(crate) fn fetch(s: &Strings, error: &FetchError) -> String {
+pub(crate) fn fetch(language: Language, error: &FetchError) -> String {
     match error {
-        FetchError::InvalidUrl => s.errors.invalid_subscription_url.to_owned(),
-        FetchError::InvalidUserAgent => s.errors.fetch_user_agent.to_owned(),
-        FetchError::InvalidDeviceId => s.errors.fetch_device_id.to_owned(),
-        FetchError::RequestFailed => s.errors.fetch_failed.to_owned(),
-        FetchError::Timeout => s.errors.fetch_timeout.to_owned(),
-        FetchError::HostNotFound => s.errors.fetch_host_not_found.to_owned(),
-        FetchError::ConnectionFailed => s.errors.fetch_connection.to_owned(),
-        FetchError::TooManyRedirects => s.errors.fetch_redirects.to_owned(),
-        FetchError::InsecureRedirect => s.errors.fetch_insecure_redirect.to_owned(),
-        FetchError::Tls(detail) => fill(s.errors.fetch_tls, &[("detail", detail)]),
-        FetchError::ResponseTooLarge => s.errors.fetch_too_large.to_owned(),
-        FetchError::BodyReadFailed => s.errors.fetch_body.to_owned(),
-        FetchError::NotFound { sent_hwid: true } => s.errors.fetch_not_found.to_owned(),
-        FetchError::NotFound { sent_hwid: false } => s.errors.fetch_not_found_retry.to_owned(),
-        FetchError::AccessDenied => s.errors.fetch_access_denied.to_owned(),
-        FetchError::HttpStatus(status) => fill(
-            s.errors.fetch_http_status,
-            &[("status", &status.to_string())],
+        FetchError::InvalidUrl => tr_in(
+            language,
+            "error-invalid-subscription-url",
+            &FluentArgs::new(),
         ),
-        FetchError::Parse(error) => parse(s, error),
+        FetchError::InvalidUserAgent => {
+            tr_in(language, "error-fetch-user-agent", &FluentArgs::new())
+        }
+        FetchError::InvalidDeviceId => tr_in(language, "error-fetch-device-id", &FluentArgs::new()),
+        FetchError::RequestFailed => tr_in(language, "error-fetch-failed", &FluentArgs::new()),
+        FetchError::Timeout => tr_in(language, "error-fetch-timeout", &FluentArgs::new()),
+        FetchError::HostNotFound => {
+            tr_in(language, "error-fetch-host-not-found", &FluentArgs::new())
+        }
+        FetchError::ConnectionFailed => {
+            tr_in(language, "error-fetch-connection", &FluentArgs::new())
+        }
+        FetchError::TooManyRedirects => {
+            tr_in(language, "error-fetch-redirects", &FluentArgs::new())
+        }
+        FetchError::InsecureRedirect => tr_in(
+            language,
+            "error-fetch-insecure-redirect",
+            &FluentArgs::new(),
+        ),
+        FetchError::Tls(detail) => tr_in(
+            language,
+            "error-fetch-tls",
+            &arguments(&[("detail", detail)]),
+        ),
+        FetchError::ResponseTooLarge => {
+            tr_in(language, "error-fetch-too-large", &FluentArgs::new())
+        }
+        FetchError::BodyReadFailed => tr_in(language, "error-fetch-body", &FluentArgs::new()),
+        FetchError::NotFound { sent_hwid: true } => {
+            tr_in(language, "error-fetch-not-found", &FluentArgs::new())
+        }
+        FetchError::NotFound { sent_hwid: false } => {
+            tr_in(language, "error-fetch-not-found-retry", &FluentArgs::new())
+        }
+        FetchError::AccessDenied => {
+            tr_in(language, "error-fetch-access-denied", &FluentArgs::new())
+        }
+        FetchError::HttpStatus(status) => tr_in(
+            language,
+            "error-fetch-http-status",
+            &arguments(&[("status", &status.to_string())]),
+        ),
+        FetchError::Parse(error) => parse(language, error),
     }
 }
 
-fn parse(s: &Strings, error: &ParseError) -> String {
+fn parse(language: Language, error: &ParseError) -> String {
     match error {
-        ParseError::Empty => s.errors.parse_empty.to_owned(),
-        ParseError::WebPage => s.errors.parse_web_page.to_owned(),
-        ParseError::UnsupportedFormat => s.errors.parse_unsupported_format.to_owned(),
-        ParseError::EncryptedHappLink => s.errors.encrypted_happ_link.to_owned(),
-        ParseError::UnrecognizedFormat => s.errors.parse_unrecognized_format.to_owned(),
-        ParseError::InvalidUtf8 => s.errors.parse_invalid_utf8.to_owned(),
-        ParseError::InvalidJson { line, column } => fill(
-            s.errors.parse_invalid_json,
-            &[("line", &line.to_string()), ("column", &column.to_string())],
+        ParseError::Empty => tr_in(language, "error-parse-empty", &FluentArgs::new()),
+        ParseError::WebPage => tr_in(language, "error-parse-web-page", &FluentArgs::new()),
+        ParseError::UnsupportedFormat => tr_in(
+            language,
+            "error-parse-unsupported-format",
+            &FluentArgs::new(),
+        ),
+        ParseError::EncryptedHappLink => {
+            tr_in(language, "error-encrypted-happ-link", &FluentArgs::new())
+        }
+        ParseError::UnrecognizedFormat => tr_in(
+            language,
+            "error-parse-unrecognized-format",
+            &FluentArgs::new(),
+        ),
+        ParseError::InvalidUtf8 => tr_in(language, "error-parse-invalid-utf8", &FluentArgs::new()),
+        ParseError::InvalidJson { line, column } => tr_in(
+            language,
+            "error-parse-invalid-json",
+            &arguments(&[("line", &line.to_string()), ("column", &column.to_string())]),
         ),
         ParseError::DeviceLimit {
             max_devices_reached,
@@ -184,48 +296,71 @@ fn parse(s: &Strings, error: &ParseError) -> String {
             announce,
         } => {
             let title = if *max_devices_reached {
-                s.errors.device_limit_reached
+                tr_in(language, "error-device-limit-reached", &FluentArgs::new())
             } else if *not_supported {
-                s.errors.device_id_rejected
+                tr_in(language, "error-device-id-rejected", &FluentArgs::new())
             } else {
-                s.errors.device_policy
+                tr_in(language, "error-device-policy", &FluentArgs::new())
             };
             let mut output = title.to_owned();
             if let Some(text) = announce {
                 output.push('\n');
-                output.push_str(&fill(s.errors.provider_announce, &[("text", text)]));
+                output.push_str(&tr_in(
+                    language,
+                    "error-provider-announce",
+                    &arguments(&[("text", text)]),
+                ));
             }
             output
         }
         ParseError::NoUsableNodes { skipped, notices } => {
-            let mut output = s.errors.no_usable_nodes.to_owned();
+            let mut output = tr_in(language, "error-no-usable-nodes", &FluentArgs::new());
             for text in notices {
                 output.push('\n');
-                output.push_str(&fill(s.errors.provider_notice, &[("text", text)]));
+                output.push_str(&tr_in(
+                    language,
+                    "error-provider-notice",
+                    &arguments(&[("text", text)]),
+                ));
             }
             for (reason, count) in rosetun_core::group_skipped(skipped) {
                 output.push('\n');
-                output.push_str(&s.skipped(count, &skip_reason(s, &reason)));
+                output.push_str(&tr_in(
+                    language,
+                    "skipped-summary",
+                    &skipped_arguments(count, &skip_reason(language, &reason)),
+                ));
             }
             output
         }
     }
 }
 
-pub(crate) fn skip_reason(s: &Strings, reason: &SkipReason) -> String {
+pub(crate) fn skip_reason(language: Language, reason: &SkipReason) -> String {
     match reason {
-        SkipReason::InvalidRecord => s.errors.skip_invalid_record.to_owned(),
-        SkipReason::InvalidPort => s.errors.skip_invalid_port.to_owned(),
-        SkipReason::MissingField => s.errors.skip_missing_field.to_owned(),
-        SkipReason::InvalidJson { line, column } => fill(
-            s.errors.skip_invalid_json,
-            &[("line", &line.to_string()), ("column", &column.to_string())],
+        SkipReason::InvalidRecord => {
+            tr_in(language, "error-skip-invalid-record", &FluentArgs::new())
+        }
+        SkipReason::InvalidPort => tr_in(language, "error-skip-invalid-port", &FluentArgs::new()),
+        SkipReason::MissingField => tr_in(language, "error-skip-missing-field", &FluentArgs::new()),
+        SkipReason::InvalidJson { line, column } => tr_in(
+            language,
+            "error-skip-invalid-json",
+            &arguments(&[("line", &line.to_string()), ("column", &column.to_string())]),
         ),
-        SkipReason::UnsupportedProtocol => s.errors.skip_unsupported_protocol.to_owned(),
-        SkipReason::ClientSettings => s.errors.skip_client_settings.to_owned(),
-        SkipReason::UnsupportedVmessFormat => s.errors.skip_vmess_format.to_owned(),
+        SkipReason::UnsupportedProtocol => tr_in(
+            language,
+            "error-skip-unsupported-protocol",
+            &FluentArgs::new(),
+        ),
+        SkipReason::ClientSettings => {
+            tr_in(language, "error-skip-client-settings", &FluentArgs::new())
+        }
+        SkipReason::UnsupportedVmessFormat => {
+            tr_in(language, "error-skip-vmess-format", &FluentArgs::new())
+        }
         SkipReason::UnsupportedTransport(UnsupportedTransport::Other) => {
-            s.errors.skip_unknown_transport.to_owned()
+            tr_in(language, "error-skip-unknown-transport", &FluentArgs::new())
         }
         SkipReason::UnsupportedTransport(
             transport @ (UnsupportedTransport::Xhttp
@@ -234,118 +369,210 @@ pub(crate) fn skip_reason(s: &Strings, reason: &SkipReason) -> String {
             | UnsupportedTransport::Quic
             | UnsupportedTransport::H2
             | UnsupportedTransport::Http),
-        ) => fill(
-            s.errors.skip_transport,
-            &[("transport", &transport.to_string())],
+        ) => tr_in(
+            language,
+            "error-skip-transport",
+            &arguments(&[("transport", &transport.to_string())]),
         ),
-        SkipReason::UnsupportedTcpHeader => s.errors.skip_tcp_header.to_owned(),
-        SkipReason::UnsupportedGrpcMultiMode => s.errors.skip_grpc_multi_mode.to_owned(),
-        SkipReason::UnsupportedEncryption => s.errors.skip_encryption.to_owned(),
-        SkipReason::UnsupportedFlow => s.errors.skip_flow.to_owned(),
-        SkipReason::UnsupportedSecurity => s.errors.skip_security.to_owned(),
-        SkipReason::MissingRealityPublicKey => s.errors.skip_reality_key.to_owned(),
-        SkipReason::ShadowsocksPlugin => s.errors.skip_shadowsocks_plugin.to_owned(),
-        SkipReason::UnsupportedShadowsocksMethod => s.errors.skip_shadowsocks_method.to_owned(),
-        SkipReason::UnsupportedObfs => s.errors.skip_unsupported_obfs.to_owned(),
-        SkipReason::UnsupportedPin => s.errors.skip_unsupported_pin.to_owned(),
-        SkipReason::ServiceRecord => s.errors.skip_service_record.to_owned(),
+        SkipReason::UnsupportedTcpHeader => {
+            tr_in(language, "error-skip-tcp-header", &FluentArgs::new())
+        }
+        SkipReason::UnsupportedGrpcMultiMode => {
+            tr_in(language, "error-skip-grpc-multi-mode", &FluentArgs::new())
+        }
+        SkipReason::UnsupportedEncryption => {
+            tr_in(language, "error-skip-encryption", &FluentArgs::new())
+        }
+        SkipReason::UnsupportedFlow => tr_in(language, "error-skip-flow", &FluentArgs::new()),
+        SkipReason::UnsupportedSecurity => {
+            tr_in(language, "error-skip-security", &FluentArgs::new())
+        }
+        SkipReason::MissingRealityPublicKey => {
+            tr_in(language, "error-skip-reality-key", &FluentArgs::new())
+        }
+        SkipReason::ShadowsocksPlugin => tr_in(
+            language,
+            "error-skip-shadowsocks-plugin",
+            &FluentArgs::new(),
+        ),
+        SkipReason::UnsupportedShadowsocksMethod => tr_in(
+            language,
+            "error-skip-shadowsocks-method",
+            &FluentArgs::new(),
+        ),
+        SkipReason::UnsupportedObfs => {
+            tr_in(language, "error-skip-unsupported-obfs", &FluentArgs::new())
+        }
+        SkipReason::UnsupportedPin => {
+            tr_in(language, "error-skip-unsupported-pin", &FluentArgs::new())
+        }
+        SkipReason::ServiceRecord => {
+            tr_in(language, "error-skip-service-record", &FluentArgs::new())
+        }
     }
 }
 
-pub(crate) fn add_subscription(s: &Strings, error: &AddFromUrlError) -> String {
+pub(crate) fn add_subscription(language: Language, error: &AddFromUrlError) -> String {
     match error {
-        AddFromUrlError::Url(error) => subscription_url(s, error),
-        AddFromUrlError::Store(error) => store(s, error),
-        AddFromUrlError::AlreadyExists(id) => fill(
-            s.errors.already_added,
-            &[("id", &rosetun_core::terminal_text(id.as_str()))],
+        AddFromUrlError::Url(error) => subscription_url(language, error),
+        AddFromUrlError::Store(error) => store(language, error),
+        AddFromUrlError::AlreadyExists(id) => tr_in(
+            language,
+            "error-already-added",
+            &arguments(&[("id", &rosetun_core::terminal_text(id.as_str()))]),
         ),
-        AddFromUrlError::InvalidUrl(_) => s.errors.invalid_subscription_url.to_owned(),
-        AddFromUrlError::MissingHost => s.errors.missing_host.to_owned(),
-        AddFromUrlError::Fetch { source, .. } => fetch(s, source),
-        AddFromUrlError::Clock(_) => s.errors.clock_before_epoch.to_owned(),
+        AddFromUrlError::InvalidUrl(_) => tr_in(
+            language,
+            "error-invalid-subscription-url",
+            &FluentArgs::new(),
+        ),
+        AddFromUrlError::MissingHost => tr_in(language, "error-missing-host", &FluentArgs::new()),
+        AddFromUrlError::Fetch { source, .. } => fetch(language, source),
+        AddFromUrlError::Clock(_) => {
+            tr_in(language, "error-clock-before-epoch", &FluentArgs::new())
+        }
         AddFromUrlError::Commit(error) => match error {
-            AddSubscriptionError::Store(error) => store(s, error),
-            AddSubscriptionError::AlreadyExists => s.errors.url_already_added.to_owned(),
-            AddSubscriptionError::IdExhausted => s.errors.ids_exhausted.to_owned(),
+            AddSubscriptionError::Store(error) => store(language, error),
+            AddSubscriptionError::AlreadyExists => {
+                tr_in(language, "error-url-already-added", &FluentArgs::new())
+            }
+            AddSubscriptionError::IdExhausted => {
+                tr_in(language, "error-ids-exhausted", &FluentArgs::new())
+            }
         },
     }
 }
 
-pub(crate) fn update_subscription(s: &Strings, error: &UpdateSubscriptionError) -> String {
+pub(crate) fn update_subscription(language: Language, error: &UpdateSubscriptionError) -> String {
     match error {
-        UpdateSubscriptionError::Store(error) => store(s, error),
-        UpdateSubscriptionError::NotFound => s.errors.subscription_not_found.to_owned(),
-        UpdateSubscriptionError::Fetch { source, .. } => fetch(s, source),
-        UpdateSubscriptionError::RequestSettingsChanged => {
-            s.errors.request_settings_changed.to_owned()
+        UpdateSubscriptionError::Store(error) => store(language, error),
+        UpdateSubscriptionError::NotFound => {
+            tr_in(language, "error-subscription-not-found", &FluentArgs::new())
         }
-        UpdateSubscriptionError::Clock(_) => s.errors.clock_before_epoch.to_owned(),
-    }
-}
-
-pub(crate) fn remove_subscription(s: &Strings, error: &RemoveSubscriptionError) -> String {
-    match error {
-        RemoveSubscriptionError::Store(error) => store(s, error),
-        RemoveSubscriptionError::SubscriptionNotFound => s.errors.subscription_not_found.to_owned(),
-    }
-}
-
-pub(crate) fn rename_subscription(s: &Strings, error: &RenameSubscriptionError) -> String {
-    match error {
-        RenameSubscriptionError::Store(error) => store(s, error),
-        RenameSubscriptionError::NotFound => s.errors.subscription_not_found.to_owned(),
-        RenameSubscriptionError::EmptyName => s.errors.subscription_name_empty.to_owned(),
-    }
-}
-
-pub(crate) fn move_subscription(s: &Strings, error: &MoveSubscriptionError) -> String {
-    match error {
-        MoveSubscriptionError::Store(error) => store(s, error),
-        MoveSubscriptionError::NotFound => s.errors.subscription_not_found.to_owned(),
-    }
-}
-
-pub(crate) fn process_list(s: &Strings, error: &ProcessListError) -> String {
-    match error {
-        ProcessListError::Snapshot(error) => {
-            fill(s.errors.process_list, &[("detail", &error.to_string())])
+        UpdateSubscriptionError::Fetch { source, .. } => fetch(language, source),
+        UpdateSubscriptionError::RequestSettingsChanged => tr_in(
+            language,
+            "error-request-settings-changed",
+            &FluentArgs::new(),
+        ),
+        UpdateSubscriptionError::Clock(_) => {
+            tr_in(language, "error-clock-before-epoch", &FluentArgs::new())
         }
     }
 }
 
-pub(crate) fn connect_request(s: &Strings, error: &ConnectRequestError) -> String {
+pub(crate) fn remove_subscription(language: Language, error: &RemoveSubscriptionError) -> String {
+    match error {
+        RemoveSubscriptionError::Store(error) => store(language, error),
+        RemoveSubscriptionError::SubscriptionNotFound => {
+            tr_in(language, "error-subscription-not-found", &FluentArgs::new())
+        }
+    }
+}
+
+pub(crate) fn rename_subscription(language: Language, error: &RenameSubscriptionError) -> String {
+    match error {
+        RenameSubscriptionError::Store(error) => store(language, error),
+        RenameSubscriptionError::NotFound => {
+            tr_in(language, "error-subscription-not-found", &FluentArgs::new())
+        }
+        RenameSubscriptionError::EmptyName => tr_in(
+            language,
+            "error-subscription-name-empty",
+            &FluentArgs::new(),
+        ),
+    }
+}
+
+pub(crate) fn move_subscription(language: Language, error: &MoveSubscriptionError) -> String {
+    match error {
+        MoveSubscriptionError::Store(error) => store(language, error),
+        MoveSubscriptionError::NotFound => {
+            tr_in(language, "error-subscription-not-found", &FluentArgs::new())
+        }
+    }
+}
+
+pub(crate) fn process_list(language: Language, error: &ProcessListError) -> String {
+    match error {
+        ProcessListError::Snapshot(error) => tr_in(
+            language,
+            "error-process-list",
+            &arguments(&[("detail", &error.to_string())]),
+        ),
+    }
+}
+
+pub(crate) fn connect_request(language: Language, error: &ConnectRequestError) -> String {
     match error {
         ConnectRequestError::SelectionMissing | ConnectRequestError::NodeNotFound => {
-            s.select_server.to_owned()
+            tr_in(language, "select-server", &FluentArgs::new())
         }
-        ConnectRequestError::RuleSetNotFound => s.errors.selected_rule_set_missing.to_owned(),
+        ConnectRequestError::RuleSetNotFound => tr_in(
+            language,
+            "error-selected-rule-set-missing",
+            &FluentArgs::new(),
+        ),
     }
 }
 
-pub(crate) fn client(s: &Strings, error: &ClientError) -> String {
+pub(crate) fn client(language: Language, error: &ClientError) -> String {
     let message = match error {
-        ClientError::Transport(detail) => fill(s.errors.helper_transport, &[("detail", detail)]),
-        ClientError::Unexpected => s.errors.helper_unexpected.to_owned(),
-        ClientError::Closed => s.errors.helper_closed.to_owned(),
+        ClientError::Transport(detail) => tr_in(
+            language,
+            "error-helper-transport",
+            &arguments(&[("detail", detail)]),
+        ),
+        ClientError::Unexpected => tr_in(language, "error-helper-unexpected", &FluentArgs::new()),
+        ClientError::Closed => tr_in(language, "error-helper-closed", &FluentArgs::new()),
         ClientError::Helper(error) => {
             let title = match error.code {
-                ErrorCode::ProtocolMismatch => s.errors.code_protocol_mismatch,
-                ErrorCode::HandshakeRequired => s.errors.code_handshake_required,
-                ErrorCode::NotPrivileged => s.errors.code_not_privileged,
-                ErrorCode::EngineFailed => s.errors.code_engine_failed,
-                ErrorCode::ServerUnreachable => s.errors.code_server_unreachable,
-                ErrorCode::ServerRejected => s.errors.code_server_rejected,
-                ErrorCode::ServerClosed => s.errors.code_server_closed,
-                ErrorCode::DnsTimeout => s.errors.code_dns_timeout,
-                ErrorCode::Cancelled => s.errors.code_cancelled,
-                ErrorCode::EngineNotReady => s.errors.code_engine_not_ready,
-                ErrorCode::RoutingFailed => s.errors.code_routing_failed,
-                ErrorCode::Busy => s.errors.code_busy,
-                ErrorCode::InvalidState => s.errors.code_invalid_state,
-                ErrorCode::UnsupportedRules => s.errors.code_unsupported_rules,
-                ErrorCode::NotImplemented => s.errors.code_not_implemented,
-                ErrorCode::Internal => s.errors.code_internal,
+                ErrorCode::ProtocolMismatch => {
+                    tr_in(language, "error-code-protocol-mismatch", &FluentArgs::new())
+                }
+                ErrorCode::HandshakeRequired => tr_in(
+                    language,
+                    "error-code-handshake-required",
+                    &FluentArgs::new(),
+                ),
+                ErrorCode::NotPrivileged => {
+                    tr_in(language, "error-code-not-privileged", &FluentArgs::new())
+                }
+                ErrorCode::EngineFailed => {
+                    tr_in(language, "error-code-engine-failed", &FluentArgs::new())
+                }
+                ErrorCode::ServerUnreachable => tr_in(
+                    language,
+                    "error-code-server-unreachable",
+                    &FluentArgs::new(),
+                ),
+                ErrorCode::ServerRejected => {
+                    tr_in(language, "error-code-server-rejected", &FluentArgs::new())
+                }
+                ErrorCode::ServerClosed => {
+                    tr_in(language, "error-code-server-closed", &FluentArgs::new())
+                }
+                ErrorCode::DnsTimeout => {
+                    tr_in(language, "error-code-dns-timeout", &FluentArgs::new())
+                }
+                ErrorCode::Cancelled => tr_in(language, "error-code-cancelled", &FluentArgs::new()),
+                ErrorCode::EngineNotReady => {
+                    tr_in(language, "error-code-engine-not-ready", &FluentArgs::new())
+                }
+                ErrorCode::RoutingFailed => {
+                    tr_in(language, "error-code-routing-failed", &FluentArgs::new())
+                }
+                ErrorCode::Busy => tr_in(language, "error-code-busy", &FluentArgs::new()),
+                ErrorCode::InvalidState => {
+                    tr_in(language, "error-code-invalid-state", &FluentArgs::new())
+                }
+                ErrorCode::UnsupportedRules => {
+                    tr_in(language, "error-code-unsupported-rules", &FluentArgs::new())
+                }
+                ErrorCode::NotImplemented => {
+                    tr_in(language, "error-code-not-implemented", &FluentArgs::new())
+                }
+                ErrorCode::Internal => tr_in(language, "error-code-internal", &FluentArgs::new()),
             };
             if error.message.is_empty() {
                 title.to_owned()
@@ -357,26 +584,31 @@ pub(crate) fn client(s: &Strings, error: &ClientError) -> String {
     display::safe_multiline(&message)
 }
 
-pub(crate) fn helper_command(s: &Strings, error: &HelperCommandError) -> String {
+pub(crate) fn helper_command(language: Language, error: &HelperCommandError) -> String {
     match error {
-        HelperCommandError::Store(error) => store(s, error),
-        HelperCommandError::Request(error) => connect_request(s, error),
-        HelperCommandError::Client(error) => client(s, error),
+        HelperCommandError::Store(error) => store(language, error),
+        HelperCommandError::Request(error) => connect_request(language, error),
+        HelperCommandError::Client(error) => client(language, error),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::strings::{EN, RU};
     use rosetun_core::{Skipped, Store};
     use rosetun_ipc::HelperError;
 
     #[test]
     fn duplicate_rule_uses_the_selected_table() {
         let error = RuleSetError::DuplicateRule;
-        assert_eq!(rule_set(&EN, &error), "this rule is already in the set");
-        assert_eq!(rule_set(&RU, &error), "такое правило уже есть в наборе");
+        assert_eq!(
+            rule_set(Language::English, &error),
+            "this rule is already in the set"
+        );
+        assert_eq!(
+            rule_set(Language::Russian, &error),
+            "такое правило уже есть в наборе"
+        );
     }
 
     #[test]
@@ -391,7 +623,10 @@ mod tests {
             SubscriptionUrlError::ImportLinkWithMultipleUrls,
             SubscriptionUrlError::TooManyNestedLinks,
         ] {
-            assert_eq!(subscription_url(&EN, &error), error.to_string());
+            assert_eq!(
+                subscription_url(Language::English, &error),
+                error.to_string()
+            );
         }
     }
 
@@ -417,7 +652,7 @@ mod tests {
             SkipReason::UnsupportedPin,
             SkipReason::ServiceRecord,
         ] {
-            assert_eq!(skip_reason(&EN, &reason), reason.to_string());
+            assert_eq!(skip_reason(Language::English, &reason), reason.to_string());
         }
         for transport in [
             UnsupportedTransport::Xhttp,
@@ -429,7 +664,7 @@ mod tests {
             UnsupportedTransport::Other,
         ] {
             let reason = SkipReason::UnsupportedTransport(transport);
-            assert_eq!(skip_reason(&EN, &reason), reason.to_string());
+            assert_eq!(skip_reason(Language::English, &reason), reason.to_string());
         }
     }
 
@@ -451,7 +686,7 @@ mod tests {
             FetchError::AccessDenied,
             FetchError::HttpStatus(418),
         ] {
-            assert_eq!(fetch(&EN, &error), error.to_string());
+            assert_eq!(fetch(Language::English, &error), error.to_string());
         }
         for error in [
             ParseError::Empty,
@@ -463,43 +698,59 @@ mod tests {
             ParseError::InvalidJson { line: 2, column: 3 },
         ] {
             let expected = error.to_string();
-            assert_eq!(parse(&EN, &error), expected);
-            assert_eq!(fetch(&EN, &FetchError::Parse(error)), expected);
+            assert_eq!(parse(Language::English, &error), expected);
+            assert_eq!(
+                fetch(Language::English, &FetchError::Parse(error)),
+                expected
+            );
         }
     }
 
     #[test]
     fn russian_subscription_errors_use_the_selected_table() {
         assert_eq!(
-            fetch(&RU, &FetchError::Timeout),
+            fetch(Language::Russian, &FetchError::Timeout),
             "сервер подписки не ответил вовремя"
         );
         assert_eq!(
-            fetch(&RU, &FetchError::NotFound { sent_hwid: false }),
+            fetch(
+                Language::Russian,
+                &FetchError::NotFound { sent_hwid: false }
+            ),
             "подписка не найдена; панели с лимитом устройств отвечают так же, если ID устройства не отправлен; включите «Отправлять ID устройства» и добавьте подписку снова"
         );
         assert_eq!(
-            fetch(&RU, &FetchError::NotFound { sent_hwid: true }),
+            fetch(Language::Russian, &FetchError::NotFound { sent_hwid: true }),
             "подписка не найдена; панели с лимитом устройств отвечают так же, если ID устройства не отправлен"
         );
         assert_eq!(
-            fetch(&RU, &FetchError::Tls("bad certificate".into())),
+            fetch(
+                Language::Russian,
+                &FetchError::Tls("bad certificate".into())
+            ),
             "ошибка TLS: bad certificate; так бывает, если антивирус проверяет HTTPS-трафик или на компьютере неверное время"
         );
         assert_eq!(
-            subscription_url(&RU, &SubscriptionUrlError::UnsupportedScheme),
+            subscription_url(Language::Russian, &SubscriptionUrlError::UnsupportedScheme),
             "адрес подписки должен начинаться с http:// или https://"
         );
         assert_eq!(
             skip_reason(
-                &RU,
+                Language::Russian,
                 &SkipReason::UnsupportedTransport(UnsupportedTransport::Other)
             ),
             "неизвестный транспорт не поддерживается"
         );
         assert_eq!(
-            fetch(&EN, &FetchError::NotFound { sent_hwid: false }),
-            EN.errors.fetch_not_found_retry
+            fetch(
+                Language::English,
+                &FetchError::NotFound { sent_hwid: false }
+            ),
+            tr_in(
+                Language::English,
+                "error-fetch-not-found-retry",
+                &FluentArgs::new()
+            )
         );
     }
 
@@ -511,23 +762,27 @@ mod tests {
             announce: Some("Remove an old device".into()),
         });
         assert_eq!(
-            fetch(&RU, &error),
+            fetch(Language::Russian, &error),
             "достигнут лимит устройств; удалите старое устройство в панели провайдера\nобъявление провайдера: Remove an old device"
         );
         assert_eq!(
-            fetch(&EN, &error),
+            fetch(Language::English, &error),
             "device limit reached for this subscription; remove an old device in your provider's panel\nannounce: Remove an old device"
         );
         assert_eq!(
             parse(
-                &RU,
+                Language::Russian,
                 &ParseError::DeviceLimit {
                     max_devices_reached: false,
                     not_supported: true,
                     announce: None,
                 }
             ),
-            RU.errors.device_id_rejected
+            tr_in(
+                Language::Russian,
+                "error-device-id-rejected",
+                &FluentArgs::new()
+            )
         );
     }
 
@@ -554,11 +809,11 @@ mod tests {
             notices: vec!["Subscription expired".into()],
         });
         assert_eq!(
-            fetch(&RU, &error),
+            fetch(Language::Russian, &error),
             "в подписке нет подходящих серверов\nуведомление провайдера: Subscription expired\nПропущено 1: транспорт xhttp не поддерживается\nПропущено 2: запись содержит уведомление провайдера"
         );
         assert_eq!(
-            fetch(&EN, &error),
+            fetch(Language::English, &error),
             "subscription contains no usable nodes\nnotice: Subscription expired\nSkipped 1: xhttp transport is not supported\nSkipped 2: record contains a provider notice"
         );
     }
@@ -568,34 +823,34 @@ mod tests {
         let error = FetchError::Timeout;
         assert_eq!(
             add_subscription(
-                &RU,
+                Language::Russian,
                 &AddFromUrlError::Fetch {
                     source: error,
                     message: "CLI only".into(),
                 }
             ),
-            RU.errors.fetch_timeout
+            tr_in(Language::Russian, "error-fetch-timeout", &FluentArgs::new())
         );
         assert_eq!(
             update_subscription(
-                &RU,
+                Language::Russian,
                 &UpdateSubscriptionError::Fetch {
                     source: FetchError::Timeout,
                     message: "CLI only".into(),
                 }
             ),
-            RU.errors.fetch_timeout
+            tr_in(Language::Russian, "error-fetch-timeout", &FluentArgs::new())
         );
     }
 
     #[test]
     fn russian_input_errors_use_plain_wording() {
         assert_eq!(
-            rule_input(&RU, &RuleInputError::SingleLabel),
+            rule_input(Language::Russian, &RuleInputError::SingleLabel),
             "введите полный домен, например example.com; для зоны целиком используйте *.ru"
         );
         assert_eq!(
-            dns_input(&RU, &DnsInputError::InvalidPort),
+            dns_input(Language::Russian, &DnsInputError::InvalidPort),
             "порт должен быть числом от 1 до 65535"
         );
     }
@@ -612,8 +867,8 @@ mod tests {
         let StoreError::Parse { source, .. } = &error else {
             panic!("expected a JSON parse error");
         };
-        let en = store(&EN, &error);
-        let ru = store(&RU, &error);
+        let en = store(Language::English, &error);
+        let ru = store(Language::Russian, &error);
         assert_eq!(
             en,
             format!(
@@ -648,9 +903,23 @@ mod tests {
                 expected: 2,
             },
         };
-        assert_eq!(store(&EN, &error), EN.errors.config_version);
-        assert_eq!(store(&RU, &error), RU.errors.config_version);
-        for language in [&EN, &RU] {
+        assert_eq!(
+            store(Language::English, &error),
+            tr_in(
+                Language::English,
+                "error-config-version",
+                &FluentArgs::new()
+            )
+        );
+        assert_eq!(
+            store(Language::Russian, &error),
+            tr_in(
+                Language::Russian,
+                "error-config-version",
+                &FluentArgs::new()
+            )
+        );
+        for language in [Language::English, Language::Russian] {
             let message = store(language, &error);
             assert!(message.contains("Rosetun"));
             assert!(!message.contains("{found}"));
@@ -672,7 +941,7 @@ mod tests {
         let error = Store::at(&path).load().unwrap_err();
         std::fs::remove_file(&path).unwrap();
         assert!(matches!(error, StoreError::Format { .. }));
-        for language in [&EN, &RU] {
+        for language in [Language::English, Language::Russian] {
             let message = store(language, &error);
             assert!(!message.contains("test-secret"));
             assert!(!message.contains("sub.example.com"));
@@ -682,16 +951,19 @@ mod tests {
     #[test]
     fn helper_codes_use_localized_titles_and_preserve_details() {
         let error = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, "boom"));
-        assert_eq!(client(&EN, &error), "the engine failed: boom");
-        assert_eq!(client(&RU, &error), "сбой ядра: boom");
+        assert_eq!(client(Language::English, &error), "the engine failed: boom");
+        assert_eq!(client(Language::Russian, &error), "сбой ядра: boom");
         let empty = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, ""));
-        assert_eq!(client(&EN, &empty), "the engine failed");
-        assert_eq!(client(&RU, &empty), "сбой ядра");
+        assert_eq!(client(Language::English, &empty), "the engine failed");
+        assert_eq!(client(Language::Russian, &empty), "сбой ядра");
         let transport = ClientError::Transport("x".to_owned());
-        assert_eq!(client(&RU, &transport), "нет связи со службой: x");
+        assert_eq!(
+            client(Language::Russian, &transport),
+            "нет связи со службой: x"
+        );
         let unsafe_detail = ClientError::Transport("socket\u{202e}failed".to_owned());
         assert_eq!(
-            client(&EN, &unsafe_detail),
+            client(Language::English, &unsafe_detail),
             "unable to contact the Rosetun service: socket failed"
         );
     }
@@ -699,11 +971,11 @@ mod tests {
     #[test]
     fn missing_selection_uses_the_regular_interface_string() {
         assert_eq!(
-            connect_request(&RU, &ConnectRequestError::SelectionMissing),
-            RU.select_server
+            connect_request(Language::Russian, &ConnectRequestError::SelectionMissing),
+            tr_in(Language::Russian, "select-server", &FluentArgs::new())
         );
         assert_eq!(
-            connect_request(&EN, &ConnectRequestError::RuleSetNotFound),
+            connect_request(Language::English, &ConnectRequestError::RuleSetNotFound),
             "the selected rule set does not exist"
         );
     }

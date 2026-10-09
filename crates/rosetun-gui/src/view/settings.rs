@@ -334,7 +334,10 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         });
     let parsed = form.parsed_dns();
     if let Err(error) = &parsed {
-        ui.colored_label(theme::ERROR, errors::dns_input(t(), error));
+        ui.colored_label(
+            theme::ERROR,
+            errors::dns_input(crate::i18n::language(), error),
+        );
     }
     ui.add_space(8.0);
     if widgets::button_fill(

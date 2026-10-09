@@ -6,7 +6,6 @@ use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::state::{Action, ExitLookup, ExitRoute, SessionPart, State, TunnelDelay, primary_label};
-use crate::strings::t;
 use crate::{display, strings, theme, widgets};
 
 use super::rose_button::{self, RosePhase};
@@ -85,7 +84,7 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
             ui.add_space(10.0);
             ui.add(
                 egui::Label::new(
-                    RichText::new(state.text(&errors::client(t(), error)))
+                    RichText::new(state.text(&errors::client(crate::i18n::language(), error)))
                         .small()
                         .color(theme::TEXT_DIM),
                 )

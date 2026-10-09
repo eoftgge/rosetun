@@ -13,7 +13,6 @@ use eframe::egui::{self, Align, RichText, Stroke};
 
 use crate::errors;
 use crate::state::{Action, Screen, SettingsSection, State};
-use crate::strings::t;
 use crate::{theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
@@ -81,7 +80,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                     if let Some(error) = &state.config_error
                         && widgets::dismissible_error(
                             ui,
-                            &state.text(&errors::config_worker(t(), error)),
+                            &state.text(&errors::config_worker(crate::i18n::language(), error)),
                         )
                     {
                         actions.push(Action::DismissConfigError);

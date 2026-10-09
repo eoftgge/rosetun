@@ -9,7 +9,6 @@ use crate::errors;
 use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
 use crate::state::{Action, PingResult, State, UpdateOutcome, shared_auto_update_hours};
-use crate::strings::t;
 use crate::{display, strings, theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -361,7 +360,7 @@ fn subscription_card(
                 if let Some(UpdateOutcome::Error(error)) = state.outcomes.get(&subscription.id)
                     && widgets::dismissible_error(
                         ui,
-                        &state.text(&errors::update_subscription(t(), error)),
+                        &state.text(&errors::update_subscription(crate::i18n::language(), error)),
                     )
                 {
                     actions.push(Action::DismissOutcome(subscription.id.clone()));
@@ -498,7 +497,7 @@ fn subscription_card(
                         ui.add(
                             egui::Label::new(state.text(&crate::i18n::skipped(
                                 *count,
-                                &errors::skip_reason(t(), reason),
+                                &errors::skip_reason(crate::i18n::language(), reason),
                             )))
                             .wrap(),
                         );

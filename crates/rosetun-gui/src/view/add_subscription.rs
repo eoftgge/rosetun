@@ -3,7 +3,6 @@ use rosetun_config::AppConfig;
 
 use crate::errors;
 use crate::state::{Action, AddDialog, redact};
-use crate::strings::t;
 use crate::{display, strings, theme, widgets};
 
 pub(crate) fn show(
@@ -58,7 +57,7 @@ pub(crate) fn show(
                                 RichText::new(form_error(
                                     config,
                                     dialog,
-                                    &errors::subscription_url(t(), error),
+                                    &errors::subscription_url(crate::i18n::language(), error),
                                 ))
                                 .color(theme::ERROR),
                             )
@@ -99,7 +98,7 @@ pub(crate) fn show(
                         RichText::new(form_error(
                             config,
                             dialog,
-                            &errors::add_subscription(t(), error),
+                            &errors::add_subscription(crate::i18n::language(), error),
                         ))
                         .color(theme::ERROR),
                     )

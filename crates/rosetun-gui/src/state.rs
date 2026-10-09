@@ -1763,7 +1763,7 @@ impl State {
                                 ..
                             }))
                         );
-                        let reason = errors::helper_command(t(), &error);
+                        let reason = errors::helper_command(crate::i18n::language(), &error);
                         let changed = baseline
                             .as_ref()
                             .zip(candidate.as_ref())
@@ -1801,7 +1801,7 @@ impl State {
                         }
                     }
                     Err(error) => {
-                        let storage = errors::rule_set(t(), &error);
+                        let storage = errors::rule_set(crate::i18n::language(), &error);
                         self.operation_error = Some(self.text(&fill(
                             t().apply_rollback_failed_template,
                             &[("reason", &reason), ("error", &storage)],
@@ -1826,7 +1826,8 @@ impl State {
                         }
                     }
                     Err(error) => {
-                        self.operation_error = Some(self.text(&errors::rule_set(t(), &error)));
+                        self.operation_error =
+                            Some(self.text(&errors::rule_set(crate::i18n::language(), &error)));
                     }
                 }
             }
@@ -1863,7 +1864,7 @@ impl State {
                     );
                 self.operation_error = result
                     .err()
-                    .map(|error| self.text(&errors::select_node(t(), &error)));
+                    .map(|error| self.text(&errors::select_node(crate::i18n::language(), &error)));
             }
             WorkerEvent::SelectRuleSet(result) => {
                 self.operations.rules = false;
@@ -1872,9 +1873,9 @@ impl State {
                         self.visible_status().map(|status| &status.state),
                         Some(ConnectionState::Connected)
                     );
-                self.operation_error = result
-                    .err()
-                    .map(|error| self.text(&errors::select_rule_set(t(), &error)));
+                self.operation_error = result.err().map(|error| {
+                    self.text(&errors::select_rule_set(crate::i18n::language(), &error))
+                });
             }
             WorkerEvent::CreateRuleSet(result) => {
                 self.operations.rules_edit = false;
@@ -1883,14 +1884,18 @@ impl State {
                         self.rule_screen.selected_set = Some(set.id);
                         self.rule_screen.name = None;
                     }
-                    Err(error) => self.name_error(errors::rule_set(t(), &error)),
+                    Err(error) => {
+                        self.name_error(errors::rule_set(crate::i18n::language(), &error))
+                    }
                 }
             }
             WorkerEvent::RenameRuleSet(result) => {
                 self.operations.rules_edit = false;
                 match result {
                     Ok(()) => self.rule_screen.name = None,
-                    Err(error) => self.name_error(errors::rule_set(t(), &error)),
+                    Err(error) => {
+                        self.name_error(errors::rule_set(crate::i18n::language(), &error))
+                    }
                 }
             }
             WorkerEvent::DeleteRuleSet(result) => {
@@ -1902,7 +1907,7 @@ impl State {
                 let message = result
                     .as_ref()
                     .err()
-                    .map(|error| self.text(&errors::process_list(t(), error)));
+                    .map(|error| self.text(&errors::process_list(crate::i18n::language(), error)));
                 if let Some(dialog) = &mut self.rule_screen.add
                     && dialog.load_request == Some(request)
                 {
@@ -1968,7 +1973,7 @@ impl State {
                 self.operations.kill_switch = false;
                 self.operation_error = result
                     .err()
-                    .map(|error| self.text(&errors::store(t(), &error)));
+                    .map(|error| self.text(&errors::store(crate::i18n::language(), &error)));
             }
             WorkerEvent::SetInterfaceScale(result) => self.finish_settings(result),
             WorkerEvent::SetLanguage(result) => self.finish_settings(result),
@@ -2118,7 +2123,7 @@ impl State {
                             ) {
                                 t().full_check_busy.to_owned()
                             } else {
-                                self.text(&errors::helper_command(t(), &error))
+                                self.text(&errors::helper_command(crate::i18n::language(), &error))
                             },
                         );
                     }
@@ -2152,7 +2157,8 @@ impl State {
                         }
                     }
                     Err(error) => {
-                        self.operation_error = Some(self.text(&errors::store(t(), &error)));
+                        self.operation_error =
+                            Some(self.text(&errors::store(crate::i18n::language(), &error)));
                     }
                 }
             }
@@ -2165,7 +2171,10 @@ impl State {
                         self.remove = None;
                     }
                     Err(error) => {
-                        let message = self.text(&errors::remove_subscription(t(), &error));
+                        let message = self.text(&errors::remove_subscription(
+                            crate::i18n::language(),
+                            &error,
+                        ));
                         if let Some(dialog) = &mut self.remove {
                             dialog.error = Some(message);
                         }
@@ -2177,7 +2186,10 @@ impl State {
                 match result {
                     Ok(()) => self.rename = None,
                     Err(error) => {
-                        let message = self.text(&errors::rename_subscription(t(), &error));
+                        let message = self.text(&errors::rename_subscription(
+                            crate::i18n::language(),
+                            &error,
+                        ));
                         if let Some(dialog) = &mut self.rename {
                             dialog.error = Some(message);
                         } else {
@@ -2188,9 +2200,9 @@ impl State {
             }
             WorkerEvent::MoveSubscription(result) => {
                 self.operations.moving_subscription = false;
-                self.operation_error = result
-                    .err()
-                    .map(|error| self.text(&errors::move_subscription(t(), &error)));
+                self.operation_error = result.err().map(|error| {
+                    self.text(&errors::move_subscription(crate::i18n::language(), &error))
+                });
             }
         }
     }
@@ -2208,7 +2220,7 @@ impl State {
         self.operations.rules_edit = false;
         self.operation_error = result
             .err()
-            .map(|error| self.text(&errors::rule_set(t(), &error)));
+            .map(|error| self.text(&errors::rule_set(crate::i18n::language(), &error)));
     }
 
     fn finish_dialog_rule_edit(&mut self, result: Result<(), rosetun_core::RuleSetError>) {
@@ -2221,7 +2233,7 @@ impl State {
                     self.rule_screen.clear_selection();
                 }
                 Err(error) => {
-                    let message = self.text(&errors::rule_set(t(), &error));
+                    let message = self.text(&errors::rule_set(crate::i18n::language(), &error));
                     if let Some(dialog) = &mut self.rule_screen.add {
                         dialog.busy = false;
                         dialog.error = Some(message);
@@ -2231,7 +2243,7 @@ impl State {
         } else {
             self.operation_error = result
                 .err()
-                .map(|error| self.text(&errors::rule_set(t(), &error)));
+                .map(|error| self.text(&errors::rule_set(crate::i18n::language(), &error)));
         }
     }
 
@@ -2245,7 +2257,7 @@ impl State {
         self.operations.settings = false;
         self.operation_error = result
             .err()
-            .map(|error| self.text(&errors::settings(t(), &error)));
+            .map(|error| self.text(&errors::settings(crate::i18n::language(), &error)));
     }
 
     fn load_processes(&mut self) -> Option<Job> {
@@ -2262,7 +2274,7 @@ impl State {
     fn helper_result(&mut self, result: Result<(), HelperCommandError>) {
         self.operation_error = result
             .err()
-            .map(|error| self.text(&errors::helper_command(t(), &error)));
+            .map(|error| self.text(&errors::helper_command(crate::i18n::language(), &error)));
     }
 
     fn update_result(
@@ -2755,7 +2767,7 @@ impl State {
                     let added = rosetun_core::temporary_rules(&existing, matchers, target).added;
                     if added.is_empty() {
                         let message = self.text(&errors::rule_set(
-                            t(),
+                            crate::i18n::language(),
                             &rosetun_core::RuleSetError::DuplicateRule,
                         ));
                         if let Some(dialog) = &mut self.rule_screen.add {
@@ -4310,8 +4322,11 @@ mod tests {
         assert_eq!(
             state.operation_error.as_deref(),
             Some(
-                errors::helper_command(t(), &HelperCommandError::Client(ClientError::Closed))
-                    .as_str()
+                errors::helper_command(
+                    crate::i18n::language(),
+                    &HelperCommandError::Client(ClientError::Closed)
+                )
+                .as_str()
             )
         );
         assert!(!state.pings.contains_key(&(id, NodeId::new("second"))));
@@ -5867,7 +5882,7 @@ mod tests {
         };
         let text = redact(
             &config,
-            &errors::update_subscription(&crate::strings::RU, &error),
+            &errors::update_subscription(crate::i18n::Language::Russian, &error),
         );
         assert!(!text.contains("private-token"));
         assert!(text.contains("https://sub.example.com/…"));
