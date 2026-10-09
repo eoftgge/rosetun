@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, TryLockError};
 use std::thread;
@@ -18,14 +18,15 @@ use rosetun_ipc::{
 use super::{Helper, node_with_endpoint, resolve_quiet, select_endpoint, wait_for_engine_ready};
 
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
-const RESOLVE_WORKERS: usize = 8;
+pub(super) const RESOLVE_WORKERS: usize = 8;
 const URL_TEST_WORKERS: usize = 16;
 static DNS_WORKERS: AtomicUsize = AtomicUsize::new(0);
+static APPLY_DNS_WORKER: AtomicBool = AtomicBool::new(false);
 
-struct DnsWorkerSlot;
+pub(super) struct DnsWorkerSlot;
 
 impl DnsWorkerSlot {
-    fn acquire() -> Option<Self> {
+    pub(super) fn acquire() -> Option<Self> {
         DNS_WORKERS
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < RESOLVE_WORKERS).then_some(count + 1)
@@ -38,6 +39,23 @@ impl DnsWorkerSlot {
 impl Drop for DnsWorkerSlot {
     fn drop(&mut self) {
         DNS_WORKERS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct ApplyDnsWorkerSlot;
+
+impl ApplyDnsWorkerSlot {
+    fn acquire() -> Option<Self> {
+        APPLY_DNS_WORKER
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for ApplyDnsWorkerSlot {
+    fn drop(&mut self) {
+        APPLY_DNS_WORKER.store(false, Ordering::Release);
     }
 }
 
@@ -300,6 +318,18 @@ fn probe_outcome<E>(result: Result<Duration, E>) -> ProbeOutcome {
 }
 
 pub(super) fn resolve_nodes(nodes: &[Node]) -> Vec<Option<IpAddr>> {
+    resolve_with_workers(nodes, RESOLVE_WORKERS, DnsWorkerSlot::acquire)
+}
+
+pub(super) fn resolve_for_apply(node: &Node) -> Option<IpAddr> {
+    resolve_with_workers(std::slice::from_ref(node), 1, ApplyDnsWorkerSlot::acquire)[0]
+}
+
+fn resolve_with_workers<S: Send + 'static>(
+    nodes: &[Node],
+    limit: usize,
+    acquire: impl Fn() -> Option<S>,
+) -> Vec<Option<IpAddr>> {
     let mut endpoints = vec![None; nodes.len()];
     let mut jobs = Vec::new();
     for (index, node) in nodes.iter().enumerate() {
@@ -316,11 +346,11 @@ pub(super) fn resolve_nodes(nodes: &[Node]) -> Vec<Option<IpAddr>> {
     let jobs = Arc::new(jobs);
     let next = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = mpsc::channel();
-    // DNS has no portable cancellation API; receive only until the overall deadline.
-    // At most eight detached workers can remain blocked inside the OS resolver.
+    // DNS has no portable cancellation API; bounded slots also limit workers
+    // left blocked inside the OS resolver after the deadline.
     let deadline = Instant::now() + RESOLVE_TIMEOUT;
-    for _ in 0..count.min(RESOLVE_WORKERS) {
-        let Some(slot) = DnsWorkerSlot::acquire() else {
+    for _ in 0..count.min(limit) {
+        let Some(slot) = acquire() else {
             break;
         };
         let jobs = Arc::clone(&jobs);

@@ -7,7 +7,7 @@ use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
     Helper, RECONNECT_BACKOFF, Reconnect, StartMode, node_with_endpoint, normalize_server,
-    probe::resolve_nodes, render_config, validate_temporary_rules,
+    probe::resolve_for_apply, render_config, validate_temporary_rules,
 };
 
 impl Helper {
@@ -56,7 +56,7 @@ impl Helper {
                     .filter(|cached| cached.server == normalize_server(&request.node.server))
                     .map(|cached| cached.address)
             })
-            .or_else(|| resolve_nodes(std::slice::from_ref(&request.node))[0])
+            .or_else(|| resolve_for_apply(&request.node))
             .ok_or_else(|| {
                 HelperError::new(
                     ErrorCode::RoutingFailed,

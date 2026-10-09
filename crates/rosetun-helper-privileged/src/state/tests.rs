@@ -2495,6 +2495,28 @@ fn apply_new_ip_and_named_node_updates_status_without_releasing_protection() {
 }
 
 #[test]
+fn apply_resolves_named_node_when_server_check_workers_are_full() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let slots: Vec<_> = (0..super::probe::RESOLVE_WORKERS)
+        .map(|_| super::probe::DnsWorkerSlot::acquire().expect("reserve check worker"))
+        .collect();
+    let mut changed = request.clone();
+    changed.node.id = NodeId::new("local-node");
+    changed.selection.node = changed.node.id.clone();
+    changed.node.server = "localhost".to_owned();
+
+    helper
+        .apply(&changed)
+        .expect("resolve outside check workers");
+    assert_eq!(helper.status().node, Some(changed.node.id));
+    assert_eq!(controls.spawns(), 2);
+    drop(slots);
+}
+
+#[test]
 fn apply_reuses_normalized_cached_server_name() {
     let (helper, controls, prepared, reverted) = supervised_helper(true);
     let mut request = connect_request();
