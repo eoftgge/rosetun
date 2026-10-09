@@ -282,6 +282,10 @@ function Publish-Rosetun {
     $unreachable.node.server = '192.0.2.1'
     $derived['request-unreachable.json'] = $unreachable
 
+    $deadServer = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+    $deadServer.node.server = '203.0.113.10'
+    $derived['request-dead-server.json'] = $deadServer
+
     # The same request with a single process rule: curl.exe goes direct and
     # everything else hits the default block. A request that gets through then
     # proves both that the rule matched and that direct traffic from the
@@ -544,6 +548,10 @@ function Disconnect-RosetunTunnel {
 
 function Request-RosetunShutdown {
     Invoke-RosetunCli 'shutdown'
+}
+
+function Get-RosetunGuestDir {
+    return $script:Config.GuestDir
 }
 
 function Get-RosetunState {

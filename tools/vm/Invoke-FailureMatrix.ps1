@@ -249,8 +249,8 @@ Set-RosetunEngineAvailable $true
 # The engine starts and the tunnel comes up, but nothing behind it answers.
 Write-Host 'Reconnect to an unreachable node...'
 $attempt = Connect-RosetunTunnel -RequestName 'request-unreachable.json' -Quiet
-Test-Step 'unreachable reconnect' 'connect fails on the DNS check' {
-    $attempt.ExitCode -ne 0 -and $attempt.Output -match 'DNS through the tunnel'
+Test-Step 'unreachable reconnect' 'connect fails before it can be used' {
+    $attempt.ExitCode -ne 0 -and $attempt.Output -match 'ServerUnreachable|DnsTimeout|DNS through the tunnel'
 }
 Test-Step 'unreachable reconnect' 'state stays FailedProtected' {
     Wait-RosetunState 'FailedProtected' -TimeoutSeconds 10
@@ -265,6 +265,21 @@ Test-Step 'disconnect' 'IPv6 works again' { Test-RosetunIpv6Egress }
 Test-Step 'disconnect' 'tunnel adapter is gone' {
     Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
 }
+
+Write-Host 'Five immediate disconnect/reconnect cycles...'
+for ($cycle = 1; $cycle -le 5; $cycle++) {
+    $attempt = Connect-RosetunTunnel -Quiet
+    Test-Step 'rapid reconnect' "cycle $cycle connects" -Note "exit $($attempt.ExitCode)" {
+        $attempt.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+    }
+    $attempt = Disconnect-RosetunTunnel
+    Test-Step 'rapid reconnect' "cycle $cycle disconnects" -Note "exit $($attempt.ExitCode)" {
+        $attempt.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Disconnected'
+    }
+}
+Test-Step 'rapid reconnect' 'direct egress works afterwards' { Test-RosetunDirectEgress }
+$adapterWaits = @(Get-RosetunHelperLog -Tail 200 | Select-String 'waiting for Windows to remove the previous tunnel adapter').Count
+Write-Host "Adapter-removal waits visible in the recent helper log: $adapterWaits"
 
 Write-Host 'Process rules...'
 Connect-RosetunTunnel -RequestName 'request-process-rules.json' | Out-Null
@@ -281,14 +296,85 @@ Wait-RosetunState 'Disconnected' | Out-Null
 
 Write-Host 'Connect to an unreachable node...'
 $attempt = Connect-RosetunTunnel -RequestName 'request-unreachable.json' -Quiet
-Test-Step 'unreachable connect' 'connect fails on the DNS check' {
-    $attempt.ExitCode -ne 0 -and $attempt.Output -match 'DNS through the tunnel'
+Test-Step 'unreachable connect' 'connect fails before it can be used' {
+    $attempt.ExitCode -ne 0 -and $attempt.Output -match 'ServerUnreachable|DnsTimeout|DNS through the tunnel'
 }
 Test-Step 'unreachable connect' 'state is Failed' { Wait-RosetunState 'Failed' -TimeoutSeconds 10 }
 Test-Step 'unreachable connect' 'direct egress works again' { Test-RosetunDirectEgress }
 Test-Step 'unreachable connect' 'tunnel adapter is gone' {
     Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
 }
+
+Write-Host 'Cancel a connection to a dead server after three seconds...'
+$cancel = Invoke-RosetunGuest -ScriptBlock {
+    param($dir)
+    $cli = Join-Path $dir 'rosetun.exe'
+    $request = Join-Path $dir 'request-dead-server.json'
+    $prefix = Join-Path $dir ('cancel-' + [guid]::NewGuid().ToString('N'))
+    $stdout = "$prefix.out"
+    $stderr = "$prefix.err"
+    function Read-TunnelState {
+        param($exe)
+        $output = & $exe status 2>&1 | Out-String
+        if ($output -match '(?m)^state: (\w+)') { return $Matches[1] }
+        return 'unknown'
+    }
+    $process = Start-Process -FilePath $cli -ArgumentList @('connect', "`"$request`"") `
+        -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
+    try {
+        $deadline = (Get-Date).AddSeconds(10)
+        $started = $false
+        do {
+            $started = (Read-TunnelState $cli) -eq 'Connecting'
+            if ($started) { break }
+            Start-Sleep -Milliseconds 100
+        } while ((Get-Date) -lt $deadline)
+        if ($started) { Start-Sleep -Seconds 3 }
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $output = & $cli disconnect 2>&1 | Out-String
+        $exit = $LASTEXITCODE
+        $state = Read-TunnelState $cli
+        while ($state -ne 'Disconnected' -and $watch.Elapsed.TotalSeconds -lt 2) {
+            Start-Sleep -Milliseconds 50
+            $state = Read-TunnelState $cli
+        }
+        $watch.Stop()
+        [pscustomobject]@{
+            Started        = $started
+            DisconnectExit = $exit
+            State          = $state
+            Seconds        = $watch.Elapsed.TotalSeconds
+        }
+    }
+    finally {
+        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+        Remove-Item $stdout, $stderr -Force -ErrorAction SilentlyContinue
+    }
+} -ArgumentList (Get-RosetunGuestDir)
+Test-Step 'cancel connect' 'reached Connecting before cancellation' { $cancel.Started }
+Test-Step 'cancel connect' 'disconnect succeeds' -Note "exit $($cancel.DisconnectExit)" {
+    $cancel.DisconnectExit -eq 0
+}
+Test-Step 'cancel connect' 'state becomes Disconnected in under one second' `
+    -Note "$($cancel.State) after $([math]::Round($cancel.Seconds, 2)) s" {
+    $cancel.State -eq 'Disconnected' -and $cancel.Seconds -lt 1
+}
+Test-Step 'cancel connect' 'direct egress works again' { Test-RosetunDirectEgress }
+Test-Step 'cancel connect' 'tunnel adapter is gone' {
+    Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
+}
+
+Write-Host 'Classify a dead server without waiting for the DNS deadline...'
+$watch = [Diagnostics.Stopwatch]::StartNew()
+$attempt = Connect-RosetunTunnel -RequestName 'request-dead-server.json' -Quiet
+$watch.Stop()
+Test-Step 'dead server' 'failure is ServerUnreachable within 20 s' `
+    -Note "exit $($attempt.ExitCode) after $([int]$watch.Elapsed.TotalSeconds) s" {
+    $attempt.ExitCode -ne 0 -and $attempt.Output -match 'ServerUnreachable' -and
+        $watch.Elapsed.TotalSeconds -le 20
+}
+Test-Step 'dead server' 'state is Failed' { Wait-RosetunState 'Failed' -TimeoutSeconds 5 }
+Test-Step 'dead server' 'direct egress works again' { Test-RosetunDirectEgress }
 
 Write-Host 'Shutdown with the tunnel up...'
 Connect-RosetunTunnel | Out-Null
