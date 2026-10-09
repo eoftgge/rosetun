@@ -18,6 +18,19 @@ pub fn backend() -> Box<dyn crate::RoutingBackend> {
     }
 }
 
+/// Whether Windows still has the adapter with this alias.
+pub fn tunnel_adapter_present(alias: &str) -> std::io::Result<bool> {
+    #[cfg(windows)]
+    {
+        windows::tunnel_adapter_present(alias)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = alias;
+        Ok(false)
+    }
+}
+
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
     #[cfg(windows)]
     {

@@ -107,6 +107,7 @@ struct Session {
     dns_timeout: Duration,
     dns_attempt_timeout: Duration,
     watchdog_timing: WatchdogTiming,
+    adapter_lookup: fn(&str) -> std::io::Result<bool>,
 }
 
 impl std::fmt::Debug for Helper {
@@ -147,6 +148,10 @@ impl Helper {
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
                 watchdog_timing: WATCHDOG_TIMING,
+                #[cfg(not(test))]
+                adapter_lookup: rosetun_routing::tunnel_adapter_present,
+                #[cfg(test)]
+                adapter_lookup: |_| Ok(false),
             }),
         }
     }
@@ -634,6 +639,13 @@ impl Session {
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
 
+        wait_for_previous_adapter(
+            &settings.tun.name,
+            Duration::from_secs(20),
+            Duration::from_millis(250),
+            self.adapter_lookup,
+        )?;
+
         if mode == StartMode::Fresh
             && let Some(guard) = self.guard.take()
             && let Err(error) = guard.routing.revert()
@@ -1023,6 +1035,50 @@ fn render_config(
         ));
     }
     Ok(config)
+}
+
+fn wait_for_previous_adapter(
+    alias: &str,
+    timeout: Duration,
+    interval: Duration,
+    mut lookup: impl FnMut(&str) -> std::io::Result<bool>,
+) -> Result<(), HelperError> {
+    let started = Instant::now();
+    let mut waiting = false;
+    loop {
+        match lookup(alias) {
+            Ok(false) => {
+                if waiting {
+                    tracing::info!(
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "previous tunnel adapter removed"
+                    );
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                tracing::warn!(%error, "could not look up previous tunnel adapter; continuing startup");
+                return Ok(());
+            }
+            Ok(true) => {}
+        }
+        if !waiting {
+            tracing::info!("waiting for Windows to remove the previous tunnel adapter");
+            waiting = true;
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            tracing::warn!(
+                elapsed_ms = elapsed.as_millis(),
+                "previous tunnel adapter removal timed out"
+            );
+            return Err(HelperError::new(
+                ErrorCode::EngineFailed,
+                "previous tunnel adapter is still present after the removal deadline",
+            ));
+        }
+        thread::sleep(interval.min(timeout.saturating_sub(elapsed)));
+    }
 }
 
 fn wait_for_engine_ready(process: &mut dyn EngineProcess) -> Result<(), HelperError> {

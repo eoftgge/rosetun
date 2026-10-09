@@ -4,6 +4,10 @@ mod policy;
 mod session;
 mod tunnel;
 
+pub(super) fn tunnel_adapter_present(alias: &str) -> std::io::Result<bool> {
+    tunnel::adapter_present(alias)
+}
+
 use session::DynamicSession;
 
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {

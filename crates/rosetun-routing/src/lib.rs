@@ -3,6 +3,7 @@ pub mod platform;
 
 pub use errors::RoutingError;
 pub use platform::backend;
+pub use platform::tunnel_adapter_present;
 
 /// Choose the physical default route: a probe engine without its own TUN would
 /// otherwise follow the connected session's default route back into that tunnel.

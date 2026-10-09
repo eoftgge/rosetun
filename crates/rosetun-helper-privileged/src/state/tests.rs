@@ -17,6 +17,46 @@ use super::*;
 
 static DNS_SLOTS: Mutex<()> = Mutex::new(());
 
+#[test]
+fn previous_adapter_waits_until_it_disappears() {
+    let mut calls = 0;
+    wait_for_previous_adapter(
+        "test-tun",
+        Duration::from_secs(1),
+        Duration::from_millis(1),
+        |_| {
+            calls += 1;
+            Ok(calls < 3)
+        },
+    )
+    .unwrap();
+    assert_eq!(calls, 3);
+}
+
+#[test]
+fn previous_adapter_wait_has_a_deadline() {
+    let started = Instant::now();
+    let result = wait_for_previous_adapter(
+        "test-tun",
+        Duration::from_millis(5),
+        Duration::from_millis(1),
+        |_| Ok(true),
+    );
+    assert_eq!(result.unwrap_err().code, ErrorCode::EngineFailed);
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn previous_adapter_lookup_errors_do_not_block_startup() {
+    wait_for_previous_adapter(
+        "test-tun",
+        Duration::from_secs(1),
+        Duration::from_millis(1),
+        |_| Err(std::io::Error::other("test lookup failure")),
+    )
+    .unwrap();
+}
+
 fn reserve_apply_worker() -> super::probe::ApplyDnsWorkerSlot {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

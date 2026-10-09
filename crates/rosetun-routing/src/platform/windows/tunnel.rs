@@ -15,6 +15,24 @@ use windows_sys::Win32::{
 
 use crate::{RoutingError, TunnelInterface};
 
+pub(super) fn adapter_present(alias: &str) -> std::io::Result<bool> {
+    if alias.contains('\0') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "adapter alias contains NUL",
+        ));
+    }
+    let alias = wide(alias);
+    let mut luid = NET_LUID_LH::default();
+    // SAFETY: alias is NUL-terminated and luid is writable for the synchronous call.
+    let status = unsafe { ConvertInterfaceAliasToLuid(alias.as_ptr(), &mut luid) };
+    match status {
+        0 => Ok(true),
+        windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER => Ok(false),
+        _ => Err(std::io::Error::from_raw_os_error(status as i32)),
+    }
+}
+
 /// Windows-specific identity accepted by
 /// `FWPM_CONDITION_IP_LOCAL_INTERFACE`.
 ///
