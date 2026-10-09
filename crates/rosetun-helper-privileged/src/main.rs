@@ -3,6 +3,8 @@
 #[cfg(windows)]
 mod data_dir;
 #[cfg(windows)]
+mod install_dir;
+#[cfg(windows)]
 mod log_file;
 mod log_gate;
 #[cfg(windows)]
@@ -24,15 +26,15 @@ use tracing_subscriber::prelude::*;
 use crate::log_gate::VerboseGate;
 use crate::server::{Helper, Server};
 
-const USAGE: &str =
-    "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service]";
+const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --verify-install-dir <path>]";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
     Console,
     Service,
     InstallService,
     UninstallService,
+    VerifyInstallDir(std::path::PathBuf),
 }
 
 fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> {
@@ -42,6 +44,7 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
         [arg] if arg == "--service" => Ok(Mode::Service),
         [arg] if arg == "--install-service" => Ok(Mode::InstallService),
         [arg] if arg == "--uninstall-service" => Ok(Mode::UninstallService),
+        [arg, path] if arg == "--verify-install-dir" => Ok(Mode::VerifyInstallDir(path.into())),
         _ => Err(USAGE.to_owned()),
     }
 }
@@ -66,7 +69,7 @@ fn main() -> std::process::ExitCode {
 
     #[cfg(not(windows))]
     if mode != Mode::Console {
-        eprintln!("--service and its install flags are Windows only");
+        eprintln!("service and install-directory commands are Windows only");
         return std::process::ExitCode::from(2);
     }
 
@@ -78,8 +81,33 @@ fn main() -> std::process::ExitCode {
         Mode::InstallService => service_command(service::install()),
         #[cfg(windows)]
         Mode::UninstallService => service_command(service::uninstall()),
+        #[cfg(windows)]
+        Mode::VerifyInstallDir(path) => {
+            install_command(&path, "safe", install_dir::verify(&path, true))
+        }
         #[cfg(not(windows))]
         _ => unreachable!("non-Windows modes were rejected above"),
+    }
+}
+
+#[cfg(windows)]
+fn install_command(
+    path: &Path,
+    action: &str,
+    result: Result<(), install_dir::Failure>,
+) -> std::process::ExitCode {
+    match result {
+        Ok(()) => {
+            println!(
+                "install directory {action}: {}",
+                install_dir::one_line(&path.to_string_lossy())
+            );
+            std::process::ExitCode::SUCCESS
+        }
+        Err(error) => {
+            println!("{}", error.message());
+            std::process::ExitCode::from(error.reason as u8)
+        }
     }
 }
 
@@ -214,6 +242,11 @@ mod tests {
         assert_eq!(mode(&["--service"]), Ok(Mode::Service));
         assert_eq!(mode(&["--install-service"]), Ok(Mode::InstallService));
         assert_eq!(mode(&["--uninstall-service"]), Ok(Mode::UninstallService));
+        assert_eq!(
+            mode(&["--verify-install-dir", r"D:\Example\Rosetun"]),
+            Ok(Mode::VerifyInstallDir(r"D:\Example\Rosetun".into()))
+        );
+        assert_eq!(mode(&["--verify-install-dir"]), Err(USAGE.to_owned()));
         assert_eq!(mode(&["--unknown"]), Err(USAGE.to_owned()));
         assert_eq!(
             mode(&["--service", "--install-service"]),
