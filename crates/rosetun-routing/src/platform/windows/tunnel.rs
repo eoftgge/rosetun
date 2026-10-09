@@ -30,7 +30,7 @@ pub(super) fn adapter_present(alias: &str) -> std::io::Result<bool> {
         0 => Ok(find_adapter(AF_UNSPEC as u32, |adapter| unsafe {
             (adapter.Luid.Value == luid.Value).then_some(())
         })?
-            .is_some()),
+        .is_some()),
         windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER => Ok(false),
         _ => Err(std::io::Error::from_raw_os_error(status as i32)),
     }

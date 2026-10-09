@@ -26,6 +26,15 @@ const MENU_GAP: f32 = 12.0;
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     let text_edit_focused = ui.ctx().text_edit_focused();
+    let pending_apply = state.config_ready
+        && state
+            .visible_status()
+            .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
+        && state.rule_screen.selected_set.is_some()
+        && state.config.active_rule_set == state.rule_screen.selected_set
+        && state.pending_reconnect(SessionPart::Rules);
+    let can_apply = state.can_apply();
+    let mut apply_clicked = false;
     egui::Sides::new().shrink_left().wrap().show(
         ui,
         |ui| {
@@ -35,6 +44,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                     egui::Label::new(RichText::new(t().rules_subtitle).color(theme::TEXT_MUTED))
                         .wrap(),
                 );
+                if pending_apply {
+                    ui.add_space(6.0);
+                    let (_, link) = apply_notice(ui, can_apply);
+                    apply_clicked = link.is_some_and(|link| link.clicked());
+                }
             });
         },
         |ui| {
@@ -43,6 +57,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
             }
         },
     );
+    if apply_clicked {
+        actions.push(Action::Apply);
+    }
     ui.add_space(20.0);
     if !state.config_ready {
         ui.colored_label(theme::TEXT_DIM, t().loading);
@@ -66,23 +83,6 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         widgets::button_fill(ui, t().new_rule_button, false);
         return;
     };
-    if state
-        .visible_status()
-        .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
-        && state.config.active_rule_set.as_ref() == Some(&set.id)
-        && state.pending_reconnect(SessionPart::Rules)
-    {
-        widgets::card_frame()
-            .inner_margin(egui::Margin::symmetric(16, 8))
-            .show(ui, |ui| {
-                if state.can_apply() {
-                    apply_notice(ui, actions);
-                } else {
-                    ui.colored_label(theme::ROSE_LIGHT, t().next_connect);
-                }
-            });
-        ui.add_space(20.0);
-    }
     template_section(ui, state, set, actions);
     ui.add_space(20.0);
     let temporary = if state.config.active_rule_set.as_ref() == Some(&set.id) {
@@ -320,17 +320,21 @@ fn selection_shortcuts(
     }
 }
 
-fn apply_notice(ui: &mut egui::Ui, actions: &mut Vec<Action>) -> (egui::Response, egui::Response) {
-    ui.spacing_mut().interact_size.y = 28.0;
+fn apply_notice(ui: &mut egui::Ui, can_apply: bool) -> (egui::Response, Option<egui::Response>) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 12.0;
-        let label = ui.colored_label(theme::ROSE_LIGHT, t().apply_on_leave);
-        let button =
-            widgets::button_fill_compact(ui, t().apply_now, true).on_hover_text(t().apply_hint);
-        if button.clicked() {
-            actions.push(Action::Apply);
-        }
-        (label, button)
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
+        ui.painter()
+            .circle_filled(dot.center(), 3.0, theme::ROSE_LIGHT);
+        let text = if can_apply {
+            t().apply_on_leave
+        } else {
+            t().next_connect
+        };
+        let label = ui.label(RichText::new(text).small().color(theme::TEXT_MUTED));
+        let link =
+            can_apply.then(|| widgets::link(ui, t().apply_now, true).on_hover_text(t().apply_hint));
+        (label, link)
     })
     .inner
 }
@@ -1967,21 +1971,32 @@ mod tests {
     }
 
     #[test]
-    fn apply_notice_centers_text_against_the_button() {
+    fn apply_notice_centers_text_against_the_link() {
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let (label, button) = widgets::card_frame()
-                    .inner_margin(egui::Margin::symmetric(16, 8))
-                    .show(ui, |ui| apply_notice(ui, &mut Vec::new()))
-                    .inner;
+                let (label, link) = apply_notice(ui, true);
+                let link = link.expect("an applicable change shows the link");
                 assert!(
-                    (label.rect.center().y - button.rect.center().y).abs() < 1.0,
-                    "text: {:?}, button: {:?}",
+                    (label.rect.center().y - link.rect.center().y).abs() < 1.0,
+                    "text: {:?}, link: {:?}",
                     label.rect,
-                    button.rect
+                    link.rect
                 );
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn apply_notice_has_no_link_when_the_change_waits_for_reconnect() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (_, link) = apply_notice(ui, false);
+                assert!(link.is_none());
             });
         });
         output.textures_delta.clear();
