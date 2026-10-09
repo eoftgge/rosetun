@@ -4,7 +4,9 @@ Requires Rust 1.96 or newer, Inno Setup 6.3 or newer, `cargo-about` 0.9.2 (`carg
 
 From the repository root, run `./installer/build.ps1` in PowerShell. The result is `target/installer/rosetun-<version>-setup.exe`; the build prints its path and SHA-256. The script checks the pinned sing-box version against the Rust engine and verifies the downloaded executable's SHA-256 before packaging it. A verified copy and its `LICENSE` are reused on subsequent builds. The version comes from `Cargo.toml`; a `-alpha.N` suffix appears only in textual version fields, not the numeric file version.
 
-The installer places these files under `C:\Program Files\Rosetun`:
+The default install folder is `C:\Program Files\Rosetun`. On a first install, you may select another safe folder on a local drive; upgrades reuse the previous folder without showing the folder page. The SYSTEM service runs both its helper and `sing-box.exe` from this folder, so a standard user must not be able to modify it or its parents. The installer checks the folder before copying anything, assigns Administrators ownership, and applies a non-inheriting DACL: SYSTEM and Administrators have full access, while Users can read and run the installed files. Service data remains readable only by SYSTEM and Administrators. An unsafe existing installation cannot be upgraded: uninstall it and reinstall in a safe folder.
+
+The installer places these files in the chosen folder:
 
 | Path | Purpose |
 | --- | --- |
@@ -15,7 +17,26 @@ The installer places these files under `C:\Program Files\Rosetun`:
 | `licenses/` | Rosetun and sing-box licenses, sing-box source information, bundled font licenses, and Rust crate license notices |
 | `data/` | Service data, created by the service and accessible only to administrators; its log is `data/logs/helper.log` |
 
-The `Rosetun` service starts automatically and restarts after a failure. From an elevated PowerShell session, `& 'C:\Program Files\Rosetun\rosetun-helper-privileged.exe' --install-service` installs or updates it, and the same executable with `--uninstall-service` removes it. Upgrades stop the GUI and service before replacing files; uninstall removes the service and installation directory but preserves `%APPDATA%\Rosetun`.
+The `Rosetun` service starts automatically and restarts after a failure. From an elevated PowerShell session, `& 'C:\Program Files\Rosetun\rosetun-helper-privileged.exe' --install-service` installs or updates it, and the same executable with `--uninstall-service` removes it. Use the chosen folder instead of `C:\Program Files\Rosetun` if necessary. Upgrades stop the GUI and service before replacing files. At service startup, an unsafe folder is logged as a warning, but the service continues.
+
+The installer runs a temporary copy of the helper with `--verify-install-dir <path>` and `--secure-install-dir <path>` before installing files. Verification is read-only. It requires an absolute drive path below the volume root, a fixed local drive with persistent ACLs, and a location outside user profiles and the Windows directory. No existing path component may be a junction or symlink; existing parents must be owned by SYSTEM, Administrators or TrustedInstaller and must not grant standard users the right to modify, delete or rename them. A root ACL that merely permits creating folders is acceptable. The target must be empty or contain an earlier Rosetun helper, and an earlier installation's own folder must also pass the ownership and ACL checks. The secure command atomically creates missing folders with protected ACLs, replaces an existing empty target with a freshly protected directory so old writable handles cannot survive at the installation path, and resets stale permissions on old contents; errors stop installation.
+
+The verifier prints one reason and affected path to stdout and returns:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Safe to install |
+| `2` | Invalid, relative, UNC, or volume-root path |
+| `3` | Not a local fixed drive |
+| `4` | No persistent filesystem ACLs |
+| `5` | Inside the profiles or Windows directory |
+| `6` | Reparse point in the path |
+| `7` | Untrusted owner of an existing parent or installation |
+| `8` | An existing parent or installation is writable by standard users |
+| `9` | Occupied folder without an earlier Rosetun installation |
+| `10` | Inspection or security operation failed |
+
+`--secure-install-dir` returns `0` on success or a nonzero verification/operation code. A silent install, including `/VERYSILENT /DIR=C:\Example\Rosetun`, runs the same checks and fails with a nonzero setup exit code on an unsafe directory. Uninstall removes the service and installation tree, including `{app}\data`. In interactive removal an unchecked-by-default option can additionally delete settings, subscriptions and rules in the displayed `{userappdata}\Rosetun` folder of the account running the elevated uninstaller. Other accounts' data stays; `/SILENT` and `/VERYSILENT` never delete user data.
 
 The installer is not signed yet, so SmartScreen may warn when it starts: choose **More info** → **Run anyway**. Test installation, upgrades, connectivity and removal on a clean VM snapshot, without the matrix test rig.
 
