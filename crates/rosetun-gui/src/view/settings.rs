@@ -3,6 +3,7 @@ use rosetun_config::LanguageSetting;
 use rosetun_core::DnsPreset;
 
 use crate::brand;
+use crate::display;
 use crate::errors;
 use crate::state::{AboutFolder, Action, SessionPart, SettingsSection, State, now_unix};
 use crate::strings::t;
@@ -476,6 +477,115 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 });
             });
         });
+    });
+    ui.add_space(theme::SECTION_GAP);
+    widgets::settings_card(ui, |card| {
+        card.body(|ui| {
+            ui.label(
+                RichText::new(t().updates_title)
+                    .font(egui::FontId::new(
+                        17.0,
+                        egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+                    ))
+                    .color(theme::TEXT),
+            );
+            if let Some(release) = state.available_update() {
+                ui.add_space(14.0);
+                let width = ui.available_width();
+                egui::Frame::new()
+                    .fill(theme::INPUT)
+                    .stroke(egui::Stroke::new(1.0, theme::ROSE_DARK))
+                    .corner_radius(theme::RADIUS)
+                    .inner_margin(16)
+                    .show(ui, |ui| {
+                        ui.set_min_width((width - 32.0).max(0.0));
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 14.0;
+                            let (icon, _) = ui
+                                .allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+                            let center = icon.center();
+                            let painter = ui.painter();
+                            painter.circle_stroke(
+                                center,
+                                15.5,
+                                egui::Stroke::new(1.0, theme::ROSE),
+                            );
+                            for (start, end) in [
+                                (
+                                    egui::pos2(center.x, center.y + 7.0),
+                                    egui::pos2(center.x, center.y - 7.0),
+                                ),
+                                (
+                                    egui::pos2(center.x - 5.0, center.y - 2.0),
+                                    egui::pos2(center.x, center.y - 7.0),
+                                ),
+                                (
+                                    egui::pos2(center.x + 5.0, center.y - 2.0),
+                                    egui::pos2(center.x, center.y - 7.0),
+                                ),
+                            ] {
+                                painter.line_segment(
+                                    [start, end],
+                                    egui::Stroke::new(1.5, theme::ROSE_LIGHT),
+                                );
+                            }
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    RichText::new(t().update_available(&release.version))
+                                        .font(egui::FontId::new(
+                                            16.0,
+                                            egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+                                        ))
+                                        .color(theme::TEXT),
+                                );
+                                let detail = format!(
+                                    "{}{}",
+                                    if release.prerelease {
+                                        t().update_prerelease
+                                    } else {
+                                        ""
+                                    },
+                                    t().update_installer_detail,
+                                );
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(detail).small().color(theme::TEXT_MUTED),
+                                    )
+                                    .wrap(),
+                                );
+                                ui.add_space(8.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    if widgets::button_fill(ui, t().update_open_page, true)
+                                        .clicked()
+                                    {
+                                        display::open_web_link(ui.ctx(), &release.url);
+                                    }
+                                    if widgets::outline_button(
+                                        ui,
+                                        t().update_skip,
+                                        state.can_edit_settings(),
+                                    )
+                                    .clicked()
+                                    {
+                                        actions.push(Action::SkipVersion);
+                                    }
+                                });
+                            });
+                        });
+                    });
+            }
+        });
+        let (status, detail) = update_status(state, now_unix(), t());
+        card.row(&status, Some(&detail), |ui| {
+            let response =
+                widgets::outline_button(ui, t().check_updates_now, state.can_check_updates());
+            if response.clicked() {
+                actions.push(Action::CheckUpdatesNow);
+            }
+            if state.update_check_blocked_by_connection() {
+                response.on_disabled_hover_text(t().check_updates_unavailable);
+            }
+        });
         let mut check_updates = state.config.interface.check_updates;
         if card
             .toggle(
@@ -488,41 +598,10 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         {
             actions.push(Action::SetCheckUpdates(check_updates));
         }
+    });
+    ui.add_space(theme::SECTION_GAP);
+    widgets::settings_card(ui, |card| {
         card.body(|ui| {
-            let response =
-                widgets::outline_button(ui, t().check_updates_now, state.can_check_updates());
-            if response.clicked() {
-                actions.push(Action::CheckUpdatesNow);
-            }
-            if state.update_check_blocked_by_connection() {
-                response.on_disabled_hover_text(t().check_updates_unavailable);
-            }
-        });
-        card.body(|ui| {
-            if let Some(release) = state.available_update() {
-                egui::Frame::new()
-                    .fill(theme::ROSE_LIGHT)
-                    .corner_radius(8.0)
-                    .inner_margin(12.0)
-                    .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(t().update_available(&release.version))
-                                .color(theme::TEXT),
-                        );
-                        ui.horizontal(|ui| {
-                            ui.hyperlink_to(t().update_open, &release.url);
-                            if ui
-                                .add_enabled(
-                                    state.can_edit_settings(),
-                                    egui::Button::new(t().update_skip).frame(false),
-                                )
-                                .clicked()
-                            {
-                                actions.push(Action::SkipVersion);
-                            }
-                        });
-                    });
-            }
             if let Some(folder) = &state.settings_screen.config_folder {
                 about_path(
                     ui,
@@ -554,17 +633,67 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     actions,
                 );
             }
-
-            ui.add(
-                egui::Label::new(
-                    RichText::new(t().license_notice)
-                        .small()
-                        .color(theme::TEXT_MUTED),
-                )
-                .wrap(),
-            );
         });
     });
+    ui.add_space(theme::SECTION_GAP);
+    ui.add(
+        egui::Label::new(
+            RichText::new(t().license_notice)
+                .small()
+                .color(theme::TEXT_DIM),
+        )
+        .wrap(),
+    );
+}
+
+fn update_status(state: &State, now: u64, s: &strings::Strings) -> (String, String) {
+    let age = state
+        .config
+        .interface
+        .last_update_check
+        .map(|timestamp| s.updated_ago(timestamp, now));
+    if state.update_check_pending {
+        return (
+            s.update_checking.to_owned(),
+            s.update_checking_detail.to_owned(),
+        );
+    }
+    if state.update_check_failed {
+        let detail = if state.config.interface.check_updates {
+            s.update_failed_detail
+        } else {
+            s.update_check_manually
+        };
+        return (s.update_failed.to_owned(), detail.to_owned());
+    }
+    if !state.config.interface.check_updates {
+        let detail = age.as_ref().map_or_else(
+            || s.update_check_manually.to_owned(),
+            |age| s.update_last_checked(age),
+        );
+        return (s.update_checks_off.to_owned(), detail);
+    }
+    if let Some(release) = &state.newest_release {
+        if state.available_update().is_none() {
+            let detail = age.as_ref().map_or_else(
+                || s.update_skipped_next.to_owned(),
+                |age| s.update_skipped_detail(age),
+            );
+            return (s.update_skipped(&release.version), detail);
+        }
+        let detail = age.as_ref().map_or_else(
+            || s.update_not_checked_detail.to_owned(),
+            |age| s.update_checked(age),
+        );
+        return (s.update_found.to_owned(), detail);
+    }
+    match age {
+        Some(age) => (s.update_up_to_date.to_owned(), s.update_checked(&age)),
+        None => (
+            s.update_not_checked.to_owned(),
+            s.update_not_checked_detail.to_owned(),
+        ),
+    }
 }
 
 fn about_path(
@@ -598,4 +727,66 @@ fn about_path(
         #[cfg(not(windows))]
         let _ = (actions, folder);
     });
+}
+
+#[cfg(test)]
+mod update_status_tests {
+    use super::{State, update_status};
+    use crate::strings::{EN, RU};
+    use rosetun_core::Release;
+
+    #[test]
+    fn status_prioritizes_checking_failure_and_disabled_checks() {
+        let mut state = State::default();
+        state.config_ready = true;
+        assert_eq!(update_status(&state, 200, &EN).0, "Not checked yet");
+        state.config.interface.last_update_check = Some(80);
+        assert_eq!(update_status(&state, 200, &EN).1, "Checked 2 minutes ago.");
+        state.newest_release = Some(Release {
+            version: "999.0.0-alpha.4".into(),
+            url: "https://example.com/release".into(),
+            prerelease: true,
+        });
+        assert_eq!(update_status(&state, 200, &EN).0, "New version available");
+        state.config.interface.skipped_version = Some("999.0.0-alpha.4".into());
+        assert_eq!(
+            update_status(&state, 200, &EN),
+            (
+                "Version 999.0.0-alpha.4 skipped".into(),
+                "We'll tell you about the next one. Checked 2 minutes ago.".into(),
+            )
+        );
+        state.config.interface.check_updates = false;
+        assert_eq!(
+            update_status(&state, 200, &EN).0,
+            "Automatic checks are off"
+        );
+        state.update_check_failed = true;
+        assert_eq!(
+            update_status(&state, 200, &EN),
+            ("Couldn't check".into(), "You can check manually.".into(),)
+        );
+        state.update_check_pending = true;
+        assert_eq!(update_status(&state, 200, &EN).0, "Checking…");
+    }
+
+    #[test]
+    fn russian_status_uses_the_same_age_and_skipped_version() {
+        let mut state = State::default();
+        state.config_ready = true;
+        state.config.interface.last_update_check = Some(80);
+        state.config.interface.skipped_version = Some("999.0.0-alpha.4".into());
+        state.newest_release = Some(Release {
+            version: "999.0.0-alpha.4".into(),
+            url: "https://example.com/release".into(),
+            prerelease: true,
+        });
+        assert_eq!(
+            update_status(&state, 200, &RU),
+            (
+                "Версия 999.0.0-alpha.4 пропущена".into(),
+                "Напомним, когда выйдет следующая. Проверено 2 минуты назад.".into(),
+            )
+        );
+    }
 }

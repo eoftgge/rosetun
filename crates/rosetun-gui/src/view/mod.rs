@@ -143,6 +143,7 @@ fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             title,
             state.settings_screen.section == section,
             section == SettingsSection::Service && service_warning(state),
+            section == SettingsSection::About && state.available_update().is_some(),
         ) {
             actions.push(Action::OpenSettingsSection(section));
         }
@@ -161,7 +162,13 @@ fn service_warning(state: &State) -> bool {
     state.helper_error.is_some()
 }
 
-fn settings_nav_item(ui: &mut egui::Ui, label: &str, selected: bool, warning: bool) -> bool {
+fn settings_nav_item(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: bool,
+    warning: bool,
+    update: bool,
+) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 42.0), egui::Sense::click());
     let fill = if selected {
@@ -200,6 +207,13 @@ fn settings_nav_item(ui: &mut egui::Ui, label: &str, selected: bool, warning: bo
             crate::strings::ERROR_MARK,
             egui::TextStyle::Body.resolve(ui.style()),
             theme::ERROR,
+        );
+    }
+    if update {
+        ui.painter().circle_filled(
+            egui::pos2(rect.right() - 14.0, rect.center().y),
+            3.0,
+            theme::ROSE_LIGHT,
         );
     }
     response.widget_info(|| {

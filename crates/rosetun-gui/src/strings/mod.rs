@@ -247,9 +247,27 @@ pub(crate) struct Strings {
     pub(crate) check_updates_detail: &'static str,
     pub(crate) check_updates_now: &'static str,
     pub(crate) check_updates_unavailable: &'static str,
+    pub(crate) updates_title: &'static str,
     pub(crate) update_available: &'static str,
-    pub(crate) update_open: &'static str,
+    pub(crate) update_prerelease: &'static str,
+    pub(crate) update_installer_detail: &'static str,
+    pub(crate) update_open_page: &'static str,
     pub(crate) update_skip: &'static str,
+    pub(crate) update_checking: &'static str,
+    pub(crate) update_checking_detail: &'static str,
+    pub(crate) update_found: &'static str,
+    pub(crate) update_checked: &'static str,
+    pub(crate) update_skipped: &'static str,
+    pub(crate) update_skipped_next: &'static str,
+    pub(crate) update_skipped_detail: &'static str,
+    pub(crate) update_up_to_date: &'static str,
+    pub(crate) update_failed: &'static str,
+    pub(crate) update_failed_detail: &'static str,
+    pub(crate) update_checks_off: &'static str,
+    pub(crate) update_last_checked: &'static str,
+    pub(crate) update_check_manually: &'static str,
+    pub(crate) update_not_checked: &'static str,
+    pub(crate) update_not_checked_detail: &'static str,
     pub(crate) license_notice: &'static str,
     pub(crate) licenses_folder: &'static str,
     pub(crate) configuration_folder: &'static str,
@@ -579,6 +597,22 @@ impl Strings {
 
     pub(crate) fn update_available(&self, version: &str) -> String {
         fill(self.update_available, &[("version", version)])
+    }
+
+    pub(crate) fn update_skipped(&self, version: &str) -> String {
+        fill(self.update_skipped, &[("version", version)])
+    }
+
+    pub(crate) fn update_checked(&self, age: &str) -> String {
+        fill(self.update_checked, &[("age", age)])
+    }
+
+    pub(crate) fn update_last_checked(&self, age: &str) -> String {
+        fill(self.update_last_checked, &[("age", age)])
+    }
+
+    pub(crate) fn update_skipped_detail(&self, age: &str) -> String {
+        fill(self.update_skipped_detail, &[("age", age)])
     }
 
     pub(crate) fn template_name(&self, template: RuleTemplate) -> &'static str {

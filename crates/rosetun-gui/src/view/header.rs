@@ -130,7 +130,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui.painter().circle_filled(
                         egui::pos2(response.rect.right() - 8.0, response.rect.top() + 10.0),
                         3.0,
-                        theme::ROSE,
+                        theme::ROSE_LIGHT,
                     );
                 }
                 if selected {
