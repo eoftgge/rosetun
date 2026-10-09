@@ -1127,7 +1127,7 @@ fn fresh_dns_timeout_stops_engine_and_releases_protection() {
         assert!(error.message.contains("last: timeout"));
         assert!(matches!(
             helper.status().state,
-            ConnectionState::Failed { ref reason } if reason == &error.message
+            ConnectionState::Failed { ref reason, .. } if reason == &error.message
         ));
         assert_eq!(stopped.load(Ordering::Acquire), 1);
         assert_eq!(reverted.load(Ordering::Acquire), 1);
@@ -1247,7 +1247,7 @@ fn protected_dns_timeout_stops_engine_but_retains_guard_and_cache() {
     assert!(error.message.contains("last: timeout"));
     assert!(matches!(
         helper.status().state,
-        ConnectionState::FailedProtected { ref reason } if reason == &error.message
+        ConnectionState::FailedProtected { ref reason, .. } if reason == &error.message
     ));
     assert_eq!(prepared.load(Ordering::Acquire), 1);
     assert_eq!(authorized.load(Ordering::Acquire), 1);
@@ -1512,7 +1512,7 @@ fn supervisor_marks_the_session_failed_when_reconnect_is_disabled() {
 
     assert!(matches!(
         status.state,
-        ConnectionState::Failed { ref reason } if reason == "the engine process exited"
+        ConnectionState::Failed { ref reason, .. } if reason == "the engine process exited"
     ));
     assert!(status.since_unix.is_none());
 }
@@ -1536,7 +1536,7 @@ fn connect_rejects_an_engine_that_exits_before_startup_readiness() {
     let status = helper.status();
     assert!(matches!(
         status.state,
-        ConnectionState::Failed { ref reason }
+        ConnectionState::Failed { ref reason, .. }
             if reason == "engine exited before startup readiness"
     ));
     assert!(status.since_unix.is_none());
@@ -1576,7 +1576,7 @@ fn supervisor_reports_failed_protected_when_reconnect_is_disabled() {
     let status = helper.status();
     assert!(matches!(
         status.state,
-        ConnectionState::FailedProtected { ref reason }
+        ConnectionState::FailedProtected { ref reason, .. }
             if reason == "the engine process exited"
     ));
     assert_eq!(
@@ -2131,6 +2131,7 @@ fn protected_helper(
     }
     helper.with_status(|status| {
         status.state = ConnectionState::FailedProtected {
+            failure_kind: None,
             reason: "old failure".into(),
         };
     });
@@ -2177,6 +2178,7 @@ fn protected_reconnect_replaces_the_traffic_monitor_and_control() {
 
     helper.with_status(|status| {
         status.state = ConnectionState::FailedProtected {
+            failure_kind: None,
             reason: "engine failed".to_owned(),
         };
     });

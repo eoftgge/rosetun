@@ -105,6 +105,7 @@ mod tests {
             primary_action(
                 true,
                 &status(ConnectionState::Failed {
+                    failure_kind: None,
                     reason: "broken".to_owned(),
                 }),
                 true,
@@ -116,6 +117,7 @@ mod tests {
             primary_action(
                 true,
                 &status(ConnectionState::FailedProtected {
+                    failure_kind: None,
                     reason: "blocked".to_owned(),
                 }),
                 true,
@@ -133,9 +135,11 @@ mod tests {
             ConnectionState::Connected,
             ConnectionState::Reconnecting,
             ConnectionState::Failed {
+                failure_kind: None,
                 reason: "broken".to_owned(),
             },
             ConnectionState::FailedProtected {
+                failure_kind: None,
                 reason: "blocked".to_owned(),
             },
         ] {
@@ -147,6 +151,7 @@ mod tests {
         assert_eq!(
             protection_action(
                 &status(ConnectionState::FailedProtected {
+                    failure_kind: None,
                     reason: "blocked".to_owned(),
                 }),
                 false,
@@ -156,6 +161,7 @@ mod tests {
         assert_eq!(
             protection_action(
                 &status(ConnectionState::FailedProtected {
+                    failure_kind: None,
                     reason: "blocked".to_owned(),
                 }),
                 true,

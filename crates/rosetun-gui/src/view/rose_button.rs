@@ -323,6 +323,7 @@ mod tests {
             (ConnectionState::Disconnected, RosePhase::Bud),
             (
                 ConnectionState::Failed {
+                    failure_kind: None,
                     reason: String::new(),
                 },
                 RosePhase::Bud,
@@ -332,6 +333,7 @@ mod tests {
             (ConnectionState::Connected, RosePhase::Bloom),
             (
                 ConnectionState::FailedProtected {
+                    failure_kind: None,
                     reason: String::new(),
                 },
                 RosePhase::Blocked,

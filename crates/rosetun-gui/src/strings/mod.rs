@@ -174,6 +174,7 @@ pub(crate) struct ErrorStrings {
     pub(crate) code_server_closed: &'static str,
     pub(crate) code_dns_timeout: &'static str,
     pub(crate) code_cancelled: &'static str,
+    pub(crate) code_engine_not_ready: &'static str,
     pub(crate) code_routing_failed: &'static str,
     pub(crate) code_busy: &'static str,
     pub(crate) code_invalid_state: &'static str,
@@ -289,6 +290,17 @@ pub(crate) struct Strings {
     pub(crate) retry: &'static str,
     pub(crate) reconnect: &'static str,
     pub(crate) connecting_action: &'static str,
+    pub(crate) cancel_connection: &'static str,
+    pub(crate) cancelling: &'static str,
+    pub(crate) stage_waiting: &'static str,
+    pub(crate) stage_starting: &'static str,
+    pub(crate) stage_checking: &'static str,
+    pub(crate) stage_elapsed: &'static str,
+    pub(crate) engine_not_ready_hint: &'static str,
+    pub(crate) server_unreachable_hint: &'static str,
+    pub(crate) server_rejected_hint: &'static str,
+    pub(crate) server_closed_hint: &'static str,
+    pub(crate) dns_timeout_hint: &'static str,
     pub(crate) reconnecting_action: &'static str,
     pub(crate) working: &'static str,
     pub(crate) loading: &'static str,
@@ -1127,5 +1139,89 @@ mod tests {
         assert_eq!(EN.last_updated("1 hour ago"), "updated 1 hour ago");
         assert_eq!(RU.never_updated, "ещё не обновлялась");
         assert_eq!(EN.never_updated, "not updated yet");
+    }
+}
+
+impl Strings {
+    pub(crate) fn connection_stage(
+        &self,
+        stage: rosetun_config::ConnectStage,
+        seconds: u64,
+    ) -> String {
+        use rosetun_config::ConnectStage;
+        let label = match stage {
+            ConnectStage::WaitingForAdapter => self.stage_waiting,
+            ConnectStage::StartingEngine => self.stage_starting,
+            ConnectStage::CheckingServer => self.stage_checking,
+        };
+        fill(
+            self.stage_elapsed,
+            &[("stage", label), ("seconds", &seconds.to_string())],
+        )
+    }
+
+    pub(crate) fn connection_failure(
+        &self,
+        kind: rosetun_config::FailureKind,
+    ) -> (&'static str, String) {
+        use rosetun_config::FailureKind;
+        let (title, hint) = match kind {
+            FailureKind::EngineNotReady => (
+                self.errors.code_engine_not_ready,
+                self.engine_not_ready_hint,
+            ),
+            FailureKind::ServerUnreachable => (
+                self.errors.code_server_unreachable,
+                self.server_unreachable_hint,
+            ),
+            FailureKind::ServerRejected => {
+                (self.errors.code_server_rejected, self.server_rejected_hint)
+            }
+            FailureKind::ServerClosed => (self.errors.code_server_closed, self.server_closed_hint),
+            FailureKind::DnsTimeout => (self.errors.code_dns_timeout, self.dns_timeout_hint),
+        };
+        (
+            title,
+            fill(
+                hint,
+                &[("retry", self.retry), ("url_test", self.check_full)],
+            ),
+        )
+    }
+}
+
+#[cfg(test)]
+mod connection_failure_tests {
+    use super::{en::EN, ru::RU};
+    use rosetun_config::{ConnectStage, FailureKind};
+
+    #[test]
+    fn localized_failures_use_the_existing_action_labels() {
+        for strings in [&EN, &RU] {
+            let (title, hint) = strings.connection_failure(FailureKind::EngineNotReady);
+            assert!(!title.is_empty());
+            assert!(hint.contains(strings.retry));
+            assert!(!hint.contains("{retry}"));
+            let (_, hint) = strings.connection_failure(FailureKind::ServerUnreachable);
+            assert!(hint.contains(strings.check_full));
+            assert!(!hint.contains("{url_test}"));
+            assert!(
+                strings
+                    .connection_stage(ConnectStage::CheckingServer, 5)
+                    .contains('5')
+            );
+            for kind in [
+                FailureKind::ServerRejected,
+                FailureKind::ServerClosed,
+                FailureKind::DnsTimeout,
+            ] {
+                let (title, hint) = strings.connection_failure(kind);
+                assert!(!title.is_empty() && !hint.is_empty());
+            }
+        }
+        assert_eq!(
+            RU.connection_failure(FailureKind::ServerUnreachable).0,
+            "Сервер не отвечает"
+        );
     }
 }

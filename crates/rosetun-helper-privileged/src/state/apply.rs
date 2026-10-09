@@ -198,10 +198,12 @@ impl Helper {
                             self.with_status(|status| {
                                 status.state = if protected {
                                     ConnectionState::FailedProtected {
+                                        failure_kind: super::failure_kind(rollback_error.code),
                                         reason: rollback_error.message,
                                     }
                                 } else {
                                     ConnectionState::Failed {
+                                        failure_kind: super::failure_kind(rollback_error.code),
                                         reason: rollback_error.message,
                                     }
                                 };

@@ -159,17 +159,75 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         );
                     });
                     if let Some(status) = visible_status {
-                        if let ConnectionState::Failed { reason }
-                        | ConnectionState::FailedProtected { reason } = &status.state
-                        {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(state.text(reason))
+                        if status.state.is_transitional() {
+                            if let Some(stage) = status.connect_stage {
+                                let seconds = display::now_unix().saturating_sub(
+                                    status.stage_since_unix.unwrap_or_else(display::now_unix),
+                                );
+                                ui.label(
+                                    RichText::new(t().connection_stage(stage, seconds))
                                         .small()
-                                        .color(theme::ERROR),
-                                )
-                                .wrap(),
-                            );
+                                        .color(theme::TEXT_MUTED),
+                                );
+                                ui.ctx()
+                                    .request_repaint_after(std::time::Duration::from_secs(1));
+                            }
+                            if widgets::outline_button(
+                                ui,
+                                if state.cancel_in_flight {
+                                    t().cancelling
+                                } else {
+                                    t().cancel_connection
+                                },
+                                !state.cancel_in_flight,
+                            )
+                            .clicked()
+                            {
+                                actions.push(Action::CancelConnection);
+                            }
+                        }
+                        if let ConnectionState::Failed {
+                            reason,
+                            failure_kind,
+                        }
+                        | ConnectionState::FailedProtected {
+                            reason,
+                            failure_kind,
+                        } = &status.state
+                        {
+                            if let Some(kind) = failure_kind {
+                                let (title, hint) = t().connection_failure(*kind);
+                                ui.colored_label(theme::ERROR, title)
+                                    .on_hover_text(state.text(reason));
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(hint).small().color(theme::TEXT_MUTED),
+                                    )
+                                    .wrap(),
+                                );
+                                if let Some(selection) = &state.config.active
+                                    && widgets::outline_button(
+                                        ui,
+                                        t().check_full,
+                                        !state.operations.helper,
+                                    )
+                                    .clicked()
+                                {
+                                    actions.push(Action::FullCheckNode(
+                                        selection.subscription.clone(),
+                                        selection.node.clone(),
+                                    ));
+                                }
+                            } else {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(state.text(reason))
+                                            .small()
+                                            .color(theme::ERROR),
+                                    )
+                                    .wrap(),
+                                );
+                            }
                         }
                         if protection_action(status, state.operations.helper)
                             == ProtectionAction::ConfirmDisconnect

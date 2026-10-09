@@ -191,6 +191,7 @@ mod tests {
     #[test]
     fn event_survives_roundtrip() {
         let frame = Frame::Event(Event::State(ConnectionState::Failed {
+            failure_kind: None,
             reason: "handshake timeout".to_owned(),
         }));
         assert_eq!(roundtrip(&frame), frame);

@@ -497,12 +497,14 @@ mod tests {
             ),
             (
                 ConnectionState::Failed {
+                    failure_kind: None,
                     reason: String::new(),
                 },
                 (t().failed, theme::ERROR),
             ),
             (
                 ConnectionState::FailedProtected {
+                    failure_kind: None,
                     reason: String::new(),
                 },
                 (t().traffic_blocked, theme::ERROR),

@@ -13,7 +13,7 @@ pub use node::{
     TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
 };
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
-pub use runtime::{ConnectStage, ConnectionState, Status, Traffic};
+pub use runtime::{ConnectStage, ConnectionState, FailureKind, Status, Traffic};
 pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings};
 pub use subscription::{Selection, Subscription, SubscriptionInfo};
 

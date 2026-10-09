@@ -468,6 +468,10 @@ pub(crate) struct State {
     pub(crate) helper_version: Option<String>,
     pub(crate) helper_error: Option<ClientError>,
     pub(crate) operation_error: Option<String>,
+    pub(crate) cancel_in_flight: bool,
+    connect_in_flight: bool,
+    cancelled_connect: bool,
+    deferred_connect: Option<ConnectRequest>,
     pub(crate) screen: Screen,
     pub(crate) rule_screen: RuleScreen,
     pub(crate) settings_screen: SettingsScreen,
@@ -525,6 +529,10 @@ impl Default for State {
             helper_version: None,
             helper_error: None,
             operation_error: None,
+            cancel_in_flight: false,
+            connect_in_flight: false,
+            cancelled_connect: false,
+            deferred_connect: None,
             screen: Screen::default(),
             rule_screen: RuleScreen::default(),
             settings_screen: SettingsScreen::default(),
@@ -608,6 +616,7 @@ pub(crate) enum Action {
     DropRule(RuleId, usize),
     MoveRuleToTop(RuleId),
     Primary,
+    CancelConnection,
     Apply,
     RequestProtectionOff,
     KeepBlocked,
@@ -853,6 +862,9 @@ impl State {
             && self.primary_action() == PrimaryAction::Connect
         {
             self.operations.helper = true;
+            self.connect_in_flight = true;
+            self.cancelled_connect = false;
+            self.deferred_connect = None;
             self.operation_error = None;
             return Some(Job::Connect);
         }
@@ -1219,6 +1231,10 @@ impl State {
                 self.traffic_history.clear();
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;
+                self.cancel_in_flight = false;
+                self.connect_in_flight = false;
+                self.cancelled_connect = true;
+                self.deferred_connect = None;
             }
             WorkerEvent::Status(status) => {
                 if (!self.helper_available || !matches!(status.state, ConnectionState::Connected))
@@ -1346,6 +1362,14 @@ impl State {
                 self.exit_revealed = false;
             }
             WorkerEvent::Connect(result) => {
+                self.connect_in_flight = false;
+                if self.cancelled_connect {
+                    if self.cancel_in_flight {
+                        self.deferred_connect = result.ok();
+                    }
+                    self.operations.helper = self.cancel_in_flight;
+                    return;
+                }
                 self.operations.helper = false;
                 match result {
                     Ok(request) => {
@@ -1402,9 +1426,19 @@ impl State {
                 }
             }
             WorkerEvent::Disconnect(result) => {
-                self.operations.helper = false;
+                let cancelling = std::mem::take(&mut self.cancel_in_flight);
+                self.operations.helper = cancelling && self.connect_in_flight;
                 if result.is_ok() {
                     self.protection_confirmation = false;
+                    self.deferred_connect = None;
+                } else if cancelling {
+                    self.cancelled_connect = false;
+                    if let Some(request) = self.deferred_connect.take() {
+                        self.temporary_rules = request.temporary_rules.clone();
+                        self.temporary_rules_loaded = true;
+                        self.session_request = Some(request);
+                        self.session_snapshot_checked = true;
+                    }
                 }
                 self.helper_result(result);
             }
@@ -2350,9 +2384,26 @@ impl State {
                     PrimaryAction::Disconnect => Job::Disconnect,
                     PrimaryAction::Disabled => return None,
                 };
+                self.connect_in_flight = matches!(job, Job::Connect);
+                if self.connect_in_flight {
+                    self.cancelled_connect = false;
+                    self.deferred_connect = None;
+                }
                 self.operations.helper = true;
                 self.operation_error = None;
                 return Some(job);
+            }
+            Action::CancelConnection => {
+                if self.helper_available
+                    && self.status.state.is_transitional()
+                    && !self.cancel_in_flight
+                {
+                    self.cancel_in_flight = true;
+                    self.cancelled_connect = true;
+                    self.operations.helper = true;
+                    self.operation_error = None;
+                    return Some(Job::Disconnect);
+                }
             }
             Action::Apply => {
                 if self.can_apply() && let Some(request) = self.apply_request() {
@@ -2994,6 +3045,7 @@ mod tests {
         state.status.state = ConnectionState::Reconnecting;
         assert!(state.take_auto_update(1_120).is_none());
         state.status.state = ConnectionState::FailedProtected {
+            failure_kind: None,
             reason: "failure".into(),
         };
         assert!(state.take_auto_update(1_180).is_none());
@@ -3110,6 +3162,7 @@ mod tests {
         state.status.state = ConnectionState::Reconnecting;
         assert!(state.take_update_check(1_120).is_none());
         state.status.state = ConnectionState::FailedProtected {
+            failure_kind: None,
             reason: "failure".into(),
         };
         assert!(state.take_update_check(1_180).is_none());
@@ -3260,6 +3313,7 @@ mod tests {
         for connection in [
             ConnectionState::Reconnecting,
             ConnectionState::FailedProtected {
+                failure_kind: None,
                 reason: "failure".into(),
             },
         ] {
@@ -3272,6 +3326,7 @@ mod tests {
         }
         state.reduce(WorkerEvent::Status(Status {
             state: ConnectionState::Failed {
+                failure_kind: None,
                 reason: "failure".into(),
             },
             ..Status::default()
@@ -4350,9 +4405,11 @@ mod tests {
         for status in [
             ConnectionState::Disconnected,
             ConnectionState::Failed {
+                failure_kind: None,
                 reason: "failed".into(),
             },
             ConnectionState::FailedProtected {
+                failure_kind: None,
                 reason: "blocked".into(),
             },
         ] {
@@ -4654,9 +4711,11 @@ mod tests {
         for status in [
             ConnectionState::Disconnected,
             ConnectionState::Failed {
+                failure_kind: None,
                 reason: "failed".into(),
             },
             ConnectionState::FailedProtected {
+                failure_kind: None,
                 reason: "blocked".into(),
             },
         ] {
@@ -4717,6 +4776,79 @@ mod tests {
     }
 
     #[test]
+    fn cancelling_a_connect_ignores_a_late_success_in_either_order() {
+        for connect_first in [false, true] {
+            let mut state = state_for_auto_connect();
+            let request = ConnectRequest::from_config(&state.config).unwrap();
+            assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+            state.reduce(WorkerEvent::Status(Status {
+                state: ConnectionState::Connecting,
+                ..Status::default()
+            }));
+            assert!(matches!(
+                state.act(Action::CancelConnection),
+                Some(Job::Disconnect)
+            ));
+            assert!(state.act(Action::CancelConnection).is_none());
+            if connect_first {
+                state.reduce(WorkerEvent::Connect(Ok(request)));
+                assert!(state.operations.helper);
+                assert!(state.session_request.is_none());
+                state.reduce(WorkerEvent::Disconnect(Ok(())));
+            } else {
+                state.reduce(WorkerEvent::Disconnect(Ok(())));
+                assert!(state.operations.helper);
+                state.reduce(WorkerEvent::Connect(Ok(request)));
+            }
+            state.reduce(WorkerEvent::Status(Status::default()));
+            assert!(state.session_request.is_none());
+            assert!(!state.operations.helper);
+            assert!(!state.cancel_in_flight);
+            assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+            assert!(!state.cancelled_connect);
+        }
+    }
+
+    #[test]
+    fn failed_cancellation_restores_a_completed_connect() {
+        let mut state = state_for_auto_connect();
+        let request = ConnectRequest::from_config(&state.config).unwrap();
+        assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connecting,
+            ..Status::default()
+        }));
+        assert!(matches!(
+            state.act(Action::CancelConnection),
+            Some(Job::Disconnect)
+        ));
+        state.reduce(WorkerEvent::Connect(Ok(request.clone())));
+        state.reduce(WorkerEvent::Disconnect(Err(HelperCommandError::Client(
+            ClientError::Closed,
+        ))));
+        assert_eq!(state.session_request, Some(request));
+        assert!(!state.cancel_in_flight);
+        assert!(!state.cancelled_connect);
+        assert!(!state.operations.helper);
+        assert!(state.operation_error.is_some());
+    }
+
+    #[test]
+    fn cancelling_an_automatic_reconnect_needs_no_connect_worker() {
+        let mut state = state_for_auto_connect();
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Reconnecting,
+            ..Status::default()
+        }));
+        assert!(matches!(
+            state.act(Action::CancelConnection),
+            Some(Job::Disconnect)
+        ));
+        state.reduce(WorkerEvent::Disconnect(Ok(())));
+        assert!(!state.operations.helper);
+    }
+
+    #[test]
     fn command_completion_clears_flags_and_maps_selection_errors() {
         let mut state = State::default();
         state.operations.helper = true;
@@ -4750,6 +4882,7 @@ mod tests {
             let mut state = State {
                 status: Status {
                     state: ConnectionState::Failed {
+                        failure_kind: None,
                         reason: "boom".into(),
                     },
                     ..Status::default()
@@ -4869,6 +5002,7 @@ mod tests {
             helper_available: true,
             status: Status {
                 state: ConnectionState::FailedProtected {
+                    failure_kind: None,
                     reason: "failed".into(),
                 },
                 ..Status::default()
@@ -6085,6 +6219,7 @@ mod tests {
             ConnectionState::Connecting,
             ConnectionState::Reconnecting,
             ConnectionState::FailedProtected {
+                failure_kind: None,
                 reason: "failure".into(),
             },
         ] {

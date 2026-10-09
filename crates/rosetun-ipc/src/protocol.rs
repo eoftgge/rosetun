@@ -203,6 +203,7 @@ pub enum ErrorCode {
     ServerClosed,
     DnsTimeout,
     Cancelled,
+    EngineNotReady,
     RoutingFailed,
     Busy,
     InvalidState,

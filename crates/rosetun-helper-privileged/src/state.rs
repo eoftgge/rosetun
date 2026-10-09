@@ -217,9 +217,15 @@ impl Helper {
                     }
                     self.with_status(|status| {
                         status.state = if protected {
-                            ConnectionState::FailedProtected { reason }
+                            ConnectionState::FailedProtected {
+                                reason,
+                                failure_kind: None,
+                            }
                         } else {
-                            ConnectionState::Failed { reason }
+                            ConnectionState::Failed {
+                                reason,
+                                failure_kind: None,
+                            }
                         };
                         status.since_unix = None;
                         status.connect_stage = None;
@@ -329,9 +335,15 @@ impl Helper {
                     let reason = error.message;
                     self.with_status(|status| {
                         status.state = if protected {
-                            ConnectionState::FailedProtected { reason }
+                            ConnectionState::FailedProtected {
+                                reason,
+                                failure_kind: failure_kind(error.code),
+                            }
                         } else {
-                            ConnectionState::Failed { reason }
+                            ConnectionState::Failed {
+                                reason,
+                                failure_kind: failure_kind(error.code),
+                            }
                         };
                         status.since_unix = None;
                         status.connect_stage = None;
@@ -421,9 +433,15 @@ impl Helper {
                 let reason = error.message.clone();
                 if let Err(cancelled) = self.publish_terminal(|status| {
                     status.state = if protected {
-                        ConnectionState::FailedProtected { reason }
+                        ConnectionState::FailedProtected {
+                            reason,
+                            failure_kind: failure_kind(error.code),
+                        }
                     } else {
-                        ConnectionState::Failed { reason }
+                        ConnectionState::Failed {
+                            reason,
+                            failure_kind: failure_kind(error.code),
+                        }
                     };
                     status.since_unix = None;
                     status.connect_stage = None;
@@ -1148,6 +1166,18 @@ fn wait_for_previous_adapter(
     wait_for_previous_adapter_cancellable(alias, timeout, interval, lookup, &AtomicBool::new(false))
 }
 
+fn failure_kind(code: ErrorCode) -> Option<rosetun_config::FailureKind> {
+    use rosetun_config::FailureKind;
+    match code {
+        ErrorCode::EngineNotReady => Some(FailureKind::EngineNotReady),
+        ErrorCode::ServerUnreachable => Some(FailureKind::ServerUnreachable),
+        ErrorCode::ServerRejected => Some(FailureKind::ServerRejected),
+        ErrorCode::ServerClosed => Some(FailureKind::ServerClosed),
+        ErrorCode::DnsTimeout => Some(FailureKind::DnsTimeout),
+        _ => None,
+    }
+}
+
 fn check_cancelled(cancelled: &AtomicBool) -> Result<(), HelperError> {
     if cancelled.load(Ordering::Acquire) {
         Err(HelperError::new(
@@ -1258,7 +1288,7 @@ fn wait_for_engine_ready_from(
         let timeout = startup_timeout(process.startup_hints());
         if Instant::now() >= spawned_at + timeout {
             return Err(HelperError::new(
-                ErrorCode::EngineFailed,
+                ErrorCode::EngineNotReady,
                 format!(
                     "engine startup readiness was not confirmed within {} seconds",
                     timeout.as_secs()
