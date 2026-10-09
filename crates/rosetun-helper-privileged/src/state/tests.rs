@@ -56,7 +56,7 @@ fn previous_adapter_wait_has_a_deadline() {
         Duration::from_millis(1),
         |_| Ok(true),
     );
-    assert_eq!(result.unwrap_err().code, ErrorCode::EngineFailed);
+    assert!(result.is_ok(), "start after the adapter removal deadline");
     assert!(started.elapsed() < Duration::from_secs(1));
 }
 

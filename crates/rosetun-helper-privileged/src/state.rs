@@ -1181,6 +1181,12 @@ fn wait_for_previous_adapter_cancellable(
                 return Ok(());
             }
             Err(error) => {
+                if waiting {
+                    tracing::info!(
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "previous tunnel adapter wait finished"
+                    );
+                }
                 tracing::warn!(%error, "could not look up previous tunnel adapter; continuing startup");
                 return Ok(());
             }
@@ -1192,14 +1198,15 @@ fn wait_for_previous_adapter_cancellable(
         }
         let elapsed = started.elapsed();
         if elapsed >= timeout {
+            tracing::info!(
+                elapsed_ms = elapsed.as_millis(),
+                "previous tunnel adapter wait finished"
+            );
             tracing::warn!(
                 elapsed_ms = elapsed.as_millis(),
                 "previous tunnel adapter removal timed out"
             );
-            return Err(HelperError::new(
-                ErrorCode::EngineFailed,
-                "previous tunnel adapter is still present after the removal deadline",
-            ));
+            return Ok(());
         }
         thread::sleep(interval.min(timeout.saturating_sub(elapsed)));
     }
