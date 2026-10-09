@@ -1170,3 +1170,37 @@ fn now_unix() -> u64 {
         .map(|value| value.as_secs())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod hysteria2_endpoint_tests {
+    use super::*;
+    use rosetun_config::{Hysteria2Params, NodeId, Outbound, StreamSettings, TlsMode, TlsParams};
+
+    #[test]
+    fn resolved_hysteria2_endpoint_keeps_the_server_name_for_tls() {
+        let node = Node {
+            id: NodeId::new("test"),
+            name: "Test".into(),
+            server: "example.com".into(),
+            port: 443,
+            outbound: Outbound::Hysteria2(Hysteria2Params {
+                password: "test-secret".into(),
+                obfs_password: None,
+                port_ranges: Vec::new(),
+                up_mbps: None,
+                down_mbps: None,
+            }),
+            stream: StreamSettings {
+                tls: TlsMode::Tls(TlsParams::default()),
+                ..Default::default()
+            },
+            raw: None,
+        };
+        let prepared = node_with_endpoint(&node, "192.0.2.1".parse().unwrap());
+        assert_eq!(prepared.server, "192.0.2.1");
+        let TlsMode::Tls(tls) = prepared.stream.tls else {
+            panic!("expected TLS");
+        };
+        assert_eq!(tls.sni.as_deref(), Some("example.com"));
+    }
+}

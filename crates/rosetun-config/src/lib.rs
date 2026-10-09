@@ -9,8 +9,8 @@ mod subscription;
 
 pub use ids::{NodeId, RuleId, RuleSetId, SubscriptionId};
 pub use node::{
-    Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode, TlsParams,
-    Transport, TrojanParams, VlessParams, VmessParams,
+    Hysteria2Params, Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
+    TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
 };
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{ConnectionState, Status, Traffic};
