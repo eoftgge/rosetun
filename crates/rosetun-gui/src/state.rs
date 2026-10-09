@@ -442,6 +442,8 @@ pub(crate) struct State {
     next_temporary_load: u64,
     temporary_retry: bool,
     temporary_waiting_status: bool,
+    temporary_last_load: Option<u64>,
+    temporary_error_reported: bool,
     temporary_before_apply: Option<Vec<Rule>>,
     keep_temporary: Option<RuleId>,
     keep_apply: Option<RuleId>,
@@ -494,6 +496,8 @@ impl Default for State {
             next_temporary_load: 0,
             temporary_retry: true,
             temporary_waiting_status: false,
+            temporary_last_load: None,
+            temporary_error_reported: false,
             temporary_before_apply: None,
             keep_temporary: None,
             keep_apply: None,
@@ -761,7 +765,7 @@ impl State {
         self.act(Action::Apply)
     }
 
-    pub(crate) fn take_temporary_load(&mut self) -> Option<Job> {
+    pub(crate) fn take_temporary_load(&mut self, now: u64) -> Option<Job> {
         if !self.helper_available
             || !self.status_received
             || !matches!(self.status.state, ConnectionState::Connected)
@@ -769,12 +773,16 @@ impl State {
             || self.temporary_load.is_some()
             || !self.temporary_retry
             || self.operations.helper
+            || self
+                .temporary_last_load
+                .is_some_and(|last| now.saturating_sub(last) < 10)
         {
             return None;
         }
         self.next_temporary_load += 1;
         self.temporary_load = Some(self.next_temporary_load);
         self.temporary_retry = false;
+        self.temporary_last_load = Some(now);
         Some(Job::LoadTemporaryRules(self.next_temporary_load))
     }
 
@@ -792,6 +800,8 @@ impl State {
         self.temporary_load = None;
         self.temporary_retry = true;
         self.temporary_waiting_status = false;
+        self.temporary_last_load = None;
+        self.temporary_error_reported = false;
         self.temporary_before_apply = None;
         self.keep_temporary = None;
         self.keep_apply = None;
@@ -1217,13 +1227,23 @@ impl State {
                         }
                         self.temporary_rules = rules;
                         self.temporary_rules_loaded = true;
+                        self.temporary_error_reported = false;
                         self.operation_error = None;
                     }
                     Err(HelperCommandError::Client(ClientError::Helper(HelperError {
                         code: ErrorCode::Busy,
                         ..
-                    }))) => self.temporary_waiting_status = true,
-                    Err(error) => self.helper_result(Err(error)),
+                    }))) => {
+                        self.temporary_waiting_status = true;
+                        self.temporary_last_load = None;
+                    }
+                    Err(error) => {
+                        self.temporary_retry = true;
+                        if !self.temporary_error_reported {
+                            self.temporary_error_reported = true;
+                            self.helper_result(Err(error));
+                        }
+                    }
                 }
             }
             WorkerEvent::Exit {
@@ -3726,23 +3746,23 @@ mod tests {
             node: Some(NodeId::new("node")),
             ..Status::default()
         }));
-        let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load() else {
+        let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load(1_000) else {
             panic!("connected status must load temporary rules");
         };
-        assert!(state.take_temporary_load().is_none());
+        assert!(state.take_temporary_load(1_000).is_none());
         state.reduce(WorkerEvent::TemporaryRules {
             request,
             result: Err(HelperCommandError::Client(ClientError::Helper(
                 HelperError::new(ErrorCode::Busy, "busy"),
             ))),
         });
-        assert!(state.take_temporary_load().is_none());
+        assert!(state.take_temporary_load(1_000).is_none());
         state.reduce(WorkerEvent::Status(Status {
             state: ConnectionState::Connected,
             node: Some(NodeId::new("node")),
             ..Status::default()
         }));
-        let Some(Job::LoadTemporaryRules(next)) = state.take_temporary_load() else {
+        let Some(Job::LoadTemporaryRules(next)) = state.take_temporary_load(1_000) else {
             panic!("busy load must retry on the next status");
         };
         assert_ne!(request, next);
@@ -3760,7 +3780,50 @@ mod tests {
             state.session_request.as_ref().unwrap().temporary_rules,
             vec![rule]
         );
-        assert!(state.take_temporary_load().is_none());
+        assert!(state.take_temporary_load(1_000).is_none());
+    }
+
+    #[test]
+    fn temporary_rules_retry_closed_after_ten_seconds_and_restore_apply() {
+        let mut state = state_for_auto_connect();
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        let Some(Job::LoadTemporaryRules(first)) = state.take_temporary_load(1_000) else {
+            panic!("connected status must load temporary rules");
+        };
+        state.config.settings.dns = DnsPreset::Google.settings();
+        assert!(state.act(Action::Apply).is_none());
+        state.reduce(WorkerEvent::TemporaryRules {
+            request: first,
+            result: Err(HelperCommandError::Client(ClientError::Closed)),
+        });
+        let error = state.operation_error.clone();
+        assert!(error.is_some());
+        assert!(state.take_temporary_load(1_009).is_none());
+        let Some(Job::LoadTemporaryRules(second)) = state.take_temporary_load(1_010) else {
+            panic!("closed load must retry after ten seconds");
+        };
+        state.reduce(WorkerEvent::TemporaryRules {
+            request: second,
+            result: Err(HelperCommandError::Client(ClientError::Helper(
+                HelperError::new(ErrorCode::Internal, "later failure"),
+            ))),
+        });
+        assert_eq!(state.operation_error, error);
+        assert!(state.take_temporary_load(1_019).is_none());
+        let Some(Job::LoadTemporaryRules(third)) = state.take_temporary_load(1_020) else {
+            panic!("repeated errors must keep retrying");
+        };
+        state.reduce(WorkerEvent::TemporaryRules {
+            request: third,
+            result: Ok(vec![]),
+        });
+        assert!(state.temporary_rules_loaded);
+        assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
+        assert!(state.operation_error.is_none());
     }
 
     #[test]
@@ -3772,7 +3835,7 @@ mod tests {
             node: Some(NodeId::new("node")),
             ..Status::default()
         }));
-        let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load() else {
+        let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load(1_000) else {
             panic!("connected status must load temporary rules");
         };
         let rule = temporary_rule("t1", "session.example");
@@ -4014,7 +4077,7 @@ mod tests {
             state: ConnectionState::Connected,
             ..Status::default()
         }));
-        let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load() else {
+        let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load(1_000) else {
             panic!("connected status must load temporary rules");
         };
         state.reduce(WorkerEvent::HelperUnavailable(ClientError::Helper(
