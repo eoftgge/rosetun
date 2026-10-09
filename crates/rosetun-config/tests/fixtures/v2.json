@@ -1,0 +1,345 @@
+{
+  "version": 2,
+  "settings": {
+    "engine": "xray",
+    "kill_switch": true,
+    "auto_reconnect": false,
+    "allow_lan": true,
+    "autostart": true,
+    "tun": {
+      "name": "rosetun-test",
+      "mtu": 1420,
+      "ipv4": "192.0.2.1/24",
+      "ipv6": "2001:db8::1/64",
+      "auto_route": false
+    },
+    "dns": {
+      "server": "192.0.2.53",
+      "server_name": "dns.example.com",
+      "port": 8443,
+      "path": "/dns-query"
+    },
+    "log_level": "trace",
+    "verbose_log_until": 1700000000
+  },
+  "interface": {
+    "scale_percent": 125,
+    "close_to_tray": false,
+    "connect_on_start": true,
+    "auto_update_subscriptions": false,
+    "check_updates": false,
+    "skipped_version": "v9.9.9-test",
+    "last_update_check": 1700000003,
+    "language": "russian",
+    "reduce_motion": true
+  },
+  "subscriptions": [
+    {
+      "id": "subscription-one",
+      "name": "Primary provider",
+      "url": "https://sub.example.com/primary",
+      "nodes": [
+        {
+          "id": "vless-reality",
+          "name": "VLESS Reality",
+          "server": "192.0.2.10",
+          "port": 443,
+          "outbound": {
+            "vless": {
+              "uuid": "00000000-0000-4000-8000-000000000001",
+              "flow": "xtls-rprx-vision"
+            }
+          },
+          "stream": {
+            "transport": "tcp",
+            "tls": {
+              "reality": {
+                "sni": "reality.example.com",
+                "public_key": "test-reality-public-key",
+                "short_id": "01234567",
+                "fingerprint": "chrome"
+              }
+            }
+          }
+        },
+        {
+          "id": "vmess-ws-tls",
+          "name": "VMess WebSocket TLS",
+          "server": "198.51.100.10",
+          "port": 8443,
+          "outbound": {
+            "vmess": {
+              "uuid": "00000000-0000-4000-8000-000000000002",
+              "alter_id": 7,
+              "security": "auto"
+            }
+          },
+          "stream": {
+            "transport": {
+              "ws": {
+                "path": "/vmess",
+                "host": "ws.example.com"
+              }
+            },
+            "tls": {
+              "tls": {
+                "sni": "tls.example.com",
+                "alpn": [
+                  "h2",
+                  "http/1.1"
+                ],
+                "allow_insecure": true,
+                "fingerprint": "firefox"
+              }
+            }
+          }
+        }
+      ],
+      "auto_update": true,
+      "updated_at_unix": 1700000001,
+      "user_agent": "Rosetun fixture",
+      "send_hwid": false,
+      "info": {
+        "upload": 100,
+        "download": 200,
+        "total": 1000,
+        "expire_unix": 1800000000
+      },
+      "update_interval_hours": 24,
+      "support_url": "https://sub.example.com/support",
+      "web_page_url": "https://sub.example.com/account",
+      "announce": "Provider announcement",
+      "notices": [
+        "Provider notice"
+      ]
+    },
+    {
+      "id": "subscription-two",
+      "name": "Secondary provider",
+      "url": "https://sub.example.com/secondary",
+      "nodes": [
+        {
+          "id": "trojan-grpc",
+          "name": "Trojan gRPC",
+          "server": "203.0.113.10",
+          "port": 443,
+          "outbound": {
+            "trojan": {
+              "password": "test-secret"
+            }
+          },
+          "stream": {
+            "transport": {
+              "grpc": {
+                "service_name": "trojan-grpc"
+              }
+            },
+            "tls": {
+              "tls": {
+                "sni": "trojan.example.com",
+                "alpn": [
+                  "h2"
+                ],
+                "allow_insecure": false
+              }
+            }
+          }
+        },
+        {
+          "id": "shadowsocks",
+          "name": "Shadowsocks",
+          "server": "2001:db8::10",
+          "port": 8388,
+          "outbound": {
+            "shadowsocks": {
+              "method": "aes-256-gcm",
+              "password": "test-secret"
+            }
+          },
+          "stream": {
+            "transport": "tcp",
+            "tls": "plain"
+          }
+        },
+        {
+          "id": "hysteria2",
+          "name": "Hysteria2",
+          "server": "192.0.2.20",
+          "port": 8443,
+          "outbound": {
+            "hysteria2": {
+              "password": "test-secret",
+              "obfs_password": "test-secret-obfs",
+              "port_ranges": [
+                "8443-8445",
+                "9443"
+              ],
+              "up_mbps": 100,
+              "down_mbps": 200
+            }
+          },
+          "stream": {
+            "transport": "tcp",
+            "tls": {
+              "tls": {
+                "sni": "hysteria.example.com",
+                "alpn": [
+                  "h3"
+                ],
+                "allow_insecure": false,
+                "fingerprint": "chrome"
+              }
+            }
+          }
+        }
+      ],
+      "auto_update": false,
+      "updated_at_unix": 1700000002,
+      "user_agent": "Rosetun fixture secondary",
+      "send_hwid": true,
+      "info": {
+        "upload": 300,
+        "download": 400,
+        "total": 2000,
+        "expire_unix": 1900000000
+      },
+      "update_interval_hours": 12,
+      "support_url": "https://sub.example.com/secondary-support",
+      "web_page_url": "https://sub.example.com/secondary-account",
+      "announce": "Secondary announcement",
+      "notices": [
+        "Secondary notice",
+        "Maintenance notice"
+      ]
+    }
+  ],
+  "rule_sets": [
+    {
+      "id": "routing",
+      "name": "Full routing rules",
+      "rules": [
+        {
+          "id": "domain-exact",
+          "enabled": true,
+          "matcher": {
+            "domain": {
+              "exact": "exact.example.com"
+            }
+          },
+          "target": "direct"
+        },
+        {
+          "id": "domain-suffix",
+          "enabled": true,
+          "matcher": {
+            "domain": {
+              "suffix": "suffix.example.com"
+            }
+          },
+          "target": "proxy"
+        },
+        {
+          "id": "domain-keyword",
+          "enabled": false,
+          "matcher": {
+            "domain": {
+              "keyword": "keyword"
+            }
+          },
+          "target": "block"
+        },
+        {
+          "id": "process-name",
+          "enabled": true,
+          "matcher": {
+            "process": {
+              "name": "example.exe"
+            }
+          },
+          "target": "direct"
+        },
+        {
+          "id": "process-path",
+          "enabled": true,
+          "matcher": {
+            "process": {
+              "path": "C:/Program Files/Example/example.exe"
+            }
+          },
+          "target": "block"
+        },
+        {
+          "id": "ip-v4",
+          "enabled": true,
+          "matcher": {
+            "ip_cidr": "198.51.100.0/24"
+          },
+          "target": "proxy"
+        },
+        {
+          "id": "ip-v6",
+          "enabled": true,
+          "matcher": {
+            "ip_cidr": "2001:db8::/32"
+          },
+          "target": "direct"
+        },
+        {
+          "id": "template-russian-sites",
+          "enabled": true,
+          "matcher": {
+            "template": "russian_sites"
+          },
+          "target": "direct"
+        },
+        {
+          "id": "template-messengers",
+          "enabled": true,
+          "matcher": {
+            "template": "messengers"
+          },
+          "target": "proxy"
+        },
+        {
+          "id": "template-youtube",
+          "enabled": false,
+          "matcher": {
+            "template": "youtube"
+          },
+          "target": "block"
+        },
+        {
+          "id": "template-torrents",
+          "enabled": true,
+          "matcher": {
+            "template": "torrents"
+          },
+          "target": "direct"
+        }
+      ],
+      "default_target": "proxy"
+    },
+    {
+      "id": "fallback",
+      "name": "Fallback rules",
+      "rules": [
+        {
+          "id": "fallback-domain",
+          "enabled": true,
+          "matcher": {
+            "domain": {
+              "suffix": "fallback.example.com"
+            }
+          },
+          "target": "direct"
+        }
+      ],
+      "default_target": "block"
+    }
+  ],
+  "active": {
+    "subscription": "subscription-one",
+    "node": "vless-reality"
+  },
+  "active_rule_set": "routing"
+}

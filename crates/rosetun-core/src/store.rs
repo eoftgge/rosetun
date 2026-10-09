@@ -363,7 +363,7 @@ mod tests {
     use rosetun_config::{
         AppConfig, CONFIG_VERSION, ConfigError, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher,
         RuleSet, RuleSetId, RuleTarget, Selection, StreamSettings, Subscription, SubscriptionId,
-        TrojanParams,
+        TrojanParams, from_json,
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -1034,6 +1034,32 @@ mod tests {
 
         fs::write(&path, b"\xef\xbb\xbf\xef\xbb\xbf{}").unwrap();
         assert!(matches!(load(&path), Err(StoreError::Parse { .. })));
+    }
+
+    #[test]
+    fn released_alpha_configuration_round_trips_through_a_modification() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let original = include_bytes!("../../rosetun-config/tests/fixtures/v0.1.0-alpha.1.json");
+        fs::write(store.path(), original).unwrap();
+        let (mut expected, migrated_from) = from_json(original).unwrap();
+        assert_eq!(migrated_from, Some(1));
+        assert_eq!(store.load().unwrap(), expected);
+        assert!(!directory.path.join("config.v1.json").exists());
+
+        store
+            .modify(|config| {
+                config.settings.kill_switch = false;
+                Ok::<_, StoreError>(())
+            })
+            .unwrap();
+        expected.settings.kill_switch = false;
+        assert_eq!(store.load().unwrap(), expected);
+        assert_eq!(store.load().unwrap().version, CONFIG_VERSION);
+        assert_eq!(
+            fs::read(directory.path.join("config.v1.json")).unwrap(),
+            original
+        );
     }
 
     #[test]
