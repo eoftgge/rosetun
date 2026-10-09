@@ -619,6 +619,7 @@ fn en_count(n: u64, unit: &str) -> String {
     }
 }
 
+#[allow(dead_code)] // Kept for equivalence checks until Fluent replaces every caller.
 impl Strings {
     pub(crate) fn about_version(&self, app: &str, helper: Option<&str>) -> String {
         match helper {
@@ -1189,6 +1190,7 @@ mod tests {
     }
 }
 
+#[allow(dead_code)] // Kept for equivalence checks until Fluent replaces every caller.
 impl Strings {
     pub(crate) fn connection_stage(
         &self,
@@ -1273,6 +1275,7 @@ mod connection_failure_tests {
     }
 }
 
+#[allow(dead_code)] // Kept for equivalence checks until Fluent replaces every caller.
 impl Strings {
     pub(crate) fn other_vpn(&self, name: &str) -> String {
         fill(

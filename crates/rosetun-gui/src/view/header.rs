@@ -8,7 +8,6 @@ use rosetun_config::ConnectionState;
 
 use crate::brand;
 use crate::state::{Action, ExitLookup, ExitRoute, Screen, State};
-use crate::strings::t;
 use crate::{strings, theme, widgets};
 
 /// The window draws its own title bar on Windows; elsewhere the system frame stays.
@@ -100,20 +99,25 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             for (index, (icon, label, screen, action)) in [
                 (
                     TabIcon::Connection,
-                    t().connection,
+                    tr!("connection"),
                     Screen::Connection,
                     Action::ShowConnection,
                 ),
                 (
                     TabIcon::Traffic,
-                    t().traffic,
+                    tr!("traffic"),
                     Screen::Traffic,
                     Action::OpenTraffic,
                 ),
-                (TabIcon::Rules, t().rules, Screen::Rules, Action::OpenRules),
+                (
+                    TabIcon::Rules,
+                    tr!("rules"),
+                    Screen::Rules,
+                    Action::OpenRules,
+                ),
                 (
                     TabIcon::Settings,
-                    t().settings,
+                    tr!("settings"),
                     Screen::Settings,
                     Action::OpenSettings,
                 ),
@@ -125,7 +129,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui.add_space(4.0);
                 }
                 let selected = state.screen == screen;
-                let response = tab(ui, icon, label, selected, reduce_motion);
+                let response = tab(ui, icon, &label, selected, reduce_motion);
                 if screen == Screen::Settings && state.available_update().is_some() {
                     ui.painter().circle_filled(
                         egui::pos2(response.rect.right() - 8.0, response.rect.top() + 10.0),
@@ -167,7 +171,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 let response = if state.helper_available {
                     response
                 } else {
-                    response.on_hover_text(t().helper_unavailable_detail)
+                    response.on_hover_text(tr!("helper-unavailable-detail"))
                 };
                 if response.clicked() {
                     actions.push(Action::ShowConnection);
@@ -221,20 +225,20 @@ fn header_status_for(
     country: Option<&str>,
 ) -> (String, Color32) {
     if !helper_available {
-        return (t().helper_unavailable.to_owned(), theme::ERROR);
+        return (tr!("helper-unavailable").to_owned(), theme::ERROR);
     }
     let (label, color) = match connection {
-        None | Some(ConnectionState::Disconnected) => (t().disconnected, theme::DISCONNECTED),
-        Some(ConnectionState::Connecting) => (t().connecting_action, theme::ROSE_BRIGHT),
-        Some(ConnectionState::Reconnecting) => (t().reconnecting_action, theme::ROSE_BRIGHT),
+        None | Some(ConnectionState::Disconnected) => (tr!("disconnected"), theme::DISCONNECTED),
+        Some(ConnectionState::Connecting) => (tr!("connecting-action"), theme::ROSE_BRIGHT),
+        Some(ConnectionState::Reconnecting) => (tr!("reconnecting-action"), theme::ROSE_BRIGHT),
         Some(ConnectionState::Connected) => {
             return (
-                country.map_or_else(|| t().connected.to_owned(), |code| t().connected_in(code)),
+                country.map_or_else(|| tr!("connected"), crate::i18n::connected_in),
                 theme::CONNECTED,
             );
         }
-        Some(ConnectionState::Failed { .. }) => (t().failed, theme::ERROR),
-        Some(ConnectionState::FailedProtected { .. }) => (t().traffic_blocked, theme::ERROR),
+        Some(ConnectionState::Failed { .. }) => (tr!("failed"), theme::ERROR),
+        Some(ConnectionState::FailedProtected { .. }) => (tr!("traffic-blocked"), theme::ERROR),
     };
     (label.to_owned(), color)
 }
@@ -291,13 +295,13 @@ fn paint_brand(ui: &mut egui::Ui, bloom: f32) {
 
 fn window_button(ui: &mut egui::Ui, kind: WindowButton, reduce_motion: bool) -> Response {
     let label = match kind {
-        WindowButton::Minimize => t().minimize,
-        WindowButton::Maximize => t().maximize,
-        WindowButton::Restore => t().restore,
-        WindowButton::Close => t().close_window,
+        WindowButton::Minimize => tr!("minimize"),
+        WindowButton::Maximize => tr!("maximize"),
+        WindowButton::Restore => tr!("restore"),
+        WindowButton::Close => tr!("close-window"),
     };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(38.0, 32.0), Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.as_str()));
     let hover = ui.ctx().animate_bool_with_time(
         response.id,
         response.hovered(),
@@ -474,7 +478,7 @@ fn paint_tab_icon(painter: &egui::Painter, rect: Rect, icon: TabIcon, color: Col
 #[cfg(test)]
 mod tests {
     use super::{header_status_for, intro_progress};
-    use crate::{strings::t, theme};
+    use crate::theme;
     use rosetun_config::ConnectionState;
 
     #[test]
@@ -482,33 +486,33 @@ mod tests {
         let states = [
             (
                 ConnectionState::Disconnected,
-                (t().disconnected, theme::DISCONNECTED),
+                (tr!("disconnected"), theme::DISCONNECTED),
             ),
             (
                 ConnectionState::Connecting,
-                (t().connecting_action, theme::ROSE_BRIGHT),
+                (tr!("connecting-action"), theme::ROSE_BRIGHT),
             ),
             (
                 ConnectionState::Reconnecting,
-                (t().reconnecting_action, theme::ROSE_BRIGHT),
+                (tr!("reconnecting-action"), theme::ROSE_BRIGHT),
             ),
             (
                 ConnectionState::Connected,
-                (t().connected, theme::CONNECTED),
+                (tr!("connected"), theme::CONNECTED),
             ),
             (
                 ConnectionState::Failed {
                     failure_kind: None,
                     reason: String::new(),
                 },
-                (t().failed, theme::ERROR),
+                (tr!("failed"), theme::ERROR),
             ),
             (
                 ConnectionState::FailedProtected {
                     failure_kind: None,
                     reason: String::new(),
                 },
-                (t().traffic_blocked, theme::ERROR),
+                (tr!("traffic-blocked"), theme::ERROR),
             ),
         ];
         for (state, expected) in &states {
@@ -518,7 +522,7 @@ mod tests {
             );
             assert_eq!(
                 header_status_for(false, Some(state), Some("NL")),
-                (t().helper_unavailable.to_owned(), theme::ERROR),
+                (tr!("helper-unavailable").to_owned(), theme::ERROR),
             );
             if !matches!(state, ConnectionState::Connected) {
                 assert_eq!(
@@ -533,11 +537,11 @@ mod tests {
         );
         assert_eq!(
             header_status_for(true, None, Some("NL")),
-            (t().disconnected.to_owned(), theme::DISCONNECTED)
+            (tr!("disconnected").to_owned(), theme::DISCONNECTED)
         );
         assert_eq!(
             header_status_for(false, None, Some("NL")),
-            (t().helper_unavailable.to_owned(), theme::ERROR),
+            (tr!("helper-unavailable").to_owned(), theme::ERROR),
         );
         assert_eq!(crate::strings::RU.connected_in("NL"), "Подключено · NL");
     }

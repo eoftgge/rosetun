@@ -65,22 +65,22 @@ pub(crate) fn show(
             ui.set_max_width(DIALOG_WIDTH);
             ui.spacing_mut().item_spacing.y = 4.0;
             ui.heading(if dialog.editing.is_some() {
-                t().edit_rule
+                tr!("edit-rule")
             } else {
-                t().new_rule
+                tr!("new-rule")
             });
             ui.label(
                 RichText::new(if dialog.editing.is_some() {
-                    t().edit_rule_subtitle
+                    tr!("edit-rule-subtitle")
                 } else {
-                    t().new_rule_subtitle
+                    tr!("new-rule-subtitle")
                 })
                 .small()
                 .color(theme::TEXT_MUTED),
             );
             ui.add_space(2.0);
             ui.label(
-                RichText::new(t().what_to_route)
+                RichText::new(tr!("what-to-route"))
                     .small()
                     .color(theme::TEXT_DIM),
             );
@@ -89,8 +89,8 @@ pub(crate) fn show(
                 "rule_input_kind",
                 dialog.kind,
                 &[
-                    (RuleInputKind::Process, t().rule_kind_app),
-                    (RuleInputKind::Domain, t().rule_kind_site),
+                    (RuleInputKind::Process, tr!("rule-kind-app")),
+                    (RuleInputKind::Domain, tr!("rule-kind-site")),
                 ],
                 true,
                 !dialog.busy && dialog.editing.is_none(),
@@ -133,7 +133,7 @@ pub(crate) fn show(
             };
             ui.add_space(0.0);
             ui.label(
-                RichText::new(t().where_to_route)
+                RichText::new(tr!("where-to-route"))
                     .small()
                     .color(theme::TEXT_DIM),
             );
@@ -145,13 +145,13 @@ pub(crate) fn show(
                     let mut match_path = dialog.match_mode == ProcessMatchMode::Path;
                     let response = widgets::toggle_row(
                         ui,
-                        t().match_by_full_path,
-                        t().full_path_detail,
+                        &tr!("match-by-full-path"),
+                        &tr!("full-path-detail"),
                         &mut match_path,
                         available && !dialog.busy,
                     );
                     if !available {
-                        response.on_hover_text(t().path_unavailable);
+                        response.on_hover_text(tr!("path-unavailable"));
                     }
                     if match_path != (dialog.match_mode == ProcessMatchMode::Path) {
                         dialog.set_process_match_mode(if match_path {
@@ -192,7 +192,7 @@ pub(crate) fn show(
                             let link = ui.add_enabled(
                                 !dialog.busy,
                                 egui::Button::new(
-                                    RichText::new(t().advanced).color(theme::TEXT_MUTED),
+                                    RichText::new(tr!("advanced")).color(theme::TEXT_MUTED),
                                 )
                                 .frame(false),
                             );
@@ -204,25 +204,25 @@ pub(crate) fn show(
                 },
                 |ui| {
                     ui.horizontal(|ui| {
-                        if widgets::outline_button(ui, t().cancel, !dialog.busy).clicked() {
+                        if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
                             actions.push(Action::CancelAddRule);
                         }
                         let label = if dialog.busy {
                             if dialog.editing.is_some() {
-                                t().saving.to_owned()
+                                tr!("saving").to_owned()
                             } else {
-                                t().adding_rule.to_owned()
+                                tr!("adding-rule").to_owned()
                             }
                         } else if dialog.editing.is_some() {
-                            t().save.to_owned()
+                            tr!("save").to_owned()
                         } else if dialog.kind == RuleInputKind::Domain {
                             let domains = rosetun_core::parse_domain_lines(
                                 &dialog.domains,
                                 dialog.subdomains,
                             );
-                            t().add_rules(domains.domains.len())
+                            crate::i18n::add_rules(domains.domains.len())
                         } else {
-                            t().add_rule.to_owned()
+                            tr!("add-rule").to_owned()
                         };
                         if widgets::button_fill(ui, &label, can_submit).clicked() {
                             actions.push(Action::SubmitAddRule);
@@ -232,7 +232,7 @@ pub(crate) fn show(
             );
             if dialog.editing.is_none() && dialog.temporary_only {
                 ui.label(
-                    RichText::new(t().temporary_dialog_hint)
+                    RichText::new(tr!("temporary-dialog-hint"))
                         .small()
                         .color(theme::ROSE_LIGHT),
                 );
@@ -254,7 +254,7 @@ fn temporary_chip(ui: &mut egui::Ui, temporary_only: &mut bool, can_temporary: b
     let font = egui::TextStyle::Small.resolve(ui.style());
     let text = ui
         .painter()
-        .layout_no_wrap(t().temporary_chip.to_owned(), font, color);
+        .layout_no_wrap(tr!("temporary-chip").to_owned(), font, color);
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(12.0 * 2.0 + 14.0 + 6.0 + text.size().x, 32.0),
         if can_temporary && !busy {
@@ -303,9 +303,9 @@ fn temporary_chip(ui: &mut egui::Ui, temporary_only: &mut bool, can_temporary: b
         response
     };
     let response = response.on_hover_text(if can_temporary {
-        t().temporary_hint
+        tr!("temporary-hint")
     } else {
-        t().temporary_needs_connection
+        tr!("temporary-needs-connection")
     });
     if response.clicked() {
         *temporary_only = !*temporary_only;
@@ -314,7 +314,7 @@ fn temporary_chip(ui: &mut egui::Ui, temporary_only: &mut bool, can_temporary: b
 
 fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     ui.label(
-        RichText::new(t().sites_label)
+        RichText::new(tr!("sites-label"))
             .small()
             .color(theme::TEXT_DIM),
     );
@@ -342,8 +342,8 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     }
     widgets::toggle_row(
         ui,
-        t().include_subdomains,
-        t().include_subdomains_detail,
+        &tr!("include-subdomains"),
+        &tr!("include-subdomains-detail"),
         &mut dialog.subdomains,
         !dialog.busy,
     );
@@ -354,14 +354,14 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     for error in parsed.errors.iter().take(3) {
         let message = errors::rule_input(t(), &error.error);
         ui.label(
-            RichText::new(t().line_error(error.line, &message))
+            RichText::new(crate::i18n::line_error(error.line, &message))
                 .small()
                 .color(theme::ERROR),
         );
     }
     if parsed.errors.len() > 3 {
         ui.label(
-            RichText::new(t().more_errors(parsed.errors.len() - 3))
+            RichText::new(crate::i18n::more_errors(parsed.errors.len() - 3))
                 .small()
                 .color(theme::ERROR),
         );
@@ -376,7 +376,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         let width = ui.available_width() - 38.0 - ui.spacing().item_spacing.x;
         let input = ui
             .add_enabled_ui(!dialog.busy, |ui| {
-                widgets::search_field(ui, &mut dialog.process_filter, t().find_app, width)
+                widgets::search_field(ui, &mut dialog.process_filter, &tr!("find-app"), width)
             })
             .inner;
         if dialog.focus_input {
@@ -400,7 +400,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
             !dialog.busy && dialog.load_request.is_none(),
             38.0,
         )
-        .on_hover_text(t().refresh)
+        .on_hover_text(tr!("refresh"))
         .clicked()
         {
             actions.push(Action::RefreshProcesses);
@@ -411,7 +411,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     }
     if dialog.load_request.is_some() {
         ui.label(
-            RichText::new(t().loading_processes)
+            RichText::new(tr!("loading-processes"))
                 .small()
                 .color(theme::TEXT_DIM),
         );
@@ -421,10 +421,17 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     if !filtering {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 16.0;
-            if process_tab(ui, t().open_tab, !dialog.show_all, !dialog.busy).clicked() {
+            if process_tab(ui, &tr!("open-tab"), !dialog.show_all, !dialog.busy).clicked() {
                 dialog.show_all = false;
             }
-            if process_tab(ui, &t().all_processes(total), dialog.show_all, !dialog.busy).clicked() {
+            if process_tab(
+                ui,
+                &crate::i18n::all_processes(total),
+                dialog.show_all,
+                !dialog.busy,
+            )
+            .clicked()
+            {
                 dialog.show_all = true;
             }
         });
@@ -443,7 +450,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         .sum();
     if filtering {
         ui.label(
-            RichText::new(t().found(shown))
+            RichText::new(crate::i18n::found(shown))
                 .small()
                 .color(theme::TEXT_DIM),
         );
@@ -469,7 +476,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 let response = process_row(
                     ui,
                     &display::safe_text(typed),
-                    t().typed_process,
+                    &tr!("typed-process"),
                     "+",
                     theme::BORDER_STRONG,
                     selected,
@@ -503,7 +510,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     continue;
                 }
                 let path = group.path.as_ref().map_or_else(
-                    || t().path_unavailable.to_owned(),
+                    || tr!("path-unavailable").to_owned(),
                     |path| path.to_string_lossy().into_owned(),
                 );
                 let name = if group.count > 1 {
@@ -537,9 +544,9 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
             if shown == 0 && !manual && dialog.processes_loaded {
                 ui.label(
                     RichText::new(if filtering {
-                        t().no_processes_match
+                        tr!("no-processes-match")
                     } else {
-                        t().no_running_processes
+                        tr!("no-running-processes")
                     })
                     .color(theme::TEXT_DIM),
                 );
@@ -552,7 +559,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
             #[cfg(windows)]
             {
                 ui.spacing_mut().interact_size.y = 32.0;
-                if widgets::outline_button(ui, t().browse, !dialog.busy && !dialog.browsing)
+                if widgets::outline_button(ui, tr!("browse"), !dialog.busy && !dialog.browsing)
                     .clicked()
                 {
                     actions.push(Action::BrowseExecutable);

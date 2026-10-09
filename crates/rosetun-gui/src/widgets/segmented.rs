@@ -19,11 +19,11 @@ fn segment_widths(natural: &[f32], fill: Option<f32>, gap: f32) -> Vec<f32> {
 
 /// Options side by side on one track. Returns the option the user clicked
 /// when it differs from `selected`.
-pub(crate) fn segmented<T: Copy + PartialEq>(
+pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
     selected: T,
-    options: &[(T, &str)],
+    options: &[(T, L)],
     fill_width: bool,
     enabled: bool,
 ) -> Option<T> {
@@ -36,7 +36,7 @@ pub(crate) fn segmented<T: Copy + PartialEq>(
         .iter()
         .map(|(_, label)| {
             ui.painter()
-                .layout_no_wrap((*label).to_owned(), font.clone(), TEXT)
+                .layout_no_wrap(label.as_ref().to_owned(), font.clone(), TEXT)
                 .size()
                 .x
                 + 28.0
@@ -80,7 +80,12 @@ pub(crate) fn segmented<T: Copy + PartialEq>(
         );
         let active = *value == selected;
         response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, active, label)
+            egui::WidgetInfo::selected(
+                egui::WidgetType::SelectableLabel,
+                enabled,
+                active,
+                label.as_ref(),
+            )
         });
         if enabled && response.clicked() && !active {
             clicked = Some(*value);
@@ -104,7 +109,7 @@ pub(crate) fn segmented<T: Copy + PartialEq>(
         let color = faded(if active || hovered { TEXT } else { TEXT_MUTED });
         let galley = ui
             .painter()
-            .layout_no_wrap((*label).to_owned(), font.clone(), color);
+            .layout_no_wrap(label.as_ref().to_owned(), font.clone(), color);
         ui.painter()
             .galley(rect.center() - galley.size() / 2.0, galley, color);
         if enabled {

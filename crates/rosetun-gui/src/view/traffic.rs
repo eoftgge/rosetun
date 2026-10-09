@@ -4,7 +4,6 @@ use eframe::egui::{self, Color32, RichText};
 use rosetun_config::ConnectionState;
 
 use crate::state::{Action, State, TrafficRange};
-use crate::strings::t;
 use crate::{theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -36,12 +35,18 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     traffic_row(
                         ui,
                         theme::ROSE_LIGHT,
-                        t().traffic_down,
+                        &tr!("traffic-down"),
                         down,
                         traffic.is_some(),
                     );
                     ui.add_space(10.0);
-                    traffic_row(ui, theme::ROSE_DARK, t().traffic_up, up, traffic.is_some());
+                    traffic_row(
+                        ui,
+                        theme::ROSE_DARK,
+                        &tr!("traffic-up"),
+                        up,
+                        traffic.is_some(),
+                    );
                     ui.add_space(14.0);
                     let (line, _) =
                         ui.allocate_exact_size(egui::vec2(232.0, 1.0), egui::Sense::hover());
@@ -53,12 +58,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(t().traffic_session)
+                            RichText::new(tr!("traffic-session"))
                                 .small()
                                 .color(theme::TEXT_DIM),
                         );
-                        let totals =
-                            t().traffic_rates(&t().bytes(down_total), &t().bytes(up_total));
+                        let totals = crate::i18n::traffic_rates(
+                            &crate::i18n::bytes(down_total),
+                            &crate::i18n::bytes(up_total),
+                        );
                         ui.add(
                             egui::Label::new(RichText::new(&totals).small().color(
                                 if traffic.is_some() {
@@ -80,14 +87,17 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui,
                     |ui| {
                         let range = match state.traffic_range {
-                            TrafficRange::OneMinute => t().traffic_range_1m,
-                            TrafficRange::FiveMinutes => t().traffic_range_5m,
-                            TrafficRange::FifteenMinutes => t().traffic_range_15m,
+                            TrafficRange::OneMinute => tr!("traffic-range-1m"),
+                            TrafficRange::FiveMinutes => tr!("traffic-range-5m"),
+                            TrafficRange::FifteenMinutes => tr!("traffic-range-15m"),
                         };
                         ui.label(
-                            RichText::new(t().traffic_chart_caption(range, &t().rate(peak)))
-                                .small()
-                                .color(theme::TEXT_DIM),
+                            RichText::new(crate::i18n::traffic_chart_caption(
+                                &range,
+                                &crate::i18n::rate(peak),
+                            ))
+                            .small()
+                            .color(theme::TEXT_DIM),
                         );
                     },
                     |ui| {
@@ -96,9 +106,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                             "traffic_range",
                             state.traffic_range,
                             &[
-                                (TrafficRange::OneMinute, t().traffic_range_1m),
-                                (TrafficRange::FiveMinutes, t().traffic_range_5m),
-                                (TrafficRange::FifteenMinutes, t().traffic_range_15m),
+                                (TrafficRange::OneMinute, tr!("traffic-range-1m")),
+                                (TrafficRange::FiveMinutes, tr!("traffic-range-5m")),
+                                (TrafficRange::FifteenMinutes, tr!("traffic-range-15m")),
                             ],
                             false,
                             true,
@@ -115,7 +125,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
 }
 
 fn traffic_row(ui: &mut egui::Ui, color: Color32, label: &str, rate: u64, connected: bool) {
-    let formatted = t().rate(rate);
+    let formatted = crate::i18n::rate(rate);
     let (number, unit) = formatted.split_once(' ').unwrap_or((&formatted, ""));
     let text_color = if connected {
         theme::TEXT
@@ -196,7 +206,7 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            t().traffic_empty,
+            tr!("traffic-empty"),
             egui::TextStyle::Small.resolve(ui.style()),
             theme::TEXT_DIM,
         );
@@ -236,10 +246,10 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
             let (down, up) = columns[columns.len() - 1 - slot];
             response.on_hover_text(format!(
                 "{}: {}\n{}: {}",
-                t().traffic_down,
-                t().rate(down),
-                t().traffic_up,
-                t().rate(up),
+                tr!("traffic-down"),
+                crate::i18n::rate(down),
+                tr!("traffic-up"),
+                crate::i18n::rate(up),
             ));
         }
     }

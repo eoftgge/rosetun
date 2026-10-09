@@ -95,7 +95,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                         let (dismissed, restore) = widgets::dismissible_error_with_action(
                             ui,
                             error,
-                            Some((t().restore_my_edits, state.can_restore_edits())),
+                            Some((&tr!("restore-my-edits"), state.can_restore_edits())),
                         );
                         if dismissed {
                             actions.push(Action::DismissApplyFailure);
@@ -147,19 +147,19 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
 fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         ui.add_space(12.0);
-        ui.heading(t().settings);
+        ui.heading(tr!("settings"));
     });
     ui.add_space(10.0);
     for (section, title) in [
-        (SettingsSection::General, t().section_general),
-        (SettingsSection::Connection, t().connection),
-        (SettingsSection::Network, t().section_network),
-        (SettingsSection::Service, t().section_service),
-        (SettingsSection::About, t().about),
+        (SettingsSection::General, tr!("section-general")),
+        (SettingsSection::Connection, tr!("connection")),
+        (SettingsSection::Network, tr!("section-network")),
+        (SettingsSection::Service, tr!("section-service")),
+        (SettingsSection::About, tr!("about")),
     ] {
         if settings_nav_item(
             ui,
-            title,
+            &title,
             state.settings_screen.section == section,
             section == SettingsSection::Service && service_warning(state),
             section == SettingsSection::About && state.available_update().is_some(),
@@ -170,7 +170,7 @@ fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let size = ui.available_size();
     ui.allocate_ui_with_layout(size, egui::Layout::bottom_up(Align::Min), |ui| {
         ui.add(egui::Label::new(
-            RichText::new(t().settings_saved_instantly)
+            RichText::new(tr!("settings-saved-instantly"))
                 .small()
                 .color(theme::TEXT_DIM),
         ));

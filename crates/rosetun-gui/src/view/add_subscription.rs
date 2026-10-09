@@ -16,10 +16,10 @@ pub(crate) fn show(
         .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(520.0);
-            ui.heading(t().add_subscription);
-            ui.colored_label(theme::TEXT_MUTED, t().add_subtitle);
+            ui.heading(tr!("add-subscription"));
+            ui.colored_label(theme::TEXT_MUTED, tr!("add-subtitle"));
             ui.add_space(18.0);
-            ui.label(t().subscription_url);
+            ui.label(tr!("subscription-url"));
             ui.horizontal(|ui| {
                 let input = ui.add_enabled(
                     !dialog.busy,
@@ -35,19 +35,21 @@ pub(crate) fn show(
                 if input.changed() {
                     dialog.error = None;
                 }
-                if widgets::outline_button(ui, t().paste, !dialog.busy).clicked() {
+                if widgets::outline_button(ui, tr!("paste"), !dialog.busy).clicked() {
                     input.request_focus();
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                 }
             });
-            ui.add(egui::Label::new(RichText::new(t().url_help).color(theme::TEXT_DIM)).wrap());
+            ui.add(egui::Label::new(RichText::new(tr!("url-help")).color(theme::TEXT_DIM)).wrap());
             let normalized = rosetun_core::normalize_subscription_url(&dialog.url);
             if !dialog.url.trim().is_empty() {
                 match &normalized {
                     Ok(url) if uses_plain_http(url) => {
                         ui.add(
-                            egui::Label::new(RichText::new(t().http_warning).color(theme::ERROR))
-                                .wrap(),
+                            egui::Label::new(
+                                RichText::new(tr!("http-warning")).color(theme::ERROR),
+                            )
+                            .wrap(),
                         );
                     }
                     Err(error) => {
@@ -67,12 +69,12 @@ pub(crate) fn show(
                 }
             }
             ui.add_space(16.0);
-            ui.label(t().name);
+            ui.label(tr!("name"));
             if ui
                 .add_enabled(
                     !dialog.busy,
                     egui::TextEdit::singleline(&mut dialog.name)
-                        .hint_text(t().name_placeholder)
+                        .hint_text(tr!("name-placeholder"))
                         .desired_width(f32::INFINITY),
                 )
                 .changed()
@@ -82,11 +84,13 @@ pub(crate) fn show(
             ui.add_space(16.0);
             ui.horizontal(|ui| {
                 widgets::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
-                ui.label(t().send_device_id);
+                ui.label(tr!("send-device-id"));
             });
             ui.add(
-                egui::Label::new(RichText::new(t().device_id_explanation).color(theme::TEXT_DIM))
-                    .wrap(),
+                egui::Label::new(
+                    RichText::new(tr!("device-id-explanation")).color(theme::TEXT_DIM),
+                )
+                .wrap(),
             );
             if let Some(error) = &dialog.error {
                 ui.add_space(12.0);
@@ -106,14 +110,18 @@ pub(crate) fn show(
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if widgets::button_fill(
                     ui,
-                    if dialog.busy { t().adding } else { t().add },
+                    if dialog.busy {
+                        tr!("adding")
+                    } else {
+                        tr!("add")
+                    },
                     !dialog.busy && normalized.is_ok(),
                 )
                 .clicked()
                 {
                     actions.push(Action::SubmitAdd);
                 }
-                if widgets::outline_button(ui, t().cancel, !dialog.busy).clicked() {
+                if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
                     actions.push(Action::CancelAdd);
                 }
             });
