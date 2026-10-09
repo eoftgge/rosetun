@@ -30,6 +30,8 @@ use windows_sys::Win32::System::SystemServices::{
 };
 use windows_sys::Win32::System::WindowsProgramming::DRIVE_FIXED;
 
+use crate::data_dir;
+
 const TRUSTED_INSTALLER_SID: &str =
     "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
 const PROFILE_LIST_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
@@ -713,6 +715,13 @@ fn collect(path: &Path, include_contents: bool) -> Result<Facts, Failure> {
 
 pub(crate) fn verify(path: &Path, include_contents: bool) -> Result<(), Failure> {
     collect(path, include_contents).map(|_| ())
+}
+
+pub(crate) fn secure(path: &Path) -> Result<(), Failure> {
+    let facts = collect(path, true)?;
+    data_dir::secure_install(&facts.path, facts.target == Target::Empty)
+        .map_err(|error| inspection(&facts.path, error))?;
+    verify(&facts.path, false)
 }
 
 #[cfg(test)]
