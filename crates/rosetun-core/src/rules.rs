@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use rosetun_config::{
-    AppConfig, DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget,
+    AppConfig, DnsSettings, DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet,
+    RuleSetId, RuleTarget,
 };
 use url::Host;
 
@@ -20,6 +21,47 @@ pub enum RuleSetError {
     EmptyName,
     #[error("this rule is already in the set")]
     DuplicateRule,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedSnapshot {
+    pub rule_set: Option<RuleSet>,
+    pub dns: DnsSettings,
+    pub missing_rule_set: Option<RuleSetId>,
+}
+
+impl AppliedSnapshot {
+    pub fn from_config(config: &AppConfig) -> Self {
+        Self {
+            rule_set: config.active_rules().cloned(),
+            dns: config.settings.dns.clone(),
+            missing_rule_set: None,
+        }
+    }
+}
+
+pub fn restore_rules_and_dns(
+    store: &Store,
+    snapshot: &AppliedSnapshot,
+) -> Result<AppliedSnapshot, RuleSetError> {
+    store.modify(|config| {
+        let mut previous = AppliedSnapshot::from_config(config);
+        if let Some(set) = &snapshot.rule_set {
+            if let Some(current) = config.rule_sets.iter_mut().find(|item| item.id == set.id) {
+                *current = set.clone();
+            } else {
+                // The failed edit deleted the running set; keep that deletion recoverable.
+                previous.missing_rule_set = Some(set.id.clone());
+                config.rule_sets.push(set.clone());
+            }
+        }
+        if let Some(id) = &snapshot.missing_rule_set {
+            config.rule_sets.retain(|set| &set.id != id);
+        }
+        config.active_rule_set = snapshot.rule_set.as_ref().map(|set| set.id.clone());
+        config.settings.dns = snapshot.dns.clone();
+        Ok(previous)
+    })
 }
 
 fn next_id<'a>(ids: impl Iterator<Item = &'a str>) -> String {

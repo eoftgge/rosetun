@@ -14,16 +14,16 @@ use rosetun_config::{
     RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
-    AddFromUrlError, AddOptions, AddedRules, ExitInfo, ExitInfoError, MoveSubscriptionError,
-    PING_PARALLEL, PING_TIMEOUT, Ping, Release, RemoveSubscriptionError, RenameSubscriptionError,
-    RuleSetError, SelectNodeError, SelectRuleSetError, SettingsError, Store, StoreError,
-    SubscriptionUpdateResult, Timeouts, UpdateCheckError, UpdateReport, UpdateSubscriptionError,
-    add_prepared_subscription, add_rule, add_rules, create_rule_set, delete_rule_set, move_rule,
-    move_rules, move_subscription, ping_all, prepare_subscription, remove_rule, remove_rules,
-    remove_subscription, rename_rule_set, rename_subscription, reset_settings, select_node,
-    select_rule_set, set_default_target, set_dns, set_interface_scale, set_kill_switch,
-    set_language, set_rule_enabled, set_rule_target, set_verbose_log, update_all, update_rule,
-    update_subscription,
+    AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitInfo, ExitInfoError,
+    MoveSubscriptionError, PING_PARALLEL, PING_TIMEOUT, Ping, Release, RemoveSubscriptionError,
+    RenameSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingsError,
+    Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateCheckError, UpdateReport,
+    UpdateSubscriptionError, add_prepared_subscription, add_rule, add_rules, create_rule_set,
+    delete_rule_set, move_rule, move_rules, move_subscription, ping_all, prepare_subscription,
+    remove_rule, remove_rules, remove_subscription, rename_rule_set, rename_subscription,
+    reset_settings, restore_rules_and_dns, select_node, select_rule_set, set_default_target,
+    set_dns, set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
+    set_verbose_log, update_all, update_rule, update_subscription,
 };
 use rosetun_ipc::{
     ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeOutcome,
@@ -81,8 +81,11 @@ pub(crate) enum WorkerEvent {
         route: ExitRoute,
         result: Result<ExitInfo, ExitInfoError>,
     },
+    ConnectSnapshot(AppliedSnapshot),
     Connect(Result<ConnectRequest, HelperCommandError>),
     Apply(Result<ConnectRequest, HelperCommandError>),
+    RestoreApplied(Result<AppliedSnapshot, RuleSetError>),
+    RestoreEdits(Result<AppliedSnapshot, RuleSetError>),
     TemporaryRules {
         request: u64,
         result: Result<Vec<Rule>, HelperCommandError>,
@@ -207,16 +210,27 @@ impl WorkerDispatcher {
                 .store
                 .load()
                 .map_err(HelperCommandError::Store)
-                .and_then(|config| ConnectRequest::from_config(&config).map_err(Into::into))
-                .and_then(|request| {
-                    let sent = request.clone();
-                    with_helper(|client| client.connect_tunnel(request))?;
-                    Ok(sent)
+                .and_then(|config| {
+                    let request = ConnectRequest::from_config(&config)?;
+                    let snapshot = AppliedSnapshot::from_config(&config);
+                    with_helper(|client| client.connect_tunnel(request.clone()))?;
+                    Ok((request, snapshot))
                 });
-            match &result {
-                Ok(_) => tracing::info!("Connect command succeeded"),
-                Err(error) => tracing::warn!(%error, "Connect command failed"),
-            }
+            let result = match result {
+                Ok((request, snapshot)) => {
+                    tracing::info!("Connect command succeeded");
+                    emit(
+                        &publisher.tx,
+                        &publisher.repaint,
+                        WorkerEvent::ConnectSnapshot(snapshot),
+                    );
+                    Ok(request)
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Connect command failed");
+                    Err(error)
+                }
+            };
             publisher.complete(WorkerEvent::Connect(result));
         });
     }
@@ -236,6 +250,22 @@ impl WorkerDispatcher {
                 &publisher.repaint,
                 WorkerEvent::Apply(result),
             );
+        });
+    }
+
+    pub(crate) fn restore_applied(&self, snapshot: AppliedSnapshot) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = restore_rules_and_dns(&publisher.store, &snapshot);
+            publisher.complete(WorkerEvent::RestoreApplied(result));
+        });
+    }
+
+    pub(crate) fn restore_edits(&self, snapshot: AppliedSnapshot) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = restore_rules_and_dns(&publisher.store, &snapshot);
+            publisher.complete(WorkerEvent::RestoreEdits(result));
         });
     }
 

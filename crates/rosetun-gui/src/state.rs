@@ -9,8 +9,8 @@ use rosetun_config::{
     Subscription, SubscriptionId,
 };
 use rosetun_core::{
-    AddFromUrlError, AddOptions, DnsPreset, Ping, Release, UpdateCheckError, UpdateReport,
-    UpdateSubscriptionError, is_newer,
+    AddFromUrlError, AddOptions, AppliedSnapshot, DnsPreset, Ping, Release, UpdateCheckError,
+    UpdateReport, UpdateSubscriptionError, is_newer,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError, ProbeOutcome, ProbeResult};
 
@@ -456,6 +456,17 @@ pub(crate) struct State {
     pub(crate) tunnel_delay: TunnelDelay,
     delay_last_auto: Option<u64>,
     session_request: Option<ConnectRequest>,
+    applied_snapshot: Option<AppliedSnapshot>,
+    connect_snapshot: Option<AppliedSnapshot>,
+    deferred_snapshot: Option<AppliedSnapshot>,
+    apply_candidate: Option<AppliedSnapshot>,
+    apply_baseline: Option<AppliedSnapshot>,
+    failed_edits: Option<AppliedSnapshot>,
+    blocked_auto_apply: Option<AppliedSnapshot>,
+    restore_pending: bool,
+    pending_restore: Option<Job>,
+    restore_reason: Option<String>,
+    pub(crate) apply_failure: Option<String>,
     pub(crate) temporary_rules: Vec<Rule>,
     temporary_rules_loaded: bool,
     temporary_load: Option<u64>,
@@ -524,6 +535,17 @@ impl Default for State {
             tunnel_delay: TunnelDelay::Idle,
             delay_last_auto: None,
             session_request: None,
+            applied_snapshot: None,
+            connect_snapshot: None,
+            deferred_snapshot: None,
+            apply_candidate: None,
+            apply_baseline: None,
+            failed_edits: None,
+            blocked_auto_apply: None,
+            restore_pending: false,
+            pending_restore: None,
+            restore_reason: None,
+            apply_failure: None,
             temporary_rules: Vec::new(),
             temporary_rules_loaded: false,
             temporary_load: None,
@@ -655,6 +677,7 @@ pub(crate) enum Action {
     Primary,
     CancelConnection,
     Apply,
+    RestoreMyEdits,
     RequestProtectionOff,
     KeepBlocked,
     ConfirmProtectionOff,
@@ -683,6 +706,7 @@ pub(crate) enum Action {
     CancelRename,
     SubmitRename,
     DismissOperationError,
+    DismissApplyFailure,
     DismissConfigError,
     DismissOutcome(SubscriptionId),
 }
@@ -694,6 +718,8 @@ pub(crate) enum Job {
         own_alias: String,
     },
     Apply(Box<ConnectRequest>),
+    RestoreApplied(AppliedSnapshot),
+    RestoreEdits(AppliedSnapshot),
     LoadTemporaryRules(u64),
     Disconnect,
     SetInterfaceScale(u16),
@@ -831,6 +857,7 @@ impl State {
             && self.config_ready
             && self.temporary_rules_loaded
             && !self.operations.helper
+            && !self.restore_pending
             && self.session_request.is_some()
             && matches!(
                 self.visible_status().map(|status| &status.state),
@@ -850,11 +877,42 @@ impl State {
             || session.settings.dns != current.settings.dns
     }
 
+    fn saving_config(&self) -> bool {
+        self.operations.rules || self.operations.rules_edit || self.operations.settings
+    }
+
     pub(crate) fn can_apply(&self) -> bool {
-        self.can_change_temporary() && self.has_pending_apply()
+        self.can_change_temporary() && !self.saving_config() && self.has_pending_apply()
+    }
+
+    fn start_apply(&mut self) {
+        self.operations.helper = true;
+        self.apply_in_flight = true;
+        self.apply_baseline = self.applied_snapshot.clone();
+        self.apply_candidate = Some(AppliedSnapshot::from_config(&self.config));
+        self.apply_failure = None;
+        self.blocked_auto_apply = None;
+        self.operation_error = None;
     }
 
     pub(crate) fn apply_on_leave(&mut self) -> Option<Job> {
+        if self.saving_config() {
+            if self.helper_available
+                && !self.restore_pending
+                && matches!(self.status.state, ConnectionState::Connected)
+            {
+                self.apply_after_leave = true;
+            }
+            return None;
+        }
+        if self
+            .blocked_auto_apply
+            .as_ref()
+            .is_some_and(|blocked| blocked == &AppliedSnapshot::from_config(&self.config))
+        {
+            return None;
+        }
+        self.blocked_auto_apply = None;
         if self.can_apply() {
             return self.act(Action::Apply);
         }
@@ -879,10 +937,25 @@ impl State {
         self.queued_leave_apply.take()
     }
 
+    pub(crate) fn take_restore(&mut self) -> Option<Job> {
+        self.pending_restore.take()
+    }
+
+    pub(crate) fn can_restore_edits(&self) -> bool {
+        self.failed_edits.is_some()
+            && self.config_ready
+            && !self.restore_pending
+            && !self.operations.helper
+            && !self.operations.settings
+            && !self.operations.rules_edit
+    }
+
     pub(crate) fn take_apply(&mut self) -> Option<Job> {
         if !(self.apply_after_choice || self.apply_after_leave)
             || !self.temporary_rules_loaded
             || self.operations.helper
+            || self.saving_config()
+            || self.restore_pending
         {
             return None;
         }
@@ -918,6 +991,21 @@ impl State {
         }
         let id = self.keep_apply.take()?;
         self.act(Action::RemoveTemporary(id))
+    }
+
+    fn clear_applied_state(&mut self) {
+        self.applied_snapshot = None;
+        self.connect_snapshot = None;
+        self.deferred_snapshot = None;
+        self.apply_candidate = None;
+        self.apply_baseline = None;
+        self.failed_edits = None;
+        self.blocked_auto_apply = None;
+        self.apply_failure = None;
+        self.restore_reason = None;
+        self.restore_pending = false;
+        self.pending_restore = None;
+        self.apply_after_leave = false;
     }
 
     fn clear_temporary(&mut self) {
@@ -1425,9 +1513,9 @@ impl State {
                 self.tunnel_delay = TunnelDelay::Idle;
                 self.delay_last_auto = None;
                 self.session_request = None;
+                self.clear_applied_state();
                 self.session_snapshot_checked = false;
                 self.apply_after_choice = false;
-                self.apply_after_leave = false;
                 self.apply_in_flight = false;
                 self.queued_leave_apply = None;
                 self.traffic_history.clear();
@@ -1478,8 +1566,13 @@ impl State {
                             self.session_request = None;
                             self.session_snapshot_checked = false;
                             self.apply_after_choice = false;
-                            if !self.apply_in_flight {
-                                self.apply_after_leave = false;
+                            if matches!(status.state, ConnectionState::Disconnected) {
+                                self.clear_applied_state();
+                            } else {
+                                self.applied_snapshot = None;
+                                if !self.apply_in_flight {
+                                    self.apply_after_leave = false;
+                                }
                             }
                             self.clear_temporary();
                         }
@@ -1487,7 +1580,8 @@ impl State {
                             if self.session_request.is_none()
                                 && !self.session_snapshot_checked
                                 && self.config_ready
-                                && !self.operations.helper =>
+                                && !self.operations.helper
+                                && !self.restore_pending =>
                         {
                             self.session_snapshot_checked = true;
                             if let Ok(mut request) = ConnectRequest::from_config(&self.config)
@@ -1497,6 +1591,8 @@ impl State {
                                     request.temporary_rules = self.temporary_rules.clone();
                                 }
                                 self.session_request = Some(request);
+                                self.applied_snapshot =
+                                    Some(AppliedSnapshot::from_config(&self.config));
                             }
                         }
                         _ => {}
@@ -1587,10 +1683,17 @@ impl State {
                 };
                 self.exit_revealed = false;
             }
+            WorkerEvent::ConnectSnapshot(snapshot) => {
+                if self.connect_in_flight {
+                    self.connect_snapshot = Some(snapshot);
+                }
+            }
             WorkerEvent::Connect(result) => {
                 self.connect_in_flight = false;
+                let snapshot = self.connect_snapshot.take();
                 if self.cancelled_connect {
                     if self.cancel_in_flight {
+                        self.deferred_snapshot = snapshot;
                         self.deferred_connect = result.ok();
                     }
                     self.operations.helper = self.cancel_in_flight;
@@ -1603,6 +1706,10 @@ impl State {
                         self.temporary_rules_loaded = true;
                         self.temporary_load = None;
                         self.session_request = Some(request);
+                        self.applied_snapshot = snapshot.or_else(|| {
+                            self.config_ready
+                                .then(|| AppliedSnapshot::from_config(&self.config))
+                        });
                         self.session_snapshot_checked = true;
                         self.operation_error = None;
                     }
@@ -1614,21 +1721,30 @@ impl State {
                 self.operations.helper = false;
                 self.apply_in_flight = false;
                 let before = self.temporary_before_apply.take();
+                let baseline = self.apply_baseline.take();
+                let candidate = self.apply_candidate.take();
                 if !self.helper_available
-                    || matches!(
-                        self.status.state,
-                        ConnectionState::Disconnected
-                            | ConnectionState::Failed { .. }
-                            | ConnectionState::FailedProtected { .. }
-                    )
+                    || matches!(self.status.state, ConnectionState::Disconnected)
                 {
                     self.apply_after_leave = false;
                     return;
                 }
                 match result {
                     Ok(request) => {
+                        if matches!(
+                            self.status.state,
+                            ConnectionState::Failed { .. }
+                                | ConnectionState::FailedProtected { .. }
+                        ) {
+                            self.apply_after_leave = false;
+                            return;
+                        }
                         self.temporary_rules = request.temporary_rules.clone();
                         self.session_request = Some(request);
+                        self.applied_snapshot = candidate;
+                        self.failed_edits = None;
+                        self.blocked_auto_apply = None;
+                        self.apply_failure = None;
                         self.operation_error = None;
                         self.exit_route = None;
                         self.tunnel_delay = TunnelDelay::Idle;
@@ -1640,18 +1756,77 @@ impl State {
                         }
                         self.apply_after_leave = false;
                         self.apply_after_choice = false;
-                        if matches!(
+                        let cancelled = matches!(
                             &error,
                             HelperCommandError::Client(ClientError::Helper(HelperError {
                                 code: ErrorCode::Cancelled,
                                 ..
                             }))
-                        ) {
-                            self.operation_error = None;
-                            return;
-                        }
+                        );
                         let reason = errors::helper_command(t(), &error);
-                        self.operation_error = Some(self.text(&t().apply_failed(&reason)));
+                        let changed = baseline
+                            .as_ref()
+                            .zip(candidate.as_ref())
+                            .is_some_and(|(running, edited)| running != edited);
+                        self.blocked_auto_apply = candidate;
+                        if changed {
+                            self.restore_pending = true;
+                            self.restore_reason = Some(reason);
+                            self.pending_restore = baseline.map(Job::RestoreApplied);
+                        } else if cancelled {
+                            self.operation_error = None;
+                        } else {
+                            self.operation_error = Some(self.text(&t().apply_failed(&reason)));
+                        }
+                    }
+                }
+            }
+            WorkerEvent::RestoreApplied(result) => {
+                if !self.restore_pending {
+                    return;
+                }
+                self.restore_pending = false;
+                let reason = self.restore_reason.take().unwrap_or_default();
+                match result {
+                    Ok(failed) => {
+                        self.failed_edits = Some(failed);
+                        self.apply_failure = Some(self.text(&fill(
+                            t().apply_failed_restored_template,
+                            &[("reason", &reason)],
+                        )));
+                        self.operation_error = None;
+                        self.settings_screen.dirty = false;
+                        if self.settings_screen.opened {
+                            self.settings_screen.sync_dns(&self.config.settings.dns);
+                        }
+                    }
+                    Err(error) => {
+                        let storage = errors::rule_set(t(), &error);
+                        self.operation_error = Some(self.text(&fill(
+                            t().apply_rollback_failed_template,
+                            &[("reason", &reason), ("error", &storage)],
+                        )));
+                    }
+                }
+            }
+            WorkerEvent::RestoreEdits(result) => {
+                if !self.restore_pending {
+                    return;
+                }
+                self.restore_pending = false;
+                match result {
+                    Ok(_) => {
+                        self.failed_edits = None;
+                        self.blocked_auto_apply = None;
+                        self.apply_failure = None;
+                        self.operation_error = None;
+                        self.settings_screen.dirty = false;
+                        if self.settings_screen.opened {
+                            self.settings_screen.sync_dns(&self.config.settings.dns);
+                        }
+                    }
+                    Err(error) => {
+                        self.operation_error = Some(self.text(&errors::rule_set(t(), &error)));
                     }
                 }
             }
@@ -1661,12 +1836,19 @@ impl State {
                 if result.is_ok() {
                     self.protection_confirmation = false;
                     self.deferred_connect = None;
+                    self.session_request = None;
+                    self.clear_temporary();
+                    self.clear_applied_state();
                 } else if cancelling {
                     self.cancelled_connect = false;
                     if let Some(request) = self.deferred_connect.take() {
                         self.temporary_rules = request.temporary_rules.clone();
                         self.temporary_rules_loaded = true;
                         self.session_request = Some(request);
+                        self.applied_snapshot = self.deferred_snapshot.take().or_else(|| {
+                            self.config_ready
+                                .then(|| AppliedSnapshot::from_config(&self.config))
+                        });
                         self.session_snapshot_checked = true;
                     }
                 }
@@ -2585,9 +2767,7 @@ impl State {
                     self.temporary_rules = added.into_iter().chain(before.iter().cloned()).collect();
                     if let Some(request) = self.apply_request() {
                         self.temporary_before_apply = Some(before);
-                        self.operations.helper = true;
-                        self.apply_in_flight = true;
-                        self.operation_error = None;
+                        self.start_apply();
                         self.rule_screen.add = None;
                         self.rule_screen.filter = RuleFilter::default();
                         self.rule_screen.clear_selection();
@@ -2605,9 +2785,7 @@ impl State {
                     self.temporary_rules.remove(index);
                     if let Some(request) = self.apply_request() {
                         self.temporary_before_apply = Some(before);
-                        self.operations.helper = true;
-                        self.apply_in_flight = true;
-                        self.operation_error = None;
+                        self.start_apply();
                         return Some(Job::Apply(Box::new(request)));
                     }
                     self.temporary_rules = before;
@@ -2749,10 +2927,14 @@ impl State {
             }
             Action::Apply => {
                 if self.can_apply() && let Some(request) = self.apply_request() {
-                    self.operations.helper = true;
-                    self.apply_in_flight = true;
-                    self.operation_error = None;
+                    self.start_apply();
                     return Some(Job::Apply(Box::new(request)));
+                }
+            }
+            Action::RestoreMyEdits => {
+                if self.can_restore_edits() {
+                    self.restore_pending = true;
+                    return self.failed_edits.clone().map(Job::RestoreEdits);
                 }
             }
             Action::RequestProtectionOff => {
@@ -2968,6 +3150,7 @@ impl State {
                 }
             }
             Action::DismissOperationError => self.operation_error = None,
+            Action::DismissApplyFailure => self.apply_failure = None,
             Action::DismissConfigError => self.config_error = None,
             Action::DismissOutcome(id) => {
                 self.outcomes.remove(&id);
@@ -4451,6 +4634,38 @@ mod tests {
     }
 
     #[test]
+    fn leaving_while_rule_or_dns_save_is_running_applies_after_publication() {
+        let mut state = connected_state_for_apply();
+        state.act(Action::OpenRules);
+        state.operations.rules_edit = true;
+        assert!(state.act(Action::ShowConnection).is_none());
+        assert!(state.apply_after_leave);
+        assert!(state.take_apply().is_none());
+        let mut saved = state.config.clone();
+        saved.rule_sets[0].rules[0].target = RuleTarget::Direct;
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: saved,
+        });
+        assert!(state.take_apply().is_none());
+        state.reduce(WorkerEvent::SetRuleTarget(Ok(())));
+        assert!(matches!(state.take_apply(), Some(Job::Apply(_))));
+
+        let mut state = connected_state_for_apply();
+        state.act(Action::OpenSettings);
+        state.operations.settings = true;
+        assert!(state.act(Action::ShowConnection).is_none());
+        let mut saved = state.config.clone();
+        saved.settings.dns = DnsPreset::Google.settings();
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config: saved,
+        });
+        state.reduce(WorkerEvent::SetDns(Ok(())));
+        assert!(matches!(state.take_apply(), Some(Job::Apply(_))));
+    }
+
+    #[test]
     fn hiding_applies_pending_edits_only_while_connected() {
         let mut state = connected_state_for_apply();
         assert!(state.apply_on_leave().is_none());
@@ -5100,6 +5315,31 @@ mod tests {
         assert!(!state.operations.helper);
     }
 
+    fn complete_applied_restore(state: &mut State) -> AppliedSnapshot {
+        let Some(Job::RestoreApplied(snapshot)) = state.take_restore() else {
+            panic!("failed apply must restore the running configuration");
+        };
+        let failed = AppliedSnapshot::from_config(&state.config);
+        let mut restored = state.config.clone();
+        if let Some(set) = snapshot.rule_set {
+            if let Some(current) = restored.rule_sets.iter_mut().find(|item| item.id == set.id) {
+                *current = set.clone();
+            } else {
+                restored.rule_sets.push(set.clone());
+            }
+            restored.active_rule_set = Some(set.id);
+        } else {
+            restored.active_rule_set = None;
+        }
+        restored.settings.dns = snapshot.dns;
+        state.reduce(WorkerEvent::Config {
+            generation: state.config_generation + 1,
+            config: restored,
+        });
+        state.reduce(WorkerEvent::RestoreApplied(Ok(failed.clone())));
+        failed
+    }
+
     #[test]
     fn failed_apply_preserves_session_and_shows_error() {
         let mut state = connected_state_for_apply();
@@ -5110,16 +5350,169 @@ mod tests {
             ClientError::Helper(HelperError::new(ErrorCode::Busy, "busy")),
         ))));
         assert_eq!(state.session_request, original);
-        assert!(state.pending_reconnect(SessionPart::Dns));
+        let failed = complete_applied_restore(&mut state);
+        assert_eq!(state.failed_edits, Some(failed));
+        assert!(!state.pending_reconnect(SessionPart::Dns));
+        assert!(
+            state
+                .apply_failure
+                .as_deref()
+                .unwrap()
+                .starts_with("The rules could not be applied: ")
+        );
+        assert!(!state.operations.helper);
+        assert!(!state.can_apply());
+    }
+
+    #[test]
+    fn successful_connections_and_applies_capture_unexpanded_rule_sets() {
+        let mut state = state_for_auto_connect();
+        let mut set = rule_set("1");
+        set.rules[0].matcher = RuleMatcher::Template(RuleTemplate::Youtube);
+        state.config.rule_sets.push(set.clone());
+        state.config.active_rule_set = Some(set.id.clone());
+        let running = AppliedSnapshot::from_config(&state.config);
+        let request = ConnectRequest::from_config(&state.config).unwrap();
+        assert!(
+            request
+                .rule_set
+                .rules
+                .iter()
+                .all(|rule| !matches!(rule.matcher, RuleMatcher::Template(_)))
+        );
+
+        state.connect_in_flight = true;
+        state.reduce(WorkerEvent::ConnectSnapshot(running.clone()));
+        state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+        state.reduce(WorkerEvent::Connect(Ok(request)));
+        assert_eq!(state.applied_snapshot, Some(running.clone()));
+        state.reduce(WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            node: Some(NodeId::new("node")),
+            ..Status::default()
+        }));
+        let candidate = AppliedSnapshot::from_config(&state.config);
+        let Some(Job::Apply(request)) = state.act(Action::Apply) else {
+            panic!("changed template must apply");
+        };
+        assert_eq!(state.applied_snapshot, Some(running));
+        state.reduce(WorkerEvent::Apply(Ok(*request)));
+        assert_eq!(state.applied_snapshot, Some(candidate));
+        assert!(matches!(
+            state
+                .applied_snapshot
+                .as_ref()
+                .unwrap()
+                .rule_set
+                .as_ref()
+                .unwrap()
+                .rules[0]
+                .matcher,
+            RuleMatcher::Template(RuleTemplate::Youtube)
+        ));
+        state.reduce(WorkerEvent::Status(Status::default()));
+        assert!(state.applied_snapshot.is_none());
+    }
+
+    #[test]
+    fn unsupported_rules_and_terminal_apply_failures_restore_config() {
+        for terminal in [
+            None,
+            Some(ConnectionState::Failed {
+                failure_kind: None,
+                reason: "failed".into(),
+            }),
+            Some(ConnectionState::FailedProtected {
+                failure_kind: None,
+                reason: "blocked".into(),
+            }),
+        ] {
+            let mut state = connected_state_for_apply();
+            let running = state.applied_snapshot.clone().unwrap();
+            state.config.rule_sets[0].rules[0].target = RuleTarget::Block;
+            state.config.settings.dns = DnsPreset::Google.settings();
+            assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
+            state.act(Action::OpenRules);
+            assert!(state.act(Action::ShowConnection).is_none());
+            assert!(state.apply_after_leave);
+            if let Some(terminal) = terminal {
+                state.reduce(WorkerEvent::Status(Status {
+                    state: terminal,
+                    ..Status::default()
+                }));
+            }
+            state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
+                ClientError::Helper(HelperError::new(ErrorCode::UnsupportedRules, "unsupported")),
+            ))));
+            assert!(state.take_apply().is_none());
+            assert!(state.restore_pending);
+            let failed = complete_applied_restore(&mut state);
+            assert_eq!(state.failed_edits, Some(failed));
+            assert_eq!(AppliedSnapshot::from_config(&state.config), running);
+            assert!(state.apply_failure.is_some());
+            assert!(state.take_apply().is_none());
+            assert!(state.apply_on_leave().is_none());
+        }
+    }
+
+    #[test]
+    fn restore_my_edits_makes_the_failed_variant_pending_again() {
+        let mut state = connected_state_for_apply();
+        state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+        state.config.settings.dns = DnsPreset::Google.settings();
+        state.act(Action::Apply);
+        state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
+            ClientError::Helper(HelperError::new(ErrorCode::Busy, "busy")),
+        ))));
+        let failed = complete_applied_restore(&mut state);
+        state.act(Action::OpenRules);
+        let Some(Job::RestoreEdits(edited)) = state.act(Action::RestoreMyEdits) else {
+            panic!("the recovery link must save the failed variant");
+        };
+        assert_eq!(edited, failed);
+        assert!(state.act(Action::ShowConnection).is_none());
+        let mut config = state.config.clone();
+        config.rule_sets[0] = edited.rule_set.unwrap();
+        config.settings.dns = edited.dns;
+        state.reduce(WorkerEvent::Config {
+            generation: state.config_generation + 1,
+            config,
+        });
+        state.reduce(WorkerEvent::RestoreEdits(Ok(failed)));
+        assert!(state.failed_edits.is_none());
+        assert!(state.apply_failure.is_none());
+        assert!(state.can_apply());
+        state.act(Action::OpenRules);
+        assert!(matches!(
+            state.act(Action::ShowConnection),
+            Some(Job::Apply(_))
+        ));
+    }
+
+    #[test]
+    fn failed_disk_rollback_does_not_claim_the_rules_were_restored() {
+        let mut state = connected_state_for_apply();
+        state.config.settings.dns = DnsPreset::Google.settings();
+        state.act(Action::Apply);
+        state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
+            ClientError::Helper(HelperError::new(ErrorCode::Busy, "busy")),
+        ))));
+        assert!(matches!(state.take_restore(), Some(Job::RestoreApplied(_))));
+        state.reduce(WorkerEvent::RestoreApplied(Err(
+            rosetun_core::RuleSetError::Store(StoreError::NoConfigDir),
+        )));
+        assert!(state.apply_failure.is_none());
+        assert!(state.failed_edits.is_none());
         assert!(
             state
                 .operation_error
                 .as_deref()
                 .unwrap()
-                .starts_with("Changes were not applied: ")
+                .contains("Could not restore")
         );
-        assert!(!state.operations.helper);
-        assert!(state.can_apply());
+        state.act(Action::OpenSettings);
+        assert!(state.act(Action::ShowConnection).is_none());
+        assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
     }
 
     #[test]

@@ -218,6 +218,8 @@ impl App {
                 self.workers.check_failure_interference(request, own_alias)
             }
             Job::Apply(request) => self.workers.apply(request),
+            Job::RestoreApplied(snapshot) => self.workers.restore_applied(snapshot),
+            Job::RestoreEdits(snapshot) => self.workers.restore_edits(snapshot),
             Job::LoadTemporaryRules(request) => self.workers.load_temporary_rules(request),
             Job::Disconnect => self.workers.disconnect(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
@@ -324,6 +326,9 @@ impl eframe::App for App {
         }
         while let Ok(event) = self.events.try_recv() {
             self.state.reduce(event);
+        }
+        if let Some(job) = self.state.take_restore() {
+            self.dispatch(job);
         }
         if let Some(job) = self.state.take_auto_connect() {
             self.dispatch(job);

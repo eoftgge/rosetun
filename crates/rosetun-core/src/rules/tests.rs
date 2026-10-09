@@ -65,6 +65,118 @@ macro_rules! assert_no_write {
 }
 
 #[test]
+fn restoring_applied_rules_and_dns_keeps_other_configuration_changes() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let mut config = AppConfig::default();
+    let mut applied = RuleSet::new(RuleSetId::new("1"), "Applied", RuleTarget::Proxy);
+    applied.rules.push(rule("1", "example.com"));
+    applied.rules.push(Rule {
+        matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+        ..rule("2", "youtube.invalid")
+    });
+    config.rule_sets = vec![
+        applied.clone(),
+        RuleSet::new(RuleSetId::new("2"), "Other", RuleTarget::Direct),
+    ];
+    config.active_rule_set = Some(applied.id.clone());
+    save_config(store.path(), config.clone());
+    let snapshot = AppliedSnapshot::from_config(&config);
+
+    let mut failed = snapshot.clone();
+    failed.rule_set.as_mut().unwrap().rules[0].target = RuleTarget::Block;
+    failed.dns.server_name = "dns.invalid".into();
+    restore_rules_and_dns(&store, &failed).unwrap();
+    store
+        .modify(|config| {
+            config.interface.reduce_motion = true;
+            config.rule_sets[1].name = "Changed while applying".into();
+            Ok::<_, StoreError>(())
+        })
+        .unwrap();
+
+    assert_eq!(restore_rules_and_dns(&store, &snapshot).unwrap(), failed);
+    let restored = store.load().unwrap();
+    assert_eq!(AppliedSnapshot::from_config(&restored), snapshot);
+    assert!(restored.interface.reduce_motion);
+    assert_eq!(restored.rule_sets[1].name, "Changed while applying");
+    assert!(matches!(
+        restored.active_rules().unwrap().rules[1].matcher,
+        RuleMatcher::Template(RuleTemplate::Youtube)
+    ));
+}
+
+#[test]
+fn restoring_removed_active_set_reinserts_it_and_restores_dns() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let mut config = AppConfig::default();
+    let applied = RuleSet::new(RuleSetId::new("1"), "Applied", RuleTarget::Direct);
+    config.rule_sets.push(applied.clone());
+    config.active_rule_set = Some(applied.id.clone());
+    save_config(store.path(), config.clone());
+    let snapshot = AppliedSnapshot::from_config(&config);
+
+    store
+        .modify(|config| {
+            config.rule_sets.clear();
+            config.active_rule_set = None;
+            config.settings.dns.server_name = "dns.invalid".into();
+            Ok::<_, StoreError>(())
+        })
+        .unwrap();
+    let failed = restore_rules_and_dns(&store, &snapshot).unwrap();
+    assert_eq!(failed.missing_rule_set, Some(applied.id.clone()));
+    assert_eq!(store.load().unwrap().active_rules(), Some(&applied));
+    assert_eq!(store.load().unwrap().settings.dns, snapshot.dns);
+
+    restore_rules_and_dns(&store, &failed).unwrap();
+    let restored_edits = store.load().unwrap();
+    assert!(restored_edits.rule_sets.is_empty());
+    assert!(restored_edits.active_rule_set.is_none());
+    assert_eq!(restored_edits.settings.dns.server_name, "dns.invalid");
+}
+
+#[test]
+fn restoring_a_session_without_an_active_set_keeps_inactive_sets() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    save_config(store.path(), AppConfig::default());
+    let snapshot = AppliedSnapshot::from_config(&store.load().unwrap());
+    let set = create_rule_set(&store, "New", RuleTarget::Proxy).unwrap();
+    crate::set_dns(&store, crate::DnsPreset::Google.settings()).unwrap();
+
+    let failed = restore_rules_and_dns(&store, &snapshot).unwrap();
+    assert_eq!(failed.rule_set, Some(set.clone()));
+    let restored = store.load().unwrap();
+    assert!(restored.active_rule_set.is_none());
+    assert_eq!(restored.rule_sets, vec![set]);
+    assert_eq!(restored.settings.dns, snapshot.dns);
+}
+
+#[test]
+fn failed_snapshot_save_leaves_rules_and_dns_unchanged() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let mut config = AppConfig::default();
+    let original = RuleSet::new(RuleSetId::new("1"), "Original", RuleTarget::Proxy);
+    config.rule_sets.push(original.clone());
+    config.active_rule_set = Some(original.id.clone());
+    save_config(store.path(), config);
+    let mut snapshot = AppliedSnapshot::from_config(&store.load().unwrap());
+    snapshot.rule_set.as_mut().unwrap().default_target = RuleTarget::Block;
+    snapshot.dns.server_name = "dns.invalid".into();
+
+    let temporary = directory.0.join("config.json.tmp");
+    fs::create_dir(&temporary).unwrap();
+    assert_no_write!(
+        store,
+        restore_rules_and_dns(&store, &snapshot),
+        RuleSetError::Store(StoreError::Io { .. })
+    );
+}
+
+#[test]
 fn create_and_rename_rule_sets_validate_names_and_select_only_the_first() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());

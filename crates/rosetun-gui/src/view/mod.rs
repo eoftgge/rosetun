@@ -91,6 +91,19 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                     {
                         actions.push(Action::DismissOperationError);
                     }
+                    if let Some(error) = &state.apply_failure {
+                        let (dismissed, restore) = widgets::dismissible_error_with_action(
+                            ui,
+                            error,
+                            Some((t().restore_my_edits, state.can_restore_edits())),
+                        );
+                        if dismissed {
+                            actions.push(Action::DismissApplyFailure);
+                        }
+                        if restore {
+                            actions.push(Action::RestoreMyEdits);
+                        }
+                    }
                     match state.screen {
                         Screen::Connection => connection::show(ui, state, &mut actions),
                         Screen::Traffic => traffic::show(ui, state, &mut actions),

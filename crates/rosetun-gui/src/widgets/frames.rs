@@ -20,7 +20,16 @@ pub(crate) fn modal_frame() -> egui::Frame {
 }
 
 pub(crate) fn dismissible_error(ui: &mut egui::Ui, message: &str) -> bool {
-    card_frame()
+    dismissible_error_with_action(ui, message, None).0
+}
+
+pub(crate) fn dismissible_error_with_action(
+    ui: &mut egui::Ui,
+    message: &str,
+    action: Option<(&str, bool)>,
+) -> (bool, bool) {
+    let mut clicked = false;
+    let dismissed = card_frame()
         .show(ui, |ui| {
             egui::Sides::new()
                 .shrink_left()
@@ -31,10 +40,14 @@ pub(crate) fn dismissible_error(ui: &mut egui::Ui, message: &str) -> bool {
                     |ui| {
                         ui.colored_label(ERROR, crate::strings::ERROR_MARK);
                         ui.add(egui::Label::new(message).wrap());
+                        if let Some((label, enabled)) = action {
+                            clicked = crate::widgets::link(ui, label, enabled).clicked();
+                        }
                     },
                     |ui| ui.button(t().dismiss).clicked(),
                 )
                 .1
         })
-        .inner
+        .inner;
+    (dismissed, clicked)
 }
