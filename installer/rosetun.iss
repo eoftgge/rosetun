@@ -72,6 +72,18 @@ english.DirUpgrade=If this is an upgrade of an existing installation, uninstall 
 russian.DirUpgrade=Если вы обновляете установленную программу, удалите Rosetun и установите заново в безопасную папку.
 english.DirFailed=Installation stopped: %1 %2
 russian.DirFailed=Установка прервана: %1 %2
+english.UninstallTitle=Remove Rosetun
+russian.UninstallTitle=Удалить Rosetun
+english.UninstallData=Also delete settings, subscriptions and rules
+russian.UninstallData=Также удалить настройки, подписки и правила
+english.UninstallOtherUsers=Other users' data on this computer will remain.
+russian.UninstallOtherUsers=Данные других пользователей этого компьютера останутся.
+english.UninstallRemove=Remove
+russian.UninstallRemove=Удалить
+english.UninstallCancel=Cancel
+russian.UninstallCancel=Отмена
+english.UninstallDataFailed=Could not delete user data at %1. Rosetun itself has already been removed.
+russian.UninstallDataFailed=Не удалось удалить данные пользователя в %1. Сама программа уже удалена.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -103,6 +115,8 @@ const
 
 var
   InstallHelperExtracted: Boolean;
+  DeleteUserData: Boolean;
+  UserDataPath: String;
 
 function InstallDirMessage(Code: Integer): String;
 begin
@@ -230,6 +244,75 @@ begin
   end;
 end;
 
+function InitializeUninstall(): Boolean;
+var
+  Form: TSetupForm;
+  DataBox: TNewCheckBox;
+  PathLabel, OtherUsersLabel: TNewStaticText;
+  RemoveButton, CancelButton: TNewButton;
+begin
+  DeleteUserData := False;
+  Result := True;
+  if UninstallSilent() then
+    Exit;
+
+  // The path belongs to the elevated uninstaller account, not necessarily
+  // the account that launched setup. Show exactly which profile will be removed.
+  UserDataPath := ExpandConstant('{userappdata}\{#AppName}');
+  Form := CreateCustomForm(ScaleX(460), ScaleY(185), False, True);
+  try
+    Form.Caption := CustomMessage('UninstallTitle');
+    DataBox := TNewCheckBox.Create(Form);
+    DataBox.Parent := Form;
+    DataBox.Left := ScaleX(16);
+    DataBox.Top := ScaleY(16);
+    DataBox.Width := Form.ClientWidth - ScaleX(32);
+    DataBox.Caption := CustomMessage('UninstallData');
+    DataBox.Checked := False;
+
+    PathLabel := TNewStaticText.Create(Form);
+    PathLabel.Parent := Form;
+    PathLabel.Left := ScaleX(32);
+    PathLabel.Top := ScaleY(46);
+    PathLabel.Width := Form.ClientWidth - ScaleX(48);
+    PathLabel.Height := ScaleY(42);
+    PathLabel.WordWrap := True;
+    PathLabel.Caption := UserDataPath;
+
+    OtherUsersLabel := TNewStaticText.Create(Form);
+    OtherUsersLabel.Parent := Form;
+    OtherUsersLabel.Left := ScaleX(32);
+    OtherUsersLabel.Top := ScaleY(94);
+    OtherUsersLabel.Width := Form.ClientWidth - ScaleX(48);
+    OtherUsersLabel.Height := ScaleY(30);
+    OtherUsersLabel.WordWrap := True;
+    OtherUsersLabel.Caption := CustomMessage('UninstallOtherUsers');
+
+    RemoveButton := TNewButton.Create(Form);
+    RemoveButton.Parent := Form;
+    RemoveButton.Left := Form.ClientWidth - ScaleX(188);
+    RemoveButton.Top := Form.ClientHeight - ScaleY(39);
+    RemoveButton.Width := ScaleX(80);
+    RemoveButton.Caption := CustomMessage('UninstallRemove');
+    RemoveButton.ModalResult := mrOk;
+    Form.ActiveControl := RemoveButton;
+
+    CancelButton := TNewButton.Create(Form);
+    CancelButton.Parent := Form;
+    CancelButton.Left := Form.ClientWidth - ScaleX(98);
+    CancelButton.Top := RemoveButton.Top;
+    CancelButton.Width := ScaleX(80);
+    CancelButton.Caption := CustomMessage('UninstallCancel');
+    CancelButton.ModalResult := mrCancel;
+    CancelButton.Cancel := True;
+
+    Result := Form.ShowModal() = mrOk;
+    DeleteUserData := Result and DataBox.Checked;
+  finally
+    Form.Free();
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
@@ -241,5 +324,10 @@ begin
     // Autostart is per user. Only the current user's values are reachable here.
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Rosetun');
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run', 'Rosetun');
+  end;
+  if (CurUninstallStep = usPostUninstall) and DeleteUserData then
+  begin
+    if not DelTree(UserDataPath, True, True, True) then
+      MsgBox(FmtMessage(CustomMessage('UninstallDataFailed'), [UserDataPath]), mbError, MB_OK);
   end;
 end;
