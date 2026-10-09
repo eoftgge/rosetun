@@ -30,6 +30,13 @@ pub(crate) fn store(s: &Strings, error: &StoreError) -> String {
                 ("column", &source.column().to_string()),
             ],
         ),
+        StoreError::Format { path } => fill(
+            s.errors.config_invalid,
+            &[
+                ("path", &path.display().to_string()),
+                ("detail", s.errors.config_value),
+            ],
+        ),
         StoreError::Invalid { path, source } => fill(
             s.errors.config_invalid,
             &[
@@ -42,13 +49,7 @@ pub(crate) fn store(s: &Strings, error: &StoreError) -> String {
 
 fn config(s: &Strings, error: &ConfigError) -> String {
     match error {
-        ConfigError::UnsupportedVersion { found, expected } => fill(
-            s.errors.config_version,
-            &[
-                ("found", &found.to_string()),
-                ("expected", &expected.to_string()),
-            ],
-        ),
+        ConfigError::UnsupportedVersion { .. } => s.errors.config_version.to_owned(),
         ConfigError::DanglingSelection { subscription, node } => fill(
             s.errors.config_dangling_node,
             &[
@@ -625,6 +626,58 @@ mod tests {
             assert!(!text.contains("private-token"));
             assert!(!text.contains("credential"));
             assert!(text.contains("{detail}"));
+        }
+    }
+
+    #[test]
+    fn future_configuration_is_left_untouched_in_both_languages() {
+        let error = StoreError::Invalid {
+            path: "config.json".into(),
+            source: ConfigError::UnsupportedVersion {
+                found: 3,
+                expected: 2,
+            },
+        };
+        assert_eq!(
+            store(&EN, &error),
+            format!(
+                "invalid configuration in config.json: {}",
+                EN.errors.config_version
+            )
+        );
+        assert_eq!(
+            store(&RU, &error),
+            format!(
+                "неверная конфигурация в config.json: {}",
+                RU.errors.config_version
+            )
+        );
+        for language in [&EN, &RU] {
+            let message = store(language, &error);
+            assert!(message.contains("Rosetun"));
+            assert!(!message.contains("{found}"));
+            assert!(!message.contains("{expected}"));
+        }
+    }
+
+    #[test]
+    fn malformed_values_do_not_reveal_their_contents() {
+        let path = std::env::temp_dir().join(format!(
+            "rosetun-gui-invalid-value-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"{"version":1,"subscriptions":"https://sub.example.com/test-secret"}"#,
+        )
+        .unwrap();
+        let error = Store::at(&path).load().unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(error, StoreError::Format { .. }));
+        for language in [&EN, &RU] {
+            let message = store(language, &error);
+            assert!(!message.contains("test-secret"));
+            assert!(!message.contains("sub.example.com"));
         }
     }
 

@@ -78,6 +78,7 @@ pub(crate) struct ErrorStrings {
     pub(crate) config_access: &'static str,
     pub(crate) config_json: &'static str,
     pub(crate) config_invalid: &'static str,
+    pub(crate) config_value: &'static str,
     pub(crate) config_version: &'static str,
     pub(crate) config_dangling_node: &'static str,
     pub(crate) config_dangling_rule_set: &'static str,
