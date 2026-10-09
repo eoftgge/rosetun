@@ -241,6 +241,8 @@ pub(crate) fn skip_reason(s: &Strings, reason: &SkipReason) -> String {
         SkipReason::MissingRealityPublicKey => s.errors.skip_reality_key.to_owned(),
         SkipReason::ShadowsocksPlugin => s.errors.skip_shadowsocks_plugin.to_owned(),
         SkipReason::UnsupportedShadowsocksMethod => s.errors.skip_shadowsocks_method.to_owned(),
+        SkipReason::UnsupportedObfs => s.errors.skip_unsupported_obfs.to_owned(),
+        SkipReason::UnsupportedPin => s.errors.skip_unsupported_pin.to_owned(),
         SkipReason::ServiceRecord => s.errors.skip_service_record.to_owned(),
     }
 }
@@ -400,6 +402,8 @@ mod tests {
             SkipReason::MissingRealityPublicKey,
             SkipReason::ShadowsocksPlugin,
             SkipReason::UnsupportedShadowsocksMethod,
+            SkipReason::UnsupportedObfs,
+            SkipReason::UnsupportedPin,
             SkipReason::ServiceRecord,
         ] {
             assert_eq!(skip_reason(&EN, &reason), reason.to_string());

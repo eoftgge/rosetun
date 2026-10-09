@@ -12,6 +12,7 @@ pub const PING_PARALLEL: usize = 8;
 pub enum Ping {
     Answered(Duration),
     NoAnswer,
+    Unsupported,
 }
 
 /// TCP connect time to `server:port`. The name is resolved first; its time

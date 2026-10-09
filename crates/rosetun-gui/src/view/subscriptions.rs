@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{
-    ConnectionState, Node, NodeId, Subscription, SubscriptionId, SubscriptionInfo,
+    ConnectionState, Node, NodeId, Outbound, Subscription, SubscriptionId, SubscriptionInfo,
 };
 
 use crate::errors;
@@ -545,9 +545,15 @@ fn subscription_card(
                 let ping_width = subscription
                     .nodes
                     .iter()
-                    .filter_map(|node| state.pings.get(&(subscription.id.clone(), node.id.clone())))
-                    .map(|&result| {
-                        let (label, _, _) = ping_label(result);
+                    .filter_map(|node| {
+                        state
+                            .pings
+                            .get(&(subscription.id.clone(), node.id.clone()))
+                            .map(|&result| (node, result))
+                    })
+                    .map(|(node, result)| {
+                        let (label, _, _) =
+                            ping_label(result, matches!(&node.outbound, Outbound::Hysteria2(_)));
                         ui.painter()
                             .layout_no_wrap(label, font.clone(), theme::TEXT_DIM)
                             .size()
@@ -646,7 +652,7 @@ fn ping_quality(result: PingResult) -> u8 {
     }
 }
 
-fn ping_label(result: PingResult) -> (String, Color32, Option<&'static str>) {
+fn ping_label(result: PingResult, is_hysteria2: bool) -> (String, Color32, Option<&'static str>) {
     match result {
         PingResult::Answered(elapsed) => (
             strings::fill(t().ping_ms, &[("ms", &ping_millis(elapsed).to_string())]),
@@ -669,7 +675,11 @@ fn ping_label(result: PingResult) -> (String, Color32, Option<&'static str>) {
             theme::TEXT_DIM,
             Some(t().ping_unresolved_hint),
         ),
-        PingResult::Unsupported => (t().ping_unsupported.to_owned(), theme::TEXT_DIM, None),
+        PingResult::Unsupported => (
+            t().ping_unsupported.to_owned(),
+            theme::TEXT_DIM,
+            is_hysteria2.then_some(t().ping_udp_hint),
+        ),
         PingResult::Pending => (t().ping_pending.to_owned(), theme::TEXT_DIM, None),
     }
 }
@@ -678,6 +688,7 @@ fn hover_ping_hint(
     result: Option<PingResult>,
     pointer: Option<egui::Pos2>,
     region: Option<egui::Rect>,
+    is_hysteria2: bool,
 ) -> Option<&'static str> {
     if !pointer
         .zip(region)
@@ -685,7 +696,7 @@ fn hover_ping_hint(
     {
         return None;
     }
-    ping_label(result?).2
+    ping_label(result?, is_hysteria2).2
 }
 
 fn check_menu_items(
@@ -775,9 +786,12 @@ fn server_row(
             egui::pos2(right, rect.bottom()),
         )
     });
-    let response = if let Some(hint) =
-        hover_ping_hint(ping_result, ui.ctx().pointer_hover_pos(), ping_region)
-    {
+    let response = if let Some(hint) = hover_ping_hint(
+        ping_result,
+        ui.ctx().pointer_hover_pos(),
+        ping_region,
+        matches!(&node.outbound, Outbound::Hysteria2(_)),
+    ) {
         response.on_hover_text(hint)
     } else {
         response.on_hover_text(strings::server_tooltip(
@@ -880,7 +894,8 @@ fn server_row(
                     },
                 );
             }
-            let (ping_text, color, _) = ping_label(result);
+            let (ping_text, color, _) =
+                ping_label(result, matches!(&node.outbound, Outbound::Hysteria2(_)));
             painter.text(
                 egui::pos2(right, rect.center().y),
                 egui::Align2::RIGHT_CENTER,
@@ -1151,29 +1166,37 @@ mod tests {
         let works = Some(PingResult::Works(Duration::from_millis(85)));
         let inside = Some(egui::pos2(100.0, 15.0));
         assert_eq!(
-            hover_ping_hint(latency, inside, Some(rect)),
+            hover_ping_hint(latency, inside, Some(rect), false),
             Some(t().ping_tcp_hint)
         );
         assert_eq!(
-            hover_ping_hint(works, inside, Some(rect)),
+            hover_ping_hint(works, inside, Some(rect), false),
             Some(t().ping_full_hint)
         );
         assert_eq!(
-            hover_ping_hint(Some(PingResult::Fails), inside, Some(rect)),
+            hover_ping_hint(Some(PingResult::Fails), inside, Some(rect), false),
             Some(t().ping_fails_hint)
         );
         assert_eq!(
-            hover_ping_hint(Some(PingResult::Unresolved), inside, Some(rect)),
+            hover_ping_hint(Some(PingResult::Unresolved), inside, Some(rect), false),
             Some(t().ping_unresolved_hint)
         );
         assert_eq!(
-            hover_ping_hint(latency, Some(egui::pos2(30.0, 15.0)), Some(rect)),
+            hover_ping_hint(latency, Some(egui::pos2(30.0, 15.0)), Some(rect), false),
             None
         );
-        assert_eq!(hover_ping_hint(latency, inside, None), None);
-        assert_eq!(hover_ping_hint(latency, None, Some(rect)), None);
+        assert_eq!(hover_ping_hint(latency, inside, None, false), None);
+        assert_eq!(hover_ping_hint(latency, None, Some(rect), false), None);
         assert_eq!(
-            hover_ping_hint(Some(PingResult::Pending), inside, Some(rect)),
+            hover_ping_hint(Some(PingResult::Pending), inside, Some(rect), false),
+            None
+        );
+        assert_eq!(
+            hover_ping_hint(Some(PingResult::Unsupported), inside, Some(rect), true),
+            Some(t().ping_udp_hint)
+        );
+        assert_eq!(
+            hover_ping_hint(Some(PingResult::Unsupported), inside, Some(rect), false),
             None
         );
     }
@@ -1246,7 +1269,7 @@ mod tests {
                 None,
             ),
         ] {
-            assert_eq!(ping_label(result), (label, color, hint));
+            assert_eq!(ping_label(result, false), (label, color, hint));
         }
     }
 

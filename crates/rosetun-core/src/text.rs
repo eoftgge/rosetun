@@ -129,11 +129,15 @@ pub fn node_protocol(node: &Node) -> &'static str {
         Outbound::Vmess(_) => "vmess",
         Outbound::Trojan(_) => "trojan",
         Outbound::Shadowsocks(_) => "shadowsocks",
+        Outbound::Hysteria2(_) => "hysteria2",
         Outbound::Unknown { .. } => "unknown",
     }
 }
 
 pub fn node_transport(node: &Node) -> &'static str {
+    if matches!(node.outbound, Outbound::Hysteria2(_)) {
+        return "quic";
+    }
     match &node.stream.transport {
         Transport::Tcp => "tcp",
         Transport::Ws { .. } => "ws",
@@ -143,6 +147,9 @@ pub fn node_transport(node: &Node) -> &'static str {
 }
 
 pub fn node_tls(node: &Node) -> &'static str {
+    if matches!(node.outbound, Outbound::Hysteria2(_)) {
+        return "tls";
+    }
     match &node.stream.tls {
         TlsMode::Plain => "plain",
         TlsMode::Tls(_) => "tls",
@@ -162,6 +169,32 @@ pub fn node_address(node: &Node) -> String {
 mod tests {
     use super::*;
     use rosetun_subscription::{SkipReason, Skipped};
+
+    #[test]
+    fn hysteria2_details_show_quic_and_tls() {
+        let node = Node {
+            id: rosetun_config::NodeId::new("test"),
+            name: "Test".into(),
+            server: "example.com".into(),
+            port: 443,
+            outbound: Outbound::Hysteria2(rosetun_config::Hysteria2Params {
+                password: "test-secret".into(),
+                obfs_password: None,
+                port_ranges: Vec::new(),
+                up_mbps: None,
+                down_mbps: None,
+            }),
+            stream: rosetun_config::StreamSettings {
+                tls: TlsMode::Tls(Default::default()),
+                ..Default::default()
+            },
+            raw: None,
+        };
+        assert_eq!(node_protocol(&node), "hysteria2");
+        assert_eq!(node_transport(&node), "quic");
+        assert_eq!(node_tls(&node), "tls");
+        assert_eq!(node_address(&node), "example.com:443");
+    }
 
     #[test]
     fn generic_device_policy_refusal_has_a_message() {

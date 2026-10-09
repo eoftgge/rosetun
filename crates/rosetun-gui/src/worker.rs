@@ -570,8 +570,19 @@ impl WorkerDispatcher {
             });
             if let Some(subscription) = subscription {
                 let nodes = check_nodes(&subscription, node.as_ref());
-                let node_ids: Vec<_> = nodes.iter().map(|node| node.id.clone()).collect();
-                let targets: Vec<_> = nodes
+                let (tcp_nodes, unsupported) = ping_targets(&nodes);
+                for node in unsupported {
+                    emit(
+                        &publisher.tx,
+                        &publisher.repaint,
+                        WorkerEvent::Ping {
+                            subscription: id.clone(),
+                            node: node.id.clone(),
+                            result: Ping::Unsupported,
+                        },
+                    );
+                }
+                let targets: Vec<_> = tcp_nodes
                     .iter()
                     .map(|node| (node.server.clone(), node.port))
                     .collect();
@@ -582,7 +593,7 @@ impl WorkerDispatcher {
                             &publisher.repaint,
                             WorkerEvent::Ping {
                                 subscription: id.clone(),
-                                node: node_ids[index].clone(),
+                                node: tcp_nodes[index].id.clone(),
                                 result,
                             },
                         );
@@ -815,6 +826,13 @@ fn check_nodes<'a>(subscription: &'a Subscription, selected: Option<&NodeId>) ->
         .collect()
 }
 
+fn ping_targets<'a>(nodes: &[&'a Node]) -> (Vec<&'a Node>, Vec<&'a Node>) {
+    nodes
+        .iter()
+        .copied()
+        .partition(|node| !matches!(&node.outbound, rosetun_config::Outbound::Hysteria2(_)))
+}
+
 fn with_helper<T>(
     operation: impl FnOnce(&mut HelperClient) -> Result<T, ClientError>,
 ) -> Result<T, HelperCommandError> {
@@ -897,6 +915,36 @@ mod tests {
             NodeId::new("second")
         );
         assert!(check_nodes(&subscription, Some(&NodeId::new("removed"))).is_empty());
+    }
+
+    #[test]
+    fn hysteria2_is_excluded_from_tcp_ping_without_dropping_vless() {
+        let tcp = Node {
+            id: NodeId::new("tcp"),
+            name: "TCP".into(),
+            server: "192.0.2.1".into(),
+            port: 443,
+            outbound: rosetun_config::Outbound::Vless(rosetun_config::VlessParams {
+                uuid: "11111111-1111-1111-1111-111111111111".into(),
+                flow: None,
+            }),
+            stream: Default::default(),
+            raw: None,
+        };
+        let mut udp = tcp.clone();
+        udp.id = NodeId::new("udp");
+        udp.outbound = rosetun_config::Outbound::Hysteria2(rosetun_config::Hysteria2Params {
+            password: "test-secret".into(),
+            obfs_password: None,
+            port_ranges: Vec::new(),
+            up_mbps: None,
+            down_mbps: None,
+        });
+        let (targets, unsupported) = ping_targets(&[&udp, &tcp]);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id, tcp.id);
+        assert_eq!(unsupported.len(), 1);
+        assert_eq!(unsupported[0].id, udp.id);
     }
 
     #[test]

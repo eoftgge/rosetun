@@ -1516,6 +1516,7 @@ impl State {
                     let result = match result {
                         Ping::Answered(elapsed) => PingResult::Answered(elapsed),
                         Ping::NoAnswer => PingResult::NoAnswer,
+                        Ping::Unsupported => PingResult::Unsupported,
                     };
                     self.pings.insert((subscription, node), result);
                 }
@@ -3152,7 +3153,17 @@ mod tests {
         let mut state = state_for_auto_connect();
         let mut second = state.config.subscriptions[0].nodes[0].clone();
         second.id = NodeId::new("second");
-        state.config.subscriptions[0].nodes.push(second);
+        state.config.subscriptions[0].nodes.push(second.clone());
+        let mut udp = second;
+        udp.id = NodeId::new("udp");
+        udp.outbound = rosetun_config::Outbound::Hysteria2(rosetun_config::Hysteria2Params {
+            password: "test-secret".into(),
+            obfs_password: None,
+            port_ranges: Vec::new(),
+            up_mbps: None,
+            down_mbps: None,
+        });
+        state.config.subscriptions[0].nodes.push(udp);
         let id = SubscriptionId::new("1");
         let first = NodeId::new("node");
         let second = NodeId::new("second");
@@ -3165,6 +3176,11 @@ mod tests {
             node: first.clone(),
             result: Ping::Answered(Duration::from_millis(118)),
         });
+        state.reduce(WorkerEvent::Ping {
+            subscription: id.clone(),
+            node: NodeId::new("udp"),
+            result: Ping::Unsupported,
+        });
         state.reduce(WorkerEvent::PingDone(id.clone()));
         assert_eq!(
             state.pings[&(id.clone(), first.clone())],
@@ -3173,6 +3189,10 @@ mod tests {
         assert_eq!(
             state.pings[&(id.clone(), second.clone())],
             PingResult::NoAnswer
+        );
+        assert_eq!(
+            state.pings[&(id.clone(), NodeId::new("udp"))],
+            PingResult::Unsupported
         );
         assert_eq!(
             state.best_ping(&state.config.subscriptions[0]),
