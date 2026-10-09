@@ -81,6 +81,7 @@ pub(crate) fn apply(ctx: &egui::Context) {
 
     let mut visuals = Visuals::dark();
     visuals.override_text_color = Some(TEXT);
+    visuals.hyperlink_color = ROSE_LIGHT;
     visuals.window_fill = MODAL;
     visuals.panel_fill = PANEL;
     visuals.faint_bg_color = CARD;
