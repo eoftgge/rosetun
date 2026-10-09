@@ -9,6 +9,10 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
 use std::time::Duration;
 
@@ -197,9 +201,10 @@ impl EngineBackend for SingBoxBackend {
             .spawn()?;
 
         let (ready_sender, readiness) = Readiness::new();
+        let slow_tunnel = Arc::new(AtomicBool::new(false));
 
         if let Some(stdout) = child.stdout.take()
-            && let Err(error) = spawn_output_drain(stdout, "stdout", None, probe)
+            && let Err(error) = spawn_output_drain(stdout, "stdout", None, probe, None)
         {
             stop_failed_spawn(&mut child);
             return Err(error.into());
@@ -210,12 +215,22 @@ impl EngineBackend for SingBoxBackend {
             return Err(std::io::Error::other("sing-box stderr pipe is unavailable").into());
         };
 
-        if let Err(error) = spawn_output_drain(stderr, "stderr", Some(ready_sender), probe) {
+        if let Err(error) = spawn_output_drain(
+            stderr,
+            "stderr",
+            Some(ready_sender),
+            probe,
+            Some(Arc::clone(&slow_tunnel)),
+        ) {
             stop_failed_spawn(&mut child);
             return Err(error.into());
         }
 
-        Ok(Box::new(SingBoxProcess { child, readiness }))
+        Ok(Box::new(SingBoxProcess {
+            child,
+            readiness,
+            slow_tunnel,
+        }))
     }
 }
 
@@ -303,6 +318,7 @@ fn spawn_output_drain<R>(
     stream: &'static str,
     mut ready_sender: Option<Sender<()>>,
     probe: bool,
+    slow_tunnel: Option<Arc<AtomicBool>>,
 ) -> std::io::Result<()>
 where
     R: Read + Send + 'static,
@@ -313,6 +329,11 @@ where
             for line in BufReader::new(reader).lines() {
                 match line {
                     Ok(line) => {
+                        if readiness::is_slow_tunnel_message(&line)
+                            && let Some(hint) = &slow_tunnel
+                        {
+                            hint.store(true, Ordering::Release);
+                        }
                         if ready_sender.is_some()
                             && readiness::is_startup_message(&line)
                             && let Some(sender) = ready_sender.take()
@@ -360,9 +381,15 @@ fn find_in_neighbours() -> Option<PathBuf> {
 struct SingBoxProcess {
     child: Child,
     readiness: Readiness,
+    slow_tunnel: Arc<AtomicBool>,
 }
 
 impl EngineProcess for SingBoxProcess {
+    fn startup_hints(&self) -> rosetun_engine::StartupHints {
+        rosetun_engine::StartupHints {
+            slow_tunnel_creation: self.slow_tunnel.load(Ordering::Acquire),
+        }
+    }
     fn is_running(&mut self) -> Result<bool, EngineError> {
         match self.child.try_wait()? {
             Some(status) => Err(EngineError::Exited {

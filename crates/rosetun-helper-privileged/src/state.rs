@@ -791,6 +791,7 @@ impl Session {
         let tunnel = tunnel.filter(|_| self.guard.is_some());
 
         tracing::info!(engine = %backend.kind().as_str(), "spawning tunnel engine");
+        let spawned_at = Instant::now();
         self.process = Some(
             backend
                 .spawn(&binary, &config)
@@ -798,11 +799,12 @@ impl Session {
         );
         self.control = control;
 
-        wait_for_engine_ready(
+        wait_for_engine_ready_from(
             self.process
                 .as_mut()
                 .expect("engine process was stored before readiness")
                 .as_mut(),
+            spawned_at,
         )?;
         tracing::info!("engine startup readiness confirmed");
 
@@ -1081,8 +1083,22 @@ fn wait_for_previous_adapter(
     }
 }
 
+fn startup_timeout(hints: rosetun_engine::StartupHints) -> Duration {
+    if hints.slow_tunnel_creation {
+        Duration::from_secs(45)
+    } else {
+        TUNNEL_READY_TIMEOUT
+    }
+}
+
 fn wait_for_engine_ready(process: &mut dyn EngineProcess) -> Result<(), HelperError> {
-    let deadline = Instant::now() + TUNNEL_READY_TIMEOUT;
+    wait_for_engine_ready_from(process, Instant::now())
+}
+
+fn wait_for_engine_ready_from(
+    process: &mut dyn EngineProcess,
+    spawned_at: Instant,
+) -> Result<(), HelperError> {
     loop {
         let running = process
             .is_running()
@@ -1108,12 +1124,13 @@ fn wait_for_engine_ready(process: &mut dyn EngineProcess) -> Result<(), HelperEr
             }
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        let timeout = startup_timeout(process.startup_hints());
+        if Instant::now() >= spawned_at + timeout {
             return Err(HelperError::new(
                 ErrorCode::EngineFailed,
                 format!(
                     "engine startup readiness was not confirmed within {} seconds",
-                    TUNNEL_READY_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 ),
             ));
         }

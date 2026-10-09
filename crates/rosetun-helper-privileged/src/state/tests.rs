@@ -18,6 +18,20 @@ use super::*;
 static DNS_SLOTS: Mutex<()> = Mutex::new(());
 
 #[test]
+fn startup_hint_extends_only_slow_tunnel_deadline() {
+    assert_eq!(
+        startup_timeout(rosetun_engine::StartupHints::default()),
+        Duration::from_secs(15)
+    );
+    assert_eq!(
+        startup_timeout(rosetun_engine::StartupHints {
+            slow_tunnel_creation: true
+        }),
+        Duration::from_secs(45)
+    );
+}
+
+#[test]
 fn previous_adapter_waits_until_it_disappears() {
     let mut calls = 0;
     wait_for_previous_adapter(

@@ -258,6 +258,11 @@ impl RenderedConfig {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct StartupHints {
+    pub slow_tunnel_creation: bool,
+}
+
 pub trait EngineProcess: Send + std::fmt::Debug {
     fn is_running(&mut self) -> Result<bool, EngineError>;
 
@@ -270,6 +275,11 @@ pub trait EngineProcess: Send + std::fmt::Debug {
     }
 
     fn stop(&mut self) -> Result<(), EngineError>;
+
+    /// Non-blocking, latched hints from startup diagnostics.
+    fn startup_hints(&self) -> StartupHints {
+        StartupHints::default()
+    }
 }
 
 #[derive(Debug, Default)]

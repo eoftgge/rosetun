@@ -100,9 +100,51 @@ pub(super) fn strip_ansi_csi(line: &str) -> String {
     result
 }
 
+/// Exact taskmonitor warning from the supported sing-box TUN startup path.
+pub(super) fn is_slow_tunnel_message(line: &str) -> bool {
+    let plain = strip_ansi_csi(line);
+    let mut words = plain.split_whitespace();
+    let warning = words.by_ref().take(4).any(|word| {
+        word == "WARN"
+            || word
+                .strip_prefix("WARN[")
+                .and_then(|value| value.strip_suffix(']'))
+                .is_some_and(|value| {
+                    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+                })
+    });
+    warning
+        && words
+            .next()
+            .is_some_and(|word| word.starts_with("inbound/tun[") && word.ends_with("]:"))
+        && words.collect::<Vec<_>>().join(" ") == "open interface take too much time to finish!"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_slow_tunnel_warning_accepts_prefixes() {
+        for prefix in [
+            "WARN ",
+            "WARN[0010] ",
+            "\x1b[33mWARN\x1b[0m[0010] ",
+            "+0900 2026-10-10 12:00:00 WARN ",
+        ] {
+            assert!(is_slow_tunnel_message(&format!(
+                "{prefix}inbound/tun[tun-in]: open interface take too much time to finish!"
+            )));
+        }
+        for line in [
+            "WARN inbound/tun[tun-in]: slow",
+            "INFO inbound/tun[tun-in]: open interface take too much time to finish!",
+            "WARN outbound/vless[proxy]: open interface take too much time to finish!",
+            "WARN inbound/tun[tun-in]: open interface take too much time to finish! extra",
+        ] {
+            assert!(!is_slow_tunnel_message(line), "{line}");
+        }
+    }
 
     #[test]
     fn accepts_only_final_readiness_line_from_windows_1_14_1_fixture() {
