@@ -311,6 +311,42 @@ pub fn move_rule(
     })
 }
 
+pub fn move_rules(
+    store: &Store,
+    set: &RuleSetId,
+    rules: &[RuleId],
+    to_index: usize,
+) -> Result<(), RuleSetError> {
+    if rules.is_empty() {
+        return Ok(());
+    }
+
+    let selected = rules.iter().cloned().collect::<BTreeSet<_>>();
+    store.modify(|config| {
+        let set = rule_set_mut(config, set)?;
+        if !selected
+            .iter()
+            .all(|id| set.rules.iter().any(|rule| &rule.id == id))
+        {
+            return Err(RuleSetError::RuleNotFound);
+        }
+
+        let mut moved = Vec::with_capacity(selected.len());
+        let mut remaining = Vec::with_capacity(set.rules.len() - selected.len());
+        for rule in std::mem::take(&mut set.rules) {
+            if selected.contains(&rule.id) {
+                moved.push(rule);
+            } else {
+                remaining.push(rule);
+            }
+        }
+        let index = to_index.min(remaining.len());
+        remaining.splice(index..index, moved);
+        set.rules = remaining;
+        Ok(())
+    })
+}
+
 pub fn remove_rule(store: &Store, set: &RuleSetId, rule: &RuleId) -> Result<(), RuleSetError> {
     store.modify(|config| {
         let set = rule_set_mut(config, set)?;
@@ -320,6 +356,26 @@ pub fn remove_rule(store: &Store, set: &RuleSetId, rule: &RuleId) -> Result<(), 
             .position(|item| &item.id == rule)
             .ok_or(RuleSetError::RuleNotFound)?;
         set.rules.remove(index);
+        Ok(())
+    })
+}
+
+pub fn remove_rules(store: &Store, set: &RuleSetId, rules: &[RuleId]) -> Result<(), RuleSetError> {
+    if rules.is_empty() {
+        return Ok(());
+    }
+
+    let selected = rules.iter().cloned().collect::<BTreeSet<_>>();
+    store.modify(|config| {
+        let set = rule_set_mut(config, set)?;
+        if !selected
+            .iter()
+            .all(|id| set.rules.iter().any(|rule| &rule.id == id))
+        {
+            return Err(RuleSetError::RuleNotFound);
+        }
+
+        set.rules.retain(|rule| !selected.contains(&rule.id));
         Ok(())
     })
 }

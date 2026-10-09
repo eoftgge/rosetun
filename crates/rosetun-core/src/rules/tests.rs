@@ -463,6 +463,115 @@ fn moving_rules_up_down_and_past_the_end_preserves_order() {
 }
 
 #[test]
+fn moving_several_rules_preserves_source_order_and_clamps_after_removal() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
+    let rules = ["a", "b", "c", "d", "e"]
+        .into_iter()
+        .map(|value| add_rule(&store, &set.id, domain(value), RuleTarget::Proxy).unwrap())
+        .collect::<Vec<_>>();
+    let ids = || {
+        store.load().unwrap().rule_sets[0]
+            .rules
+            .iter()
+            .map(|rule| rule.id.clone())
+            .collect::<Vec<_>>()
+    };
+
+    move_rules(
+        &store,
+        &set.id,
+        &[
+            rules[3].id.clone(),
+            rules[1].id.clone(),
+            rules[1].id.clone(),
+        ],
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        ids(),
+        vec![
+            rules[3].id.clone(),
+            rules[1].id.clone(),
+            rules[4].id.clone(),
+            rules[2].id.clone(),
+            rules[0].id.clone(),
+        ]
+    );
+
+    move_rules(
+        &store,
+        &set.id,
+        &[rules[1].id.clone(), rules[3].id.clone()],
+        usize::MAX,
+    )
+    .unwrap();
+    assert_eq!(
+        ids(),
+        vec![
+            rules[4].id.clone(),
+            rules[2].id.clone(),
+            rules[0].id.clone(),
+            rules[3].id.clone(),
+            rules[1].id.clone(),
+        ]
+    );
+
+    move_rules(
+        &store,
+        &set.id,
+        &[rules[1].id.clone(), rules[4].id.clone()],
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        ids(),
+        vec![
+            rules[2].id.clone(),
+            rules[4].id.clone(),
+            rules[1].id.clone(),
+            rules[0].id.clone(),
+            rules[3].id.clone(),
+        ]
+    );
+
+    move_rules(
+        &store,
+        &set.id,
+        &[rules[4].id.clone(), rules[1].id.clone()],
+        usize::MAX,
+    )
+    .unwrap();
+    assert_eq!(
+        ids(),
+        vec![
+            rules[2].id.clone(),
+            rules[0].id.clone(),
+            rules[3].id.clone(),
+            rules[4].id.clone(),
+            rules[1].id.clone(),
+        ]
+    );
+
+    assert_no_write!(
+        store,
+        move_rules(
+            &store,
+            &set.id,
+            &[rules[0].id.clone(), RuleId::new("missing")],
+            0,
+        ),
+        RuleSetError::RuleNotFound
+    );
+
+    let before = fs::read(store.path()).unwrap();
+    move_rules(&store, &RuleSetId::new("missing"), &[], 0).unwrap();
+    assert_eq!(fs::read(store.path()).unwrap(), before);
+}
+
+#[test]
 fn removing_rules_persists_and_missing_ids_do_not_write() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
@@ -485,6 +594,50 @@ fn removing_rules_persists_and_missing_ids_do_not_write() {
         remove_rule(&store, &set.id, &rule.id),
         RuleSetError::RuleNotFound
     );
+}
+
+#[test]
+fn removing_several_rules_deduplicates_and_validates_before_writing() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
+    let rules = ["a", "b", "c", "d"]
+        .into_iter()
+        .map(|value| add_rule(&store, &set.id, domain(value), RuleTarget::Proxy).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_no_write!(
+        store,
+        remove_rules(
+            &store,
+            &set.id,
+            &[rules[0].id.clone(), RuleId::new("missing")],
+        ),
+        RuleSetError::RuleNotFound
+    );
+
+    remove_rules(
+        &store,
+        &set.id,
+        &[
+            rules[2].id.clone(),
+            rules[0].id.clone(),
+            rules[2].id.clone(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        store.load().unwrap().rule_sets[0]
+            .rules
+            .iter()
+            .map(|rule| rule.id.clone())
+            .collect::<Vec<_>>(),
+        vec![rules[3].id.clone(), rules[1].id.clone()]
+    );
+
+    let before = fs::read(store.path()).unwrap();
+    remove_rules(&store, &RuleSetId::new("missing"), &[]).unwrap();
+    assert_eq!(fs::read(store.path()).unwrap(), before);
 }
 
 #[test]
