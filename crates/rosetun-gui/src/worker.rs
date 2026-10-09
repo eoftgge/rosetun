@@ -92,7 +92,10 @@ pub(crate) enum WorkerEvent {
     SetAutoUpdateSubscriptions(Result<(), SettingsError>),
     SetCheckUpdates(Result<(), SettingsError>),
     SkipVersion(Result<(), SettingsError>),
-    UpdateCheck(Result<Option<Release>, UpdateCheckError>),
+    UpdateCheck {
+        checked_at: u64,
+        result: Result<Option<Release>, UpdateCheckError>,
+    },
     SetDns(Result<(), SettingsError>),
     ResetSettings(Result<(), SettingsError>),
     SetVerboseLog(Result<(), SettingsError>),
@@ -364,10 +367,18 @@ impl WorkerDispatcher {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
             let result = rosetun_core::latest_release(Duration::from_secs(15));
+            let checked_at = crate::state::now_unix();
+            if result.is_ok() {
+                if rosetun_core::record_update_check(&publisher.store, checked_at).is_err() {
+                    tracing::warn!("Could not save update check time");
+                } else {
+                    publisher.publish();
+                }
+            }
             emit(
                 &publisher.tx,
                 &publisher.repaint,
-                WorkerEvent::UpdateCheck(result),
+                WorkerEvent::UpdateCheck { checked_at, result },
             );
         });
     }

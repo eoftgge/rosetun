@@ -37,7 +37,7 @@ const AUTO_UPDATE_RANGE: RangeInclusive<u64> = 1..=168;
 const AUTO_UPDATE_RETRY: u64 = 60 * 60;
 /// How often the schedule is checked.
 const AUTO_UPDATE_CHECK: u64 = 60;
-const UPDATE_CHECK_INITIAL: u64 = 60;
+const UPDATE_CHECK_DEFER: u64 = 60;
 const UPDATE_CHECK_INTERVAL: u64 = 24 * 60 * 60;
 const UPDATE_CHECK_RETRY: u64 = 6 * 60 * 60;
 const TRAFFIC_HISTORY: usize = 900;
@@ -434,8 +434,9 @@ pub(crate) struct State {
     next_auto_update_check: u64,
     auto_update_attempts: HashMap<SubscriptionId, u64>,
     next_update_check: Option<u64>,
-    update_check_pending: bool,
-    pub(crate) available_update: Option<Release>,
+    pub(crate) update_check_pending: bool,
+    pub(crate) update_check_failed: bool,
+    pub(crate) newest_release: Option<Release>,
     status_received: bool,
     pub(crate) config_generation: u64,
     pub(crate) config_error: Option<ConfigWorkerError>,
@@ -492,7 +493,8 @@ impl Default for State {
             auto_update_attempts: HashMap::new(),
             next_update_check: None,
             update_check_pending: false,
-            available_update: None,
+            update_check_failed: false,
+            newest_release: None,
             status_received: false,
             config_generation: 0,
             config_error: None,
@@ -892,25 +894,42 @@ impl State {
         Some(Job::Update(id))
     }
 
+    pub(crate) fn update_check_blocked_by_connection(&self) -> bool {
+        matches!(
+            self.visible_status().map(|status| &status.state),
+            Some(
+                ConnectionState::Connecting
+                    | ConnectionState::Reconnecting
+                    | ConnectionState::FailedProtected { .. }
+            )
+        )
+    }
+
+    pub(crate) fn can_check_updates(&self) -> bool {
+        self.config_ready
+            && !self.update_check_pending
+            && !self.update_check_blocked_by_connection()
+    }
+
+    pub(crate) fn available_update(&self) -> Option<&Release> {
+        self.newest_release.as_ref().filter(|release| {
+            self.config.interface.skipped_version.as_deref() != Some(release.version.as_str())
+        })
+    }
+
     pub(crate) fn take_update_check(&mut self, now: u64) -> Option<Job> {
-        let due = self
-            .next_update_check
-            .get_or_insert(now.saturating_add(UPDATE_CHECK_INITIAL));
-        if now < *due || self.update_check_pending {
+        if !self.config_ready || !self.config.interface.check_updates || self.update_check_pending {
             return None;
         }
-        if !self.config_ready
-            || !self.config.interface.check_updates
-            || matches!(
-                self.visible_status().map(|status| &status.state),
-                Some(
-                    ConnectionState::Connecting
-                        | ConnectionState::Reconnecting
-                        | ConnectionState::FailedProtected { .. }
-                )
-            )
-        {
-            self.next_update_check = Some(now.saturating_add(UPDATE_CHECK_INITIAL));
+        let due = match self.config.interface.last_update_check {
+            Some(last) if last <= now => last.saturating_add(UPDATE_CHECK_INTERVAL),
+            _ => now,
+        };
+        if now < due.max(self.next_update_check.unwrap_or(0)) {
+            return None;
+        }
+        if !self.can_check_updates() {
+            self.next_update_check = Some(now.saturating_add(UPDATE_CHECK_DEFER));
             return None;
         }
         self.update_check_pending = true;
@@ -922,19 +941,18 @@ impl State {
             return;
         }
         self.update_check_pending = false;
-        self.next_update_check = Some(now.saturating_add(if result.is_ok() {
-            UPDATE_CHECK_INTERVAL
-        } else {
-            UPDATE_CHECK_RETRY
-        }));
-        if let Ok(release) = result {
-            self.available_update = release.filter(|release| {
-                self.config_ready
-                    && self.config.interface.check_updates
-                    && is_newer(&release.version, env!("CARGO_PKG_VERSION"))
-                    && self.config.interface.skipped_version.as_deref()
-                        != Some(release.version.as_str())
-            });
+        match result {
+            Ok(release) => {
+                self.config.interface.last_update_check = Some(now);
+                self.next_update_check = None;
+                self.update_check_failed = false;
+                self.newest_release =
+                    release.filter(|release| is_newer(&release.version, env!("CARGO_PKG_VERSION")));
+            }
+            Err(_) => {
+                self.next_update_check = Some(now.saturating_add(UPDATE_CHECK_RETRY));
+                self.update_check_failed = true;
+            }
         }
     }
 
@@ -1147,14 +1165,6 @@ impl State {
                 self.config = config;
                 self.config_ready = true;
                 self.config_error = None;
-                if !self.config.interface.check_updates
-                    || self.available_update.as_ref().is_some_and(|release| {
-                        self.config.interface.skipped_version.as_deref()
-                            == Some(release.version.as_str())
-                    })
-                {
-                    self.available_update = None;
-                }
                 if self.settings_screen.opened && !self.settings_screen.dirty {
                     self.settings_screen.sync_dns(&self.config.settings.dns);
                 }
@@ -1528,7 +1538,9 @@ impl State {
             WorkerEvent::SetAutoUpdateSubscriptions(result) => self.finish_settings(result),
             WorkerEvent::SetCheckUpdates(result) => self.finish_settings(result),
             WorkerEvent::SkipVersion(result) => self.finish_settings(result),
-            WorkerEvent::UpdateCheck(result) => self.finish_update_check(result, now_unix()),
+            WorkerEvent::UpdateCheck { checked_at, result } => {
+                self.finish_update_check(result, checked_at);
+            }
             WorkerEvent::SetDns(result) => {
                 if result.is_ok() {
                     self.settings_screen.dirty = false;
@@ -1879,7 +1891,7 @@ impl State {
             }
             Action::SkipVersion => {
                 if self.can_edit_settings()
-                    && let Some(release) = &self.available_update
+                    && let Some(release) = self.available_update()
                 {
                     return self.start_settings(Job::SkipVersion(release.version.clone()));
                 }
@@ -2973,112 +2985,162 @@ mod tests {
     }
 
     #[test]
-    fn release_check_starts_after_a_minute_then_waits_a_day() {
-        let mut state = State {
-            config_ready: true,
-            ..State::default()
-        };
-        assert!(state.take_update_check(1_000).is_none());
-        assert!(state.take_update_check(1_059).is_none());
-        assert!(matches!(
-            state.take_update_check(1_060),
-            Some(Job::CheckUpdates)
-        ));
-        assert!(state.take_update_check(1_061).is_none());
-        state.finish_update_check(Ok(None), 1_060);
-        assert!(
-            state
-                .take_update_check(1_060 + UPDATE_CHECK_INTERVAL - 1)
-                .is_none()
-        );
-        assert!(matches!(
-            state.take_update_check(1_060 + UPDATE_CHECK_INTERVAL),
-            Some(Job::CheckUpdates)
-        ));
-    }
-
-    #[test]
-    fn failed_release_check_retries_in_six_hours() {
-        let mut state = State {
-            config_ready: true,
-            ..State::default()
-        };
-        state.take_update_check(1_000);
-        assert!(matches!(
-            state.take_update_check(1_060),
-            Some(Job::CheckUpdates)
-        ));
-        state.finish_update_check(Err(UpdateCheckError::Parse), 1_065);
-        assert!(
-            state
-                .take_update_check(1_065 + UPDATE_CHECK_RETRY - 1)
-                .is_none()
-        );
-        assert!(matches!(
-            state.take_update_check(1_065 + UPDATE_CHECK_RETRY),
-            Some(Job::CheckUpdates)
-        ));
-    }
-
-    #[test]
-    fn release_check_waits_for_config_setting_and_safe_connection_state() {
+    fn missing_last_check_starts_immediately_after_config_load_then_waits_a_day() {
         let mut state = State::default();
-        state.take_update_check(1_000);
-        assert!(state.take_update_check(1_060).is_none());
+        assert!(state.take_update_check(1_000).is_none());
         state.config_ready = true;
+        assert!(matches!(
+            state.take_update_check(1_001),
+            Some(Job::CheckUpdates)
+        ));
+        assert!(state.take_update_check(1_001).is_none());
+        state.finish_update_check(Ok(None), 1_002);
+        assert_eq!(state.config.interface.last_update_check, Some(1_002));
+        assert!(!state.update_check_failed);
+        assert!(
+            state
+                .take_update_check(1_002 + UPDATE_CHECK_INTERVAL - 1)
+                .is_none()
+        );
+        assert!(matches!(
+            state.take_update_check(1_002 + UPDATE_CHECK_INTERVAL),
+            Some(Job::CheckUpdates)
+        ));
+    }
+
+    #[test]
+    fn recent_check_waits_for_the_remaining_hours_and_old_or_future_check_runs_now() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        let now = 200_000;
+        state.config.interface.last_update_check = Some(now - 2 * 60 * 60);
+        assert!(state.take_update_check(now).is_none());
+        assert!(state.take_update_check(now + 22 * 60 * 60 - 1).is_none());
+        assert!(matches!(
+            state.take_update_check(now + 22 * 60 * 60),
+            Some(Job::CheckUpdates)
+        ));
+
+        let mut old = State {
+            config_ready: true,
+            ..State::default()
+        };
+        old.config.interface.last_update_check = Some(now - 30 * 60 * 60);
+        assert!(matches!(
+            old.take_update_check(now),
+            Some(Job::CheckUpdates)
+        ));
+
+        let mut future = State {
+            config_ready: true,
+            ..State::default()
+        };
+        future.config.interface.last_update_check = Some(now + 60);
+        assert!(matches!(
+            future.take_update_check(now),
+            Some(Job::CheckUpdates)
+        ));
+    }
+
+    #[test]
+    fn failed_release_check_preserves_timestamp_and_retries_in_six_hours() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        state.config.interface.last_update_check = Some(1_000);
+        assert!(matches!(
+            state.take_update_check(100_000),
+            Some(Job::CheckUpdates)
+        ));
+        state.finish_update_check(Err(UpdateCheckError::Parse), 100_005);
+        assert_eq!(state.config.interface.last_update_check, Some(1_000));
+        assert!(state.update_check_failed);
+        assert!(
+            state
+                .take_update_check(100_005 + UPDATE_CHECK_RETRY - 1)
+                .is_none()
+        );
+        assert!(matches!(
+            state.take_update_check(100_005 + UPDATE_CHECK_RETRY),
+            Some(Job::CheckUpdates)
+        ));
+        state.finish_update_check(Ok(None), 100_006 + UPDATE_CHECK_RETRY);
+        assert!(!state.update_check_failed);
+        assert_eq!(
+            state.config.interface.last_update_check,
+            Some(100_006 + UPDATE_CHECK_RETRY)
+        );
+    }
+
+    #[test]
+    fn release_check_waits_for_setting_and_safe_connection_state() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
         state.config.interface.check_updates = false;
-        assert!(state.take_update_check(1_119).is_none());
-        assert!(state.take_update_check(1_120).is_none());
+        assert!(state.take_update_check(1_000).is_none());
         state.config.interface.check_updates = true;
         state.helper_available = true;
         state.status.state = ConnectionState::Connecting;
-        assert!(state.take_update_check(1_180).is_none());
+        assert!(state.take_update_check(1_060).is_none());
         state.status.state = ConnectionState::Reconnecting;
-        assert!(state.take_update_check(1_240).is_none());
+        assert!(state.take_update_check(1_120).is_none());
         state.status.state = ConnectionState::FailedProtected {
             reason: "failure".into(),
         };
-        assert!(state.take_update_check(1_300).is_none());
+        assert!(state.take_update_check(1_180).is_none());
         state.status.state = ConnectionState::Connected;
-        assert!(state.take_update_check(1_359).is_none());
+        assert!(state.take_update_check(1_239).is_none());
         assert!(matches!(
-            state.take_update_check(1_360),
+            state.take_update_check(1_240),
             Some(Job::CheckUpdates)
         ));
     }
 
     #[test]
-    fn skipped_release_stays_hidden_but_a_newer_release_is_shown() {
+    fn skipped_release_stays_known_and_a_newer_release_is_shown() {
         let mut state = State {
             config_ready: true,
             ..State::default()
         };
-        let release = |version: &str| rosetun_core::Release {
+        let release = |version: &str| Release {
             version: version.into(),
             url: "https://example.com/release".into(),
+            prerelease: true,
         };
         state.config.interface.skipped_version = Some("999.0.0-alpha.3".into());
         state.take_update_check(1_000);
-        state.take_update_check(1_060);
-        state.finish_update_check(Ok(Some(release("999.0.0-alpha.3"))), 1_061);
-        assert!(state.available_update.is_none());
+        state.finish_update_check(Ok(Some(release("999.0.0-alpha.3"))), 1_001);
+        assert!(state.available_update().is_none());
+        assert_eq!(
+            state.newest_release.as_ref().unwrap().version,
+            "999.0.0-alpha.3"
+        );
 
-        state.take_update_check(1_061 + UPDATE_CHECK_INTERVAL);
+        state.take_update_check(1_001 + UPDATE_CHECK_INTERVAL);
         state.finish_update_check(
             Ok(Some(release("999.0.0-alpha.4"))),
-            1_062 + UPDATE_CHECK_INTERVAL,
+            1_002 + UPDATE_CHECK_INTERVAL,
         );
-        assert_eq!(
-            state.available_update.as_ref().unwrap().version,
-            "999.0.0-alpha.4"
-        );
+        assert_eq!(state.available_update().unwrap().version, "999.0.0-alpha.4");
         state.config.interface.skipped_version = Some("999.0.0-alpha.4".into());
         let config = state.config.clone();
         state.reduce(WorkerEvent::Config {
             generation: 1,
             config,
         });
-        assert!(state.available_update.is_none());
+        assert!(state.available_update().is_none());
+        assert_eq!(
+            state.newest_release.as_ref().unwrap().version,
+            "999.0.0-alpha.4"
+        );
+        state.config.interface.check_updates = false;
+        state.config.interface.skipped_version = None;
+        assert!(state.available_update().is_some());
     }
 
     #[test]
@@ -5942,9 +6004,10 @@ mod tests {
     fn release_settings_use_jobs_and_respect_busy_state() {
         let mut state = State {
             config_ready: true,
-            available_update: Some(Release {
+            newest_release: Some(Release {
                 version: "999.0.0".into(),
                 url: "https://example.com/release".into(),
+                prerelease: false,
             }),
             ..State::default()
         };

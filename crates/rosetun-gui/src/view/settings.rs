@@ -489,7 +489,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetCheckUpdates(check_updates));
         }
         card.body(|ui| {
-            if let Some(release) = &state.available_update {
+            if let Some(release) = state.available_update() {
                 egui::Frame::new()
                     .fill(theme::ROSE_LIGHT)
                     .corner_radius(8.0)
