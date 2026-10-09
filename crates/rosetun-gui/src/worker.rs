@@ -15,9 +15,9 @@ use rosetun_config::{
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, AddedRules, ExitInfo, ExitInfoError, MoveSubscriptionError,
-    PING_PARALLEL, PING_TIMEOUT, Ping, RemoveSubscriptionError, RenameSubscriptionError,
+    PING_PARALLEL, PING_TIMEOUT, Ping, Release, RemoveSubscriptionError, RenameSubscriptionError,
     RuleSetError, SelectNodeError, SelectRuleSetError, SettingsError, Store, StoreError,
-    SubscriptionUpdateResult, Timeouts, UpdateReport, UpdateSubscriptionError,
+    SubscriptionUpdateResult, Timeouts, UpdateCheckError, UpdateReport, UpdateSubscriptionError,
     add_prepared_subscription, add_rule, add_rules, create_rule_set, delete_rule_set, move_rule,
     move_subscription, ping_all, prepare_subscription, remove_rule, remove_subscription,
     rename_rule_set, rename_subscription, reset_settings, select_node, select_rule_set,
@@ -90,6 +90,9 @@ pub(crate) enum WorkerEvent {
     SetConnectOnStart(Result<(), SettingsError>),
     SetAutoReconnect(Result<(), SettingsError>),
     SetAutoUpdateSubscriptions(Result<(), SettingsError>),
+    SetCheckUpdates(Result<(), SettingsError>),
+    SkipVersion(Result<(), SettingsError>),
+    UpdateCheck(Result<Option<Release>, UpdateCheckError>),
     SetDns(Result<(), SettingsError>),
     ResetSettings(Result<(), SettingsError>),
     SetVerboseLog(Result<(), SettingsError>),
@@ -338,6 +341,34 @@ impl WorkerDispatcher {
         thread::spawn(move || {
             let result = rosetun_core::set_auto_update_subscriptions(&publisher.store, enabled);
             publisher.complete(WorkerEvent::SetAutoUpdateSubscriptions(result));
+        });
+    }
+
+    pub(crate) fn set_check_updates(&self, enabled: bool) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = rosetun_core::set_check_updates(&publisher.store, enabled);
+            publisher.complete(WorkerEvent::SetCheckUpdates(result));
+        });
+    }
+
+    pub(crate) fn skip_version(&self, version: String) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = rosetun_core::skip_version(&publisher.store, Some(version));
+            publisher.complete(WorkerEvent::SkipVersion(result));
+        });
+    }
+
+    pub(crate) fn check_updates(&self) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = rosetun_core::latest_release(Duration::from_secs(15));
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::UpdateCheck(result),
+            );
         });
     }
 

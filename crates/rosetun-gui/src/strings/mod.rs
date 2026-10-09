@@ -243,6 +243,11 @@ pub(crate) struct Strings {
     pub(crate) about: &'static str,
     pub(crate) about_version_with_helper: &'static str,
     pub(crate) about_version_without_helper: &'static str,
+    pub(crate) check_updates: &'static str,
+    pub(crate) check_updates_detail: &'static str,
+    pub(crate) update_available: &'static str,
+    pub(crate) update_open: &'static str,
+    pub(crate) update_skip: &'static str,
     pub(crate) license_notice: &'static str,
     pub(crate) licenses_folder: &'static str,
     pub(crate) configuration_folder: &'static str,
@@ -568,6 +573,10 @@ impl Strings {
             ),
             None => fill(self.about_version_without_helper, &[("app", app)]),
         }
+    }
+
+    pub(crate) fn update_available(&self, version: &str) -> String {
+        fill(self.update_available, &[("version", version)])
     }
 
     pub(crate) fn template_name(&self, template: RuleTemplate) -> &'static str {

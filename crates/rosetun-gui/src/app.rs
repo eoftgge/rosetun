@@ -215,6 +215,9 @@ impl App {
             Job::SetAutoUpdateSubscriptions(enabled) => {
                 self.workers.set_auto_update_subscriptions(enabled)
             }
+            Job::SetCheckUpdates(enabled) => self.workers.set_check_updates(enabled),
+            Job::SkipVersion(version) => self.workers.skip_version(version),
+            Job::CheckUpdates => self.workers.check_updates(),
             Job::SetDns(dns) => self.workers.set_dns(dns),
             Job::ResetSettings => self.workers.reset_settings(),
             Job::SetVerboseLog(on) => self.workers.set_verbose_log(on),
@@ -311,6 +314,9 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_auto_update(display::now_unix()) {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_update_check(display::now_unix()) {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_apply() {

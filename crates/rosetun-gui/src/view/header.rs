@@ -126,6 +126,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 }
                 let selected = state.screen == screen;
                 let response = tab(ui, icon, label, selected, reduce_motion);
+                if screen == Screen::Settings && state.available_update.is_some() {
+                    ui.painter().circle_filled(
+                        egui::pos2(response.rect.right() - 8.0, response.rect.top() + 10.0),
+                        3.0,
+                        theme::ROSE,
+                    );
+                }
                 if selected {
                     selected_rect = Some(response.rect);
                 } else if response.clicked() {

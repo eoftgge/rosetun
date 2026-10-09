@@ -475,7 +475,45 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     ui.label(RichText::new(version).small().color(theme::TEXT_MUTED));
                 });
             });
-            ui.add_space(12.0);
+        });
+        let mut check_updates = state.config.interface.check_updates;
+        if card
+            .toggle(
+                t().check_updates,
+                t().check_updates_detail,
+                &mut check_updates,
+                state.can_edit_settings(),
+            )
+            .changed()
+        {
+            actions.push(Action::SetCheckUpdates(check_updates));
+        }
+        card.body(|ui| {
+            if let Some(release) = &state.available_update {
+                egui::Frame::new()
+                    .fill(theme::ROSE_LIGHT)
+                    .corner_radius(8.0)
+                    .inner_margin(12.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(t().update_available(&release.version))
+                                .color(theme::TEXT),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.hyperlink_to(t().update_open, &release.url);
+                            if ui
+                                .add_enabled(
+                                    state.can_edit_settings(),
+                                    egui::Button::new(t().update_skip).frame(false),
+                                )
+                                .clicked()
+                            {
+                                actions.push(Action::SkipVersion);
+                            }
+                        });
+                    });
+                ui.add_space(12.0);
+            }
             ui.add(
                 egui::Label::new(
                     RichText::new(t().license_notice)
