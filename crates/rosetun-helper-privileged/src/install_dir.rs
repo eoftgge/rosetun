@@ -242,12 +242,19 @@ fn decide(facts: &Facts) -> Result<(), Failure> {
         if !component.owner.trusted() {
             return Err(Failure::at(Reason::Owner, &component.path));
         }
+        // A volume root cannot be deleted or renamed, so DELETE on it is harmless;
+        // removing a child still needs FILE_DELETE_CHILD, which stays dangerous.
+        let ignored = if component.path.parent().is_none() {
+            DELETE
+        } else {
+            0
+        };
         if component.aces.iter().any(|ace| {
             ace.allow
                 && !ace.principal.trusted()
                 && ace.flags & INHERIT_ONLY == 0
                 && ace.mask
-                    & (DANGEROUS
+                    & ((DANGEROUS & !ignored)
                         | if component.child {
                             0x0000_0116
                         } else if component.target {
@@ -860,6 +867,28 @@ mod tests {
     }
 
     #[test]
+    fn volume_root_ignores_only_delete() {
+        assert!(Path::new(r"D:\").parent().is_none());
+        let mut case = facts();
+        case.components[0].aces[0].mask = 0x0013_01bf; // Modify
+        assert!(decide(&case).is_ok());
+
+        let mut parent = case.components[0].clone();
+        parent.path = PathBuf::from(r"D:\Example");
+        case.components.push(parent);
+        fails(case.clone(), Reason::Permissions);
+        case.components[1].aces[0].mask = DELETE;
+        fails(case.clone(), Reason::Permissions);
+        case.components.pop();
+
+        for (mask, flags) in [(0x001f_01ff, 0x03), (FILE_DELETE_CHILD, 0), (WRITE_DAC, 0)] {
+            case.components[0].aces[0].mask = mask;
+            case.components[0].aces[0].flags = flags;
+            fails(case.clone(), Reason::Permissions);
+        }
+    }
+
+    #[test]
     fn only_fixed_acl_capable_drives_are_accepted() {
         let mut case = facts();
         case.drive_fixed = false;
@@ -914,7 +943,6 @@ mod tests {
             GENERIC_WRITE,
             WRITE_DAC,
             WRITE_OWNER,
-            DELETE,
             FILE_DELETE_CHILD,
         ] {
             let mut case = facts();
