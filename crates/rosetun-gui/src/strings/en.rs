@@ -170,6 +170,8 @@ pub(crate) static EN: Strings = Strings {
     about_version_without_helper: "Version {app}",
     check_updates: "Check for updates",
     check_updates_detail: "Once a day, Rosetun asks GitHub for its list of releases. Nothing is downloaded or installed by itself.",
+    check_updates_now: "Check now",
+    check_updates_unavailable: "Unavailable while connecting",
     update_available: "Version {version} is out",
     update_open: "Open",
     update_skip: "Skip this version",

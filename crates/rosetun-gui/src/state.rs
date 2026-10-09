@@ -565,6 +565,7 @@ pub(crate) enum Action {
     SetAutoReconnect(bool),
     SetAutoUpdateSubscriptions(bool),
     SetCheckUpdates(bool),
+    CheckUpdatesNow,
     SkipVersion,
     SaveDns,
     SelectCustomDns,
@@ -1887,6 +1888,12 @@ impl State {
             Action::SetCheckUpdates(enabled) => {
                 if self.can_edit_settings() && self.config.interface.check_updates != enabled {
                     return self.start_settings(Job::SetCheckUpdates(enabled));
+                }
+            }
+            Action::CheckUpdatesNow => {
+                if self.can_check_updates() {
+                    self.update_check_pending = true;
+                    return Some(Job::CheckUpdates);
                 }
             }
             Action::SkipVersion => {
@@ -6021,6 +6028,59 @@ mod tests {
             state.act(Action::SetCheckUpdates(false)),
             Some(Job::SetCheckUpdates(false))
         ));
+    }
+
+    #[test]
+    fn manual_update_check_works_when_automatic_checks_are_off() {
+        let mut state = State {
+            config_ready: true,
+            ..State::default()
+        };
+        state.config.interface.check_updates = false;
+        assert!(state.take_update_check(100_000).is_none());
+        assert!(matches!(
+            state.act(Action::CheckUpdatesNow),
+            Some(Job::CheckUpdates)
+        ));
+        assert!(state.act(Action::CheckUpdatesNow).is_none());
+        state.reduce(WorkerEvent::UpdateCheck {
+            checked_at: 100_001,
+            result: Err(UpdateCheckError::Parse),
+        });
+        assert!(state.update_check_failed);
+        assert!(state.config.interface.last_update_check.is_none());
+        assert!(matches!(
+            state.act(Action::CheckUpdatesNow),
+            Some(Job::CheckUpdates)
+        ));
+        state.reduce(WorkerEvent::UpdateCheck {
+            checked_at: 100_002,
+            result: Ok(None),
+        });
+        assert!(!state.update_check_failed);
+        assert_eq!(state.config.interface.last_update_check, Some(100_002));
+    }
+
+    #[test]
+    fn manual_update_check_is_blocked_in_transitional_states() {
+        let mut state = State {
+            config_ready: true,
+            helper_available: true,
+            ..State::default()
+        };
+        for status in [
+            ConnectionState::Connecting,
+            ConnectionState::Reconnecting,
+            ConnectionState::FailedProtected {
+                reason: "failure".into(),
+            },
+        ] {
+            state.status.state = status;
+            assert!(!state.can_check_updates());
+            assert!(state.act(Action::CheckUpdatesNow).is_none());
+        }
+        state.status.state = ConnectionState::Connected;
+        assert!(state.can_check_updates());
     }
 
     #[cfg(windows)]

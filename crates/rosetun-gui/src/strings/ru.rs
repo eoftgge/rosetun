@@ -170,6 +170,8 @@ pub(crate) static RU: Strings = Strings {
     about_version_without_helper: "Версия {app}",
     check_updates: "Проверять обновления",
     check_updates_detail: "Раз в сутки Rosetun запрашивает у GitHub список релизов. Ничего не скачивается и не ставится само.",
+    check_updates_now: "Проверить сейчас",
+    check_updates_unavailable: "Недоступно во время подключения",
     update_available: "Вышла версия {version}",
     update_open: "Открыть",
     update_skip: "Пропустить эту версию",

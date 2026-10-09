@@ -245,6 +245,8 @@ pub(crate) struct Strings {
     pub(crate) about_version_without_helper: &'static str,
     pub(crate) check_updates: &'static str,
     pub(crate) check_updates_detail: &'static str,
+    pub(crate) check_updates_now: &'static str,
+    pub(crate) check_updates_unavailable: &'static str,
     pub(crate) update_available: &'static str,
     pub(crate) update_open: &'static str,
     pub(crate) update_skip: &'static str,

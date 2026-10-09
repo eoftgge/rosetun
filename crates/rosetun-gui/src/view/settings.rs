@@ -489,6 +489,16 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetCheckUpdates(check_updates));
         }
         card.body(|ui| {
+            let response =
+                widgets::outline_button(ui, t().check_updates_now, state.can_check_updates());
+            if response.clicked() {
+                actions.push(Action::CheckUpdatesNow);
+            }
+            if state.update_check_blocked_by_connection() {
+                response.on_disabled_hover_text(t().check_updates_unavailable);
+            }
+        });
+        card.body(|ui| {
             if let Some(release) = state.available_update() {
                 egui::Frame::new()
                     .fill(theme::ROSE_LIGHT)
