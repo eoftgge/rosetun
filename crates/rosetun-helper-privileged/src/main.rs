@@ -26,7 +26,7 @@ use tracing_subscriber::prelude::*;
 use crate::log_gate::VerboseGate;
 use crate::server::{Helper, Server};
 
-const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --verify-install-dir <path> | --secure-install-dir <path>]";
+const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path>]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
@@ -36,6 +36,7 @@ enum Mode {
     UninstallService,
     VerifyInstallDir(std::path::PathBuf),
     SecureInstallDir(std::path::PathBuf),
+    FinalizeInstallDir(std::path::PathBuf),
 }
 
 fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> {
@@ -47,6 +48,7 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
         [arg] if arg == "--uninstall-service" => Ok(Mode::UninstallService),
         [arg, path] if arg == "--verify-install-dir" => Ok(Mode::VerifyInstallDir(path.into())),
         [arg, path] if arg == "--secure-install-dir" => Ok(Mode::SecureInstallDir(path.into())),
+        [arg, path] if arg == "--finalize-install-dir" => Ok(Mode::FinalizeInstallDir(path.into())),
         _ => Err(USAGE.to_owned()),
     }
 }
@@ -90,6 +92,10 @@ fn main() -> std::process::ExitCode {
         #[cfg(windows)]
         Mode::SecureInstallDir(path) => {
             install_command(&path, "secured", install_dir::secure(&path))
+        }
+        #[cfg(windows)]
+        Mode::FinalizeInstallDir(path) => {
+            install_command(&path, "finalized", install_dir::finalize(&path))
         }
         #[cfg(not(windows))]
         _ => unreachable!("non-Windows modes were rejected above"),
@@ -275,6 +281,10 @@ mod tests {
         assert_eq!(
             mode(&["--secure-install-dir", r"D:\Example\Rosetun"]),
             Ok(Mode::SecureInstallDir(r"D:\Example\Rosetun".into()))
+        );
+        assert_eq!(
+            mode(&["--finalize-install-dir", r"D:\Example\Rosetun"]),
+            Ok(Mode::FinalizeInstallDir(r"D:\Example\Rosetun".into()))
         );
         assert_eq!(mode(&["--verify-install-dir"]), Err(USAGE.to_owned()));
         assert_eq!(mode(&["--unknown"]), Err(USAGE.to_owned()));
