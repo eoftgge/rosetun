@@ -46,7 +46,12 @@ Rosetun makes these network requests:
 - Before connecting, system DNS resolves the VPN server name; provider and ping hostnames may also be resolved by the operating system.
 - When changing servers while connected, the new server's name is resolved through the current tunnel.
 
-The engine's control API is contacted only over local loopback. There is no telemetry or Rosetun account. The application update check only reports a new version; it does not download or install it. Logs stay on this machine; the service log is accessible only to administrators. Site addresses are logged only while the temporary **Verbose log** setting is enabled. Automatic *subscription* updates are separate from application updates.
+The engine's control API is contacted only over local loopback. There is no telemetry or Rosetun account. The application update check only reports a new version; it does not download or install it. Logs stay on this machine; the service log is accessible only to administrators. When **Verbose log** is off, destination addresses in engine messages are replaced with `[hidden]`; the VPN server address and error cause remain. Site addresses are logged only while the temporary **Verbose log** setting is enabled. Automatic *subscription* updates are separate from application updates.
+
+## Troubleshooting
+
+- Another VPN client in TUN mode can prevent the tunnel from starting. Disconnect it and retry.
+- Traffic-modifying programs such as zapret can disrupt the connection to the VPN server. Exclude the server addresses in that program's settings.
 
 ## How it works
 
