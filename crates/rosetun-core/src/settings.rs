@@ -150,6 +150,13 @@ pub fn skip_version(store: &Store, version: Option<String>) -> Result<(), Settin
     })
 }
 
+pub fn record_update_check(store: &Store, at: u64) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.last_update_check = Some(at);
+        Ok(())
+    })
+}
+
 pub fn set_auto_reconnect(store: &Store, enabled: bool) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.settings.auto_reconnect = enabled;
@@ -375,6 +382,10 @@ mod tests {
         assert_eq!(store.load().unwrap(), expected);
         skip_version(&store, None).unwrap();
         expected.interface.skipped_version = None;
+        assert_eq!(store.load().unwrap(), expected);
+
+        record_update_check(&store, 123_456).unwrap();
+        expected.interface.last_update_check = Some(123_456);
         assert_eq!(store.load().unwrap(), expected);
 
         set_auto_reconnect(&store, false).unwrap();

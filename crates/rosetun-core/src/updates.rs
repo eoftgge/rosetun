@@ -13,6 +13,7 @@ const RELEASE_PAGE_PREFIX: &str = "https://github.com/eoftgge/rosetun/releases/"
 pub struct Release {
     pub version: String,
     pub url: String,
+    pub prerelease: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -156,6 +157,10 @@ fn parse_releases(body: &str) -> Result<Option<Release>, UpdateCheckError> {
             newest = Some(Release {
                 version: normalized.to_owned(),
                 url: url.to_owned(),
+                prerelease: entry
+                    .get("prerelease")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
             });
         }
     }
@@ -226,7 +231,7 @@ mod tests {
     fn selects_highest_valid_release_not_first_in_list() {
         let body = r#"[
             {"tag_name":"v0.1.0-alpha.3","html_url":"https://github.com/eoftgge/rosetun/releases/tag/v0.1.0-alpha.3","draft":false},
-            {"tag_name":"v0.1.0-alpha.10","html_url":"https://github.com/eoftgge/rosetun/releases/tag/v0.1.0-alpha.10","draft":false},
+            {"tag_name":"v0.1.0-alpha.10","html_url":"https://github.com/eoftgge/rosetun/releases/tag/v0.1.0-alpha.10","draft":false,"prerelease":true},
             {"tag_name":"0.1.0","html_url":"https://github.com/eoftgge/rosetun/releases/tag/0.1.0","draft":true},
             {"tag_name":"0.2.0","html_url":"https://github.com/other/rosetun/releases/tag/0.2.0","draft":false},
             {"tag_name":"not-a-version","html_url":"https://github.com/eoftgge/rosetun/releases/tag/not-a-version","draft":false}
@@ -236,8 +241,19 @@ mod tests {
             Some(Release {
                 version: "0.1.0-alpha.10".into(),
                 url: "https://github.com/eoftgge/rosetun/releases/tag/v0.1.0-alpha.10".into(),
+                prerelease: true,
             })
         );
+    }
+
+    #[test]
+    fn missing_or_invalid_prerelease_flag_is_false() {
+        for suffix in ["", ",\"prerelease\":\"yes\""] {
+            let body = format!(
+                "[{{\"tag_name\":\"1.0.0\",\"html_url\":\"https://github.com/eoftgge/rosetun/releases/tag/v1.0.0\",\"draft\":false{suffix}}}]"
+            );
+            assert!(!parse_releases(&body).unwrap().unwrap().prerelease);
+        }
     }
 
     #[test]

@@ -48,6 +48,8 @@ pub struct InterfaceSettings {
     pub check_updates: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_update_check: Option<u64>,
     #[serde(default)]
     pub language: LanguageSetting,
     #[serde(default)]
@@ -71,6 +73,7 @@ impl Default for InterfaceSettings {
             auto_update_subscriptions: true,
             check_updates: true,
             skipped_version: None,
+            last_update_check: None,
             language: LanguageSetting::System,
             reduce_motion: false,
         }
@@ -197,8 +200,11 @@ mod tests {
         assert!(config.interface.check_updates);
         assert_eq!(interface.skipped_version, None);
         assert_eq!(config.interface.skipped_version, None);
+        assert_eq!(interface.last_update_check, None);
+        assert_eq!(config.interface.last_update_check, None);
         let saved = serde_json::to_value(&interface).unwrap();
         assert!(saved.get("skipped_version").is_none());
+        assert!(saved.get("last_update_check").is_none());
     }
 
     #[test]
