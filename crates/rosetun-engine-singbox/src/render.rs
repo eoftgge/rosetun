@@ -187,6 +187,46 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
             outbound.insert("method".into(), params.method.clone().into());
             outbound.insert("password".into(), params.password.clone().into());
         }
+        Outbound::Hysteria2(params) => {
+            if !matches!(node.stream.tls, TlsMode::Tls(_))
+                || node.stream.transport != Transport::Tcp
+            {
+                return Err(EngineError::Unsupported(
+                    "Hysteria2 requires TLS and its built-in QUIC transport".into(),
+                ));
+            }
+            outbound.insert("type".into(), "hysteria2".into());
+            outbound.insert("password".into(), params.password.clone().into());
+            if let Some(password) = &params.obfs_password {
+                outbound.insert(
+                    "obfs".into(),
+                    json!({ "type": "salamander", "password": password }),
+                );
+            }
+            if !params.port_ranges.is_empty() {
+                let first_port = params.port_ranges[0]
+                    .split_once(['-', ':'])
+                    .map_or(params.port_ranges[0].as_str(), |(start, _)| start);
+                let mut ports = Vec::new();
+                // server_port is ignored when server_ports is set, and every entry must be a range.
+                if first_port.parse::<u16>().ok() != Some(node.port) {
+                    ports.push(format!("{}:{}", node.port, node.port));
+                }
+                ports.extend(params.port_ranges.iter().map(|range| {
+                    range.split_once(['-', ':']).map_or_else(
+                        || format!("{range}:{range}"),
+                        |(start, end)| format!("{start}:{end}"),
+                    )
+                }));
+                outbound.insert("server_ports".into(), ports.into());
+            }
+            if let Some(up) = params.up_mbps {
+                outbound.insert("up_mbps".into(), up.into());
+            }
+            if let Some(down) = params.down_mbps {
+                outbound.insert("down_mbps".into(), down.into());
+            }
+        }
         Outbound::Unknown { scheme, .. } => {
             return Err(EngineError::Unsupported(format!(
                 "protocol {scheme} not supported by the sing box backend"
@@ -194,7 +234,10 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
         }
     }
 
-    if let Some(tls) = tls_section(&node.stream.tls) {
+    if let Some(tls) = tls_section(
+        &node.stream.tls,
+        !matches!(&node.outbound, Outbound::Hysteria2(_)),
+    ) {
         outbound.insert("tls".into(), tls);
     }
     if let Some(transport) = transport_section(&node.stream.transport) {
@@ -204,7 +247,7 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
     Ok(Value::Object(outbound))
 }
 
-fn tls_section(mode: &TlsMode) -> Option<Value> {
+fn tls_section(mode: &TlsMode, use_utls: bool) -> Option<Value> {
     match mode {
         TlsMode::Plain => None,
         TlsMode::Tls(params) => {
@@ -219,11 +262,13 @@ fn tls_section(mode: &TlsMode) -> Option<Value> {
             if params.allow_insecure {
                 tls.insert("insecure".into(), true.into());
             }
-            let fingerprint = params.fingerprint.as_deref().unwrap_or(DEFAULT_FINGERPRINT);
-            tls.insert(
-                "utls".into(),
-                json!({ "enabled": true, "fingerprint": fingerprint }),
-            );
+            if use_utls {
+                let fingerprint = params.fingerprint.as_deref().unwrap_or(DEFAULT_FINGERPRINT);
+                tls.insert(
+                    "utls".into(),
+                    json!({ "enabled": true, "fingerprint": fingerprint }),
+                );
+            }
             Some(Value::Object(tls))
         }
         TlsMode::Reality(params) => {
@@ -373,13 +418,15 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use rosetun_config::{Rule, RuleSetId, RuleTemplate};
+    use rosetun_config::{
+        Hysteria2Params, NodeId, Rule, RuleSetId, RuleTemplate, StreamSettings, TlsParams,
+    };
 
     use super::*;
 
     #[test]
     fn tls_without_fingerprint_uses_chrome_utls() {
-        let tls = tls_section(&TlsMode::Tls(Default::default())).unwrap();
+        let tls = tls_section(&TlsMode::Tls(Default::default()), true).unwrap();
         assert_eq!(
             tls["utls"],
             json!({ "enabled": true, "fingerprint": "chrome" })
@@ -393,11 +440,89 @@ mod tests {
             unreachable!();
         };
         params.fingerprint = Some("firefox".into());
-        let tls = tls_section(&mode).unwrap();
+        let tls = tls_section(&mode, true).unwrap();
         assert_eq!(
             tls["utls"],
             json!({ "enabled": true, "fingerprint": "firefox" })
         );
+    }
+
+    #[test]
+    fn hysteria2_renders_quic_ports_obfs_bandwidth_and_tls_without_utls() {
+        let mut node = Node {
+            id: NodeId::new("test"),
+            name: "Test".into(),
+            server: "192.0.2.1".into(),
+            port: 443,
+            outbound: Outbound::Hysteria2(Hysteria2Params {
+                password: "test-secret".into(),
+                obfs_password: Some("test-secret-obfs".into()),
+                port_ranges: vec!["20000-30000".into()],
+                up_mbps: Some(100),
+                down_mbps: Some(200),
+            }),
+            stream: StreamSettings {
+                tls: TlsMode::Tls(TlsParams {
+                    sni: Some("example.com".into()),
+                    fingerprint: Some("firefox".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            raw: None,
+        };
+        let outbound = proxy_outbound(&node, "proxy").unwrap();
+        assert_eq!(outbound["type"], "hysteria2");
+        assert_eq!(outbound["server_ports"], json!(["443:443", "20000:30000"]));
+        assert_eq!(
+            outbound["obfs"],
+            json!({ "type": "salamander", "password": "test-secret-obfs" })
+        );
+        assert_eq!(outbound["password"], "test-secret");
+        assert_eq!(outbound["up_mbps"], 100);
+        assert_eq!(outbound["down_mbps"], 200);
+        assert_eq!(outbound["tls"]["server_name"], "example.com");
+        assert!(outbound["tls"].get("utls").is_none());
+        assert!(outbound["tls"].get("alpn").is_none());
+        let rendered = RenderedConfig {
+            file_name: "config.json".into(),
+            body: serde_json::to_vec(&outbound).unwrap(),
+            unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
+        };
+        assert!(!format!("{rendered:?}").contains("test-secret"));
+
+        node.port = 20000;
+        if let TlsMode::Tls(tls) = &mut node.stream.tls {
+            tls.fingerprint = None;
+        }
+        let outbound = proxy_outbound(&node, "proxy").unwrap();
+        assert_eq!(outbound["server_ports"], json!(["20000:30000"]));
+        assert!(outbound["tls"].get("utls").is_none());
+
+        let Outbound::Hysteria2(params) = &mut node.outbound else {
+            unreachable!();
+        };
+        params.port_ranges = vec!["30001".into()];
+        let outbound = proxy_outbound(&node, "proxy").unwrap();
+        assert_eq!(
+            outbound["server_ports"],
+            json!(["20000:20000", "30001:30001"])
+        );
+
+        let Outbound::Hysteria2(params) = &mut node.outbound else {
+            unreachable!();
+        };
+        params.port_ranges.clear();
+        let outbound = proxy_outbound(&node, "proxy").unwrap();
+        assert!(outbound.get("server_ports").is_none());
+        assert_eq!(outbound["server_port"], 20000);
+
+        node.stream.tls = TlsMode::Plain;
+        assert!(matches!(
+            proxy_outbound(&node, "proxy"),
+            Err(EngineError::Unsupported(_))
+        ));
     }
 
     #[test]
