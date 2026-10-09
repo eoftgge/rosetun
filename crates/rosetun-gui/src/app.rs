@@ -247,7 +247,9 @@ impl App {
                 self.workers.set_rule_enabled(set, rule, enabled);
             }
             Job::MoveRule(set, rule, to_index) => self.workers.move_rule(set, rule, to_index),
+            Job::MoveRules(set, rules, to_index) => self.workers.move_rules(set, rules, to_index),
             Job::RemoveRule(set, rule) => self.workers.remove_rule(set, rule),
+            Job::RemoveRules(set, rules) => self.workers.remove_rules(set, rules),
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
             Job::Add { input, options } => self.workers.add(input, options),
             Job::Update(id) => self.workers.update(id),

@@ -69,8 +69,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                 }),
         )
         .show(ui, |ui| {
+            let dragging_rule = state.screen == Screen::Rules
+                && egui::DragAndDrop::payload::<rosetun_config::RuleId>(ui.ctx()).is_some();
             egui::ScrollArea::vertical()
                 .id_salt("connection_scroll")
+                .scroll_source(egui::scroll_area::ScrollSource {
+                    mouse_wheel: !dragging_rule,
+                    ..Default::default()
+                })
                 .show(ui, |ui| {
                     if let Some(error) = &state.config_error
                         && widgets::dismissible_error(

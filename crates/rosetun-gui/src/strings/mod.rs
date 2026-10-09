@@ -447,7 +447,14 @@ pub(crate) struct Strings {
     pub(crate) delete_active_rule_set_warning: &'static str,
     pub(crate) delete_rule: &'static str,
     pub(crate) delete_rule_detail: &'static str,
+    pub(crate) delete_rules_heading: &'static str,
+    pub(crate) rule_unit: &'static str,
+    pub(crate) and_more_rules: &'static str,
     pub(crate) move_to_top: &'static str,
+    pub(crate) move_selected_to_top: &'static str,
+    pub(crate) move_to_end: &'static str,
+    pub(crate) selected_rule_count: &'static str,
+    pub(crate) delete_selected_rules: &'static str,
     pub(crate) search_rules: &'static str,
     pub(crate) all: &'static str,
     pub(crate) domains: &'static str,
@@ -674,6 +681,26 @@ impl Strings {
 
     pub(crate) fn more_errors(&self, count: usize) -> String {
         fill(self.more_errors, &[("k", &count.to_string())])
+    }
+
+    pub(crate) fn selected_rule_count(&self, count: usize) -> String {
+        fill(self.selected_rule_count, &[("n", &count.to_string())])
+    }
+
+    pub(crate) fn delete_selected_rules(&self, count: usize) -> String {
+        fill(self.delete_selected_rules, &[("n", &count.to_string())])
+    }
+
+    pub(crate) fn delete_rules_heading(&self, count: usize) -> String {
+        let rules = en_count(count as u64, self.rule_unit);
+        fill(
+            self.delete_rules_heading,
+            &[("n", &count.to_string()), ("rules", &rules)],
+        )
+    }
+
+    pub(crate) fn and_more_rules(&self, count: usize) -> String {
+        fill(self.and_more_rules, &[("k", &count.to_string())])
     }
 
     pub(crate) fn add_rules(&self, count: usize) -> String {
@@ -985,6 +1012,16 @@ mod tests {
         }
         assert_eq!(EN.add_rules(1), "Add rule");
         assert_eq!(EN.add_rules(2), "Add 2 rules");
+    }
+
+    #[test]
+    fn grouped_rule_labels_include_counts() {
+        assert_eq!(EN.delete_rules_heading(2), "Delete 2 rules");
+        assert_eq!(EN.delete_rules_heading(5), "Delete 5 rules");
+        assert_eq!(RU.delete_rules_heading(5), "Удалить правила: 5");
+        assert_eq!(RU.selected_rule_count(3), "Выбрано: 3");
+        assert_eq!(RU.delete_selected_rules(3), "Удалить выбранные (3)");
+        assert_eq!(RU.and_more_rules(2), "и ещё 2");
     }
 
     #[test]

@@ -221,6 +221,7 @@ pub(crate) struct NameDialog {
 pub(crate) enum DeleteDialog {
     Set(RuleSetId),
     Rule { set: RuleSetId, rule: RuleId },
+    Rules { set: RuleSetId, rules: Vec<RuleId> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -619,6 +620,7 @@ pub(crate) enum Action {
     SubmitSetName,
     RequestDeleteSet,
     RequestDeleteRule(RuleId),
+    RequestDeleteSelectedRules,
     CancelRuleDelete,
     ConfirmRuleDelete,
     SetDefaultTarget(RuleTarget),
@@ -638,7 +640,10 @@ pub(crate) enum Action {
     SetRuleTarget(RuleId, RuleTarget),
     SetRuleEnabled(RuleId, bool),
     DropRule(RuleId, usize),
+    DropRules(Vec<RuleId>, usize),
     MoveRuleToTop(RuleId),
+    MoveSelectedRulesToTop,
+    MoveSelectedRulesToEnd,
     Primary,
     CancelConnection,
     Apply,
@@ -718,7 +723,9 @@ pub(crate) enum Job {
     SetRuleTarget(RuleSetId, RuleId, RuleTarget),
     SetRuleEnabled(RuleSetId, RuleId, bool),
     MoveRule(RuleSetId, RuleId, usize),
+    MoveRules(RuleSetId, Vec<RuleId>, usize),
     RemoveRule(RuleSetId, RuleId),
+    RemoveRules(RuleSetId, Vec<RuleId>),
     SetKillSwitch(bool),
     Add {
         input: String,
@@ -1219,6 +1226,13 @@ impl State {
             .unwrap_or_default()
     }
 
+    fn selected_rule_ids(&self) -> Vec<RuleId> {
+        self.visible_rule_ids()
+            .into_iter()
+            .filter(|id| self.rule_screen.selected_rules.contains(id))
+            .collect()
+    }
+
     fn select_rule(&mut self, rule: RuleId, additive: bool, range: bool) {
         let visible = self.visible_rule_ids();
         let Some(index) = visible.iter().position(|id| id == &rule) else {
@@ -1712,7 +1726,11 @@ impl State {
             WorkerEvent::SetRuleTarget(result) => self.finish_rule_edit(result),
             WorkerEvent::SetRuleEnabled(result) => self.finish_rule_edit(result),
             WorkerEvent::MoveRule(result) => self.finish_rule_edit(result),
-            WorkerEvent::RemoveRule(result) => {
+            WorkerEvent::MoveRules(result) => self.finish_rule_edit(result),
+            WorkerEvent::RemoveRule(result) | WorkerEvent::RemoveRules(result) => {
+                if result.is_ok() {
+                    self.rule_screen.clear_selection();
+                }
                 self.rule_screen.delete = None;
                 self.finish_rule_edit(result);
             }
@@ -1970,6 +1988,7 @@ impl State {
                 Ok(()) => {
                     self.rule_screen.add = None;
                     self.rule_screen.filter = RuleFilter::default();
+                    self.rule_screen.clear_selection();
                 }
                 Err(error) => {
                     let message = self.text(&errors::rule_set(t(), &error));
@@ -2294,6 +2313,23 @@ impl State {
                     });
                 }
             }
+            Action::RequestDeleteSelectedRules => {
+                if self.can_edit_rules()
+                    && self.rule_screen.delete.is_none()
+                    && let Some(set) = self.selected_rules()
+                {
+                    let set_id = set.id.clone();
+                    let rules = self.selected_rule_ids();
+                    self.rule_screen.delete = match rules.as_slice() {
+                        [] => None,
+                        [rule] => Some(DeleteDialog::Rule {
+                            set: set_id,
+                            rule: rule.clone(),
+                        }),
+                        _ => Some(DeleteDialog::Rules { set: set_id, rules }),
+                    };
+                }
+            }
             Action::CancelRuleDelete => {
                 if !self.operations.rules_edit {
                     self.rule_screen.delete = None;
@@ -2307,6 +2343,9 @@ impl State {
                         DeleteDialog::Set(id) => Job::DeleteRuleSet(id.clone()),
                         DeleteDialog::Rule { set, rule } => {
                             Job::RemoveRule(set.clone(), rule.clone())
+                        }
+                        DeleteDialog::Rules { set, rules } => {
+                            Job::RemoveRules(set.clone(), rules.clone())
                         }
                     };
                     return self.start_rule_edit(job);
@@ -2497,6 +2536,7 @@ impl State {
                         self.operation_error = None;
                         self.rule_screen.add = None;
                         self.rule_screen.filter = RuleFilter::default();
+                        self.rule_screen.clear_selection();
                         return Some(Job::Apply(Box::new(request)));
                     }
                     self.temporary_rules = before;
@@ -2567,6 +2607,23 @@ impl State {
                     return self.start_rule_edit(Job::MoveRule(set.id.clone(), rule, to));
                 }
             }
+            Action::DropRules(rules, slot) => {
+                if self.can_edit_rules()
+                    && !self.rule_screen.filter.is_active()
+                    && rules.len() >= 2
+                    && rules.len() == self.rule_screen.selected_rules.len()
+                    && rules.iter().cloned().collect::<BTreeSet<_>>()
+                        == self.rule_screen.selected_rules
+                    && let Some(set) = self.selected_rules()
+                    && rules.len() <= set.rules.len()
+                    && slot <= set.rules.len() - rules.len()
+                    && rules
+                        .iter()
+                        .all(|id| set.rules.iter().any(|rule| &rule.id == id))
+                {
+                    return self.start_rule_edit(Job::MoveRules(set.id.clone(), rules, slot));
+                }
+            }
             Action::MoveRuleToTop(rule) => {
                 if self.can_edit_rules()
                     && let Some(set) = self.selected_rules()
@@ -2577,6 +2634,32 @@ impl State {
                         .is_some_and(|index| index > 0)
                 {
                     return self.start_rule_edit(Job::MoveRule(set.id.clone(), rule, 0));
+                }
+            }
+            move_action @ (Action::MoveSelectedRulesToTop | Action::MoveSelectedRulesToEnd) => {
+                if self.can_edit_rules()
+                    && !self.rule_screen.filter.is_active()
+                    && let Some(set) = self.selected_rules()
+                {
+                    let set_id = set.id.clone();
+                    let len = set.rules.len();
+                    let rules = self.selected_rule_ids();
+                    if rules.len() >= 2 {
+                        let at_end = matches!(move_action, Action::MoveSelectedRulesToEnd);
+                        let index = if at_end { len - rules.len() } else { 0 };
+                        let already_there = if at_end {
+                            set.rules[len - rules.len()..]
+                                .iter()
+                                .all(|rule| self.rule_screen.selected_rules.contains(&rule.id))
+                        } else {
+                            set.rules[..rules.len()]
+                                .iter()
+                                .all(|rule| self.rule_screen.selected_rules.contains(&rule.id))
+                        };
+                        if !already_there {
+                            return self.start_rule_edit(Job::MoveRules(set_id, rules, index));
+                        }
+                    }
                 }
             }
             Action::Primary => {
@@ -5554,7 +5637,9 @@ mod tests {
             WorkerEvent::SetRuleTarget(Err(RuleSetError::RuleNotFound)),
             WorkerEvent::SetRuleEnabled(Err(RuleSetError::RuleNotFound)),
             WorkerEvent::MoveRule(Err(RuleSetError::RuleNotFound)),
+            WorkerEvent::MoveRules(Err(RuleSetError::RuleNotFound)),
             WorkerEvent::RemoveRule(Err(RuleSetError::RuleNotFound)),
+            WorkerEvent::RemoveRules(Err(RuleSetError::RuleNotFound)),
         ];
         for event in events {
             let mut state = state_with_rules();
@@ -5570,7 +5655,9 @@ mod tests {
             WorkerEvent::SetRuleTarget(Ok(())),
             WorkerEvent::SetRuleEnabled(Ok(())),
             WorkerEvent::MoveRule(Ok(())),
+            WorkerEvent::MoveRules(Ok(())),
             WorkerEvent::RemoveRule(Ok(())),
+            WorkerEvent::RemoveRules(Ok(())),
         ];
         for event in events {
             let mut state = state_with_rules();
@@ -6048,6 +6135,149 @@ mod tests {
         assert!(state.act(Action::MoveRuleToTop(RuleId::new("0"))).is_none());
         state.rule_screen.selected_set = None;
         assert!(state.act(Action::MoveRuleToTop(RuleId::new("2"))).is_none());
+    }
+
+    #[test]
+    fn selected_rules_move_as_one_job_and_filters_block_reordering() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        for id in ["0", "2"] {
+            state.act(Action::SelectRule {
+                rule: RuleId::new(id),
+                additive: true,
+                range: false,
+            });
+        }
+        assert!(matches!(
+            state.act(Action::DropRules(vec![RuleId::new("0"), RuleId::new("2")], 1)),
+            Some(Job::MoveRules(set, rules, 1))
+                if set == RuleSetId::new("2") && rules == [RuleId::new("0"), RuleId::new("2")]
+        ));
+        assert!(state.act(Action::MoveSelectedRulesToTop).is_none());
+        state.reduce(WorkerEvent::MoveRules(Ok(())));
+        assert!(matches!(
+            state.act(Action::MoveSelectedRulesToTop),
+            Some(Job::MoveRules(_, rules, 0)) if rules.len() == 2
+        ));
+        state.reduce(WorkerEvent::MoveRules(Ok(())));
+        assert!(matches!(
+            state.act(Action::MoveSelectedRulesToEnd),
+            Some(Job::MoveRules(_, rules, 1)) if rules.len() == 2
+        ));
+        state.reduce(WorkerEvent::MoveRules(Ok(())));
+        state.rule_screen.filter.search = "first".into();
+        assert!(state.act(Action::MoveSelectedRulesToTop).is_none());
+        assert!(state.act(Action::MoveSelectedRulesToEnd).is_none());
+        assert!(
+            state
+                .act(Action::DropRules(
+                    vec![RuleId::new("0"), RuleId::new("2")],
+                    0
+                ))
+                .is_none()
+        );
+        state.rule_screen.filter.search.clear();
+        assert!(
+            state
+                .act(Action::DropRules(
+                    vec![RuleId::new("0"), RuleId::new("2")],
+                    2
+                ))
+                .is_none()
+        );
+        assert!(
+            state
+                .act(Action::DropRules(
+                    vec![RuleId::new("0"), RuleId::new("missing")],
+                    0
+                ))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn selected_rules_delete_in_one_confirmed_job_and_clear_after_success() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        state.act(Action::SelectVisibleRules);
+        state.act(Action::RequestDeleteSelectedRules);
+        assert!(matches!(
+            &state.rule_screen.delete,
+            Some(DeleteDialog::Rules { set, rules })
+                if set == &RuleSetId::new("2") && rules.len() == 3
+        ));
+        state.act(Action::CancelRuleDelete);
+        assert!(state.rule_screen.delete.is_none());
+        assert_eq!(state.rule_screen.selected_rules.len(), 3);
+        state.rule_screen.filter.search = "first".into();
+        state.act(Action::RequestDeleteSelectedRules);
+        assert!(matches!(
+            state.rule_screen.delete,
+            Some(DeleteDialog::Rule { .. })
+        ));
+        state.act(Action::CancelRuleDelete);
+        state.rule_screen.filter.search.clear();
+        state.act(Action::RequestDeleteSelectedRules);
+        assert!(matches!(
+            state.act(Action::ConfirmRuleDelete),
+            Some(Job::RemoveRules(set, rules))
+                if set == RuleSetId::new("2") && rules.len() == 3
+        ));
+        assert!(state.act(Action::CancelRuleDelete).is_none());
+        state.reduce(WorkerEvent::RemoveRules(Ok(())));
+        assert!(state.rule_screen.delete.is_none());
+        assert!(state.rule_screen.selected_rules.is_empty());
+    }
+
+    #[test]
+    fn grouped_edit_while_connected_requires_explicit_apply() {
+        let mut state = connected_state_for_apply();
+        state.temporary_rules_loaded = true;
+        state.act(Action::OpenRules);
+        state.act(Action::SelectRule {
+            rule: RuleId::new("0"),
+            additive: false,
+            range: false,
+        });
+        state.act(Action::SelectRule {
+            rule: RuleId::new("2"),
+            additive: true,
+            range: false,
+        });
+        assert!(matches!(
+            state.act(Action::MoveSelectedRulesToEnd),
+            Some(Job::MoveRules(_, _, 1))
+        ));
+        let mut config = state.config.clone();
+        let first = config.rule_sets[0].rules.remove(0);
+        let last = config.rule_sets[0].rules.remove(1);
+        config.rule_sets[0].rules.extend([first, last]);
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config,
+        });
+        state.reduce(WorkerEvent::MoveRules(Ok(())));
+        assert!(state.pending_reconnect(SessionPart::Rules));
+        assert!(state.can_apply());
+        assert!(state.take_apply().is_none());
+        state.act(Action::RequestDeleteSelectedRules);
+        assert!(matches!(
+            state.act(Action::ConfirmRuleDelete),
+            Some(Job::RemoveRules(_, _))
+        ));
+        let mut config = state.config.clone();
+        config.rule_sets[0]
+            .rules
+            .retain(|rule| !state.rule_screen.selected_rules.contains(&rule.id));
+        state.reduce(WorkerEvent::Config {
+            generation: 2,
+            config,
+        });
+        state.reduce(WorkerEvent::RemoveRules(Ok(())));
+        assert!(state.rule_screen.selected_rules.is_empty());
+        assert!(state.pending_reconnect(SessionPart::Rules));
+        assert!(state.can_apply());
+        assert!(state.take_apply().is_none());
     }
 
     #[test]

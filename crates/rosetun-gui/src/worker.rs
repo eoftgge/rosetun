@@ -19,10 +19,10 @@ use rosetun_core::{
     RuleSetError, SelectNodeError, SelectRuleSetError, SettingsError, Store, StoreError,
     SubscriptionUpdateResult, Timeouts, UpdateCheckError, UpdateReport, UpdateSubscriptionError,
     add_prepared_subscription, add_rule, add_rules, create_rule_set, delete_rule_set, move_rule,
-    move_subscription, ping_all, prepare_subscription, remove_rule, remove_subscription,
-    rename_rule_set, rename_subscription, reset_settings, select_node, select_rule_set,
-    set_default_target, set_dns, set_interface_scale, set_kill_switch, set_language,
-    set_rule_enabled, set_rule_target, set_verbose_log, update_all, update_rule,
+    move_rules, move_subscription, ping_all, prepare_subscription, remove_rule, remove_rules,
+    remove_subscription, rename_rule_set, rename_subscription, reset_settings, select_node,
+    select_rule_set, set_default_target, set_dns, set_interface_scale, set_kill_switch,
+    set_language, set_rule_enabled, set_rule_target, set_verbose_log, update_all, update_rule,
     update_subscription,
 };
 use rosetun_ipc::{
@@ -129,7 +129,9 @@ pub(crate) enum WorkerEvent {
     SetRuleTarget(Result<(), RuleSetError>),
     SetRuleEnabled(Result<(), RuleSetError>),
     MoveRule(Result<(), RuleSetError>),
+    MoveRules(Result<(), RuleSetError>),
     RemoveRule(Result<(), RuleSetError>),
+    RemoveRules(Result<(), RuleSetError>),
     SetKillSwitch(Result<(), StoreError>),
     Add(Result<(Subscription, UpdateReport), AddFromUrlError>),
     Update {
@@ -590,11 +592,27 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn move_rules(&self, set: RuleSetId, rules: Vec<RuleId>, to_index: usize) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = move_rules(&publisher.store, &set, &rules, to_index);
+            publisher.complete(WorkerEvent::MoveRules(result));
+        });
+    }
+
     pub(crate) fn remove_rule(&self, set: RuleSetId, rule: RuleId) {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
             let result = remove_rule(&publisher.store, &set, &rule);
             publisher.complete(WorkerEvent::RemoveRule(result));
+        });
+    }
+
+    pub(crate) fn remove_rules(&self, set: RuleSetId, rules: Vec<RuleId>) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let result = remove_rules(&publisher.store, &set, &rules);
+            publisher.complete(WorkerEvent::RemoveRules(result));
         });
     }
 

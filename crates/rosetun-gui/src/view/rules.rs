@@ -2,7 +2,7 @@ use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 
 use crate::icons::{self, Icon};
-use crate::reorder::drop_target;
+use crate::reorder::group_drop_target;
 use crate::rules::{
     RuleCaption, RuleFilter, TypeFilter, rule_counts, rule_counts_slice, rule_lines, visible_rules,
     visible_rules_slice,
@@ -103,16 +103,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     if state.rule_screen.filter.search != search_before {
         actions.push(Action::ClearRuleSelection);
     }
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), 38.0),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.add(
-                egui::Label::new(RichText::new(t().order_hint).small().color(theme::TEXT_DIM))
-                    .wrap(),
-            );
-        },
-    );
+    let mut selection_regions = Vec::new();
+    let slot = selection_slot(ui, state, actions);
+    if state.rule_screen.selected_rules.len() >= 2 {
+        selection_regions.push(slot.rect);
+    }
 
     let visible_temporary = visible_rules_slice(temporary, &state.rule_screen.filter);
     let visible = visible_rules(set, &state.rule_screen.filter);
@@ -142,25 +137,160 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
             });
         }
         for (index, rule) in visible {
-            ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
+            let row = ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
                 rule_row(ui, state, set, rule, Some(index), value_width, actions);
             });
+            if state.rule_screen.selected_rules.contains(&rule.id) {
+                let rect = row.response.rect;
+                selection_regions.push(egui::Rect::from_min_max(
+                    rect.min,
+                    egui::pos2(
+                        rect.left() + ROW_INSET + HANDLE_WIDTH + HANDLE_GAP,
+                        rect.bottom(),
+                    ),
+                ));
+                selection_regions.push(egui::Rect::from_min_max(
+                    egui::pos2(rect.right() - ROW_INSET - MENU_WIDTH - MENU_GAP, rect.top()),
+                    rect.max,
+                ));
+            }
         }
         default_rule(ui, state, set, value_width, actions);
     });
-    let blank_height = (ui.clip_rect().bottom() - ui.cursor().top()).max(0.0);
-    if blank_height > 0.0
-        && ui
-            .allocate_exact_size(
-                egui::vec2(ui.available_width(), blank_height),
-                egui::Sense::click(),
+    scroll_rules_while_dragging(ui);
+    clear_selection_on_click_away(ui.ctx(), state, &selection_regions, actions);
+    selection_shortcuts(ui.ctx(), state, text_edit_focused, actions);
+}
+
+fn clear_selection_on_click_away(
+    ctx: &egui::Context,
+    state: &State,
+    selection_regions: &[egui::Rect],
+    actions: &mut Vec<Action>,
+) {
+    if state.rule_screen.selected_rules.is_empty()
+        || state.rule_screen.name.is_some()
+        || state.rule_screen.add.is_some()
+        || state.rule_screen.delete.is_some()
+        || ctx.dragged_id().is_some()
+        || actions.iter().any(|action| {
+            matches!(
+                action,
+                Action::SelectRule { .. }
+                    | Action::DropRule(_, _)
+                    | Action::DropRules(_, _)
+                    | Action::MoveSelectedRulesToTop
+                    | Action::MoveSelectedRulesToEnd
+                    | Action::RequestDeleteSelectedRules
+                    | Action::ClearRuleSelection
             )
-            .1
-            .clicked()
+        })
     {
+        return;
+    }
+    let click = ctx.input(|input| {
+        input
+            .pointer
+            .primary_clicked()
+            .then(|| input.pointer.interact_pos())
+            .flatten()
+    });
+    if click.is_some_and(|pos| !selection_regions.iter().any(|rect| rect.contains(pos))) {
         actions.push(Action::ClearRuleSelection);
     }
-    selection_shortcuts(ui.ctx(), state, text_edit_focused, actions);
+}
+
+fn scroll_rules_while_dragging(ui: &mut egui::Ui) {
+    if egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_none() {
+        return;
+    }
+    let Some(pointer) = ui.ctx().pointer_hover_pos() else {
+        return;
+    };
+    let viewport = ui.clip_rect();
+    if pointer.x < viewport.left()
+        || pointer.x > viewport.right()
+        || pointer.y < viewport.top() - 24.0
+        || pointer.y > viewport.bottom() + 24.0
+    {
+        return;
+    }
+    let (wheel, dt) = ui.input(|input| (input.smooth_scroll_delta().y, input.stable_dt.min(0.1)));
+    if wheel != 0.0 {
+        ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
+    }
+    let delta = drag_scroll_delta(viewport, pointer.y, wheel, dt);
+    if delta != 0.0 {
+        ui.scroll_with_delta_animation(
+            egui::vec2(0.0, delta),
+            egui::style::ScrollAnimation::none(),
+        );
+    }
+}
+
+fn drag_scroll_delta(viewport: egui::Rect, pointer_y: f32, wheel: f32, dt: f32) -> f32 {
+    let edge = 48.0;
+    let speed = 640.0;
+    let proximity = if pointer_y < viewport.top() + edge {
+        ((viewport.top() + edge - pointer_y) / edge).clamp(0.0, 1.0)
+    } else if pointer_y > viewport.bottom() - edge {
+        -((pointer_y - viewport.bottom() + edge) / edge).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    wheel + proximity * proximity.abs() * speed * dt
+}
+
+fn selection_slot(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 38.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            if state.rule_screen.selected_rules.len() >= 2 {
+                selection_toolbar(ui, state, actions);
+            } else {
+                ui.add(
+                    egui::Label::new(RichText::new(t().order_hint).small().color(theme::TEXT_DIM))
+                        .wrap(),
+                );
+            }
+        },
+    )
+    .response
+}
+
+fn selection_toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let can_edit = state.can_edit_rules();
+    let can_move = can_edit && !state.rule_screen.filter.is_active();
+    let count = state.rule_screen.selected_rules.len();
+    ui.label(RichText::new(t().selected_rule_count(count)).color(theme::TEXT_MUTED));
+    for (label, action) in [
+        (t().move_selected_to_top, Action::MoveSelectedRulesToTop),
+        (t().move_to_end, Action::MoveSelectedRulesToEnd),
+    ] {
+        let button = widgets::outline_button_compact(ui, label, can_move);
+        let button = if state.rule_screen.filter.is_active() {
+            button.on_hover_text(t().reorder_disabled)
+        } else {
+            button
+        };
+        if button.clicked() {
+            actions.push(action);
+        }
+    }
+    let delete = ui
+        .scope(|ui| {
+            ui.visuals_mut().override_text_color = Some(if can_edit {
+                theme::ERROR
+            } else {
+                theme::DISABLED
+            });
+            widgets::outline_button_compact(ui, t().delete, can_edit)
+        })
+        .inner;
+    if delete.clicked() {
+        actions.push(Action::RequestDeleteSelectedRules);
+    }
 }
 
 fn selection_shortcuts(
@@ -182,6 +312,11 @@ fn selection_shortcuts(
         && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         actions.push(Action::ClearRuleSelection);
+    } else if !state.rule_screen.selected_rules.is_empty()
+        && state.can_edit_rules()
+        && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
+    {
+        actions.push(Action::RequestDeleteSelectedRules);
     }
 }
 
@@ -780,6 +915,46 @@ fn target_button(
     .inner
 }
 
+fn dragged_rules(state: &State, set: &RuleSet, dragged: &RuleId) -> Option<Vec<RuleId>> {
+    if !set.rules.iter().any(|rule| &rule.id == dragged) {
+        return None;
+    }
+    Some(if state.rule_screen.selected_rules.contains(dragged) {
+        set.rules
+            .iter()
+            .filter(|rule| state.rule_screen.selected_rules.contains(&rule.id))
+            .map(|rule| rule.id.clone())
+            .collect()
+    } else {
+        vec![dragged.clone()]
+    })
+}
+
+fn drag_target(
+    state: &State,
+    set: &RuleSet,
+    dragged: &RuleId,
+    full_slot: usize,
+) -> Option<(Vec<RuleId>, usize)> {
+    let rules = dragged_rules(state, set, dragged)?;
+    let positions: Vec<_> = set
+        .rules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, rule)| rules.contains(&rule.id).then_some(index))
+        .collect();
+    let target = group_drop_target(&positions, full_slot, set.rules.len())?;
+    Some((rules, target))
+}
+
+fn drop_action(rules: Vec<RuleId>, full_slot: usize, target: usize) -> Action {
+    if rules.len() == 1 {
+        Action::DropRule(rules[0].clone(), full_slot)
+    } else {
+        Action::DropRules(rules, target)
+    }
+}
+
 fn rule_icon(matcher: &RuleMatcher) -> Icon {
     match matcher {
         RuleMatcher::Domain(_) => Icon::Globe,
@@ -801,8 +976,10 @@ fn rule_row(
     let temporary = index.is_none();
     let selected = !temporary && state.rule_screen.selected_rules.contains(&rule.id);
     let reorder = !temporary && state.can_edit_rules() && !state.rule_screen.filter.is_active();
-    let dragged =
-        reorder && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| *id == rule.id);
+    let dragged = reorder
+        && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| {
+            *id == rule.id || (selected && state.rule_screen.selected_rules.contains(&*id))
+        });
     let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(12, 0));
     let fill = if selected { theme::INPUT } else { theme::CARD };
     if dragged {
@@ -882,75 +1059,145 @@ fn rule_row(
                     let menu = icons::icon_button_sized(ui, Icon::More, can_open, MENU_WIDTH)
                         .on_hover_text(t().more_actions);
                     if can_open {
+                        let group = selected && state.rule_screen.selected_rules.len() >= 2;
+                        let menu_width = if group {
+                            ui.painter()
+                                .layout_no_wrap(
+                                    t().delete_selected_rules(
+                                        state.rule_screen.selected_rules.len(),
+                                    ),
+                                    egui::TextStyle::Button.resolve(ui.style()),
+                                    theme::ERROR,
+                                )
+                                .size()
+                                .x
+                                + 40.0
+                        } else {
+                            160.0
+                        };
                         widgets::menu_popup(&menu).show(|ui| {
-                            ui.set_min_width(160.0);
-                            if temporary {
+                            ui.set_min_width(menu_width.max(160.0));
+                            if group {
+                                widgets::menu_item(
+                                    ui,
+                                    widgets::MenuItem {
+                                        label: t().edit,
+                                        enabled: false,
+                                        selected: false,
+                                        danger: false,
+                                        note: None,
+                                    },
+                                );
+                                for (label, action) in [
+                                    (t().move_selected_to_top, Action::MoveSelectedRulesToTop),
+                                    (t().move_to_end, Action::MoveSelectedRulesToEnd),
+                                ] {
+                                    let item = widgets::menu_item(
+                                        ui,
+                                        widgets::MenuItem {
+                                            label,
+                                            enabled: !state.rule_screen.filter.is_active(),
+                                            selected: false,
+                                            danger: false,
+                                            note: None,
+                                        },
+                                    );
+                                    let item = if state.rule_screen.filter.is_active() {
+                                        item.on_hover_text(t().reorder_disabled)
+                                    } else {
+                                        item
+                                    };
+                                    if item.clicked() {
+                                        actions.push(action);
+                                        ui.close();
+                                    }
+                                }
                                 if widgets::menu_item(
                                     ui,
                                     widgets::MenuItem {
-                                        label: t().keep_permanently,
-                                        enabled: state.can_edit_rules(),
+                                        label: &t().delete_selected_rules(
+                                            state.rule_screen.selected_rules.len(),
+                                        ),
+                                        enabled: true,
                                         selected: false,
-                                        danger: false,
+                                        danger: true,
                                         note: None,
                                     },
                                 )
                                 .clicked()
                                 {
-                                    actions.push(Action::KeepTemporary(rule.id.clone()));
+                                    actions.push(Action::RequestDeleteSelectedRules);
                                     ui.close();
                                 }
                             } else {
-                                if crate::rules::editable(&rule.matcher)
-                                    && widgets::menu_item(
+                                if temporary {
+                                    if widgets::menu_item(
                                         ui,
                                         widgets::MenuItem {
-                                            label: t().edit,
-                                            enabled: true,
+                                            label: t().keep_permanently,
+                                            enabled: state.can_edit_rules(),
                                             selected: false,
                                             danger: false,
                                             note: None,
                                         },
                                     )
                                     .clicked()
-                                {
-                                    actions.push(Action::OpenEditRule(rule.id.clone()));
-                                    ui.close();
+                                    {
+                                        actions.push(Action::KeepTemporary(rule.id.clone()));
+                                        ui.close();
+                                    }
+                                } else {
+                                    if crate::rules::editable(&rule.matcher)
+                                        && widgets::menu_item(
+                                            ui,
+                                            widgets::MenuItem {
+                                                label: t().edit,
+                                                enabled: true,
+                                                selected: false,
+                                                danger: false,
+                                                note: None,
+                                            },
+                                        )
+                                        .clicked()
+                                    {
+                                        actions.push(Action::OpenEditRule(rule.id.clone()));
+                                        ui.close();
+                                    }
+                                    if widgets::menu_item(
+                                        ui,
+                                        widgets::MenuItem {
+                                            label: t().move_to_top,
+                                            enabled: index.is_some_and(|index| index > 0),
+                                            selected: false,
+                                            danger: false,
+                                            note: None,
+                                        },
+                                    )
+                                    .clicked()
+                                    {
+                                        actions.push(Action::MoveRuleToTop(rule.id.clone()));
+                                        ui.close();
+                                    }
                                 }
                                 if widgets::menu_item(
                                     ui,
                                     widgets::MenuItem {
-                                        label: t().move_to_top,
-                                        enabled: index.is_some_and(|index| index > 0),
+                                        label: t().delete,
+                                        enabled: true,
                                         selected: false,
-                                        danger: false,
+                                        danger: true,
                                         note: None,
                                     },
                                 )
                                 .clicked()
                                 {
-                                    actions.push(Action::MoveRuleToTop(rule.id.clone()));
+                                    actions.push(if temporary {
+                                        Action::RemoveTemporary(rule.id.clone())
+                                    } else {
+                                        Action::RequestDeleteRule(rule.id.clone())
+                                    });
                                     ui.close();
                                 }
-                            }
-                            if widgets::menu_item(
-                                ui,
-                                widgets::MenuItem {
-                                    label: t().delete,
-                                    enabled: true,
-                                    selected: false,
-                                    danger: true,
-                                    note: None,
-                                },
-                            )
-                            .clicked()
-                            {
-                                actions.push(if temporary {
-                                    Action::RemoveTemporary(rule.id.clone())
-                                } else {
-                                    Action::RequestDeleteRule(rule.id.clone())
-                                });
-                                ui.close();
                             }
                         });
                     }
@@ -996,12 +1243,11 @@ fn rule_row(
     if reorder
         && let Some(index) = index
         && let Some(dragged_id) = response.dnd_hover_payload::<RuleId>()
-        && let Some(from) = set.rules.iter().position(|item| item.id == *dragged_id)
         && let Some(pointer) = ui.ctx().pointer_hover_pos()
     {
         let above = pointer.y < response.rect.center().y;
         let slot = index + usize::from(!above);
-        if drop_target(from, slot, set.rules.len()).is_some() {
+        if drag_target(state, set, &dragged_id, slot).is_some() {
             let y = if above {
                 response.rect.top()
             } else {
@@ -1014,8 +1260,10 @@ fn rule_row(
                 ],
                 Stroke::new(2.0, theme::ROSE),
             );
-            if let Some(payload) = response.dnd_release_payload::<RuleId>() {
-                actions.push(Action::DropRule((*payload).clone(), slot));
+            if let Some(payload) = response.dnd_release_payload::<RuleId>()
+                && let Some((rules, target)) = drag_target(state, set, &payload, slot)
+            {
+                actions.push(drop_action(rules, slot, target));
             }
         }
     }
@@ -1140,8 +1388,7 @@ fn default_rule(
     if state.can_edit_rules()
         && !state.rule_screen.filter.is_active()
         && let Some(dragged_id) = response.inner.dnd_hover_payload::<RuleId>()
-        && let Some(from) = set.rules.iter().position(|rule| rule.id == *dragged_id)
-        && drop_target(from, set.rules.len(), set.rules.len()).is_some()
+        && drag_target(state, set, &dragged_id, set.rules.len()).is_some()
     {
         ui.painter().line_segment(
             [
@@ -1150,8 +1397,10 @@ fn default_rule(
             ],
             Stroke::new(2.0, theme::ROSE),
         );
-        if let Some(payload) = response.inner.dnd_release_payload::<RuleId>() {
-            actions.push(Action::DropRule((*payload).clone(), set.rules.len()));
+        if let Some(payload) = response.inner.dnd_release_payload::<RuleId>()
+            && let Some((rules, target)) = drag_target(state, set, &payload, set.rules.len())
+        {
+            actions.push(drop_action(rules, set.rules.len(), target));
         }
     }
 }
@@ -1222,6 +1471,14 @@ pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
     }
 }
 
+fn delete_rule_value(rule: &Rule) -> String {
+    if matches!(&rule.matcher, RuleMatcher::Template(_)) {
+        rule_lines(&rule.matcher).0
+    } else {
+        rosetun_core::rule_value_text(&rule.matcher)
+    }
+}
+
 pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
     let Some(dialog) = &state.rule_screen.delete else {
         return;
@@ -1257,12 +1514,23 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                         .find(|item| &item.id == set)
                         .and_then(|set| set.rules.iter().find(|item| &item.id == rule))
                     {
-                        let value = if matches!(&rule.matcher, RuleMatcher::Template(_)) {
-                            rule_lines(&rule.matcher).0
-                        } else {
-                            rosetun_core::rule_value_text(&rule.matcher)
-                        };
-                        ui.label(state.text(&value));
+                        ui.label(state.text(&delete_rule_value(rule)));
+                    }
+                    ui.label(t().delete_rule_detail);
+                }
+                DeleteDialog::Rules { set, rules } => {
+                    ui.heading(t().delete_rules_heading(rules.len()));
+                    if let Some(set) = state.config.rule_sets.iter().find(|item| &item.id == set) {
+                        for id in rules.iter().take(5) {
+                            if let Some(rule) = set.rules.iter().find(|item| &item.id == id) {
+                                ui.add(
+                                    egui::Label::new(state.text(&delete_rule_value(rule))).wrap(),
+                                );
+                            }
+                        }
+                    }
+                    if rules.len() > 5 {
+                        ui.label(t().and_more_rules(rules.len() - 5));
                     }
                     ui.label(t().delete_rule_detail);
                 }
@@ -1286,15 +1554,373 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
 mod tests {
     use super::*;
 
+    fn drag_set() -> RuleSet {
+        let mut set = RuleSet::new(
+            rosetun_config::RuleSetId::new("set"),
+            "Test",
+            RuleTarget::Proxy,
+        );
+        set.rules = (0..5)
+            .map(|index| Rule {
+                id: RuleId::new(index.to_string()),
+                enabled: true,
+                matcher: RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(format!(
+                    "{index}.example"
+                ))),
+                target: RuleTarget::Proxy,
+            })
+            .collect();
+        set
+    }
+
+    #[test]
+    fn selected_drag_targets_use_the_list_without_selected_rules() {
+        let set = drag_set();
+        let mut state = State::default();
+        state.rule_screen.selected_rules = [RuleId::new("1"), RuleId::new("3")].into();
+        assert!(matches!(
+            drag_target(&state, &set, &RuleId::new("1"), 0),
+            Some((rules, 0)) if rules == [RuleId::new("1"), RuleId::new("3")]
+        ));
+        assert!(matches!(
+            drag_target(&state, &set, &RuleId::new("3"), 2),
+            Some((_, 1))
+        ));
+        assert!(matches!(
+            drag_target(&state, &set, &RuleId::new("1"), 4),
+            Some((_, 2))
+        ));
+        state.rule_screen.selected_rules = [RuleId::new("1"), RuleId::new("2")].into();
+        assert!(drag_target(&state, &set, &RuleId::new("1"), 2).is_none());
+        state.rule_screen.selected_rules = [RuleId::new("1"), RuleId::new("3")].into();
+        let (rules, target) = drag_target(&state, &set, &RuleId::new("3"), 5).unwrap();
+        assert_eq!(target, 3);
+        assert!(matches!(
+            drop_action(rules, 5, target),
+            Action::DropRules(_, 3)
+        ));
+        let (rules, target) = drag_target(&state, &set, &RuleId::new("2"), 0).unwrap();
+        assert_eq!(rules, vec![RuleId::new("2")]);
+        assert!(matches!(
+            drop_action(rules, 0, target),
+            Action::DropRule(_, 0)
+        ));
+        assert_eq!(state.rule_screen.selected_rules.len(), 2);
+    }
+
+    fn row_input_actions(
+        ctx: &egui::Context,
+        state: &State,
+        set: &RuleSet,
+        events: Vec<egui::Event>,
+    ) -> Vec<Action> {
+        let mut actions = Vec::new();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 200.0),
+                )),
+                events,
+                ..egui::RawInput::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.push_id((set.id.as_str(), set.rules[0].id.as_str()), |ui| {
+                        rule_row(
+                            ui,
+                            state,
+                            set,
+                            &set.rules[0],
+                            Some(0),
+                            (ui.available_width() - 350.0).max(0.0),
+                            &mut actions,
+                        );
+                    });
+                });
+            },
+        );
+        output.textures_delta.clear();
+        actions
+    }
+
+    #[test]
+    fn row_body_selects_without_selecting_from_the_handle_or_controls() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let set = drag_set();
+        let mut state = State::default();
+        state.config_ready = true;
+        row_input_actions(&ctx, &state, &set, Vec::new());
+        for (x, select) in [(150.0, true), (30.0, false), (600.0, false)] {
+            let pos = egui::pos2(x, 38.0);
+            row_input_actions(
+                &ctx,
+                &state,
+                &set,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            let actions = row_input_actions(
+                &ctx,
+                &state,
+                &set,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert_eq!(
+                actions
+                    .iter()
+                    .any(|action| matches!(action, Action::SelectRule { .. })),
+                select,
+                "click at {pos:?}"
+            );
+        }
+        assert!(state.rule_screen.selected_rules.is_empty());
+    }
+
+    #[test]
+    fn row_click_forwards_ctrl_and_shift_modifiers() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let set = drag_set();
+        let state = State::default();
+        row_input_actions(&ctx, &state, &set, Vec::new());
+        let pos = egui::pos2(150.0, 38.0);
+        for (modifiers, additive, range) in [
+            (
+                egui::Modifiers {
+                    ctrl: true,
+                    command: true,
+                    ..egui::Modifiers::NONE
+                },
+                true,
+                false,
+            ),
+            (egui::Modifiers::SHIFT, false, true),
+        ] {
+            row_input_actions(
+                &ctx,
+                &state,
+                &set,
+                vec![
+                    egui::Event::ModifiersChanged(modifiers),
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers,
+                    },
+                ],
+            );
+            let actions = row_input_actions(
+                &ctx,
+                &state,
+                &set,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers,
+                }],
+            );
+            assert!(matches!(
+                actions.as_slice(),
+                [Action::SelectRule {
+                    additive: actual_additive,
+                    range: actual_range,
+                    ..
+                }] if *actual_additive == additive && *actual_range == range
+            ));
+        }
+    }
+
+    #[test]
+    fn clicking_away_clears_selection_but_selected_rows_and_actions_keep_it() {
+        let ctx = egui::Context::default();
+        let mut state = State::default();
+        state.rule_screen.selected_rules.insert(RuleId::new("1"));
+        let handle = egui::Rect::from_min_size(egui::pos2(100.0, 20.0), egui::vec2(40.0, 60.0));
+        let menu = egui::Rect::from_min_size(egui::pos2(270.0, 20.0), egui::vec2(30.0, 60.0));
+        let frame = |events, mut actions: Vec<Action>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 200.0),
+                    )),
+                    events,
+                    ..egui::RawInput::default()
+                },
+                |ctx| clear_selection_on_click_away(ctx, &state, &[handle, menu], &mut actions),
+            );
+            output.textures_delta.clear();
+            actions
+        };
+        frame(Vec::new(), Vec::new());
+        for (pos, clear) in [
+            (egui::pos2(150.0, 150.0), true),
+            (egui::pos2(110.0, 50.0), false),
+            (egui::pos2(285.0, 50.0), false),
+            (egui::pos2(150.0, 50.0), true),
+            (egui::pos2(500.0, 50.0), true),
+        ] {
+            frame(
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                Vec::new(),
+            );
+            let actions = frame(
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                Vec::new(),
+            );
+            assert_eq!(
+                matches!(actions.as_slice(), [Action::ClearRuleSelection]),
+                clear,
+                "click at {pos:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dragging_near_edges_or_wheeling_scrolls_in_the_expected_direction() {
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        assert!(drag_scroll_delta(viewport, 10.0, 0.0, 1.0 / 60.0) > 0.0);
+        assert!(drag_scroll_delta(viewport, 590.0, 0.0, 1.0 / 60.0) < 0.0);
+        assert_eq!(drag_scroll_delta(viewport, 300.0, 0.0, 1.0 / 60.0), 0.0);
+        assert_eq!(drag_scroll_delta(viewport, 300.0, -72.0, 1.0 / 60.0), -72.0);
+        assert!(
+            drag_scroll_delta(viewport, 580.0, 0.0, 1.0 / 60.0).abs()
+                < drag_scroll_delta(viewport, 595.0, 0.0, 1.0 / 60.0).abs()
+        );
+    }
+
+    #[test]
+    fn dragging_a_rule_scrolls_the_enclosing_area_with_a_wheel() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let frame = |events| {
+            let mut offset = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 200.0),
+                    )),
+                    events,
+                    ..egui::RawInput::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let result = egui::ScrollArea::vertical()
+                            .id_salt("rule_drag_wheel")
+                            .scroll_source(egui::scroll_area::ScrollSource {
+                                mouse_wheel: false,
+                                ..Default::default()
+                            })
+                            .show(ui, |ui| {
+                                ui.ctx().set_dragged_id(egui::Id::new("rule_drag"));
+                                ui.allocate_space(egui::vec2(200.0, 600.0));
+                                scroll_rules_while_dragging(ui);
+                            });
+                        offset = result.state.offset.y;
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            offset
+        };
+        frame(Vec::new());
+        egui::DragAndDrop::set_payload(&ctx, RuleId::new("1"));
+        let offset = frame(vec![
+            egui::Event::PointerMoved(egui::pos2(100.0, 100.0)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -72.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let after = frame(vec![egui::Event::PointerMoved(egui::pos2(100.0, 100.0))]);
+        assert!(
+            offset > 0.0 || after > 0.0,
+            "offset after drag wheel: {offset}, {after}"
+        );
+        let edge = frame(vec![egui::Event::PointerMoved(egui::pos2(100.0, 189.0))]);
+        let edge_after = frame(vec![egui::Event::PointerMoved(egui::pos2(100.0, 189.0))]);
+        assert!(
+            edge > after || edge_after > after,
+            "offset after edge drag: {after}, {edge}, {edge_after}"
+        );
+        egui::DragAndDrop::clear_payload(&ctx);
+    }
+
+    #[test]
+    fn toolbar_and_hint_reserve_the_same_height() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut state = State::default();
+        state.config_ready = true;
+        for selected in [false, true] {
+            state.rule_screen.selected_rules.clear();
+            if selected {
+                state.rule_screen.selected_rules = [RuleId::new("1"), RuleId::new("2")].into();
+            }
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(888.0, 640.0),
+                    )),
+                    ..egui::RawInput::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let slot = selection_slot(ui, &state, &mut Vec::new());
+                        assert!((slot.rect.height() - 38.0).abs() < 1.0, "{slot:?}");
+                    });
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
+
     #[test]
     fn table_shortcuts_select_visible_clear_and_ignore_text_focus() {
         let ctx = egui::Context::default();
         let mut state = State::default();
+        state.config_ready = true;
         state.rule_screen.selected_rules.insert(RuleId::new("1"));
         for (key, modifiers, focused, expected) in [
             (egui::Key::A, egui::Modifiers::COMMAND, false, true),
             (egui::Key::Escape, egui::Modifiers::NONE, false, true),
+            (egui::Key::Delete, egui::Modifiers::NONE, false, true),
             (egui::Key::Escape, egui::Modifiers::NONE, true, false),
+            (egui::Key::Delete, egui::Modifiers::NONE, true, false),
         ] {
             let mut actions = Vec::new();
             let mut output = ctx.run_ui(
@@ -1315,10 +1941,29 @@ mod tests {
             if expected {
                 assert!(matches!(
                     actions.as_slice(),
-                    [Action::SelectVisibleRules | Action::ClearRuleSelection]
+                    [Action::SelectVisibleRules
+                        | Action::ClearRuleSelection
+                        | Action::RequestDeleteSelectedRules]
                 ));
             }
         }
+        state.rule_screen.delete = Some(DeleteDialog::Set(rosetun_config::RuleSetId::new("1")));
+        let mut actions = Vec::new();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Delete,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..egui::RawInput::default()
+            },
+            |ctx| selection_shortcuts(ctx, &state, false, &mut actions),
+        );
+        output.textures_delta.clear();
+        assert!(actions.is_empty());
     }
 
     #[test]
