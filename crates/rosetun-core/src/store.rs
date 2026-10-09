@@ -216,6 +216,15 @@ fn existing_backup(path: &Path) -> Result<bool, StoreError> {
 }
 
 fn backup(path: &Path, version: u32, contents: &[u8]) -> Result<(), StoreError> {
+    backup_with_link(path, version, contents, |from, to| fs::hard_link(from, to))
+}
+
+fn backup_with_link(
+    path: &Path,
+    version: u32,
+    contents: &[u8],
+    link: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> Result<(), StoreError> {
     let destination = backup_path(path, version)?;
     if existing_backup(&destination)? {
         return Ok(());
@@ -258,23 +267,73 @@ fn backup(path: &Path, version: u32, contents: &[u8]) -> Result<(), StoreError> 
         });
     }
 
-    // Unlike rename on Unix, hard-link publication cannot replace an existing backup.
-    let publish_result = fs::hard_link(&temporary_path, &destination).or_else(|source| {
-        if source.kind() == io::ErrorKind::AlreadyExists && existing_backup(&destination)? {
-            Ok(())
-        } else {
-            Err(StoreError::Io {
-                path: destination.clone(),
-                source,
-            })
-        }
-    });
+    let publish_result = publish_backup(&temporary_path, &destination, contents, link);
     let cleanup_result = fs::remove_file(&temporary_path).map_err(|source| StoreError::Io {
         path: temporary_path,
         source,
     });
     publish_result?;
     cleanup_result
+}
+
+fn publish_backup(
+    temporary_path: &Path,
+    destination: &Path,
+    contents: &[u8],
+    link: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> Result<(), StoreError> {
+    match link(temporary_path, destination) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+            if existing_backup(destination)? {
+                Ok(())
+            } else {
+                Err(StoreError::Io {
+                    path: destination.to_owned(),
+                    source,
+                })
+            }
+        }
+        Err(_) => {
+            // Hard links are not available everywhere, and rename would overwrite on Windows.
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = match options.open(destination) {
+                Ok(file) => file,
+                Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+                    return if existing_backup(destination)? {
+                        Ok(())
+                    } else {
+                        Err(StoreError::Io {
+                            path: destination.to_owned(),
+                            source,
+                        })
+                    };
+                }
+                Err(source) => {
+                    return Err(StoreError::Io {
+                        path: destination.to_owned(),
+                        source,
+                    });
+                }
+            };
+            let write_result = file.write_all(contents).and_then(|()| file.sync_all());
+            drop(file);
+            if let Err(source) = write_result {
+                let _ = fs::remove_file(destination);
+                return Err(StoreError::Io {
+                    path: destination.to_owned(),
+                    source,
+                });
+            }
+            Ok(())
+        }
+    }
 }
 
 fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
@@ -355,10 +414,11 @@ fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
 mod tests {
     use std::ffi::OsString;
     use std::fs;
+    use std::io;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{StoreError, config_path_with, load, save};
+    use super::{StoreError, backup_with_link, config_path_with, load, save};
     use crate::Store;
     use rosetun_config::{
         AppConfig, CONFIG_VERSION, ConfigError, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher,
@@ -1107,6 +1167,31 @@ mod tests {
 
         assert_eq!(fs::read(&backup).unwrap(), b"earlier backup");
         assert_eq!(store.load().unwrap().version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn backup_without_hard_links_preserves_bytes_and_does_not_overwrite() {
+        let directory = TestDirectory::new();
+        let path = directory.config_path();
+        let backup = directory.path.join("config.v1.json");
+        let contents = b"{\n  \"version\": 1\n}";
+        fs::write(&path, contents).unwrap();
+
+        backup_with_link(&path, 1, contents, |_, _| {
+            Err(io::ErrorKind::Unsupported.into())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), contents);
+        assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 2);
+
+        fs::remove_file(&backup).unwrap();
+        backup_with_link(&path, 1, contents, |_, _| {
+            fs::write(&backup, b"earlier backup").unwrap();
+            Err(io::ErrorKind::Unsupported.into())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), b"earlier backup");
+        assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 2);
     }
 
     #[test]
