@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 eframe.workspace = true
+fluent-bundle.workspace = true
+unic-langid.workspace = true
 rosetun-adapters.workspace = true
 rosetun-config.workspace = true
 rosetun-core.workspace = true
@@ -21,6 +23,9 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+fluent-syntax.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle.workspace = true

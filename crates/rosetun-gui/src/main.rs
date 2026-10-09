@@ -4,6 +4,10 @@
 )]
 #![forbid(unsafe_code)]
 
+#[macro_use]
+#[allow(dead_code)] // The old tables stay in use until the callers are migrated.
+mod i18n;
+
 mod actions;
 mod app;
 #[cfg(test)]
