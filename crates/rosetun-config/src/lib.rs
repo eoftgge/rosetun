@@ -44,6 +44,10 @@ pub struct InterfaceSettings {
     /// Subscriptions are refreshed in the background when they get old.
     #[serde(default = "default_true")]
     pub auto_update_subscriptions: bool,
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_version: Option<String>,
     #[serde(default)]
     pub language: LanguageSetting,
     #[serde(default)]
@@ -65,6 +69,8 @@ impl Default for InterfaceSettings {
             close_to_tray: default_close_to_tray(),
             connect_on_start: false,
             auto_update_subscriptions: true,
+            check_updates: true,
+            skipped_version: None,
             language: LanguageSetting::System,
             reduce_motion: false,
         }
@@ -187,6 +193,12 @@ mod tests {
         assert!(!config.interface.connect_on_start);
         assert!(interface.auto_update_subscriptions);
         assert!(config.interface.auto_update_subscriptions);
+        assert!(interface.check_updates);
+        assert!(config.interface.check_updates);
+        assert_eq!(interface.skipped_version, None);
+        assert_eq!(config.interface.skipped_version, None);
+        let saved = serde_json::to_value(&interface).unwrap();
+        assert!(saved.get("skipped_version").is_none());
     }
 
     #[test]

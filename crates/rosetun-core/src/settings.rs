@@ -136,6 +136,20 @@ pub fn set_auto_update_subscriptions(store: &Store, enabled: bool) -> Result<(),
     })
 }
 
+pub fn set_check_updates(store: &Store, enabled: bool) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.check_updates = enabled;
+        Ok(())
+    })
+}
+
+pub fn skip_version(store: &Store, version: Option<String>) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.skipped_version = version;
+        Ok(())
+    })
+}
+
 pub fn set_auto_reconnect(store: &Store, enabled: bool) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.settings.auto_reconnect = enabled;
@@ -350,6 +364,17 @@ mod tests {
 
         set_auto_update_subscriptions(&store, false).unwrap();
         expected.interface.auto_update_subscriptions = false;
+        assert_eq!(store.load().unwrap(), expected);
+
+        set_check_updates(&store, false).unwrap();
+        expected.interface.check_updates = false;
+        assert_eq!(store.load().unwrap(), expected);
+
+        skip_version(&store, Some("0.1.0-alpha.3".into())).unwrap();
+        expected.interface.skipped_version = Some("0.1.0-alpha.3".into());
+        assert_eq!(store.load().unwrap(), expected);
+        skip_version(&store, None).unwrap();
+        expected.interface.skipped_version = None;
         assert_eq!(store.load().unwrap(), expected);
 
         set_auto_reconnect(&store, false).unwrap();

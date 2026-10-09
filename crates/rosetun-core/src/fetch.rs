@@ -8,7 +8,7 @@ use rosetun_subscription::{ParseError, Parsed};
 use ureq::tls::{RootCerts, TlsConfig};
 use url::Url;
 
-const MAX_BODY_BYTES: u64 = 5 * 1024 * 1024;
+pub(crate) const MAX_BODY_BYTES: u64 = 5 * 1024 * 1024;
 pub(crate) const DEFAULT_USER_AGENT: &str = concat!("Rosetun/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, Copy)]

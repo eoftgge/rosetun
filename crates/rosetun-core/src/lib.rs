@@ -11,6 +11,7 @@ mod subscription_url;
 mod subscriptions;
 mod text;
 mod update;
+mod updates;
 
 pub use exit::{ExitInfo, ExitInfoError, exit_info};
 pub use fetch::{FetchError, Timeouts, fetch};
@@ -27,8 +28,9 @@ pub use selection::{
 };
 pub use settings::{
     DnsInputError, DnsPreset, INTERFACE_SCALES, SettingsError, parse_dns_input, reset_settings,
-    set_auto_reconnect, set_auto_update_subscriptions, set_close_to_tray, set_connect_on_start,
-    set_dns, set_interface_scale, set_language, set_reduce_motion, set_verbose_log,
+    set_auto_reconnect, set_auto_update_subscriptions, set_check_updates, set_close_to_tray,
+    set_connect_on_start, set_dns, set_interface_scale, set_language, set_reduce_motion,
+    set_verbose_log, skip_version,
 };
 pub use store::{Store, StoreError};
 pub use subscription_url::{
@@ -48,6 +50,7 @@ pub use text::{
     provider_text, terminal_text, traffic_text, updated_text,
 };
 pub use update::{UpdateReport, group_skipped};
+pub use updates::{Release, UpdateCheckError, is_newer, latest_release};
 
 pub fn is_sensitive_log_target(target: &str) -> bool {
     ["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"]
