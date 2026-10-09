@@ -273,10 +273,12 @@ that bypasses the tunnel does not count. The tunnel probe fetches
 reachable from the test node's exit, which is the developer's own network.
 
 "IPv6" is a TCP connect from the guest to the test node on the host's
-link-local address on the Default Switch. Neither the guest nor the
-developer's network has global IPv6, but the connect passes the same WFP IPv6
-layer a real leak would. While sing-box runs, its strict route blocks all IPv6
-too, because the TUN has no IPv6 address. Only the "engine killed" check tests
+link-local address on the Default Switch. The matrix restores a missing or
+unreachable guest neighbor entry for this address and removes it afterwards
+only if it created the entry. Neither the guest nor the developer's network has
+global IPv6, but the connect passes the same WFP IPv6 layer a real leak would.
+While sing-box runs, its strict route blocks all IPv6 too, because the TUN has
+no IPv6 address. Only the "engine killed" check tests
 Rosetun's own IPv6 filter alone.
 
 `Publish-Rosetun` derives two more requests from the one you pass and writes

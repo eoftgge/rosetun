@@ -599,6 +599,35 @@ function Test-RosetunDirectDns {
     } -ArgumentList $address, $script:Config.DnsProbeServer, [bool]$Tcp
 }
 
+function Initialize-RosetunIpv6Neighbor {
+    $hostAddress = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -like 'fe80::*' } |
+        Select-Object -First 1
+    if ($null -eq $hostAddress) {
+        throw 'The host has no link-local IPv6 address on the Default Switch.'
+    }
+    $hostMac = (Get-NetAdapter -Name 'vEthernet (Default Switch)' -ErrorAction Stop).MacAddress
+    $egress = Get-RosetunEgressInterface
+    Invoke-RosetunGuest -ScriptBlock {
+        param($address, $index, $mac)
+        $neighbor = Get-NetNeighbor -InterfaceIndex $index -IPAddress $address -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($null -ne $neighbor -and $neighbor.State -notin @('Unreachable', 'Incomplete')) {
+            return $false
+        }
+        try {
+            if ($null -ne $neighbor) {
+                Remove-NetNeighbor -InterfaceIndex $index -IPAddress $address -Confirm:$false -ErrorAction Stop
+            }
+            New-NetNeighbor -InterfaceIndex $index -IPAddress $address -LinkLayerAddress $mac -State Permanent -ErrorAction Stop | Out-Null
+        }
+        catch {
+            throw 'Could not initialize the host IPv6 neighbor in the guest.'
+        }
+        $true
+    } -ArgumentList ($hostAddress.IPAddress -replace '%.*$', ''), $egress.Index, $hostMac
+}
+
 function Test-RosetunIpv6Egress {
     # True when a guest process opens a TCP connection over IPv6 outside the
     # tunnel. Neither the guest nor the developer's network has global IPv6, so

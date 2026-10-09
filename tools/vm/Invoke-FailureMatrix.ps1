@@ -74,6 +74,8 @@ Publish-Rosetun -BuildDir $BuildDir -SingBoxPath $SingBoxPath -RequestPath $Requ
 Register-RosetunHelper
 Start-RosetunHelper
 
+$ipv6NeighborCreated = Initialize-RosetunIpv6Neighbor
+
 # Proves the probe itself works. Without it, every "blocked" check below would
 # pass even if the probe were broken or the probe URL unreachable.
 Test-Step 'baseline' 'direct egress works before connect' { Test-RosetunDirectEgress }
@@ -376,6 +378,23 @@ Test-Step 'dns lock helper killed' 'direct DNS works again' {
     Wait-RosetunCondition { Test-RosetunDirectDns }
 }
 Start-RosetunHelper
+
+if ($ipv6NeighborCreated) {
+    Test-Step 'cleanup' 'created IPv6 neighbor is removed' {
+        $hostAddress = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv6 -ErrorAction Stop |
+            Where-Object { $_.IPAddress -like 'fe80::*' } |
+            Select-Object -First 1
+        if ($null -eq $hostAddress) {
+            throw 'The host has no link-local IPv6 address on the Default Switch.'
+        }
+        $egress = Get-RosetunEgressInterface
+        Invoke-RosetunGuest -ScriptBlock {
+            param($address, $index)
+            Remove-NetNeighbor -InterfaceIndex $index -IPAddress $address -Confirm:$false -ErrorAction Stop
+            $true
+        } -ArgumentList ($hostAddress.IPAddress -replace '%.*$', ''), $egress.Index
+    }
+}
 
 # Result first, so a long note cannot push it off the screen.
 $results | Format-Table Result, Scenario, Check, Note -AutoSize
