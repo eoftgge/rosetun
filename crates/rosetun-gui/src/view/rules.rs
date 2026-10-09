@@ -324,9 +324,9 @@ fn apply_notice(ui: &mut egui::Ui, actions: &mut Vec<Action>) -> (egui::Response
     ui.spacing_mut().interact_size.y = 28.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
-        let label = ui.colored_label(theme::ROSE_LIGHT, t().rules_not_applied);
+        let label = ui.colored_label(theme::ROSE_LIGHT, t().apply_on_leave);
         let button =
-            widgets::button_fill_compact(ui, t().apply, true).on_hover_text(t().apply_hint);
+            widgets::button_fill_compact(ui, t().apply_now, true).on_hover_text(t().apply_hint);
         if button.clicked() {
             actions.push(Action::Apply);
         }

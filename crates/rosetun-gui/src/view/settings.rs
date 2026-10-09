@@ -243,7 +243,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         ui.label(
-                            RichText::new(t().not_applied)
+                            RichText::new(t().apply_on_leave)
                                 .small()
                                 .color(theme::ROSE_LIGHT),
                         );
@@ -252,7 +252,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                                 .small()
                                 .color(theme::ROSE_LIGHT),
                         );
-                        if widgets::link(ui, t().apply, true)
+                        if widgets::link(ui, t().apply_now, true)
                             .on_hover_text(t().apply_hint)
                             .clicked()
                         {

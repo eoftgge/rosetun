@@ -469,6 +469,9 @@ pub(crate) struct State {
     keep_apply: Option<RuleId>,
     session_snapshot_checked: bool,
     apply_after_choice: bool,
+    apply_in_flight: bool,
+    apply_after_leave: bool,
+    queued_leave_apply: Option<Job>,
     pub(crate) exit: ExitLookup,
     exit_route: Option<ExitRoute>,
     exit_generation: u64,
@@ -534,6 +537,9 @@ impl Default for State {
             keep_apply: None,
             session_snapshot_checked: false,
             apply_after_choice: false,
+            apply_in_flight: false,
+            apply_after_leave: false,
+            queued_leave_apply: None,
             exit: ExitLookup::None,
             exit_route: None,
             exit_generation: 0,
@@ -830,10 +836,7 @@ impl State {
             )
     }
 
-    pub(crate) fn can_apply(&self) -> bool {
-        if !self.can_change_temporary() {
-            return false;
-        }
+    fn has_pending_apply(&self) -> bool {
         let Some(session) = &self.session_request else {
             return false;
         };
@@ -845,11 +848,44 @@ impl State {
             || session.settings.dns != current.settings.dns
     }
 
+    pub(crate) fn can_apply(&self) -> bool {
+        self.can_change_temporary() && self.has_pending_apply()
+    }
+
+    pub(crate) fn apply_on_leave(&mut self) -> Option<Job> {
+        if self.can_apply() {
+            return self.act(Action::Apply);
+        }
+        if self.apply_in_flight && self.has_pending_apply() {
+            self.apply_after_leave = true;
+        }
+        None
+    }
+
+    fn show_screen(&mut self, screen: Screen) -> Option<Job> {
+        let job =
+            if self.screen != screen && matches!(self.screen, Screen::Rules | Screen::Settings) {
+                self.apply_on_leave()
+            } else {
+                None
+            };
+        self.screen = screen;
+        job
+    }
+
+    pub(crate) fn take_leave_apply(&mut self) -> Option<Job> {
+        self.queued_leave_apply.take()
+    }
+
     pub(crate) fn take_apply(&mut self) -> Option<Job> {
-        if !self.apply_after_choice || !self.temporary_rules_loaded {
+        if !(self.apply_after_choice || self.apply_after_leave)
+            || !self.temporary_rules_loaded
+            || self.operations.helper
+        {
             return None;
         }
         self.apply_after_choice = false;
+        self.apply_after_leave = false;
         self.act(Action::Apply)
     }
 
@@ -1389,6 +1425,9 @@ impl State {
                 self.session_request = None;
                 self.session_snapshot_checked = false;
                 self.apply_after_choice = false;
+                self.apply_after_leave = false;
+                self.apply_in_flight = false;
+                self.queued_leave_apply = None;
                 self.traffic_history.clear();
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;
@@ -1437,6 +1476,9 @@ impl State {
                             self.session_request = None;
                             self.session_snapshot_checked = false;
                             self.apply_after_choice = false;
+                            if !self.apply_in_flight {
+                                self.apply_after_leave = false;
+                            }
                             self.clear_temporary();
                         }
                         ConnectionState::Connected
@@ -1568,6 +1610,7 @@ impl State {
             }
             WorkerEvent::Apply(result) => {
                 self.operations.helper = false;
+                self.apply_in_flight = false;
                 let before = self.temporary_before_apply.take();
                 if !self.helper_available
                     || matches!(
@@ -1577,6 +1620,7 @@ impl State {
                             | ConnectionState::FailedProtected { .. }
                     )
                 {
+                    self.apply_after_leave = false;
                     return;
                 }
                 match result {
@@ -1592,6 +1636,8 @@ impl State {
                         if let Some(before) = before {
                             self.temporary_rules = before;
                         }
+                        self.apply_after_leave = false;
+                        self.apply_after_choice = false;
                         if matches!(
                             &error,
                             HelperCommandError::Client(ClientError::Helper(HelperError {
@@ -2049,8 +2095,8 @@ impl State {
 
     pub(crate) fn act(&mut self, action: Action) -> Option<Job> {
         match action {
-            Action::ShowConnection => self.screen = Screen::Connection,
-            Action::OpenTraffic => self.screen = Screen::Traffic,
+            Action::ShowConnection => return self.show_screen(Screen::Connection),
+            Action::OpenTraffic => return self.show_screen(Screen::Traffic),
             Action::SetTrafficRange(range) => self.traffic_range = range,
             Action::OpenSettings => {
                 if !self.settings_screen.opened {
@@ -2059,12 +2105,15 @@ impl State {
                         self.settings_screen.sync_dns(&self.config.settings.dns);
                     }
                 }
-                self.screen = Screen::Settings;
+                let job = self.show_screen(Screen::Settings);
                 #[cfg(windows)]
                 {
+                    self.queued_leave_apply = job;
                     self.settings_screen.autostart = None;
                     return Some(Job::LoadAutostart);
                 }
+                #[cfg(not(windows))]
+                return job;
             }
             Action::OpenSettingsSection(section) => {
                 self.settings_screen.section = section;
@@ -2201,7 +2250,7 @@ impl State {
                     self.rule_screen.clear_selection();
                 }
                 self.rule_screen.opened = true;
-                self.screen = Screen::Rules;
+                return self.show_screen(Screen::Rules);
             }
             Action::OpenActiveRules => {
                 let preferred = self.preferred_set();
@@ -2210,7 +2259,7 @@ impl State {
                 }
                 self.rule_screen.selected_set = preferred;
                 self.rule_screen.opened = true;
-                self.screen = Screen::Rules;
+                return self.show_screen(Screen::Rules);
             }
             Action::ChooseRuleSet(id) => {
                 if self.config.rule_sets.iter().any(|set| set.id == id) {
@@ -2533,6 +2582,7 @@ impl State {
                     if let Some(request) = self.apply_request() {
                         self.temporary_before_apply = Some(before);
                         self.operations.helper = true;
+                        self.apply_in_flight = true;
                         self.operation_error = None;
                         self.rule_screen.add = None;
                         self.rule_screen.filter = RuleFilter::default();
@@ -2552,6 +2602,7 @@ impl State {
                     if let Some(request) = self.apply_request() {
                         self.temporary_before_apply = Some(before);
                         self.operations.helper = true;
+                        self.apply_in_flight = true;
                         self.operation_error = None;
                         return Some(Job::Apply(Box::new(request)));
                     }
@@ -2695,6 +2746,7 @@ impl State {
             Action::Apply => {
                 if self.can_apply() && let Some(request) = self.apply_request() {
                     self.operations.helper = true;
+                    self.apply_in_flight = true;
                     self.operation_error = None;
                     return Some(Job::Apply(Box::new(request)));
                 }
@@ -4349,6 +4401,85 @@ mod tests {
             ..Status::default()
         }));
         state
+    }
+
+    #[test]
+    fn leaving_rules_applies_edits_once_but_rule_screen_actions_do_not() {
+        let mut state = connected_state_for_apply();
+        assert!(state.act(Action::OpenRules).is_none());
+        state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+        assert!(state.act(Action::SetRuleTargetFilter(None)).is_none());
+        assert!(!matches!(
+            state.act(Action::OpenAddRule),
+            Some(Job::Apply(_))
+        ));
+        state.act(Action::CancelAddRule);
+        state.config.rule_sets.push(rule_set("2"));
+        assert!(
+            state
+                .act(Action::ChooseRuleSet(RuleSetId::new("2")))
+                .is_none()
+        );
+        assert!(matches!(
+            state.act(Action::ShowConnection),
+            Some(Job::Apply(_))
+        ));
+        assert!(state.act(Action::OpenRules).is_none());
+        assert!(state.act(Action::ShowConnection).is_none());
+    }
+
+    #[test]
+    fn leaving_settings_applies_dns_edits_but_not_without_a_connection() {
+        let mut state = connected_state_for_apply();
+        state.act(Action::OpenSettings);
+        assert!(state.act(Action::ShowConnection).is_none());
+        state.act(Action::OpenSettings);
+        state.config.settings.dns = DnsPreset::Google.settings();
+        assert!(matches!(
+            state.act(Action::ShowConnection),
+            Some(Job::Apply(_))
+        ));
+
+        let mut disconnected = state_for_auto_connect();
+        disconnected.act(Action::OpenSettings);
+        disconnected.config.settings.dns = DnsPreset::Google.settings();
+        assert!(disconnected.act(Action::ShowConnection).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn opening_settings_keeps_autostart_load_and_queues_apply() {
+        let mut state = connected_state_for_apply();
+        state.act(Action::OpenRules);
+        state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+        assert!(matches!(
+            state.act(Action::OpenSettings),
+            Some(Job::LoadAutostart)
+        ));
+        assert!(matches!(state.take_leave_apply(), Some(Job::Apply(_))));
+        assert!(state.take_leave_apply().is_none());
+    }
+
+    #[test]
+    fn leaving_during_apply_coalesces_one_follow_up_after_success() {
+        let mut state = connected_state_for_apply();
+        state.act(Action::OpenRules);
+        state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+        let Some(Job::Apply(first)) = state.act(Action::ShowConnection) else {
+            panic!("leaving rules must apply");
+        };
+        state.act(Action::OpenRules);
+        state.config.rule_sets[0].rules[1].target = RuleTarget::Block;
+        assert!(state.act(Action::ShowConnection).is_none());
+        assert!(state.apply_after_leave);
+        state.reduce(WorkerEvent::Apply(Ok(*first)));
+        let Some(Job::Apply(second)) = state.take_apply() else {
+            panic!("edits made during apply must run next");
+        };
+        assert_eq!(second.rule_set.rules[1].target, RuleTarget::Block);
+        assert!(state.take_apply().is_none());
+        state.reduce(WorkerEvent::Apply(Ok(*second)));
+        assert!(state.take_apply().is_none());
     }
 
     fn temporary_rule(id: &str, domain: &str) -> Rule {

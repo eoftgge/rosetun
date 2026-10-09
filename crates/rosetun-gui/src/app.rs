@@ -318,6 +318,9 @@ impl eframe::App for App {
         if let Some(job) = self.state.take_keep_apply() {
             self.dispatch(job);
         }
+        if let Some(job) = self.state.take_leave_apply() {
+            self.dispatch(job);
+        }
         if let Some(job) = self.state.take_auto_update(display::now_unix()) {
             self.dispatch(job);
         }
