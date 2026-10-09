@@ -69,8 +69,7 @@ function Install-RosetunSingBox {
 }
 
 function Start-RosetunTestNode {
-    # Runs the Shadowsocks test node on the host in the background with a
-    # debug log in vm\logs, so a failed run keeps the node's side as well.
+    # Runs the TCP and UDP test nodes on the host with a log kept under vm\logs.
     param(
         [string]$SingBoxPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\sing-box.exe')),
         # Sends the node's own traffic out of this adapter, past a VPN client
@@ -80,19 +79,47 @@ function Start-RosetunTestNode {
     )
 
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
-    $port = $config.inbounds[0].listen_port
+    $tcpPort = ($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' }).listen_port
+    $udpPort = ($config.inbounds | Where-Object { $_.type -eq 'hysteria2' }).listen_port
+    $tcpListening = Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue
+    $udpListening = Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
+    if ($tcpListening -and $udpListening) {
+        Write-Host "Test node already listens on TCP $tcpPort and UDP $udpPort."
+        return
+    }
+    if ($tcpListening -or $udpListening) {
+        throw 'One test port is already in use; stop the existing node before starting both inbounds.'
+    }
     if ($BindInterface) {
         $config.outbounds | Where-Object { $_.type -eq 'direct' } | ForEach-Object {
             $_ | Add-Member -NotePropertyName bind_interface -NotePropertyValue $BindInterface -Force
         }
     }
-    if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
-        Write-Host "Something already listens on port $port; leaving it running."
-        return
-    }
 
     $logDir = Join-Path $PSScriptRoot 'logs'
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $keyPath = Join-Path $logDir 'test-node.key'
+    $certPath = Join-Path $logDir 'test-node.crt'
+    if ((Test-Path $keyPath) -ne (Test-Path $certPath)) {
+        throw 'The test certificate or key is missing; remove both and restart the test node.'
+    }
+    if (-not (Test-Path $keyPath)) {
+        $pair = (& $SingBoxPath generate tls-keypair rosetun-test.invalid 2>&1) -join "`n"
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not generate the test TLS certificate.'
+        }
+        $key = [regex]::Match($pair, '(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----')
+        $cert = [regex]::Match($pair, '(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----')
+        if (-not $key.Success -or -not $cert.Success) {
+            throw 'The certificate generator returned an unexpected format.'
+        }
+        [IO.File]::WriteAllText($keyPath, ($key.Value + "`n"))
+        [IO.File]::WriteAllText($certPath, ($cert.Value + "`n"))
+    }
+    ($config.inbounds | Where-Object { $_.type -eq 'hysteria2' }).tls | ForEach-Object {
+        $_ | Add-Member -NotePropertyName key_path -NotePropertyValue $keyPath -Force
+        $_ | Add-Member -NotePropertyName certificate_path -NotePropertyValue $certPath -Force
+    }
     $config.log = [pscustomobject]@{
         level     = 'debug'
         timestamp = $true
@@ -104,13 +131,14 @@ function Start-RosetunTestNode {
     $node = Start-Process -FilePath $SingBoxPath -ArgumentList 'run', '--disable-color', '-c', $configPath `
         -WindowStyle Hidden -PassThru
     $deadline = (Get-Date).AddSeconds(15)
-    while (-not (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+    while (-not (Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue) -or
+           -not (Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue)) {
         if ($node.HasExited -or (Get-Date) -gt $deadline) {
-            throw "The test node did not start listening on port $port; see $logDir\test-node.log."
+            throw "The test node did not start on TCP $tcpPort and UDP $udpPort; see $logDir\test-node.log."
         }
         Start-Sleep -Milliseconds 200
     }
-    Write-Host "Test node listening on port $port, log: $logDir\test-node.log"
+    Write-Host "Test node listening on TCP $tcpPort and UDP $udpPort, log: $logDir\test-node.log"
 }
 
 function Stop-RosetunTestNode {
@@ -220,6 +248,32 @@ function Publish-Rosetun {
     [IO.File]::WriteAllText($temporaryRequest, ($request | ConvertTo-Json -Depth 20))
     $RequestPath = $temporaryRequest
     $derived = [ordered]@{}
+
+    $hysteriaPort = (Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json).inbounds |
+        Where-Object { $_.type -eq 'hysteria2' } | Select-Object -ExpandProperty listen_port
+    if (-not (Get-NetUDPEndpoint -LocalPort $hysteriaPort -ErrorAction SilentlyContinue)) {
+        throw "Nothing listens on UDP $hysteriaPort on the host. Start the test node first."
+    }
+    $hysteria = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $hysteria.node.id = 'home-hysteria2'
+    $hysteria.node.name = 'Test Hysteria2'
+    $hysteria.node.server = (Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4).IPAddress
+    $hysteria.node.port = $hysteriaPort
+    $hysteria.node.outbound = [pscustomobject]@{
+        hysteria2 = [pscustomobject]@{ password = 'rosetun-test' }
+    }
+    $hysteria.node.stream = [pscustomobject]@{
+        transport = 'tcp'
+        tls       = [pscustomobject]@{
+            tls = [pscustomobject]@{
+                sni            = 'rosetun-test.invalid'
+                allow_insecure = $true
+            }
+        }
+    }
+    $hysteria.selection.node = $hysteria.node.id
+    $hysteria.settings.kill_switch = $true
+    $derived['request-hysteria2.json'] = $hysteria
 
     # The same request with a node that never answers: 192.0.2.1 is TEST-NET-1,
     # reserved and unroutable. The engine starts, but DNS through the tunnel

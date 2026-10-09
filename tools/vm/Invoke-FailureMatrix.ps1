@@ -379,6 +379,25 @@ Test-Step 'dns lock helper killed' 'direct DNS works again' {
 }
 Start-RosetunHelper
 
+Write-Host 'Hysteria2 through the kill switch...'
+$connect = Connect-RosetunTunnel -RequestName 'request-hysteria2.json' -Quiet
+Test-Step 'hysteria2' 'connect succeeds' -Note "exit $($connect.ExitCode)" {
+    $connect.ExitCode -eq 0
+}
+Test-Step 'hysteria2' 'state is Connected' { Wait-RosetunState 'Connected' }
+$egress = Wait-RosetunTunnelEgress
+Test-Step 'hysteria2' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
+Test-Step 'hysteria2' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+Test-Step 'hysteria2' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
+$probe = Invoke-RosetunProbe 'request-hysteria2.json'
+Test-Step 'hysteria2' 'server check works under protection' -Note "exit $($probe.ExitCode)" {
+    $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
+}
+Disconnect-RosetunTunnel | Out-Null
+Test-Step 'hysteria2' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
+Test-Step 'hysteria2' 'direct egress works again' { Test-RosetunDirectEgress }
+Test-Step 'hysteria2' 'IPv6 works again' { Test-RosetunIpv6Egress }
+
 if ($ipv6NeighborCreated) {
     Test-Step 'cleanup' 'created IPv6 neighbor is removed' {
         $hostAddress = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv6 -ErrorAction Stop |

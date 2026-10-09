@@ -8,6 +8,14 @@
       "listen_port": 8388,
       "method": "aes-128-gcm",
       "password": "rosetun-test"
+    },
+    {
+      "type": "hysteria2",
+      "tag": "hy2-in",
+      "listen": "::",
+      "listen_port": 8443,
+      "users": [{ "password": "rosetun-test" }],
+      "tls": { "enabled": true }
     }
   ],
   "outbounds": [
