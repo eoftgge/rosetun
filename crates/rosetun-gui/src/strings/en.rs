@@ -226,6 +226,8 @@ pub(crate) static EN: Strings = Strings {
     server_rejected_hint: "The connection may have been altered on the way (for example, by traffic-modifying software), or the server details are outdated. Update the subscription or choose another server.",
     server_closed_hint: "Choose another server or try again later.",
     dns_timeout_hint: "The server may be slow or its DNS resolver may be unreachable. Choose another server or change DNS.",
+    other_vpn_hint: "Another VPN seems to be enabled: {name}. Turn it off and select “{retry}”.",
+    traffic_tool_hint: "{name} is running. It may interfere with the VPN: exclude the server addresses in its settings or restrict it to the physical network adapter.",
     reconnecting_action: "Reconnecting…",
     working: "Working…",
     loading: "Loading configuration…",

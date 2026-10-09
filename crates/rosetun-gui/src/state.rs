@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AppConfig, ConnectionState, DnsSettings, DomainMatch, LanguageSetting, NodeId, ProcessMatch,
-    Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Status, Subscription,
-    SubscriptionId,
+    AppConfig, ConnectionState, DnsSettings, DomainMatch, FailureKind, LanguageSetting, NodeId,
+    ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Status,
+    Subscription, SubscriptionId,
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, DnsPreset, Ping, Release, UpdateCheckError, UpdateReport,
@@ -20,7 +20,7 @@ use crate::errors;
 use crate::reorder::drop_target;
 use crate::rules::{ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes};
 use crate::strings::{fill, t};
-use crate::worker::{ConfigWorkerError, HelperCommandError, WorkerEvent};
+use crate::worker::{ConfigWorkerError, FailureInterference, HelperCommandError, WorkerEvent};
 
 pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
@@ -468,6 +468,9 @@ pub(crate) struct State {
     pub(crate) helper_version: Option<String>,
     pub(crate) helper_error: Option<ClientError>,
     pub(crate) operation_error: Option<String>,
+    pub(crate) failure_interference: Option<FailureInterference>,
+    failure_interference_checked: bool,
+    failure_interference_request: u64,
     pub(crate) cancel_in_flight: bool,
     connect_in_flight: bool,
     cancelled_connect: bool,
@@ -529,6 +532,9 @@ impl Default for State {
             helper_version: None,
             helper_error: None,
             operation_error: None,
+            failure_interference: None,
+            failure_interference_checked: false,
+            failure_interference_request: 0,
             cancel_in_flight: false,
             connect_in_flight: false,
             cancelled_connect: false,
@@ -652,6 +658,10 @@ pub(crate) enum Action {
 
 pub(crate) enum Job {
     Connect,
+    CheckFailureInterference {
+        request: u64,
+        own_alias: String,
+    },
     Apply(Box<ConnectRequest>),
     LoadTemporaryRules(u64),
     Disconnect,
@@ -710,6 +720,29 @@ pub(crate) enum Job {
     Remove(SubscriptionId),
     RenameSubscription(SubscriptionId, String),
     MoveSubscription(SubscriptionId, usize),
+}
+
+fn diagnosable_failure(state: &ConnectionState) -> bool {
+    matches!(
+        state,
+        ConnectionState::Failed {
+            failure_kind: Some(
+                FailureKind::EngineNotReady
+                    | FailureKind::ServerUnreachable
+                    | FailureKind::ServerRejected
+                    | FailureKind::ServerClosed
+            ),
+            ..
+        } | ConnectionState::FailedProtected {
+            failure_kind: Some(
+                FailureKind::EngineNotReady
+                    | FailureKind::ServerUnreachable
+                    | FailureKind::ServerRejected
+                    | FailureKind::ServerClosed
+            ),
+            ..
+        }
+    )
 }
 
 /// The helper already put this failure into the status the card shows.
@@ -863,6 +896,7 @@ impl State {
         {
             self.operations.helper = true;
             self.connect_in_flight = true;
+            self.reset_failure_interference();
             self.cancelled_connect = false;
             self.deferred_connect = None;
             self.operation_error = None;
@@ -1005,6 +1039,29 @@ impl State {
         Some(Job::LookupExit {
             generation: self.exit_generation,
             route,
+        })
+    }
+
+    fn reset_failure_interference(&mut self) {
+        self.failure_interference = None;
+        self.failure_interference_checked = false;
+        self.failure_interference_request = self.failure_interference_request.wrapping_add(1);
+    }
+
+    pub(crate) fn take_failure_interference(&mut self) -> Option<Job> {
+        if !self.helper_available
+            || !self.config_ready
+            || !self.status_received
+            || self.failure_interference_checked
+            || !diagnosable_failure(&self.status.state)
+        {
+            return None;
+        }
+        self.failure_interference_checked = true;
+        self.failure_interference_request = self.failure_interference_request.wrapping_add(1);
+        Some(Job::CheckFailureInterference {
+            request: self.failure_interference_request,
+            own_alias: self.config.settings.tun.name.clone(),
         })
     }
 
@@ -1231,12 +1288,24 @@ impl State {
                 self.traffic_history.clear();
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;
+                self.reset_failure_interference();
                 self.cancel_in_flight = false;
                 self.connect_in_flight = false;
                 self.cancelled_connect = true;
                 self.deferred_connect = None;
             }
             WorkerEvent::Status(status) => {
+                if (status.state.is_transitional() && !self.status.state.is_transitional())
+                    || (matches!(
+                        status.state,
+                        ConnectionState::Connected
+                            | ConnectionState::Disconnected
+                            | ConnectionState::Failed { .. }
+                            | ConnectionState::FailedProtected { .. }
+                    ) && self.status.state != status.state)
+                {
+                    self.reset_failure_interference();
+                }
                 if (!self.helper_available || !matches!(status.state, ConnectionState::Connected))
                     && let Some(dialog) = &mut self.rule_screen.add
                 {
@@ -1305,6 +1374,15 @@ impl State {
                     self.protection_confirmation = false;
                 }
                 self.status = status;
+            }
+            WorkerEvent::FailureInterference { request, hints } => {
+                if self.failure_interference_checked
+                    && request == self.failure_interference_request
+                    && self.helper_available
+                    && diagnosable_failure(&self.status.state)
+                {
+                    self.failure_interference = Some(hints);
+                }
             }
             WorkerEvent::TemporaryRules { request, result } => {
                 if self.temporary_load != Some(request)
@@ -2386,6 +2464,7 @@ impl State {
                 };
                 self.connect_in_flight = matches!(job, Job::Connect);
                 if self.connect_in_flight {
+                    self.reset_failure_interference();
                     self.cancelled_connect = false;
                     self.deferred_connect = None;
                 }
@@ -4773,6 +4852,64 @@ mod tests {
         }));
         assert!(missing_selection.session_request.is_none());
         assert!(!missing_selection.pending_reconnect(SessionPart::Dns));
+    }
+
+    #[test]
+    fn failure_conflicts_are_checked_once_and_stale_results_are_ignored() {
+        let mut state = state_for_auto_connect();
+        let failure = Status {
+            state: ConnectionState::Failed {
+                reason: "dial tcp 203.0.113.10:443: i/o timeout".into(),
+                failure_kind: Some(FailureKind::ServerUnreachable),
+            },
+            ..Status::default()
+        };
+        state.reduce(WorkerEvent::Status(failure.clone()));
+        let Some(Job::CheckFailureInterference { request, own_alias }) =
+            state.take_failure_interference()
+        else {
+            panic!("expected one failure check");
+        };
+        assert_eq!(own_alias, state.config.settings.tun.name);
+        assert!(state.take_failure_interference().is_none());
+        state.reduce(WorkerEvent::FailureInterference {
+            request,
+            hints: FailureInterference {
+                other_vpns: vec!["Example VPN".into()],
+                traffic_tools: vec!["winws.exe".into()],
+            },
+        });
+        assert_eq!(
+            state.failure_interference.as_ref().unwrap().other_vpns,
+            ["Example VPN"]
+        );
+        state.reduce(WorkerEvent::Status(failure));
+        assert!(state.take_failure_interference().is_none());
+        assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+        assert!(state.failure_interference.is_none());
+        state.reduce(WorkerEvent::FailureInterference {
+            request,
+            hints: FailureInterference {
+                other_vpns: vec!["Stale VPN".into()],
+                ..FailureInterference::default()
+            },
+        });
+        assert!(state.failure_interference.is_none());
+    }
+
+    #[test]
+    fn unrelated_and_dns_timeout_failures_do_not_scan_for_conflicts() {
+        let mut state = state_for_auto_connect();
+        for kind in [None, Some(FailureKind::DnsTimeout)] {
+            state.reduce(WorkerEvent::Status(Status {
+                state: ConnectionState::Failed {
+                    reason: "no DNS answer".into(),
+                    failure_kind: kind,
+                },
+                ..Status::default()
+            }));
+            assert!(state.take_failure_interference().is_none());
+        }
     }
 
     #[test]

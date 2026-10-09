@@ -11,6 +11,7 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [workspace.dependencies]
+rosetun-adapters = { path = "crates/rosetun-adapters" }
 rosetun-config = { path = "crates/rosetun-config" }
 rosetun-core = { path = "crates/rosetun-core" }
 rosetun-engine = { path = "crates/rosetun-engine" }

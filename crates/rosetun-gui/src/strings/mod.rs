@@ -301,6 +301,8 @@ pub(crate) struct Strings {
     pub(crate) server_rejected_hint: &'static str,
     pub(crate) server_closed_hint: &'static str,
     pub(crate) dns_timeout_hint: &'static str,
+    pub(crate) other_vpn_hint: &'static str,
+    pub(crate) traffic_tool_hint: &'static str,
     pub(crate) reconnecting_action: &'static str,
     pub(crate) working: &'static str,
     pub(crate) loading: &'static str,
@@ -1223,5 +1225,18 @@ mod connection_failure_tests {
             RU.connection_failure(FailureKind::ServerUnreachable).0,
             "Сервер не отвечает"
         );
+    }
+}
+
+impl Strings {
+    pub(crate) fn other_vpn(&self, name: &str) -> String {
+        fill(
+            self.other_vpn_hint,
+            &[("name", name), ("retry", self.retry)],
+        )
+    }
+
+    pub(crate) fn traffic_tool(&self, name: &str) -> String {
+        fill(self.traffic_tool_hint, &[("name", name)])
     }
 }

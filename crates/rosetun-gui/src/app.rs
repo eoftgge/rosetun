@@ -198,6 +198,9 @@ impl App {
     fn dispatch(&self, job: Job) {
         match job {
             Job::Connect => self.workers.connect(),
+            Job::CheckFailureInterference { request, own_alias } => {
+                self.workers.check_failure_interference(request, own_alias)
+            }
             Job::Apply(request) => self.workers.apply(request),
             Job::LoadTemporaryRules(request) => self.workers.load_temporary_rules(request),
             Job::Disconnect => self.workers.disconnect(),
@@ -323,6 +326,9 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_exit_lookup() {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_failure_interference() {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_tunnel_delay(display::now_unix()) {

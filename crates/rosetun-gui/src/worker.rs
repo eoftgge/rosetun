@@ -55,6 +55,12 @@ pub(crate) enum ConfigWorkerError {
     Metadata(std::io::Error),
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct FailureInterference {
+    pub(crate) other_vpns: Vec<String>,
+    pub(crate) traffic_tools: Vec<String>,
+}
+
 pub(crate) enum WorkerEvent {
     Config {
         generation: u64,
@@ -66,6 +72,10 @@ pub(crate) enum WorkerEvent {
     },
     HelperUnavailable(ClientError),
     Status(Status),
+    FailureInterference {
+        request: u64,
+        hints: FailureInterference,
+    },
     Exit {
         generation: u64,
         route: ExitRoute,
@@ -472,6 +482,26 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn check_failure_interference(&self, request: u64, own_alias: String) {
+        let publisher = self.publisher.clone();
+        thread::spawn(move || {
+            let adapters = rosetun_adapters::other_tunnels(&own_alias);
+            let processes = running_processes();
+            if adapters.is_err() || processes.is_err() {
+                tracing::warn!("Could not inspect possible connection conflicts");
+            }
+            let hints = FailureInterference {
+                other_vpns: adapters.unwrap_or_default(),
+                traffic_tools: processes.map(conflicting_processes).unwrap_or_default(),
+            };
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::FailureInterference { request, hints },
+            );
+        });
+    }
+
     pub(crate) fn load_processes(&self, request: u64) {
         let publisher = self.publisher.clone();
         thread::spawn(move || {
@@ -875,6 +905,20 @@ fn ping_targets<'a>(nodes: &[&'a Node]) -> (Vec<&'a Node>, Vec<&'a Node>) {
         .partition(|node| !matches!(&node.outbound, rosetun_config::Outbound::Hysteria2(_)))
 }
 
+fn conflicting_processes(processes: Vec<RunningProcess>) -> Vec<String> {
+    let mut names: Vec<_> = processes
+        .into_iter()
+        .filter(|process| {
+            process.name.eq_ignore_ascii_case("winws.exe")
+                || process.name.eq_ignore_ascii_case("goodbyedpi.exe")
+        })
+        .map(|process| process.name)
+        .collect();
+    names.sort_by_key(|name| name.to_ascii_lowercase());
+    names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    names
+}
+
 fn with_helper<T>(
     operation: impl FnOnce(&mut HelperClient) -> Result<T, ClientError>,
 ) -> Result<T, HelperCommandError> {
@@ -1063,5 +1107,28 @@ mod tests {
         }
         assert_eq!(last_count, 8);
         fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod failure_interference_tests {
+    use super::{RunningProcess, conflicting_processes};
+
+    #[test]
+    fn identifies_traffic_tools_without_process_name_case_or_duplicates() {
+        let processes = ["WINWS.EXE", "winws.exe", "GOODBYEDPI.exe", "example.exe"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| RunningProcess {
+                pid: index as u32 + 5,
+                name: name.into(),
+                path: None,
+                has_window: false,
+            })
+            .collect();
+        assert_eq!(
+            conflicting_processes(processes),
+            ["GOODBYEDPI.exe", "WINWS.EXE"]
+        );
     }
 }

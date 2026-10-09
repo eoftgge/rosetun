@@ -205,6 +205,26 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                     )
                                     .wrap(),
                                 );
+                                if let Some(conflicts) = &state.failure_interference {
+                                    if !conflicts.other_vpns.is_empty() {
+                                        ui.add(
+                                            egui::Label::new(t().other_vpn(&conflict_names(
+                                                state,
+                                                &conflicts.other_vpns,
+                                            )))
+                                            .wrap(),
+                                        );
+                                    }
+                                    if !conflicts.traffic_tools.is_empty() {
+                                        ui.add(
+                                            egui::Label::new(t().traffic_tool(&conflict_names(
+                                                state,
+                                                &conflicts.traffic_tools,
+                                            )))
+                                            .wrap(),
+                                        );
+                                    }
+                                }
                                 if let Some(selection) = &state.config.active
                                     && widgets::outline_button(
                                         ui,
@@ -955,6 +975,51 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
         });
     if !state.operations.helper && response.should_close() {
         actions.push(Action::KeepBlocked);
+    }
+}
+
+fn conflict_names(state: &State, names: &[String]) -> String {
+    let mut visible = names
+        .iter()
+        .take(2)
+        .map(|name| {
+            let safe = display::safe_text(&state.text(name));
+            let short: String = safe.chars().take(48).collect();
+            if safe.chars().count() > 48 {
+                format!("{short}…")
+            } else {
+                short
+            }
+        })
+        .collect::<Vec<_>>();
+    if names.len() > 2 {
+        visible.push("…".to_owned());
+    }
+    visible.join(", ")
+}
+
+#[cfg(test)]
+mod conflict_names_tests {
+    use super::*;
+
+    #[test]
+    fn limits_conflict_names_and_individual_name_lengths() {
+        let state = State::default();
+        assert_eq!(
+            conflict_names(
+                &state,
+                &[
+                    "Example VPN".into(),
+                    "Example tunnel".into(),
+                    "Third".into()
+                ]
+            ),
+            "Example VPN, Example tunnel, …"
+        );
+        let long = "A".repeat(80);
+        let clipped = conflict_names(&state, &[long]);
+        assert_eq!(clipped.chars().count(), 49);
+        assert!(clipped.ends_with('…'));
     }
 }
 
