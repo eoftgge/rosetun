@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use rosetun_config::{ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 use rosetun_processes::RunningProcess;
 
-use crate::strings::{Strings, t};
+use crate::i18n::{self, Language, tr_in};
+use fluent_bundle::FluentArgs;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessGroup {
@@ -116,10 +117,10 @@ pub(crate) enum RuleCaption {
 
 /// What a rule row shows: the value in bold and the caption under it.
 pub(crate) fn rule_lines(matcher: &RuleMatcher) -> (String, RuleCaption) {
-    rule_lines_in(matcher, t())
+    rule_lines_in(matcher, i18n::language())
 }
 
-fn rule_lines_in(matcher: &RuleMatcher, strings: &Strings) -> (String, RuleCaption) {
+fn rule_lines_in(matcher: &RuleMatcher, language: Language) -> (String, RuleCaption) {
     let value = rosetun_core::rule_value_text(matcher);
     match matcher {
         RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(_)) => {
@@ -144,7 +145,14 @@ fn rule_lines_in(matcher: &RuleMatcher, strings: &Strings) -> (String, RuleCapti
         }
         RuleMatcher::IpCidr(_) => (value, RuleCaption::Addresses),
         RuleMatcher::Template(template) => (
-            strings.template_name(*template).to_owned(),
+            match template {
+                RuleTemplate::RussianSites => {
+                    tr_in(language, "russian-sites-name", &FluentArgs::new())
+                }
+                RuleTemplate::Messengers => tr_in(language, "messengers-name", &FluentArgs::new()),
+                RuleTemplate::Youtube => tr_in(language, "youtube-name", &FluentArgs::new()),
+                RuleTemplate::Torrents => tr_in(language, "torrents-name", &FluentArgs::new()),
+            },
             RuleCaption::Template,
         ),
     }
@@ -195,20 +203,20 @@ pub(crate) fn rule_counts_slice(rules: &[Rule]) -> RuleCounts {
 }
 
 pub(crate) fn visible_rules<'a>(set: &'a RuleSet, filter: &RuleFilter) -> Vec<(usize, &'a Rule)> {
-    visible_rules_in(&set.rules, filter, t())
+    visible_rules_in(&set.rules, filter, i18n::language())
 }
 
 pub(crate) fn visible_rules_slice<'a>(
     rules: &'a [Rule],
     filter: &RuleFilter,
 ) -> Vec<(usize, &'a Rule)> {
-    visible_rules_in(rules, filter, t())
+    visible_rules_in(rules, filter, i18n::language())
 }
 
 fn visible_rules_in<'a>(
     rules: &'a [Rule],
     filter: &RuleFilter,
-    strings: &Strings,
+    language: Language,
 ) -> Vec<(usize, &'a Rule)> {
     let search = filter.search.to_lowercase();
     rules
@@ -221,7 +229,7 @@ fn visible_rules_in<'a>(
                     || rosetun_core::rule_value_text(&rule.matcher)
                         .to_lowercase()
                         .contains(&search)
-                    || rule_lines_in(&rule.matcher, strings)
+                    || rule_lines_in(&rule.matcher, language)
                         .0
                         .to_lowercase()
                         .contains(&search))
@@ -422,12 +430,12 @@ mod tests {
         filter.kind = TypeFilter::Processes;
         assert_eq!(indices(&set, &filter), vec![1, 3]);
         assert_eq!(
-            rule_lines_in(&set.rules[3].matcher, &crate::strings::RU),
+            rule_lines_in(&set.rules[3].matcher, Language::Russian),
             ("Торренты".to_owned(), RuleCaption::Template)
         );
         filter.search = "торр".into();
         assert_eq!(
-            visible_rules_in(&set.rules, &filter, &crate::strings::RU)
+            visible_rules_in(&set.rules, &filter, Language::Russian)
                 .into_iter()
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>(),
@@ -435,7 +443,7 @@ mod tests {
         );
         filter.search = "template:torrents".into();
         assert_eq!(
-            visible_rules_in(&set.rules, &filter, &crate::strings::RU)
+            visible_rules_in(&set.rules, &filter, Language::Russian)
                 .into_iter()
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>(),
