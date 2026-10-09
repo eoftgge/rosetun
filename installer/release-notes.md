@@ -4,12 +4,13 @@ This is an alpha release. Bugs are expected. Report them in [Issues](https://git
 
 ## What's new
 
-- **Change the server, rules or DNS while connected.** Choosing another server or rule set applies at once; after editing rules or DNS, select **Apply**. The tunnel restarts for a second or two without disconnecting, and the kill switch keeps traffic blocked meanwhile. If the new server does not work, Rosetun returns to the previous one.
-- **Temporary rules.** Mark a new rule **Temporary** to keep it only until you disconnect. It applies at once, is never saved, and survives automatic reconnects. **Keep permanently** in the rule's menu turns it into an ordinary rule.
-- **Traffic tab.** Download and upload speed, session totals and a chart over 1, 5 or 15 minutes. The connection screen keeps one line with the current speed.
-- Server checks are now called **Ping** and **Real delay**.
+- **Hysteria2.** Subscriptions can now carry Hysteria2 servers, as links or in sing-box JSON, with Salamander obfuscation and port hopping. Hysteria2 runs over UDP, so **TCP ping** does not apply to it; use **URL test**.
+- **New version notice.** Rosetun asks GitHub for its list of releases at launch, if a day has passed since the last check, and then once a day. A new version shows under **Settings → About**, with a dot on the Settings tab, **Open release page** and **Skip this version**. Nothing is downloaded or installed. **Check now** checks at once; **Check for updates** turns automatic checks off.
+- **TLS fingerprint.** TLS servers that do not set a fingerprint now present Chrome's, as most clients do, instead of Go's own.
+- **Settings survive upgrades.** The settings file now carries a format version. On its first change, Rosetun 0.1.0-alpha.4 moves the file to the new format and keeps the previous one next to it as `config.v1.json`; it contains the same subscription links.
+- Server checks are now called **TCP ping** and **URL test**. Links use the rose accent colour.
 
-When you switch to a server given by name while connected, its address is resolved through the current tunnel. Settings and subscriptions from 0.1.0-alpha.2 are kept.
+Settings, subscriptions and rules from 0.1.0-alpha.3 are kept. Going back to 0.1.0-alpha.3 after the settings were saved in the new format: the older version refuses to open the new file and leaves it untouched; replace `config.json` with `config.v1.json` to use it.
 
 ## Install
 
@@ -29,12 +30,13 @@ Rosetun includes the unmodified official sing-box {{sing_box_version}} build, li
 
 ### Что нового
 
-- **Смена сервера, правил и DNS при подключении.** Другой сервер или набор правил применяется сразу; после правки правил или DNS нажмите **Применить**. Туннель перезапускается на секунду или две без отключения, а kill switch в это время держит трафик заблокированным. Если новый сервер не работает, Rosetun вернётся к прежнему.
-- **Временные правила.** Отметьте новое правило как **Временное**, и оно будет действовать только до отключения. Правило применяется сразу, никуда не сохраняется и переживает автоматическое переподключение. **Сохранить навсегда** в меню правила превращает его в обычное.
-- **Вкладка «Трафик».** Скорость загрузки и отдачи, итоги за сеанс и график за 1, 5 или 15 минут. На экране подключения осталась одна строка с текущей скоростью.
-- Проверки серверов теперь называются **Пинг** и **Реальная задержка**.
+- **Hysteria2.** Подписки теперь могут содержать серверы Hysteria2, ссылками или в JSON sing-box, с обфускацией Salamander и сменой портов. Hysteria2 работает по UDP, поэтому **Пинг TCP** к нему неприменим; используйте **Проверку URL**.
+- **Сообщение о новой версии.** Rosetun запрашивает у GitHub список релизов при запуске, если с прошлой проверки прошли сутки, и затем раз в сутки. Новая версия появляется в **Настройки → О программе**, с точкой на вкладке настроек и кнопками **Открыть страницу релиза** и **Пропустить эту версию**. Ничего не скачивается и не устанавливается. **Проверить сейчас** проверяет сразу; **Проверять обновления** выключает автоматическую проверку.
+- **Отпечаток TLS.** TLS-серверы, у которых отпечаток не задан, теперь представляются как Chrome, как в большинстве клиентов, а не собственным отпечатком Go.
+- **Настройки переживают обновления.** У файла настроек появилась версия формата. При первом изменении Rosetun 0.1.0-alpha.4 переводит файл на новый формат и оставляет прежний рядом как `config.v1.json`; в нём те же ссылки подписок.
+- Проверки серверов теперь называются **Пинг TCP** и **Проверка URL**. Ссылки окрашены в розовый цвет оформления.
 
-Если при подключении переключиться на сервер, заданный именем, его адрес определяется через текущий туннель. Настройки и подписки из 0.1.0-alpha.2 сохраняются.
+Настройки, подписки и правила из 0.1.0-alpha.3 сохраняются. Если вернуться на 0.1.0-alpha.3 после того, как настройки сохранены в новом формате, старая версия откажется открывать новый файл и не изменит его; чтобы пользоваться ею, замените `config.json` файлом `config.v1.json`.
 
 ### Установка
 
