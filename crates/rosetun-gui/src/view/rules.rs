@@ -25,6 +25,7 @@ const TARGET_GAP: f32 = 16.0;
 const MENU_GAP: f32 = 12.0;
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
+    let text_edit_focused = ui.ctx().text_edit_focused();
     egui::Sides::new().shrink_left().wrap().show(
         ui,
         |ui| {
@@ -90,6 +91,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         &[]
     };
     let can_add = state.can_edit_rules();
+    let search_before = state.rule_screen.filter.search.clone();
     filter_controls(
         ui,
         &mut state.rule_screen.filter,
@@ -98,9 +100,19 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         can_add,
         actions,
     );
-    ui.add_space(8.0);
-    ui.add(egui::Label::new(RichText::new(t().order_hint).small().color(theme::TEXT_DIM)).wrap());
-    ui.add_space(12.0);
+    if state.rule_screen.filter.search != search_before {
+        actions.push(Action::ClearRuleSelection);
+    }
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 38.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.add(
+                egui::Label::new(RichText::new(t().order_hint).small().color(theme::TEXT_DIM))
+                    .wrap(),
+            );
+        },
+    );
 
     let visible_temporary = visible_rules_slice(temporary, &state.rule_screen.filter);
     let visible = visible_rules(set, &state.rule_screen.filter);
@@ -136,6 +148,41 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         }
         default_rule(ui, state, set, value_width, actions);
     });
+    let blank_height = (ui.clip_rect().bottom() - ui.cursor().top()).max(0.0);
+    if blank_height > 0.0
+        && ui
+            .allocate_exact_size(
+                egui::vec2(ui.available_width(), blank_height),
+                egui::Sense::click(),
+            )
+            .1
+            .clicked()
+    {
+        actions.push(Action::ClearRuleSelection);
+    }
+    selection_shortcuts(ui.ctx(), state, text_edit_focused, actions);
+}
+
+fn selection_shortcuts(
+    ctx: &egui::Context,
+    state: &State,
+    text_edit_focused: bool,
+    actions: &mut Vec<Action>,
+) {
+    if text_edit_focused
+        || state.rule_screen.name.is_some()
+        || state.rule_screen.add.is_some()
+        || state.rule_screen.delete.is_some()
+    {
+        return;
+    }
+    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
+        actions.push(Action::SelectVisibleRules);
+    } else if !state.rule_screen.selected_rules.is_empty()
+        && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        actions.push(Action::ClearRuleSelection);
+    }
 }
 
 fn apply_notice(ui: &mut egui::Ui, actions: &mut Vec<Action>) -> (egui::Response, egui::Response) {
@@ -752,19 +799,23 @@ fn rule_row(
     actions: &mut Vec<Action>,
 ) {
     let temporary = index.is_none();
+    let selected = !temporary && state.rule_screen.selected_rules.contains(&rule.id);
     let reorder = !temporary && state.can_edit_rules() && !state.rule_screen.filter.is_active();
     let dragged =
         reorder && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| *id == rule.id);
     let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(12, 0));
+    let fill = if selected { theme::INPUT } else { theme::CARD };
     if dragged {
         frame = frame.fill(Color32::from_rgba_unmultiplied(
-            theme::CARD.r(),
-            theme::CARD.g(),
-            theme::CARD.b(),
+            fill.r(),
+            fill.g(),
+            fill.b(),
             128,
         ));
     } else if !rule.enabled {
-        frame = frame.fill(theme::CARD.gamma_multiply(0.72));
+        frame = frame.fill(fill.gamma_multiply(0.72));
+    } else {
+        frame = frame.fill(fill);
     }
     let response = frame
         .show(ui, |ui| {
@@ -907,6 +958,40 @@ fn rule_row(
             });
         })
         .response;
+
+    if selected {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(response.rect.left(), response.rect.top() + 10.0),
+                egui::vec2(3.0, response.rect.height() - 20.0),
+            ),
+            0.0,
+            theme::ROSE,
+        );
+    }
+    if !temporary {
+        let left = response.rect.left() + ROW_INSET + HANDLE_WIDTH + HANDLE_GAP;
+        let right = response.rect.right()
+            - ROW_INSET
+            - MENU_WIDTH
+            - MENU_GAP
+            - TOGGLE_WIDTH
+            - TARGET_GAP
+            - TARGET_WIDTH;
+        let body = egui::Rect::from_min_max(
+            egui::pos2(left, response.rect.top()),
+            egui::pos2(right.max(left), response.rect.bottom()),
+        );
+        let click = ui.interact(body, ui.id().with("select_rule"), egui::Sense::click());
+        if click.clicked() {
+            let modifiers = ui.input(|input| input.modifiers);
+            actions.push(Action::SelectRule {
+                rule: rule.id.clone(),
+                additive: modifiers.command,
+                range: modifiers.shift,
+            });
+        }
+    }
 
     if reorder
         && let Some(index) = index
@@ -1200,6 +1285,41 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_shortcuts_select_visible_clear_and_ignore_text_focus() {
+        let ctx = egui::Context::default();
+        let mut state = State::default();
+        state.rule_screen.selected_rules.insert(RuleId::new("1"));
+        for (key, modifiers, focused, expected) in [
+            (egui::Key::A, egui::Modifiers::COMMAND, false, true),
+            (egui::Key::Escape, egui::Modifiers::NONE, false, true),
+            (egui::Key::Escape, egui::Modifiers::NONE, true, false),
+        ] {
+            let mut actions = Vec::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..egui::RawInput::default()
+                },
+                |ctx| selection_shortcuts(ctx, &state, focused, &mut actions),
+            );
+            output.textures_delta.clear();
+            assert_eq!(!actions.is_empty(), expected);
+            if expected {
+                assert!(matches!(
+                    actions.as_slice(),
+                    [Action::SelectVisibleRules | Action::ClearRuleSelection]
+                ));
+            }
+        }
+    }
 
     #[test]
     fn apply_notice_centers_text_against_the_button() {

@@ -18,7 +18,9 @@ use crate::actions::{self, PrimaryAction};
 use crate::display;
 use crate::errors;
 use crate::reorder::drop_target;
-use crate::rules::{ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes};
+use crate::rules::{
+    ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes, visible_rules,
+};
 use crate::strings::{fill, t};
 use crate::worker::{ConfigWorkerError, FailureInterference, HelperCommandError, WorkerEvent};
 
@@ -383,10 +385,19 @@ fn browsed_process_value(path: &std::path::Path, mode: ProcessMatchMode) -> Stri
 pub(crate) struct RuleScreen {
     pub(crate) selected_set: Option<RuleSetId>,
     pub(crate) filter: RuleFilter,
+    pub(crate) selected_rules: BTreeSet<RuleId>,
+    pub(crate) selection_anchor: Option<RuleId>,
     pub(crate) name: Option<NameDialog>,
     pub(crate) delete: Option<DeleteDialog>,
     pub(crate) add: Option<AddRuleDialog>,
     opened: bool,
+}
+
+impl RuleScreen {
+    fn clear_selection(&mut self) {
+        self.selected_rules.clear();
+        self.selection_anchor = None;
+    }
 }
 
 #[derive(Default)]
@@ -595,6 +606,13 @@ pub(crate) enum Action {
     ChooseRuleSet(RuleSetId),
     SetRuleTypeFilter(TypeFilter),
     SetRuleTargetFilter(Option<RuleTarget>),
+    SelectRule {
+        rule: RuleId,
+        additive: bool,
+        range: bool,
+    },
+    SelectVisibleRules,
+    ClearRuleSelection,
     OpenCreateSet,
     OpenRenameSet,
     CancelSetName,
@@ -1190,6 +1208,57 @@ impl State {
         self.config.rule_sets.iter().find(|set| &set.id == id)
     }
 
+    fn visible_rule_ids(&self) -> Vec<RuleId> {
+        self.selected_rules()
+            .map(|set| {
+                visible_rules(set, &self.rule_screen.filter)
+                    .into_iter()
+                    .map(|(_, rule)| rule.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn select_rule(&mut self, rule: RuleId, additive: bool, range: bool) {
+        let visible = self.visible_rule_ids();
+        let Some(index) = visible.iter().position(|id| id == &rule) else {
+            return;
+        };
+        let selection = &mut self.rule_screen.selected_rules;
+        if range {
+            let anchor = self
+                .rule_screen
+                .selection_anchor
+                .as_ref()
+                .filter(|id| selection.contains(*id))
+                .and_then(|id| visible.iter().position(|item| item == id))
+                .or_else(|| visible.iter().rposition(|id| selection.contains(id)))
+                .unwrap_or(index);
+            selection.clear();
+            selection.extend(
+                visible[anchor.min(index)..=anchor.max(index)]
+                    .iter()
+                    .cloned(),
+            );
+            self.rule_screen.selection_anchor = Some(visible[anchor].clone());
+        } else if additive {
+            if !selection.insert(rule.clone()) {
+                selection.remove(&rule);
+                self.rule_screen.selection_anchor = visible
+                    .iter()
+                    .rev()
+                    .find(|id| selection.contains(*id))
+                    .cloned();
+            } else {
+                self.rule_screen.selection_anchor = Some(rule);
+            }
+        } else {
+            selection.clear();
+            selection.insert(rule.clone());
+            self.rule_screen.selection_anchor = Some(rule);
+        }
+    }
+
     pub(crate) fn can_edit_rules(&self) -> bool {
         self.config_ready
             && !self.operations.rules_edit
@@ -1215,8 +1284,29 @@ impl State {
     }
 
     fn reconcile_selected_set(&mut self) {
+        let previous = self.rule_screen.selected_set.clone();
         if self.rule_screen.opened && self.selected_rules().is_none() {
             self.rule_screen.selected_set = self.preferred_set();
+        }
+        if self.rule_screen.selected_set != previous {
+            self.rule_screen.clear_selection();
+        } else {
+            let existing: BTreeSet<_> = self
+                .selected_rules()
+                .into_iter()
+                .flat_map(|set| set.rules.iter().map(|rule| rule.id.clone()))
+                .collect();
+            self.rule_screen
+                .selected_rules
+                .retain(|id| existing.contains(id));
+            if self
+                .rule_screen
+                .selection_anchor
+                .as_ref()
+                .is_some_and(|id| !self.rule_screen.selected_rules.contains(id))
+            {
+                self.rule_screen.selection_anchor = None;
+            }
         }
         if self
             .rule_screen
@@ -2089,22 +2179,57 @@ impl State {
             Action::OpenRules => {
                 if !self.rule_screen.opened {
                     self.rule_screen.selected_set = self.preferred_set();
+                    self.rule_screen.clear_selection();
                 }
                 self.rule_screen.opened = true;
                 self.screen = Screen::Rules;
             }
             Action::OpenActiveRules => {
-                self.rule_screen.selected_set = self.preferred_set();
+                let preferred = self.preferred_set();
+                if self.rule_screen.selected_set != preferred {
+                    self.rule_screen.clear_selection();
+                }
+                self.rule_screen.selected_set = preferred;
                 self.rule_screen.opened = true;
                 self.screen = Screen::Rules;
             }
             Action::ChooseRuleSet(id) => {
                 if self.config.rule_sets.iter().any(|set| set.id == id) {
+                    if self.rule_screen.selected_set.as_ref() != Some(&id) {
+                        self.rule_screen.clear_selection();
+                    }
                     self.rule_screen.selected_set = Some(id);
                 }
             }
-            Action::SetRuleTypeFilter(kind) => self.rule_screen.filter.kind = kind,
-            Action::SetRuleTargetFilter(target) => self.rule_screen.filter.target = target,
+            Action::SetRuleTypeFilter(kind) => {
+                if self.rule_screen.filter.kind != kind {
+                    self.rule_screen.filter.kind = kind;
+                    self.rule_screen.clear_selection();
+                }
+            }
+            Action::SetRuleTargetFilter(target) => {
+                if self.rule_screen.filter.target != target {
+                    self.rule_screen.filter.target = target;
+                    self.rule_screen.clear_selection();
+                }
+            }
+            Action::SelectRule {
+                rule,
+                additive,
+                range,
+            } => {
+                if self.screen == Screen::Rules {
+                    self.select_rule(rule, additive, range);
+                }
+            }
+            Action::SelectVisibleRules => {
+                if self.screen == Screen::Rules {
+                    let visible = self.visible_rule_ids();
+                    self.rule_screen.selected_rules = visible.iter().cloned().collect();
+                    self.rule_screen.selection_anchor = visible.last().cloned();
+                }
+            }
+            Action::ClearRuleSelection => self.rule_screen.clear_selection(),
             Action::OpenCreateSet => {
                 if self.can_edit_rules() && self.rule_screen.name.is_none() {
                     self.rule_screen.name = Some(NameDialog {
@@ -5200,6 +5325,117 @@ mod tests {
             state.text("🇩🇪 https://example.com/secret-path\nnext"),
             "[DE] https://example.com/…\nnext"
         );
+    }
+
+    #[test]
+    fn rule_selection_click_toggle_and_visible_range() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        state.act(Action::SelectRule {
+            rule: RuleId::new("0"),
+            additive: false,
+            range: false,
+        });
+        state.act(Action::SelectRule {
+            rule: RuleId::new("2"),
+            additive: true,
+            range: false,
+        });
+        assert_eq!(
+            state.rule_screen.selected_rules,
+            [RuleId::new("0"), RuleId::new("2")].into()
+        );
+        state.act(Action::SelectRule {
+            rule: RuleId::new("0"),
+            additive: true,
+            range: false,
+        });
+        assert_eq!(state.rule_screen.selected_rules, [RuleId::new("2")].into());
+        state.act(Action::SelectRule {
+            rule: RuleId::new("0"),
+            additive: false,
+            range: true,
+        });
+        assert_eq!(
+            state.rule_screen.selected_rules,
+            [RuleId::new("0"), RuleId::new("1"), RuleId::new("2")].into()
+        );
+
+        state.act(Action::SetRuleTypeFilter(TypeFilter::Processes));
+        assert!(state.rule_screen.selected_rules.is_empty());
+        state.act(Action::SetRuleTypeFilter(TypeFilter::All));
+        state.config.rule_sets[1].rules[1].target = RuleTarget::Direct;
+        state.act(Action::SetRuleTargetFilter(Some(RuleTarget::Proxy)));
+        state.act(Action::SelectRule {
+            rule: RuleId::new("0"),
+            additive: false,
+            range: false,
+        });
+        state.act(Action::SelectRule {
+            rule: RuleId::new("2"),
+            additive: false,
+            range: true,
+        });
+        assert_eq!(
+            state.rule_screen.selected_rules,
+            [RuleId::new("0"), RuleId::new("2")].into()
+        );
+    }
+
+    #[test]
+    fn select_all_ignores_temporary_and_unknown_rules_and_clears_on_set_change() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        state.rule_screen.filter.search = "second".into();
+        state.act(Action::SelectVisibleRules);
+        assert_eq!(state.rule_screen.selected_rules, [RuleId::new("1")].into());
+        state.act(Action::SelectRule {
+            rule: RuleId::new("t1"),
+            additive: true,
+            range: false,
+        });
+        state.act(Action::SelectRule {
+            rule: RuleId::new("missing"),
+            additive: true,
+            range: false,
+        });
+        assert_eq!(state.rule_screen.selected_rules, [RuleId::new("1")].into());
+        state.act(Action::ChooseRuleSet(RuleSetId::new("1")));
+        assert!(state.rule_screen.selected_rules.is_empty());
+        assert!(state.rule_screen.selection_anchor.is_none());
+        state.rule_screen.filter.search.clear();
+        state.act(Action::SelectVisibleRules);
+        assert_eq!(state.rule_screen.selected_rules.len(), 3);
+        state.act(Action::ClearRuleSelection);
+        assert!(state.rule_screen.selected_rules.is_empty());
+    }
+
+    #[test]
+    fn configuration_reload_prunes_missing_rule_ids_and_anchor() {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        state.act(Action::SelectRule {
+            rule: RuleId::new("0"),
+            additive: false,
+            range: false,
+        });
+        state.act(Action::SelectRule {
+            rule: RuleId::new("2"),
+            additive: true,
+            range: false,
+        });
+        let mut config = state.config.clone();
+        config.rule_sets[1]
+            .rules
+            .retain(|rule| rule.id != RuleId::new("2"));
+        state.reduce(WorkerEvent::Config {
+            generation: 1,
+            config,
+        });
+        assert_eq!(state.rule_screen.selected_rules, [RuleId::new("0")].into());
+        assert!(state.rule_screen.selection_anchor.is_none());
+        state.act(Action::OpenActiveRules);
+        assert_eq!(state.rule_screen.selected_rules, [RuleId::new("0")].into());
     }
 
     #[test]
