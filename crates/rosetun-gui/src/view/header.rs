@@ -157,6 +157,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                             .send_viewport_cmd(ViewportCommand::Maximized(!maximized));
                     }
                     if window_button(ui, WindowButton::Minimize, reduce_motion).clicked() {
+                        actions.push(Action::WindowMinimized);
                         ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true));
                     }
                     ui.add_space(12.0);

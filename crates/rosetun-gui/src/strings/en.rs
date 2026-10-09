@@ -207,6 +207,8 @@ pub(crate) static EN: Strings = Strings {
     #[cfg(windows)]
     tray_open: "Open Rosetun",
     #[cfg(windows)]
+    tray_hide: "Hide Rosetun",
+    #[cfg(windows)]
     tray_quit: "Quit Rosetun",
     open_folder: "Open folder",
     connect: "Connect",

@@ -282,6 +282,8 @@ pub(crate) struct Strings {
     #[cfg(windows)]
     pub(crate) tray_open: &'static str,
     #[cfg(windows)]
+    pub(crate) tray_hide: &'static str,
+    #[cfg(windows)]
     pub(crate) tray_quit: &'static str,
     pub(crate) open_folder: &'static str,
     pub(crate) connect: &'static str,

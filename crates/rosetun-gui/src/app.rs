@@ -32,6 +32,7 @@ fn centered_position(monitor: Option<egui::Vec2>, window: egui::Vec2) -> egui::P
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShellEvent {
     Show,
+    Hide,
     Primary,
     Quit,
 }
@@ -54,6 +55,8 @@ pub(crate) struct App {
     window: Option<WindowMemory>,
     #[cfg(windows)]
     maximize_in: Option<u8>,
+    #[cfg(windows)]
+    window_minimized: bool,
     #[cfg(windows)]
     quitting: bool,
 }
@@ -104,6 +107,8 @@ impl App {
             window: None,
             #[cfg(windows)]
             maximize_in: None,
+            #[cfg(windows)]
+            window_minimized: false,
             #[cfg(windows)]
             quitting: false,
         }
@@ -181,6 +186,17 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    #[cfg(windows)]
+    fn hide_window(&mut self, ctx: &egui::Context) {
+        if let Some(window) = &self.window {
+            window.save();
+        }
+        if let Some(job) = self.state.apply_on_leave() {
+            self.dispatch(job);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 
     #[cfg(windows)]
@@ -348,7 +364,7 @@ impl eframe::App for App {
         #[cfg(windows)]
         {
             if std::mem::take(&mut self.hide_on_start) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.hide_window(ctx);
             }
             while let Some(event) = self
                 .shell_events
@@ -357,6 +373,7 @@ impl eframe::App for App {
             {
                 match event {
                     ShellEvent::Show => self.show_window(ctx),
+                    ShellEvent::Hide => self.hide_window(ctx),
                     ShellEvent::Primary => {
                         if let Some(job) = self.state.act(Action::Primary) {
                             self.dispatch(job);
@@ -371,15 +388,26 @@ impl eframe::App for App {
             if let Some(tray) = &mut self.tray {
                 tray.sync(&tray::tray_view(&self.state));
             }
+            let minimized = ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+            if minimized
+                && !self.window_minimized
+                && !self.quitting
+                && let Some(job) = self.state.apply_on_leave()
+            {
+                self.dispatch(job);
+            }
+            self.window_minimized = minimized;
         }
         if ctx.input(|input| input.viewport().close_requested()) {
-            #[cfg(windows)]
-            if let Some(window) = &self.window {
-                window.save();
-            }
             if self.hides_on_close() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                #[cfg(windows)]
+                self.hide_window(ctx);
+            } else {
+                #[cfg(windows)]
+                if let Some(window) = &self.window {
+                    window.save();
+                }
             }
         }
     }
@@ -399,6 +427,10 @@ impl eframe::App for App {
             ui.ctx().request_repaint();
         }
         for action in actions {
+            #[cfg(windows)]
+            if matches!(action, Action::WindowMinimized) {
+                self.window_minimized = true;
+            }
             if let Some(job) = self.state.act(action) {
                 self.dispatch(job);
             }

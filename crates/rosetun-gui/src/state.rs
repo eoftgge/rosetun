@@ -585,6 +585,8 @@ pub(crate) enum Action {
     OpenTraffic,
     SetTrafficRange(TrafficRange),
     OpenSettings,
+    #[cfg(windows)]
+    WindowMinimized,
     OpenSettingsSection(SettingsSection),
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
@@ -2098,6 +2100,8 @@ impl State {
             Action::ShowConnection => return self.show_screen(Screen::Connection),
             Action::OpenTraffic => return self.show_screen(Screen::Traffic),
             Action::SetTrafficRange(range) => self.traffic_range = range,
+            #[cfg(windows)]
+            Action::WindowMinimized => return self.apply_on_leave(),
             Action::OpenSettings => {
                 if !self.settings_screen.opened {
                     self.settings_screen.opened = true;
@@ -4444,6 +4448,31 @@ mod tests {
         disconnected.act(Action::OpenSettings);
         disconnected.config.settings.dns = DnsPreset::Google.settings();
         assert!(disconnected.act(Action::ShowConnection).is_none());
+    }
+
+    #[test]
+    fn hiding_applies_pending_edits_only_while_connected() {
+        let mut state = connected_state_for_apply();
+        assert!(state.apply_on_leave().is_none());
+        state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+        assert!(matches!(state.apply_on_leave(), Some(Job::Apply(_))));
+        assert!(state.apply_on_leave().is_none());
+
+        let mut disconnected = state_with_rules();
+        disconnected.config.rule_sets[1].rules[0].target = RuleTarget::Direct;
+        assert!(disconnected.apply_on_leave().is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn minimizing_applies_pending_edits() {
+        let mut state = connected_state_for_apply();
+        state.config.settings.dns = DnsPreset::Google.settings();
+        assert!(matches!(
+            state.act(Action::WindowMinimized),
+            Some(Job::Apply(_))
+        ));
+        assert!(state.act(Action::WindowMinimized).is_none());
     }
 
     #[cfg(windows)]

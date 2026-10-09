@@ -12,6 +12,7 @@ use crate::strings::t;
 use crate::{strings, theme, view};
 
 const OPEN_ID: &str = "rosetun.tray.open";
+const HIDE_ID: &str = "rosetun.tray.hide";
 const PRIMARY_ID: &str = "rosetun.tray.primary";
 const QUIT_ID: &str = "rosetun.tray.quit";
 
@@ -22,6 +23,7 @@ pub(crate) struct TrayView {
     pub(crate) primary_label: &'static str,
     pub(crate) primary_enabled: bool,
     pub(crate) open_label: &'static str,
+    pub(crate) hide_label: &'static str,
     pub(crate) quit_label: &'static str,
 }
 
@@ -45,6 +47,7 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
         primary_label: primary_label(state),
         primary_enabled: state.primary_action() != PrimaryAction::Disabled,
         open_label: t().tray_open,
+        hide_label: t().tray_hide,
         quit_label: t().tray_quit,
     }
 }
@@ -80,6 +83,7 @@ pub(crate) struct Tray {
     icon: tray_icon::TrayIcon,
     primary: MenuItem,
     open: MenuItem,
+    hide: MenuItem,
     quit: MenuItem,
     shown: Option<TrayView>,
 }
@@ -87,10 +91,12 @@ pub(crate) struct Tray {
 impl Tray {
     pub(crate) fn new(events: Sender<ShellEvent>, ctx: egui::Context) -> Result<Self, TrayError> {
         let open = MenuItem::with_id(OPEN_ID, t().tray_open, true, None);
+        let hide = MenuItem::with_id(HIDE_ID, t().tray_hide, true, None);
         let primary = MenuItem::with_id(PRIMARY_ID, t().connect, false, None);
         let quit = MenuItem::with_id(QUIT_ID, t().tray_quit, true, None);
         let menu = Menu::with_items(&[
             &open,
+            &hide,
             &PredefinedMenuItem::separator(),
             &primary,
             &PredefinedMenuItem::separator(),
@@ -126,6 +132,7 @@ impl Tray {
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             let shell_event = match event.id.as_ref() {
                 OPEN_ID => Some(ShellEvent::Show),
+                HIDE_ID => Some(ShellEvent::Hide),
                 PRIMARY_ID => Some(ShellEvent::Primary),
                 QUIT_ID => Some(ShellEvent::Quit),
                 _ => None,
@@ -139,6 +146,7 @@ impl Tray {
             icon,
             primary,
             open,
+            hide,
             quit,
             shown: None,
         })
@@ -198,6 +206,13 @@ impl Tray {
         if self
             .shown
             .as_ref()
+            .is_none_or(|shown| shown.hide_label != view.hide_label)
+        {
+            self.hide.set_text(view.hide_label);
+        }
+        if self
+            .shown
+            .as_ref()
             .is_none_or(|shown| shown.quit_label != view.quit_label)
         {
             self.quit.set_text(view.quit_label);
@@ -242,6 +257,7 @@ mod tests {
             strings::tray_tooltip(t().status_unknown, None)
         );
         assert!(!unknown.primary_enabled);
+        assert_eq!(unknown.hide_label, t().tray_hide);
 
         state.helper_available = true;
         state.status = Status {
