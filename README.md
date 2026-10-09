@@ -40,11 +40,12 @@ Rosetun makes these network requests:
 - To your subscription provider to fetch or update subscriptions, using `User-Agent: Rosetun/<version>` by default. When **Send device ID** is on, the request also includes `x-hwid`, `x-device-os`, `x-ver-os` and `x-device-model`. Subscription URLs may contain credentials; an HTTP subscription sends its token without encryption.
 - To the configured DNS-over-HTTPS resolver through the tunnel. The service also checks DNS by querying `example.com` during connection and random names beneath `example.com` while the tunnel is up.
 - To `https://1.1.1.1/cdn-cgi/trace` through the tunnel for the exit country and public IP shown on the connection screen. The exit IP is hidden by default and is not written to the log.
+- To `https://api.github.com/repos/eoftgge/rosetun/releases` for the release list, once a day starting one minute after launch, through the tunnel when connected. This check is on by default; turn it off under **Settings → About → Check for updates**. Nothing is downloaded or installed automatically.
 - If DNS stalls, the watchdog also sends an HTTP `HEAD` request to `1.1.1.1:80` through the tunnel to distinguish a DNS failure from a lost path.
 - Before connecting, system DNS resolves the VPN server name; provider and ping hostnames may also be resolved by the operating system.
 - When changing servers while connected, the new server's name is resolved through the current tunnel.
 
-The engine's control API is contacted only over local loopback. There is no telemetry, application update checker or Rosetun account. Logs stay on this machine; the service log is accessible only to administrators. Site addresses are logged only while the temporary **Verbose log** setting is enabled. Automatic *subscription* updates are separate from application updates.
+The engine's control API is contacted only over local loopback. There is no telemetry or Rosetun account. The application update check only reports a new version; it does not download or install it. Logs stay on this machine; the service log is accessible only to administrators. Site addresses are logged only while the temporary **Verbose log** setting is enabled. Automatic *subscription* updates are separate from application updates.
 
 ## How it works
 
