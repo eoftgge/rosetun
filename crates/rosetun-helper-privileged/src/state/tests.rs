@@ -15,6 +15,19 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 
+static DNS_SLOTS: Mutex<()> = Mutex::new(());
+
+fn reserve_apply_worker() -> super::probe::ApplyDnsWorkerSlot {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(slot) = super::probe::ApplyDnsWorkerSlot::acquire() {
+            return slot;
+        }
+        assert!(Instant::now() < deadline, "apply DNS worker remained busy");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 #[derive(Debug)]
 struct BlockingRouting {
     entered: Sender<()>,
@@ -2459,6 +2472,9 @@ fn temporary_rules_end_when_reconnect_attempts_are_exhausted() {
 
 #[test]
 fn apply_new_ip_and_named_node_updates_status_without_releasing_protection() {
+    let _dns_slots = DNS_SLOTS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let (helper, controls, prepared, reverted) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -2495,7 +2511,63 @@ fn apply_new_ip_and_named_node_updates_status_without_releasing_protection() {
 }
 
 #[test]
+fn apply_waits_for_a_busy_resolver_slot() {
+    let _dns_slots = DNS_SLOTS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (ready_tx, ready_rx) = channel();
+    let holder = std::thread::spawn(move || {
+        let _slot = reserve_apply_worker();
+        ready_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+    });
+    ready_rx.recv().unwrap();
+
+    let mut node = connect_request().node;
+    node.server = "localhost".to_owned();
+    let address = super::probe::resolve_for_apply(&node);
+    holder.join().unwrap();
+    assert!(address.is_some());
+}
+
+#[test]
+fn apply_resolver_slot_wait_respects_the_deadline() {
+    let _dns_slots = DNS_SLOTS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (ready_tx, ready_rx) = channel();
+    let (release_tx, release_rx) = channel();
+    let holder = std::thread::spawn(move || {
+        let _slot = reserve_apply_worker();
+        ready_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    ready_rx.recv().unwrap();
+
+    let mut node = connect_request().node;
+    node.server = "localhost".to_owned();
+    let timeout = Duration::from_millis(250);
+    let started = Instant::now();
+    let address = super::probe::resolve_for_apply_with_timeout(&node, timeout);
+    let elapsed = started.elapsed();
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    assert_eq!(address, None);
+    assert!(
+        elapsed >= timeout,
+        "resolver returned before the deadline: {elapsed:?}"
+    );
+    assert!(
+        elapsed <= timeout + Duration::from_millis(250),
+        "resolver exceeded the deadline: {elapsed:?}"
+    );
+}
+
+#[test]
 fn apply_resolves_named_node_when_server_check_workers_are_full() {
+    let _dns_slots = DNS_SLOTS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let (helper, controls, _, _) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -2579,6 +2651,9 @@ fn apply_dns_lock_reuses_guard() {
 
 #[test]
 fn apply_unresolvable_node_leaves_the_running_session_intact() {
+    let _dns_slots = DNS_SLOTS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let (helper, controls, prepared, reverted) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -3025,6 +3100,9 @@ fn probe_request() -> rosetun_ipc::ProbeRequest {
 
 #[test]
 fn probe_results_keep_request_order_and_cleanup_secrets() {
+    let _dns_slots = DNS_SLOTS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     use rosetun_ipc::ProbeOutcome;
 
     let (helper, stopped, dir) = probe_fixture(true, None);
