@@ -512,18 +512,8 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             }
                         });
                     });
-                ui.add_space(12.0);
             }
-            ui.add(
-                egui::Label::new(
-                    RichText::new(t().license_notice)
-                        .small()
-                        .color(theme::TEXT_MUTED),
-                )
-                .wrap(),
-            );
             if let Some(folder) = &state.settings_screen.config_folder {
-                ui.add_space(16.0);
                 about_path(
                     ui,
                     state,
@@ -554,6 +544,15 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     actions,
                 );
             }
+
+            ui.add(
+                egui::Label::new(
+                    RichText::new(t().license_notice)
+                        .small()
+                        .color(theme::TEXT_MUTED),
+                )
+                    .wrap(),
+            );
         });
     });
 }
