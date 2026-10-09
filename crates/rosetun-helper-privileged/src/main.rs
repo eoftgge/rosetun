@@ -191,6 +191,26 @@ fn run_service() -> std::process::ExitCode {
             log_gate.allows(metadata)
         }))
         .init();
+    let install_dir = std::env::current_exe().and_then(|exe| {
+        let parent = exe
+            .parent()
+            .ok_or_else(|| std::io::Error::other("service executable has no parent"))?;
+        // Windows can return the executable's trusted path in verbatim form.
+        // Installer-supplied verbatim paths remain invalid at the CLI boundary.
+        Ok(parent
+            .to_str()
+            .and_then(|path| path.strip_prefix(r"\\?\"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| parent.to_owned()))
+    });
+    match install_dir {
+        Ok(dir) => {
+            if let Err(error) = install_dir::verify(&dir, false) {
+                tracing::warn!(reason = error.reason as u8, "{}", error.message());
+            }
+        }
+        Err(error) => tracing::warn!(%error, "cannot inspect service install directory"),
+    }
     service::run(gate)
 }
 
