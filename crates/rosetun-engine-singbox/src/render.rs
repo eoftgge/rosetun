@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 pub(crate) const TAG_PROXY: &str = "proxy";
 const TAG_DIRECT: &str = "direct";
 const TAG_DNS_PROXY: &str = "dns-proxy";
+const DEFAULT_FINGERPRINT: &str = "chrome";
 
 pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
     domain_exact: true,
@@ -218,12 +219,11 @@ fn tls_section(mode: &TlsMode) -> Option<Value> {
             if params.allow_insecure {
                 tls.insert("insecure".into(), true.into());
             }
-            if let Some(fingerprint) = &params.fingerprint {
-                tls.insert(
-                    "utls".into(),
-                    json!({ "enabled": true, "fingerprint": fingerprint }),
-                );
-            }
+            let fingerprint = params.fingerprint.as_deref().unwrap_or(DEFAULT_FINGERPRINT);
+            tls.insert(
+                "utls".into(),
+                json!({ "enabled": true, "fingerprint": fingerprint }),
+            );
             Some(Value::Object(tls))
         }
         TlsMode::Reality(params) => {
@@ -240,10 +240,7 @@ fn tls_section(mode: &TlsMode) -> Option<Value> {
                 tls.insert("server_name".into(), sni.clone().into());
             }
             tls.insert("reality".into(), Value::Object(reality));
-            let fingerprint = params
-                .fingerprint
-                .clone()
-                .unwrap_or_else(|| "chrome".into());
+            let fingerprint = params.fingerprint.as_deref().unwrap_or(DEFAULT_FINGERPRINT);
             tls.insert(
                 "utls".into(),
                 json!({ "enabled": true, "fingerprint": fingerprint }),
@@ -379,6 +376,29 @@ mod tests {
     use rosetun_config::{Rule, RuleSetId, RuleTemplate};
 
     use super::*;
+
+    #[test]
+    fn tls_without_fingerprint_uses_chrome_utls() {
+        let tls = tls_section(&TlsMode::Tls(Default::default())).unwrap();
+        assert_eq!(
+            tls["utls"],
+            json!({ "enabled": true, "fingerprint": "chrome" })
+        );
+    }
+
+    #[test]
+    fn tls_preserves_explicit_fingerprint() {
+        let mut mode = TlsMode::Tls(Default::default());
+        let TlsMode::Tls(params) = &mut mode else {
+            unreachable!();
+        };
+        params.fingerprint = Some("firefox".into());
+        let tls = tls_section(&mode).unwrap();
+        assert_eq!(
+            tls["utls"],
+            json!({ "enabled": true, "fingerprint": "firefox" })
+        );
+    }
 
     #[test]
     fn unexpanded_template_is_reported_without_a_match_all_route() {
