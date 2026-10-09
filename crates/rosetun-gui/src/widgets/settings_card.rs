@@ -28,11 +28,11 @@ impl SettingsCard<'_> {
     /// high, padding 16 by 20.
     pub(crate) fn row(
         &mut self,
-        title: &str,
+        title: impl AsRef<str>,
         detail: Option<&str>,
         control: impl FnOnce(&mut egui::Ui),
     ) {
-        self.row_inner(title, detail, control);
+        self.row_inner(title.as_ref(), detail, control);
     }
 
     fn row_inner(
@@ -114,11 +114,13 @@ impl SettingsCard<'_> {
     /// A row whose control is a toggle; the whole row is clickable.
     pub(crate) fn toggle(
         &mut self,
-        title: &str,
-        detail: &str,
+        title: impl AsRef<str>,
+        detail: impl AsRef<str>,
         on: &mut bool,
         enabled: bool,
     ) -> egui::Response {
+        let title = title.as_ref();
+        let detail = detail.as_ref();
         let enabled = enabled && self.ui.is_enabled();
         let id = self.ui.next_auto_id();
         let mut switch = egui::Rect::NOTHING;

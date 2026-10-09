@@ -145,8 +145,8 @@ pub(crate) fn show(
                     let mut match_path = dialog.match_mode == ProcessMatchMode::Path;
                     let response = widgets::toggle_row(
                         ui,
-                        &tr!("match-by-full-path"),
-                        &tr!("full-path-detail"),
+                        tr!("match-by-full-path"),
+                        tr!("full-path-detail"),
                         &mut match_path,
                         available && !dialog.busy,
                     );
@@ -342,8 +342,8 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     }
     widgets::toggle_row(
         ui,
-        &tr!("include-subdomains"),
-        &tr!("include-subdomains-detail"),
+        tr!("include-subdomains"),
+        tr!("include-subdomains-detail"),
         &mut dialog.subdomains,
         !dialog.busy,
     );
@@ -777,7 +777,7 @@ fn target_cards(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
                 width,
                 dialog.target == target,
                 !dialog.busy,
-                target_label(target),
+                &target_label(target),
                 |ui| {
                     ui.vertical_centered(|ui| {
                         ui.label(

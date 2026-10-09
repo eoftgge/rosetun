@@ -14,7 +14,7 @@ use super::rules::{target_color, target_label};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if !state.config_ready {
-        ui.colored_label(theme::TEXT_DIM, t().loading);
+        ui.colored_label(theme::TEXT_DIM, tr!("loading"));
     }
     if !state.helper_available {
         service_banner(ui, state);
@@ -50,13 +50,13 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
                     );
                     ui.vertical(|ui| {
                         ui.label(
-                            RichText::new(t().service_down_title)
+                            RichText::new(tr!("service-down-title"))
                                 .strong()
                                 .color(theme::TEXT),
                         );
                         ui.add(
                             egui::Label::new(
-                                RichText::new(t().service_down_body)
+                                RichText::new(tr!("service-down-body"))
                                     .small()
                                     .color(theme::TEXT_DIM),
                             )
@@ -69,9 +69,9 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
                 if widgets::outline_button(
                     ui,
                     if expanded {
-                        t().hide_details
+                        tr!("hide-details")
                     } else {
-                        t().details
+                        tr!("details")
                     },
                     true,
                 )
@@ -125,7 +125,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             visible_status.map(|status| &status.state),
                         );
                         let button_label = if phase == RosePhase::Unavailable {
-                            t().unavailable.to_owned()
+                            tr!("unavailable").to_owned()
                         } else {
                             primary_label(state)
                         };
@@ -150,12 +150,12 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         let session = visible_status
                             .and_then(|status| status.since_unix)
                             .map_or_else(
-                                || t().no_session.to_owned(),
+                                || tr!("no-session").to_owned(),
                                 |since| display::session_text(Some(since), display::now_unix()),
                             );
                         ui.colored_label(
                             theme::TEXT_MUTED,
-                            strings::plain_link(t().session, &session),
+                            strings::plain_link(&tr!("session"), &session),
                         );
                     });
                     if let Some(status) = visible_status {
@@ -165,7 +165,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                     status.stage_since_unix.unwrap_or_else(display::now_unix),
                                 );
                                 ui.label(
-                                    RichText::new(t().connection_stage(stage, seconds))
+                                    RichText::new(crate::i18n::connection_stage(stage, seconds))
                                         .small()
                                         .color(theme::TEXT_MUTED),
                                 );
@@ -175,9 +175,9 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             if widgets::outline_button(
                                 ui,
                                 if state.cancel_in_flight {
-                                    t().cancelling
+                                    tr!("cancelling")
                                 } else {
-                                    t().cancel_connection
+                                    tr!("cancel-connection")
                                 },
                                 !state.cancel_in_flight,
                             )
@@ -196,7 +196,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         } = &status.state
                         {
                             if let Some(kind) = failure_kind {
-                                let (title, hint) = t().connection_failure(*kind);
+                                let (title, hint) = crate::i18n::connection_failure(*kind);
                                 ui.colored_label(theme::ERROR, title)
                                     .on_hover_text(state.text(reason));
                                 ui.add(
@@ -208,19 +208,17 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 if let Some(conflicts) = &state.failure_interference {
                                     if !conflicts.other_vpns.is_empty() {
                                         ui.add(
-                                            egui::Label::new(t().other_vpn(&conflict_names(
-                                                state,
-                                                &conflicts.other_vpns,
-                                            )))
+                                            egui::Label::new(crate::i18n::other_vpn(
+                                                &conflict_names(state, &conflicts.other_vpns),
+                                            ))
                                             .wrap(),
                                         );
                                     }
                                     if !conflicts.traffic_tools.is_empty() {
                                         ui.add(
-                                            egui::Label::new(t().traffic_tool(&conflict_names(
-                                                state,
-                                                &conflicts.traffic_tools,
-                                            )))
+                                            egui::Label::new(crate::i18n::traffic_tool(
+                                                &conflict_names(state, &conflicts.traffic_tools),
+                                            ))
                                             .wrap(),
                                         );
                                     }
@@ -228,7 +226,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 if let Some(selection) = &state.config.active
                                     && widgets::outline_button(
                                         ui,
-                                        t().check_full,
+                                        tr!("check-full"),
                                         !state.operations.helper,
                                     )
                                     .clicked()
@@ -251,7 +249,8 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         }
                         if protection_action(status, state.operations.helper)
                             == ProtectionAction::ConfirmDisconnect
-                            && widgets::outline_button(ui, t().turn_off_protection, true).clicked()
+                            && widgets::outline_button(ui, tr!("turn-off-protection"), true)
+                                .clicked()
                         {
                             actions.push(Action::RequestProtectionOff);
                         }
@@ -263,7 +262,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         let applying = server_pending && state.operations.helper;
                         let can_apply = server_pending && state.can_apply();
                         let message = state.config.active_node().map_or_else(
-                            || t().selection_cleared.to_owned(),
+                            || tr!("selection-cleared").to_owned(),
                             |(_, node)| {
                                 let name = display::drop_missing_glyphs(
                                     ui.ctx(),
@@ -271,11 +270,11 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                     &state.text(&node.name),
                                 );
                                 if applying {
-                                    t().switching_to(&name)
+                                    crate::i18n::switching_to(&name)
                                 } else if can_apply {
-                                    t().selected_not_applied(&name)
+                                    crate::i18n::selected_not_applied(&name)
                                 } else {
-                                    t().selected_pending(&name)
+                                    crate::i18n::selected_pending(&name)
                                 }
                             },
                         );
@@ -284,12 +283,12 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             ui.label(RichText::new(message).small().color(theme::ROSE_LIGHT));
                             if can_apply {
                                 ui.label(
-                                    RichText::new(t().apply_separator)
+                                    RichText::new(tr!("apply-separator"))
                                         .small()
                                         .color(theme::ROSE_LIGHT),
                                 );
-                                if widgets::link(ui, t().apply, true)
-                                    .on_hover_text(t().apply_hint)
+                                if widgets::link(ui, &tr!("apply"), true)
+                                    .on_hover_text(tr!("apply-hint"))
                                     .clicked()
                                 {
                                     actions.push(Action::Apply);
@@ -298,7 +297,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         });
                     }
                     let protocol = state.config.active_node().map_or_else(
-                        || t().ping_pending.to_owned(),
+                        || tr!("ping-pending").to_owned(),
                         |(_, node)| {
                             strings::node_details(
                                 rosetun_core::node_protocol(node),
@@ -314,10 +313,10 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 8.0;
                         ui.add_space(2.0);
-                        detail_row(ui, t().external_ip, |ui| {
+                        detail_row(ui, tr!("external-ip"), |ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
                             let row_height = ui.text_style_height(&egui::TextStyle::Body);
-                            let toggle_width = toggle.map_or(0.0, |text| {
+                            let toggle_width = toggle.as_ref().map_or(0.0, |text| {
                                 ui.painter()
                                     .layout_no_wrap(
                                         text.to_owned(),
@@ -359,21 +358,18 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         if visible_status.is_some_and(|status| {
                             matches!(status.state, ConnectionState::Connected)
                         }) {
-                            detail_row(ui, t().delay, |ui| {
+                            detail_row(ui, tr!("delay"), |ui| {
                                 ui.spacing_mut().item_spacing.x = 6.0;
                                 let (text, color) = match state.tunnel_delay {
                                     TunnelDelay::Done(ProbeOutcome::Works { millis }) => (
-                                        strings::fill(
-                                            t().ping_ms,
-                                            &[("ms", &millis.max(1).to_string())],
-                                        ),
+                                        tr!("ping-ms", ms = millis.max(1).to_string()),
                                         theme::TEXT,
                                     ),
                                     TunnelDelay::Done(_) => {
-                                        (t().ping_no_answer.to_owned(), theme::ERROR)
+                                        (tr!("ping-no-answer").to_owned(), theme::ERROR)
                                     }
                                     TunnelDelay::Idle | TunnelDelay::Measuring => {
-                                        (t().ping_pending.to_owned(), theme::TEXT_DIM)
+                                        (tr!("ping-pending").to_owned(), theme::TEXT_DIM)
                                     }
                                 };
                                 let enabled = !matches!(state.tunnel_delay, TunnelDelay::Measuring);
@@ -385,11 +381,11 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                             egui::Sense::hover()
                                         },
                                     ))
-                                    .on_hover_text(t().delay_hint);
+                                    .on_hover_text(tr!("delay-hint"));
                                 let refresh = if matches!(state.tunnel_delay, TunnelDelay::Done(_))
                                 {
                                     icons::icon_button_sized(ui, Icon::Refresh, enabled, 18.0)
-                                        .on_hover_text(t().delay_hint)
+                                        .on_hover_text(tr!("delay-hint"))
                                         .clicked()
                                 } else {
                                     false
@@ -405,10 +401,10 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 ConnectionState::Connected | ConnectionState::Reconnecting
                             )
                         }) {
-                            detail_row(ui, t().traffic, |ui| {
-                                let rates = t().traffic_rates(
-                                    &t().rate(status.traffic.down_bps),
-                                    &t().rate(status.traffic.up_bps),
+                            detail_row(ui, tr!("traffic"), |ui| {
+                                let rates = crate::i18n::traffic_rates(
+                                    &crate::i18n::rate(status.traffic.down_bps),
+                                    &crate::i18n::rate(status.traffic.up_bps),
                                 );
                                 if ui
                                     .add(
@@ -416,7 +412,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                             .truncate()
                                             .sense(egui::Sense::click()),
                                     )
-                                    .on_hover_text(t().traffic_open_hint)
+                                    .on_hover_text(tr!("traffic-open-hint"))
                                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                                     .clicked()
                                 {
@@ -424,13 +420,13 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 }
                             });
                         }
-                        detail_row(ui, t().protocol, |ui| {
+                        detail_row(ui, tr!("protocol"), |ui| {
                             ui.add(egui::Label::new(&protocol).truncate())
                                 .on_hover_text(&protocol);
                         });
-                        detail_row(ui, t().engine, |ui| {
+                        detail_row(ui, tr!("engine"), |ui| {
                             ui.add(egui::Label::new(engine.as_str()).truncate())
-                                .on_hover_text(t().engine_detail(engine.as_str()));
+                                .on_hover_text(crate::i18n::engine_detail(engine.as_str()));
                         });
                     });
                 });
@@ -440,32 +436,36 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 
 /// What the external IP line shows: the value, its colour and the reveal link,
 /// if any. A hidden address shows neither its digits nor its length.
-fn exit_line(exit: &ExitLookup, revealed: bool) -> (String, Color32, Option<&'static str>) {
+fn exit_line(exit: &ExitLookup, revealed: bool) -> (String, Color32, Option<String>) {
     match exit {
         ExitLookup::Known { .. } if !revealed => (
-            t().ip_hidden.to_owned(),
+            tr!("ip-hidden").to_owned(),
             theme::TEXT_MUTED,
-            Some(t().ip_show),
+            Some(tr!("ip-show")),
         ),
         ExitLookup::Known { route, info } => {
             let address = info.ip.to_string();
             let address = if *route == ExitRoute::Direct {
-                format!("{address} {}", t().ip_own)
+                format!("{address} {}", tr!("ip-own"))
             } else {
                 address
             };
-            (address, theme::TEXT, Some(t().ip_hide))
+            (address, theme::TEXT, Some(tr!("ip-hide")))
         }
-        ExitLookup::Failed(_) => (t().ip_unknown.to_owned(), theme::TEXT_DIM, None),
+        ExitLookup::Failed(_) => (tr!("ip-unknown").to_owned(), theme::TEXT_DIM, None),
         ExitLookup::None | ExitLookup::Pending(_) => {
-            (t().ip_pending.to_owned(), theme::TEXT_DIM, None)
+            (tr!("ip-pending").to_owned(), theme::TEXT_DIM, None)
         }
     }
 }
 
 /// One line of the details list: a small label in a 96 px column, then the
 /// value, both centred on one row height.
-fn detail_row<R>(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui) -> R) -> R {
+fn detail_row<R>(
+    ui: &mut egui::Ui,
+    label: impl AsRef<str>,
+    value: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     let row_height = ui.text_style_height(&egui::TextStyle::Body);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
@@ -474,7 +474,7 @@ fn detail_row<R>(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::U
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.set_width(96.0);
-                ui.label(RichText::new(label).small().color(theme::TEXT_DIM));
+                ui.label(RichText::new(label.as_ref()).small().color(theme::TEXT_DIM));
             },
         );
         ui.allocate_ui_with_layout(
@@ -572,7 +572,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                                 ui.set_width(text_width);
                                 ui.set_min_height(badge_height);
                                 let name = state.config.active_node().map_or_else(
-                                    || t().select_server.to_owned(),
+                                    || tr!("select-server").to_owned(),
                                     |(_, node)| {
                                         display::drop_missing_glyphs(
                                             ui.ctx(),
@@ -613,7 +613,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                     },
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(t().server_change).color(theme::ROSE_LIGHT));
+                    ui.label(RichText::new(tr!("server-change")).color(theme::ROSE_LIGHT));
                 });
             });
         })
@@ -665,12 +665,12 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.set_min_height((height - 34.0).max(0.0));
-        ui.colored_label(theme::TEXT_DIM, t().protection);
+        ui.colored_label(theme::TEXT_DIM, tr!("protection"));
         let mut kill_switch = state.config.settings.kill_switch;
         if widgets::toggle_row(
             ui,
-            t().kill_switch,
-            t().kill_switch_detail,
+            tr!("kill-switch"),
+            tr!("kill-switch-detail"),
             &mut kill_switch,
             state.config_ready && !state.operations.kill_switch && !state.operations.helper,
         )
@@ -681,8 +681,8 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         let mut connect_on_start = state.config.interface.connect_on_start;
         if widgets::toggle_row(
             ui,
-            t().connect_on_start,
-            t().connect_on_start_detail,
+            tr!("connect-on-start"),
+            tr!("connect-on-start-detail"),
             &mut connect_on_start,
             state.can_edit_settings(),
         )
@@ -692,7 +692,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         }
         if tunnel_up(state) && state.pending_reconnect(SessionPart::Protection) {
             ui.label(
-                RichText::new(t().next_connect)
+                RichText::new(tr!("next-connect"))
                     .small()
                     .color(theme::ROSE_LIGHT),
             );
@@ -708,7 +708,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
             ui,
             |ui| {
                 ui.label(
-                    RichText::new(t().rules_title)
+                    RichText::new(tr!("rules-title"))
                         .small()
                         .color(theme::TEXT_DIM),
                 );
@@ -716,7 +716,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
             |ui| {
                 if ui
                     .add(
-                        egui::Label::new(RichText::new(t().open_link).color(theme::ROSE_LIGHT))
+                        egui::Label::new(RichText::new(tr!("open-link")).color(theme::ROSE_LIGHT))
                             .sense(egui::Sense::click()),
                     )
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -729,7 +729,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
         rule_set_picker(ui, state, actions);
         if !state.temporary_rules.is_empty() {
             ui.label(
-                RichText::new(t().temporary_count(state.temporary_rules.len()))
+                RichText::new(crate::i18n::temporary_count(state.temporary_rules.len()))
                     .small()
                     .color(theme::TEXT_DIM),
             );
@@ -762,7 +762,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
             if shown == 0 {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(t().no_rules_yet)
+                        RichText::new(tr!("no-rules-yet"))
                             .small()
                             .color(theme::TEXT_DIM),
                     )
@@ -772,7 +772,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
             let remaining = enabled.count();
             if remaining > 0 {
                 ui.label(
-                    RichText::new(t().more_rules(remaining))
+                    RichText::new(crate::i18n::more_rules(remaining))
                         .small()
                         .color(theme::TEXT_DIM),
                 );
@@ -780,7 +780,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
         } else {
             ui.add(
                 egui::Label::new(
-                    RichText::new(t().no_rules_yet)
+                    RichText::new(tr!("no-rules-yet"))
                         .small()
                         .color(theme::TEXT_DIM),
                 )
@@ -792,17 +792,17 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.label(
-                        RichText::new(t().not_applied)
+                        RichText::new(tr!("not-applied"))
                             .small()
                             .color(theme::TEXT_DIM),
                     );
                     ui.label(
-                        RichText::new(t().apply_separator)
+                        RichText::new(tr!("apply-separator"))
                             .small()
                             .color(theme::TEXT_DIM),
                     );
-                    if widgets::link(ui, t().apply, true)
-                        .on_hover_text(t().apply_hint)
+                    if widgets::link(ui, &tr!("apply"), true)
+                        .on_hover_text(tr!("apply-hint"))
                         .clicked()
                     {
                         actions.push(Action::Apply);
@@ -810,7 +810,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 });
             } else {
                 ui.label(
-                    RichText::new(t().next_connect)
+                    RichText::new(tr!("next-connect"))
                         .small()
                         .color(theme::TEXT_DIM),
                 );
@@ -824,7 +824,7 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .config
         .active_rules()
         .map(|rules| state.text(&rules.name))
-        .unwrap_or_else(|| t().default_rules.to_owned());
+        .unwrap_or_else(|| tr!("default-rules").to_owned());
     let font = egui::FontId::new(
         egui::TextStyle::Body.resolve(ui.style()).size,
         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
@@ -890,7 +890,7 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         if widgets::menu_item(
             ui,
             widgets::MenuItem {
-                label: t().default_rules,
+                label: &tr!("default-rules"),
                 enabled: true,
                 selected: state.config.active_rule_set.is_none(),
                 danger: false,
@@ -948,23 +948,25 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
         .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(480.0);
-            ui.heading(t().turn_off_protection);
+            ui.heading(tr!("turn-off-protection"));
             ui.add_space(12.0);
             ui.add(
-                egui::Label::new(RichText::new(t().protection_warning).color(theme::ERROR)).wrap(),
+                egui::Label::new(RichText::new(tr!("protection-warning")).color(theme::ERROR))
+                    .wrap(),
             );
             if let Some(error) = &state.operation_error {
                 ui.add(egui::Label::new(state.text(error)).wrap());
             }
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                if widgets::outline_button(ui, t().keep_blocked, !state.operations.helper).clicked()
+                if widgets::outline_button(ui, tr!("keep-blocked"), !state.operations.helper)
+                    .clicked()
                 {
                     actions.push(Action::KeepBlocked);
                 }
                 if widgets::button_fill(
                     ui,
-                    t().turn_off_protection,
+                    tr!("turn-off-protection"),
                     state.helper_available && !state.operations.helper,
                 )
                 .clicked()
@@ -1043,30 +1045,30 @@ mod hero_details_tests {
             (
                 known(ExitRoute::Direct),
                 false,
-                t().ip_hidden.to_owned(),
+                tr!("ip-hidden").to_owned(),
                 theme::TEXT_MUTED,
-                Some(t().ip_show),
+                Some(tr!("ip-show")),
             ),
             (
                 known(ExitRoute::Tunnel),
                 false,
-                t().ip_hidden.to_owned(),
+                tr!("ip-hidden").to_owned(),
                 theme::TEXT_MUTED,
-                Some(t().ip_show),
+                Some(tr!("ip-show")),
             ),
             (
                 known(ExitRoute::Direct),
                 true,
-                format!("203.0.113.7 {}", t().ip_own),
+                format!("203.0.113.7 {}", tr!("ip-own")),
                 theme::TEXT,
-                Some(t().ip_hide),
+                Some(tr!("ip-hide")),
             ),
             (
                 known(ExitRoute::Tunnel),
                 true,
                 "203.0.113.7".to_owned(),
                 theme::TEXT,
-                Some(t().ip_hide),
+                Some(tr!("ip-hide")),
             ),
         ];
         for (exit, revealed, value, color, toggle) in cases {
@@ -1086,9 +1088,9 @@ mod hero_details_tests {
         ] {
             for revealed in [false, true] {
                 let expected = if matches!(exit, ExitLookup::Failed(_)) {
-                    t().ip_unknown
+                    tr!("ip-unknown")
                 } else {
-                    t().ip_pending
+                    tr!("ip-pending")
                 };
                 assert_eq!(
                     exit_line(&exit, revealed),

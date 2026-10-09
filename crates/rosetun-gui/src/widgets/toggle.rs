@@ -71,11 +71,13 @@ pub(super) fn paint_toggle(
 /// flips the toggle, not only the switch.
 pub(crate) fn toggle_row(
     ui: &mut egui::Ui,
-    title: &str,
-    detail: &str,
+    title: impl AsRef<str>,
+    detail: impl AsRef<str>,
     on: &mut bool,
     enabled: bool,
 ) -> egui::Response {
+    let title = title.as_ref();
+    let detail = detail.as_ref();
     let enabled = enabled && ui.is_enabled();
     let id = ui.next_auto_id();
     let row = ui.horizontal(|ui| {

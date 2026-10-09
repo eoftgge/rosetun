@@ -11,7 +11,7 @@ use crate::{strings, theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     if !state.config_ready {
-        ui.colored_label(theme::TEXT_DIM, t().loading);
+        ui.colored_label(theme::TEXT_DIM, tr!("loading"));
         return;
     }
     match state.settings_screen.section {
@@ -25,7 +25,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
 
 fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
-        card.row(t().scale, Some(t().zoom_hint), |ui| {
+        card.row(tr!("scale"), Some(&tr!("zoom-hint")), |ui| {
             let scales: Vec<_> = rosetun_core::INTERFACE_SCALES
                 .into_iter()
                 .map(|percent| (percent, strings::scale(percent)))
@@ -45,7 +45,7 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 actions.push(Action::SetInterfaceScale(percent));
             }
         });
-        card.row(t().language_title, None, |ui| {
+        card.row(tr!("language-title"), None, |ui| {
             let saved = state.config.interface.language;
             let mut selected = saved;
             ui.add_enabled_ui(state.can_edit_settings(), |ui| {
@@ -69,8 +69,8 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         let mut reduce_motion = state.config.interface.reduce_motion;
         if card
             .toggle(
-                t().reduce_motion,
-                t().reduce_motion_detail,
+                tr!("reduce-motion"),
+                tr!("reduce-motion-detail"),
                 &mut reduce_motion,
                 state.can_edit_settings(),
             )
@@ -86,11 +86,11 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     }
 }
 
-fn language_label(setting: LanguageSetting) -> &'static str {
+fn language_label(setting: LanguageSetting) -> String {
     match setting {
-        LanguageSetting::System => t().language_system,
-        LanguageSetting::English => strings::ENGLISH,
-        LanguageSetting::Russian => strings::RUSSIAN,
+        LanguageSetting::System => tr!("language-system"),
+        LanguageSetting::English => strings::ENGLISH.to_owned(),
+        LanguageSetting::Russian => strings::RUSSIAN.to_owned(),
     }
 }
 
@@ -101,8 +101,8 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         let mut autostart = state.settings_screen.autostart.unwrap_or(false);
         if card
             .toggle(
-                t().start_with_windows,
-                t().start_with_windows_detail,
+                tr!("start-with-windows"),
+                tr!("start-with-windows-detail"),
                 &mut autostart,
                 editable && state.settings_screen.autostart.is_some(),
             )
@@ -113,8 +113,8 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         let mut close_to_tray = state.config.interface.close_to_tray;
         if card
             .toggle(
-                t().keep_in_tray,
-                t().keep_in_tray_detail,
+                tr!("keep-in-tray"),
+                tr!("keep-in-tray-detail"),
                 &mut close_to_tray,
                 editable,
             )
@@ -131,8 +131,8 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         let mut connect_on_start = state.config.interface.connect_on_start;
         if card
             .toggle(
-                t().connect_on_start,
-                t().connect_on_start_detail,
+                tr!("connect-on-start"),
+                tr!("connect-on-start-detail"),
                 &mut connect_on_start,
                 editable,
             )
@@ -143,8 +143,8 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         let mut kill_switch = state.config.settings.kill_switch;
         if card
             .toggle(
-                t().kill_switch,
-                t().kill_switch_detail,
+                tr!("kill-switch"),
+                tr!("kill-switch-detail"),
                 &mut kill_switch,
                 state.config_ready && !state.operations.kill_switch && !state.operations.helper,
             )
@@ -155,8 +155,8 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         let mut auto_reconnect = state.config.settings.auto_reconnect;
         if card
             .toggle(
-                t().auto_reconnect,
-                t().auto_reconnect_detail,
+                tr!("auto-reconnect"),
+                tr!("auto-reconnect-detail"),
                 &mut auto_reconnect,
                 editable,
             )
@@ -167,8 +167,8 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         let mut auto_update_subscriptions = state.config.interface.auto_update_subscriptions;
         if card
             .toggle(
-                t().auto_update_subscriptions,
-                t().auto_update_subscriptions_detail,
+                tr!("auto-update-subscriptions"),
+                tr!("auto-update-subscriptions-detail"),
                 &mut auto_update_subscriptions,
                 editable,
             )
@@ -183,7 +183,11 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 
 fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
-        card.row(t().dns_through_tunnel, Some(t().dns_explanation), |_| {});
+        card.row(
+            tr!("dns-through-tunnel"),
+            Some(&tr!("dns-explanation")),
+            |_| {},
+        );
         card.body(|ui| {
             let editable = state.can_edit_settings();
             let saved = DnsPreset::matching(&state.config.settings.dns);
@@ -216,8 +220,8 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                     width,
                     custom,
                     editable,
-                    t().dns_custom,
-                    t().dns_custom_detail,
+                    &tr!("dns-custom"),
+                    &tr!("dns-custom-detail"),
                 )
                 .clicked()
                 {
@@ -230,7 +234,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             }
             ui.add_space(12.0);
             ui.label(
-                RichText::new(t().dns_reachable)
+                RichText::new(tr!("dns-reachable"))
                     .small()
                     .color(theme::TEXT_DIM),
             );
@@ -243,17 +247,17 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         ui.label(
-                            RichText::new(t().apply_on_leave)
+                            RichText::new(tr!("apply-on-leave"))
                                 .small()
                                 .color(theme::ROSE_LIGHT),
                         );
                         ui.label(
-                            RichText::new(t().apply_separator)
+                            RichText::new(tr!("apply-separator"))
                                 .small()
                                 .color(theme::ROSE_LIGHT),
                         );
-                        if widgets::link(ui, t().apply_now, true)
-                            .on_hover_text(t().apply_hint)
+                        if widgets::link(ui, &tr!("apply-now"), true)
+                            .on_hover_text(tr!("apply-hint"))
                             .clicked()
                         {
                             actions.push(Action::Apply);
@@ -261,7 +265,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                     });
                 } else {
                     ui.label(
-                        RichText::new(t().next_connect)
+                        RichText::new(tr!("next-connect"))
                             .small()
                             .color(theme::ROSE_LIGHT),
                     );
@@ -304,10 +308,14 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         .spacing([16.0, 10.0])
         .show(ui, |ui| {
             for (label, value, hint) in [
-                (t().resolver_ip, &mut form.server, ""),
-                (t().tls_name, &mut form.server_name, ""),
-                (t().port, &mut form.port, strings::PORT_PLACEHOLDER),
-                (t().dns_path, &mut form.path, strings::DNS_PATH_PLACEHOLDER),
+                (tr!("resolver-ip"), &mut form.server, ""),
+                (tr!("tls-name"), &mut form.server_name, ""),
+                (tr!("port"), &mut form.port, strings::PORT_PLACEHOLDER),
+                (
+                    tr!("dns-path"),
+                    &mut form.path,
+                    strings::DNS_PATH_PLACEHOLDER,
+                ),
             ] {
                 ui.label(label);
                 if ui
@@ -331,7 +339,7 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     ui.add_space(8.0);
     if widgets::button_fill(
         ui,
-        t().save,
+        tr!("save"),
         editable && parsed.is_ok_and(|dns| dns != state.config.settings.dns),
     )
     .clicked()
@@ -347,10 +355,10 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     } else {
         theme::ERROR
     };
-    let mut detail = t().service_detail.to_owned();
+    let mut detail = tr!("service-detail").to_owned();
     if running && let Some(version) = &state.helper_version {
         detail.push('\n');
-        detail.push_str(&t().helper_version(&state.text(version)));
+        detail.push_str(&crate::i18n::helper_version(&state.text(version)));
     }
     widgets::settings_card(ui, |card| {
         card.row_with_title(
@@ -360,13 +368,13 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     let (dot, _) =
                         ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                     ui.painter().circle_filled(dot.center(), 5.0, color);
-                    ui.colored_label(color, t().service_label);
+                    ui.colored_label(color, tr!("service-label"));
                     ui.colored_label(
                         color,
                         if running {
-                            t().service_running
+                            tr!("service-running")
                         } else {
-                            t().service_stopped
+                            tr!("service-stopped")
                         },
                     );
                 });
@@ -377,9 +385,10 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
     ui.add_space(16.0);
     widgets::settings_card(ui, |card| {
-        card.row(t().log_title, Some(t().log_detail), |ui| {
+        card.row(tr!("log-title"), Some(&tr!("log-detail")), |ui| {
             #[cfg(windows)]
-            if widgets::outline_button(ui, t().open_folder, state.can_edit_settings()).clicked() {
+            if widgets::outline_button(ui, tr!("open-folder"), state.can_edit_settings()).clicked()
+            {
                 actions.push(Action::OpenFolder(AboutFolder::Config));
             }
             #[cfg(not(windows))]
@@ -394,12 +403,17 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 .unwrap_or(now)
                 .saturating_sub(now)
                 .div_ceil(3600);
-            t().verbose_log_on_detail(hours)
+            crate::i18n::verbose_log_on_detail(hours)
         } else {
-            t().verbose_log_off_detail.to_owned()
+            tr!("verbose-log-off-detail").to_owned()
         };
         if card
-            .toggle(t().verbose_log, &detail, &mut on, state.can_edit_settings())
+            .toggle(
+                tr!("verbose-log"),
+                &detail,
+                &mut on,
+                state.can_edit_settings(),
+            )
             .changed()
         {
             actions.push(Action::SetVerboseLog(on));
@@ -407,20 +421,24 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
     ui.add_space(16.0);
     widgets::settings_card(ui, |card| {
-        card.row(t().reset_settings, Some(t().reset_settings_detail), |ui| {
-            let allowed = state.can_reset_settings();
-            let response = widgets::outline_button(
-                ui,
-                RichText::new(t().reset_to_default).color(theme::ERROR),
-                allowed,
-            );
-            if response.clicked() {
-                actions.push(Action::RequestResetSettings);
-            }
-            if !allowed {
-                response.on_disabled_hover_text(t().reset_disconnect_first);
-            }
-        });
+        card.row(
+            tr!("reset-settings"),
+            Some(&tr!("reset-settings-detail")),
+            |ui| {
+                let allowed = state.can_reset_settings();
+                let response = widgets::outline_button(
+                    ui,
+                    RichText::new(tr!("reset-to-default")).color(theme::ERROR),
+                    allowed,
+                );
+                if response.clicked() {
+                    actions.push(Action::RequestResetSettings);
+                }
+                if !allowed {
+                    response.on_disabled_hover_text(tr!("reset-disconnect-first"));
+                }
+            },
+        );
     });
 }
 
@@ -429,15 +447,16 @@ pub(crate) fn reset_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec
         .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(480.0);
-            ui.heading(t().reset_settings_question);
+            ui.heading(tr!("reset-settings-question"));
             ui.add_space(12.0);
-            ui.add(egui::Label::new(t().reset_settings_body).wrap());
+            ui.add(egui::Label::new(tr!("reset-settings-body")).wrap());
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                if widgets::outline_button(ui, t().cancel, !state.operations.settings).clicked() {
+                if widgets::outline_button(ui, tr!("cancel"), !state.operations.settings).clicked()
+                {
                     actions.push(Action::CancelResetSettings);
                 }
-                if widgets::button_fill(ui, t().reset_to_default, state.can_reset_settings())
+                if widgets::button_fill(ui, tr!("reset-to-default"), state.can_reset_settings())
                     .clicked()
                 {
                     actions.push(Action::ConfirmResetSettings);
@@ -466,7 +485,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             ))
                             .color(theme::TEXT),
                     );
-                    let version = t().about_version(
+                    let version = crate::i18n::about_version(
                         env!("CARGO_PKG_VERSION"),
                         state
                             .helper_available
@@ -482,7 +501,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
         card.body(|ui| {
             ui.label(
-                RichText::new(t().updates_title)
+                RichText::new(tr!("updates-title"))
                     .font(egui::FontId::new(
                         17.0,
                         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
@@ -531,7 +550,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             }
                             ui.vertical(|ui| {
                                 ui.label(
-                                    RichText::new(t().update_available(&release.version))
+                                    RichText::new(crate::i18n::update_available(&release.version))
                                         .font(egui::FontId::new(
                                             16.0,
                                             egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
@@ -541,11 +560,11 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 let detail = format!(
                                     "{}{}",
                                     if release.prerelease {
-                                        t().update_prerelease
+                                        tr!("update-prerelease")
                                     } else {
-                                        ""
+                                        String::new()
                                     },
-                                    t().update_installer_detail,
+                                    tr!("update-installer-detail"),
                                 );
                                 ui.add(
                                     egui::Label::new(
@@ -555,14 +574,14 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 );
                                 ui.add_space(8.0);
                                 ui.horizontal_wrapped(|ui| {
-                                    if widgets::button_fill(ui, t().update_open_page, true)
+                                    if widgets::button_fill(ui, tr!("update-open-page"), true)
                                         .clicked()
                                     {
                                         display::open_web_link(ui.ctx(), &release.url);
                                     }
                                     if widgets::outline_button(
                                         ui,
-                                        t().update_skip,
+                                        tr!("update-skip"),
                                         state.can_edit_settings(),
                                     )
                                     .clicked()
@@ -578,19 +597,19 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         let (status, detail) = update_status(state, now_unix(), t());
         card.row(&status, Some(&detail), |ui| {
             let response =
-                widgets::outline_button(ui, t().check_updates_now, state.can_check_updates());
+                widgets::outline_button(ui, tr!("check-updates-now"), state.can_check_updates());
             if response.clicked() {
                 actions.push(Action::CheckUpdatesNow);
             }
             if state.update_check_blocked_by_connection() {
-                response.on_disabled_hover_text(t().check_updates_unavailable);
+                response.on_disabled_hover_text(tr!("check-updates-unavailable"));
             }
         });
         let mut check_updates = state.config.interface.check_updates;
         if card
             .toggle(
-                t().check_updates,
-                t().check_updates_detail,
+                tr!("check-updates"),
+                tr!("check-updates-detail"),
                 &mut check_updates,
                 state.can_edit_settings(),
             )
@@ -606,7 +625,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 about_path(
                     ui,
                     state,
-                    t().configuration_folder,
+                    &tr!("configuration-folder"),
                     folder.to_string_lossy().as_ref(),
                     AboutFolder::Config,
                     actions,
@@ -616,7 +635,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 about_path(
                     ui,
                     state,
-                    t().log_file,
+                    &tr!("log-file"),
                     log.to_string_lossy().as_ref(),
                     AboutFolder::Config,
                     actions,
@@ -627,7 +646,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 about_path(
                     ui,
                     state,
-                    t().licenses_folder,
+                    &tr!("licenses-folder"),
                     folder.to_string_lossy().as_ref(),
                     AboutFolder::Licenses,
                     actions,
@@ -638,7 +657,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.add_space(theme::SECTION_GAP);
     ui.add(
         egui::Label::new(
-            RichText::new(t().license_notice)
+            RichText::new(tr!("license-notice"))
                 .small()
                 .color(theme::TEXT_DIM),
         )
@@ -721,7 +740,7 @@ fn about_path(
             },
         );
         #[cfg(windows)]
-        if widgets::outline_button(ui, t().open_folder, state.can_edit_settings()).clicked() {
+        if widgets::outline_button(ui, tr!("open-folder"), state.can_edit_settings()).clicked() {
             actions.push(Action::OpenFolder(folder));
         }
         #[cfg(not(windows))]

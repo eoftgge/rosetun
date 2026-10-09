@@ -37,15 +37,15 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         widgets::outline_button(
                             ui,
                             if state.operations.update_all {
-                                t().updating
+                                tr!("updating")
                             } else {
-                                t().update_all
+                                tr!("update-all")
                             },
                             enabled,
                         )
                         .clicked()
                     },
-                    |ui| widgets::button_fill(ui, t().add_short, state.add.is_none()).clicked(),
+                    |ui| widgets::button_fill(ui, tr!("add-short"), state.add.is_none()).clicked(),
                 );
             if update_all {
                 actions.push(Action::UpdateAll);
@@ -63,13 +63,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         && !state.config.subscriptions.is_empty()
                     {
                         let text = shared_auto_update_hours(&state.config.subscriptions)
-                            .map(|hours| {
-                                strings::fill(
-                                    t().auto_update_every,
-                                    &[("hours", &hours.to_string())],
-                                )
-                            })
-                            .unwrap_or_else(|| t().auto_update_on.to_owned());
+                            .map(|hours| tr!("auto-update-every", hours = hours.to_string()))
+                            .unwrap_or_else(|| tr!("auto-update-on"));
                         ui.add(
                             egui::Label::new(RichText::new(text).small().color(theme::TEXT_DIM))
                                 .truncate(),
@@ -81,7 +76,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.label(
-            RichText::new(t().subscriptions_title)
+            RichText::new(tr!("subscriptions-title"))
                 .color(theme::TEXT)
                 .font(egui::FontId::new(
                     15.0,
@@ -98,11 +93,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if state.config.subscriptions.is_empty() {
-                ui.colored_label(theme::TEXT_MUTED, t().no_subscriptions);
+                ui.colored_label(theme::TEXT_MUTED, tr!("no-subscriptions"));
                 ui.add_space(8.0);
                 ui.add(
-                    egui::Label::new(RichText::new(t().empty_subscriptions).color(theme::TEXT_DIM))
-                        .wrap(),
+                    egui::Label::new(
+                        RichText::new(tr!("empty-subscriptions")).color(theme::TEXT_DIM),
+                    )
+                    .wrap(),
                 );
             }
             ui.scope(|ui| {
@@ -168,8 +165,8 @@ fn subscription_card(
     let now = display::now_unix();
     let updated = subscription
         .updated_at_unix
-        .map(|timestamp| t().last_updated(&t().updated_ago(timestamp, now)))
-        .unwrap_or_else(|| t().never_updated.to_owned());
+        .map(|timestamp| crate::i18n::last_updated(&crate::i18n::updated_ago(timestamp, now)))
+        .unwrap_or_else(|| tr!("never-updated").to_owned());
     let mut frame = widgets::card_frame()
         .inner_margin(12)
         .stroke(Stroke::new(1.0, theme::BORDER));
@@ -252,20 +249,20 @@ fn subscription_card(
                             },
                         )
                         .response
-                        .on_hover_text(format!("{}\n{updated}", t().updating));
+                        .on_hover_text(format!("{}\n{updated}", tr!("updating")));
                     } else if icons::icon_button_sized(
                         ui,
                         Icon::Refresh,
                         !state.subscription_busy(&subscription.id),
                         28.0,
                     )
-                    .on_hover_text(format!("{}\n{updated}", t().update))
+                    .on_hover_text(format!("{}\n{updated}", tr!("update")))
                     .clicked()
                     {
                         actions.push(Action::Update(subscription.id.clone()));
                     }
                     let menu = icons::icon_button_sized(ui, Icon::More, true, 28.0)
-                        .on_hover_text(t().more_actions);
+                        .on_hover_text(tr!("more-actions"));
                     widgets::menu_popup(&menu).show(|ui| {
                         ui.set_width(180.0);
                         ui.add(
@@ -282,7 +279,7 @@ fn subscription_card(
                         if widgets::menu_item(
                             ui,
                             widgets::MenuItem {
-                                label: t().rename,
+                                label: &tr!("rename"),
                                 enabled: state.config_ready
                                     && !state.operations.renaming
                                     && state.rename.is_none()
@@ -300,7 +297,7 @@ fn subscription_card(
                         if widgets::menu_item(
                             ui,
                             widgets::MenuItem {
-                                label: t().remove,
+                                label: &tr!("remove"),
                                 enabled: !state.subscription_busy(&subscription.id)
                                     && !state.operations.removing,
                                 selected: false,
@@ -327,7 +324,7 @@ fn subscription_card(
                             };
                             let mut summary = egui::text::LayoutJob::default();
                             summary.append(
-                                &t().servers(subscription.nodes.len()),
+                                &crate::i18n::servers(subscription.nodes.len()),
                                 0.0,
                                 muted.clone(),
                             );
@@ -335,7 +332,7 @@ fn subscription_card(
                                 subscription.info.as_ref().and_then(|info| info.expire_unix)
                             {
                                 summary.append(" · ", 0.0, muted.clone());
-                                let (term, _) = t().term_left(expire, now);
+                                let (term, _) = crate::i18n::term_left(expire, now);
                                 summary.append(
                                     &term,
                                     0.0,
@@ -350,9 +347,9 @@ fn subscription_card(
                         |ui| {
                             if !expanded && let Some(best) = state.best_ping(subscription) {
                                 ui.label(
-                                    RichText::new(strings::fill(
-                                        t().ping_best,
-                                        &[("ms", &ping_millis(best).to_string())],
+                                    RichText::new(tr!(
+                                        "ping-best",
+                                        ms = ping_millis(best).to_string()
                                     ))
                                     .small()
                                     .color(theme::TEXT_DIM),
@@ -374,13 +371,14 @@ fn subscription_card(
                 }
                 ui.add_space(6.0);
                 if let Some(info) = &subscription.info {
-                    let used = t().bytes(info.upload.saturating_add(info.download));
+                    let used = crate::i18n::bytes(info.upload.saturating_add(info.download));
                     let traffic = info.total.map_or_else(
-                        || strings::fill(t().quota_used, &[("used", &used)]),
+                        || tr!("quota-used", used = &used),
                         |total| {
-                            strings::fill(
-                                t().quota_used_of,
-                                &[("used", &used), ("total", &t().bytes(total))],
+                            tr!(
+                                "quota-used-of",
+                                used = &used,
+                                total = crate::i18n::bytes(total)
                             )
                         },
                     );
@@ -396,7 +394,7 @@ fn subscription_card(
                         },
                         |ui| {
                             if let Some(expire) = info.expire_unix {
-                                let (term, _) = t().term_left(expire, now);
+                                let (term, _) = crate::i18n::term_left(expire, now);
                                 ui.label(
                                     RichText::new(term).small().color(expiry_color(expire, now)),
                                 );
@@ -469,17 +467,17 @@ fn subscription_card(
                 if subscription.support_url.is_some() || subscription.web_page_url.is_some() {
                     ui.horizontal(|ui| {
                         if let Some(value) = &subscription.support_url {
-                            provider_link(ui, state, t().support, value);
+                            provider_link(ui, state, &tr!("support"), value);
                         }
                         if let Some(value) = &subscription.web_page_url {
-                            provider_link(ui, state, t().website, value);
+                            provider_link(ui, state, &tr!("website"), value);
                         }
                     });
                 }
                 if let Some(UpdateOutcome::Success(report)) = state.outcomes.get(&subscription.id) {
                     ui.add(
                         egui::Label::new(
-                            RichText::new(t().updated(
+                            RichText::new(crate::i18n::updated(
                                 report.added,
                                 report.removed,
                                 report.retained,
@@ -491,16 +489,17 @@ fn subscription_card(
                     if report.selection_cleared {
                         ui.add(
                             egui::Label::new(
-                                RichText::new(t().selection_cleared).color(theme::ERROR),
+                                RichText::new(tr!("selection-cleared")).color(theme::ERROR),
                             )
                             .wrap(),
                         );
                     }
                     for (reason, count) in &report.skipped {
                         ui.add(
-                            egui::Label::new(
-                                state.text(&t().skipped(*count, &errors::skip_reason(t(), reason))),
-                            )
+                            egui::Label::new(state.text(&crate::i18n::skipped(
+                                *count,
+                                &errors::skip_reason(t(), reason),
+                            )))
                             .wrap(),
                         );
                     }
@@ -509,7 +508,7 @@ fn subscription_card(
                     ui,
                     |ui| {
                         ui.label(
-                            RichText::new(t().servers_heading)
+                            RichText::new(tr!("servers-heading"))
                                 .small()
                                 .color(theme::TEXT_DIM),
                         );
@@ -518,7 +517,7 @@ fn subscription_card(
                         let checking = state.operations.pinging.contains(&subscription.id);
                         if checking {
                             ui.label(
-                                RichText::new(t().ping_checking)
+                                RichText::new(tr!("ping-checking"))
                                     .small()
                                     .color(theme::TEXT_DIM),
                             );
@@ -526,8 +525,8 @@ fn subscription_card(
                             let enabled = state.config_ready
                                 && !subscription.nodes.is_empty()
                                 && !state.subscription_busy(&subscription.id);
-                            let menu = menu_link(ui, t().check_menu, enabled)
-                                .on_hover_text(t().check_hint);
+                            let menu = menu_link(ui, &tr!("check-menu"), enabled)
+                                .on_hover_text(tr!("check-hint"));
                             widgets::menu_popup(&menu).show(|ui| {
                                 check_menu_items(ui, state, subscription, None, enabled, actions);
                             });
@@ -535,7 +534,7 @@ fn subscription_card(
                     },
                 );
                 if subscription.nodes.is_empty() {
-                    ui.colored_label(theme::TEXT_DIM, t().no_servers);
+                    ui.colored_label(theme::TEXT_DIM, tr!("no-servers"));
                 }
                 let show_flags = subscription
                     .nodes
@@ -652,35 +651,35 @@ fn ping_quality(result: PingResult) -> u8 {
     }
 }
 
-fn ping_label(result: PingResult, is_hysteria2: bool) -> (String, Color32, Option<&'static str>) {
+fn ping_label(result: PingResult, is_hysteria2: bool) -> (String, Color32, Option<String>) {
     match result {
         PingResult::Answered(elapsed) => (
-            strings::fill(t().ping_ms, &[("ms", &ping_millis(elapsed).to_string())]),
+            tr!("ping-ms", ms = ping_millis(elapsed).to_string()),
             theme::TEXT_DIM,
-            Some(t().ping_tcp_hint),
+            Some(tr!("ping-tcp-hint")),
         ),
         PingResult::Works(elapsed) => (
-            strings::fill(t().ping_ms, &[("ms", &ping_millis(elapsed).to_string())]),
+            tr!("ping-ms", ms = ping_millis(elapsed).to_string()),
             theme::TEXT_DIM,
-            Some(t().ping_full_hint),
+            Some(tr!("ping-full-hint")),
         ),
-        PingResult::NoAnswer => (t().ping_no_answer.to_owned(), theme::ERROR, None),
+        PingResult::NoAnswer => (tr!("ping-no-answer"), theme::ERROR, None),
         PingResult::Fails => (
-            t().ping_fails.to_owned(),
+            tr!("ping-fails"),
             theme::ERROR,
-            Some(t().ping_fails_hint),
+            Some(tr!("ping-fails-hint")),
         ),
         PingResult::Unresolved => (
-            t().ping_unresolved.to_owned(),
+            tr!("ping-unresolved"),
             theme::TEXT_DIM,
-            Some(t().ping_unresolved_hint),
+            Some(tr!("ping-unresolved-hint")),
         ),
         PingResult::Unsupported => (
-            t().ping_unsupported.to_owned(),
+            tr!("ping-unsupported"),
             theme::TEXT_DIM,
-            is_hysteria2.then_some(t().ping_udp_hint),
+            is_hysteria2.then(|| tr!("ping-udp-hint")),
         ),
-        PingResult::Pending => (t().ping_pending.to_owned(), theme::TEXT_DIM, None),
+        PingResult::Pending => (tr!("ping-pending"), theme::TEXT_DIM, None),
     }
 }
 
@@ -689,7 +688,7 @@ fn hover_ping_hint(
     pointer: Option<egui::Pos2>,
     region: Option<egui::Rect>,
     is_hysteria2: bool,
-) -> Option<&'static str> {
+) -> Option<String> {
     if !pointer
         .zip(region)
         .is_some_and(|(point, rect)| rect.contains(point))
@@ -712,7 +711,7 @@ fn check_menu_items(
     let ping = widgets::menu_item(
         ui,
         widgets::MenuItem {
-            label: t().check_quick,
+            label: &tr!("check-quick"),
             enabled: available && can_ping,
             selected: false,
             danger: false,
@@ -720,7 +719,7 @@ fn check_menu_items(
         },
     );
     let ping = if matches!(state.status.state, ConnectionState::Connected) {
-        ping.on_disabled_hover_text(t().ping_while_connected)
+        ping.on_disabled_hover_text(tr!("ping-while-connected"))
     } else {
         ping
     };
@@ -734,7 +733,7 @@ fn check_menu_items(
     if widgets::menu_item(
         ui,
         widgets::MenuItem {
-            label: t().check_full,
+            label: &tr!("check-full"),
             enabled: available && state.can_full_check(),
             selected: false,
             danger: false,
@@ -1025,9 +1024,9 @@ pub(crate) fn rename_dialog(ctx: &egui::Context, state: &mut State, actions: &mu
         .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(400.0);
-            ui.heading(t().rename_subscription);
+            ui.heading(tr!("rename-subscription"));
             ui.add_space(12.0);
-            ui.label(t().subscription_name);
+            ui.label(tr!("subscription-name"));
             let input = ui.add_enabled(
                 !busy,
                 egui::TextEdit::singleline(&mut dialog.name)
@@ -1053,10 +1052,10 @@ pub(crate) fn rename_dialog(ctx: &egui::Context, state: &mut State, actions: &mu
             }
             ui.add_space(16.0);
             ui.horizontal(|ui| {
-                if widgets::outline_button(ui, t().cancel, !busy).clicked() {
+                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
                     actions.push(Action::CancelRename);
                 }
-                if widgets::button_fill(ui, t().rename, !busy && !dialog.name.trim().is_empty())
+                if widgets::button_fill(ui, tr!("rename"), !busy && !dialog.name.trim().is_empty())
                     .clicked()
                 {
                     actions.push(Action::SubmitRename);
@@ -1076,7 +1075,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
         .frame(widgets::modal_frame())
         .show(ctx, |ui| {
             ui.set_width(480.0);
-            ui.heading(t().remove_subscription);
+            ui.heading(tr!("remove-subscription"));
             if let Some(subscription) = state
                 .config
                 .subscriptions
@@ -1091,7 +1090,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                 ));
             }
             ui.add_space(12.0);
-            ui.add(egui::Label::new(t().remove_detail).wrap());
+            ui.add(egui::Label::new(tr!("remove-detail")).wrap());
             if state
                 .config
                 .active
@@ -1100,7 +1099,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(t().remove_selected_warning).color(theme::ERROR),
+                        RichText::new(tr!("remove-selected-warning")).color(theme::ERROR),
                     )
                     .wrap(),
                 );
@@ -1112,15 +1111,16 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             }
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                if widgets::outline_button(ui, t().cancel, !state.operations.removing).clicked() {
+                if widgets::outline_button(ui, tr!("cancel"), !state.operations.removing).clicked()
+                {
                     actions.push(Action::CancelRemove);
                 }
                 if widgets::button_fill(
                     ui,
                     if state.operations.removing {
-                        t().removing
+                        tr!("removing")
                     } else {
-                        t().remove
+                        tr!("remove")
                     },
                     !state.operations.removing,
                 )
@@ -1167,19 +1167,19 @@ mod tests {
         let inside = Some(egui::pos2(100.0, 15.0));
         assert_eq!(
             hover_ping_hint(latency, inside, Some(rect), false),
-            Some(t().ping_tcp_hint)
+            Some(tr!("ping-tcp-hint"))
         );
         assert_eq!(
             hover_ping_hint(works, inside, Some(rect), false),
-            Some(t().ping_full_hint)
+            Some(tr!("ping-full-hint"))
         );
         assert_eq!(
             hover_ping_hint(Some(PingResult::Fails), inside, Some(rect), false),
-            Some(t().ping_fails_hint)
+            Some(tr!("ping-fails-hint"))
         );
         assert_eq!(
             hover_ping_hint(Some(PingResult::Unresolved), inside, Some(rect), false),
-            Some(t().ping_unresolved_hint)
+            Some(tr!("ping-unresolved-hint"))
         );
         assert_eq!(
             hover_ping_hint(latency, Some(egui::pos2(30.0, 15.0)), Some(rect), false),
@@ -1193,7 +1193,7 @@ mod tests {
         );
         assert_eq!(
             hover_ping_hint(Some(PingResult::Unsupported), inside, Some(rect), true),
-            Some(t().ping_udp_hint)
+            Some(tr!("ping-udp-hint"))
         );
         assert_eq!(
             hover_ping_hint(Some(PingResult::Unsupported), inside, Some(rect), false),
@@ -1224,47 +1224,47 @@ mod tests {
     #[test]
     fn ping_labels_match_results_and_hints() {
         let elapsed = Duration::from_millis(85);
-        let ms = strings::fill(t().ping_ms, &[("ms", "85")]);
+        let ms = tr!("ping-ms", ms = "85");
         for (result, label, color, hint) in [
             (
                 PingResult::Answered(elapsed),
                 ms.clone(),
                 theme::TEXT_DIM,
-                Some(t().ping_tcp_hint),
+                Some(tr!("ping-tcp-hint")),
             ),
             (
                 PingResult::Works(elapsed),
                 ms,
                 theme::TEXT_DIM,
-                Some(t().ping_full_hint),
+                Some(tr!("ping-full-hint")),
             ),
             (
                 PingResult::NoAnswer,
-                t().ping_no_answer.to_owned(),
+                tr!("ping-no-answer").to_owned(),
                 theme::ERROR,
                 None,
             ),
             (
                 PingResult::Fails,
-                t().ping_fails.to_owned(),
+                tr!("ping-fails").to_owned(),
                 theme::ERROR,
-                Some(t().ping_fails_hint),
+                Some(tr!("ping-fails-hint")),
             ),
             (
                 PingResult::Unresolved,
-                t().ping_unresolved.to_owned(),
+                tr!("ping-unresolved").to_owned(),
                 theme::TEXT_DIM,
-                Some(t().ping_unresolved_hint),
+                Some(tr!("ping-unresolved-hint")),
             ),
             (
                 PingResult::Unsupported,
-                t().ping_unsupported.to_owned(),
+                tr!("ping-unsupported").to_owned(),
                 theme::TEXT_DIM,
                 None,
             ),
             (
                 PingResult::Pending,
-                t().ping_pending.to_owned(),
+                tr!("ping-pending").to_owned(),
                 theme::TEXT_DIM,
                 None,
             ),

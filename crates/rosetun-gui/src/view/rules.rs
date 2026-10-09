@@ -8,7 +8,6 @@ use crate::rules::{
     visible_rules_slice,
 };
 use crate::state::{Action, DeleteDialog, NameDialogKind, SessionPart, State};
-use crate::strings::t;
 use crate::{strings, theme, widgets};
 
 const HANDLE_WIDTH: f32 = 22.0;
@@ -39,9 +38,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         ui,
         |ui| {
             ui.vertical(|ui| {
-                ui.heading(t().rules_tab_title);
+                ui.heading(tr!("rules-tab-title"));
                 ui.add(
-                    egui::Label::new(RichText::new(t().rules_subtitle).color(theme::TEXT_MUTED))
+                    egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::TEXT_MUTED))
                         .wrap(),
                 );
                 if pending_apply {
@@ -62,13 +61,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     }
     ui.add_space(20.0);
     if !state.config_ready {
-        ui.colored_label(theme::TEXT_DIM, t().loading);
+        ui.colored_label(theme::TEXT_DIM, tr!("loading"));
         return;
     }
     if state.config.rule_sets.is_empty() {
-        ui.colored_label(theme::TEXT_MUTED, t().no_rule_sets);
+        ui.colored_label(theme::TEXT_MUTED, tr!("no-rule-sets"));
         ui.add_space(12.0);
-        if widgets::button_fill(ui, t().create_rule_set, state.can_edit_rules()).clicked() {
+        if widgets::button_fill(ui, tr!("create-rule-set"), state.can_edit_rules()).clicked() {
             actions.push(Action::OpenCreateSet);
         }
         return;
@@ -80,7 +79,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         .iter()
         .find(|item| state.rule_screen.selected_set.as_ref() == Some(&item.id))
     else {
-        widgets::button_fill(ui, t().new_rule_button, false);
+        widgets::button_fill(ui, tr!("new-rule-button"), false);
         return;
     };
     template_section(ui, state, set, actions);
@@ -127,7 +126,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         && visible_temporary.is_empty()
         && (!set.rules.is_empty() || !temporary.is_empty())
     {
-        ui.colored_label(theme::TEXT_MUTED, t().no_rules_match);
+        ui.colored_label(theme::TEXT_MUTED, tr!("no-rules-match"));
     }
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
@@ -250,8 +249,12 @@ fn selection_slot(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -
                 selection_toolbar(ui, state, actions);
             } else {
                 ui.add(
-                    egui::Label::new(RichText::new(t().order_hint).small().color(theme::TEXT_DIM))
-                        .wrap(),
+                    egui::Label::new(
+                        RichText::new(tr!("order-hint"))
+                            .small()
+                            .color(theme::TEXT_DIM),
+                    )
+                    .wrap(),
                 );
             }
         },
@@ -263,14 +266,14 @@ fn selection_toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>
     let can_edit = state.can_edit_rules();
     let can_move = can_edit && !state.rule_screen.filter.is_active();
     let count = state.rule_screen.selected_rules.len();
-    ui.label(RichText::new(t().selected_rule_count(count)).color(theme::TEXT_MUTED));
+    ui.label(RichText::new(crate::i18n::selected_rule_count(count)).color(theme::TEXT_MUTED));
     for (label, action) in [
-        (t().move_selected_to_top, Action::MoveSelectedRulesToTop),
-        (t().move_to_end, Action::MoveSelectedRulesToEnd),
+        (tr!("move-selected-to-top"), Action::MoveSelectedRulesToTop),
+        (tr!("move-to-end"), Action::MoveSelectedRulesToEnd),
     ] {
-        let button = widgets::outline_button_compact(ui, label, can_move);
+        let button = widgets::outline_button_compact(ui, &label, can_move);
         let button = if state.rule_screen.filter.is_active() {
-            button.on_hover_text(t().reorder_disabled)
+            button.on_hover_text(tr!("reorder-disabled"))
         } else {
             button
         };
@@ -285,7 +288,7 @@ fn selection_toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>
             } else {
                 theme::DISABLED
             });
-            widgets::outline_button_compact(ui, t().delete, can_edit)
+            widgets::outline_button_compact(ui, &tr!("delete"), can_edit)
         })
         .inner;
     if delete.clicked() {
@@ -327,13 +330,13 @@ fn apply_notice(ui: &mut egui::Ui, can_apply: bool) -> (egui::Response, Option<e
         ui.painter()
             .circle_filled(dot.center(), 3.0, theme::ROSE_LIGHT);
         let text = if can_apply {
-            t().apply_on_leave
+            tr!("apply-on-leave")
         } else {
-            t().next_connect
+            tr!("next-connect")
         };
         let label = ui.label(RichText::new(text).small().color(theme::TEXT_MUTED));
-        let link =
-            can_apply.then(|| widgets::link(ui, t().apply_now, true).on_hover_text(t().apply_hint));
+        let link = can_apply
+            .then(|| widgets::link(ui, &tr!("apply-now"), true).on_hover_text(tr!("apply-hint")));
         (label, link)
     })
     .inner
@@ -354,7 +357,7 @@ fn template_section(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &m
         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
     );
     ui.label(
-        RichText::new(t().rules_templates)
+        RichText::new(tr!("rules-templates"))
             .font(font)
             .color(theme::TEXT_MUTED),
     );
@@ -404,7 +407,7 @@ fn template_card(
                         ui.spacing_mut().item_spacing.x = 10.0;
                         let badge = icons::icon_badge(ui, template_icon(template), 30.0);
                         if redundant {
-                            badge.on_hover_text(t().template_redundant);
+                            badge.on_hover_text(tr!("template-redundant"));
                         }
                         let font = egui::FontId::new(
                             egui::TextStyle::Body.resolve(ui.style()).size,
@@ -412,20 +415,20 @@ fn template_card(
                         );
                         ui.add(
                             egui::Label::new(
-                                RichText::new(state.text(t().template_name(template)))
+                                RichText::new(state.text(&crate::i18n::template_name(template)))
                                     .font(font)
                                     .color(theme::TEXT),
                             )
                             .truncate(),
                         )
                         .on_hover_text(if redundant {
-                            t().template_redundant
+                            tr!("template-redundant")
                         } else {
-                            t().template_name(template)
+                            crate::i18n::template_name(template)
                         });
                     });
                     ui.add_space(8.0);
-                    let description = state.text(t().template_description(template));
+                    let description = state.text(&crate::i18n::template_description(template));
                     let height = 2.0 * ui.text_style_height(&egui::TextStyle::Small);
                     let mut job = egui::text::LayoutJob::simple(
                         description.clone(),
@@ -442,7 +445,7 @@ fn template_card(
                             ui.set_min_height(height);
                             ui.add(egui::Label::new(job).wrap())
                                 .on_hover_text(if redundant {
-                                    t().template_redundant.to_owned()
+                                    tr!("template-redundant").to_owned()
                                 } else {
                                     description
                                 });
@@ -459,7 +462,7 @@ fn template_card(
                                     egui::Sense::hover(),
                                 );
                                 if redundant {
-                                    dot.on_hover_text(t().template_redundant);
+                                    dot.on_hover_text(tr!("template-redundant"));
                                 }
                                 ui.painter().circle_filled(
                                     rect.center(),
@@ -475,7 +478,7 @@ fn template_card(
                                     .truncate(),
                                 );
                                 if redundant {
-                                    label.on_hover_text(t().template_redundant);
+                                    label.on_hover_text(tr!("template-redundant"));
                                 }
                             });
                         },
@@ -483,19 +486,19 @@ fn template_card(
                             let button = if rule.is_some() {
                                 widgets::outline_button_compact(
                                     ui,
-                                    t().template_added,
+                                    &tr!("template-added"),
                                     state.can_edit_rules(),
                                 )
-                                .on_hover_text(t().template_remove_hint)
+                                .on_hover_text(tr!("template-remove-hint"))
                             } else {
                                 widgets::button_fill_compact(
                                     ui,
-                                    t().template_add,
+                                    &tr!("template-add"),
                                     state.can_edit_rules(),
                                 )
                             };
                             let button = if redundant {
-                                button.on_hover_text(t().template_redundant)
+                                button.on_hover_text(tr!("template-redundant"))
                             } else {
                                 button
                             };
@@ -511,7 +514,7 @@ fn template_card(
                 })
                 .response;
             if redundant {
-                response.on_hover_text(t().template_redundant);
+                response.on_hover_text(tr!("template-redundant"));
             }
         },
     );
@@ -525,14 +528,14 @@ fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         set_picker(ui, state, set, actions);
         let menu =
-            icons::icon_button_sized(ui, Icon::More, true, 40.0).on_hover_text(t().more_actions);
+            icons::icon_button_sized(ui, Icon::More, true, 40.0).on_hover_text(tr!("more-actions"));
         widgets::menu_popup(&menu).show(|ui| {
             ui.set_min_width(180.0);
             if !active
                 && widgets::menu_item(
                     ui,
                     widgets::MenuItem {
-                        label: t().make_active,
+                        label: &tr!("make-active"),
                         enabled: state.can_edit_rules(),
                         selected: false,
                         danger: false,
@@ -547,7 +550,7 @@ fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             if widgets::menu_item(
                 ui,
                 widgets::MenuItem {
-                    label: t().new_set,
+                    label: &tr!("new-set"),
                     enabled: state.can_edit_rules(),
                     selected: false,
                     danger: false,
@@ -562,7 +565,7 @@ fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             if widgets::menu_item(
                 ui,
                 widgets::MenuItem {
-                    label: t().rename,
+                    label: &tr!("rename"),
                     enabled: state.can_edit_rules(),
                     selected: false,
                     danger: false,
@@ -578,7 +581,7 @@ fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             if widgets::menu_item(
                 ui,
                 widgets::MenuItem {
-                    label: t().delete,
+                    label: &tr!("delete"),
                     enabled: state.can_edit_rules(),
                     selected: false,
                     danger: true,
@@ -610,7 +613,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
     let active_width = if active {
         ui.painter()
             .layout_no_wrap(
-                t().active.to_owned(),
+                tr!("active").to_owned(),
                 egui::TextStyle::Small.resolve(ui.style()),
                 theme::ROSE_LIGHT,
             )
@@ -661,7 +664,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
                 painter.text(
                     egui::pos2(rect.right() - 10.0 - icon_right, center_y),
                     egui::Align2::RIGHT_CENTER,
-                    t().active,
+                    tr!("active"),
                     egui::TextStyle::Small.resolve(ui.style()),
                     theme::ROSE_LIGHT,
                 );
@@ -687,7 +690,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
                     enabled: true,
                     selected,
                     danger: false,
-                    note: is_active.then_some(t().active),
+                    note: is_active.then_some(tr!("active")).as_deref(),
                 },
             )
             .clicked()
@@ -713,14 +716,14 @@ fn filter_controls(
     counts.processes += extra.processes;
     counts.other += extra.other;
     let labels: Vec<_> = [
-        (TypeFilter::All, t().all, counts.all()),
-        (TypeFilter::Domains, t().domains, counts.domains),
-        (TypeFilter::Processes, t().processes, counts.processes),
-        (TypeFilter::Other, t().other, counts.other),
+        (TypeFilter::All, tr!("all"), counts.all()),
+        (TypeFilter::Domains, tr!("domains"), counts.domains),
+        (TypeFilter::Processes, tr!("processes"), counts.processes),
+        (TypeFilter::Other, tr!("other"), counts.other),
     ]
     .into_iter()
     .filter(|(kind, _, count)| *kind != TypeFilter::Other || *count != 0)
-    .map(|(kind, label, count)| (kind, strings::filter_count(label, count)))
+    .map(|(kind, label, count)| (kind, strings::filter_count(&label, count)))
     .collect();
     let options: Vec<_> = labels
         .iter()
@@ -730,7 +733,7 @@ fn filter_controls(
         ui,
         |ui| {
             ui.horizontal_wrapped(|ui| {
-                widgets::search_field(ui, &mut filter.search, t().search_rules, 260.0);
+                widgets::search_field(ui, &mut filter.search, &tr!("search-rules"), 260.0);
                 if let Some(kind) =
                     widgets::segmented(ui, "rule_type_filter", filter.kind, &options, false, true)
                 {
@@ -739,7 +742,7 @@ fn filter_controls(
                 target_filter(ui, filter, actions);
             });
         },
-        |ui| widgets::button_fill(ui, t().new_rule_button, can_add).clicked(),
+        |ui| widgets::button_fill(ui, tr!("new-rule-button"), can_add).clicked(),
     );
     if add_rule {
         actions.push(Action::OpenAddRule);
@@ -765,12 +768,12 @@ fn target_filter(
             visuals.open.bg_stroke = border;
             let selected_text = selected
                 .map(|target| RichText::new(target_label(target)).color(target_color(target)))
-                .unwrap_or_else(|| RichText::new(t().any_action));
+                .unwrap_or_else(|| RichText::new(tr!("any-action")));
             egui::ComboBox::from_id_salt("rule_target_filter")
                 .width(166.0)
                 .selected_text(selected_text)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut selected, None, t().any_action);
+                    ui.selectable_value(&mut selected, None, tr!("any-action"));
                     for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
                         ui.selectable_value(
                             &mut selected,
@@ -892,7 +895,7 @@ fn target_button(
                         widgets::menu_item(
                             ui,
                             widgets::MenuItem {
-                                label: target_label(choice),
+                                label: &target_label(choice),
                                 enabled: true,
                                 selected: choice == target,
                                 danger: false,
@@ -1015,14 +1018,14 @@ fn rule_row(
                         });
                     } else if !temporary {
                         icons::icon_button(ui, Icon::Grip, false)
-                            .on_hover_text(t().reorder_disabled);
+                            .on_hover_text(tr!("reorder-disabled"));
                     }
                 });
                 ui.add_space(HANDLE_GAP);
                 table_cell(ui, ICON_WIDTH, theme::RULE_ROW, |ui| {
                     if temporary {
                         icons::icon_badge_colored(ui, Icon::Clock, ICON_WIDTH, theme::TEXT_DIM)
-                            .on_hover_text(t().temporary_hint);
+                            .on_hover_text(tr!("temporary-hint"));
                     } else {
                         icons::icon_badge(ui, rule_icon(&rule.matcher), ICON_WIDTH);
                     }
@@ -1061,13 +1064,13 @@ fn rule_row(
                         state.can_edit_rules()
                     };
                     let menu = icons::icon_button_sized(ui, Icon::More, can_open, MENU_WIDTH)
-                        .on_hover_text(t().more_actions);
+                        .on_hover_text(tr!("more-actions"));
                     if can_open {
                         let group = selected && state.rule_screen.selected_rules.len() >= 2;
                         let menu_width = if group {
                             ui.painter()
                                 .layout_no_wrap(
-                                    t().delete_selected_rules(
+                                    crate::i18n::delete_selected_rules(
                                         state.rule_screen.selected_rules.len(),
                                     ),
                                     egui::TextStyle::Button.resolve(ui.style()),
@@ -1085,7 +1088,7 @@ fn rule_row(
                                 widgets::menu_item(
                                     ui,
                                     widgets::MenuItem {
-                                        label: t().edit,
+                                        label: &tr!("edit"),
                                         enabled: false,
                                         selected: false,
                                         danger: false,
@@ -1093,13 +1096,13 @@ fn rule_row(
                                     },
                                 );
                                 for (label, action) in [
-                                    (t().move_selected_to_top, Action::MoveSelectedRulesToTop),
-                                    (t().move_to_end, Action::MoveSelectedRulesToEnd),
+                                    (tr!("move-selected-to-top"), Action::MoveSelectedRulesToTop),
+                                    (tr!("move-to-end"), Action::MoveSelectedRulesToEnd),
                                 ] {
                                     let item = widgets::menu_item(
                                         ui,
                                         widgets::MenuItem {
-                                            label,
+                                            label: &label,
                                             enabled: !state.rule_screen.filter.is_active(),
                                             selected: false,
                                             danger: false,
@@ -1107,7 +1110,7 @@ fn rule_row(
                                         },
                                     );
                                     let item = if state.rule_screen.filter.is_active() {
-                                        item.on_hover_text(t().reorder_disabled)
+                                        item.on_hover_text(tr!("reorder-disabled"))
                                     } else {
                                         item
                                     };
@@ -1119,7 +1122,7 @@ fn rule_row(
                                 if widgets::menu_item(
                                     ui,
                                     widgets::MenuItem {
-                                        label: &t().delete_selected_rules(
+                                        label: &crate::i18n::delete_selected_rules(
                                             state.rule_screen.selected_rules.len(),
                                         ),
                                         enabled: true,
@@ -1138,7 +1141,7 @@ fn rule_row(
                                     if widgets::menu_item(
                                         ui,
                                         widgets::MenuItem {
-                                            label: t().keep_permanently,
+                                            label: &tr!("keep-permanently"),
                                             enabled: state.can_edit_rules(),
                                             selected: false,
                                             danger: false,
@@ -1155,7 +1158,7 @@ fn rule_row(
                                         && widgets::menu_item(
                                             ui,
                                             widgets::MenuItem {
-                                                label: t().edit,
+                                                label: &tr!("edit"),
                                                 enabled: true,
                                                 selected: false,
                                                 danger: false,
@@ -1170,7 +1173,7 @@ fn rule_row(
                                     if widgets::menu_item(
                                         ui,
                                         widgets::MenuItem {
-                                            label: t().move_to_top,
+                                            label: &tr!("move-to-top"),
                                             enabled: index.is_some_and(|index| index > 0),
                                             selected: false,
                                             danger: false,
@@ -1186,7 +1189,7 @@ fn rule_row(
                                 if widgets::menu_item(
                                     ui,
                                     widgets::MenuItem {
-                                        label: t().delete,
+                                        label: &tr!("delete"),
                                         enabled: true,
                                         selected: false,
                                         danger: true,
@@ -1277,13 +1280,13 @@ fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
     let (value, caption) = rule_lines(&rule.matcher);
     let value = state.text(&value);
     let caption = match caption {
-        RuleCaption::ThisAddress => t().caption_this_address.to_owned(),
-        RuleCaption::WithSubdomains => t().caption_subdomains.to_owned(),
-        RuleCaption::Keyword => t().caption_keyword.to_owned(),
-        RuleCaption::AnyFolder => t().caption_any_folder.to_owned(),
+        RuleCaption::ThisAddress => tr!("caption-this-address").to_owned(),
+        RuleCaption::WithSubdomains => tr!("caption-subdomains").to_owned(),
+        RuleCaption::Keyword => tr!("caption-keyword").to_owned(),
+        RuleCaption::AnyFolder => tr!("caption-any-folder").to_owned(),
         RuleCaption::Path(path) => path,
-        RuleCaption::Addresses => t().caption_addresses.to_owned(),
-        RuleCaption::Template => t().caption_template.to_owned(),
+        RuleCaption::Addresses => tr!("caption-addresses").to_owned(),
+        RuleCaption::Template => tr!("caption-template").to_owned(),
     };
     let caption = state.text(&caption);
     let tooltip = if let RuleMatcher::Template(template) = &rule.matcher {
@@ -1293,11 +1296,16 @@ fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
             .map(rosetun_core::rule_value_text)
             .collect::<Vec<_>>()
             .join(", ");
-        state.text(&strings::fill(t().template_contents, &[("list", &list)]))
+        state.text(&tr!("template-contents", list = &list))
     } else {
         let full_value = state.text(&rosetun_core::rule_value_text(&rule.matcher));
         rosetun_core::rule_value_ascii(&rule.matcher)
-            .map(|ascii| format!("{full_value}\n{}", t().stored_as(&state.text(&ascii))))
+            .map(|ascii| {
+                format!(
+                    "{full_value}\n{}",
+                    crate::i18n::stored_as(&state.text(&ascii))
+                )
+            })
             .unwrap_or(full_value)
     };
     let font = egui::FontId::new(
@@ -1340,22 +1348,22 @@ fn default_rule(
                         );
                         ui.add(
                             egui::Label::new(
-                                RichText::new(state.text(t().all_other_traffic))
+                                RichText::new(state.text(&tr!("all-other-traffic")))
                                     .font(font)
                                     .color(theme::TEXT),
                             )
                             .truncate(),
                         )
-                        .on_hover_text(t().default_rule_tooltip);
+                        .on_hover_text(tr!("default-rule-tooltip"));
                         ui.add(
                             egui::Label::new(
-                                RichText::new(state.text(t().default_fallback))
+                                RichText::new(state.text(&tr!("default-fallback")))
                                     .small()
                                     .color(theme::TEXT_DIM),
                             )
                             .truncate(),
                         )
-                        .on_hover_text(t().default_rule_tooltip);
+                        .on_hover_text(tr!("default-rule-tooltip"));
                     });
                     table_cell(ui, TARGET_WIDTH, theme::RULE_ROW, |ui| {
                         let choices = if set.default_target == RuleTarget::Block {
@@ -1409,11 +1417,11 @@ fn default_rule(
     }
 }
 
-pub(crate) fn target_label(target: RuleTarget) -> &'static str {
+pub(crate) fn target_label(target: RuleTarget) -> String {
     match target {
-        RuleTarget::Proxy => t().proxy,
-        RuleTarget::Direct => t().direct,
-        RuleTarget::Block => t().block,
+        RuleTarget::Proxy => tr!("proxy"),
+        RuleTarget::Direct => tr!("direct"),
+        RuleTarget::Block => tr!("block"),
     }
 }
 
@@ -1435,11 +1443,11 @@ pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
         .show(ctx, |ui| {
             ui.set_width(400.0);
             ui.heading(match dialog.kind {
-                NameDialogKind::Create => t().create_rule_set,
-                NameDialogKind::Rename(_) => t().rename_rule_set,
+                NameDialogKind::Create => tr!("create-rule-set"),
+                NameDialogKind::Rename(_) => tr!("rename-rule-set"),
             });
             ui.add_space(12.0);
-            ui.label(t().set_name);
+            ui.label(tr!("set-name"));
             let input = ui.add_enabled(
                 !busy,
                 egui::TextEdit::singleline(&mut dialog.name).desired_width(f32::INFINITY),
@@ -1456,12 +1464,12 @@ pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
             }
             ui.add_space(16.0);
             ui.horizontal(|ui| {
-                if widgets::outline_button(ui, t().cancel, !busy).clicked() {
+                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
                     actions.push(Action::CancelSetName);
                 }
                 let label = match dialog.kind {
-                    NameDialogKind::Create => t().create_rule_set,
-                    NameDialogKind::Rename(_) => t().rename,
+                    NameDialogKind::Create => tr!("create-rule-set"),
+                    NameDialogKind::Rename(_) => tr!("rename"),
                 };
                 if widgets::button_fill(ui, label, !busy && !dialog.name.trim().is_empty())
                     .clicked()
@@ -1494,15 +1502,15 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             ui.set_width(480.0);
             match dialog {
                 DeleteDialog::Set(id) => {
-                    ui.heading(t().delete_rule_set);
+                    ui.heading(tr!("delete-rule-set"));
                     if let Some(set) = state.config.rule_sets.iter().find(|set| &set.id == id) {
                         ui.label(state.text(&set.name));
                     }
-                    ui.add(egui::Label::new(t().delete_rule_set_detail).wrap());
+                    ui.add(egui::Label::new(tr!("delete-rule-set-detail")).wrap());
                     if state.config.active_rule_set.as_ref() == Some(id) {
                         ui.add(
                             egui::Label::new(
-                                RichText::new(t().delete_active_rule_set_warning)
+                                RichText::new(tr!("delete-active-rule-set-warning"))
                                     .color(theme::ERROR),
                             )
                             .wrap(),
@@ -1510,7 +1518,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                     }
                 }
                 DeleteDialog::Rule { set, rule } => {
-                    ui.heading(t().delete_rule);
+                    ui.heading(tr!("delete-rule"));
                     if let Some(rule) = state
                         .config
                         .rule_sets
@@ -1520,10 +1528,10 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                     {
                         ui.label(state.text(&delete_rule_value(rule)));
                     }
-                    ui.label(t().delete_rule_detail);
+                    ui.label(tr!("delete-rule-detail"));
                 }
                 DeleteDialog::Rules { set, rules } => {
-                    ui.heading(t().delete_rules_heading(rules.len()));
+                    ui.heading(crate::i18n::delete_rules_heading(rules.len()));
                     if let Some(set) = state.config.rule_sets.iter().find(|item| &item.id == set) {
                         for id in rules.iter().take(5) {
                             if let Some(rule) = set.rules.iter().find(|item| &item.id == id) {
@@ -1534,17 +1542,17 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                         }
                     }
                     if rules.len() > 5 {
-                        ui.label(t().and_more_rules(rules.len() - 5));
+                        ui.label(crate::i18n::and_more_rules(rules.len() - 5));
                     }
-                    ui.label(t().delete_rule_detail);
+                    ui.label(tr!("delete-rule-detail"));
                 }
             }
             ui.add_space(18.0);
             ui.horizontal(|ui| {
-                if widgets::outline_button(ui, t().cancel, !busy).clicked() {
+                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
                     actions.push(Action::CancelRuleDelete);
                 }
-                if widgets::button_fill(ui, t().delete, !busy).clicked() {
+                if widgets::button_fill(ui, tr!("delete"), !busy).clicked() {
                     actions.push(Action::ConfirmRuleDelete);
                 }
             });
