@@ -551,7 +551,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         .small()
                         .color(theme::TEXT_MUTED),
                 )
-                    .wrap(),
+                .wrap(),
             );
         });
     });
