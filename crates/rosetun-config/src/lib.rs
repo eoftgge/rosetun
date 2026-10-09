@@ -18,8 +18,11 @@ pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings};
 pub use subscription::{Selection, Subscription, SubscriptionInfo};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
-pub const CONFIG_VERSION: u32 = 1;
+/// Bump for every serialized format change, including defaulted fields older releases drop on save.
+/// Add a Value migration and a new fixture; never edit fixtures of released formats.
+pub const CONFIG_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -103,7 +106,7 @@ pub struct AppConfig {
 }
 
 fn default_config_version() -> u32 {
-    CONFIG_VERSION
+    1
 }
 
 impl Default for AppConfig {
@@ -150,6 +153,58 @@ pub enum ConfigError {
     },
     #[error("selected rule set {0} does not exist")]
     DanglingRuleSet(RuleSetId),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum FormatError {
+    #[error("invalid JSON at line {}, column {}", .0.line(), .0.column())]
+    Json(#[source] serde_json::Error),
+    #[error("unexpected value in the configuration")]
+    UnexpectedValue,
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+}
+
+pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> {
+    let mut value: Value = serde_json::from_slice(bytes).map_err(FormatError::Json)?;
+    let config = value.as_object_mut().ok_or(FormatError::UnexpectedValue)?;
+    let original_version = match config.get("version") {
+        None => 1,
+        Some(version) => version
+            .as_u64()
+            .and_then(|version| u32::try_from(version).ok())
+            .filter(|version| *version > 0)
+            .ok_or(FormatError::UnexpectedValue)?,
+    };
+    if original_version > CONFIG_VERSION {
+        return Err(ConfigError::UnsupportedVersion {
+            found: original_version,
+            expected: CONFIG_VERSION,
+        }
+        .into());
+    }
+
+    let mut version = original_version;
+    while version < CONFIG_VERSION {
+        match version {
+            1 => migrate_1_to_2(config),
+            _ => return Err(FormatError::UnexpectedValue),
+        }
+        version += 1;
+        config.insert("version".to_owned(), Value::from(version));
+    }
+
+    let config: AppConfig =
+        serde_json::from_value(value).map_err(|_| FormatError::UnexpectedValue)?;
+    config.validate()?;
+    Ok((
+        config,
+        (original_version < CONFIG_VERSION).then_some(original_version),
+    ))
+}
+
+fn migrate_1_to_2(_config: &mut Map<String, Value>) {
+    // New fields are supplied by serde defaults; updating the version prevents older writers from dropping them.
 }
 
 impl AppConfig {
