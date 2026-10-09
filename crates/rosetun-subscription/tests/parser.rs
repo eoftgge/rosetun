@@ -149,6 +149,92 @@ fn shadowsocks_formats() {
 }
 
 #[test]
+fn hysteria2_links_keep_credentials_ports_tls_and_obfuscation() {
+    for scheme in ["hysteria2", "hy2"] {
+        let link = format!(
+            "{scheme}://test%2Duser%3Atest%2Dsecret@example.com:443,20000-30000/?sni=example.com&insecure=1&obfs=salamander&obfs-password=test%2Dsecret%2Dobfs&upmbps=100&downmbps=200#Test"
+        );
+        let result = parsed(&link);
+        let node = &result.nodes[0];
+        let Outbound::Hysteria2(params) = &node.outbound else {
+            panic!("expected Hysteria2");
+        };
+        assert_eq!(params.password, "test-user:test-secret");
+        assert_eq!(params.obfs_password.as_deref(), Some("test-secret-obfs"));
+        assert_eq!(params.port_ranges, ["20000-30000"]);
+        assert_eq!((params.up_mbps, params.down_mbps), (Some(100), Some(200)));
+        assert_eq!(node.port, 443);
+        assert_eq!(node.stream.transport, Transport::Tcp);
+        let TlsMode::Tls(tls) = &node.stream.tls else {
+            panic!("expected TLS");
+        };
+        assert_eq!(tls.sni.as_deref(), Some("example.com"));
+        assert!(tls.allow_insecure);
+        assert!(!format!("{node:?}").contains("test-secret"));
+    }
+
+    let single = parsed("hy2://test-secret@example.com:443#Test");
+    assert_eq!(single.nodes[0].port, 443);
+    let Outbound::Hysteria2(params) = &single.nodes[0].outbound else {
+        panic!("expected Hysteria2");
+    };
+    assert!(params.port_ranges.is_empty());
+    let userpass = parsed("hysteria2://test-user:test-secret@example.com:443#Test");
+    let Outbound::Hysteria2(params) = &userpass.nodes[0].outbound else {
+        panic!("expected Hysteria2");
+    };
+    assert_eq!(params.password, "test-user:test-secret");
+    let range = parsed("hy2://test-secret@[2001:db8::1]:20000-30000#Test");
+    assert_eq!(range.nodes[0].server, "2001:db8::1");
+    assert_eq!(range.nodes[0].port, 20000);
+    let Outbound::Hysteria2(params) = &range.nodes[0].outbound else {
+        panic!("expected Hysteria2");
+    };
+    assert_eq!(params.port_ranges, ["20000-30000"]);
+
+    let hopped = parsed("hy2://test-secret@example.com:443?mport=20000-30000,30001#Test");
+    let Outbound::Hysteria2(params) = &hopped.nodes[0].outbound else {
+        panic!("expected Hysteria2");
+    };
+    assert_eq!(params.port_ranges, ["20000-30000", "30001"]);
+    let mport_only = parsed("hy2://test-secret@example.com?mport=20000-30000#Test");
+    assert_eq!(mport_only.nodes[0].port, 20000);
+}
+
+#[test]
+fn hysteria2_rejects_unsupported_or_incomplete_security_without_leaking_secrets() {
+    for (link, reason) in [
+        (
+            "hy2://test-secret@example.com:443?obfs=gecko",
+            SkipReason::UnsupportedObfs,
+        ),
+        (
+            "hy2://test-secret@example.com:443?obfs=salamander",
+            SkipReason::MissingField,
+        ),
+        (
+            "hy2://test-secret@example.com:443?pinSHA256=test-secret-pin&insecure=1",
+            SkipReason::UnsupportedPin,
+        ),
+        ("hy2://example.com:443", SkipReason::MissingField),
+        ("hy2://test-secret@:443", SkipReason::MissingField),
+        (
+            "hy2://test-secret@example.com:65536",
+            SkipReason::InvalidPort,
+        ),
+        (
+            "hy2://test-secret@example.com:443,30000-20000",
+            SkipReason::InvalidPort,
+        ),
+    ] {
+        assert_eq!(only_skip(link), reason);
+        let error = parse(link.as_bytes(), &no_headers).unwrap_err();
+        assert!(!error.to_string().contains("test-secret"));
+        assert!(!format!("{error:?}").contains("test-secret"));
+    }
+}
+
+#[test]
 fn unsupported_options_have_typed_reasons() {
     let cases = [
         (
@@ -179,10 +265,6 @@ fn unsupported_options_have_typed_reasons() {
     assert_eq!(
         only_skip("ss://unsupported:test-password@example.com:443"),
         SkipReason::UnsupportedShadowsocksMethod,
-    );
-    assert_eq!(
-        only_skip("hysteria2://test-password@example.com:443"),
-        SkipReason::UnsupportedProtocol,
     );
     assert_eq!(
         only_skip("tuic://test-password@example.com:443"),
@@ -437,6 +519,56 @@ fn sing_box_ignores_non_node_outbounds() {
     assert!(result.skipped.is_empty());
     assert_eq!(result.nodes[0].name, "Test VLESS");
     assert_eq!(result.nodes[1].name, "Test Shadowsocks");
+}
+
+#[test]
+fn sing_box_hysteria2_matches_the_equivalent_link_and_xray_remains_unsupported() {
+    let link = parsed(
+        "hy2://test-secret@example.com:443,20000-30000/?sni=example.com&insecure=true&alpn=h3&obfs=salamander&obfs-password=test-secret-obfs&upmbps=100&downmbps=200#Test",
+    );
+    let json = parsed(
+        &serde_json::json!({ "outbounds": [{
+            "type": "hysteria2", "tag": "Test", "server": "example.com", "server_port": 9,
+            "server_ports": ["443:443", "20000:30000"], "password": "test-secret",
+            "obfs": { "type": "salamander", "password": "test-secret-obfs" },
+            "tls": { "enabled": true, "server_name": "example.com", "insecure": true, "alpn": ["h3"] },
+            "up_mbps": 100, "down_mbps": 200
+        }]})
+        .to_string(),
+    );
+    assert_eq!(json.format, Format::SingBoxJson);
+    assert_eq!(json.nodes, link.nodes);
+    let xray = serde_json::json!({ "outbounds": [{ "protocol": "hysteria2" }] });
+    assert_eq!(
+        only_skip(&xray.to_string()),
+        SkipReason::UnsupportedProtocol
+    );
+
+    for (field, value, reason) in [
+        (
+            "obfs",
+            serde_json::json!({ "type": "gecko", "password": "test-secret-obfs" }),
+            SkipReason::UnsupportedObfs,
+        ),
+        (
+            "tls",
+            serde_json::json!({ "enabled": false }),
+            SkipReason::UnsupportedSecurity,
+        ),
+        (
+            "tls",
+            serde_json::json!({ "enabled": true, "certificate_public_key_sha256": ["test-secret-pin"] }),
+            SkipReason::UnsupportedPin,
+        ),
+    ] {
+        let mut outbound = serde_json::json!({
+            "type": "hysteria2", "server": "example.com", "server_port": 443,
+            "password": "test-secret", "tls": { "enabled": true }
+        });
+        outbound[field] = value;
+        let body = serde_json::json!({ "outbounds": [outbound] });
+        assert_eq!(only_skip(&body.to_string()), reason);
+    }
 }
 
 #[test]

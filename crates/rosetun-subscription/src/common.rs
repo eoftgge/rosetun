@@ -4,8 +4,8 @@ use std::net::IpAddr;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use rosetun_config::{
-    Node, NodeId, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode, TlsParams,
-    Transport, TrojanParams, VlessParams, VmessParams,
+    Hysteria2Params, Node, NodeId, Outbound, RealityParams, ShadowsocksParams, StreamSettings,
+    TlsMode, TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
 };
 
 use crate::{SkipReason, UnsupportedTransport};
@@ -51,6 +51,38 @@ pub(crate) fn optional(fields: &Fields, key: &str) -> Option<String> {
 
 pub(crate) fn truth(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+pub(crate) fn hysteria_ports(value: &str) -> Result<(u16, Vec<String>), SkipReason> {
+    let mut first = None;
+    let mut ranges = Vec::new();
+    for (index, entry) in value.split(',').enumerate() {
+        let (port, range) = if let Some((start, end)) = entry.split_once(['-', ':']) {
+            let start = valid_port(start)?;
+            let end = valid_port(end)?;
+            if start > end {
+                return Err(SkipReason::InvalidPort);
+            }
+            (start, (start != end).then(|| format!("{start}-{end}")))
+        } else {
+            (valid_port(entry)?, None)
+        };
+        first.get_or_insert(port);
+        if let Some(range) = range {
+            ranges.push(range);
+        } else if index != 0 {
+            ranges.push(port.to_string());
+        }
+    }
+    Ok((first.ok_or(SkipReason::InvalidPort)?, ranges))
+}
+
+fn valid_port(value: &str) -> Result<u16, SkipReason> {
+    value
+        .parse()
+        .ok()
+        .filter(|port| *port != 0)
+        .ok_or(SkipReason::InvalidPort)
 }
 
 pub(crate) fn build(protocol: &str, fields: &Fields) -> Result<Node, SkipReason> {
@@ -121,11 +153,49 @@ pub(crate) fn build(protocol: &str, fields: &Fields) -> Result<Node, SkipReason>
                 password: required(fields, "password")?,
             })
         }
+        "hysteria2" => {
+            if !matches!(field(fields, "obfs"), "" | "salamander")
+                || (field(fields, "obfs").is_empty() && fields.contains_key("obfs_password"))
+            {
+                return Err(SkipReason::UnsupportedObfs);
+            }
+            if fields.contains_key("pin") {
+                return Err(SkipReason::UnsupportedPin);
+            }
+            let bandwidth = |key| -> Result<Option<u32>, SkipReason> {
+                optional(fields, key)
+                    .map(|value| value.parse().map_err(|_| SkipReason::InvalidRecord))
+                    .transpose()
+            };
+            Outbound::Hysteria2(Hysteria2Params {
+                password: required(fields, "password")?,
+                obfs_password: if field(fields, "obfs") == "salamander" {
+                    Some(required(fields, "obfs_password")?)
+                } else {
+                    None
+                },
+                port_ranges: field(fields, "port_ranges")
+                    .split(',')
+                    .filter(|entry| !entry.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+                up_mbps: bandwidth("up_mbps")?,
+                down_mbps: bandwidth("down_mbps")?,
+            })
+        }
         _ => return Err(SkipReason::UnsupportedProtocol),
     };
 
     let transport = transport(fields)?;
+    if protocol == "hysteria2" && transport != Transport::Tcp {
+        return Err(SkipReason::UnsupportedTransport(
+            UnsupportedTransport::Other,
+        ));
+    }
     let tls = tls(protocol, fields)?;
+    if protocol == "hysteria2" && !matches!(tls, TlsMode::Tls(_)) {
+        return Err(SkipReason::UnsupportedSecurity);
+    }
     let mut name = clean(field(fields, "name"), 128);
     if name.is_empty() {
         name = clean(&endpoint(server, port), 128);
@@ -183,12 +253,16 @@ fn transport(fields: &Fields) -> Result<Transport, SkipReason> {
 }
 
 fn tls(protocol: &str, fields: &Fields) -> Result<TlsMode, SkipReason> {
-    let security = fields
-        .get("security")
-        .map(String::as_str)
-        .unwrap_or(if protocol == "trojan" { "tls" } else { "" });
+    let security = fields.get("security").map(String::as_str).unwrap_or(
+        if matches!(protocol, "trojan" | "hysteria2") {
+            "tls"
+        } else {
+            ""
+        },
+    );
 
     match security {
+        "" | "none" if protocol == "hysteria2" => Err(SkipReason::UnsupportedSecurity),
         "" | "none" => Ok(TlsMode::Plain),
         "tls" => Ok(TlsMode::Tls(TlsParams {
             sni: optional(fields, "sni"),
@@ -246,6 +320,7 @@ pub(crate) fn stable_id(node: &Node) -> String {
         Outbound::Vmess(_) => "vmess",
         Outbound::Trojan(_) => "trojan",
         Outbound::Shadowsocks(_) => "ss",
+        Outbound::Hysteria2(_) => "hysteria2",
         Outbound::Unknown { .. } => "unknown",
     };
     let (transport, path, host, service) = match &node.stream.transport {

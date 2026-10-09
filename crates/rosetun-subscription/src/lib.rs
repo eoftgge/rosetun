@@ -110,6 +110,8 @@ pub enum SkipReason {
     MissingRealityPublicKey,
     ShadowsocksPlugin,
     UnsupportedShadowsocksMethod,
+    UnsupportedObfs,
+    UnsupportedPin,
     ServiceRecord,
 }
 
@@ -142,6 +144,8 @@ impl fmt::Display for SkipReason {
             Self::UnsupportedShadowsocksMethod => {
                 f.write_str("Shadowsocks method is not supported")
             }
+            Self::UnsupportedObfs => f.write_str("Hysteria2 obfuscation type is not supported"),
+            Self::UnsupportedPin => f.write_str("Hysteria2 certificate pin is not supported"),
             Self::ServiceRecord => f.write_str("record contains a provider notice"),
         }
     }

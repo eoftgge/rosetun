@@ -2,7 +2,7 @@ use serde_json::Value;
 use url::{Host, Url};
 
 use crate::common::{
-    Fields, build, clean, decode_base64, is_service_address, percent_decode, truth,
+    Fields, build, clean, decode_base64, hysteria_ports, is_service_address, percent_decode, truth,
 };
 use crate::{Entry, Record, SkipReason};
 
@@ -17,6 +17,7 @@ pub(crate) fn parse(line: &str) -> Record {
     }
     let result = match scheme.as_str() {
         "vless" | "trojan" => ordinary(line, &scheme),
+        "hysteria2" | "hy2" => hysteria2(rest),
         "vmess" => vmess(rest),
         "ss" => shadowsocks(rest),
         "happ" | "incy" | "v2raytun" | "hiddify" | "streisand" | "sing-box" => {
@@ -132,6 +133,63 @@ fn endpoint_fields(url: &Url) -> Result<Fields, SkipReason> {
             percent_decode(url.fragment().unwrap_or("")),
         ),
     ]))
+}
+
+fn hysteria2(rest: &str) -> Result<rosetun_config::Node, SkipReason> {
+    let (address, fragment) = rest.split_once('#').unwrap_or((rest, ""));
+    let (address, query) = address.split_once('?').unwrap_or((address, ""));
+    let address = address.split_once('/').map_or(address, |(value, _)| value);
+    let (password, endpoint) = address.rsplit_once('@').ok_or(SkipReason::MissingField)?;
+    let (host, ports) = if let Some(host) = endpoint.strip_prefix('[') {
+        let closing = host.find(']').ok_or(SkipReason::MissingField)?;
+        let remainder = &host[closing + 1..];
+        if !remainder.is_empty() && !remainder.starts_with(':') {
+            return Err(SkipReason::InvalidRecord);
+        }
+        (
+            &endpoint[..closing + 2],
+            remainder.strip_prefix(':').unwrap_or(remainder),
+        )
+    } else {
+        endpoint.rsplit_once(':').unwrap_or((endpoint, ""))
+    };
+    if host.is_empty() || password.is_empty() {
+        return Err(SkipReason::MissingField);
+    }
+
+    let query: Fields = url::form_urlencoded::parse(query.as_bytes())
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    let ports = match (ports.is_empty(), query.get("mport")) {
+        (true, Some(value)) => value.clone(),
+        (false, Some(value)) if !value.is_empty() => format!("{ports},{value}"),
+        _ => ports.to_owned(),
+    };
+    let (port, ranges) = hysteria_ports(&ports)?;
+    let url =
+        Url::parse(&format!("hysteria2://{host}:{port}")).map_err(|_| SkipReason::InvalidRecord)?;
+    let mut fields = endpoint_fields(&url)?;
+    fields.insert("name".into(), percent_decode(fragment));
+    fields.insert("password".into(), percent_decode(password));
+    fields.insert("port_ranges".into(), ranges.join(","));
+    for (source, target) in [
+        ("sni", "sni"),
+        ("alpn", "alpn"),
+        ("fp", "fingerprint"),
+        ("obfs", "obfs"),
+        ("obfs-password", "obfs_password"),
+        ("upmbps", "up_mbps"),
+        ("downmbps", "down_mbps"),
+        ("pinSHA256", "pin"),
+    ] {
+        if let Some(value) = query.get(source) {
+            fields.insert(target.into(), value.clone());
+        }
+    }
+    if query.get("insecure").is_some_and(|value| truth(value)) {
+        fields.insert("insecure".into(), "true".into());
+    }
+    build("hysteria2", &fields)
 }
 
 fn vmess(rest: &str) -> Result<rosetun_config::Node, SkipReason> {

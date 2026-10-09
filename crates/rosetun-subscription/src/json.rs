@@ -1,9 +1,10 @@
 use serde_json::Value;
 
-use crate::common::{Fields, build, clean, is_service_address};
+use crate::common::{Fields, build, clean, hysteria_ports, is_service_address};
 use crate::{Entry, Format, ParseError, Record, SkipReason};
 
-const PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks"];
+const PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks", "hysteria2"];
+const XRAY_PROTOCOLS: &[&str] = &["vless", "vmess", "trojan", "shadowsocks"];
 
 pub(crate) fn format(value: &Value) -> Result<Format, ParseError> {
     if value.is_array() {
@@ -60,7 +61,7 @@ fn xray(config: &Value) -> Record {
         outbound
             .get("protocol")
             .and_then(Value::as_str)
-            .is_some_and(|protocol| PROTOCOLS.contains(&protocol))
+            .is_some_and(|protocol| XRAY_PROTOCOLS.contains(&protocol))
     };
     let outbound = outbounds
         .iter()
@@ -226,9 +227,61 @@ fn sing_box(outbound: &Value) -> Record {
         fields.insert("plugin".to_owned(), String::new());
     }
 
+    if protocol == "hysteria2" {
+        if let Some(value) = outbound.get("server_ports") {
+            let ports = match value {
+                Value::String(value) => value.clone(),
+                Value::Array(values) => {
+                    let Some(values) = values.iter().map(Value::as_str).collect::<Option<Vec<_>>>()
+                    else {
+                        return (
+                            Some(scheme.to_owned()),
+                            Entry::Skip(SkipReason::InvalidPort),
+                        );
+                    };
+                    values.join(",")
+                }
+                _ => {
+                    return (
+                        Some(scheme.to_owned()),
+                        Entry::Skip(SkipReason::InvalidPort),
+                    );
+                }
+            };
+            if !ports.is_empty() {
+                let (port, ranges) = match hysteria_ports(&ports) {
+                    Ok(ports) => ports,
+                    Err(reason) => return (Some(scheme.to_owned()), Entry::Skip(reason)),
+                };
+                fields.insert("port".into(), port.to_string());
+                fields.insert("port_ranges".into(), ranges.join(","));
+            }
+        }
+        for (source, target) in [("up_mbps", "up_mbps"), ("down_mbps", "down_mbps")] {
+            put(&mut fields, target, outbound.get(source));
+        }
+        let obfs = &outbound["obfs"];
+        put(&mut fields, "obfs", obfs.get("type"));
+        put(&mut fields, "obfs_password", obfs.get("password"));
+    }
+
     fields.insert("security".to_owned(), "none".to_owned());
     let tls = &outbound["tls"];
-    if tls.get("enabled").and_then(Value::as_bool) == Some(true) {
+    if protocol == "hysteria2" {
+        if !tls.is_object() || tls.get("enabled").and_then(Value::as_bool) == Some(false) {
+            return (
+                Some(scheme.to_owned()),
+                Entry::Skip(SkipReason::UnsupportedSecurity),
+            );
+        }
+        if tls.get("certificate_public_key_sha256").is_some() {
+            return (
+                Some(scheme.to_owned()),
+                Entry::Skip(SkipReason::UnsupportedPin),
+            );
+        }
+    }
+    if protocol == "hysteria2" || tls.get("enabled").and_then(Value::as_bool) == Some(true) {
         fields.insert("security".to_owned(), "tls".to_owned());
         for (source, target) in [
             ("server_name", "sni"),
