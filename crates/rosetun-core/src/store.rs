@@ -2,9 +2,12 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rosetun_config::{AppConfig, ConfigError};
+use rosetun_config::{AppConfig, ConfigError, FormatError, from_json};
+
+static NEXT_BACKUP_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(thiserror::Error)]
 pub enum StoreError {
@@ -24,6 +27,8 @@ pub enum StoreError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("unexpected value in the configuration at {}", path.display())]
+    Format { path: PathBuf },
     #[error("invalid configuration in {}: {source}", path.display())]
     Invalid {
         path: PathBuf,
@@ -75,8 +80,21 @@ impl Store {
             .write_lock
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let mut config = self.load().map_err(E::from)?;
+        let LoadedConfig {
+            mut config,
+            original,
+            migrated_from,
+        } = load_with_source(&self.path).map_err(E::from)?;
         let result = change(&mut config)?;
+        config.validate().map_err(|source| {
+            E::from(StoreError::Invalid {
+                path: self.path.clone(),
+                source,
+            })
+        })?;
+        if let (Some(original), Some(version)) = (original, migrated_from) {
+            backup(&self.path, version, &original).map_err(E::from)?;
+        }
         save(&self.path, &config).map_err(E::from)?;
         Ok(result)
     }
@@ -110,11 +128,25 @@ fn config_path_with(
     Ok(directory.join("rosetun").join("config.json"))
 }
 
+struct LoadedConfig {
+    config: AppConfig,
+    original: Option<Vec<u8>>,
+    migrated_from: Option<u32>,
+}
+
 fn load(path: &Path) -> Result<AppConfig, StoreError> {
+    Ok(load_with_source(path)?.config)
+}
+
+fn load_with_source(path: &Path) -> Result<LoadedConfig, StoreError> {
     let contents = match fs::read(path) {
         Ok(contents) => contents,
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
-            return Ok(AppConfig::default());
+            return Ok(LoadedConfig {
+                config: AppConfig::default(),
+                original: None,
+                migrated_from: None,
+            });
         }
         Err(source) => {
             return Err(StoreError::Io {
@@ -124,19 +156,125 @@ fn load(path: &Path) -> Result<AppConfig, StoreError> {
         }
     };
 
-    let contents = contents.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&contents);
-    let config: AppConfig =
-        serde_json::from_slice(contents).map_err(|source| StoreError::Parse {
+    let json = contents.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&contents);
+    let (config, migrated_from) = from_json(json).map_err(|error| match error {
+        FormatError::Json(source) => StoreError::Parse {
             path: path.to_owned(),
             source,
-        })?;
-
-    config.validate().map_err(|source| StoreError::Invalid {
-        path: path.to_owned(),
-        source,
+        },
+        FormatError::UnexpectedValue => StoreError::Format {
+            path: path.to_owned(),
+        },
+        FormatError::Config(source) => StoreError::Invalid {
+            path: path.to_owned(),
+            source,
+        },
     })?;
 
-    Ok(config)
+    Ok(LoadedConfig {
+        config,
+        original: Some(contents),
+        migrated_from,
+    })
+}
+
+fn backup_path(path: &Path, version: u32) -> Result<PathBuf, StoreError> {
+    let stem = path.file_stem().ok_or_else(|| StoreError::Io {
+        path: path.to_owned(),
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "configuration path must name a file",
+        ),
+    })?;
+    let mut name = stem.to_os_string();
+    name.push(format!(".v{version}"));
+    if let Some(extension) = path.extension()
+        && !extension.is_empty()
+    {
+        name.push(".");
+        name.push(extension);
+    }
+    Ok(path.with_file_name(name))
+}
+
+fn existing_backup(path: &Path) -> Result<bool, StoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(true),
+        Ok(_) => Err(StoreError::Io {
+            path: path.to_owned(),
+            source: io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "backup path is not a regular file",
+            ),
+        }),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(StoreError::Io {
+            path: path.to_owned(),
+            source,
+        }),
+    }
+}
+
+fn backup(path: &Path, version: u32, contents: &[u8]) -> Result<(), StoreError> {
+    let destination = backup_path(path, version)?;
+    if existing_backup(&destination)? {
+        return Ok(());
+    }
+
+    let (temporary_path, mut file) = loop {
+        let mut name = destination
+            .file_name()
+            .expect("backup has a file name")
+            .to_os_string();
+        let sequence = NEXT_BACKUP_TEMP.fetch_add(1, Ordering::Relaxed);
+        name.push(format!(".tmp-{}-{sequence}", std::process::id()));
+        let temporary_path = destination.with_file_name(name);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&temporary_path) {
+            Ok(file) => break (temporary_path, file),
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(StoreError::Io {
+                    path: temporary_path,
+                    source,
+                });
+            }
+        }
+    };
+
+    let write_result = file.write_all(contents).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(source) = write_result {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(StoreError::Io {
+            path: temporary_path,
+            source,
+        });
+    }
+
+    // Unlike rename on Unix, hard-link publication cannot replace an existing backup.
+    let publish_result = fs::hard_link(&temporary_path, &destination).or_else(|source| {
+        if source.kind() == io::ErrorKind::AlreadyExists && existing_backup(&destination)? {
+            Ok(())
+        } else {
+            Err(StoreError::Io {
+                path: destination.clone(),
+                source,
+            })
+        }
+    });
+    let cleanup_result = fs::remove_file(&temporary_path).map_err(|source| StoreError::Io {
+        path: temporary_path,
+        source,
+    });
+    publish_result?;
+    cleanup_result
 }
 
 fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
@@ -899,12 +1037,145 @@ mod tests {
     }
 
     #[test]
+    fn migrating_a_legacy_file_keeps_its_original_bytes_only_once() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let backup = directory.path.join("config.v1.json");
+        let original = b"\xef\xbb\xbf{\n  \"version\": 1, \"settings\": {\"kill_switch\": true}\n}";
+        fs::write(store.path(), original).unwrap();
+
+        assert!(store.load().unwrap().settings.kill_switch);
+        assert!(!backup.exists());
+        assert_eq!(fs::read(store.path()).unwrap(), original);
+
+        store
+            .modify(|config| {
+                config.interface.scale_percent = 125;
+                Ok::<_, StoreError>(())
+            })
+            .unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        assert_eq!(store.load().unwrap().version, CONFIG_VERSION);
+        assert!(store.load().unwrap().settings.kill_switch);
+        assert_eq!(store.load().unwrap().interface.scale_percent, 125);
+
+        store
+            .modify(|config| {
+                config.interface.scale_percent = 150;
+                Ok::<_, StoreError>(())
+            })
+            .unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        assert_eq!(store.load().unwrap().interface.scale_percent, 150);
+    }
+
+    #[test]
+    fn existing_backup_is_never_overwritten() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let backup = directory.path.join("config.v1.json");
+        fs::write(store.path(), br#"{"version":1}"#).unwrap();
+        fs::write(&backup, b"earlier backup").unwrap();
+
+        store.modify(|_| Ok::<_, StoreError>(())).unwrap();
+
+        assert_eq!(fs::read(&backup).unwrap(), b"earlier backup");
+        assert_eq!(store.load().unwrap().version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn an_occupied_backup_path_prevents_migration_without_changing_the_source() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let original = br#"{"version":1}"#;
+        fs::write(store.path(), original).unwrap();
+        fs::create_dir(directory.path.join("config.v1.json")).unwrap();
+
+        let result = store.modify(|_| Ok::<_, StoreError>(()));
+
+        assert!(matches!(result, Err(StoreError::Io { .. })));
+        assert_eq!(fs::read(store.path()).unwrap(), original);
+        assert!(!directory.path.join("config.v1.json.tmp").exists());
+    }
+
+    #[test]
+    fn current_version_and_rejected_legacy_changes_do_not_create_backups() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let backup = directory.path.join("config.v1.json");
+        let original = br#"{"version":1}"#;
+        fs::write(store.path(), original).unwrap();
+
+        let result = store.modify(|_| Err::<(), _>(StoreError::NoConfigDir));
+        assert!(matches!(result, Err(StoreError::NoConfigDir)));
+        assert_eq!(fs::read(store.path()).unwrap(), original);
+        assert!(!backup.exists());
+
+        save(store.path(), &AppConfig::default()).unwrap();
+        store.modify(|_| Ok::<_, StoreError>(())).unwrap();
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn custom_filename_gets_a_neighboring_versioned_backup() {
+        let directory = TestDirectory::new();
+        let path = directory.path.join("custom.json");
+        let store = Store::at(&path);
+        let original = br#"{"version":1}"#;
+        fs::write(&path, original).unwrap();
+
+        store.modify(|_| Ok::<_, StoreError>(())).unwrap();
+
+        assert_eq!(
+            fs::read(directory.path.join("custom.v1.json")).unwrap(),
+            original
+        );
+        assert_eq!(store.load().unwrap().version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn invalid_versions_never_change_the_source_or_create_a_backup() {
+        for version in ["0", "-1", "\"1\"", "1.0", "4294967296"] {
+            let directory = TestDirectory::new();
+            let store = Store::at(directory.config_path());
+            let original = format!("{{\"version\":{version}}}");
+            fs::write(store.path(), &original).unwrap();
+
+            assert!(matches!(
+                store.modify(|_| Ok::<_, StoreError>(())),
+                Err(StoreError::Format { .. })
+            ));
+            assert_eq!(fs::read_to_string(store.path()).unwrap(), original);
+            assert!(!directory.path.join("config.v1.json").exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrated_backup_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        fs::write(store.path(), br#"{"version":1}"#).unwrap();
+
+        store.modify(|_| Ok::<_, StoreError>(())).unwrap();
+
+        let mode = fs::metadata(directory.path.join("config.v1.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
     fn future_version_is_invalid() {
         let directory = TestDirectory::new();
         let path = directory.config_path();
         let found = CONFIG_VERSION + 1;
 
-        fs::write(&path, format!(r#"{{"version":{found}}}"#)).unwrap();
+        let original = format!(r#"{{"version":{found}}}"#);
+        fs::write(&path, &original).unwrap();
 
         match load(&path) {
             Err(StoreError::Invalid {
@@ -921,6 +1192,15 @@ mod tests {
             }
             result => panic!("expected unsupported version error, got {result:?}"),
         }
+        assert!(matches!(
+            Store::at(&path).modify(|_| Ok::<_, StoreError>(())),
+            Err(StoreError::Invalid {
+                source: ConfigError::UnsupportedVersion { .. },
+                ..
+            })
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert!(!directory.path.join("config.v1.json").exists());
     }
 
     #[test]

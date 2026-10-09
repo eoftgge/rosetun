@@ -203,7 +203,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use rosetun_config::{AppConfig, DnsSettings, LogLevel};
+    use rosetun_config::{AppConfig, CONFIG_VERSION, DnsSettings, LogLevel};
 
     use super::*;
 
@@ -313,6 +313,7 @@ mod tests {
             }"#,
         )
         .unwrap();
+        before.version = CONFIG_VERSION;
         before.settings.dns = DnsPreset::Google.settings();
         before.settings.kill_switch = true;
         before.settings.auto_reconnect = false;
