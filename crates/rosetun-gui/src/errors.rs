@@ -338,6 +338,7 @@ pub(crate) fn client(s: &Strings, error: &ClientError) -> String {
                 ErrorCode::ServerRejected => s.errors.code_server_rejected,
                 ErrorCode::ServerClosed => s.errors.code_server_closed,
                 ErrorCode::DnsTimeout => s.errors.code_dns_timeout,
+                ErrorCode::Cancelled => s.errors.code_cancelled,
                 ErrorCode::RoutingFailed => s.errors.code_routing_failed,
                 ErrorCode::Busy => s.errors.code_busy,
                 ErrorCode::InvalidState => s.errors.code_invalid_state,

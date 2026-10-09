@@ -102,6 +102,7 @@ pub(crate) static RU: Strings = Strings {
         code_server_rejected: "сервер отклонил подключение",
         code_server_closed: "сервер закрыл подключение",
         code_dns_timeout: "DNS через туннель не ответил",
+        code_cancelled: "подключение отменено",
         code_routing_failed: "не удалось настроить маршрутизацию",
         code_busy: "служба занята другой операцией",
         code_invalid_state: "в текущем состоянии туннеля это невозможно",

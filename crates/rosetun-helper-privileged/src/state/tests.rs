@@ -1340,7 +1340,7 @@ fn status_answers_while_connect_holds_the_session() {
 }
 
 #[test]
-fn second_operation_reports_busy() {
+fn disconnect_cancels_while_a_second_connect_reports_busy() {
     let (entered, entered_rx) = channel();
     let (release_tx, release) = channel();
     let received_plan = Arc::new(Mutex::new(None));
@@ -1366,14 +1366,20 @@ fn second_operation_reports_busy() {
     };
 
     entered_rx.recv().expect("connect reached routing apply");
-    let error = helper.disconnect().expect_err("session is held");
+    let error = helper
+        .connect(&connect_request())
+        .expect_err("session is held");
     assert_eq!(error.code, ErrorCode::Busy);
+    helper
+        .disconnect()
+        .expect("disconnect accepts cancellation");
 
     release_tx.send(()).expect("release apply");
-    worker
-        .join()
-        .expect("worker thread")
-        .expect("connect succeeds");
+    assert_eq!(
+        worker.join().expect("worker thread").unwrap_err().code,
+        ErrorCode::Cancelled
+    );
+    assert_eq!(helper.status(), Status::default());
 }
 
 #[test]
@@ -3354,4 +3360,177 @@ fn tunnel_delay_requires_connection_and_uses_its_control() {
     assert_eq!(stopped.load(Ordering::Acquire), 1);
     std::fs::remove_file(dir.join("config.json")).unwrap();
     std::fs::remove_dir(dir).unwrap();
+}
+
+#[derive(Debug)]
+struct CancellableEngine {
+    ready: Arc<AtomicBool>,
+    stopped: Arc<AtomicUsize>,
+    dns: Option<SocketAddr>,
+}
+
+impl EngineBackend for CancellableEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+    fn capabilities(&self) -> EngineCapabilities {
+        StubEngine.capabilities()
+    }
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        StubEngine.locate_binary()
+    }
+    fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        StubEngine.render(request)
+    }
+    fn tunnel_dns_server(&self, _: &rosetun_config::TunSettings) -> Option<SocketAddr> {
+        self.dns
+    }
+    fn spawn(&self, _: &Path, _: &RenderedConfig) -> Result<Box<dyn EngineProcess>, EngineError> {
+        Ok(Box::new(CancellableProcess {
+            ready: Arc::clone(&self.ready),
+            stopped: Arc::clone(&self.stopped),
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct CancellableProcess {
+    ready: Arc<AtomicBool>,
+    stopped: Arc<AtomicUsize>,
+}
+
+impl EngineProcess for CancellableProcess {
+    fn is_running(&mut self) -> Result<bool, EngineError> {
+        Ok(true)
+    }
+    fn is_ready(&mut self) -> Result<bool, EngineError> {
+        Ok(self.ready.load(Ordering::Acquire))
+    }
+    fn stop(&mut self) -> Result<(), EngineError> {
+        self.stopped.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+}
+
+fn wait_for_stage(helper: &Helper, expected: rosetun_config::ConnectStage) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while helper.status().connect_stage != Some(expected) {
+        assert!(
+            Instant::now() < deadline,
+            "startup never reached {expected:?}"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn cancellation_at_each_stage_releases_the_session_and_guard() {
+    use super::dns::test_support::{Behavior, Server};
+    use rosetun_config::ConnectStage;
+    for stage in [
+        ConnectStage::WaitingForAdapter,
+        ConnectStage::StartingEngine,
+        ConnectStage::CheckingServer,
+    ] {
+        let dns = Server::new(Behavior::Silent);
+        let ready = Arc::new(AtomicBool::new(stage != ConnectStage::StartingEngine));
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let reverted = Arc::new(AtomicUsize::new(0));
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(CancellableEngine {
+            ready: Arc::clone(&ready),
+            stopped: Arc::clone(&stopped),
+            dns: (stage == ConnectStage::CheckingServer).then_some(dns.address()),
+        }));
+        let helper = Arc::new(Helper::new(
+            engines,
+            Box::new(CountingRouting {
+                reverted: Arc::clone(&reverted),
+            }),
+            VerboseGate::default(),
+        ));
+        if stage == ConnectStage::WaitingForAdapter {
+            helper.session().unwrap().adapter_lookup = |_| Ok(true);
+        }
+        let mut request = connect_request();
+        request.settings.kill_switch = true;
+        let worker = {
+            let helper = Arc::clone(&helper);
+            let request = request.clone();
+            thread::spawn(move || helper.connect(&request))
+        };
+        wait_for_stage(&helper, stage);
+        helper
+            .disconnect()
+            .expect("cancellation is accepted while startup owns session");
+        assert_eq!(
+            worker.join().unwrap().unwrap_err().code,
+            ErrorCode::Cancelled
+        );
+        assert_eq!(helper.status(), Status::default());
+        let session = helper.session().expect("session lock is released");
+        assert!(session.guard.is_none());
+        assert!(session.process.is_none());
+        assert!(session.request.is_none());
+        drop(session);
+        if stage != ConnectStage::WaitingForAdapter {
+            assert_eq!(reverted.load(Ordering::Acquire), 1);
+        }
+        if stage != ConnectStage::CheckingServer {
+            ready.store(true, Ordering::Release);
+            helper.session().unwrap().adapter_lookup = |_| Ok(false);
+            helper
+                .connect(&request)
+                .expect("the next connection resets cancellation");
+            helper.disconnect().unwrap();
+        }
+    }
+}
+
+#[test]
+fn cancellation_during_protected_apply_does_not_roll_back() {
+    use rosetun_config::ConnectStage;
+    let (helper, controls, _, reverted) = supervised_helper(true);
+    let helper = Arc::new(helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).unwrap();
+    helper.session().unwrap().adapter_lookup = |_| Ok(true);
+    let changed = request_with_new_rules(&request);
+    let worker = {
+        let helper = Arc::clone(&helper);
+        thread::spawn(move || helper.apply(&changed))
+    };
+    wait_for_stage(&helper, ConnectStage::WaitingForAdapter);
+    helper.disconnect().unwrap();
+    assert_eq!(
+        worker.join().unwrap().unwrap_err().code,
+        ErrorCode::Cancelled
+    );
+    assert_eq!(
+        controls.spawns(),
+        1,
+        "apply cancellation must not spawn a rollback engine"
+    );
+    assert_eq!(reverted.load(Ordering::Acquire), 1);
+    assert_eq!(helper.status(), Status::default());
+}
+
+#[test]
+fn accepted_cancellation_cannot_publish_connected() {
+    let (helper, _, _, _) = supervised_helper(false);
+    helper.begin_attempt(ConnectionState::Connecting);
+    let _session = helper.session().unwrap();
+    helper.disconnect().unwrap();
+    assert_eq!(
+        helper
+            .publish_terminal(|status| status.state = ConnectionState::Connected)
+            .unwrap_err()
+            .code,
+        ErrorCode::Cancelled
+    );
+    assert_ne!(helper.status().state, ConnectionState::Connected);
 }

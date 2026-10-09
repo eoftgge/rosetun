@@ -61,6 +61,7 @@ pub struct Helper {
     probe: Mutex<()>,
     shutting_down: AtomicBool,
     resumed: AtomicBool,
+    cancelled: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +109,7 @@ struct Session {
     dns_attempt_timeout: Duration,
     watchdog_timing: WatchdogTiming,
     adapter_lookup: fn(&str) -> std::io::Result<bool>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Helper {
@@ -124,12 +126,14 @@ impl Helper {
     ) -> Self {
         let status = Arc::new(Mutex::new(Status::default()));
         let engines = Arc::new(engines);
+        let cancelled = Arc::new(AtomicBool::new(false));
         Self {
             status: Arc::clone(&status),
             engines: Arc::clone(&engines),
             probe: Mutex::new(()),
             shutting_down: AtomicBool::new(false),
             resumed: AtomicBool::new(false),
+            cancelled: Arc::clone(&cancelled),
             session: Mutex::new(Session {
                 engines,
                 routing,
@@ -148,6 +152,7 @@ impl Helper {
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
                 watchdog_timing: WATCHDOG_TIMING,
+                cancelled,
                 #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
                 #[cfg(test)]
@@ -217,12 +222,14 @@ impl Helper {
                             ConnectionState::Failed { reason }
                         };
                         status.since_unix = None;
+                        status.connect_stage = None;
+                        status.stage_since_unix = None;
                     });
                     session.request = None;
                     return;
                 }
                 tracing::warn!(%reason, protected, "the engine terminated; reconnecting");
-                self.with_status(|status| status.state = ConnectionState::Reconnecting);
+                self.begin_attempt(ConnectionState::Reconnecting);
                 session.reconnect = Some(Reconnect {
                     failures: 0,
                     next_at: now,
@@ -233,7 +240,7 @@ impl Helper {
                     return;
                 }
                 tracing::info!("resumed from sleep; reconnecting tunnel");
-                self.with_status(|status| status.state = ConnectionState::Reconnecting);
+                self.begin_attempt(ConnectionState::Reconnecting);
                 session.reconnect = Some(Reconnect {
                     failures: 0,
                     next_at: now + RESUME_DELAY,
@@ -250,7 +257,7 @@ impl Helper {
                     return;
                 }
                 tracing::warn!("DNS through the tunnel stalled; reconnecting");
-                self.with_status(|status| status.state = ConnectionState::Reconnecting);
+                self.begin_attempt(ConnectionState::Reconnecting);
                 session.reconnect = Some(Reconnect {
                     failures: 0,
                     next_at: now,
@@ -270,23 +277,34 @@ impl Helper {
         } else {
             StartMode::Fresh
         };
-        match session.start(
-            &request.node,
-            &request.effective_rule_set(),
-            &request.settings,
-            mode,
-            None,
-        ) {
-            Ok(()) => {
-                self.with_status(|status| {
+        match session
+            .start(
+                &request.node,
+                &request.effective_rule_set(),
+                &request.settings,
+                mode,
+                None,
+            )
+            .and_then(|()| {
+                self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
                     status.since_unix.get_or_insert_with(now_unix);
-                });
+                })
+            }) {
+            Ok(()) => {
                 session.start_monitor(request.settings.engine);
                 session.start_watchdog();
                 tracing::info!(cause = reconnect.cause, attempt, "tunnel reconnected");
             }
             Err(error) => {
+                if error.code == ErrorCode::Cancelled {
+                    self.finish_cancelled(&mut session);
+                    return;
+                }
+                self.with_status(|status| {
+                    status.connect_stage = None;
+                    status.stage_since_unix = None;
+                });
                 let failures = attempt;
                 if failures < RECONNECT_ATTEMPTS {
                     if let Err(cleanup_error) = session.stop_engine() {
@@ -316,8 +334,13 @@ impl Helper {
                             ConnectionState::Failed { reason }
                         };
                         status.since_unix = None;
+                        status.connect_stage = None;
+                        status.stage_since_unix = None;
                     });
                     session.request = None;
+                }
+                if self.cancelled.load(Ordering::Acquire) {
+                    self.finish_cancelled(&mut session);
                 }
             }
         }
@@ -353,22 +376,25 @@ impl Helper {
 
         session.request = None;
         session.reconnect = None;
-        self.with_status(|status| status.state = ConnectionState::Connecting);
+        self.begin_attempt(ConnectionState::Connecting);
 
-        match session.start(
-            &request.node,
-            &request.effective_rule_set(),
-            &request.settings,
-            mode,
-            None,
-        ) {
-            Ok(()) => {
-                self.with_status(|status| {
+        match session
+            .start(
+                &request.node,
+                &request.effective_rule_set(),
+                &request.settings,
+                mode,
+                None,
+            )
+            .and_then(|()| {
+                self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
                     status.node = Some(request.node.id.clone());
                     status.engine = Some(request.settings.engine);
                     status.since_unix = Some(now_unix());
-                });
+                })
+            }) {
+            Ok(()) => {
                 session.request = Some(request.clone());
                 self.resumed.store(false, Ordering::Release);
                 session.start_monitor(request.settings.engine);
@@ -376,6 +402,10 @@ impl Helper {
                 Ok(())
             }
             Err(error) => {
+                if error.code == ErrorCode::Cancelled {
+                    self.finish_cancelled(&mut session);
+                    return Err(error);
+                }
                 let protected = mode == StartMode::ProtectedReconnect && session.keeps_protection();
                 if protected {
                     if let Err(cleanup_error) = session.stop_engine() {
@@ -389,21 +419,39 @@ impl Helper {
                 }
 
                 let reason = error.message.clone();
-                self.with_status(|status| {
+                if let Err(cancelled) = self.publish_terminal(|status| {
                     status.state = if protected {
                         ConnectionState::FailedProtected { reason }
                     } else {
                         ConnectionState::Failed { reason }
                     };
                     status.since_unix = None;
-                });
+                    status.connect_stage = None;
+                    status.stage_since_unix = None;
+                }) {
+                    self.finish_cancelled(&mut session);
+                    return Err(cancelled);
+                }
                 Err(error)
             }
         }
     }
 
     pub fn disconnect(&self) -> Result<(), HelperError> {
-        let mut session = self.session()?;
+        let mut session = match self.session() {
+            Ok(session) => session,
+            Err(error) if error.code == ErrorCode::Busy => {
+                return self.with_status(|status| {
+                    if status.state.is_transitional() {
+                        self.cancelled.store(true, Ordering::Release);
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                });
+            }
+            Err(error) => return Err(error),
+        };
         session.request = None;
         session.reconnect = None;
         session.teardown();
@@ -460,6 +508,32 @@ impl Helper {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         apply(&mut status)
+    }
+
+    fn begin_attempt(&self, state: ConnectionState) {
+        self.with_status(|status| {
+            self.cancelled.store(false, Ordering::Release);
+            status.state = state;
+            status.connect_stage = None;
+            status.stage_since_unix = None;
+        });
+    }
+
+    fn publish_terminal(&self, publish: impl FnOnce(&mut Status)) -> Result<(), HelperError> {
+        self.with_status(|status| {
+            check_cancelled(&self.cancelled)?;
+            publish(status);
+            status.connect_stage = None;
+            status.stage_since_unix = None;
+            Ok(())
+        })
+    }
+
+    fn finish_cancelled(&self, session: &mut Session) {
+        session.request = None;
+        session.reconnect = None;
+        session.teardown();
+        self.with_status(|status| *status = Status::default());
     }
 }
 
@@ -619,6 +693,17 @@ fn rates(previous: (TrafficTotals, Instant), current: (TrafficTotals, Instant)) 
 }
 
 impl Session {
+    fn stage(&self, stage: rosetun_config::ConnectStage) -> Result<(), HelperError> {
+        let mut status = self
+            .status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        check_cancelled(&self.cancelled)?;
+        status.connect_stage = Some(stage);
+        status.stage_since_unix = Some(now_unix());
+        Ok(())
+    }
+
     /// Only the kill switch keeps blocking after a failure. The DNS lock goes
     /// with the session.
     fn keeps_protection(&self) -> bool {
@@ -639,12 +724,15 @@ impl Session {
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
 
-        wait_for_previous_adapter(
+        self.stage(rosetun_config::ConnectStage::WaitingForAdapter)?;
+        wait_for_previous_adapter_cancellable(
             &settings.tun.name,
             Duration::from_secs(20),
             Duration::from_millis(250),
             self.adapter_lookup,
+            &self.cancelled,
         )?;
+        self.stage(rosetun_config::ConnectStage::StartingEngine)?;
 
         if mode == StartMode::Fresh
             && let Some(guard) = self.guard.take()
@@ -792,6 +880,7 @@ impl Session {
 
         tracing::info!(engine = %backend.kind().as_str(), "spawning tunnel engine");
         let spawned_at = Instant::now();
+        check_cancelled(&self.cancelled)?;
         self.process = Some(
             backend
                 .spawn(&binary, &config)
@@ -805,6 +894,7 @@ impl Session {
                 .expect("engine process was stored before readiness")
                 .as_mut(),
             spawned_at,
+            &self.cancelled,
         )?;
         tracing::info!("engine startup readiness confirmed");
 
@@ -846,16 +936,23 @@ impl Session {
         }
 
         if let Some(server) = dns_server {
+            self.stage(rosetun_config::ConnectStage::CheckingServer)?;
             let process = self.process.as_mut().ok_or_else(|| {
                 HelperError::new(
                     ErrorCode::EngineFailed,
                     "engine process disappeared before DNS check",
                 )
             })?;
-            dns::check_observed(server, self.dns_timeout, self.dns_attempt_timeout, || {
-                let running = process.is_running()?;
-                Ok((running, process.outbound_failures()))
-            })?;
+            dns::check_cancellable(
+                server,
+                self.dns_timeout,
+                self.dns_attempt_timeout,
+                || {
+                    let running = process.is_running()?;
+                    Ok((running, process.outbound_failures()))
+                },
+                || self.cancelled.load(Ordering::Acquire),
+            )?;
             self.tunnel_dns = Some(server);
         } else {
             tracing::info!(
@@ -869,7 +966,7 @@ impl Session {
             server: normalize_server(&node.server),
             address,
         });
-        Ok(())
+        check_cancelled(&self.cancelled)
     }
 
     fn start_monitor(&mut self, kind: rosetun_config::EngineKind) {
@@ -901,6 +998,7 @@ impl Session {
         let deadline = Instant::now() + TUNNEL_READY_TIMEOUT;
 
         loop {
+            check_cancelled(&self.cancelled)?;
             let running = self
                 .process
                 .as_mut()
@@ -1040,15 +1138,38 @@ fn render_config(
     Ok(config)
 }
 
+#[cfg(test)]
 fn wait_for_previous_adapter(
     alias: &str,
     timeout: Duration,
     interval: Duration,
+    lookup: impl FnMut(&str) -> std::io::Result<bool>,
+) -> Result<(), HelperError> {
+    wait_for_previous_adapter_cancellable(alias, timeout, interval, lookup, &AtomicBool::new(false))
+}
+
+fn check_cancelled(cancelled: &AtomicBool) -> Result<(), HelperError> {
+    if cancelled.load(Ordering::Acquire) {
+        Err(HelperError::new(
+            ErrorCode::Cancelled,
+            "connection cancelled",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn wait_for_previous_adapter_cancellable(
+    alias: &str,
+    timeout: Duration,
+    interval: Duration,
     mut lookup: impl FnMut(&str) -> std::io::Result<bool>,
+    cancelled: &AtomicBool,
 ) -> Result<(), HelperError> {
     let started = Instant::now();
     let mut waiting = false;
     loop {
+        check_cancelled(cancelled)?;
         match lookup(alias) {
             Ok(false) => {
                 if waiting {
@@ -1093,14 +1214,16 @@ fn startup_timeout(hints: rosetun_engine::StartupHints) -> Duration {
 }
 
 fn wait_for_engine_ready(process: &mut dyn EngineProcess) -> Result<(), HelperError> {
-    wait_for_engine_ready_from(process, Instant::now())
+    wait_for_engine_ready_from(process, Instant::now(), &AtomicBool::new(false))
 }
 
 fn wait_for_engine_ready_from(
     process: &mut dyn EngineProcess,
     spawned_at: Instant,
+    cancelled: &AtomicBool,
 ) -> Result<(), HelperError> {
     loop {
+        check_cancelled(cancelled)?;
         let running = process
             .is_running()
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;

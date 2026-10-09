@@ -708,7 +708,10 @@ fn reported_by_status(error: &HelperCommandError) -> bool {
     matches!(
         error,
         HelperCommandError::Client(ClientError::Helper(HelperError {
-            code: ErrorCode::EngineFailed | ErrorCode::RoutingFailed | ErrorCode::UnsupportedRules,
+            code: ErrorCode::EngineFailed
+                | ErrorCode::RoutingFailed
+                | ErrorCode::UnsupportedRules
+                | ErrorCode::Cancelled,
             ..
         }))
     )
@@ -1382,6 +1385,16 @@ impl State {
                     Err(error) => {
                         if let Some(before) = before {
                             self.temporary_rules = before;
+                        }
+                        if matches!(
+                            &error,
+                            HelperCommandError::Client(ClientError::Helper(HelperError {
+                                code: ErrorCode::Cancelled,
+                                ..
+                            }))
+                        ) {
+                            self.operation_error = None;
+                            return;
                         }
                         let reason = errors::helper_command(t(), &error);
                         self.operation_error = Some(self.text(&t().apply_failed(&reason)));

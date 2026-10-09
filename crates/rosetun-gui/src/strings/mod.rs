@@ -173,6 +173,7 @@ pub(crate) struct ErrorStrings {
     pub(crate) code_server_rejected: &'static str,
     pub(crate) code_server_closed: &'static str,
     pub(crate) code_dns_timeout: &'static str,
+    pub(crate) code_cancelled: &'static str,
     pub(crate) code_routing_failed: &'static str,
     pub(crate) code_busy: &'static str,
     pub(crate) code_invalid_state: &'static str,

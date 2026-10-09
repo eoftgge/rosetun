@@ -258,11 +258,22 @@ pub(super) fn check(
     })
 }
 
+#[cfg(test)]
 pub(super) fn check_observed(
     server: SocketAddr,
     timeout: Duration,
     attempt_timeout: Duration,
+    observe: impl FnMut() -> Result<(bool, rosetun_engine::OutboundFailures), EngineError>,
+) -> Result<(), HelperError> {
+    check_cancellable(server, timeout, attempt_timeout, observe, || false)
+}
+
+pub(super) fn check_cancellable(
+    server: SocketAddr,
+    timeout: Duration,
+    attempt_timeout: Duration,
     mut observe: impl FnMut() -> Result<(bool, rosetun_engine::OutboundFailures), EngineError>,
+    stopped: impl Fn() -> bool,
 ) -> Result<(), HelperError> {
     let mut initial = None;
     let failure = std::cell::Cell::new(None);
@@ -290,6 +301,12 @@ pub(super) fn check_observed(
     let packet = query(id, &[b"example", b"com"]);
 
     while Instant::now() < deadline {
+        if stopped() {
+            return Err(HelperError::new(
+                ErrorCode::Cancelled,
+                "connection cancelled",
+            ));
+        }
         ensure_running(&mut is_running)?;
 
         let attempt_deadline = (Instant::now() + attempt_timeout).min(deadline);
@@ -302,11 +319,17 @@ pub(super) fn check_observed(
             id,
             attempt_deadline,
             &mut buffer,
-            || match ensure_running(&mut is_running) {
-                Ok(()) => false,
-                Err(error) => {
-                    polling_error = Some(error);
+            || {
+                if stopped() {
                     true
+                } else {
+                    match ensure_running(&mut is_running) {
+                        Ok(()) => false,
+                        Err(error) => {
+                            polling_error = Some(error);
+                            true
+                        }
+                    }
                 }
             },
         )?;
@@ -322,6 +345,12 @@ pub(super) fn check_observed(
             return Ok(());
         }
 
+        if stopped() {
+            return Err(HelperError::new(
+                ErrorCode::Cancelled,
+                "connection cancelled",
+            ));
+        }
         if let Some(error) = polling_error.take() {
             return Err(error);
         }
@@ -349,7 +378,19 @@ pub(super) fn check_observed(
         }
 
         // Pace immediate negative replies instead of flooding the resolver.
-        std::thread::sleep(attempt_deadline.saturating_duration_since(Instant::now()));
+        while Instant::now() < attempt_deadline {
+            if stopped() {
+                return Err(HelperError::new(
+                    ErrorCode::Cancelled,
+                    "connection cancelled",
+                ));
+            }
+            std::thread::sleep(
+                attempt_deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(250)),
+            );
+        }
     }
 
     ensure_running(&mut is_running)?;

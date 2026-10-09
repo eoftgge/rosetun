@@ -102,6 +102,7 @@ pub(crate) static EN: Strings = Strings {
         code_server_rejected: "the server rejected the connection",
         code_server_closed: "the server closed the connection",
         code_dns_timeout: "DNS through the tunnel did not answer",
+        code_cancelled: "connection cancelled",
         code_routing_failed: "routing setup failed",
         code_busy: "the service is busy with another operation",
         code_invalid_state: "the tunnel is not in a state that allows this",

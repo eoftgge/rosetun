@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{EngineKind, NodeId};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectStage {
+    WaitingForAdapter,
+    StartingEngine,
+    CheckingServer,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionState {
@@ -39,6 +47,10 @@ pub struct Traffic {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Status {
     pub state: ConnectionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_stage: Option<ConnectStage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_since_unix: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<NodeId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

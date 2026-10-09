@@ -202,6 +202,7 @@ pub enum ErrorCode {
     ServerRejected,
     ServerClosed,
     DnsTimeout,
+    Cancelled,
     RoutingFailed,
     Busy,
     InvalidState,

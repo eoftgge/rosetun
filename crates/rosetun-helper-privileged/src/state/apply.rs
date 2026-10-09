@@ -108,24 +108,27 @@ impl Helper {
             dns = current.settings.dns != request.settings.dns,
             "applying session changes"
         );
-        self.with_status(|status| status.state = ConnectionState::Reconnecting);
+        self.begin_attempt(ConnectionState::Reconnecting);
         let mode = if session.guard.is_some() {
             StartMode::ProtectedReconnect
         } else {
             StartMode::Fresh
         };
-        match session.start(
-            &request.node,
-            &request.effective_rule_set(),
-            &request.settings,
-            mode,
-            Some(endpoint),
-        ) {
-            Ok(()) => {
-                self.with_status(|status| {
+        match session
+            .start(
+                &request.node,
+                &request.effective_rule_set(),
+                &request.settings,
+                mode,
+                Some(endpoint),
+            )
+            .and_then(|()| {
+                self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
                     status.node = Some(request.node.id.clone());
-                });
+                })
+            }) {
+            Ok(()) => {
                 session.request = Some(request.clone());
                 self.resumed.store(false, Ordering::Release);
                 session.start_monitor(request.settings.engine);
@@ -134,20 +137,27 @@ impl Helper {
                 Ok(())
             }
             Err(error) => {
+                if error.code == ErrorCode::Cancelled {
+                    self.finish_cancelled(&mut session);
+                    return Err(error);
+                }
                 tracing::warn!(code = ?error.code, "session changes failed; restoring previous session");
-                let rollback = session.start(
-                    &current.node,
-                    &current.effective_rule_set(),
-                    &current.settings,
-                    mode,
-                    Some(previous_endpoint),
-                );
-                match rollback {
-                    Ok(()) => {
-                        self.with_status(|status| {
+                let rollback = session
+                    .start(
+                        &current.node,
+                        &current.effective_rule_set(),
+                        &current.settings,
+                        mode,
+                        Some(previous_endpoint),
+                    )
+                    .and_then(|()| {
+                        self.publish_terminal(|status| {
                             status.state = ConnectionState::Connected;
                             status.node = Some(current.node.id.clone());
-                        });
+                        })
+                    });
+                match rollback {
+                    Ok(()) => {
                         self.resumed.store(false, Ordering::Release);
                         session.start_monitor(current.settings.engine);
                         session.start_watchdog();
@@ -157,6 +167,14 @@ impl Helper {
                         ))
                     }
                     Err(rollback_error) => {
+                        if rollback_error.code == ErrorCode::Cancelled {
+                            self.finish_cancelled(&mut session);
+                            return Err(rollback_error);
+                        }
+                        self.with_status(|status| {
+                            status.connect_stage = None;
+                            status.stage_since_unix = None;
+                        });
                         tracing::warn!(code = ?rollback_error.code, "session changes rollback failed");
                         if current.settings.auto_reconnect {
                             if let Err(cleanup_error) = session.stop_engine() {
