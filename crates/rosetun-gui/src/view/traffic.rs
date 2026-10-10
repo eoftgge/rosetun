@@ -22,7 +22,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             traffic.up_total,
         )
     });
-    let columns = chart_columns(&state.traffic_history, state.traffic_range);
+    let columns = chart_columns(&state.traffic.traffic_history, state.traffic.traffic_range);
     let peak = chart_peak(&columns);
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
@@ -86,7 +86,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 egui::Sides::new().shrink_left().show(
                     ui,
                     |ui| {
-                        let range = match state.traffic_range {
+                        let range = match state.traffic.traffic_range {
                             TrafficRange::OneMinute => tr!("traffic-range-1m"),
                             TrafficRange::FiveMinutes => tr!("traffic-range-5m"),
                             TrafficRange::FifteenMinutes => tr!("traffic-range-15m"),
@@ -104,7 +104,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         if let Some(range) = widgets::segmented(
                             ui,
                             "traffic_range",
-                            state.traffic_range,
+                            state.traffic.traffic_range,
                             &[
                                 (TrafficRange::OneMinute, tr!("traffic-range-1m")),
                                 (TrafficRange::FiveMinutes, tr!("traffic-range-5m")),

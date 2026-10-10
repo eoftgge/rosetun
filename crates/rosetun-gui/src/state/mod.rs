@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,8 +23,11 @@ use crate::rules::{
 };
 use crate::worker::{ConfigWorkerError, FailureInterference, HelperCommandError, WorkerEvent};
 
+mod traffic;
 mod updates;
 
+pub(crate) use traffic::TrafficRange;
+use traffic::TrafficState;
 use updates::UpdatesState;
 
 pub(crate) fn now_unix() -> u64 {
@@ -42,7 +45,6 @@ const AUTO_UPDATE_RANGE: RangeInclusive<u64> = 1..=168;
 const AUTO_UPDATE_RETRY: u64 = 60 * 60;
 /// How often the schedule is checked.
 const AUTO_UPDATE_CHECK: u64 = 60;
-const TRAFFIC_HISTORY: usize = 900;
 
 /// Hours between automatic updates of one subscription.
 pub(crate) fn auto_update_hours(subscription: &Subscription) -> u64 {
@@ -176,24 +178,6 @@ pub(crate) enum Screen {
     Traffic,
     Rules,
     Settings,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum TrafficRange {
-    #[default]
-    OneMinute,
-    FiveMinutes,
-    FifteenMinutes,
-}
-
-impl TrafficRange {
-    pub(crate) fn samples_per_bar(self) -> usize {
-        match self {
-            Self::OneMinute => 1,
-            Self::FiveMinutes => 5,
-            Self::FifteenMinutes => 15,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -484,9 +468,7 @@ pub(crate) struct State {
     exit_route: Option<ExitRoute>,
     exit_generation: u64,
     pub(crate) exit_revealed: bool,
-    /// Rates of the last 15 minutes, one sample per status; newest last.
-    pub(crate) traffic_history: VecDeque<(u64, u64)>,
-    pub(crate) traffic_range: TrafficRange,
+    pub(crate) traffic: TrafficState,
     pub(crate) helper_available: bool,
     pub(crate) helper_version: Option<String>,
     pub(crate) helper_error: Option<ClientError>,
@@ -560,8 +542,7 @@ impl Default for State {
             exit_route: None,
             exit_generation: 0,
             exit_revealed: false,
-            traffic_history: VecDeque::new(),
-            traffic_range: TrafficRange::default(),
+            traffic: TrafficState::default(),
             helper_available: false,
             helper_version: None,
             helper_error: None,
@@ -1450,7 +1431,7 @@ impl State {
                 self.apply_after_choice = false;
                 self.apply_in_flight = false;
                 self.queued_leave_apply = None;
-                self.traffic_history.clear();
+                self.clear_traffic_history();
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;
                 self.reset_failure_interference();
@@ -1530,20 +1511,7 @@ impl State {
                         _ => {}
                     }
                 }
-                if self.helper_available
-                    && matches!(
-                        status.state,
-                        ConnectionState::Connected | ConnectionState::Reconnecting
-                    )
-                {
-                    self.traffic_history
-                        .push_back((status.traffic.down_bps, status.traffic.up_bps));
-                    if self.traffic_history.len() > TRAFFIC_HISTORY {
-                        self.traffic_history.pop_front();
-                    }
-                } else {
-                    self.traffic_history.clear();
-                }
+                self.reduce_traffic_status(&status);
                 if !matches!(status.state, ConnectionState::FailedProtected { .. })
                     && !self.operations.helper
                 {
@@ -2221,8 +2189,9 @@ impl State {
     pub(crate) fn act(&mut self, action: Action) -> Option<Job> {
         match action {
             Action::ShowConnection => return self.show_screen(Screen::Connection),
-            Action::OpenTraffic => return self.show_screen(Screen::Traffic),
-            Action::SetTrafficRange(range) => self.traffic_range = range,
+            action @ (Action::OpenTraffic | Action::SetTrafficRange(_)) => {
+                return self.act_traffic(action);
+            }
             #[cfg(windows)]
             Action::WindowMinimized => return self.apply_on_leave(),
             Action::OpenSettings => {
