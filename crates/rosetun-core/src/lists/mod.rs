@@ -490,8 +490,12 @@ pub fn list_payload(
         .into_iter()
         .find(|item| &item.id == id)
         .ok_or(ListError::NotFound)?;
-    list.validate_category(category)?;
     let bytes = read_verified(&list_dir(store)?, &list)?;
+    let category_check = list.validate_category(category);
+    if matches!(category_check, Err(ListCategoryError::Unknown)) {
+        let _ = formats::inspect(&bytes, Some(list.format.extension()))?;
+    }
+    category_check?;
     Ok(formats::payload(&bytes, list.format, category)?)
 }
 

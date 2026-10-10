@@ -172,6 +172,30 @@ fn updating_a_dat_can_remove_a_used_category_without_breaking_connect() {
     assert_eq!(prepared.request.rule_set.rules[0].target, RuleTarget::Block);
     assert!(prepared.request.lists.is_empty());
     assert!(prepared.payloads.is_empty());
+
+    fs::write(directory.0.join("lists").join(format!("{}.dat", dat.id)), b"damaged").unwrap();
+    let mut after_damage = self::request();
+    after_damage.rule_set = config.rule_sets[0].clone();
+    assert!(matches!(
+        prepare_lists(&store, after_damage),
+        Err(ListPreparationError::List(ListError::Integrity))
+    ));
+
+    let corrupted = b"not-a-dat";
+    fs::write(directory.0.join("lists").join(format!("{}.dat", dat.id)), corrupted).unwrap();
+    store
+        .modify(|config| {
+            config.lists[0].size = Some(corrupted.len() as u64);
+            config.lists[0].sha256 = Some(format!("{:x}", Sha256::digest(corrupted)));
+            Ok::<_, crate::StoreError>(())
+        })
+        .unwrap();
+    let mut matching_checksum = self::request();
+    matching_checksum.rule_set = config.rule_sets[0].clone();
+    assert!(matches!(
+        prepare_lists(&store, matching_checksum),
+        Err(ListPreparationError::List(ListError::Parse(_)))
+    ));
 }
 
 #[test]
