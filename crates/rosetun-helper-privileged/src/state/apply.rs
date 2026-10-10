@@ -77,6 +77,8 @@ impl Helper {
             backend,
             &node_with_endpoint(&request.node, endpoint),
             &request.effective_rule_set(),
+            &request.lists,
+            &request.fallback_block_rules,
             &request.settings,
             None,
             false,
@@ -100,6 +102,7 @@ impl Helper {
                     "previous server address is unavailable",
                 )
             })?;
+        session.reserve_lists(request, Some(&current))?;
         tracing::info!(
             server = current.node != request.node || current.selection != request.selection,
             rules = current.rule_set != request.rule_set,
@@ -118,6 +121,8 @@ impl Helper {
             .start(
                 &request.node,
                 &request.effective_rule_set(),
+                &request.lists,
+                &request.fallback_block_rules,
                 &request.settings,
                 mode,
                 Some(endpoint),
@@ -130,6 +135,7 @@ impl Helper {
             }) {
             Ok(()) => {
                 session.request = Some(request.clone());
+                session.pin_lists(&request.lists);
                 self.resumed.store(false, Ordering::Release);
                 session.start_monitor(request.settings.engine);
                 session.start_watchdog();
@@ -146,6 +152,8 @@ impl Helper {
                     .start(
                         &current.node,
                         &current.effective_rule_set(),
+                        &current.lists,
+                        &current.fallback_block_rules,
                         &current.settings,
                         mode,
                         Some(previous_endpoint),
@@ -158,6 +166,7 @@ impl Helper {
                     });
                 match rollback {
                     Ok(()) => {
+                        session.pin_lists(&current.lists);
                         self.resumed.store(false, Ordering::Release);
                         session.start_monitor(current.settings.engine);
                         session.start_watchdog();
@@ -167,6 +176,7 @@ impl Helper {
                         ))
                     }
                     Err(rollback_error) => {
+                        session.pin_lists(&current.lists);
                         if rollback_error.code == ErrorCode::Cancelled {
                             self.finish_cancelled(&mut session);
                             return Err(rollback_error);
@@ -195,6 +205,7 @@ impl Helper {
                                 session.teardown();
                             }
                             session.request = None;
+                            session.pin_lists(&[]);
                             self.with_status(|status| {
                                 status.state = if protected {
                                     ConnectionState::FailedProtected {

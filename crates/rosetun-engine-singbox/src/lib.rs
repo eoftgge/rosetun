@@ -206,6 +206,7 @@ impl EngineBackend for SingBoxBackend {
             .arg("--disable-color")
             .arg("-c")
             .arg(&config_path)
+            .current_dir(&self.work_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -541,6 +542,8 @@ mod tests {
         let request = RenderRequest {
             node: &node,
             rules: &rules,
+            lists: &[],
+            fallback_block_rules: &[],
             settings: &settings,
             control: Some(&control),
             verbose_log: false,
@@ -611,6 +614,8 @@ mod tests {
         let request = RenderRequest {
             node: &node,
             rules: &rules,
+            lists: &[],
+            fallback_block_rules: &[],
             settings: &settings,
             control: None,
             verbose_log: false,
@@ -629,6 +634,8 @@ mod tests {
         let config = render::render(&RenderRequest {
             node: &node,
             rules: &rules,
+            lists: &[],
+            fallback_block_rules: &[],
             settings: &settings,
             control: None,
             verbose_log: false,
@@ -653,6 +660,8 @@ mod tests {
             let config = render::render(&RenderRequest {
                 node: &node,
                 rules: &rules,
+                lists: &[],
+                fallback_block_rules: &[],
                 settings: &settings,
                 control: None,
                 verbose_log,
@@ -677,6 +686,8 @@ mod tests {
         let config = render::render(&RenderRequest {
             node: &node,
             rules: &rules,
+            lists: &[],
+            fallback_block_rules: &[],
             settings: &settings,
             control: Some(&control),
             verbose_log: false,
@@ -1089,6 +1100,7 @@ mod tests {
                 process_name: false,
                 process_path: false,
                 ip_cidr: true,
+                lists: false,
             },
             true,
         );
@@ -1181,6 +1193,8 @@ mod tests {
         let config = render::render(&RenderRequest {
             node: &node,
             rules: &rule_set,
+            lists: &[],
+            fallback_block_rules: &[],
             settings: &settings,
             control: None,
             verbose_log: false,
@@ -1271,6 +1285,8 @@ mod tests {
         let rendered = render::render(&RenderRequest {
             node: &node,
             rules: &rule_set,
+            lists: &[],
+            fallback_block_rules: &[],
             settings: &settings,
             control: None,
             verbose_log: false,
@@ -1349,6 +1365,8 @@ mod tests {
         let request = RenderRequest {
             node: &node,
             rules: &rules,
+            lists: &[],
+            fallback_block_rules: &[],
             settings: &settings,
             control: None,
             verbose_log: false,
@@ -1372,6 +1390,8 @@ mod tests {
         let rendered = render::render(&RenderRequest {
             node: &node,
             rules: &rule_set,
+            lists: &[],
+            fallback_block_rules: &[],
             settings: &settings,
             control: None,
             verbose_log: false,
@@ -1427,6 +1447,8 @@ mod tests {
             let rendered = render::render(&RenderRequest {
                 node: &node,
                 rules: &rules,
+                lists: &[],
+                fallback_block_rules: &[],
                 settings: &settings,
                 control: None,
                 verbose_log: false,

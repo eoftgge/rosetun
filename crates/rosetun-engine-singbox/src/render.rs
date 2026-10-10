@@ -1,6 +1,6 @@
 use rosetun_config::{
-    DnsSettings, DomainMatch, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher, RuleSet,
-    RuleTarget, Settings, TlsMode, Transport,
+    DnsSettings, DomainMatch, ListRef, LogLevel, Node, Outbound, ProcessMatch, RuleId,
+    RuleMatcher, RuleSet, RuleTarget, Settings, TlsMode, Transport, UploadedListFormat, list_tag,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities};
@@ -18,11 +18,17 @@ pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
     process_name: true,
     process_path: true,
     ip_cidr: true,
+    lists: true,
 };
 
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
-    let (route, unsupported) =
-        route_section(request.rules, RULE_CAPABILITIES, request.settings.allow_lan);
+    let (route, unsupported) = route_section_with_lists(
+        request.rules,
+        RULE_CAPABILITIES,
+        request.settings.allow_lan,
+        request.lists,
+        request.fallback_block_rules,
+    );
     let mut config = json!({
         "log": log_section(request),
         "dns": dns_section(&request.settings.dns)?,
@@ -318,10 +324,21 @@ fn transport_section(transport: &Transport) -> Option<Value> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn route_section(
     rules: &RuleSet,
     capabilities: RuleCapabilities,
     allow_lan: bool,
+) -> (Value, Vec<RuleId>) {
+    route_section_with_lists(rules, capabilities, allow_lan, &[], &[])
+}
+
+fn route_section_with_lists(
+    rules: &RuleSet,
+    capabilities: RuleCapabilities,
+    allow_lan: bool,
+    lists: &[ListRef],
+    fallback_block_rules: &[RuleId],
 ) -> (Value, Vec<RuleId>) {
     let mut route_rules = vec![
         json!({
@@ -334,11 +351,36 @@ pub(crate) fn route_section(
         }),
     ];
     let mut unsupported = Vec::new();
+    let mut used_lists = Vec::<&ListRef>::new();
 
     for rule in rules.enabled() {
-        if capabilities.supports(&rule.matcher)
-            && let Some(value) = route_rule(rule)
-        {
+        if !capabilities.supports(&rule.matcher) {
+            unsupported.push(rule.id.clone());
+            continue;
+        }
+        let value = match &rule.matcher {
+            RuleMatcher::List { .. } if fallback_block_rules.contains(&rule.id) => {
+                (rule.target == RuleTarget::Block).then(|| json!({ "action": "reject" }))
+            }
+            RuleMatcher::List { list, category } => {
+                let tag = list_tag(list, category.as_deref());
+                let mut matching = lists.iter().filter(|reference| reference.tag == tag);
+                match (matching.next(), matching.next()) {
+                    (Some(reference), None) => {
+                        if !used_lists.iter().any(|used| used.tag == tag) {
+                            used_lists.push(reference);
+                        }
+                        let mut value = Map::new();
+                        value.insert("rule_set".into(), json!([tag]));
+                        route_action(&mut value, rule.target);
+                        Some(Value::Object(value))
+                    }
+                    _ => None,
+                }
+            }
+            _ => route_rule(rule),
+        };
+        if let Some(value) = value {
             route_rules.push(value);
         } else {
             unsupported.push(rule.id.clone());
@@ -362,14 +404,30 @@ pub(crate) fn route_section(
         }
     };
 
-    (
-        json!({
+    let mut route = json!({
             "rules": route_rules,
             "final": final_outbound,
             "auto_detect_interface": true,
-        }),
-        unsupported,
-    )
+        });
+    if !used_lists.is_empty() {
+        route["rule_set"] = Value::Array(
+            used_lists
+                .into_iter()
+                .map(|reference| {
+                    json!({
+                        "type": "local",
+                        "tag": reference.tag,
+                        "format": match reference.format {
+                            UploadedListFormat::Binary => "binary",
+                            UploadedListFormat::Source => "source",
+                        },
+                        "path": format!("{}.{}", reference.tag, reference.format.extension()),
+                    })
+                })
+                .collect(),
+        );
+    }
+    (route, unsupported)
 }
 
 fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
@@ -396,12 +454,18 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
         RuleMatcher::List { .. } | RuleMatcher::Template(_) => return None,
     }
 
-    match rule.target {
+    route_action(&mut value, rule.target);
+
+    Some(Value::Object(value))
+}
+
+fn route_action(value: &mut Map<String, Value>, target: RuleTarget) {
+    match target {
         RuleTarget::Proxy | RuleTarget::Direct => {
             value.insert("action".into(), "route".into());
             value.insert(
                 "outbound".into(),
-                match rule.target {
+                match target {
                     RuleTarget::Proxy => TAG_PROXY,
                     _ => TAG_DIRECT,
                 }
@@ -412,8 +476,6 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
             value.insert("action".into(), "reject".into());
         }
     }
-
-    Some(Value::Object(value))
 }
 
 #[cfg(test)]
@@ -449,6 +511,7 @@ mod tests {
             ("path", RuleMatcher::Process(ProcessMatch::Path("C:\\example\\example.exe".into())), RuleTarget::Proxy),
             ("cidr", RuleMatcher::IpCidr("198.51.100.0/24".into()), RuleTarget::Block),
             ("template", RuleMatcher::Template(RuleTemplate::Torrents), RuleTarget::Direct),
+            ("list", RuleMatcher::List { list: ListId::new("golden-list"), category: None }, RuleTarget::Direct),
         ] {
             rules.rules.push(rosetun_config::Rule {
                 id: RuleId::new(id),
@@ -474,9 +537,16 @@ mod tests {
             address: "127.0.0.1:9090".parse().unwrap(),
             secret: "fixture-secret".into(),
         };
+        let lists = [ListRef {
+            tag: list_tag(&ListId::new("golden-list"), None),
+            sha256: "a".repeat(64),
+            format: UploadedListFormat::Source,
+        }];
         let rendered = render(&RenderRequest {
             node: &node,
             rules: &rules,
+            lists: &lists,
+            fallback_block_rules: &[],
             settings: &settings,
             control: Some(&control),
             verbose_log: false,
@@ -604,6 +674,77 @@ mod tests {
         let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
         assert_eq!(unsupported, vec![list.id]);
         assert_eq!(route["rules"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn list_rules_share_one_local_rule_set_and_keep_their_actions() {
+        let list = ListId::new("example-list");
+        let tag = list_tag(&list, None);
+        let reference = ListRef {
+            tag: tag.clone(),
+            sha256: "a".repeat(64),
+            format: UploadedListFormat::Binary,
+        };
+        let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
+        for (id, target) in [("direct", RuleTarget::Direct), ("block", RuleTarget::Block)] {
+            set.rules.push(rosetun_config::Rule {
+                id: RuleId::new(id),
+                enabled: true,
+                matcher: RuleMatcher::List {
+                    list: list.clone(),
+                    category: None,
+                },
+                target,
+            });
+        }
+        let (route, unsupported) = route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[]);
+        assert!(unsupported.is_empty());
+        assert_eq!(route["rule_set"], json!([{
+            "type": "local", "tag": tag, "format": "binary", "path": format!("{tag}.srs")
+        }]));
+        assert_eq!(route["rules"][2], json!({
+            "rule_set": [tag], "action": "route", "outbound": "direct"
+        }));
+        assert_eq!(route["rules"][3], json!({"rule_set": [tag], "action": "reject"}));
+        assert!(route_section_with_lists(&set, RuleCapabilities::NONE, false, &[], &[]).1.len() == 2);
+    }
+
+    #[test]
+    fn vanished_category_rejects_every_flow_before_other_list_rules() {
+        let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
+        let vanished = RuleId::new("vanished");
+        set.rules.push(rosetun_config::Rule {
+            id: vanished.clone(),
+            enabled: true,
+            matcher: RuleMatcher::List {
+                list: ListId::new("dat"),
+                category: Some("missing@ads".into()),
+            },
+            target: RuleTarget::Block,
+        });
+        let remaining = ListId::new("still-present");
+        let tag = list_tag(&remaining, None);
+        set.rules.push(rosetun_config::Rule {
+            id: RuleId::new("remaining"),
+            enabled: true,
+            matcher: RuleMatcher::List { list: remaining, category: None },
+            target: RuleTarget::Direct,
+        });
+        let reference = ListRef {
+            tag: tag.clone(),
+            sha256: "b".repeat(64),
+            format: UploadedListFormat::Source,
+        };
+        let (route, unsupported) = route_section_with_lists(
+            &set, RULE_CAPABILITIES, false, &[reference], &[vanished],
+        );
+        assert!(unsupported.is_empty());
+        assert_eq!(route["rules"][2], json!({"action": "reject"}));
+        assert_eq!(route["rules"][3], json!({
+            "rule_set": [tag], "action": "route", "outbound": "direct"
+        }));
+        assert_eq!(route["rule_set"][0]["format"], "source");
+        assert_eq!(route["rule_set"][0]["path"], format!("{tag}.json"));
     }
 
     #[test]

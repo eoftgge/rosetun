@@ -3702,3 +3702,140 @@ fn accepted_cancellation_cannot_publish_connected() {
     );
     assert_ne!(helper.status().state, ConnectionState::Connected);
 }
+
+static NEXT_LIST_SESSION: AtomicUsize = AtomicUsize::new(0);
+
+struct ListSessionDirectory(PathBuf);
+
+impl ListSessionDirectory {
+    fn new() -> Self {
+        let directory = std::env::temp_dir().join(format!(
+            "rosetun-list-session-{}-{}",
+            std::process::id(),
+            NEXT_LIST_SESSION.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(directory.join("lists")).unwrap();
+        Self(directory)
+    }
+
+    fn reference(&self, id: &rosetun_config::ListId, domain: &str) -> rosetun_config::ListRef {
+        use sha2::Digest;
+        let source = format!(r#"{{"version":3,"rules":[{{"domain":["{domain}"]}}]}}"#);
+        let bytes = rosetun_config::normalize_source(source.as_bytes()).unwrap();
+        let hash = format!("{:x}", sha2::Sha256::digest(&bytes));
+        std::fs::write(self.0.join("lists").join(format!("{hash}.json")), bytes).unwrap();
+        rosetun_config::ListRef {
+            tag: rosetun_config::list_tag(id, None),
+            sha256: hash,
+            format: rosetun_config::UploadedListFormat::Source,
+        }
+    }
+
+    fn helper(&self) -> (Helper, Arc<EngineControls>) {
+        let (helper, controls, _, _) = supervised_helper(true);
+        let lists = ListStore::open_for_test(self.0.join("lists")).unwrap();
+        (helper.with_list_store(lists, self.0.join("run")), controls)
+    }
+}
+
+impl Drop for ListSessionDirectory {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
+}
+
+fn with_list_rule(
+    mut request: ConnectRequest,
+    list: rosetun_config::ListId,
+    reference: rosetun_config::ListRef,
+) -> ConnectRequest {
+    request.rule_set.rules.push(Rule {
+        id: RuleId::new("list-rule"),
+        enabled: true,
+        matcher: RuleMatcher::List { list, category: None },
+        target: RuleTarget::Direct,
+    });
+    request.lists = vec![reference];
+    request
+}
+
+#[test]
+fn missing_list_is_rejected_before_engine_spawn() {
+    let directory = ListSessionDirectory::new();
+    let (helper, controls) = directory.helper();
+    let id = rosetun_config::ListId::new("missing");
+    let request = with_list_rule(
+        connect_request(),
+        id.clone(),
+        rosetun_config::ListRef {
+            tag: rosetun_config::list_tag(&id, None),
+            sha256: "0".repeat(64),
+            format: rosetun_config::UploadedListFormat::Source,
+        },
+    );
+    let error = helper.connect(&request).expect_err("list is not stored");
+    assert_eq!(error.code, ErrorCode::ListMissing);
+    assert_eq!(controls.spawns(), 0);
+    assert!(matches!(helper.status().state, ConnectionState::Disconnected));
+}
+
+#[test]
+fn invalid_list_tag_and_fallback_are_rejected_before_spawn() {
+    let directory = ListSessionDirectory::new();
+    let list_id = rosetun_config::ListId::new("one");
+    let reference = directory.reference(&list_id, "example.com");
+    let (helper, controls) = directory.helper();
+    let mut request = with_list_rule(connect_request(), list_id, reference);
+    request.lists[0].tag = "../bad".into();
+    assert_eq!(helper.connect(&request).unwrap_err().code, ErrorCode::InvalidState);
+    request.lists[0].tag = rosetun_config::list_tag(&rosetun_config::ListId::new("one"), None);
+    request.fallback_block_rules.push(RuleId::new("list-rule"));
+    assert_eq!(helper.connect(&request).unwrap_err().code, ErrorCode::InvalidState);
+    assert_eq!(controls.spawns(), 0);
+}
+
+#[test]
+fn vanished_category_block_rule_does_not_require_a_stored_list() {
+    let directory = ListSessionDirectory::new();
+    let (helper, controls) = directory.helper();
+    let mut request = connect_request();
+    request.rule_set.rules.push(Rule {
+        id: RuleId::new("vanished"),
+        enabled: true,
+        matcher: RuleMatcher::List {
+            list: rosetun_config::ListId::new("dat"),
+            category: Some("removed".into()),
+        },
+        target: RuleTarget::Block,
+    });
+    request.fallback_block_rules.push(RuleId::new("vanished"));
+    helper.connect(&request).expect("fallback does not need list bytes");
+    assert_eq!(controls.spawns(), 1);
+    helper.disconnect().unwrap();
+}
+
+#[test]
+fn failed_apply_restages_the_previous_list_under_protection() {
+    let directory = ListSessionDirectory::new();
+    let first_id = rosetun_config::ListId::new("first");
+    let second_id = rosetun_config::ListId::new("second");
+    let first = directory.reference(&first_id, "example.com");
+    let second = directory.reference(&second_id, "example.org");
+    let (helper, controls) = directory.helper();
+    let mut request = with_list_rule(connect_request(), first_id, first.clone());
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("first list connects");
+    let first_path = directory.0.join("run").join(format!("{}.json", first.tag));
+    assert!(first_path.exists());
+
+    let mut changed = request.clone();
+    changed.rule_set.rules[0].matcher = RuleMatcher::List { list: second_id, category: None };
+    changed.lists = vec![second.clone()];
+    controls.fail_readiness_next(1);
+    assert!(helper.apply(&changed).is_err());
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+    assert!(first_path.exists());
+    assert!(!directory.0.join("run").join(format!("{}.json", second.tag)).exists());
+    helper.disconnect().unwrap();
+}

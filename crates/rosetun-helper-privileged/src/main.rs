@@ -280,7 +280,8 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
         .ok_or_else(|| StartError("engine run directory has no data directory".to_owned()))?;
     let lists = list_store::ListStore::open(data_dir.join("lists"))
         .map_err(|error| StartError(format!("failed to initialize list storage: {error}")))?;
-    let helper = Arc::new(Helper::new(engines, rosetun_routing::backend(), gate).with_list_store(lists));
+    let helper = Arc::new(Helper::new(engines, rosetun_routing::backend(), gate)
+        .with_list_store(lists, run_dir.join("sing-box")));
     state::spawn_list_reaper(Arc::clone(&helper)).map_err(|error| {
         StartError(format!("failed to start list cleanup thread: {error}"))
     })?;

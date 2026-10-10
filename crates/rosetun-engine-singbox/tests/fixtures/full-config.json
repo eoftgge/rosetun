@@ -55,6 +55,14 @@
   "route": {
     "auto_detect_interface": true,
     "final": "direct",
+    "rule_set": [
+      {
+        "format": "source",
+        "path": "list-c0b5d1cfa1b0a1f0dcfcf7119122b0de74fea4e426077502.json",
+        "tag": "list-c0b5d1cfa1b0a1f0dcfcf7119122b0de74fea4e426077502",
+        "type": "local"
+      }
+    ],
     "rules": [
       {
         "action": "sniff",
@@ -156,6 +164,13 @@
         "outbound": "direct",
         "process_name": [
           "biglybt.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "rule_set": [
+          "list-c0b5d1cfa1b0a1f0dcfcf7119122b0de74fea4e426077502"
         ]
       },
       {

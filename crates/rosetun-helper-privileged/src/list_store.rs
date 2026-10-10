@@ -95,7 +95,7 @@ impl ListStore {
     }
 
     #[cfg(test)]
-    fn open_for_test(directory: PathBuf) -> io::Result<Self> {
+    pub(crate) fn open_for_test(directory: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(&directory)?;
         Self::load(directory)
     }

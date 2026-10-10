@@ -7,13 +7,15 @@ mod tests;
 mod watchdog;
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
-    ConnectionState, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic,
+    ConnectionState, ListRef, Node, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, Settings,
+    Status, Traffic, list_tag,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
@@ -25,7 +27,7 @@ use rosetun_routing::{
 };
 
 use crate::log_gate::VerboseGate;
-use crate::list_store::ListStore;
+use crate::list_store::{ListStore, valid_hash, valid_tag};
 use watchdog::{DnsWatchdog, WatchdogTiming};
 
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -60,7 +62,7 @@ pub struct Helper {
     session: Mutex<Session>,
     engines: Arc<EngineRegistry>,
     probe: Mutex<()>,
-    lists: Option<Mutex<ListStore>>,
+    lists: Option<Arc<Mutex<ListStore>>>,
     shutting_down: AtomicBool,
     resumed: AtomicBool,
     cancelled: Arc<AtomicBool>,
@@ -112,6 +114,8 @@ struct Session {
     watchdog_timing: WatchdogTiming,
     adapter_lookup: fn(&str) -> std::io::Result<bool>,
     cancelled: Arc<AtomicBool>,
+    lists: Option<Arc<Mutex<ListStore>>>,
+    list_run_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Helper {
@@ -156,6 +160,8 @@ impl Helper {
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
                 watchdog_timing: WATCHDOG_TIMING,
                 cancelled,
+                lists: None,
+                list_run_dir: None,
                 #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
                 #[cfg(test)]
@@ -164,8 +170,11 @@ impl Helper {
         }
     }
 
-    pub fn with_list_store(mut self, store: ListStore) -> Self {
-        self.lists = Some(Mutex::new(store));
+    pub(crate) fn with_list_store(mut self, store: ListStore, run_dir: PathBuf) -> Self {
+        let lists = Arc::new(Mutex::new(store));
+        self.session.get_mut().expect("new session is not poisoned").lists = Some(Arc::clone(&lists));
+        self.session.get_mut().expect("new session is not poisoned").list_run_dir = Some(run_dir);
+        self.lists = Some(lists);
         self
     }
 
@@ -277,6 +286,7 @@ impl Helper {
                         status.stage_since_unix = None;
                     });
                     session.request = None;
+                    session.pin_lists(&[]);
                     return;
                 }
                 tracing::warn!(%reason, protected, "the engine terminated; reconnecting");
@@ -332,6 +342,8 @@ impl Helper {
             .start(
                 &request.node,
                 &request.effective_rule_set(),
+                &request.lists,
+                &request.fallback_block_rules,
                 &request.settings,
                 mode,
                 None,
@@ -395,6 +407,7 @@ impl Helper {
                         status.stage_since_unix = None;
                     });
                     session.request = None;
+                    session.pin_lists(&[]);
                 }
                 if self.cancelled.load(Ordering::Acquire) {
                     self.finish_cancelled(&mut session);
@@ -418,6 +431,7 @@ impl Helper {
                 ));
             }
         };
+        session.reserve_lists(request, None)?;
 
         tracing::info!(
             node = %request.node.id,
@@ -439,6 +453,8 @@ impl Helper {
             .start(
                 &request.node,
                 &request.effective_rule_set(),
+                &request.lists,
+                &request.fallback_block_rules,
                 &request.settings,
                 mode,
                 None,
@@ -471,6 +487,7 @@ impl Helper {
                             "failed to stop engine after protected reconnect failure"
                         );
                     }
+                    session.pin_lists(&[]);
                 } else {
                     session.teardown();
                 }
@@ -654,6 +671,47 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
             "temporary rules exceed the limit or contain a template",
         ));
     }
+    if request.lists.len() > MAX_TEMPORARY_RULES
+        || request.fallback_block_rules.len() > MAX_TEMPORARY_RULES
+    {
+        return Err(HelperError::new(ErrorCode::InvalidState, "too many list references"));
+    }
+    let rules = request.effective_rule_set();
+    if request.settings.engine != rosetun_config::EngineKind::SingBox
+        && rules.enabled().any(|rule| matches!(rule.matcher, RuleMatcher::List { .. }))
+    {
+        return Err(HelperError::new(ErrorCode::UnsupportedRules, "engine does not support list rules"));
+    }
+    let mut block_ids = std::collections::HashSet::new();
+    for id in &request.fallback_block_rules {
+        if !block_ids.insert(id)
+            || !rules.enabled().any(|rule| {
+                &rule.id == id
+                    && matches!(rule.matcher, RuleMatcher::List { .. })
+                    && rule.target == RuleTarget::Block
+            })
+        {
+            return Err(HelperError::new(ErrorCode::InvalidState, "invalid fallback block rule"));
+        }
+    }
+    let expected: std::collections::HashSet<_> = rules
+        .enabled()
+        .filter(|rule| !block_ids.contains(&rule.id))
+        .filter_map(|rule| match &rule.matcher {
+            RuleMatcher::List { list, category } => Some(list_tag(list, category.as_deref())),
+            _ => None,
+        })
+        .collect();
+    let mut tags = std::collections::HashSet::new();
+    for reference in &request.lists {
+        if !valid_tag(&reference.tag)
+            || !valid_hash(&reference.sha256)
+            || !expected.contains(&reference.tag)
+            || !tags.insert(&reference.tag)
+        {
+            return Err(HelperError::new(ErrorCode::InvalidState, "invalid list reference"));
+        }
+    }
     Ok(())
 }
 
@@ -827,10 +885,120 @@ impl Session {
             .is_some_and(|guard| guard.scope == ProtectionScope::AllTraffic)
     }
 
+    fn reserve_lists(
+        &self,
+        request: &ConnectRequest,
+        previous: Option<&ConnectRequest>,
+    ) -> Result<(), HelperError> {
+        let Some(lists) = &self.lists else {
+            return if request.lists.is_empty() {
+                Ok(())
+            } else {
+                Err(HelperError::new(ErrorCode::ListMissing, "list storage is unavailable"))
+            };
+        };
+        let mut store = lists
+            .lock()
+            .map_err(|_| HelperError::new(ErrorCode::Internal, "list storage is unavailable"))?;
+        for reference in &request.lists {
+            store.verified_path(reference)?;
+        }
+        let mut pinned = request.lists.clone();
+        if let Some(previous) = previous {
+            pinned.extend(previous.lists.iter().cloned());
+        }
+        store.pin(&pinned);
+        Ok(())
+    }
+
+    fn pin_lists(&self, references: &[ListRef]) {
+        if let Some(lists) = &self.lists
+            && let Ok(mut store) = lists.lock()
+        {
+            store.pin(references);
+        }
+    }
+
+    fn clear_staged_lists(&self) -> Result<(), HelperError> {
+        let Some(directory) = &self.list_run_dir else {
+            return Ok(());
+        };
+        if !directory.exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(directory)
+            .map_err(|_| HelperError::new(ErrorCode::Internal, "cannot inspect staged lists"))?
+        {
+            let entry = entry
+                .map_err(|_| HelperError::new(ErrorCode::Internal, "cannot inspect staged lists"))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let file_name = name
+                .strip_prefix('.')
+                .and_then(|name| name.strip_suffix(".part"))
+                .unwrap_or(&name);
+            let Some((tag, extension)) = file_name.rsplit_once('.') else {
+                continue;
+            };
+            if tag.starts_with("list-")
+                && valid_tag(tag)
+                && matches!(extension, "srs" | "json")
+            {
+                std::fs::remove_file(entry.path()).map_err(|_| {
+                    HelperError::new(ErrorCode::Internal, "cannot remove a staged list")
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn stage_lists(&self, references: &[ListRef]) -> Result<(), HelperError> {
+        self.clear_staged_lists()?;
+        if references.is_empty() {
+            return Ok(());
+        }
+        let directory = self.list_run_dir.as_ref().ok_or_else(|| {
+            HelperError::new(ErrorCode::Internal, "list run directory is unavailable")
+        })?;
+        std::fs::create_dir_all(directory).map_err(|_| {
+            HelperError::new(ErrorCode::Internal, "cannot create the list run directory")
+        })?;
+        let lists = self.lists.as_ref().ok_or_else(|| {
+            HelperError::new(ErrorCode::ListMissing, "list storage is unavailable")
+        })?;
+        for reference in references {
+            let source = lists
+                .lock()
+                .map_err(|_| HelperError::new(ErrorCode::Internal, "list storage is unavailable"))?
+                .verified_path(reference)?;
+            let name = format!("{}.{}", reference.tag, reference.format.extension());
+            let destination = directory.join(&name);
+            let temporary = directory.join(format!(".{name}.part"));
+            if let Err(error) = std::fs::copy(&source, &temporary) {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(HelperError::new(
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        ErrorCode::ListMissing
+                    } else {
+                        ErrorCode::Internal
+                    },
+                    "cannot stage a required list",
+                ));
+            }
+            if std::fs::rename(&temporary, &destination).is_err() {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(HelperError::new(ErrorCode::Internal, "cannot publish a staged list"));
+            }
+        }
+        Ok(())
+    }
+
     fn start(
         &mut self,
         node: &Node,
         rules: &RuleSet,
+        lists: &[ListRef],
+        fallback_block_rules: &[RuleId],
         settings: &Settings,
         mode: StartMode,
         endpoint: Option<IpAddr>,
@@ -910,10 +1078,14 @@ impl Session {
             backend,
             resolved_node.as_ref().unwrap_or(node),
             rules,
+            lists,
+            fallback_block_rules,
             settings,
             control.as_ref(),
             verbose_until.is_some(),
         )?;
+
+        self.stage_lists(lists)?;
 
         let binary = backend
             .locate_binary()
@@ -1206,9 +1378,15 @@ impl Session {
     }
 
     fn teardown(&mut self) {
-        if let Err(error) = self.stop_engine() {
-            tracing::error!(%error, "failed to stop the engine");
+        match self.stop_engine() {
+            Ok(()) => {
+                if let Err(error) = self.clear_staged_lists() {
+                    tracing::warn!(code = ?error.code, "could not clean staged lists");
+                }
+            }
+            Err(error) => tracing::error!(%error, "failed to stop the engine"),
         }
+        self.pin_lists(&[]);
         if let Some(guard) = self.guard.take()
             && let Err(error) = guard.routing.revert()
         {
@@ -1221,6 +1399,8 @@ fn render_config(
     backend: &dyn EngineBackend,
     node: &Node,
     rules: &RuleSet,
+    lists: &[ListRef],
+    fallback_block_rules: &[RuleId],
     settings: &Settings,
     control: Option<&ControlEndpoint>,
     verbose_log: bool,
@@ -1229,6 +1409,8 @@ fn render_config(
         .render(&RenderRequest {
             node,
             rules,
+            lists,
+            fallback_block_rules,
             settings,
             control,
             verbose_log,
