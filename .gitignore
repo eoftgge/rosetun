@@ -2,6 +2,6 @@
 /.idea
 /tools/*.exe
 /tools/vm/logs/
-/.aiassistant/
+/rules/
 design/rosetun-vpn-client.html
 CONTEXT.md
