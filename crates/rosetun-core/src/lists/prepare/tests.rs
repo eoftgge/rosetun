@@ -492,7 +492,7 @@ impl ListClient for MockClient {
     fn list_status(&mut self, hashes: Vec<String>) -> Result<Vec<String>, ClientError> {
         self.calls.push("status");
         self.status_count += 1;
-        assert_eq!(hashes, [self.missing.clone()]);
+        assert_eq!(hashes.as_slice(), std::slice::from_ref(&self.missing));
         Ok(vec![self.missing.clone()])
     }
 

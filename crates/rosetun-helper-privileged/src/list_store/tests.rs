@@ -38,17 +38,19 @@ fn chunk(
     hash: &str,
     format: ListFormat,
     bytes: &[u8],
-    offset: u64,
-    total: u64,
+    (offset, total_size): (u64, u64),
     now: Instant,
 ) -> Result<(), HelperError> {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     store.put_chunk(
         owner,
-        hash,
-        format,
-        total,
-        offset,
-        &base64::engine::general_purpose::STANDARD.encode(bytes),
+        ListChunk {
+            hash,
+            format,
+            total_size,
+            offset,
+            encoded: &encoded,
+        },
         now,
     )
 }
@@ -61,8 +63,11 @@ fn chunks_are_sequential_verified_and_persist_after_restart() {
     let digest = hash(bytes);
     let now = Instant::now();
     assert_eq!(
-        store.status(std::slice::from_ref(&digest), now).unwrap(),
-        [digest.clone()]
+        store
+            .status(std::slice::from_ref(&digest), now)
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&digest)
     );
     chunk(
         &mut store,
@@ -70,8 +75,7 @@ fn chunks_are_sequential_verified_and_persist_after_restart() {
         &digest,
         ListFormat::Binary,
         &bytes[..5],
-        0,
-        bytes.len() as u64,
+        (0, bytes.len() as u64),
         now,
     )
     .unwrap();
@@ -82,8 +86,7 @@ fn chunks_are_sequential_verified_and_persist_after_restart() {
         &digest,
         ListFormat::Binary,
         &bytes[5..],
-        5,
-        bytes.len() as u64,
+        (5, bytes.len() as u64),
         now,
     )
     .unwrap();
@@ -116,16 +119,18 @@ fn status_discards_a_damaged_object_so_it_can_be_uploaded_again() {
         &digest,
         ListFormat::Binary,
         bytes,
-        0,
-        bytes.len() as u64,
+        (0, bytes.len() as u64),
         now,
     )
     .unwrap();
     let path = store.object_path(&digest, ListFormat::Binary);
     fs::write(&path, b"damaged").unwrap();
     assert_eq!(
-        store.status(std::slice::from_ref(&digest), now).unwrap(),
-        [digest.clone()]
+        store
+            .status(std::slice::from_ref(&digest), now)
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&digest)
     );
     assert!(!path.exists());
     assert_eq!(store.used_bytes, 0);
@@ -136,8 +141,7 @@ fn status_discards_a_damaged_object_so_it_can_be_uploaded_again() {
         &digest,
         ListFormat::Binary,
         bytes,
-        0,
-        bytes.len() as u64,
+        (0, bytes.len() as u64),
         now,
     )
     .unwrap();
@@ -158,8 +162,7 @@ fn bad_offset_and_hash_remove_partial_files() {
         &digest,
         ListFormat::Binary,
         &bytes[..5],
-        0,
-        bytes.len() as u64,
+        (0, bytes.len() as u64),
         now,
     )
     .unwrap();
@@ -171,8 +174,7 @@ fn bad_offset_and_hash_remove_partial_files() {
             &digest,
             ListFormat::Binary,
             &bytes[5..],
-            4,
-            bytes.len() as u64,
+            (4, bytes.len() as u64),
             now
         )
         .is_err()
@@ -188,8 +190,7 @@ fn bad_offset_and_hash_remove_partial_files() {
             &"0".repeat(64),
             ListFormat::Binary,
             bytes,
-            0,
-            bytes.len() as u64,
+            (0, bytes.len() as u64),
             now
         )
         .is_err()
@@ -215,8 +216,7 @@ fn invalid_source_never_becomes_an_object() {
                 &digest,
                 ListFormat::Source,
                 bytes,
-                0,
-                bytes.len() as u64,
+                (0, bytes.len() as u64),
                 now
             )
             .is_err()
@@ -238,8 +238,7 @@ fn upload_limit_and_idle_expiry_free_partial_files() {
             &format!("{owner:064x}"),
             ListFormat::Binary,
             b"S",
-            0,
-            4,
+            (0, 4),
             now,
         )
         .unwrap();
@@ -251,8 +250,7 @@ fn upload_limit_and_idle_expiry_free_partial_files() {
             &"5".repeat(64),
             ListFormat::Binary,
             b"S",
-            0,
-            4,
+            (0, 4),
             now
         )
         .is_err()

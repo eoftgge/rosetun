@@ -25,7 +25,7 @@ use rosetun_routing::{
     ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
 };
 
-use crate::list_store::{ListStore, valid_hash, valid_tag};
+use crate::list_store::{ListChunk, ListStore, valid_hash, valid_tag};
 use crate::log_gate::VerboseGate;
 use watchdog::{DnsWatchdog, WatchdogTiming};
 
@@ -206,11 +206,13 @@ impl Helper {
     ) -> Result<(), HelperError> {
         self.list_store()?.put_chunk(
             owner,
-            hash,
-            format,
-            total_size,
-            offset,
-            data,
+            ListChunk {
+                hash,
+                format,
+                total_size,
+                offset,
+                encoded: data,
+            },
             Instant::now(),
         )
     }

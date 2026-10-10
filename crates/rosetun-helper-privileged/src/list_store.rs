@@ -20,6 +20,14 @@ static NEXT_UPLOAD: AtomicU64 = AtomicU64::new(0);
 type ObjectKey = (String, ListFormat);
 type UploadKey = (u64, String, ListFormat);
 
+pub(crate) struct ListChunk<'a> {
+    pub hash: &'a str,
+    pub format: ListFormat,
+    pub total_size: u64,
+    pub offset: u64,
+    pub encoded: &'a str,
+}
+
 struct Upload {
     file: File,
     path: PathBuf,
@@ -214,15 +222,11 @@ impl ListStore {
     pub(crate) fn put_chunk(
         &mut self,
         owner: u64,
-        hash: &str,
-        format: ListFormat,
-        total_size: u64,
-        offset: u64,
-        encoded: &str,
+        chunk: ListChunk<'_>,
         now: Instant,
     ) -> Result<(), HelperError> {
         self.expire(now);
-        let result = self.put_inner(owner, hash, format, total_size, offset, encoded, now);
+        let result = self.put_inner(owner, chunk, now);
         if result.is_err() {
             self.abort_owner(owner);
         }
@@ -232,13 +236,16 @@ impl ListStore {
     fn put_inner(
         &mut self,
         owner: u64,
-        hash: &str,
-        format: ListFormat,
-        total_size: u64,
-        offset: u64,
-        encoded: &str,
+        chunk: ListChunk<'_>,
         now: Instant,
     ) -> Result<(), HelperError> {
+        let ListChunk {
+            hash,
+            format,
+            total_size,
+            offset,
+            encoded,
+        } = chunk;
         if !valid_hash(hash) || total_size == 0 || total_size > MAX_LIST_PAYLOAD_BYTES {
             return Err(invalid("invalid list hash or size"));
         }
