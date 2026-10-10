@@ -3,14 +3,14 @@ use super::*;
 #[test]
 fn settings_section_survives_navigation_between_tabs() {
     let mut state = State::default();
-    assert_eq!(state.settings_screen.section, SettingsSection::General);
+    assert_eq!(state.settings.screen.section, SettingsSection::General);
     state.act(Action::OpenSettings);
     state.act(Action::OpenSettingsSection(SettingsSection::Service));
-    assert_eq!(state.settings_screen.section, SettingsSection::Service);
+    assert_eq!(state.settings.screen.section, SettingsSection::Service);
     state.act(Action::ShowConnection);
     state.act(Action::OpenSettings);
     assert_eq!(state.screen, Screen::Settings);
-    assert_eq!(state.settings_screen.section, SettingsSection::Service);
+    assert_eq!(state.settings.screen.section, SettingsSection::Service);
 }
 
 #[test]
@@ -24,25 +24,25 @@ fn settings_dns_form_initializes_on_open_and_follows_clean_config() {
         generation: 1,
         config: config.clone(),
     });
-    assert!(state.settings_screen.server.is_empty());
+    assert!(state.settings.screen.server.is_empty());
     state.act(Action::OpenSettings);
     assert_eq!(state.screen, Screen::Settings);
-    assert_eq!(state.settings_screen.server, "1.1.1.1");
-    assert_eq!(state.settings_screen.server_name, "cloudflare-dns.com");
-    assert_eq!(state.settings_screen.port, "8443");
-    assert_eq!(state.settings_screen.path, "/dns-query");
-    assert!(state.settings_screen.custom_dns);
+    assert_eq!(state.settings.screen.server, "1.1.1.1");
+    assert_eq!(state.settings.screen.server_name, "cloudflare-dns.com");
+    assert_eq!(state.settings.screen.port, "8443");
+    assert_eq!(state.settings.screen.path, "/dns-query");
+    assert!(state.settings.screen.custom_dns);
 
     config.settings.dns = DnsSettings::default();
     state.reduce(WorkerEvent::Config {
         generation: 2,
         config,
     });
-    assert_eq!(state.settings_screen.server, "1.1.1.1");
-    assert_eq!(state.settings_screen.server_name, "cloudflare-dns.com");
-    assert!(state.settings_screen.port.is_empty());
-    assert!(state.settings_screen.path.is_empty());
-    assert!(!state.settings_screen.custom_dns);
+    assert_eq!(state.settings.screen.server, "1.1.1.1");
+    assert_eq!(state.settings.screen.server_name, "cloudflare-dns.com");
+    assert!(state.settings.screen.port.is_empty());
+    assert!(state.settings.screen.path.is_empty());
+    assert!(!state.settings.screen.custom_dns);
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn saved_google_and_presets_select_the_correct_card_and_job() {
         config,
     });
     state.act(Action::OpenSettings);
-    assert!(!state.settings_screen.custom_dns);
+    assert!(!state.settings.screen.custom_dns);
     assert_eq!(
         DnsPreset::matching(&state.config.settings.dns),
         Some(DnsPreset::Google)
@@ -65,7 +65,7 @@ fn saved_google_and_presets_select_the_correct_card_and_job() {
         state.act(Action::SetDnsPreset(DnsPreset::Quad9)),
         Some(Job::SetDns(dns)) if dns == DnsPreset::Quad9.settings()
     ));
-    assert!(!state.settings_screen.custom_dns);
+    assert!(!state.settings.screen.custom_dns);
 }
 
 #[test]
@@ -76,16 +76,16 @@ fn selecting_saved_preset_leaves_no_job_and_failed_preset_restores_saved_dns() {
     };
     state.act(Action::OpenSettings);
     state.act(Action::SelectCustomDns);
-    state.settings_screen.server = "9.9.9.9".into();
-    state.settings_screen.dirty = true;
+    state.settings.screen.server = "9.9.9.9".into();
+    state.settings.screen.dirty = true;
     assert!(
         state
             .act(Action::SetDnsPreset(DnsPreset::Cloudflare))
             .is_none()
     );
-    assert!(!state.settings_screen.custom_dns);
-    assert!(!state.settings_screen.dirty);
-    assert_eq!(state.settings_screen.server, "1.1.1.1");
+    assert!(!state.settings.screen.custom_dns);
+    assert!(!state.settings.screen.dirty);
+    assert_eq!(state.settings.screen.server, "1.1.1.1");
 
     assert!(matches!(
         state.act(Action::SetDnsPreset(DnsPreset::Quad9)),
@@ -94,8 +94,8 @@ fn selecting_saved_preset_leaves_no_job_and_failed_preset_restores_saved_dns() {
     state.reduce(WorkerEvent::SetDns(Err(
         rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
     )));
-    assert_eq!(state.settings_screen.server, "1.1.1.1");
-    assert!(!state.settings_screen.custom_dns);
+    assert_eq!(state.settings.screen.server, "1.1.1.1");
+    assert!(!state.settings.screen.custom_dns);
 }
 
 #[test]
@@ -108,37 +108,37 @@ fn settings_reset_requires_disconnection_and_resynchronizes_dns() {
     state.config.settings.dns =
         rosetun_core::parse_dns_input("1.0.0.1", "cloudflare-dns.com", "", "").unwrap();
     state.act(Action::OpenSettings);
-    assert!(state.settings_screen.custom_dns);
-    state.settings_screen.server = "8.8.8.8".into();
-    state.settings_screen.dirty = true;
+    assert!(state.settings.screen.custom_dns);
+    state.settings.screen.server = "8.8.8.8".into();
+    state.settings.screen.dirty = true;
     state.status.state = ConnectionState::Connected;
     assert!(!state.can_reset_settings());
     state.act(Action::RequestResetSettings);
-    assert!(!state.settings_screen.reset_open);
+    assert!(!state.settings.screen.reset_open);
 
     state.status.state = ConnectionState::Disconnected;
     state.operations.kill_switch = true;
     assert!(!state.can_reset_settings());
     state.operations.kill_switch = false;
     state.act(Action::RequestResetSettings);
-    assert!(state.settings_screen.reset_open);
+    assert!(state.settings.screen.reset_open);
     assert!(matches!(
         state.act(Action::ConfirmResetSettings),
         Some(Job::ResetSettings)
     ));
     state.act(Action::CancelResetSettings);
-    assert!(state.settings_screen.reset_open);
+    assert!(state.settings.screen.reset_open);
     state.reduce(WorkerEvent::Config {
         generation: 1,
         config: AppConfig::default(),
     });
-    assert!(state.settings_screen.dirty);
+    assert!(state.settings.screen.dirty);
     state.reduce(WorkerEvent::ResetSettings(Ok(())));
-    assert!(!state.settings_screen.reset_open);
+    assert!(!state.settings.screen.reset_open);
     assert!(!state.operations.settings);
-    assert!(!state.settings_screen.dirty);
-    assert!(!state.settings_screen.custom_dns);
-    assert_eq!(state.settings_screen.server, "1.1.1.1");
+    assert!(!state.settings.screen.dirty);
+    assert!(!state.settings.screen.custom_dns);
+    assert_eq!(state.settings.screen.server, "1.1.1.1");
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn settings_reset_failure_closes_confirmation_and_reports_error() {
         ..State::default()
     };
     state.act(Action::RequestResetSettings);
-    assert!(state.settings_screen.reset_open);
+    assert!(state.settings.screen.reset_open);
     assert!(matches!(
         state.act(Action::ConfirmResetSettings),
         Some(Job::ResetSettings)
@@ -156,7 +156,7 @@ fn settings_reset_failure_closes_confirmation_and_reports_error() {
     state.reduce(WorkerEvent::ResetSettings(Err(
         rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
     )));
-    assert!(!state.settings_screen.reset_open);
+    assert!(!state.settings.screen.reset_open);
     assert!(!state.operations.settings);
     assert_eq!(
         state.operation_error.as_deref(),
@@ -172,22 +172,22 @@ fn settings_dns_form_preserves_unsaved_input_across_config_reloads() {
         generation: 1,
         config: AppConfig::default(),
     });
-    assert_eq!(state.settings_screen.server, "1.1.1.1");
+    assert_eq!(state.settings.screen.server, "1.1.1.1");
     state.act(Action::SelectCustomDns);
-    assert!(state.settings_screen.custom_dns);
-    state.settings_screen.server = "8.8.8.8".into();
-    state.settings_screen.server_name = "dns.google".into();
-    state.settings_screen.port = "8443".into();
-    state.settings_screen.dirty = true;
+    assert!(state.settings.screen.custom_dns);
+    state.settings.screen.server = "8.8.8.8".into();
+    state.settings.screen.server_name = "dns.google".into();
+    state.settings.screen.port = "8443".into();
+    state.settings.screen.dirty = true;
     let mut config = AppConfig::default();
     config.settings.kill_switch = true;
     state.reduce(WorkerEvent::Config {
         generation: 2,
         config,
     });
-    assert_eq!(state.settings_screen.server, "8.8.8.8");
-    assert_eq!(state.settings_screen.server_name, "dns.google");
-    assert!(state.settings_screen.dirty);
+    assert_eq!(state.settings.screen.server, "8.8.8.8");
+    assert_eq!(state.settings.screen.server_name, "dns.google");
+    assert!(state.settings.screen.dirty);
 
     let Some(Job::SetDns(dns)) = state.act(Action::SaveDns) else {
         panic!("expected DNS save");
@@ -195,20 +195,20 @@ fn settings_dns_form_preserves_unsaved_input_across_config_reloads() {
     assert_eq!(dns.server_name, "dns.google");
     assert!(state.operations.settings);
     assert!(state.act(Action::SetDnsPreset(DnsPreset::Quad9)).is_none());
-    assert_eq!(state.settings_screen.server, "8.8.8.8");
+    assert_eq!(state.settings.screen.server, "8.8.8.8");
     let mut config = state.config.clone();
     config.settings.dns = dns;
     state.reduce(WorkerEvent::Config {
         generation: 3,
         config,
     });
-    assert!(state.settings_screen.dirty);
+    assert!(state.settings.screen.dirty);
     state.reduce(WorkerEvent::SetDns(Ok(())));
     assert!(!state.operations.settings);
-    assert!(!state.settings_screen.dirty);
-    assert_eq!(state.settings_screen.server, "8.8.8.8");
+    assert!(!state.settings.screen.dirty);
+    assert_eq!(state.settings.screen.server, "8.8.8.8");
     assert!(state.act(Action::SaveDns).is_none());
-    assert!(state.settings_screen.custom_dns);
+    assert!(state.settings.screen.custom_dns);
 }
 
 #[test]
@@ -263,18 +263,18 @@ fn settings_operations_clear_busy_and_report_errors() {
 
     state.act(Action::OpenSettings);
     state.act(Action::SelectCustomDns);
-    assert!(!state.settings_screen.dirty);
-    state.settings_screen.server = "bad".into();
+    assert!(!state.settings.screen.dirty);
+    state.settings.screen.server = "bad".into();
     assert!(state.act(Action::SaveDns).is_none());
-    state.settings_screen.server = "8.8.8.8".into();
-    state.settings_screen.dirty = true;
+    state.settings.screen.server = "8.8.8.8".into();
+    state.settings.screen.dirty = true;
     assert!(matches!(state.act(Action::SaveDns), Some(Job::SetDns(_))));
     state.reduce(WorkerEvent::SetDns(Err(
         rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
     )));
     assert!(!state.operations.settings);
-    assert!(state.settings_screen.dirty);
-    assert_eq!(state.settings_screen.server, "8.8.8.8");
+    assert!(state.settings.screen.dirty);
+    assert_eq!(state.settings.screen.server, "8.8.8.8");
     assert_eq!(
         state.operation_error.as_deref(),
         Some("could not determine the configuration directory")
@@ -440,23 +440,23 @@ fn opening_settings_refreshes_autostart_every_time() {
         state.act(Action::OpenSettings),
         Some(Job::LoadAutostart)
     ));
-    assert_eq!(state.settings_screen.autostart, None);
+    assert_eq!(state.settings.screen.autostart, None);
     state.reduce(WorkerEvent::AutostartLoaded(Ok(true)));
-    assert_eq!(state.settings_screen.autostart, Some(true));
+    assert_eq!(state.settings.screen.autostart, Some(true));
 
     state.act(Action::ShowConnection);
     assert!(matches!(
         state.act(Action::OpenSettings),
         Some(Job::LoadAutostart)
     ));
-    assert_eq!(state.settings_screen.autostart, None);
+    assert_eq!(state.settings.screen.autostart, None);
     state.reduce(WorkerEvent::AutostartLoaded(Ok(false)));
-    assert_eq!(state.settings_screen.autostart, Some(false));
+    assert_eq!(state.settings.screen.autostart, Some(false));
     state.reduce(WorkerEvent::AutostartLoaded(Err(std::io::Error::new(
         std::io::ErrorKind::PermissionDenied,
         "registry read denied",
     ))));
-    assert_eq!(state.settings_screen.autostart, None);
+    assert_eq!(state.settings.screen.autostart, None);
     assert_eq!(
         state.operation_error.as_deref(),
         Some("could not read the autostart setting: registry read denied")
@@ -482,7 +482,7 @@ fn windows_settings_jobs_respect_busy_state_and_saved_values() {
     assert!(state.act(Action::SetCloseToTray(false)).is_none());
     state.reduce(WorkerEvent::SetAutostart(Ok(true)));
     assert!(!state.operations.settings);
-    assert_eq!(state.settings_screen.autostart, Some(true));
+    assert_eq!(state.settings.screen.autostart, Some(true));
 
     assert!(matches!(
         state.act(Action::SetCloseToTray(false)),
@@ -531,7 +531,7 @@ fn failed_autostart_write_clears_busy_and_loaded_state() {
         "registry write denied",
     ))));
     assert!(!state.operations.settings);
-    assert_eq!(state.settings_screen.autostart, None);
+    assert_eq!(state.settings.screen.autostart, None);
     assert_eq!(
         state.operation_error.as_deref(),
         Some("could not change autostart: registry write denied")
@@ -546,7 +546,7 @@ fn folder_launch_uses_the_worker_and_reports_failures() {
         config_ready: true,
         ..State::default()
     };
-    state.settings_screen.config_folder = Some(PathBuf::from("C:\\Users\\Test\\Rosetun"));
+    state.settings.screen.config_folder = Some(PathBuf::from("C:\\Users\\Test\\Rosetun"));
     assert!(
         state
             .act(Action::OpenFolder(AboutFolder::Licenses))
@@ -568,7 +568,7 @@ fn folder_launch_uses_the_worker_and_reports_failures() {
     );
 
     let licenses = PathBuf::from("C:\\Program Files\\Rosetun\\licenses");
-    state.settings_screen.licenses_folder = Some(licenses.clone());
+    state.settings.screen.licenses_folder = Some(licenses.clone());
     assert!(matches!(
         state.act(Action::OpenFolder(AboutFolder::Licenses)),
         Some(Job::OpenFolder(path)) if path == licenses

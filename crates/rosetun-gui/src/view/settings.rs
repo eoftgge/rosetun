@@ -13,7 +13,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         ui.colored_label(theme::TEXT_DIM, tr!("loading"));
         return;
     }
-    match state.settings_screen.section {
+    match state.settings.screen.section {
         SettingsSection::General => general(ui, state, actions),
         SettingsSection::Connection => connection(ui, state, actions),
         SettingsSection::Network => dns(ui, state, actions),
@@ -97,13 +97,13 @@ fn language_label(setting: LanguageSetting) -> String {
 fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
         let editable = state.can_edit_settings();
-        let mut autostart = state.settings_screen.autostart.unwrap_or(false);
+        let mut autostart = state.settings.screen.autostart.unwrap_or(false);
         if card
             .toggle(
                 tr!("start-with-windows"),
                 tr!("start-with-windows-detail"),
                 &mut autostart,
-                editable && state.settings_screen.autostart.is_some(),
+                editable && state.settings.screen.autostart.is_some(),
             )
             .changed()
         {
@@ -190,7 +190,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         card.body(|ui| {
             let editable = state.can_edit_settings();
             let saved = DnsPreset::matching(&state.config.settings.dns);
-            let custom = state.settings_screen.custom_dns;
+            let custom = state.settings.screen.custom_dns;
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let width = (ui.available_width() - 3.0 * 8.0) / 4.0;
@@ -301,7 +301,7 @@ fn dns_choice(
 
 fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     let editable = state.can_edit_settings();
-    let form = &mut state.settings_screen;
+    let form = &mut state.settings.screen;
     egui::Grid::new("dns_settings_fields")
         .num_columns(2)
         .spacing([16.0, 10.0])
@@ -623,7 +623,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.add_space(theme::SECTION_GAP);
     widgets::settings_card(ui, |card| {
         card.body(|ui| {
-            if let Some(folder) = &state.settings_screen.config_folder {
+            if let Some(folder) = &state.settings.screen.config_folder {
                 about_path(
                     ui,
                     state,
@@ -643,7 +643,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     actions,
                 );
             }
-            if let Some(folder) = &state.settings_screen.licenses_folder {
+            if let Some(folder) = &state.settings.screen.licenses_folder {
                 ui.add_space(8.0);
                 about_path(
                     ui,

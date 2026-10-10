@@ -23,9 +23,12 @@ use crate::rules::{
 };
 use crate::worker::{ConfigWorkerError, FailureInterference, HelperCommandError, WorkerEvent};
 
+mod settings;
 mod traffic;
 mod updates;
 
+use settings::SettingsState;
+pub(crate) use settings::{AboutFolder, SettingsSection};
 pub(crate) use traffic::TrafficRange;
 use traffic::TrafficState;
 use updates::UpdatesState;
@@ -178,16 +181,6 @@ pub(crate) enum Screen {
     Traffic,
     Rules,
     Settings,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum SettingsSection {
-    #[default]
-    General,
-    Connection,
-    Network,
-    Service,
-    About,
 }
 
 pub(crate) enum NameDialogKind {
@@ -385,37 +378,6 @@ impl RuleScreen {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct SettingsScreen {
-    pub(crate) section: SettingsSection,
-    pub(crate) custom_dns: bool,
-    pub(crate) reset_open: bool,
-    pub(crate) server: String,
-    pub(crate) server_name: String,
-    pub(crate) port: String,
-    pub(crate) path: String,
-    pub(crate) dirty: bool,
-    pub(crate) config_folder: Option<PathBuf>,
-    pub(crate) licenses_folder: Option<PathBuf>,
-    #[cfg(windows)]
-    pub(crate) autostart: Option<bool>,
-    opened: bool,
-}
-
-impl SettingsScreen {
-    fn sync_dns(&mut self, dns: &DnsSettings) {
-        self.custom_dns = DnsPreset::matching(dns).is_none();
-        self.server = dns.server.to_string();
-        self.server_name = dns.server_name.clone();
-        self.port = dns.port.map_or_else(String::new, |port| port.to_string());
-        self.path = dns.path.clone().unwrap_or_default();
-    }
-
-    pub(crate) fn parsed_dns(&self) -> Result<DnsSettings, rosetun_core::DnsInputError> {
-        rosetun_core::parse_dns_input(&self.server, &self.server_name, &self.port, &self.path)
-    }
-}
-
 pub(crate) enum SessionPart {
     Server,
     Rules,
@@ -482,7 +444,7 @@ pub(crate) struct State {
     deferred_connect: Option<ConnectRequest>,
     pub(crate) screen: Screen,
     pub(crate) rule_screen: RuleScreen,
-    pub(crate) settings_screen: SettingsScreen,
+    pub(crate) settings: SettingsState,
     next_process_request: u64,
     pub(crate) expanded: BTreeSet<SubscriptionId>,
     pub(crate) reveal: Option<(SubscriptionId, NodeId)>,
@@ -556,7 +518,7 @@ impl Default for State {
             deferred_connect: None,
             screen: Screen::default(),
             rule_screen: RuleScreen::default(),
-            settings_screen: SettingsScreen::default(),
+            settings: SettingsState::default(),
             next_process_request: 0,
             expanded: BTreeSet::new(),
             reveal: None,
@@ -569,12 +531,6 @@ impl Default for State {
             protection_confirmation: false,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum AboutFolder {
-    Config,
-    Licenses,
 }
 
 pub(crate) enum Action {
@@ -1161,19 +1117,6 @@ impl State {
                 ))
     }
 
-    /// Reset is allowed only when the running tunnel cannot disagree with the
-    /// kill switch value that will be written to the configuration.
-    pub(crate) fn can_reset_settings(&self) -> bool {
-        self.can_edit_settings()
-            && !self.operations.helper
-            && !self.operations.kill_switch
-            && (!self.helper_available
-                || matches!(
-                    self.status.state,
-                    ConnectionState::Disconnected | ConnectionState::Failed { .. }
-                ))
-    }
-
     pub(crate) fn can_full_check(&self) -> bool {
         self.helper_available && self.config_ready
     }
@@ -1319,16 +1262,6 @@ impl State {
             && !self.operations.helper
     }
 
-    pub(crate) fn can_edit_settings(&self) -> bool {
-        self.config_ready && !self.operations.settings
-    }
-
-    fn start_settings(&mut self, job: Job) -> Option<Job> {
-        self.operations.settings = true;
-        self.operation_error = None;
-        Some(job)
-    }
-
     fn preferred_set(&self) -> Option<RuleSetId> {
         self.config
             .active_rules()
@@ -1381,8 +1314,8 @@ impl State {
                 self.config = config;
                 self.config_ready = true;
                 self.config_error = None;
-                if self.settings_screen.opened && !self.settings_screen.dirty {
-                    self.settings_screen.sync_dns(&self.config.settings.dns);
+                if self.settings.screen.opened && !self.settings.screen.dirty {
+                    self.settings.screen.sync_dns(&self.config.settings.dns);
                 }
                 self.expanded
                     .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));
@@ -1695,9 +1628,9 @@ impl State {
                             self.text(&tr!("apply-failed-restored-template", reason = &reason)),
                         );
                         self.operation_error = None;
-                        self.settings_screen.dirty = false;
-                        if self.settings_screen.opened {
-                            self.settings_screen.sync_dns(&self.config.settings.dns);
+                        self.settings.screen.dirty = false;
+                        if self.settings.screen.opened {
+                            self.settings.screen.sync_dns(&self.config.settings.dns);
                         }
                     }
                     Err(error) => {
@@ -1721,9 +1654,9 @@ impl State {
                         self.blocked_auto_apply = None;
                         self.apply_failure = None;
                         self.operation_error = None;
-                        self.settings_screen.dirty = false;
-                        if self.settings_screen.opened {
-                            self.settings_screen.sync_dns(&self.config.settings.dns);
+                        self.settings.screen.dirty = false;
+                        if self.settings.screen.opened {
+                            self.settings.screen.sync_dns(&self.config.settings.dns);
                         }
                     }
                     Err(error) => {
@@ -1876,62 +1809,24 @@ impl State {
                     .err()
                     .map(|error| self.text(&errors::store(crate::i18n::language(), &error)));
             }
-            WorkerEvent::SetInterfaceScale(result) => self.finish_settings(result),
-            WorkerEvent::SetLanguage(result) => self.finish_settings(result),
+            event @ (WorkerEvent::SetInterfaceScale(_)
+            | WorkerEvent::SetLanguage(_)
+            | WorkerEvent::SetReduceMotion(_)
+            | WorkerEvent::SetConnectOnStart(_)
+            | WorkerEvent::SetAutoReconnect(_)
+            | WorkerEvent::SetAutoUpdateSubscriptions(_)
+            | WorkerEvent::SetCheckUpdates(_)
+            | WorkerEvent::SkipVersion(_)
+            | WorkerEvent::SetDns(_)
+            | WorkerEvent::ResetSettings(_)
+            | WorkerEvent::SetVerboseLog(_)) => self.reduce_settings(event),
             #[cfg(windows)]
-            WorkerEvent::AutostartLoaded(result) => match result {
-                Ok(enabled) => self.settings_screen.autostart = Some(enabled),
-                Err(error) => {
-                    self.settings_screen.autostart = None;
-                    let message = tr!("error-autostart-read", detail = error.to_string());
-                    self.operation_error = Some(self.text(&message));
-                }
-            },
-            #[cfg(windows)]
-            WorkerEvent::SetAutostart(result) => {
-                self.operations.settings = false;
-                self.settings_screen.autostart = result.as_ref().ok().copied();
-                self.operation_error = result.err().map(|error| {
-                    let message = tr!("error-autostart-write", detail = error.to_string());
-                    self.text(&message)
-                });
-            }
-            #[cfg(windows)]
-            WorkerEvent::SetCloseToTray(result) => self.finish_settings(result),
-            WorkerEvent::SetReduceMotion(result) => self.finish_settings(result),
-            WorkerEvent::SetConnectOnStart(result) => self.finish_settings(result),
-            WorkerEvent::SetAutoReconnect(result) => self.finish_settings(result),
-            WorkerEvent::SetAutoUpdateSubscriptions(result) => self.finish_settings(result),
-            WorkerEvent::SetCheckUpdates(result) => self.finish_settings(result),
-            WorkerEvent::SkipVersion(result) => self.finish_settings(result),
+            event @ (WorkerEvent::AutostartLoaded(_)
+            | WorkerEvent::SetAutostart(_)
+            | WorkerEvent::SetCloseToTray(_)
+            | WorkerEvent::OpenFolder(_)) => self.reduce_settings(event),
             WorkerEvent::UpdateCheck { checked_at, result } => {
                 self.reduce_updates(result, checked_at);
-            }
-            WorkerEvent::SetDns(result) => {
-                if result.is_ok() {
-                    self.settings_screen.dirty = false;
-                    self.settings_screen.sync_dns(&self.config.settings.dns);
-                } else if !self.settings_screen.dirty {
-                    self.settings_screen.sync_dns(&self.config.settings.dns);
-                }
-                self.finish_settings(result);
-            }
-            WorkerEvent::ResetSettings(result) => {
-                if result.is_ok() {
-                    self.settings_screen.dirty = false;
-                    self.settings_screen.sync_dns(&self.config.settings.dns);
-                }
-                self.settings_screen.reset_open = false;
-                self.finish_settings(result);
-            }
-            WorkerEvent::SetVerboseLog(result) => self.finish_settings(result),
-            #[cfg(windows)]
-            WorkerEvent::OpenFolder(result) => {
-                self.operations.settings = false;
-                self.operation_error = result.err().map(|error| {
-                    let message = tr!("error-open-folder", detail = error.to_string());
-                    self.text(&message)
-                });
             }
             WorkerEvent::Add(result) => match result {
                 Ok((subscription, report)) => {
@@ -2150,13 +2045,6 @@ impl State {
         Some(job)
     }
 
-    fn finish_settings(&mut self, result: Result<(), rosetun_core::SettingsError>) {
-        self.operations.settings = false;
-        self.operation_error = result
-            .err()
-            .map(|error| self.text(&errors::settings(crate::i18n::language(), &error)));
-    }
-
     fn load_processes(&mut self) -> Option<Job> {
         let dialog = self.rule_screen.add.as_mut()?;
         if dialog.kind != RuleInputKind::Process || dialog.load_request.is_some() || dialog.busy {
@@ -2194,141 +2082,28 @@ impl State {
             }
             #[cfg(windows)]
             Action::WindowMinimized => return self.apply_on_leave(),
-            Action::OpenSettings => {
-                if !self.settings_screen.opened {
-                    self.settings_screen.opened = true;
-                    if self.config_ready {
-                        self.settings_screen.sync_dns(&self.config.settings.dns);
-                    }
-                }
-                let job = self.show_screen(Screen::Settings);
-                #[cfg(windows)]
-                {
-                    self.queued_leave_apply = job;
-                    self.settings_screen.autostart = None;
-                    return Some(Job::LoadAutostart);
-                }
-                #[cfg(not(windows))]
-                return job;
-            }
-            Action::OpenSettingsSection(section) => {
-                self.settings_screen.section = section;
-            }
-            Action::SetInterfaceScale(percent) => {
-                if self.can_edit_settings()
-                    && self.config.interface.scale_percent != percent
-                    && rosetun_core::INTERFACE_SCALES.contains(&percent)
-                {
-                    return self.start_settings(Job::SetInterfaceScale(percent));
-                }
-            }
-            Action::SetLanguage(language) => {
-                if self.can_edit_settings() && self.config.interface.language != language {
-                    return self.start_settings(Job::SetLanguage(language));
-                }
-            }
-            Action::SetReduceMotion(enabled) => {
-                if self.can_edit_settings() && self.config.interface.reduce_motion != enabled {
-                    return self.start_settings(Job::SetReduceMotion(enabled));
-                }
-            }
+            action @ (Action::OpenSettings
+            | Action::OpenSettingsSection(_)
+            | Action::SetInterfaceScale(_)
+            | Action::SetLanguage(_)
+            | Action::SetReduceMotion(_)
+            | Action::SetConnectOnStart(_)
+            | Action::SetAutoReconnect(_)
+            | Action::SetAutoUpdateSubscriptions(_)
+            | Action::SetCheckUpdates(_)
+            | Action::SaveDns
+            | Action::SelectCustomDns
+            | Action::SetDnsPreset(_)
+            | Action::RequestResetSettings
+            | Action::CancelResetSettings
+            | Action::ConfirmResetSettings
+            | Action::SetVerboseLog(_)) => return self.act_settings(action),
             #[cfg(windows)]
-            Action::SetAutostart(enabled) => {
-                if self.can_edit_settings()
-                    && self.settings_screen.autostart.is_some()
-                    && self.settings_screen.autostart != Some(enabled)
-                {
-                    return self.start_settings(Job::SetAutostart(enabled));
-                }
-            }
-            #[cfg(windows)]
-            Action::SetCloseToTray(enabled) => {
-                if self.can_edit_settings() && self.config.interface.close_to_tray != enabled {
-                    return self.start_settings(Job::SetCloseToTray(enabled));
-                }
-            }
-            Action::SetConnectOnStart(enabled) => {
-                if self.can_edit_settings() && self.config.interface.connect_on_start != enabled {
-                    return self.start_settings(Job::SetConnectOnStart(enabled));
-                }
-            }
-            Action::SetAutoReconnect(enabled) => {
-                if self.can_edit_settings() && self.config.settings.auto_reconnect != enabled {
-                    return self.start_settings(Job::SetAutoReconnect(enabled));
-                }
-            }
-            Action::SetAutoUpdateSubscriptions(enabled) => {
-                if self.can_edit_settings()
-                    && self.config.interface.auto_update_subscriptions != enabled
-                {
-                    return self.start_settings(Job::SetAutoUpdateSubscriptions(enabled));
-                }
-            }
-            Action::SetCheckUpdates(enabled) => {
-                if self.can_edit_settings() && self.config.interface.check_updates != enabled {
-                    return self.start_settings(Job::SetCheckUpdates(enabled));
-                }
+            action @ (Action::SetAutostart(_) | Action::SetCloseToTray(_) | Action::OpenFolder(_)) => {
+                return self.act_settings(action);
             }
             action @ (Action::CheckUpdatesNow | Action::SkipVersion) => {
                 return self.act_updates(action);
-            }
-            Action::SaveDns => {
-                if self.can_edit_settings()
-                    && self.settings_screen.custom_dns
-                    && let Ok(dns) = self.settings_screen.parsed_dns()
-                    && dns != self.config.settings.dns
-                {
-                    return self.start_settings(Job::SetDns(dns));
-                }
-            }
-            Action::SelectCustomDns => {
-                if self.can_edit_settings() {
-                    self.settings_screen.custom_dns = true;
-                }
-            }
-            Action::SetDnsPreset(preset) => {
-                if self.can_edit_settings() {
-                    self.settings_screen.custom_dns = false;
-                    self.settings_screen.dirty = false;
-                    self.settings_screen.sync_dns(&preset.settings());
-                    if self.config.settings.dns != preset.settings() {
-                        return self.start_settings(Job::SetDns(preset.settings()));
-                    }
-                }
-            }
-            Action::RequestResetSettings => {
-                if self.can_reset_settings() {
-                    self.settings_screen.reset_open = true;
-                }
-            }
-            Action::CancelResetSettings => {
-                if !self.operations.settings {
-                    self.settings_screen.reset_open = false;
-                }
-            }
-            Action::ConfirmResetSettings => {
-                if self.settings_screen.reset_open && self.can_reset_settings() {
-                    return self.start_settings(Job::ResetSettings);
-                }
-            }
-            Action::SetVerboseLog(on) => {
-                if self.can_edit_settings()
-                    && self.config.settings.verbose_log_active(now_unix()) != on
-                {
-                    return self.start_settings(Job::SetVerboseLog(on));
-                }
-            }
-            #[cfg(windows)]
-            Action::OpenFolder(folder) => {
-                let path = match folder {
-                    AboutFolder::Config => &self.settings_screen.config_folder,
-                    AboutFolder::Licenses => &self.settings_screen.licenses_folder,
-                };
-                if self.can_edit_settings()
-                    && let Some(path) = path
-                {
-                    return self.start_settings(Job::OpenFolder(path.clone()));
-                }
             }
             Action::OpenRules => {
                 if !self.rule_screen.opened {

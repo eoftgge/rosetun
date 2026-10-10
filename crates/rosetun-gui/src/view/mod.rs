@@ -136,7 +136,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             add_rule::show(ctx, dialog, can_temporary, &mut actions);
         }
     }
-    if state.settings_screen.reset_open {
+    if state.settings.screen.reset_open {
         settings::reset_dialog(ctx, state, &mut actions);
     }
     window_frame::resize_edges(ui);
@@ -159,7 +159,7 @@ fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if settings_nav_item(
             ui,
             &title,
-            state.settings_screen.section == section,
+            state.settings.screen.section == section,
             section == SettingsSection::Service && service_warning(state),
             section == SettingsSection::About && state.available_update().is_some(),
         ) {
