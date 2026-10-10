@@ -105,15 +105,16 @@ $singBoxBytes = [IO.File]::ReadAllBytes($binary)
 $wintunFound = $false
 $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
-    for ($offset = 0; $offset -le $singBoxBytes.Length - $wintunDllLength; $offset++) {
-        if ($singBoxBytes[$offset] -ne 0x4D -or $singBoxBytes[$offset + 1] -ne 0x5A) {
-            continue
+    $offset = [Array]::IndexOf($singBoxBytes, [byte]0x4D, 0)
+    while ($offset -ge 0 -and $offset -le $singBoxBytes.Length - $wintunDllLength) {
+        if ($singBoxBytes[$offset + 1] -eq 0x5A) {
+            $candidateHash = [BitConverter]::ToString($sha256.ComputeHash($singBoxBytes, $offset, $wintunDllLength)).Replace('-', '')
+            if ($candidateHash -eq $wintunDllHash) {
+                $wintunFound = $true
+                break
+            }
         }
-        $candidateHash = [BitConverter]::ToString($sha256.ComputeHash($singBoxBytes, $offset, $wintunDllLength)).Replace('-', '')
-        if ($candidateHash -eq $wintunDllHash) {
-            $wintunFound = $true
-            break
-        }
+        $offset = [Array]::IndexOf($singBoxBytes, [byte]0x4D, $offset + 1)
     }
 }
 finally {
@@ -134,6 +135,11 @@ under the Wintun Prebuilt Binaries License; see wintun-prebuilt-binaries-license
 Upstream binary distribution:
 https://www.wintun.net/builds/wintun-$wintunVersion.zip
 Embedded amd64 DLL: $wintunDllLength bytes, SHA-256 $wintunDllHash.
+
+Wintun source code (GPL-2.0):
+https://git.zx2c4.com/wintun/tree/?h=$wintunVersion
+
+Rosetun is not affiliated with WireGuard LLC.
 
 License source:
 https://git.zx2c4.com/wintun/plain/prebuilt-binaries-license.txt?h=$wintunVersion
