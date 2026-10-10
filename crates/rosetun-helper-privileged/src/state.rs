@@ -14,8 +14,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
-    ConnectionState, ListRef, Node, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, Settings,
-    Status, Traffic, list_tag,
+    ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic, list_tag,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
@@ -356,7 +355,6 @@ impl Helper {
                 &request.node,
                 &request.effective_rule_set(),
                 &request.lists,
-                &request.fallback_block_rules,
                 &request.settings,
                 mode,
                 None,
@@ -467,7 +465,6 @@ impl Helper {
                 &request.node,
                 &request.effective_rule_set(),
                 &request.lists,
-                &request.fallback_block_rules,
                 &request.settings,
                 mode,
                 None,
@@ -684,9 +681,7 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
             "temporary rules exceed the limit or contain a template",
         ));
     }
-    if request.lists.len() > MAX_TEMPORARY_RULES
-        || request.fallback_block_rules.len() > MAX_TEMPORARY_RULES
-    {
+    if request.lists.len() > MAX_TEMPORARY_RULES {
         return Err(HelperError::new(
             ErrorCode::InvalidState,
             "too many list references",
@@ -703,24 +698,8 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
             "engine does not support list rules",
         ));
     }
-    let mut block_ids = std::collections::HashSet::new();
-    for id in &request.fallback_block_rules {
-        if !block_ids.insert(id)
-            || !rules.enabled().any(|rule| {
-                &rule.id == id
-                    && matches!(rule.matcher, RuleMatcher::List { .. })
-                    && rule.target == RuleTarget::Block
-            })
-        {
-            return Err(HelperError::new(
-                ErrorCode::InvalidState,
-                "invalid fallback block rule",
-            ));
-        }
-    }
     let expected: std::collections::HashSet<_> = rules
         .enabled()
-        .filter(|rule| !block_ids.contains(&rule.id))
         .filter_map(|rule| match &rule.matcher {
             RuleMatcher::List { list, category } => Some(list_tag(list, category.as_deref())),
             _ => None,
@@ -1031,7 +1010,6 @@ impl Session {
         node: &Node,
         rules: &RuleSet,
         lists: &[ListRef],
-        fallback_block_rules: &[RuleId],
         settings: &Settings,
         mode: StartMode,
         endpoint: Option<IpAddr>,
@@ -1112,7 +1090,6 @@ impl Session {
             resolved_node.as_ref().unwrap_or(node),
             rules,
             lists,
-            fallback_block_rules,
             settings,
             control.as_ref(),
             verbose_until.is_some(),
@@ -1433,7 +1410,6 @@ fn render_config(
     node: &Node,
     rules: &RuleSet,
     lists: &[ListRef],
-    fallback_block_rules: &[RuleId],
     settings: &Settings,
     control: Option<&ControlEndpoint>,
     verbose_log: bool,
@@ -1443,7 +1419,6 @@ fn render_config(
             node,
             rules,
             lists,
-            fallback_block_rules,
             settings,
             control,
             verbose_log,

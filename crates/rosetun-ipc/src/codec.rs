@@ -117,7 +117,6 @@ mod tests {
                     target: RuleTarget::Direct,
                 }],
                 lists: Vec::new(),
-                fallback_block_rules: Vec::new(),
                 settings: Settings::default(),
             })),
         };

@@ -1,4 +1,5 @@
 mod formats;
+mod last_good;
 mod prepare;
 
 use std::collections::HashSet;

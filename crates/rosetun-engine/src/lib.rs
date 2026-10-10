@@ -203,7 +203,6 @@ pub struct RenderRequest<'a> {
     pub node: &'a Node,
     pub rules: &'a RuleSet,
     pub lists: &'a [rosetun_config::ListRef],
-    pub fallback_block_rules: &'a [rosetun_config::RuleId],
     pub settings: &'a Settings,
     pub control: Option<&'a ControlEndpoint>,
     pub verbose_log: bool,
@@ -218,10 +217,6 @@ impl std::fmt::Debug for RenderRequest<'_> {
             .field("rule_set_id", &self.rules.id)
             .field("rule_count", &self.rules.rules.len())
             .field("list_count", &self.lists.len())
-            .field(
-                "fallback_block_rule_count",
-                &self.fallback_block_rules.len(),
-            )
             .field("control", &self.control)
             .field("verbose_log", &self.verbose_log)
             .finish_non_exhaustive()

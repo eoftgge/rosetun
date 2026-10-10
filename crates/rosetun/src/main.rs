@@ -137,10 +137,16 @@ fn send_connection(
             ListOperation::Apply => client.apply_tunnel(request),
         },
         PreparedCliRequest::Lists(prepared) => {
-            if !prepared.missing_categories.is_empty() {
+            let cached = prepared.missing_categories.len() - prepared.skipped_categories.len();
+            if cached > 0 {
                 eprintln!(
-                    "warning: {} list category rules now block all traffic",
-                    prepared.missing_categories.len()
+                    "warning: {cached} list rules use a category that is no longer in the list; the last known version is used"
+                );
+            }
+            if !prepared.skipped_categories.is_empty() {
+                eprintln!(
+                    "warning: {} list rules use a category that is no longer in the list; these rules are skipped",
+                    prepared.skipped_categories.len()
                 );
             }
             rosetun_core::send_prepared(client, &prepared, operation)

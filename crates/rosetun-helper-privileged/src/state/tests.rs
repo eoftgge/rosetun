@@ -2332,7 +2332,6 @@ fn connect_request() -> ConnectRequest {
         rule_set: RuleSet::new(RuleSetId::new("base"), "base", RuleTarget::Proxy),
         temporary_rules: Vec::new(),
         lists: Vec::new(),
-        fallback_block_rules: Vec::new(),
         settings: Settings::default(),
     }
 }
@@ -3786,7 +3785,7 @@ fn missing_list_is_rejected_before_engine_spawn() {
 }
 
 #[test]
-fn invalid_list_tag_and_fallback_are_rejected_before_spawn() {
+fn invalid_list_tag_is_rejected_before_spawn() {
     let directory = ListSessionDirectory::new();
     let list_id = rosetun_config::ListId::new("one");
     let reference = directory.reference(&list_id, "example.com");
@@ -3797,33 +3796,26 @@ fn invalid_list_tag_and_fallback_are_rejected_before_spawn() {
         helper.connect(&request).unwrap_err().code,
         ErrorCode::InvalidState
     );
-    request.lists[0].tag = rosetun_config::list_tag(&rosetun_config::ListId::new("one"), None);
-    request.fallback_block_rules.push(RuleId::new("list-rule"));
-    assert_eq!(
-        helper.connect(&request).unwrap_err().code,
-        ErrorCode::InvalidState
-    );
     assert_eq!(controls.spawns(), 0);
 }
 
 #[test]
-fn vanished_category_block_rule_does_not_require_a_stored_list() {
+fn skipped_category_rule_does_not_require_a_stored_list() {
     let directory = ListSessionDirectory::new();
     let (helper, controls) = directory.helper();
     let mut request = connect_request();
     request.rule_set.rules.push(Rule {
         id: RuleId::new("vanished"),
-        enabled: true,
+        enabled: false,
         matcher: RuleMatcher::List {
             list: rosetun_config::ListId::new("dat"),
             category: Some("removed".into()),
         },
         target: RuleTarget::Block,
     });
-    request.fallback_block_rules.push(RuleId::new("vanished"));
     helper
         .connect(&request)
-        .expect("fallback does not need list bytes");
+        .expect("disabled list rule does not need list bytes");
     assert_eq!(controls.spawns(), 1);
     helper.disconnect().unwrap();
 }

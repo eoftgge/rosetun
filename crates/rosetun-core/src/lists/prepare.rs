@@ -4,7 +4,7 @@ use std::fmt;
 use base64::Engine as _;
 use rosetun_config::{
     ListCategoryError, ListFormat as StoredFormat, ListId, ListRef, RuleId, RuleMatcher,
-    RuleTarget, UploadedListFormat, list_tag,
+    UploadedListFormat, list_tag,
 };
 use rosetun_ipc::{
     ClientError, ConnectRequest, ErrorCode, HelperClient, ListFormat, MAX_LIST_CHUNK_BYTES,
@@ -12,11 +12,18 @@ use rosetun_ipc::{
 };
 use sha2::{Digest, Sha256};
 
-use super::{ListError, ListParseError, PayloadFormat, list_payload};
+use super::{ListError, ListParseError, PayloadFormat, last_good, list_payload};
 use crate::{Store, StoreError};
 
 const MAX_PREPARED_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_REFERENCES: usize = 256;
+
+#[derive(Clone, Copy)]
+enum Selected {
+    Current,
+    LastGood,
+    Skipped,
+}
 
 pub struct PreparedListPayload {
     pub sha256: String,
@@ -38,6 +45,7 @@ pub struct PreparedConnection {
     pub request: ConnectRequest,
     pub payloads: Vec<PreparedListPayload>,
     pub missing_categories: Vec<RuleId>,
+    pub skipped_categories: Vec<RuleId>,
 }
 
 impl fmt::Debug for PreparedConnection {
@@ -46,6 +54,7 @@ impl fmt::Debug for PreparedConnection {
             .field("list_count", &self.request.lists.len())
             .field("payload_count", &self.payloads.len())
             .field("missing_category_count", &self.missing_categories.len())
+            .field("skipped_category_count", &self.skipped_categories.len())
             .finish()
     }
 }
@@ -75,13 +84,25 @@ pub fn prepare_lists(
     mut request: ConnectRequest,
 ) -> Result<PreparedConnection, ListPreparationError> {
     let config = store.load()?;
-    let mut selected = HashMap::<(ListId, Option<String>), Option<ListRef>>::new();
+    let referenced: HashSet<_> = config
+        .rule_sets
+        .iter()
+        .flat_map(|set| set.rules.iter())
+        .chain(request.temporary_rules.iter())
+        .chain(request.rule_set.rules.iter())
+        .filter_map(|rule| match &rule.matcher {
+            RuleMatcher::List { list, category } => Some(list_tag(list, category.as_deref())),
+            _ => None,
+        })
+        .collect();
+    let mut selected = HashMap::<(ListId, Option<String>), Selected>::new();
     let mut references = Vec::new();
     let mut payloads = Vec::<PreparedListPayload>::new();
+    let mut updates = Vec::new();
     let mut missing_categories = Vec::new();
+    let mut skipped_categories = Vec::new();
     let mut total_bytes = 0_u64;
     request.lists.clear();
-    request.fallback_block_rules.clear();
 
     for rule in request
         .temporary_rules
@@ -93,71 +114,99 @@ pub fn prepare_lists(
             continue;
         };
         let key = (list.clone(), category.clone());
-        let reference = if let Some(cached) = selected.get(&key) {
-            cached.clone()
+        let value = if let Some(cached) = selected.get(&key) {
+            *cached
         } else {
-            let stored = config.lists.iter().find(|item| &item.id == list);
-            let dat = stored.is_some_and(|item| {
-                matches!(item.format, StoredFormat::GeoSite | StoredFormat::GeoIp)
+            let dat = config.lists.iter().any(|item| {
+                item.id == *list
+                    && matches!(item.format, StoredFormat::GeoSite | StoredFormat::GeoIp)
             });
-            let value = match list_payload(store, list, category.as_deref()) {
-                Ok(payload) => {
-                    let format = match payload.format {
-                        PayloadFormat::Binary => UploadedListFormat::Binary,
-                        PayloadFormat::Source => UploadedListFormat::Source,
-                    };
-                    let sha256 = format!("{:x}", Sha256::digest(&payload.bytes));
-                    let reference = ListRef {
-                        tag: list_tag(list, category.as_deref()),
-                        sha256: sha256.clone(),
-                        format,
-                    };
-                    if !payloads
-                        .iter()
-                        .any(|item| item.sha256 == sha256 && item.format == format)
-                    {
-                        let size = payload.bytes.len() as u64;
-                        total_bytes = total_bytes
-                            .checked_add(size)
-                            .filter(|total| *total <= MAX_PREPARED_BYTES)
-                            .ok_or(ListPreparationError::TooMany)?;
-                        if size > MAX_LIST_PAYLOAD_BYTES {
-                            return Err(ListPreparationError::TooMany);
-                        }
-                        payloads.push(PreparedListPayload {
-                            sha256,
-                            format,
-                            bytes: payload.bytes,
-                        });
-                    }
-                    references.push(reference.clone());
-                    Some(reference)
+            let tag = list_tag(list, category.as_deref());
+            let (payload, missing) = match list_payload(store, list, category.as_deref()) {
+                Ok(payload) => (Some(payload), false),
+                Err(ListError::Category(ListCategoryError::Unknown)) if dat => {
+                    (last_good::load(store, &tag)?, true)
                 }
-                Err(ListError::Category(ListCategoryError::Unknown)) if dat => None,
                 Err(ListError::Parse(ListParseError::EmptyResult)) if dat && category.is_some() => {
-                    None
+                    (last_good::load(store, &tag)?, true)
                 }
                 Err(error) => return Err(error.into()),
             };
-            selected.insert(key, value.clone());
+            let value = if let Some(payload) = payload {
+                let format = match payload.format {
+                    PayloadFormat::Binary => UploadedListFormat::Binary,
+                    PayloadFormat::Source => UploadedListFormat::Source,
+                };
+                let sha256 = format!("{:x}", Sha256::digest(&payload.bytes));
+                let reference = ListRef {
+                    tag: tag.clone(),
+                    sha256: sha256.clone(),
+                    format,
+                };
+                if !payloads
+                    .iter()
+                    .any(|item| item.sha256 == sha256 && item.format == format)
+                {
+                    let size = payload.bytes.len() as u64;
+                    total_bytes = total_bytes
+                        .checked_add(size)
+                        .filter(|total| *total <= MAX_PREPARED_BYTES)
+                        .ok_or(ListPreparationError::TooMany)?;
+                    if size > MAX_LIST_PAYLOAD_BYTES {
+                        return Err(ListPreparationError::TooMany);
+                    }
+                    payloads.push(PreparedListPayload {
+                        sha256: sha256.clone(),
+                        format,
+                        bytes: payload.bytes,
+                    });
+                }
+                if dat && !missing {
+                    updates.push((tag, sha256, format));
+                }
+                references.push(reference.clone());
+                if missing {
+                    Selected::LastGood
+                } else {
+                    Selected::Current
+                }
+            } else {
+                Selected::Skipped
+            };
+            selected.insert(key, value);
             value
         };
-        if reference.is_none() {
-            rule.target = RuleTarget::Block;
-            if !request.fallback_block_rules.contains(&rule.id) {
-                request.fallback_block_rules.push(rule.id.clone());
+        match value {
+            Selected::Current => {}
+            Selected::LastGood => missing_categories.push(rule.id.clone()),
+            Selected::Skipped => {
+                rule.enabled = false;
+                missing_categories.push(rule.id.clone());
+                skipped_categories.push(rule.id.clone());
             }
-            missing_categories.push(rule.id.clone());
         }
     }
-    if references.len() > MAX_REFERENCES || request.fallback_block_rules.len() > MAX_REFERENCES {
+    if references.len() > MAX_REFERENCES {
         return Err(ListPreparationError::TooMany);
     }
+    for (tag, sha256, format) in updates {
+        let payload = payloads
+            .iter()
+            .find(|item| item.sha256 == sha256 && item.format == format)
+            .expect("successful category payload exists");
+        let format = match format {
+            UploadedListFormat::Binary => PayloadFormat::Binary,
+            UploadedListFormat::Source => PayloadFormat::Source,
+        };
+        last_good::save(store, &tag, format, &payload.bytes)?;
+    }
+    last_good::prune(store, &referenced)?;
     request.lists = references;
     Ok(PreparedConnection {
         request,
         payloads,
         missing_categories,
+        skipped_categories,
     })
 }
 

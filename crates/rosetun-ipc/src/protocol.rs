@@ -1,6 +1,6 @@
 use rosetun_config::{
-    AppConfig, LogLevel, Node, NodeId, Rule, RuleId, RuleSet, RuleSetId, RuleTarget, Selection,
-    Settings, Status, Traffic,
+    AppConfig, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId, RuleTarget, Selection, Settings,
+    Status, Traffic,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
@@ -100,8 +100,6 @@ pub struct ConnectRequest {
     pub temporary_rules: Vec<Rule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lists: Vec<ListRef>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fallback_block_rules: Vec<RuleId>,
     pub settings: Settings,
 }
 
@@ -118,10 +116,6 @@ impl std::fmt::Debug for ConnectRequest {
             .field("rule_count", &self.rule_set.rules.len())
             .field("temporary_rule_count", &self.temporary_rules.len())
             .field("list_count", &self.lists.len())
-            .field(
-                "fallback_block_rule_count",
-                &self.fallback_block_rules.len(),
-            )
             .finish_non_exhaustive()
     }
 }
@@ -150,7 +144,6 @@ impl ConnectRequest {
             rule_set,
             temporary_rules: Vec::new(),
             lists: Vec::new(),
-            fallback_block_rules: Vec::new(),
             settings: config.settings.clone(),
         })
     }
@@ -338,20 +331,16 @@ mod tests {
         let mut request = ConnectRequest::from_config(&selected_config()).unwrap();
         let old = serde_json::to_value(&request).unwrap();
         assert!(old.get("lists").is_none());
-        assert!(old.get("fallback_block_rules").is_none());
         let decoded: ConnectRequest = serde_json::from_value(old).unwrap();
         assert!(decoded.lists.is_empty());
-        assert!(decoded.fallback_block_rules.is_empty());
 
         request.lists.push(ListRef {
             tag: "list-test".into(),
             sha256: "b".repeat(64),
             format: ListFormat::Binary,
         });
-        request.fallback_block_rules.push(RuleId::new("block"));
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["lists"][0]["format"], "binary");
-        assert_eq!(json["fallback_block_rules"][0], "block");
         assert_eq!(
             serde_json::from_value::<ConnectRequest>(json).unwrap(),
             request

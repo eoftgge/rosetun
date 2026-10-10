@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use base64::Engine as _;
 use rosetun_config::{
-    Node, NodeId, Outbound, Rule, RuleMatcher, RuleSet, RuleSetId, Selection, Settings,
+    Node, NodeId, Outbound, Rule, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Selection, Settings,
     StreamSettings, SubscriptionId, TrojanParams,
 };
 use rosetun_ipc::HelperError;
@@ -58,7 +58,6 @@ fn request() -> ConnectRequest {
         rule_set: RuleSet::new(RuleSetId::new("example"), "Example", RuleTarget::Proxy),
         temporary_rules: Vec::new(),
         lists: Vec::new(),
-        fallback_block_rules: Vec::new(),
         settings: Settings::default(),
     }
 }
@@ -81,15 +80,21 @@ fn field(number: u8, value: &[u8]) -> Vec<u8> {
     bytes
 }
 
-fn site_dat_with_category(category: &[u8]) -> Vec<u8> {
-    let mut attribute = field(1, b"cn");
-    attribute.extend([0x10, 1]);
+fn site_dat(category: &[u8], hostname: &[u8], with_cn: bool) -> Vec<u8> {
     let mut domain = [0x08, 2].to_vec();
-    domain.extend(field(2, b"example.com"));
-    domain.extend(field(3, &attribute));
+    domain.extend(field(2, hostname));
+    if with_cn {
+        let mut attribute = field(1, b"cn");
+        attribute.extend([0x10, 1]);
+        domain.extend(field(3, &attribute));
+    }
     let mut entry = field(1, category);
     entry.extend(field(2, &domain));
     field(1, &entry)
+}
+
+fn site_dat_with_category(category: &[u8]) -> Vec<u8> {
+    site_dat(category, b"example.com", true)
 }
 
 fn example_site_dat() -> Vec<u8> {
@@ -137,7 +142,7 @@ fn enabled_rules_deduplicate_refs_and_payloads_including_temporary_rules() {
 }
 
 #[test]
-fn vanished_and_empty_dat_categories_block_all_and_report_rules() {
+fn vanished_and_empty_dat_categories_skip_only_their_rules() {
     let directory = TestDirectory::new();
     let store = directory.store();
     let dat = add_list_from_bytes(&store, "Geosite", "geosite.dat", &example_site_dat()).unwrap();
@@ -166,19 +171,18 @@ fn vanished_and_empty_dat_categories_block_all_and_report_rules() {
         prepared.missing_categories,
         [RuleId::new("vanished"), RuleId::new("empty-filter")]
     );
-    assert_eq!(
-        prepared.request.fallback_block_rules,
-        prepared.missing_categories
-    );
-    assert_eq!(prepared.request.rule_set.rules[0].target, RuleTarget::Block);
-    assert_eq!(prepared.request.rule_set.rules[1].target, RuleTarget::Block);
-    assert_eq!(
-        prepared.request.rule_set.rules[2].target,
-        RuleTarget::Direct
-    );
-    assert_eq!(
-        prepared.request.rule_set.rules[3].target,
-        RuleTarget::Direct
+    assert_eq!(prepared.skipped_categories, prepared.missing_categories);
+    assert!(!prepared.request.rule_set.rules[0].enabled);
+    assert!(!prepared.request.rule_set.rules[1].enabled);
+    assert!(prepared.request.rule_set.rules[2].enabled);
+    assert!(prepared.request.rule_set.rules[3].enabled);
+    assert!(
+        prepared
+            .request
+            .rule_set
+            .rules
+            .iter()
+            .all(|rule| rule.target == RuleTarget::Direct)
     );
     assert_eq!(prepared.request.lists.len(), 2);
     assert_eq!(prepared.request.lists[0].tag, list_tag(&text.id, None));
@@ -221,7 +225,12 @@ fn updating_a_dat_can_remove_a_used_category_without_breaking_connect() {
 
     let prepared = prepare_lists(&store, request).unwrap();
     assert_eq!(prepared.missing_categories.len(), 1);
-    assert_eq!(prepared.request.rule_set.rules[0].target, RuleTarget::Block);
+    assert_eq!(prepared.skipped_categories, prepared.missing_categories);
+    assert!(!prepared.request.rule_set.rules[0].enabled);
+    assert_eq!(
+        prepared.request.rule_set.rules[0].target,
+        RuleTarget::Direct
+    );
     assert!(prepared.request.lists.is_empty());
     assert!(prepared.payloads.is_empty());
 
@@ -255,6 +264,186 @@ fn updating_a_dat_can_remove_a_used_category_without_breaking_connect() {
     assert!(matches!(
         prepare_lists(&store, matching_checksum),
         Err(ListPreparationError::List(ListError::Parse(_)))
+    ));
+}
+
+#[test]
+fn vanished_category_uses_last_good_payload_and_keeps_other_lists() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let dat = add_list_from_bytes(&store, "Geosite", "geosite.dat", &example_site_dat()).unwrap();
+    let text = add_list_from_bytes(&store, "Text", "example.txt", b"example.org\n").unwrap();
+    let mut request = request();
+    request
+        .rule_set
+        .rules
+        .push(list_rule("cached", dat.id.clone(), Some("example@cn")));
+    request
+        .rule_set
+        .rules
+        .push(list_rule("working", text.id.clone(), None));
+
+    let original = prepare_lists(&store, request.clone()).unwrap();
+    let tag = list_tag(&dat.id, Some("example@cn"));
+    let cache_path = directory
+        .0
+        .join("lists")
+        .join("last-good")
+        .join(format!("{tag}.json"));
+    assert_eq!(fs::read(&cache_path).unwrap(), original.payloads[0].bytes);
+    super::super::update_list(
+        &store,
+        &dat.id,
+        Some(("geosite.dat", &site_dat_with_category(b"OTHER"))),
+        crate::Timeouts::default(),
+    )
+    .unwrap();
+
+    let prepared = prepare_lists(&store, request).unwrap();
+    assert_eq!(prepared.missing_categories, [RuleId::new("cached")]);
+    assert!(prepared.skipped_categories.is_empty());
+    assert!(
+        prepared
+            .request
+            .rule_set
+            .rules
+            .iter()
+            .all(|rule| rule.enabled)
+    );
+    assert!(
+        prepared
+            .request
+            .rule_set
+            .rules
+            .iter()
+            .all(|rule| rule.target == RuleTarget::Direct)
+    );
+    assert_eq!(prepared.request.lists.len(), 2);
+    assert_eq!(prepared.request.lists[0], original.request.lists[0]);
+    assert_eq!(prepared.payloads[0].bytes, original.payloads[0].bytes);
+    assert_eq!(prepared.request.lists[1].tag, list_tag(&text.id, None));
+}
+
+#[test]
+fn empty_filtered_category_uses_last_good_and_current_category_overwrites_it() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let dat = add_list_from_bytes(&store, "Geosite", "geosite.dat", &example_site_dat()).unwrap();
+    let mut request = request();
+    request
+        .rule_set
+        .rules
+        .push(list_rule("filtered", dat.id.clone(), Some("example@cn")));
+    let original = prepare_lists(&store, request.clone()).unwrap();
+    let tag = list_tag(&dat.id, Some("example@cn"));
+    let cache_path = directory
+        .0
+        .join("lists")
+        .join("last-good")
+        .join(format!("{tag}.json"));
+
+    super::super::update_list(
+        &store,
+        &dat.id,
+        Some(("geosite.dat", &site_dat(b"EXAMPLE", b"example.org", false))),
+        crate::Timeouts::default(),
+    )
+    .unwrap();
+    let fallback = prepare_lists(&store, request.clone()).unwrap();
+    assert_eq!(fallback.missing_categories, [RuleId::new("filtered")]);
+    assert!(fallback.skipped_categories.is_empty());
+    assert!(fallback.request.rule_set.rules[0].enabled);
+    assert_eq!(fallback.request.lists, original.request.lists);
+    assert_eq!(fs::read(&cache_path).unwrap(), original.payloads[0].bytes);
+
+    super::super::update_list(
+        &store,
+        &dat.id,
+        Some(("geosite.dat", &site_dat(b"EXAMPLE", b"example.org", true))),
+        crate::Timeouts::default(),
+    )
+    .unwrap();
+    let refreshed = prepare_lists(&store, request).unwrap();
+    assert!(refreshed.missing_categories.is_empty());
+    assert_ne!(refreshed.request.lists, original.request.lists);
+    assert_eq!(fs::read(cache_path).unwrap(), refreshed.payloads[0].bytes);
+}
+
+#[test]
+fn last_good_copy_is_pruned_when_no_rule_references_its_tag() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let dat = add_list_from_bytes(&store, "Geosite", "geosite.dat", &example_site_dat()).unwrap();
+    let set = crate::create_rule_set(&store, "Stored", RuleTarget::Proxy).unwrap();
+    crate::add_rule(
+        &store,
+        &set.id,
+        RuleMatcher::List {
+            list: dat.id.clone(),
+            category: Some("example".into()),
+        },
+        RuleTarget::Direct,
+    )
+    .unwrap();
+    let mut with_rule = request();
+    with_rule.rule_set = store.load().unwrap().rule_sets[0].clone();
+    prepare_lists(&store, with_rule).unwrap();
+    let tag = list_tag(&dat.id, Some("example"));
+    let cache_path = directory
+        .0
+        .join("lists")
+        .join("last-good")
+        .join(format!("{tag}.json"));
+    assert!(cache_path.exists());
+
+    prepare_lists(&store, request()).unwrap();
+    assert!(
+        cache_path.exists(),
+        "another stored rule set still references the tag"
+    );
+    store
+        .modify(|config| {
+            config.rule_sets[0].rules.clear();
+            Ok::<_, crate::StoreError>(())
+        })
+        .unwrap();
+    prepare_lists(&store, request()).unwrap();
+    assert!(!cache_path.exists());
+}
+
+#[test]
+fn damaged_last_good_copy_is_an_error_before_transport() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let dat = add_list_from_bytes(&store, "Geosite", "geosite.dat", &example_site_dat()).unwrap();
+    let mut request = request();
+    request
+        .rule_set
+        .rules
+        .push(list_rule("cached", dat.id.clone(), Some("example")));
+    prepare_lists(&store, request.clone()).unwrap();
+    super::super::update_list(
+        &store,
+        &dat.id,
+        Some(("geosite.dat", &site_dat_with_category(b"OTHER"))),
+        crate::Timeouts::default(),
+    )
+    .unwrap();
+    let tag = list_tag(&dat.id, Some("example"));
+    fs::write(
+        directory
+            .0
+            .join("lists")
+            .join("last-good")
+            .join(format!("{tag}.json")),
+        b"invalid json",
+    )
+    .unwrap();
+    assert!(matches!(
+        prepare_lists(&store, request),
+        Err(ListPreparationError::List(ListError::Parse(
+            ListParseError::InvalidJson
+        )))
     ));
 }
 
@@ -359,6 +548,7 @@ fn upload_uses_one_client_and_retries_only_one_list_missing() {
         request: request(),
         payloads: vec![payload],
         missing_categories: Vec::new(),
+        skipped_categories: Vec::new(),
     };
     let mut client = MockClient {
         missing: digest,

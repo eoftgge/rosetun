@@ -27,7 +27,6 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         RULE_CAPABILITIES,
         request.settings.allow_lan,
         request.lists,
-        request.fallback_block_rules,
     );
     let mut config = json!({
         "log": log_section(request),
@@ -330,7 +329,7 @@ pub(crate) fn route_section(
     capabilities: RuleCapabilities,
     allow_lan: bool,
 ) -> (Value, Vec<RuleId>) {
-    route_section_with_lists(rules, capabilities, allow_lan, &[], &[])
+    route_section_with_lists(rules, capabilities, allow_lan, &[])
 }
 
 fn route_section_with_lists(
@@ -338,7 +337,6 @@ fn route_section_with_lists(
     capabilities: RuleCapabilities,
     allow_lan: bool,
     lists: &[ListRef],
-    fallback_block_rules: &[RuleId],
 ) -> (Value, Vec<RuleId>) {
     let mut route_rules = vec![
         json!({
@@ -359,9 +357,6 @@ fn route_section_with_lists(
             continue;
         }
         let value = match &rule.matcher {
-            RuleMatcher::List { .. } if fallback_block_rules.contains(&rule.id) => {
-                (rule.target == RuleTarget::Block).then(|| json!({ "action": "reject" }))
-            }
             RuleMatcher::List { list, category } => {
                 let tag = list_tag(list, category.as_deref());
                 let mut matching = lists.iter().filter(|reference| reference.tag == tag);
@@ -585,7 +580,6 @@ mod tests {
             node: &node,
             rules: &rules,
             lists: &lists,
-            fallback_block_rules: &[],
             settings: &settings,
             control: Some(&control),
             verbose_log: false,
@@ -740,7 +734,7 @@ mod tests {
             });
         }
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[]);
+            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference]);
         assert!(unsupported.is_empty());
         assert_eq!(
             route["rule_set"],
@@ -759,7 +753,7 @@ mod tests {
             json!({"rule_set": [tag], "action": "reject"})
         );
         assert!(
-            route_section_with_lists(&set, RuleCapabilities::NONE, false, &[], &[])
+            route_section_with_lists(&set, RuleCapabilities::NONE, false, &[])
                 .1
                 .len()
                 == 2
@@ -767,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn vanished_category_rejects_every_flow_before_other_list_rules() {
+    fn missing_list_reference_is_unsupported_without_affecting_other_list_rules() {
         let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
         let vanished = RuleId::new("vanished");
         set.rules.push(rosetun_config::Rule {
@@ -796,11 +790,11 @@ mod tests {
             format: UploadedListFormat::Source,
         };
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[vanished]);
-        assert!(unsupported.is_empty());
-        assert_eq!(route["rules"][2], json!({"action": "reject"}));
+            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference]);
+        assert_eq!(unsupported, [vanished]);
+        assert_eq!(route["rules"].as_array().unwrap().len(), 3);
         assert_eq!(
-            route["rules"][3],
+            route["rules"][2],
             json!({
                 "rule_set": [tag], "action": "route", "outbound": "direct"
             })

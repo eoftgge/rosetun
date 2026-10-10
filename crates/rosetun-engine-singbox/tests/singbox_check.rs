@@ -103,7 +103,6 @@ fn sing_box_check_validates_local_rule_set_config() {
             node: &node,
             rules: &rules,
             lists: &lists,
-            fallback_block_rules: &[],
             settings: &settings,
             control: None,
             verbose_log: false,
