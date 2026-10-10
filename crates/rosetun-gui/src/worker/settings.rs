@@ -13,9 +13,9 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn set_reduce_motion(&self, enabled: bool) {
-        self.spawn_complete("rosetun-set-reduce-motion", move |store| {
-            WorkerEvent::SetReduceMotion(rosetun_core::set_reduce_motion(store, enabled))
+    pub(crate) fn change_setting(&self, change: SettingChange) {
+        self.spawn_complete("rosetun-change-setting", move |store| {
+            WorkerEvent::Setting(change, rosetun_core::change_setting(store, change))
         });
     }
 
@@ -48,39 +48,6 @@ impl WorkerDispatcher {
                 &publisher.repaint,
                 WorkerEvent::SetAutostart(result),
             );
-        });
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn set_close_to_tray(&self, enabled: bool) {
-        self.spawn_complete("rosetun-set-close-to-tray", move |store| {
-            WorkerEvent::SetCloseToTray(rosetun_core::set_close_to_tray(store, enabled))
-        });
-    }
-
-    pub(crate) fn set_connect_on_start(&self, enabled: bool) {
-        self.spawn_complete("rosetun-set-connect-on-start", move |store| {
-            WorkerEvent::SetConnectOnStart(rosetun_core::set_connect_on_start(store, enabled))
-        });
-    }
-
-    pub(crate) fn set_auto_reconnect(&self, enabled: bool) {
-        self.spawn_complete("rosetun-set-auto-reconnect", move |store| {
-            WorkerEvent::SetAutoReconnect(rosetun_core::set_auto_reconnect(store, enabled))
-        });
-    }
-
-    pub(crate) fn set_auto_update_subscriptions(&self, enabled: bool) {
-        self.spawn_complete("rosetun-set-auto-update-subscriptions", move |store| {
-            WorkerEvent::SetAutoUpdateSubscriptions(rosetun_core::set_auto_update_subscriptions(
-                store, enabled,
-            ))
-        });
-    }
-
-    pub(crate) fn set_check_updates(&self, enabled: bool) {
-        self.spawn_complete("rosetun-set-check-updates", move |store| {
-            WorkerEvent::SetCheckUpdates(rosetun_core::set_check_updates(store, enabled))
         });
     }
 

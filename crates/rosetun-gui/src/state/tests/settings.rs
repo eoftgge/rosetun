@@ -328,11 +328,14 @@ fn reduce_motion_setting_uses_a_settings_job_and_saved_value() {
     assert!(state.act(Action::SetReduceMotion(false)).is_none());
     assert!(matches!(
         state.act(Action::SetReduceMotion(true)),
-        Some(Job::SetReduceMotion(true))
+        Some(Job::Setting(SettingChange::ReduceMotion(true)))
     ));
     assert!(state.operations.settings);
     assert!(state.act(Action::SetReduceMotion(true)).is_none());
-    state.reduce(WorkerEvent::SetReduceMotion(Ok(())));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::ReduceMotion(true),
+        Ok(()),
+    ));
     assert!(!state.operations.settings);
     let mut config = state.config.clone();
     config.interface.reduce_motion = true;
@@ -353,17 +356,21 @@ fn connection_settings_jobs_respect_busy_state_and_saved_values() {
     assert!(state.act(Action::SetAutoReconnect(true)).is_none());
     assert!(matches!(
         state.act(Action::SetConnectOnStart(true)),
-        Some(Job::SetConnectOnStart(true))
+        Some(Job::Setting(SettingChange::ConnectOnStart(true)))
     ));
     assert!(state.act(Action::SetAutoReconnect(false)).is_none());
-    state.reduce(WorkerEvent::SetConnectOnStart(Ok(())));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::ConnectOnStart(true),
+        Ok(()),
+    ));
     assert!(matches!(
         state.act(Action::SetAutoReconnect(false)),
-        Some(Job::SetAutoReconnect(false))
+        Some(Job::Setting(SettingChange::AutoReconnect(false)))
     ));
-    state.reduce(WorkerEvent::SetAutoReconnect(Err(
-        rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
-    )));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::AutoReconnect(false),
+        Err(rosetun_core::SettingsError::Store(StoreError::NoConfigDir)),
+    ));
     assert!(!state.operations.settings);
     assert!(state.operation_error.is_some());
     let mut config = AppConfig::default();
@@ -390,14 +397,17 @@ fn auto_update_setting_uses_settings_job_and_respects_busy_state() {
     );
     assert!(matches!(
         state.act(Action::SetAutoUpdateSubscriptions(false)),
-        Some(Job::SetAutoUpdateSubscriptions(false))
+        Some(Job::Setting(SettingChange::AutoUpdateSubscriptions(false)))
     ));
     assert!(
         state
             .act(Action::SetAutoUpdateSubscriptions(false))
             .is_none()
     );
-    state.reduce(WorkerEvent::SetAutoUpdateSubscriptions(Ok(())));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::AutoUpdateSubscriptions(false),
+        Ok(()),
+    ));
     state.config.interface.auto_update_subscriptions = false;
     assert!(
         state
@@ -428,7 +438,7 @@ fn release_settings_use_jobs_and_respect_busy_state() {
     state.reduce(WorkerEvent::SkipVersion(Ok(())));
     assert!(matches!(
         state.act(Action::SetCheckUpdates(false)),
-        Some(Job::SetCheckUpdates(false))
+        Some(Job::Setting(SettingChange::CheckUpdates(false)))
     ));
 }
 
@@ -486,13 +496,14 @@ fn windows_settings_jobs_respect_busy_state_and_saved_values() {
 
     assert!(matches!(
         state.act(Action::SetCloseToTray(false)),
-        Some(Job::SetCloseToTray(false))
+        Some(Job::Setting(SettingChange::CloseToTray(false)))
     ));
     assert!(state.operations.settings);
     assert!(state.act(Action::SetAutostart(false)).is_none());
-    state.reduce(WorkerEvent::SetCloseToTray(Err(
-        rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
-    )));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::CloseToTray(false),
+        Err(rosetun_core::SettingsError::Store(StoreError::NoConfigDir)),
+    ));
     assert!(!state.operations.settings);
     assert_eq!(
         state.operation_error.as_deref(),
@@ -500,7 +511,7 @@ fn windows_settings_jobs_respect_busy_state_and_saved_values() {
     );
     assert!(matches!(
         state.act(Action::SetCloseToTray(false)),
-        Some(Job::SetCloseToTray(false))
+        Some(Job::Setting(SettingChange::CloseToTray(false)))
     ));
     let mut config = AppConfig::default();
     config.interface.close_to_tray = false;
@@ -508,7 +519,10 @@ fn windows_settings_jobs_respect_busy_state_and_saved_values() {
         generation: 1,
         config,
     });
-    state.reduce(WorkerEvent::SetCloseToTray(Ok(())));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::CloseToTray(false),
+        Ok(()),
+    ));
     assert!(!state.operations.settings);
     assert!(state.operation_error.is_none());
     assert!(state.act(Action::SetCloseToTray(false)).is_none());

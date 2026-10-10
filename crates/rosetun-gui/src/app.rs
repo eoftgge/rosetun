@@ -224,19 +224,11 @@ impl App {
             Job::Disconnect => self.workers.disconnect(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
             Job::SetLanguage(language) => self.workers.set_language(language),
-            Job::SetReduceMotion(enabled) => self.workers.set_reduce_motion(enabled),
+            Job::Setting(change) => self.workers.change_setting(change),
             #[cfg(windows)]
             Job::LoadAutostart => self.workers.load_autostart(),
             #[cfg(windows)]
             Job::SetAutostart(enabled) => self.workers.set_autostart(enabled),
-            #[cfg(windows)]
-            Job::SetCloseToTray(enabled) => self.workers.set_close_to_tray(enabled),
-            Job::SetConnectOnStart(enabled) => self.workers.set_connect_on_start(enabled),
-            Job::SetAutoReconnect(enabled) => self.workers.set_auto_reconnect(enabled),
-            Job::SetAutoUpdateSubscriptions(enabled) => {
-                self.workers.set_auto_update_subscriptions(enabled)
-            }
-            Job::SetCheckUpdates(enabled) => self.workers.set_check_updates(enabled),
             Job::SkipVersion(version) => self.workers.skip_version(version),
             Job::CheckUpdates => self.workers.check_updates(),
             Job::SetDns(dns) => self.workers.set_dns(dns),

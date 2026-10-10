@@ -16,14 +16,15 @@ use rosetun_config::{
 use rosetun_core::{
     AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitInfo, ExitInfoError,
     MoveSubscriptionError, PING_PARALLEL, PING_TIMEOUT, Ping, Release, RemoveSubscriptionError,
-    RenameSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingsError,
-    Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateCheckError, UpdateReport,
-    UpdateSubscriptionError, add_prepared_subscription, add_rule, add_rules, create_rule_set,
-    delete_rule_set, move_rule, move_rules, move_subscription, ping_all, prepare_subscription,
-    remove_rule, remove_rules, remove_subscription, rename_rule_set, rename_subscription,
-    reset_settings, restore_rules_and_dns, select_node, select_rule_set, set_default_target,
-    set_dns, set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
-    set_verbose_log, update_all, update_rule, update_subscription,
+    RenameSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingChange,
+    SettingsError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateCheckError,
+    UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule, add_rules,
+    create_rule_set, delete_rule_set, move_rule, move_rules, move_subscription, ping_all,
+    prepare_subscription, remove_rule, remove_rules, remove_subscription, rename_rule_set,
+    rename_subscription, reset_settings, restore_rules_and_dns, select_node, select_rule_set,
+    set_default_target, set_dns, set_interface_scale, set_kill_switch, set_language,
+    set_rule_enabled, set_rule_target, set_verbose_log, update_all, update_rule,
+    update_subscription,
 };
 use rosetun_ipc::{
     ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeOutcome,
@@ -91,17 +92,11 @@ pub(crate) enum WorkerEvent {
     Disconnect(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
     SetLanguage(Result<(), SettingsError>),
-    SetReduceMotion(Result<(), SettingsError>),
+    Setting(SettingChange, Result<(), SettingsError>),
     #[cfg(windows)]
     AutostartLoaded(std::io::Result<bool>),
     #[cfg(windows)]
     SetAutostart(std::io::Result<bool>),
-    #[cfg(windows)]
-    SetCloseToTray(Result<(), SettingsError>),
-    SetConnectOnStart(Result<(), SettingsError>),
-    SetAutoReconnect(Result<(), SettingsError>),
-    SetAutoUpdateSubscriptions(Result<(), SettingsError>),
-    SetCheckUpdates(Result<(), SettingsError>),
     SkipVersion(Result<(), SettingsError>),
     UpdateCheck {
         checked_at: u64,

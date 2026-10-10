@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use rosetun_config::{ConnectionState, DnsSettings};
-use rosetun_core::DnsPreset;
+use rosetun_core::{DnsPreset, SettingChange};
 
 use super::{Action, Job, Screen, State, now_unix};
 use crate::errors;
@@ -112,13 +112,10 @@ impl State {
                     self.text(&message)
                 });
             }
-            #[cfg(windows)]
-            WorkerEvent::SetCloseToTray(result) => self.finish_settings(result),
-            WorkerEvent::SetReduceMotion(result) => self.finish_settings(result),
-            WorkerEvent::SetConnectOnStart(result) => self.finish_settings(result),
-            WorkerEvent::SetAutoReconnect(result) => self.finish_settings(result),
-            WorkerEvent::SetAutoUpdateSubscriptions(result) => self.finish_settings(result),
-            WorkerEvent::SetCheckUpdates(result) => self.finish_settings(result),
+            WorkerEvent::Setting(change, result) => {
+                let _ = change;
+                self.finish_settings(result);
+            }
             WorkerEvent::SkipVersion(result) => self.finish_settings(result),
             WorkerEvent::SetDns(result) => {
                 if result.is_ok() {
@@ -187,7 +184,7 @@ impl State {
             }
             Action::SetReduceMotion(enabled) => {
                 if self.can_edit_settings() && self.config.interface.reduce_motion != enabled {
-                    return self.start_settings(Job::SetReduceMotion(enabled));
+                    return self.start_settings(Job::Setting(SettingChange::ReduceMotion(enabled)));
                 }
             }
             #[cfg(windows)]
@@ -202,29 +199,33 @@ impl State {
             #[cfg(windows)]
             Action::SetCloseToTray(enabled) => {
                 if self.can_edit_settings() && self.config.interface.close_to_tray != enabled {
-                    return self.start_settings(Job::SetCloseToTray(enabled));
+                    return self.start_settings(Job::Setting(SettingChange::CloseToTray(enabled)));
                 }
             }
             Action::SetConnectOnStart(enabled) => {
                 if self.can_edit_settings() && self.config.interface.connect_on_start != enabled {
-                    return self.start_settings(Job::SetConnectOnStart(enabled));
+                    return self
+                        .start_settings(Job::Setting(SettingChange::ConnectOnStart(enabled)));
                 }
             }
             Action::SetAutoReconnect(enabled) => {
                 if self.can_edit_settings() && self.config.settings.auto_reconnect != enabled {
-                    return self.start_settings(Job::SetAutoReconnect(enabled));
+                    return self
+                        .start_settings(Job::Setting(SettingChange::AutoReconnect(enabled)));
                 }
             }
             Action::SetAutoUpdateSubscriptions(enabled) => {
                 if self.can_edit_settings()
                     && self.config.interface.auto_update_subscriptions != enabled
                 {
-                    return self.start_settings(Job::SetAutoUpdateSubscriptions(enabled));
+                    return self.start_settings(Job::Setting(
+                        SettingChange::AutoUpdateSubscriptions(enabled),
+                    ));
                 }
             }
             Action::SetCheckUpdates(enabled) => {
                 if self.can_edit_settings() && self.config.interface.check_updates != enabled {
-                    return self.start_settings(Job::SetCheckUpdates(enabled));
+                    return self.start_settings(Job::Setting(SettingChange::CheckUpdates(enabled)));
                 }
             }
             Action::SaveDns => {

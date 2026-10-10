@@ -6,7 +6,7 @@ use rosetun_config::{
     AppConfig, DnsSettings, LanguageSetting, NodeId, RuleId, RuleMatcher, RuleSetId, RuleTarget,
     RuleTemplate, Status, SubscriptionId,
 };
-use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset};
+use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset, SettingChange};
 use rosetun_ipc::{ClientError, ConnectRequest};
 
 use crate::display;
@@ -264,17 +264,11 @@ pub(crate) enum Job {
     Disconnect,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
-    SetReduceMotion(bool),
+    Setting(SettingChange),
     #[cfg(windows)]
     LoadAutostart,
     #[cfg(windows)]
     SetAutostart(bool),
-    #[cfg(windows)]
-    SetCloseToTray(bool),
-    SetConnectOnStart(bool),
-    SetAutoReconnect(bool),
-    SetAutoUpdateSubscriptions(bool),
-    SetCheckUpdates(bool),
     SkipVersion(String),
     CheckUpdates,
     SetDns(DnsSettings),
@@ -377,11 +371,7 @@ impl State {
             event @ WorkerEvent::BrowsedExecutable(_) => self.reduce_rules(event),
             event @ (WorkerEvent::SetInterfaceScale(_)
             | WorkerEvent::SetLanguage(_)
-            | WorkerEvent::SetReduceMotion(_)
-            | WorkerEvent::SetConnectOnStart(_)
-            | WorkerEvent::SetAutoReconnect(_)
-            | WorkerEvent::SetAutoUpdateSubscriptions(_)
-            | WorkerEvent::SetCheckUpdates(_)
+            | WorkerEvent::Setting(_, _)
             | WorkerEvent::SkipVersion(_)
             | WorkerEvent::SetDns(_)
             | WorkerEvent::ResetSettings(_)
@@ -389,7 +379,6 @@ impl State {
             #[cfg(windows)]
             event @ (WorkerEvent::AutostartLoaded(_)
             | WorkerEvent::SetAutostart(_)
-            | WorkerEvent::SetCloseToTray(_)
             | WorkerEvent::OpenFolder(_)) => self.reduce_settings(event),
             WorkerEvent::UpdateCheck { checked_at, result } => {
                 self.reduce_updates(result, checked_at);

@@ -47,6 +47,32 @@ pub enum SettingsError {
     UnsupportedScale,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingChange {
+    CloseToTray(bool),
+    ReduceMotion(bool),
+    ConnectOnStart(bool),
+    AutoReconnect(bool),
+    AutoUpdateSubscriptions(bool),
+    CheckUpdates(bool),
+}
+
+pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        match change {
+            SettingChange::CloseToTray(enabled) => config.interface.close_to_tray = enabled,
+            SettingChange::ReduceMotion(enabled) => config.interface.reduce_motion = enabled,
+            SettingChange::ConnectOnStart(enabled) => config.interface.connect_on_start = enabled,
+            SettingChange::AutoReconnect(enabled) => config.settings.auto_reconnect = enabled,
+            SettingChange::AutoUpdateSubscriptions(enabled) => {
+                config.interface.auto_update_subscriptions = enabled;
+            }
+            SettingChange::CheckUpdates(enabled) => config.interface.check_updates = enabled,
+        }
+        Ok(())
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DnsInputError {
     #[error("enter the resolver's IP address, such as 1.1.1.1")]
@@ -108,41 +134,6 @@ pub fn set_interface_scale(store: &Store, percent: u16) -> Result<(), SettingsEr
     })
 }
 
-pub fn set_close_to_tray(store: &Store, enabled: bool) -> Result<(), SettingsError> {
-    store.modify(|config| {
-        config.interface.close_to_tray = enabled;
-        Ok(())
-    })
-}
-
-pub fn set_reduce_motion(store: &Store, enabled: bool) -> Result<(), SettingsError> {
-    store.modify(|config| {
-        config.interface.reduce_motion = enabled;
-        Ok(())
-    })
-}
-
-pub fn set_connect_on_start(store: &Store, enabled: bool) -> Result<(), SettingsError> {
-    store.modify(|config| {
-        config.interface.connect_on_start = enabled;
-        Ok(())
-    })
-}
-
-pub fn set_auto_update_subscriptions(store: &Store, enabled: bool) -> Result<(), SettingsError> {
-    store.modify(|config| {
-        config.interface.auto_update_subscriptions = enabled;
-        Ok(())
-    })
-}
-
-pub fn set_check_updates(store: &Store, enabled: bool) -> Result<(), SettingsError> {
-    store.modify(|config| {
-        config.interface.check_updates = enabled;
-        Ok(())
-    })
-}
-
 pub fn skip_version(store: &Store, version: Option<String>) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.interface.skipped_version = version;
@@ -153,13 +144,6 @@ pub fn skip_version(store: &Store, version: Option<String>) -> Result<(), Settin
 pub fn record_update_check(store: &Store, at: u64) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.interface.last_update_check = Some(at);
-        Ok(())
-    })
-}
-
-pub fn set_auto_reconnect(store: &Store, enabled: bool) -> Result<(), SettingsError> {
-    store.modify(|config| {
-        config.settings.auto_reconnect = enabled;
         Ok(())
     })
 }
@@ -358,23 +342,23 @@ mod tests {
         expected.interface.scale_percent = 125;
         assert_eq!(store.load().unwrap(), expected);
 
-        set_close_to_tray(&store, false).unwrap();
+        change_setting(&store, SettingChange::CloseToTray(false)).unwrap();
         expected.interface.close_to_tray = false;
         assert_eq!(store.load().unwrap(), expected);
 
-        set_reduce_motion(&store, true).unwrap();
+        change_setting(&store, SettingChange::ReduceMotion(true)).unwrap();
         expected.interface.reduce_motion = true;
         assert_eq!(store.load().unwrap(), expected);
 
-        set_connect_on_start(&store, true).unwrap();
+        change_setting(&store, SettingChange::ConnectOnStart(true)).unwrap();
         expected.interface.connect_on_start = true;
         assert_eq!(store.load().unwrap(), expected);
 
-        set_auto_update_subscriptions(&store, false).unwrap();
+        change_setting(&store, SettingChange::AutoUpdateSubscriptions(false)).unwrap();
         expected.interface.auto_update_subscriptions = false;
         assert_eq!(store.load().unwrap(), expected);
 
-        set_check_updates(&store, false).unwrap();
+        change_setting(&store, SettingChange::CheckUpdates(false)).unwrap();
         expected.interface.check_updates = false;
         assert_eq!(store.load().unwrap(), expected);
 
@@ -389,7 +373,7 @@ mod tests {
         expected.interface.last_update_check = Some(123_456);
         assert_eq!(store.load().unwrap(), expected);
 
-        set_auto_reconnect(&store, false).unwrap();
+        change_setting(&store, SettingChange::AutoReconnect(false)).unwrap();
         expected.settings.auto_reconnect = false;
         assert_eq!(store.load().unwrap(), expected);
 
