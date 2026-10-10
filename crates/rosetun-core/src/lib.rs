@@ -58,35 +58,11 @@ pub use text::{
 pub use update::{UpdateReport, group_skipped};
 pub use updates::{Release, UpdateCheckError, is_newer, latest_release};
 
-pub fn is_sensitive_log_target(target: &str) -> bool {
-    ["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"]
-        .iter()
-        .any(|prefix| {
-            target == *prefix
-                || target
-                    .strip_prefix(prefix)
-                    .is_some_and(|suffix| suffix.starts_with("::"))
-        })
-}
+pub use rosetun_config::is_sensitive_log_target;
 
 #[cfg(test)]
 mod tests {
-    use super::{Store, StoreError, is_sensitive_log_target};
-
-    #[test]
-    fn sensitive_log_targets_match_only_exact_names_and_submodules() {
-        for target in ["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"] {
-            assert!(is_sensitive_log_target(target));
-            assert!(is_sensitive_log_target(&format!("{target}::run")));
-            assert!(is_sensitive_log_target(&format!("{target}::run::request")));
-            assert!(!is_sensitive_log_target(&format!("{target}x")));
-            assert!(!is_sensitive_log_target(&format!("{target}_other")));
-        }
-
-        for target in ["", "rosetun", "other::ureq", "ureqx::run"] {
-            assert!(!is_sensitive_log_target(target));
-        }
-    }
+    use super::{Store, StoreError};
 
     #[test]
     fn store_and_store_error_are_send_and_sync() {

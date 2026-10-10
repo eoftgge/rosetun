@@ -26,6 +26,17 @@ use serde_json::{Map, Value};
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
 pub const CONFIG_VERSION: u32 = 3;
 
+pub fn is_sensitive_log_target(target: &str) -> bool {
+    ["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"]
+        .iter()
+        .any(|prefix| {
+            target == *prefix
+                || target
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| suffix.starts_with("::"))
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LanguageSetting {
@@ -300,7 +311,22 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, InterfaceSettings, LanguageSetting};
+    use super::{AppConfig, InterfaceSettings, LanguageSetting, is_sensitive_log_target};
+
+    #[test]
+    fn sensitive_log_targets_match_only_exact_names_and_submodules() {
+        for target in ["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"] {
+            assert!(is_sensitive_log_target(target));
+            assert!(is_sensitive_log_target(&format!("{target}::run")));
+            assert!(is_sensitive_log_target(&format!("{target}::run::request")));
+            assert!(!is_sensitive_log_target(&format!("{target}x")));
+            assert!(!is_sensitive_log_target(&format!("{target}_other")));
+        }
+
+        for target in ["", "rosetun", "other::ureq", "ureqx::run"] {
+            assert!(!is_sensitive_log_target(target));
+        }
+    }
 
     #[test]
     fn old_configuration_without_interface_uses_default_scale() {

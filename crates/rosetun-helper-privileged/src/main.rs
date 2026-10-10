@@ -167,6 +167,7 @@ fn run_console() -> std::process::ExitCode {
         .finish()
         .with(tracing_subscriber::filter::filter_fn(move |metadata| {
             log_gate.allows(metadata)
+                && !rosetun_config::is_sensitive_log_target(metadata.target())
         }))
         .init();
 
@@ -220,6 +221,7 @@ fn run_service() -> std::process::ExitCode {
         .finish()
         .with(tracing_subscriber::filter::filter_fn(move |metadata| {
             log_gate.allows(metadata)
+                && !rosetun_config::is_sensitive_log_target(metadata.target())
         }))
         .init();
     let install_dir = std::env::current_exe().and_then(|exe| {
