@@ -1,0 +1,171 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "detour": "proxy",
+        "path": "/dns-query",
+        "server": "192.0.2.53",
+        "server_port": 443,
+        "tag": "dns-proxy",
+        "tls": {
+          "server_name": "dns.example.com"
+        },
+        "type": "https"
+      }
+    ]
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "secret": "fixture-secret"
+    }
+  },
+  "inbounds": [
+    {
+      "address": [
+        "198.51.100.1/30"
+      ],
+      "auto_route": true,
+      "interface_name": "rosetun0",
+      "mtu": 1500,
+      "stack": "gvisor",
+      "strict_route": true,
+      "tag": "tun-in",
+      "type": "tun"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "method": "aes-128-gcm",
+      "password": "test-secret",
+      "server": "203.0.113.10",
+      "server_port": 443,
+      "tag": "proxy",
+      "type": "shadowsocks"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "direct",
+    "rules": [
+      {
+        "action": "sniff",
+        "sniffer": [
+          "http",
+          "tls",
+          "quic",
+          "dns"
+        ]
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "action": "route",
+        "domain": [
+          "example.com"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "action": "route",
+        "domain_suffix": [
+          "example.org"
+        ],
+        "outbound": "proxy"
+      },
+      {
+        "action": "reject",
+        "domain_keyword": [
+          "example"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_name": [
+          "example.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "proxy",
+        "process_path": [
+          "C:\\example\\example.exe"
+        ]
+      },
+      {
+        "action": "reject",
+        "ip_cidr": [
+          "198.51.100.0/24"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_name": [
+          "qbittorrent.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_name": [
+          "utorrent.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_name": [
+          "bittorrent.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_name": [
+          "transmission-qt.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_name": [
+          "tixati.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_name": [
+          "deluge.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_name": [
+          "biglybt.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "action": "reject"
+      }
+    ]
+  }
+}

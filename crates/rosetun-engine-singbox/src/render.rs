@@ -425,6 +425,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn full_rendered_config_matches_golden() {
+        use rosetun_config::ShadowsocksParams;
+
+        let node = Node {
+            id: NodeId::new("example-node"),
+            name: "Example node".into(),
+            server: "203.0.113.10".into(),
+            port: 443,
+            outbound: Outbound::Shadowsocks(ShadowsocksParams {
+                method: "aes-128-gcm".into(),
+                password: "test-secret".into(),
+            }),
+            stream: StreamSettings::default(),
+            raw: None,
+        };
+        let mut rules = RuleSet::new(RuleSetId::new("example-rules"), "Examples", RuleTarget::Block);
+        for (id, matcher, target) in [
+            ("exact", RuleMatcher::Domain(DomainMatch::Exact("example.com".into())), RuleTarget::Direct),
+            ("suffix", RuleMatcher::Domain(DomainMatch::Suffix("example.org".into())), RuleTarget::Proxy),
+            ("keyword", RuleMatcher::Domain(DomainMatch::Keyword("example".into())), RuleTarget::Block),
+            ("name", RuleMatcher::Process(ProcessMatch::Name("example.exe".into())), RuleTarget::Direct),
+            ("path", RuleMatcher::Process(ProcessMatch::Path("C:\\example\\example.exe".into())), RuleTarget::Proxy),
+            ("cidr", RuleMatcher::IpCidr("198.51.100.0/24".into()), RuleTarget::Block),
+            ("template", RuleMatcher::Template(RuleTemplate::Torrents), RuleTarget::Direct),
+        ] {
+            rules.rules.push(rosetun_config::Rule {
+                id: RuleId::new(id),
+                enabled: true,
+                matcher,
+                target,
+            });
+        }
+        let rules = rules.with_templates_expanded();
+        let mut settings = Settings {
+            kill_switch: true,
+            allow_lan: true,
+            dns: DnsSettings {
+                server: "192.0.2.53".parse().unwrap(),
+                server_name: "dns.example.com".into(),
+                port: Some(443),
+                path: Some("/dns-query".into()),
+            },
+            ..Settings::default()
+        };
+        settings.tun.ipv4 = "198.51.100.1/30".into();
+        let control = rosetun_engine::ControlEndpoint {
+            address: "127.0.0.1:9090".parse().unwrap(),
+            secret: "fixture-secret".into(),
+        };
+        let rendered = render(&RenderRequest {
+            node: &node,
+            rules: &rules,
+            settings: &settings,
+            control: Some(&control),
+            verbose_log: false,
+        })
+        .unwrap();
+        assert!(rendered.unsupported.is_empty());
+        assert_eq!(rendered.body, include_bytes!("../tests/fixtures/full-config.json"));
+    }
+
+    #[test]
     fn tls_without_fingerprint_uses_chrome_utls() {
         let tls = tls_section(&TlsMode::Tls(Default::default()), true).unwrap();
         assert_eq!(
