@@ -74,6 +74,22 @@ mod tests {
     }
 
     #[test]
+    fn a_one_mebibyte_list_chunk_fits_in_one_frame() {
+        let frame = Frame::Request {
+            id: 1,
+            body: Request::PutListChunk {
+                sha256: "a".repeat(64),
+                format: crate::ListFormat::Source,
+                total_size: crate::MAX_LIST_PAYLOAD_BYTES,
+                offset: 0,
+                data: "A".repeat(4 * crate::MAX_LIST_CHUNK_BYTES.div_ceil(3)),
+            },
+        };
+        assert!((serde_json::to_vec(&frame).unwrap().len() as u64) < super::MAX_FRAME_BYTES);
+        assert_eq!(roundtrip(&frame), frame);
+    }
+
+    #[test]
     fn apply_request_survives_roundtrip() {
         let frame = Frame::Request {
             id: 8,
@@ -100,6 +116,8 @@ mod tests {
                     matcher: RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
                     target: RuleTarget::Direct,
                 }],
+                lists: Vec::new(),
+                fallback_block_rules: Vec::new(),
                 settings: Settings::default(),
             })),
         };

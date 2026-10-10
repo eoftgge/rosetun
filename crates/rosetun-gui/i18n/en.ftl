@@ -103,6 +103,7 @@ error-code-routing-failed = routing setup failed
 error-code-busy = the service is busy with another operation
 error-code-invalid-state = the tunnel is not in a state that allows this
 error-code-unsupported-rules = the engine does not support these rules
+error-code-list-missing = a required list is no longer available in the service
 error-code-not-implemented = the service does not support this yet
 error-code-internal = internal service error
 error-autostart-read = could not read the autostart setting: { $detail }

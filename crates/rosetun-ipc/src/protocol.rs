@@ -1,15 +1,19 @@
 use rosetun_config::{
-    AppConfig, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId, RuleTarget, Selection, Settings,
-    Status, Traffic,
+    AppConfig, LogLevel, Node, NodeId, Rule, RuleId, RuleSet, RuleSetId, RuleTarget, Selection,
+    Settings, Status, Traffic,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
+pub const MAX_LIST_CHUNK_BYTES: usize = 1024 * 1024;
+pub const MAX_LIST_PAYLOAD_BYTES: u64 = 16 * 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub use rosetun_config::{ListRef, UploadedListFormat as ListFormat};
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Request {
     Hello {
@@ -18,6 +22,14 @@ pub enum Request {
     },
     Status,
     TemporaryRules,
+    ListStatus { hashes: Vec<String> },
+    PutListChunk {
+        sha256: String,
+        format: ListFormat,
+        total_size: u64,
+        offset: u64,
+        data: String,
+    },
     Connect(Box<ConnectRequest>),
     ProbeNodes(Box<ProbeRequest>),
     TunnelDelay,
@@ -25,6 +37,44 @@ pub enum Request {
     Apply(Box<ConnectRequest>),
     Subscribe,
     Shutdown,
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Hello { protocol_version, .. } => f
+                .debug_struct("Hello")
+                .field("protocol_version", protocol_version)
+                .finish_non_exhaustive(),
+            Self::ListStatus { hashes } => f
+                .debug_struct("ListStatus")
+                .field("hash_count", &hashes.len())
+                .finish(),
+            Self::PutListChunk {
+                sha256,
+                format,
+                total_size,
+                offset,
+                data,
+            } => f
+                .debug_struct("PutListChunk")
+                .field("sha256", sha256)
+                .field("format", format)
+                .field("total_size", total_size)
+                .field("offset", offset)
+                .field("encoded_len", &data.len())
+                .finish(),
+            Self::Connect(request) => f.debug_tuple("Connect").field(request).finish(),
+            Self::Apply(request) => f.debug_tuple("Apply").field(request).finish(),
+            Self::ProbeNodes(request) => f.debug_tuple("ProbeNodes").field(request).finish(),
+            Self::Status => f.write_str("Status"),
+            Self::TemporaryRules => f.write_str("TemporaryRules"),
+            Self::TunnelDelay => f.write_str("TunnelDelay"),
+            Self::Disconnect => f.write_str("Disconnect"),
+            Self::Subscribe => f.write_str("Subscribe"),
+            Self::Shutdown => f.write_str("Shutdown"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -44,6 +94,10 @@ pub struct ConnectRequest {
     pub rule_set: RuleSet,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub temporary_rules: Vec<Rule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lists: Vec<ListRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_block_rules: Vec<RuleId>,
     pub settings: Settings,
 }
 
@@ -59,6 +113,8 @@ impl std::fmt::Debug for ConnectRequest {
             .field("rule_set_id", &self.rule_set.id)
             .field("rule_count", &self.rule_set.rules.len())
             .field("temporary_rule_count", &self.temporary_rules.len())
+            .field("list_count", &self.lists.len())
+            .field("fallback_block_rule_count", &self.fallback_block_rules.len())
             .finish_non_exhaustive()
     }
 }
@@ -86,6 +142,8 @@ impl ConnectRequest {
             node: node.clone(),
             rule_set,
             temporary_rules: Vec::new(),
+            lists: Vec::new(),
+            fallback_block_rules: Vec::new(),
             settings: config.settings.clone(),
         })
     }
@@ -142,6 +200,7 @@ pub enum Response {
     },
     Status(Status),
     TemporaryRules(Vec<Rule>),
+    ListStatus { missing: Vec<String> },
     Probe(Vec<ProbeResult>),
     Delay(ProbeOutcome),
     Ok,
@@ -208,6 +267,7 @@ pub enum ErrorCode {
     Busy,
     InvalidState,
     UnsupportedRules,
+    ListMissing,
     NotImplemented,
     Internal,
 }
@@ -228,7 +288,7 @@ mod tests {
                 code
             );
         }
-        assert_eq!(super::PROTOCOL_VERSION, 6);
+        assert_eq!(super::PROTOCOL_VERSION, 7);
     }
     use rosetun_config::{
         AppConfig, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
@@ -236,7 +296,57 @@ mod tests {
         TrojanParams,
     };
 
-    use super::{ConnectRequest, ConnectRequestError, ProbeRequest, Request};
+    use super::{ConnectRequest, ConnectRequestError, ListFormat, ListRef, ProbeRequest, Request};
+
+    #[test]
+    fn list_requests_round_trip_without_exposing_chunks_in_debug() {
+        let hash = "a".repeat(64);
+        let status = Request::ListStatus {
+            hashes: vec![hash.clone()],
+        };
+        let chunk = Request::PutListChunk {
+            sha256: hash.clone(),
+            format: ListFormat::Source,
+            total_size: 6,
+            offset: 0,
+            data: "c2VjcmV0".into(),
+        };
+        for request in [status, chunk] {
+            let encoded = serde_json::to_string(&request).unwrap();
+            assert_eq!(serde_json::from_str::<Request>(&encoded).unwrap(), request);
+            let debug = format!("{request:?}");
+            assert!(!debug.contains("c2VjcmV0"));
+            assert!(!debug.contains(&hash) || matches!(request, Request::PutListChunk { .. }));
+        }
+        assert_eq!(
+            serde_json::to_string(&super::ErrorCode::ListMissing).unwrap(),
+            "\"list_missing\""
+        );
+    }
+
+    #[test]
+    fn list_references_are_optional_and_debug_is_redacted() {
+        let mut request = ConnectRequest::from_config(&selected_config()).unwrap();
+        let old = serde_json::to_value(&request).unwrap();
+        assert!(old.get("lists").is_none());
+        assert!(old.get("fallback_block_rules").is_none());
+        let decoded: ConnectRequest = serde_json::from_value(old).unwrap();
+        assert!(decoded.lists.is_empty());
+        assert!(decoded.fallback_block_rules.is_empty());
+
+        request.lists.push(ListRef {
+            tag: "list-test".into(),
+            sha256: "b".repeat(64),
+            format: ListFormat::Binary,
+        });
+        request.fallback_block_rules.push(RuleId::new("block"));
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["lists"][0]["format"], "binary");
+        assert_eq!(json["fallback_block_rules"][0], "block");
+        assert_eq!(serde_json::from_value::<ConnectRequest>(json).unwrap(), request);
+        assert!(!format!("{request:?}").contains("list-test"));
+        assert!(!format!("{:?}", request.lists[0]).contains("list-test"));
+    }
 
     fn selected_config() -> AppConfig {
         let subscription_id = SubscriptionId::new("subscription");

@@ -574,6 +574,9 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                 ErrorCode::UnsupportedRules => {
                     tr_in(language, "error-code-unsupported-rules", &FluentArgs::new())
                 }
+                ErrorCode::ListMissing => {
+                    tr_in(language, "error-code-list-missing", &FluentArgs::new())
+                }
                 ErrorCode::NotImplemented => {
                     tr_in(language, "error-code-not-implemented", &FluentArgs::new())
                 }

@@ -221,6 +221,9 @@ fn dispatch(
             Ok(rules) => Response::TemporaryRules(rules),
             Err(error) => Response::Error(error),
         },
+        Request::ListStatus { .. } | Request::PutListChunk { .. } => Response::Error(
+            HelperError::new(ErrorCode::NotImplemented, "list uploads are not available yet"),
+        ),
         Request::Connect(connect) => match helper.connect(connect) {
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),

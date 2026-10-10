@@ -2331,6 +2331,8 @@ fn connect_request() -> ConnectRequest {
         },
         rule_set: RuleSet::new(RuleSetId::new("base"), "base", RuleTarget::Proxy),
         temporary_rules: Vec::new(),
+        lists: Vec::new(),
+        fallback_block_rules: Vec::new(),
         settings: Settings::default(),
     }
 }

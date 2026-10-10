@@ -103,6 +103,7 @@ error-code-routing-failed = не удалось настроить маршру�
 error-code-busy = служба занята другой операцией
 error-code-invalid-state = в текущем состоянии туннеля это невозможно
 error-code-unsupported-rules = ядро не поддерживает эти правила
+error-code-list-missing = нужный список больше не доступен в службе
 error-code-not-implemented = служба пока этого не умеет
 error-code-internal = внутренняя ошибка службы
 error-autostart-read = не удалось прочитать настройку автозапуска: { $detail }

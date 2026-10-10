@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use crate::{
-    ConnectRequest, Connection, Frame, HelperError, PROTOCOL_VERSION, ProbeOutcome, ProbeRequest,
-    ProbeResult, Request, Response,
+    ConnectRequest, Connection, Frame, HelperError, ListFormat, PROTOCOL_VERSION, ProbeOutcome,
+    ProbeRequest, ProbeResult, Request, Response,
 };
 use rosetun_config::{Rule, Status};
 
@@ -62,6 +62,30 @@ impl HelperClient {
             Response::TemporaryRules(rules) => Ok(rules),
             _ => Err(ClientError::Unexpected),
         }
+    }
+
+    pub fn list_status(&mut self, hashes: Vec<String>) -> Result<Vec<String>, ClientError> {
+        match self.request(Request::ListStatus { hashes })? {
+            Response::ListStatus { missing } => Ok(missing),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
+    pub fn put_list_chunk(
+        &mut self,
+        sha256: &str,
+        format: ListFormat,
+        total_size: u64,
+        offset: u64,
+        data: String,
+    ) -> Result<(), ClientError> {
+        self.expect_ok(Request::PutListChunk {
+            sha256: sha256.to_owned(),
+            format,
+            total_size,
+            offset,
+            data,
+        })
     }
 
     pub fn connect_tunnel(&mut self, request: ConnectRequest) -> Result<(), ClientError> {

@@ -7,6 +7,7 @@ mod rule;
 mod runtime;
 mod settings;
 mod subscription;
+mod uploaded_list;
 
 pub use ids::{ListId, NodeId, RuleId, RuleSetId, SubscriptionId};
 pub use list::{List, ListCategoryError, ListFormat, ListSource};
@@ -18,6 +19,7 @@ pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget
 pub use runtime::{ConnectStage, ConnectionState, FailureKind, Status, Traffic};
 pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings};
 pub use subscription::{Selection, Subscription, SubscriptionInfo};
+pub use uploaded_list::{ListRef, UploadedListFormat, list_tag};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
