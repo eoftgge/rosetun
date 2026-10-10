@@ -112,11 +112,18 @@ pub(crate) fn state_style(state: &ConnectionState) -> (String, Color32) {
 }
 
 pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
-    let response = egui::Modal::new(egui::Id::new("turn_off_protection"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
-            ui.set_width(480.0);
-            ui.heading(tr!("turn-off-protection"));
+    let choice = widgets::confirm_modal(
+        ctx,
+        widgets::ConfirmModal {
+            id: "turn_off_protection",
+            title: tr!("turn-off-protection"),
+            cancel: tr!("keep-blocked"),
+            confirm: tr!("turn-off-protection"),
+            busy: state.operations.helper,
+            confirm_enabled: state.helper_available && !state.operations.helper,
+            button_gap: 20.0,
+        },
+        |ui| {
             ui.add_space(12.0);
             ui.add(
                 egui::Label::new(RichText::new(tr!("protection-warning")).color(theme::ERROR))
@@ -125,26 +132,12 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
             if let Some(error) = &state.operation_error {
                 ui.add(egui::Label::new(state.text(error)).wrap());
             }
-            ui.add_space(20.0);
-            ui.horizontal(|ui| {
-                if widgets::outline_button(ui, tr!("keep-blocked"), !state.operations.helper)
-                    .clicked()
-                {
-                    actions.push(Action::KeepBlocked);
-                }
-                if widgets::button_fill(
-                    ui,
-                    tr!("turn-off-protection"),
-                    state.helper_available && !state.operations.helper,
-                )
-                .clicked()
-                {
-                    actions.push(Action::ConfirmProtectionOff);
-                }
-            });
-        });
-    if !state.operations.helper && response.should_close() {
-        actions.push(Action::KeepBlocked);
+        },
+    );
+    match choice {
+        widgets::ModalChoice::Cancel => actions.push(Action::KeepBlocked),
+        widgets::ModalChoice::Confirm => actions.push(Action::ConfirmProtectionOff),
+        widgets::ModalChoice::None => {}
     }
 }
 

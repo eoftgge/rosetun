@@ -445,28 +445,26 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 }
 
 pub(crate) fn reset_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
-    let response = egui::Modal::new(egui::Id::new("reset_settings"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
-            ui.set_width(480.0);
-            ui.heading(tr!("reset-settings-question"));
+    let choice = widgets::confirm_modal(
+        ctx,
+        widgets::ConfirmModal {
+            id: "reset_settings",
+            title: tr!("reset-settings-question"),
+            cancel: tr!("cancel"),
+            confirm: tr!("reset-to-default"),
+            busy: state.operations.settings,
+            confirm_enabled: state.can_reset_settings(),
+            button_gap: 20.0,
+        },
+        |ui| {
             ui.add_space(12.0);
             ui.add(egui::Label::new(tr!("reset-settings-body")).wrap());
-            ui.add_space(20.0);
-            ui.horizontal(|ui| {
-                if widgets::outline_button(ui, tr!("cancel"), !state.operations.settings).clicked()
-                {
-                    actions.push(Action::CancelResetSettings);
-                }
-                if widgets::button_fill(ui, tr!("reset-to-default"), state.can_reset_settings())
-                    .clicked()
-                {
-                    actions.push(Action::ConfirmResetSettings);
-                }
-            });
-        });
-    if !state.operations.settings && response.should_close() {
-        actions.push(Action::CancelResetSettings);
+        },
+    );
+    match choice {
+        widgets::ModalChoice::Cancel => actions.push(Action::CancelResetSettings),
+        widgets::ModalChoice::Confirm => actions.push(Action::ConfirmResetSettings),
+        widgets::ModalChoice::None => {}
     }
 }
 

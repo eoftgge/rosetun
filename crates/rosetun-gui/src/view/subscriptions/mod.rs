@@ -244,50 +244,24 @@ pub(crate) fn rename_dialog(ctx: &egui::Context, state: &mut State, actions: &mu
         return;
     };
     let busy = state.operations.renaming;
-    let response = egui::Modal::new(egui::Id::new("rename_subscription"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
-            ui.set_width(400.0);
-            ui.heading(tr!("rename-subscription"));
-            ui.add_space(12.0);
-            ui.label(tr!("subscription-name"));
-            let input = ui.add_enabled(
-                !busy,
-                egui::TextEdit::singleline(&mut dialog.name)
-                    .char_limit(rosetun_core::SUBSCRIPTION_NAME_LIMIT)
-                    .desired_width(f32::INFINITY),
-            );
-            if dialog.focus {
-                input.request_focus();
-                dialog.focus = false;
-            }
-            if input.changed() {
-                dialog.error = None;
-            }
-            if !busy
-                && !dialog.name.trim().is_empty()
-                && (input.has_focus() || input.lost_focus())
-                && ui.input(|input| input.key_pressed(egui::Key::Enter))
-            {
-                actions.push(Action::SubmitRename);
-            }
-            if let Some(error) = &dialog.error {
-                ui.colored_label(theme::ERROR, error);
-            }
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                    actions.push(Action::CancelRename);
-                }
-                if widgets::button_fill(ui, tr!("rename"), !busy && !dialog.name.trim().is_empty())
-                    .clicked()
-                {
-                    actions.push(Action::SubmitRename);
-                }
-            });
-        });
-    if !busy && response.should_close() {
-        actions.push(Action::CancelRename);
+    let choice = widgets::name_modal(
+        ctx,
+        widgets::NameModal {
+            id: "rename_subscription",
+            title: tr!("rename-subscription"),
+            label: tr!("subscription-name"),
+            submit: tr!("rename"),
+            name: &mut dialog.name,
+            focus: &mut dialog.focus,
+            error: &mut dialog.error,
+            busy,
+            char_limit: Some(rosetun_core::SUBSCRIPTION_NAME_LIMIT),
+        },
+    );
+    match choice {
+        widgets::ModalChoice::Cancel => actions.push(Action::CancelRename),
+        widgets::ModalChoice::Confirm => actions.push(Action::SubmitRename),
+        widgets::ModalChoice::None => {}
     }
 }
 
@@ -295,11 +269,22 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
     let Some(dialog) = &state.subscriptions.remove else {
         return;
     };
-    let response = egui::Modal::new(egui::Id::new("remove_subscription"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
-            ui.set_width(480.0);
-            ui.heading(tr!("remove-subscription"));
+    let choice = widgets::confirm_modal(
+        ctx,
+        widgets::ConfirmModal {
+            id: "remove_subscription",
+            title: tr!("remove-subscription"),
+            cancel: tr!("cancel"),
+            confirm: if state.operations.removing {
+                tr!("removing")
+            } else {
+                tr!("remove")
+            },
+            busy: state.operations.removing,
+            confirm_enabled: !state.operations.removing,
+            button_gap: 20.0,
+        },
+        |ui| {
             if let Some(subscription) = state
                 .config
                 .subscriptions
@@ -333,28 +318,11 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                     egui::Label::new(RichText::new(state.text(error)).color(theme::ERROR)).wrap(),
                 );
             }
-            ui.add_space(20.0);
-            ui.horizontal(|ui| {
-                if widgets::outline_button(ui, tr!("cancel"), !state.operations.removing).clicked()
-                {
-                    actions.push(Action::CancelRemove);
-                }
-                if widgets::button_fill(
-                    ui,
-                    if state.operations.removing {
-                        tr!("removing")
-                    } else {
-                        tr!("remove")
-                    },
-                    !state.operations.removing,
-                )
-                .clicked()
-                {
-                    actions.push(Action::ConfirmRemove);
-                }
-            });
-        });
-    if !state.operations.removing && response.should_close() {
-        actions.push(Action::CancelRemove);
+        },
+    );
+    match choice {
+        widgets::ModalChoice::Cancel => actions.push(Action::CancelRemove),
+        widgets::ModalChoice::Confirm => actions.push(Action::ConfirmRemove),
+        widgets::ModalChoice::None => {}
     }
 }

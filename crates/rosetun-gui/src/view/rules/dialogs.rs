@@ -5,48 +5,28 @@ pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
         return;
     };
     let busy = state.operations.rules_edit;
-    let response = egui::Modal::new(egui::Id::new("rule_set_name"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
-            ui.set_width(400.0);
-            ui.heading(match dialog.kind {
-                NameDialogKind::Create => tr!("create-rule-set"),
-                NameDialogKind::Rename(_) => tr!("rename-rule-set"),
-            });
-            ui.add_space(12.0);
-            ui.label(tr!("set-name"));
-            let input = ui.add_enabled(
-                !busy,
-                egui::TextEdit::singleline(&mut dialog.name).desired_width(f32::INFINITY),
-            );
-            if dialog.focus {
-                input.request_focus();
-                dialog.focus = false;
-            }
-            if input.changed() {
-                dialog.error = None;
-            }
-            if let Some(error) = &dialog.error {
-                ui.colored_label(theme::ERROR, error);
-            }
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                    actions.push(Action::CancelSetName);
-                }
-                let label = match dialog.kind {
-                    NameDialogKind::Create => tr!("create-rule-set"),
-                    NameDialogKind::Rename(_) => tr!("rename"),
-                };
-                if widgets::button_fill(ui, label, !busy && !dialog.name.trim().is_empty())
-                    .clicked()
-                {
-                    actions.push(Action::SubmitSetName);
-                }
-            });
-        });
-    if !busy && response.should_close() {
-        actions.push(Action::CancelSetName);
+    let (title, submit) = match dialog.kind {
+        NameDialogKind::Create => (tr!("create-rule-set"), tr!("create-rule-set")),
+        NameDialogKind::Rename(_) => (tr!("rename-rule-set"), tr!("rename")),
+    };
+    let choice = widgets::name_modal(
+        ctx,
+        widgets::NameModal {
+            id: "rule_set_name",
+            title,
+            label: tr!("set-name"),
+            submit,
+            name: &mut dialog.name,
+            focus: &mut dialog.focus,
+            error: &mut dialog.error,
+            busy,
+            char_limit: None,
+        },
+    );
+    match choice {
+        widgets::ModalChoice::Cancel => actions.push(Action::CancelSetName),
+        widgets::ModalChoice::Confirm => actions.push(Action::SubmitSetName),
+        widgets::ModalChoice::None => {}
     }
 }
 
@@ -63,13 +43,25 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
         return;
     };
     let busy = state.operations.rules_edit;
-    let response = egui::Modal::new(egui::Id::new("delete_rules"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
-            ui.set_width(480.0);
+    let title = match dialog {
+        DeleteDialog::Set(_) => tr!("delete-rule-set"),
+        DeleteDialog::Rule { .. } => tr!("delete-rule"),
+        DeleteDialog::Rules { rules, .. } => crate::i18n::delete_rules_heading(rules.len()),
+    };
+    let choice = widgets::confirm_modal(
+        ctx,
+        widgets::ConfirmModal {
+            id: "delete_rules",
+            title,
+            cancel: tr!("cancel"),
+            confirm: tr!("delete"),
+            busy,
+            confirm_enabled: !busy,
+            button_gap: 18.0,
+        },
+        |ui| {
             match dialog {
                 DeleteDialog::Set(id) => {
-                    ui.heading(tr!("delete-rule-set"));
                     if let Some(set) = state.config.rule_sets.iter().find(|set| &set.id == id) {
                         ui.label(state.text(&set.name));
                     }
@@ -85,7 +77,6 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                     }
                 }
                 DeleteDialog::Rule { set, rule } => {
-                    ui.heading(tr!("delete-rule"));
                     if let Some(rule) = state
                         .config
                         .rule_sets
@@ -98,7 +89,6 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                     ui.label(tr!("delete-rule-detail"));
                 }
                 DeleteDialog::Rules { set, rules } => {
-                    ui.heading(crate::i18n::delete_rules_heading(rules.len()));
                     if let Some(set) = state.config.rule_sets.iter().find(|item| &item.id == set) {
                         for id in rules.iter().take(5) {
                             if let Some(rule) = set.rules.iter().find(|item| &item.id == id) {
@@ -114,17 +104,11 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                     ui.label(tr!("delete-rule-detail"));
                 }
             }
-            ui.add_space(18.0);
-            ui.horizontal(|ui| {
-                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                    actions.push(Action::CancelRuleDelete);
-                }
-                if widgets::button_fill(ui, tr!("delete"), !busy).clicked() {
-                    actions.push(Action::ConfirmRuleDelete);
-                }
-            });
-        });
-    if !busy && response.should_close() {
-        actions.push(Action::CancelRuleDelete);
+        },
+    );
+    match choice {
+        widgets::ModalChoice::Cancel => actions.push(Action::CancelRuleDelete),
+        widgets::ModalChoice::Confirm => actions.push(Action::ConfirmRuleDelete),
+        widgets::ModalChoice::None => {}
     }
 }
