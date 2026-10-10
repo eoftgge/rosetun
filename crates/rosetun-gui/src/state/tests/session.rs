@@ -536,6 +536,48 @@ fn late_apply_cannot_restore_rules_after_disconnect() {
 }
 
 #[test]
+fn repeated_checks_reuse_the_request_until_config_or_temporary_rules_change() {
+    let mut state = state_for_auto_connect();
+    let config = state.config.clone();
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config: config.clone(),
+    });
+    let request = ConnectRequest::from_config(&config).unwrap();
+    state.reduce(WorkerEvent::Connect(Ok(request)));
+    state.reduce(WorkerEvent::Status(Status {
+        state: ConnectionState::Connected,
+        node: Some(NodeId::new("node")),
+        ..Status::default()
+    }));
+    assert_eq!(state.session.request_builds, 1);
+
+    for _ in 0..2 {
+        assert!(!state.pending_reconnect(SessionPart::Rules));
+        assert!(!state.can_apply());
+        assert!(state.apply_request().is_some());
+    }
+    assert_eq!(state.session.request_builds, 1);
+
+    let mut updated = config;
+    updated.settings.dns = DnsPreset::Google.settings();
+    state.reduce(WorkerEvent::Config {
+        generation: 2,
+        config: updated,
+    });
+    assert!(state.pending_reconnect(SessionPart::Dns));
+    assert_eq!(state.session.request_builds, 2);
+
+    state.session.temporary_load = Some(1);
+    state.reduce(WorkerEvent::TemporaryRules {
+        request: 1,
+        result: Ok(vec![temporary_rule("temp", "example.com")]),
+    });
+    assert_eq!(state.session.request_builds, 3);
+    assert_eq!(state.apply_request().unwrap().temporary_rules.len(), 1);
+}
+
+#[test]
 fn successful_connect_has_no_pending_changes_until_dns_or_protection_changes() {
     let mut state = state_for_auto_connect();
     let request = ConnectRequest::from_config(&state.config).unwrap();

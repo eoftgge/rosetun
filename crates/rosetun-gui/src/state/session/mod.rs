@@ -1,6 +1,6 @@
 use rosetun_config::{ConnectionState, Rule, RuleId, Status};
 use rosetun_core::AppliedSnapshot;
-use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError};
+use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, ErrorCode, HelperError};
 
 use super::{Action, Job, Screen, State, TunnelDelay};
 use crate::errors;
@@ -143,6 +143,9 @@ impl AutoApplyIntent {
 }
 
 pub(crate) struct SessionState {
+    cached_request: Option<Result<ConnectRequest, ConnectRequestError>>,
+    #[cfg(test)]
+    pub(in crate::state) request_builds: usize,
     pub(super) session_request: Option<ConnectRequest>,
     pub(super) applied_snapshot: Option<AppliedSnapshot>,
     pub(super) connect_snapshot: Option<AppliedSnapshot>,
@@ -167,6 +170,9 @@ pub(crate) struct SessionState {
 impl Default for SessionState {
     fn default() -> Self {
         Self {
+            cached_request: None,
+            #[cfg(test)]
+            request_builds: 0,
             session_request: None,
             applied_snapshot: None,
             connect_snapshot: None,
@@ -226,11 +232,42 @@ impl SessionState {
 }
 
 impl State {
+    pub(super) fn refresh_cached_request(&mut self) {
+        if self
+            .session
+            .cached_request
+            .as_ref()
+            .and_then(|request| request.as_ref().ok())
+            .is_some_and(|request| request.temporary_rules != self.session.temporary_rules)
+        {
+            self.cache_config_request();
+        }
+    }
+
+    pub(super) fn cache_config_request(&mut self) {
+        self.session.cached_request = Some(ConnectRequest::from_config(&self.config).map(|mut request| {
+            request.temporary_rules = self.session.temporary_rules.clone();
+            request
+        }));
+        #[cfg(test)]
+        {
+            self.session.request_builds += 1;
+        }
+    }
+
+    fn config_request(&self) -> Result<std::borrow::Cow<'_, ConnectRequest>, ConnectRequestError> {
+        match self.session.cached_request.as_ref() {
+            Some(Ok(request)) => Ok(std::borrow::Cow::Borrowed(request)),
+            Some(Err(error)) => Err(*error),
+            None => ConnectRequest::from_config(&self.config).map(std::borrow::Cow::Owned),
+        }
+    }
+
     pub(crate) fn pending_reconnect(&self, part: SessionPart) -> bool {
         let Some(session) = &self.session.session_request else {
             return false;
         };
-        let Ok(current) = ConnectRequest::from_config(&self.config) else {
+        let Ok(current) = self.config_request() else {
             return false;
         };
         match part {
@@ -241,9 +278,9 @@ impl State {
         }
     }
 
-    fn apply_request(&self) -> Option<ConnectRequest> {
+    pub(in crate::state) fn apply_request(&self) -> Option<ConnectRequest> {
         let session = self.session.session_request.as_ref()?;
-        let mut request = ConnectRequest::from_config(&self.config).ok()?;
+        let mut request = self.config_request().ok()?.into_owned();
         request.settings.engine = session.settings.engine;
         request.settings.tun = session.settings.tun.clone();
         request.settings.kill_switch = session.settings.kill_switch;
@@ -269,7 +306,7 @@ impl State {
         let Some(session) = &self.session.session_request else {
             return false;
         };
-        let Ok(current) = ConnectRequest::from_config(&self.config) else {
+        let Ok(current) = self.config_request() else {
             return false;
         };
         session.selection != current.selection
@@ -421,7 +458,10 @@ impl State {
     }
 
     pub(super) fn clear_temporary(&mut self) {
-        self.session.temporary_rules.clear();
+        if !self.session.temporary_rules.is_empty() {
+            self.session.temporary_rules.clear();
+            self.refresh_cached_request();
+        }
         self.session.temporary_rules_loaded = false;
         self.session.temporary_load = None;
         self.session.temporary_retry = true;
@@ -471,7 +511,7 @@ impl State {
                         && !self.session.flow.restore_pending() =>
                 {
                     self.session.session_snapshot_checked = true;
-                    if let Ok(mut request) = ConnectRequest::from_config(&self.config)
+                    if let Ok(mut request) = self.config_request().map(std::borrow::Cow::into_owned)
                         && status.node.as_ref() == Some(&request.selection.node)
                     {
                         if self.session.temporary_rules_loaded {
@@ -508,6 +548,7 @@ impl State {
                             session.temporary_rules = rules.clone();
                         }
                         self.session.temporary_rules = rules;
+                        self.refresh_cached_request();
                         self.session.temporary_rules_loaded = true;
                         self.session.temporary_error_reported = false;
                         self.operation_error = None;
@@ -559,6 +600,7 @@ impl State {
                             return;
                         }
                         self.session.temporary_rules = request.temporary_rules.clone();
+                        self.refresh_cached_request();
                         self.session.session_request = Some(request);
                         self.session.applied_snapshot = candidate;
                         self.session.recovery = ApplyRecovery::default();
@@ -570,6 +612,7 @@ impl State {
                     Err(error) => {
                         if let Some(before) = before {
                             self.session.temporary_rules = before;
+                            self.refresh_cached_request();
                         }
                         self.session.intent = AutoApplyIntent::None;
                         let cancelled = matches!(
@@ -689,6 +732,7 @@ impl State {
                     let before = std::mem::take(&mut self.session.temporary_rules);
                     self.session.temporary_rules =
                         added.into_iter().chain(before.iter().cloned()).collect();
+                    self.refresh_cached_request();
                     if let Some(request) = self.apply_request() {
                         self.start_apply(Some(before));
                         self.rules.screen.add = None;
@@ -697,6 +741,7 @@ impl State {
                         return Some(Job::Apply(Box::new(request)));
                     }
                     self.session.temporary_rules = before;
+                    self.refresh_cached_request();
                 }
             }
             Action::RemoveTemporary(id) => {
@@ -710,11 +755,13 @@ impl State {
                 {
                     let before = self.session.temporary_rules.clone();
                     self.session.temporary_rules.remove(index);
+                    self.refresh_cached_request();
                     if let Some(request) = self.apply_request() {
                         self.start_apply(Some(before));
                         return Some(Job::Apply(Box::new(request)));
                     }
                     self.session.temporary_rules = before;
+                    self.refresh_cached_request();
                 }
             }
             Action::KeepTemporary(id) => {

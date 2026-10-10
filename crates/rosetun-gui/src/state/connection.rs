@@ -311,6 +311,7 @@ impl State {
                 match result {
                     Ok(request) => {
                         self.session.temporary_rules = request.temporary_rules.clone();
+                        self.refresh_cached_request();
                         self.session.temporary_rules_loaded = true;
                         self.session.temporary_load = None;
                         self.session.session_request = Some(request);
@@ -338,6 +339,7 @@ impl State {
                     self.cancelled_connect = false;
                     if let Some(request) = self.deferred_connect.take() {
                         self.session.temporary_rules = request.temporary_rules.clone();
+                        self.refresh_cached_request();
                         self.session.temporary_rules_loaded = true;
                         self.session.session_request = Some(request);
                         self.session.applied_snapshot =
