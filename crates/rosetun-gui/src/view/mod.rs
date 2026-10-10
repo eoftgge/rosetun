@@ -222,7 +222,7 @@ fn settings_nav_item(
         ui.painter().text(
             egui::pos2(rect.right() - 12.0, rect.center().y),
             egui::Align2::RIGHT_CENTER,
-            crate::strings::ERROR_MARK,
+            crate::constants::ERROR_MARK,
             egui::TextStyle::Body.resolve(ui.style()),
             theme::ERROR,
         );

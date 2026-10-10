@@ -5,7 +5,6 @@
 #![forbid(unsafe_code)]
 
 #[macro_use]
-#[allow(dead_code)] // The old tables stay in use until the callers are migrated.
 mod i18n;
 
 mod actions;
@@ -13,6 +12,7 @@ mod app;
 #[cfg(test)]
 mod app_icon;
 mod brand;
+mod constants;
 mod display;
 mod errors;
 #[cfg(test)]
@@ -23,7 +23,6 @@ mod reorder;
 mod rose_icon;
 mod rules;
 mod state;
-mod strings;
 mod theme;
 #[cfg(windows)]
 mod tray;
@@ -63,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .write(true)
                     .create(true)
                     .truncate(true)
-                    .open(directory.join(strings::LOG_FILE_NAME))
+                    .open(directory.join(constants::LOG_FILE_NAME))
             })
             .ok()
     });
@@ -93,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok();
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
-        .with_title(strings::TITLE)
+        .with_title(constants::TITLE)
         .with_icon(std::sync::Arc::new(eframe::egui::IconData {
             rgba: rose_icon::rose_icon_rgba(128, rose_icon::RoseIcon::Large),
             width: 128,
@@ -113,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     eframe::run_native(
-        strings::TITLE,
+        constants::TITLE,
         options,
         Box::new(move |cc| {
             let app = app::App::new(cc, store);

@@ -8,7 +8,7 @@ use crate::rules::{
     visible_rules_slice,
 };
 use crate::state::{Action, DeleteDialog, NameDialogKind, SessionPart, State};
-use crate::{strings, theme, widgets};
+use crate::{i18n, theme, widgets};
 
 const HANDLE_WIDTH: f32 = 22.0;
 const ICON_WIDTH: f32 = 34.0;
@@ -723,7 +723,7 @@ fn filter_controls(
     ]
     .into_iter()
     .filter(|(kind, _, count)| *kind != TypeFilter::Other || *count != 0)
-    .map(|(kind, label, count)| (kind, strings::filter_count(&label, count)))
+    .map(|(kind, label, count)| (kind, i18n::filter_count(&label, count)))
     .collect();
     let options: Vec<_> = labels
         .iter()

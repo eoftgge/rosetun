@@ -3,6 +3,43 @@ use rosetun_config::{ConnectStage, FailureKind, RuleTemplate};
 
 use super::{Language, tr_in};
 
+#[cfg(windows)]
+pub(crate) fn tray_tooltip(status: &str, server: Option<&str>) -> String {
+    let title = crate::constants::TITLE;
+    match server {
+        Some(server) => format!("{title} · {status}\n{server}"),
+        None => format!("{title} · {status}"),
+    }
+}
+
+pub(crate) fn scale(percent: u16) -> String {
+    format!("{percent}%")
+}
+
+pub(crate) fn process_copies(name: &str, count: usize) -> String {
+    format!("{name} ×{count}")
+}
+
+pub(crate) fn filter_count(label: &str, count: usize) -> String {
+    format!("{label} {count}")
+}
+
+pub(crate) fn node_details(protocol: &str, tls: &str, transport: &str) -> String {
+    format!("{protocol} · {tls} · {transport}")
+}
+
+pub(crate) fn server_tooltip(name: &str, details: &str, address: &str) -> String {
+    format!("{name}\n{details}\n{address}")
+}
+
+pub(crate) fn session_time(hours: u64, minutes: u64, seconds: u64) -> String {
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+pub(crate) fn plain_link(label: &str, value: &str) -> String {
+    format!("{label}: {value}")
+}
+
 pub(crate) fn about_version(app: &str, helper: Option<&str>) -> String {
     match helper {
         Some(helper) => tr!("about-version-with-helper", app = app, helper = helper),
@@ -12,22 +49,6 @@ pub(crate) fn about_version(app: &str, helper: Option<&str>) -> String {
 
 pub(crate) fn update_available(version: &str) -> String {
     tr!("update-available", version = version)
-}
-
-pub(crate) fn update_skipped(version: &str) -> String {
-    tr!("update-skipped", version = version)
-}
-
-pub(crate) fn update_checked(age: &str) -> String {
-    tr!("update-checked", age = age)
-}
-
-pub(crate) fn update_last_checked(age: &str) -> String {
-    tr!("update-last-checked", age = age)
-}
-
-pub(crate) fn update_skipped_detail(age: &str) -> String {
-    tr!("update-skipped-detail", age = age)
 }
 
 pub(crate) fn template_name(template: RuleTemplate) -> String {

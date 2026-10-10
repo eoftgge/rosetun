@@ -8,7 +8,7 @@ use rosetun_config::ConnectionState;
 
 use crate::brand;
 use crate::state::{Action, ExitLookup, ExitRoute, Screen, State};
-use crate::{strings, theme, widgets};
+use crate::{constants, theme, widgets};
 
 /// The window draws its own title bar on Windows; elsewhere the system frame stays.
 pub(crate) const CUSTOM_FRAME: bool = cfg!(windows);
@@ -250,7 +250,7 @@ fn intro_progress(time: f64, started_at: f64) -> f32 {
 fn paint_brand(ui: &mut egui::Ui, bloom: f32) {
     let mut name = LayoutJob::default();
     name.append(
-        strings::BRAND,
+        constants::BRAND,
         0.0,
         TextFormat {
             font_id: FontId::new(25.0, FontFamily::Name(theme::BRAND_FONT.into())),
@@ -263,7 +263,7 @@ fn paint_brand(ui: &mut egui::Ui, bloom: f32) {
 
     let mut tagline = LayoutJob::default();
     tagline.append(
-        &strings::TAGLINE.to_uppercase(),
+        &constants::TAGLINE.to_uppercase(),
         0.0,
         TextFormat {
             font_id: FontId::new(10.5, FontFamily::Proportional),

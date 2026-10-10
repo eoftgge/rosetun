@@ -9,7 +9,7 @@ use crate::errors;
 use crate::icons::{self, Icon};
 use crate::reorder::drop_target;
 use crate::state::{Action, PingResult, State, UpdateOutcome, shared_auto_update_hours};
-use crate::{display, strings, theme, widgets};
+use crate::{constants, display, i18n, theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     const FOOTER_HEIGHT: f32 = 92.0;
@@ -202,9 +202,9 @@ fn subscription_card(
                 ui.horizontal(|ui| {
                     if icons::icon_button(ui, Icon::Chevron { open: expanded }, true)
                         .on_hover_text(if expanded {
-                            strings::COLLAPSE
+                            constants::COLLAPSE
                         } else {
-                            strings::EXPAND
+                            constants::EXPAND
                         })
                         .clicked()
                     {
@@ -792,9 +792,9 @@ fn server_row(
     ) {
         response.on_hover_text(hint)
     } else {
-        response.on_hover_text(strings::server_tooltip(
+        response.on_hover_text(i18n::server_tooltip(
             &full_name,
-            &strings::node_details(
+            &i18n::node_details(
                 rosetun_core::node_protocol(node),
                 rosetun_core::node_tls(node),
                 rosetun_core::node_transport(node),
@@ -1006,8 +1006,7 @@ fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, value: &str) {
     } else {
         ui.add(
             egui::Label::new(
-                RichText::new(state.text(&strings::plain_link(label, value)))
-                    .color(theme::TEXT_DIM),
+                RichText::new(state.text(&i18n::plain_link(label, value))).color(theme::TEXT_DIM),
             )
             .truncate(),
         );

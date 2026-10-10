@@ -37,7 +37,7 @@ pub(crate) fn dismissible_error_with_action(
                 .show(
                     ui,
                     |ui| {
-                        ui.colored_label(ERROR, crate::strings::ERROR_MARK);
+                        ui.colored_label(ERROR, crate::constants::ERROR_MARK);
                         ui.add(egui::Label::new(message).wrap());
                         if let Some((label, enabled)) = action {
                             clicked = crate::widgets::link(ui, label, enabled).clicked();

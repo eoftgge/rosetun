@@ -6,7 +6,7 @@ use crate::brand;
 use crate::display;
 use crate::errors;
 use crate::state::{AboutFolder, Action, SessionPart, SettingsSection, State, now_unix};
-use crate::{strings, theme, widgets};
+use crate::{constants, i18n, theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     if !state.config_ready {
@@ -27,7 +27,7 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         card.row(tr!("scale"), Some(&tr!("zoom-hint")), |ui| {
             let scales: Vec<_> = rosetun_core::INTERFACE_SCALES
                 .into_iter()
-                .map(|percent| (percent, strings::scale(percent)))
+                .map(|percent| (percent, i18n::scale(percent)))
                 .collect();
             let options: Vec<_> = scales
                 .iter()
@@ -88,8 +88,8 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 fn language_label(setting: LanguageSetting) -> String {
     match setting {
         LanguageSetting::System => tr!("language-system"),
-        LanguageSetting::English => strings::ENGLISH.to_owned(),
-        LanguageSetting::Russian => strings::RUSSIAN.to_owned(),
+        LanguageSetting::English => constants::ENGLISH.to_owned(),
+        LanguageSetting::Russian => constants::RUSSIAN.to_owned(),
     }
 }
 
@@ -196,7 +196,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                 let width = (ui.available_width() - 3.0 * 8.0) / 4.0;
                 for (index, (preset, (name, address))) in DnsPreset::ALL
                     .into_iter()
-                    .zip(strings::DNS_PRESETS)
+                    .zip(constants::DNS_PRESETS)
                     .enumerate()
                 {
                     if dns_choice(
@@ -309,11 +309,11 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             for (label, value, hint) in [
                 (tr!("resolver-ip"), &mut form.server, ""),
                 (tr!("tls-name"), &mut form.server_name, ""),
-                (tr!("port"), &mut form.port, strings::PORT_PLACEHOLDER),
+                (tr!("port"), &mut form.port, constants::PORT_PLACEHOLDER),
                 (
                     tr!("dns-path"),
                     &mut form.path,
-                    strings::DNS_PATH_PLACEHOLDER,
+                    constants::DNS_PATH_PLACEHOLDER,
                 ),
             ] {
                 ui.label(label);
@@ -480,7 +480,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 ui.add_space(16.0);
                 ui.vertical(|ui| {
                     ui.label(
-                        RichText::new(strings::BRAND)
+                        RichText::new(constants::BRAND)
                             .font(egui::FontId::new(
                                 28.0,
                                 egui::FontFamily::Name(theme::BRAND_FONT.into()),
@@ -633,7 +633,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     actions,
                 );
                 ui.add_space(8.0);
-                let log = folder.join(strings::LOG_FILE_NAME);
+                let log = folder.join(constants::LOG_FILE_NAME);
                 about_path(
                     ui,
                     state,

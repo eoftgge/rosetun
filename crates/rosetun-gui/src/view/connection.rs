@@ -6,7 +6,7 @@ use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::state::{Action, ExitLookup, ExitRoute, SessionPart, State, TunnelDelay, primary_label};
-use crate::{display, strings, theme, widgets};
+use crate::{display, i18n, theme, widgets};
 
 use super::rose_button::{self, RosePhase};
 use super::rules::{target_color, target_label};
@@ -154,7 +154,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             );
                         ui.colored_label(
                             theme::TEXT_MUTED,
-                            strings::plain_link(&tr!("session"), &session),
+                            i18n::plain_link(&tr!("session"), &session),
                         );
                     });
                     if let Some(status) = visible_status {
@@ -298,7 +298,7 @@ fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     let protocol = state.config.active_node().map_or_else(
                         || tr!("ping-pending").to_owned(),
                         |(_, node)| {
-                            strings::node_details(
+                            i18n::node_details(
                                 rosetun_core::node_protocol(node),
                                 rosetun_core::node_tls(node),
                                 rosetun_core::node_transport(node),

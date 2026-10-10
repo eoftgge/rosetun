@@ -3,7 +3,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use eframe::egui;
 use rosetun_core::{provider_text, terminal_text};
 
-use crate::strings;
+use crate::i18n;
 
 pub(crate) fn safe_text(value: &str) -> String {
     let sanitized = terminal_text(value);
@@ -101,7 +101,7 @@ pub(crate) fn session_text(since_unix: Option<u64>, now_unix: u64) -> String {
     let hours = total_seconds / 3_600;
     let minutes = (total_seconds % 3_600) / 60;
     let seconds = total_seconds % 60;
-    strings::session_time(hours, minutes, seconds)
+    i18n::session_time(hours, minutes, seconds)
 }
 
 pub(crate) fn now_unix() -> u64 {

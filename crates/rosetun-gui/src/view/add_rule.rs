@@ -7,7 +7,7 @@ use crate::icons::{self, Icon};
 use crate::rules::{ProcessMatchMode, process_matches_filter, update_process_match_mode};
 use crate::state::{Action, AddRuleDialog, RuleInputKind};
 use crate::view::rules::{target_color, target_label};
-use crate::{strings, theme, widgets};
+use crate::{constants, i18n, theme, widgets};
 
 const DIALOG_WIDTH: f32 = 640.0;
 const DIALOG_TOP: f32 = 100.0;
@@ -329,7 +329,7 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
                 .desired_width(DIALOG_WIDTH)
                 .desired_rows(5)
                 .font(FontId::monospace(14.0))
-                .hint_text(strings::SITES_EXAMPLE),
+                .hint_text(constants::SITES_EXAMPLE),
         )
     };
     if dialog.focus_input {
@@ -513,7 +513,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     |path| path.to_string_lossy().into_owned(),
                 );
                 let name = if group.count > 1 {
-                    strings::process_copies(&display::safe_text(&group.name), group.count)
+                    i18n::process_copies(&display::safe_text(&group.name), group.count)
                 } else {
                     display::safe_text(&group.name)
                 };

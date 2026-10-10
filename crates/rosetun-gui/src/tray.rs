@@ -8,7 +8,7 @@ use crate::actions::PrimaryAction;
 use crate::app::ShellEvent;
 use crate::rose_icon::{self, RoseIcon};
 use crate::state::{State, primary_label};
-use crate::{strings, theme, view};
+use crate::{constants, i18n, theme, view};
 
 const OPEN_ID: &str = "rosetun.tray.open";
 const HIDE_ID: &str = "rosetun.tray.hide";
@@ -42,7 +42,7 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
     });
     TrayView {
         color,
-        tooltip: fit_tooltip(&strings::tray_tooltip(&status, server.as_deref())),
+        tooltip: fit_tooltip(&i18n::tray_tooltip(&status, server.as_deref())),
         primary_label: primary_label(state),
         primary_enabled: state.primary_action() != PrimaryAction::Disabled,
         open_label: tr!("tray-open"),
@@ -109,7 +109,7 @@ impl Tray {
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
-            .with_tooltip(strings::TITLE)
+            .with_tooltip(constants::TITLE)
             .with_icon(initial_icon)
             .build()?;
 
@@ -224,7 +224,7 @@ impl Tray {
 mod tests {
     use super::{fit_tooltip, tray_view};
     use crate::state::State;
-    use crate::{strings, theme};
+    use crate::{i18n, theme};
     use rosetun_config::{ConnectionState, Status};
     use rosetun_core::Store;
     use std::fs;
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(unknown.color, theme::DISCONNECTED);
         assert_eq!(
             unknown.tooltip,
-            strings::tray_tooltip(&tr!("status-unknown"), None)
+            i18n::tray_tooltip(&tr!("status-unknown"), None)
         );
         assert!(!unknown.primary_enabled);
         assert_eq!(unknown.hide_label, tr!("tray-hide"));

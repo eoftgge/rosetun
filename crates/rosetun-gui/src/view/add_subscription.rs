@@ -3,7 +3,7 @@ use rosetun_config::AppConfig;
 
 use crate::errors;
 use crate::state::{Action, AddDialog, redact};
-use crate::{display, strings, theme, widgets};
+use crate::{constants, display, theme, widgets};
 
 pub(crate) fn show(
     ctx: &egui::Context,
@@ -24,7 +24,7 @@ pub(crate) fn show(
                     !dialog.busy,
                     egui::TextEdit::singleline(&mut dialog.url)
                         .id(egui::Id::new("subscription_url_input"))
-                        .hint_text(strings::URL_PLACEHOLDER)
+                        .hint_text(constants::URL_PLACEHOLDER)
                         .desired_width((ui.available_width() - 90.0).max(120.0)),
                 );
                 if dialog.focus_url {
