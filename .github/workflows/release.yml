@@ -28,6 +28,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Check tag and release availability
         if: github.event_name == 'push'
         shell: pwsh
@@ -35,6 +36,11 @@ jobs:
           TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/master
+          $onMaster = $LASTEXITCODE -eq 0
+          # git exits with 1 when the commit is not an ancestor; do not fail the step on it.
+          $global:LASTEXITCODE = 0
+          if (-not $onMaster) { throw "Tag $env:TAG must point to a commit on master." }
           . ./installer/version.ps1
           $releaseVersion = Get-RosetunVersion
           if ($env:TAG -ne "v$($releaseVersion.Version)") {
