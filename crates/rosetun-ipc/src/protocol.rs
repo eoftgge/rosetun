@@ -58,7 +58,7 @@ impl std::fmt::Debug for Request {
                 data,
             } => f
                 .debug_struct("PutListChunk")
-                .field("sha256", sha256)
+                .field("sha256_prefix", &sha256.get(..12).unwrap_or("<invalid>"))
                 .field("format", format)
                 .field("total_size", total_size)
                 .field("offset", offset)

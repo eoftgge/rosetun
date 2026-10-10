@@ -2,6 +2,7 @@
 
 mod ids;
 mod list;
+mod list_validation;
 mod node;
 mod rule;
 mod runtime;
@@ -11,6 +12,10 @@ mod uploaded_list;
 
 pub use ids::{ListId, NodeId, RuleId, RuleSetId, SubscriptionId};
 pub use list::{List, ListCategoryError, ListFormat, ListSource};
+pub use list_validation::{
+    ListValidationError, MAX_UPLOADED_LIST_BYTES, MAX_UPLOADED_LIST_ENTRIES, normalize_source,
+    validate_srs,
+};
 pub use node::{
     Hysteria2Params, Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
     TlsParams, Transport, TrojanParams, VlessParams, VmessParams,

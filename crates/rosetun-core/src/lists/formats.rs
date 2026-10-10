@@ -2,23 +2,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use rosetun_config::{DomainMatch, ListCategoryError, ListFormat};
-use serde_json::{Value, json};
+use rosetun_config::{DomainMatch, ListCategoryError, ListFormat, ListValidationError};
+use serde_json::json;
+#[cfg(test)]
+use serde_json::Value;
 
 use crate::rules::parse_domain_input;
 
 const MAX_INPUT_BYTES: usize = 32 * 1024 * 1024;
-const MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ENTRIES: usize = 1_000_000;
-const ALLOWED_KEYS: [&str; 7] = [
-    "domain",
-    "domain_suffix",
-    "domain_keyword",
-    "domain_regex",
-    "ip_cidr",
-    "process_name",
-    "process_path",
-];
+const MAX_PAYLOAD_BYTES: usize = rosetun_config::MAX_UPLOADED_LIST_BYTES;
+const MAX_ENTRIES: usize = rosetun_config::MAX_UPLOADED_LIST_ENTRIES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PayloadFormat {
@@ -269,68 +262,25 @@ fn no_category(category: Option<&str>) -> Result<(), ListParseError> {
 }
 
 fn check_srs(bytes: &[u8]) -> Result<(), ListParseError> {
-    if bytes.len() < 4 || &bytes[..3] != b"SRS" {
-        return Err(ListParseError::InvalidSrs);
-    }
-    if bytes[3] > 5 {
-        return Err(ListParseError::UnsupportedSrsVersion(bytes[3]));
-    }
-    Ok(())
+    rosetun_config::validate_srs(bytes).map_err(map_validation)
 }
 
 fn normalize_json(bytes: &[u8]) -> Result<Vec<u8>, ListParseError> {
-    let source: Value = serde_json::from_slice(bytes).map_err(|_| ListParseError::InvalidJson)?;
-    let root = source
-        .as_object()
-        .ok_or(ListParseError::InvalidSource("expected an object"))?;
-    if root.len() != 2 || !root.contains_key("version") || !root.contains_key("rules") {
-        return Err(ListParseError::InvalidSource(
-            "expected only version and rules at the root",
-        ));
+    rosetun_config::normalize_source(bytes).map_err(map_validation)
+}
+
+fn map_validation(error: ListValidationError) -> ListParseError {
+    match error {
+        ListValidationError::TooLarge => ListParseError::PayloadTooLarge,
+        ListValidationError::TooManyEntries => ListParseError::TooManyEntries,
+        ListValidationError::InvalidSrs => ListParseError::InvalidSrs,
+        ListValidationError::UnsupportedSrsVersion(version) =>
+            ListParseError::UnsupportedSrsVersion(version),
+        ListValidationError::InvalidJson => ListParseError::InvalidJson,
+        ListValidationError::InvalidSource(reason) => ListParseError::InvalidSource(reason),
+        ListValidationError::UnsupportedRuleKey(key) => ListParseError::UnsupportedRuleKey(key),
+        ListValidationError::EmptyResult => ListParseError::EmptyResult,
     }
-    if root["version"].as_u64().is_none() {
-        return Err(ListParseError::InvalidSource(
-            "version must be a nonnegative integer",
-        ));
-    }
-    let rules = root["rules"]
-        .as_array()
-        .ok_or(ListParseError::InvalidSource("rules must be an array"))?;
-    let mut count = 0_usize;
-    for rule in rules {
-        let rule = rule
-            .as_object()
-            .ok_or(ListParseError::InvalidSource("each rule must be an object"))?;
-        let before = count;
-        for (key, values) in rule {
-            if !ALLOWED_KEYS.contains(&key.as_str()) {
-                return Err(ListParseError::UnsupportedRuleKey(key.clone()));
-            }
-            let values = values.as_array().ok_or(ListParseError::InvalidSource(
-                "rule conditions must be arrays of strings",
-            ))?;
-            for value in values {
-                if value.as_str().is_none_or(|value| value.trim().is_empty()) {
-                    return Err(ListParseError::InvalidSource(
-                        "rule conditions must contain nonempty strings",
-                    ));
-                }
-                count += 1;
-                if count > MAX_ENTRIES {
-                    return Err(ListParseError::TooManyEntries);
-                }
-            }
-        }
-        if count == before {
-            return Err(ListParseError::InvalidSource("a rule has no conditions"));
-        }
-    }
-    if count == 0 {
-        return Err(ListParseError::EmptyResult);
-    }
-    let output = serde_json::to_vec(&source).map_err(|_| ListParseError::InvalidJson)?;
-    check_payload_size(output.len())?;
-    Ok(output)
 }
 
 struct Record {

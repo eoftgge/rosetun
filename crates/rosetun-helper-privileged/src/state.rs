@@ -19,12 +19,13 @@ use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
     TrafficProbe, TrafficTotals,
 };
-use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, MAX_TEMPORARY_RULES};
+use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_TEMPORARY_RULES};
 use rosetun_routing::{
     ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
 };
 
 use crate::log_gate::VerboseGate;
+use crate::list_store::ListStore;
 use watchdog::{DnsWatchdog, WatchdogTiming};
 
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -59,6 +60,7 @@ pub struct Helper {
     session: Mutex<Session>,
     engines: Arc<EngineRegistry>,
     probe: Mutex<()>,
+    lists: Option<Mutex<ListStore>>,
     shutting_down: AtomicBool,
     resumed: AtomicBool,
     cancelled: Arc<AtomicBool>,
@@ -131,6 +133,7 @@ impl Helper {
             status: Arc::clone(&status),
             engines: Arc::clone(&engines),
             probe: Mutex::new(()),
+            lists: None,
             shutting_down: AtomicBool::new(false),
             resumed: AtomicBool::new(false),
             cancelled: Arc::clone(&cancelled),
@@ -158,6 +161,48 @@ impl Helper {
                 #[cfg(test)]
                 adapter_lookup: |_| Ok(false),
             }),
+        }
+    }
+
+    pub fn with_list_store(mut self, store: ListStore) -> Self {
+        self.lists = Some(Mutex::new(store));
+        self
+    }
+
+    fn list_store(&self) -> Result<MutexGuard<'_, ListStore>, HelperError> {
+        self.lists
+            .as_ref()
+            .ok_or_else(|| HelperError::new(ErrorCode::Internal, "list storage is unavailable"))?
+            .lock()
+            .map_err(|_| HelperError::new(ErrorCode::Internal, "list storage is unavailable"))
+    }
+
+    pub fn list_status(&self, hashes: &[String]) -> Result<Vec<String>, HelperError> {
+        self.list_store()?.status(hashes, Instant::now())
+    }
+
+    pub fn put_list_chunk(
+        &self,
+        owner: u64,
+        hash: &str,
+        format: ListFormat,
+        total_size: u64,
+        offset: u64,
+        data: &str,
+    ) -> Result<(), HelperError> {
+        self.list_store()?
+            .put_chunk(owner, hash, format, total_size, offset, data, Instant::now())
+    }
+
+    pub fn abort_list_uploads(&self, owner: u64) {
+        if let Ok(mut store) = self.list_store() {
+            store.abort_owner(owner);
+        }
+    }
+
+    fn expire_list_uploads(&self, now: Instant) {
+        if let Ok(mut store) = self.list_store() {
+            store.expire(now);
         }
     }
 
@@ -626,6 +671,16 @@ pub fn spawn_supervisor(helper: Arc<Helper>) -> std::io::Result<()> {
                 }
                 helper.supervise(Instant::now());
             }
+        })?;
+    Ok(())
+}
+
+pub fn spawn_list_reaper(helper: Arc<Helper>) -> std::io::Result<()> {
+    thread::Builder::new()
+        .name("list-upload-reaper".to_owned())
+        .spawn(move || loop {
+            thread::sleep(Duration::from_secs(5));
+            helper.expire_list_uploads(Instant::now());
         })?;
     Ok(())
 }

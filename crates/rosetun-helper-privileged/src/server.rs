@@ -1,6 +1,6 @@
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
@@ -12,6 +12,7 @@ pub(crate) use crate::state::Helper;
 
 const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_ACTIVE_CONNECTIONS: usize = 32;
+static NEXT_CONNECTION: AtomicU64 = AtomicU64::new(1);
 
 enum ServerEvent {
     Accepted(Connection, ConnectionPermit),
@@ -34,6 +35,17 @@ impl ConnectionPermit {
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct UploadOwner {
+    helper: Arc<Helper>,
+    id: u64,
+}
+
+impl Drop for UploadOwner {
+    fn drop(&mut self) {
+        self.helper.abort_list_uploads(self.id);
     }
 }
 
@@ -139,6 +151,10 @@ fn handle(
     ipc_shutdown: bool,
 ) -> Result<(), String> {
     let mut greeted = false;
+    let owner = UploadOwner {
+        helper: Arc::clone(&helper),
+        id: NEXT_CONNECTION.fetch_add(1, Ordering::Relaxed),
+    };
 
     loop {
         let frame = match connection.read() {
@@ -164,7 +180,7 @@ fn handle(
         }
 
         tracing::debug!(request = ?body, "handling helper request");
-        let response = dispatch(&body, &helper, &mut greeted, ipc_shutdown);
+        let response = dispatch(&body, &helper, &mut greeted, ipc_shutdown, owner.id);
         let fatal = matches!(
             response,
             Response::Error(HelperError {
@@ -195,6 +211,7 @@ fn dispatch(
     helper: &Helper,
     greeted: &mut bool,
     ipc_shutdown: bool,
+    owner: u64,
 ) -> Response {
     match request {
         Request::Hello {
@@ -221,9 +238,20 @@ fn dispatch(
             Ok(rules) => Response::TemporaryRules(rules),
             Err(error) => Response::Error(error),
         },
-        Request::ListStatus { .. } | Request::PutListChunk { .. } => Response::Error(
-            HelperError::new(ErrorCode::NotImplemented, "list uploads are not available yet"),
-        ),
+        Request::ListStatus { hashes } => match helper.list_status(hashes) {
+            Ok(missing) => Response::ListStatus { missing },
+            Err(error) => Response::Error(error),
+        },
+        Request::PutListChunk {
+            sha256,
+            format,
+            total_size,
+            offset,
+            data,
+        } => match helper.put_list_chunk(owner, sha256, *format, *total_size, *offset, data) {
+            Ok(()) => Response::Ok,
+            Err(error) => Response::Error(error),
+        },
         Request::Connect(connect) => match helper.connect(connect) {
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
@@ -290,14 +318,14 @@ mod tests {
         );
         let mut greeted = true;
         assert!(matches!(
-            dispatch(&Request::Shutdown, &helper, &mut greeted, false),
+            dispatch(&Request::Shutdown, &helper, &mut greeted, false, 0),
             Response::Error(HelperError {
                 code: ErrorCode::InvalidState,
                 ..
             })
         ));
         assert!(matches!(
-            dispatch(&Request::Shutdown, &helper, &mut greeted, true),
+            dispatch(&Request::Shutdown, &helper, &mut greeted, true, 0),
             Response::Ok
         ));
     }
@@ -315,14 +343,14 @@ mod tests {
             settings: rosetun_config::Settings::default(),
         }));
         assert!(matches!(
-            dispatch(&probe, &helper, &mut greeted, false),
+            dispatch(&probe, &helper, &mut greeted, false, 0),
             Response::Error(HelperError {
                 code: ErrorCode::InvalidState,
                 ..
             })
         ));
         assert!(matches!(
-            dispatch(&Request::TunnelDelay, &helper, &mut greeted, false),
+            dispatch(&Request::TunnelDelay, &helper, &mut greeted, false, 0),
             Response::Error(HelperError {
                 code: ErrorCode::InvalidState,
                 ..

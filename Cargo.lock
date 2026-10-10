@@ -2803,12 +2803,14 @@ dependencies = [
 name = "rosetun-helper-privileged"
 version = "0.1.0-alpha.5"
 dependencies = [
+ "base64",
  "rosetun-config",
  "rosetun-engine",
  "rosetun-engine-singbox",
  "rosetun-engine-xray",
  "rosetun-ipc",
  "rosetun-routing",
+ "sha2",
  "tracing",
  "tracing-subscriber",
  "windows-sys 0.61.2",
