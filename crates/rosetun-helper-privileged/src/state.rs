@@ -491,6 +491,7 @@ impl Helper {
 
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
+        self.cancelled.store(true, Ordering::Release);
         tracing::info!("starting helper session teardown");
         let mut session = self
             .session
@@ -543,6 +544,9 @@ impl Helper {
     fn begin_attempt(&self, state: ConnectionState) {
         self.with_status(|status| {
             self.cancelled.store(false, Ordering::Release);
+            if self.shutting_down.load(Ordering::Acquire) {
+                self.cancelled.store(true, Ordering::Release);
+            }
             status.state = state;
             status.connect_stage = None;
             status.stage_since_unix = None;

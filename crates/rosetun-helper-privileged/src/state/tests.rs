@@ -3525,6 +3525,61 @@ fn cancellation_at_each_stage_releases_the_session_and_guard() {
 }
 
 #[test]
+fn shutdown_cancels_a_running_connect_before_waiting_for_session() {
+    use rosetun_config::ConnectStage;
+
+    let ready = Arc::new(AtomicBool::new(false));
+    let reverted = Arc::new(AtomicUsize::new(0));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(CancellableEngine {
+        ready: Arc::clone(&ready),
+        stopped: Arc::new(AtomicUsize::new(0)),
+        dns: None,
+    }));
+    let helper = Arc::new(Helper::new(
+        engines,
+        Box::new(CountingRouting {
+            reverted: Arc::clone(&reverted),
+        }),
+        VerboseGate::default(),
+    ));
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let (connect_tx, connect_rx) = channel();
+    let connecting = {
+        let helper = Arc::clone(&helper);
+        thread::spawn(move || connect_tx.send(helper.connect(&request)).unwrap())
+    };
+    wait_for_stage(&helper, ConnectStage::StartingEngine);
+
+    let started = Instant::now();
+    let (shutdown_tx, shutdown_rx) = channel();
+    let stopping = {
+        let helper = Arc::clone(&helper);
+        thread::spawn(move || {
+            helper.shutdown();
+            shutdown_tx.send(()).unwrap();
+        })
+    };
+    assert_eq!(
+        connect_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("connect cancels promptly")
+            .unwrap_err()
+            .code,
+        ErrorCode::Cancelled,
+    );
+    shutdown_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("shutdown completes promptly");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    connecting.join().unwrap();
+    stopping.join().unwrap();
+    assert_eq!(reverted.load(Ordering::Acquire), 1);
+    assert_eq!(helper.status(), Status::default());
+}
+
+#[test]
 fn cancellation_during_protected_apply_does_not_roll_back() {
     use rosetun_config::ConnectStage;
     let (helper, controls, _, reverted) = supervised_helper(true);
