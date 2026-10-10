@@ -44,6 +44,16 @@ The installer is not signed yet, so SmartScreen may warn when it starts: choose 
 
 ## Releases
 
-A signed `v<version>` tag matching the version in `Cargo.toml` builds and publishes a GitHub Release. Versions with `-alpha.N` or another prerelease suffix are marked as prereleases. Existing releases are never overwritten.
+All development takes place on `dev`; `master` contains only released commits and remains the default branch. There are no pull requests between these branches. CI runs on pushes to both branches. A signed `v<version>` tag on `master` matching the version in `Cargo.toml` builds and publishes a GitHub Release. Versions with `-alpha.N` or another prerelease suffix are marked as prereleases. Existing releases are never overwritten.
 
-Use **Run workflow** on the Release workflow for a test build: it uploads the installer, checksums and release notes as an artifact without publishing a release. Run `./installer/build.ps1 -Release` to build the same assets locally, including the sing-box source archive, `SHA256SUMS.txt` and bilingual release notes.
+First use **Actions → Release → Run workflow** on `dev` for a test build: it uploads the installer, checksums and release notes as an artifact without publishing a release. Then fast-forward `master` and tag the released commit:
+
+```sh
+# Trial: Actions → Release → Run workflow on dev
+git switch master
+git merge --ff-only dev
+git tag -s vX.Y.Z -m "Rosetun X.Y.Z"
+git push origin master vX.Y.Z
+```
+
+Run `./installer/build.ps1 -Release` to build the same assets locally, including the sing-box source archive, `SHA256SUMS.txt` and bilingual release notes. To fix an already released version, commit the fix on `master`, tag and push the corrected release, then bring that commit back to `dev` with `git switch dev && git merge -S master` and push `dev`.
