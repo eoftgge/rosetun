@@ -68,7 +68,7 @@ pub struct SubscriptionInfo {
     pub expire_unix: Option<u64>,
 }
 
-fn debug_host(value: &str) -> &str {
+pub(crate) fn debug_host(value: &str) -> &str {
     // Only a conservative authority projection is used for diagnostics; malformed
     // input is hidden rather than echoed, including credentials and URL suffixes.
     let Some((scheme, remainder)) = value.split_once("://") else {

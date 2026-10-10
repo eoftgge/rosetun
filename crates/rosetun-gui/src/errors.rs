@@ -92,6 +92,10 @@ fn config(language: Language, error: &ConfigError) -> String {
             "error-config-dangling-rule-set",
             &arguments(&[("id", id.as_str())]),
         ),
+        ConfigError::InvalidListId
+        | ConfigError::InvalidListMetadata
+        | ConfigError::MissingList
+        | ConfigError::InvalidListCategory => error.to_string(),
     }
 }
 
@@ -124,6 +128,7 @@ pub(crate) fn rule_set(language: Language, error: &RuleSetError) -> String {
         RuleSetError::RuleNotFound => tr_in(language, "error-rule-not-found", &FluentArgs::new()),
         RuleSetError::EmptyName => tr_in(language, "error-rule-set-name-empty", &FluentArgs::new()),
         RuleSetError::DuplicateRule => tr_in(language, "error-duplicate-rule", &FluentArgs::new()),
+        RuleSetError::ListNotFound | RuleSetError::ListCategory(_) => error.to_string(),
     }
 }
 

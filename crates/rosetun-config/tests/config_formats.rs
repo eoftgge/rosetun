@@ -1,8 +1,9 @@
 mod support;
 
 use rosetun_config::{
-    AppConfig, CONFIG_VERSION, ConfigError, FormatError, Hysteria2Params, Node, NodeId, Outbound,
-    StreamSettings, TlsMode, TlsParams, Transport, from_json,
+    AppConfig, CONFIG_VERSION, ConfigError, FormatError, Hysteria2Params, List, ListFormat, ListId,
+    ListSource, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleTarget, StreamSettings,
+    TlsMode, TlsParams, Transport, from_json,
 };
 use serde_json::{Value, json};
 
@@ -10,6 +11,7 @@ const ALPHA_1: &[u8] = include_bytes!("fixtures/v0.1.0-alpha.1.json");
 const ALPHA_2: &[u8] = include_bytes!("fixtures/v0.1.0-alpha.2.json");
 const ALPHA_3: &[u8] = include_bytes!("fixtures/v0.1.0-alpha.3.json");
 const V2: &[u8] = include_bytes!("fixtures/v2.json");
+const V3: &[u8] = include_bytes!("fixtures/v3.json");
 
 fn current_config() -> AppConfig {
     let mut config = support::legacy_config();
@@ -40,6 +42,37 @@ fn current_config() -> AppConfig {
         },
         raw: None,
     });
+    config.lists = vec![
+        List {
+            id: ListId::new("1"),
+            name: "Example domains".to_owned(),
+            source: ListSource::Url("https://lists.example.com/example.txt".to_owned()),
+            format: ListFormat::Text,
+            updated_at: Some(1_700_000_004),
+            size: Some(12),
+            sha256: Some("391196688aa55d3321deffa736f8d103b4813470952b748e9c2c9deb17fa60f5".to_owned()),
+            categories: Vec::new(),
+        },
+        List {
+            id: ListId::new("2"),
+            name: "Example categories".to_owned(),
+            source: ListSource::File { original_name: "geosite.dat".to_owned() },
+            format: ListFormat::GeoSite,
+            updated_at: Some(1_700_000_005),
+            size: Some(7),
+            sha256: Some("a".repeat(64)),
+            categories: vec!["example".to_owned()],
+        },
+    ];
+    config.rule_sets[0].rules.push(Rule {
+        id: RuleId::new("list-example"),
+        enabled: true,
+        matcher: RuleMatcher::List {
+            list: ListId::new("2"),
+            category: Some("example@cn".to_owned()),
+        },
+        target: RuleTarget::Direct,
+    });
     config
 }
 
@@ -56,8 +89,8 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 2,
-        "released fixtures require format version two"
+        CONFIG_VERSION, 3,
+        "released fixtures require format version three"
     );
     let expected = expected_migrated_legacy_config();
 
@@ -81,15 +114,25 @@ fn released_configurations_migrate_to_the_expected_configuration() {
 #[test]
 fn current_configuration_fixture_guards_the_serialized_format() {
     let expected = current_config();
-    let (loaded, migrated_from) = from_json(V2).expect("current fixture should load");
+    let (loaded, migrated_from) = from_json(V3).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V2),
-        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v2.json"
+        value(V3),
+        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v3.json"
     );
+}
+
+#[test]
+fn version_two_configuration_adds_empty_lists() {
+    let (config, migrated_from) = from_json(V2).expect("version two should migrate");
+    let mut expected = current_config();
+    expected.lists.clear();
+    expected.rule_sets[0].rules.pop();
+    assert_eq!(migrated_from, Some(2));
+    assert_eq!(config, expected);
 }
 
 #[test]
@@ -112,7 +155,7 @@ fn unknown_fields_do_not_prevent_loading() {
     let (config, migrated_from) =
         from_json(br#"{"version":2,"unknown_root":"ignored","settings":{"unknown_setting":true}}"#)
             .expect("unknown fields remain accepted");
-    assert_eq!(migrated_from, None);
+    assert_eq!(migrated_from, Some(2));
     assert_eq!(config, AppConfig::default());
 }
 
@@ -166,4 +209,27 @@ fn invalid_and_future_versions_are_rejected_without_echoing_sensitive_values() {
     assert!(matches!(error, FormatError::UnexpectedValue));
     assert!(!error.to_string().contains(secret));
     assert!(!error.to_string().contains("test-secret"));
+}
+
+#[test]
+fn list_references_and_metadata_are_validated() {
+    let mut config = current_config();
+    assert!(config.validate().is_ok());
+
+    config.lists.pop();
+    assert!(matches!(config.validate(), Err(ConfigError::MissingList)));
+    config.rule_sets[0].rules.last_mut().unwrap().enabled = false;
+    assert!(matches!(config.validate(), Err(ConfigError::MissingList)));
+
+    let mut config = current_config();
+    config.lists[1].id = ListId::new("../example.invalid");
+    assert!(matches!(config.validate(), Err(ConfigError::InvalidListId)));
+
+    let mut config = current_config();
+    config.lists[1].categories.push("example".to_owned());
+    assert!(matches!(config.validate(), Err(ConfigError::InvalidListMetadata)));
+
+    let mut config = current_config();
+    config.lists[1].format = ListFormat::GeoIp;
+    assert!(matches!(config.validate(), Err(ConfigError::InvalidListCategory)));
 }

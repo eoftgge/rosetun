@@ -1156,6 +1156,24 @@ mod tests {
     }
 
     #[test]
+    fn migrating_version_two_preserves_original_bytes_in_a_version_two_backup() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let original = include_bytes!("../../rosetun-config/tests/fixtures/v2.json");
+        let backup = directory.path.join("config.v2.json");
+        fs::write(store.path(), original).unwrap();
+
+        assert_eq!(store.load().unwrap().version, CONFIG_VERSION);
+        assert!(!backup.exists());
+        store.modify(|_| Ok::<_, StoreError>(())).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        assert_eq!(store.load().unwrap().version, CONFIG_VERSION);
+        assert!(store.load().unwrap().lists.is_empty());
+        store.modify(|_| Ok::<_, StoreError>(())).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), original);
+    }
+
+    #[test]
     fn existing_backup_is_never_overwritten() {
         let directory = TestDirectory::new();
         let store = Store::at(directory.config_path());

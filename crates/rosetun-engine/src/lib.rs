@@ -130,7 +130,7 @@ impl RuleCapabilities {
                 self.process_path
             }
             rosetun_config::RuleMatcher::IpCidr(_) => self.ip_cidr,
-            rosetun_config::RuleMatcher::Template(_) => false,
+            rosetun_config::RuleMatcher::List { .. } | rosetun_config::RuleMatcher::Template(_) => false,
         }
     }
 }
@@ -365,7 +365,18 @@ impl EngineRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::ControlEndpoint;
+    use super::{ControlEndpoint, RuleCapabilities};
+    use rosetun_config::{ListId, RuleMatcher};
+
+    #[test]
+    fn list_rules_remain_unsupported_before_payload_transport_exists() {
+        let matcher = RuleMatcher::List {
+            list: ListId::new("1"),
+            category: None,
+        };
+        assert!(!RuleCapabilities::NONE.supports(&matcher));
+        assert!(!RuleCapabilities::ALL.supports(&matcher));
+    }
 
     #[test]
     fn local_control_endpoint_uses_loopback_and_a_redacted_hex_secret() {

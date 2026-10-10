@@ -37,6 +37,7 @@ macro_rules! id_type {
 }
 
 id_type!(SubscriptionId);
+id_type!(ListId);
 id_type!(NodeId);
 id_type!(RuleId);
 id_type!(RuleSetId);

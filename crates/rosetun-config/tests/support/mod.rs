@@ -194,6 +194,7 @@ pub(crate) fn legacy_config() -> AppConfig {
                 ],
             },
         ],
+        lists: Vec::new(),
         rule_sets: vec![
             RuleSet {
                 id: rule_set.clone(),

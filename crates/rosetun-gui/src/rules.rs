@@ -144,6 +144,7 @@ fn rule_lines_in(matcher: &RuleMatcher, language: Language) -> (String, RuleCapt
             (name, RuleCaption::Path(value))
         }
         RuleMatcher::IpCidr(_) => (value, RuleCaption::Addresses),
+        RuleMatcher::List { .. } => (value, RuleCaption::Template),
         RuleMatcher::Template(template) => (
             match template {
                 RuleTemplate::RussianSites => {
@@ -175,7 +176,7 @@ fn kind(rule: &Rule) -> TypeFilter {
     match &rule.matcher {
         RuleMatcher::Domain(_) => TypeFilter::Domains,
         RuleMatcher::Process(_) => TypeFilter::Processes,
-        RuleMatcher::IpCidr(_) => TypeFilter::Other,
+        RuleMatcher::IpCidr(_) | RuleMatcher::List { .. } => TypeFilter::Other,
         RuleMatcher::Template(RuleTemplate::RussianSites | RuleTemplate::Youtube) => {
             TypeFilter::Domains
         }

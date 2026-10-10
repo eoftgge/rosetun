@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{RuleId, RuleSetId};
+use crate::{ListId, RuleId, RuleSetId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rule {
@@ -19,6 +19,7 @@ pub enum RuleMatcher {
     Domain(DomainMatch),
     Process(ProcessMatch),
     IpCidr(String),
+    List { list: ListId, category: Option<String> },
     /// A named group of plain rules defined by the app. Clients expand it
     /// before connecting; an engine never sees one.
     Template(RuleTemplate),

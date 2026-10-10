@@ -393,7 +393,7 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
         RuleMatcher::IpCidr(cidr) => {
             value.insert("ip_cidr".into(), json!([cidr]));
         }
-        RuleMatcher::Template(_) => return None,
+        RuleMatcher::List { .. } | RuleMatcher::Template(_) => return None,
     }
 
     match rule.target {

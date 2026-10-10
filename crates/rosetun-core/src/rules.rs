@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use rosetun_config::{
-    AppConfig, DnsSettings, DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet,
-    RuleSetId, RuleTarget,
+    AppConfig, DnsSettings, DomainMatch, ListCategoryError, ProcessMatch, Rule, RuleId,
+    RuleMatcher, RuleSet, RuleSetId, RuleTarget,
 };
 use url::Host;
 
@@ -21,6 +21,10 @@ pub enum RuleSetError {
     EmptyName,
     #[error("this rule is already in the set")]
     DuplicateRule,
+    #[error("the selected list does not exist")]
+    ListNotFound,
+    #[error(transparent)]
+    ListCategory(#[from] ListCategoryError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,6 +157,18 @@ pub fn set_default_target(
     })
 }
 
+pub fn validate_list_matcher(config: &AppConfig, matcher: &RuleMatcher) -> Result<(), RuleSetError> {
+    if let RuleMatcher::List { list, category } = matcher {
+        let entry = config
+            .lists
+            .iter()
+            .find(|entry| &entry.id == list)
+            .ok_or(RuleSetError::ListNotFound)?;
+        entry.validate_category(category.as_deref())?;
+    }
+    Ok(())
+}
+
 fn same_matcher(a: &RuleMatcher, b: &RuleMatcher, names_ignore_case: bool) -> bool {
     match (a, b) {
         (
@@ -170,6 +186,7 @@ pub fn add_rule(
     target: RuleTarget,
 ) -> Result<Rule, RuleSetError> {
     store.modify(|config| {
+        validate_list_matcher(config, &matcher)?;
         let set = rule_set_mut(config, set)?;
         if set
             .rules
@@ -210,6 +227,9 @@ pub fn add_rules(
         });
     }
     store.modify(|config| {
+        for matcher in &matchers {
+            validate_list_matcher(config, matcher)?;
+        }
         let set = rule_set_mut(config, set)?;
         let mut added = Vec::new();
         let mut skipped = 0;
@@ -292,6 +312,7 @@ pub fn update_rule(
     target: RuleTarget,
 ) -> Result<(), RuleSetError> {
     store.modify(|config| {
+        validate_list_matcher(config, &matcher)?;
         let set = rule_set_mut(config, set)?;
         if !set.rules.iter().any(|item| &item.id == rule) {
             return Err(RuleSetError::RuleNotFound);
@@ -574,6 +595,9 @@ pub fn rule_value_text(matcher: &RuleMatcher) -> String {
         RuleMatcher::Process(ProcessMatch::Name(name)) => name.clone(),
         RuleMatcher::Process(ProcessMatch::Path(path)) => path.to_string_lossy().into_owned(),
         RuleMatcher::IpCidr(cidr) => cidr.clone(),
+        RuleMatcher::List { list, category } => category
+            .as_ref()
+            .map_or_else(|| format!("list:{list}"), |category| format!("list:{list}:{category}")),
         RuleMatcher::Template(template) => format!("template:{}", template.key()),
     }
 }

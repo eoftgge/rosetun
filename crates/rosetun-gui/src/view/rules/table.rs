@@ -217,7 +217,7 @@ fn rule_icon(matcher: &RuleMatcher) -> Icon {
     match matcher {
         RuleMatcher::Domain(_) => Icon::Globe,
         RuleMatcher::Process(_) => Icon::App,
-        RuleMatcher::IpCidr(_) => Icon::Stack,
+        RuleMatcher::IpCidr(_) | RuleMatcher::List { .. } => Icon::Stack,
         RuleMatcher::Template(template) => template_icon(*template),
     }
 }

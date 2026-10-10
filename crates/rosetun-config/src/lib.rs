@@ -1,13 +1,15 @@
 #![forbid(unsafe_code)]
 
 mod ids;
+mod list;
 mod node;
 mod rule;
 mod runtime;
 mod settings;
 mod subscription;
 
-pub use ids::{NodeId, RuleId, RuleSetId, SubscriptionId};
+pub use ids::{ListId, NodeId, RuleId, RuleSetId, SubscriptionId};
+pub use list::{List, ListCategoryError, ListFormat, ListSource};
 pub use node::{
     Hysteria2Params, Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
     TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
@@ -22,7 +24,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 2;
+pub const CONFIG_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,6 +100,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub subscriptions: Vec<Subscription>,
     #[serde(default)]
+    pub lists: Vec<List>,
+    #[serde(default)]
     pub rule_sets: Vec<RuleSet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<Selection>,
@@ -116,6 +120,7 @@ impl Default for AppConfig {
             settings: Settings::default(),
             interface: InterfaceSettings::default(),
             subscriptions: Vec::new(),
+            lists: Vec::new(),
             rule_sets: Vec::new(),
             active: None,
             active_rule_set: None,
@@ -153,6 +158,14 @@ pub enum ConfigError {
     },
     #[error("selected rule set {0} does not exist")]
     DanglingRuleSet(RuleSetId),
+    #[error("a list ID is not safe for a file name or is duplicated")]
+    InvalidListId,
+    #[error("list metadata or categories are invalid")]
+    InvalidListMetadata,
+    #[error("a rule refers to a missing list")]
+    MissingList,
+    #[error("a rule has an invalid list category")]
+    InvalidListCategory,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -188,6 +201,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
     while version < CONFIG_VERSION {
         match version {
             1 => migrate_1_to_2(config),
+            2 => migrate_2_to_3(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -205,6 +219,10 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
 
 fn migrate_1_to_2(_config: &mut Map<String, Value>) {
     // New fields are supplied by serde defaults; updating the version prevents older writers from dropping them.
+}
+
+fn migrate_2_to_3(config: &mut Map<String, Value>) {
+    config.insert("lists".to_owned(), Value::Array(Vec::new()));
 }
 
 impl AppConfig {
@@ -227,6 +245,52 @@ impl AppConfig {
             && self.active_rules().is_none()
         {
             return Err(ConfigError::DanglingRuleSet(id.clone()));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for list in &self.lists {
+            let id = list.id.as_str();
+            if id.is_empty()
+                || id.len() > 20
+                || !id.bytes().all(|byte| byte.is_ascii_digit())
+                || !ids.insert(id)
+            {
+                return Err(ConfigError::InvalidListId);
+            }
+            if matches!(&list.source, ListSource::File { original_name } if original_name.is_empty() || original_name == "." || original_name == ".." || original_name.contains(['/', '\\']))
+                || list.size.is_some() != list.sha256.is_some()
+                || list.sha256.as_ref().is_some_and(|digest| {
+                    digest.len() != 64
+                        || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                })
+                || list.format.has_categories() == list.categories.is_empty()
+            {
+                return Err(ConfigError::InvalidListMetadata);
+            }
+            let mut categories = std::collections::HashSet::new();
+            for category in &list.categories {
+                if category.is_empty()
+                    || !category.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'-' | b'_' | b'.' | b'!')
+                    })
+                    || !categories.insert(category)
+                {
+                    return Err(ConfigError::InvalidListMetadata);
+                }
+            }
+        }
+        for rule in self.rule_sets.iter().flat_map(|set| &set.rules) {
+            if let RuleMatcher::List { list, category } = &rule.matcher {
+                let entry = self
+                    .lists
+                    .iter()
+                    .find(|entry| &entry.id == list)
+                    .ok_or(ConfigError::MissingList)?;
+                entry
+                    .validate_category(category.as_deref())
+                    .map_err(|_| ConfigError::InvalidListCategory)?;
+            }
         }
         Ok(())
     }
