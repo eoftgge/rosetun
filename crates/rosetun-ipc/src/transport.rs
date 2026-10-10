@@ -8,6 +8,22 @@ pub const ENDPOINT_ENV: &str = "ROSETUN_HELPER_ENDPOINT";
 #[cfg(any(windows, test))]
 const SECURITY_DESCRIPTOR_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x0012019B;;;AU)";
 
+#[cfg(any(windows, test))]
+fn server_trusted(
+    service_pid: Option<u32>,
+    server_pid: u32,
+    token_check: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    match service_pid {
+        Some(pid) if pid == server_pid && pid != 0 => Ok(()),
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the helper pipe server does not match the Rosetun service process",
+        )),
+        None => token_check(),
+    }
+}
+
 pub fn default_endpoint() -> PathBuf {
     if let Some(custom) = std::env::var_os(ENDPOINT_ENV) {
         return PathBuf::from(custom);
@@ -112,8 +128,8 @@ mod platform {
     use std::sync::Mutex;
 
     use windows_sys::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GetLastError, HANDLE,
-        INVALID_HANDLE_VALUE, LocalFree,
+        ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_SERVICE_DOES_NOT_EXIST,
+        GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
@@ -132,6 +148,11 @@ mod platform {
         CreateNamedPipeW, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
         PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
         WaitNamedPipeW,
+    };
+    use windows_sys::Win32::System::Services::{
+        CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx, SC_HANDLE,
+        SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO, SERVICE_QUERY_STATUS, SERVICE_STATUS_PROCESS,
+        SERVICE_STOPPED,
     };
     use windows_sys::Win32::System::Threading::{
         OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -170,6 +191,15 @@ mod platform {
         fn drop(&mut self) {
             // SAFETY: The descriptor was allocated by Windows and is freed exactly once.
             unsafe { LocalFree(self.0) };
+        }
+    }
+
+    struct ServiceHandle(SC_HANDLE);
+
+    impl Drop for ServiceHandle {
+        fn drop(&mut self) {
+            // SAFETY: The SCM or service handle is live and owned by this guard.
+            unsafe { CloseServiceHandle(self.0) };
         }
     }
 
@@ -221,13 +251,62 @@ mod platform {
         is_system || (elevated && administrator)
     }
 
+    fn service_process_id() -> io::Result<Option<u32>> {
+        // SAFETY: Null names select the local machine and active services database.
+        let manager =
+            unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT) };
+        if manager.is_null() {
+            return Err(last_error());
+        }
+        let manager = ServiceHandle(manager);
+        let name = wide_string(crate::SERVICE_NAME);
+        // SAFETY: The manager is live and the NUL-terminated service name stays
+        // valid throughout the call; the returned handle is owned by ServiceHandle.
+        let service = unsafe { OpenServiceW(manager.0, name.as_ptr(), SERVICE_QUERY_STATUS) };
+        if service.is_null() {
+            let error = last_error();
+            if error.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST as i32) {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+        let service = ServiceHandle(service);
+        let mut status = SERVICE_STATUS_PROCESS::default();
+        let mut returned = 0;
+        // SAFETY: The service handle is live; the writable status buffer has
+        // exactly the advertised C-ABI size and remains live for the call.
+        if unsafe {
+            QueryServiceStatusEx(
+                service.0,
+                SC_STATUS_PROCESS_INFO,
+                (&raw mut status).cast(),
+                std::mem::size_of::<SERVICE_STATUS_PROCESS>() as u32,
+                &mut returned,
+            )
+        } == 0
+        {
+            return Err(last_error());
+        }
+        if (returned as usize) < std::mem::size_of::<SERVICE_STATUS_PROCESS>() {
+            return Err(io::Error::other("incomplete Rosetun service status"));
+        }
+        if status.dwCurrentState == SERVICE_STOPPED {
+            Ok(None)
+        } else {
+            Ok(Some(status.dwProcessId))
+        }
+    }
+
     fn verify_server_process(handle: &OwnedHandle) -> io::Result<()> {
         let mut pid = 0;
         // SAFETY: The connected pipe handle stays live and pid is writable for the call.
         if unsafe { GetNamedPipeServerProcessId(handle.as_raw_handle() as HANDLE, &mut pid) } == 0 {
             return Err(last_error());
         }
+        super::server_trusted(service_process_id()?, pid, || verify_server_token(pid))
+    }
 
+    fn verify_server_token(pid: u32) -> io::Result<()> {
         // SAFETY: OpenProcess receives a process ID returned by the connected pipe.
         let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         if process.is_null() {
@@ -568,7 +647,42 @@ pub use platform::{Listener, connect};
 
 #[cfg(test)]
 mod security_descriptor_tests {
-    use super::SECURITY_DESCRIPTOR_SDDL;
+    use std::io;
+
+    use super::{SECURITY_DESCRIPTOR_SDDL, server_trusted};
+
+    #[test]
+    fn matching_service_pid_trusts_server_without_opening_its_token() {
+        server_trusted(Some(4242), 4242, || panic!("token access is not needed"))
+            .expect("service process owns the pipe");
+    }
+
+    #[test]
+    fn different_service_pid_rejects_server_without_token_fallback() {
+        let error = server_trusted(Some(4242), 7331, || panic!("do not trust another instance"))
+            .expect_err("server belongs to another process");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("does not match"));
+        assert_eq!(
+            server_trusted(Some(0), 0, || panic!("a zero PID is not trusted"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn missing_or_stopped_service_uses_token_fallback() {
+        server_trusted(None, 4242, || Ok(())).expect("elevated console helper is trusted");
+        let error = server_trusted(None, 4242, || {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "console helper token is not trusted",
+            ))
+        })
+        .expect_err("untrusted console helper is rejected");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
 
     #[test]
     fn authenticated_users_cannot_create_pipe_instances() {

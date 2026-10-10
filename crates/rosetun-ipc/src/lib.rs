@@ -14,3 +14,5 @@ pub use protocol::{
     Response,
 };
 pub use transport::{Connection, Listener, connect, default_endpoint};
+
+pub const SERVICE_NAME: &str = "Rosetun";

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::log_gate::VerboseGate;
 use crate::server::{Server, ShutdownHandle};
 use crate::state::Helper;
+use rosetun_ipc::SERVICE_NAME;
 use windows_sys::Win32::Foundation::{
     ERROR_CALL_NOT_IMPLEMENTED, ERROR_FAILED_SERVICE_CONTROLLER_CONNECT,
     ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL, ERROR_SERVICE_DOES_NOT_EXIST,
@@ -32,7 +33,6 @@ use windows_sys::Win32::System::Services::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND};
 
-pub(crate) const SERVICE_NAME: &str = "Rosetun";
 const DESCRIPTION: &str = "Runs the Rosetun tunnel and kill switch.";
 const WAIT_HINT_MS: u32 = 30_000;
 const DELETE: u32 = 0x0001_0000;
