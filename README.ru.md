@@ -1,6 +1,6 @@
 [English](README.md) | Русский
 
-# Rosetun
+<p align="center"><img src=".github/assets/banner-ru.svg" alt="Rosetun: VPN-клиент для Windows" width="100%"></p>
 
 Rosetun: VPN-клиент для Windows на базе sing-box. Служба Windows держит kill switch и замок DNS; правила разделяют трафик по программам и сайтам, а подписки провайдеров поставляют серверы.
 
