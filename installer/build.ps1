@@ -28,6 +28,9 @@ if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "carg
 # Update these together with Install-RosetunSingBox and SUPPORTED_SING_BOX_VERSION.
 $singBoxVersion = '1.14.1'
 $expectedHash = 'B838DE45BD0B2E6DDBED1977E4745622F7DFFAB3B293807FF4C6B1B640FED909'
+$wintunVersion = '0.14.1'
+$wintunDllLength = 427552
+$wintunDllHash = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
 $versionFile = Get-Content -LiteralPath (Join-Path $root 'crates/rosetun-engine-singbox/src/version.rs') -Raw
 $supportedVersion = [regex]::Match($versionFile, '(?m)^pub const SUPPORTED_SING_BOX_VERSION:\s*&str\s*=\s*"([^"]+)"\s*;')
 if (-not $supportedVersion.Success) {
@@ -97,8 +100,45 @@ if (-not ((Test-Path -LiteralPath $binary -PathType Leaf) -and
     }
 }
 
+# Verify the embedded DLL without extracting or modifying the official executable.
+$singBoxBytes = [IO.File]::ReadAllBytes($binary)
+$wintunFound = $false
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+    for ($offset = 0; $offset -le $singBoxBytes.Length - $wintunDllLength; $offset++) {
+        if ($singBoxBytes[$offset] -ne 0x4D -or $singBoxBytes[$offset + 1] -ne 0x5A) {
+            continue
+        }
+        $candidateHash = [BitConverter]::ToString($sha256.ComputeHash($singBoxBytes, $offset, $wintunDllLength)).Replace('-', '')
+        if ($candidateHash -eq $wintunDllHash) {
+            $wintunFound = $true
+            break
+        }
+    }
+}
+finally {
+    $sha256.Dispose()
+}
+if (-not $wintunFound) {
+    throw "Wintun notice verification failed: sing-box.exe does not contain the pinned Wintun $wintunVersion amd64 DLL (SHA-256 $wintunDllHash). Review the Wintun version, DLL pin and license notices before packaging."
+}
+
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $licensesDir 'rosetun.txt')
 Copy-Item -LiteralPath $license -Destination (Join-Path $licensesDir 'sing-box.txt')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'third-party/wintun-prebuilt-binaries-license.txt') -Destination $licensesDir
+$wintunNotice = @"
+The unmodified official sing-box $singBoxVersion executable embeds Wintun $wintunVersion.
+The prebuilt Wintun DLL is copyrighted by WireGuard LLC and is distributed
+under the Wintun Prebuilt Binaries License; see wintun-prebuilt-binaries-license.txt.
+
+Upstream binary distribution:
+https://www.wintun.net/builds/wintun-$wintunVersion.zip
+Embedded amd64 DLL: $wintunDllLength bytes, SHA-256 $wintunDllHash.
+
+License source:
+https://git.zx2c4.com/wintun/plain/prebuilt-binaries-license.txt?h=$wintunVersion
+"@
+Set-Content -LiteralPath (Join-Path $licensesDir 'wintun.txt') -Value $wintunNotice -Encoding utf8
 Copy-Item -Path (Join-Path $root 'crates/rosetun-gui/assets/fonts/OFL-*.txt') -Destination $licensesDir
 $sourceNotice = @"
 sing-box $singBoxVersion is licensed under the GNU General Public License,

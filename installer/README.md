@@ -14,7 +14,7 @@ The installer places these files in the chosen folder:
 | `rosetun-helper-privileged.exe` | Windows service and manual service management |
 | `rosetun.exe` | Command-line client |
 | `sing-box.exe` | Tunnel engine |
-| `licenses/` | Rosetun and sing-box licenses, sing-box source information, bundled font licenses, and Rust crate license notices |
+| `licenses/` | Rosetun, sing-box and prebuilt Wintun licenses, Wintun notices, sing-box source information, bundled font licenses, and Rust crate license notices |
 | `data/` | Service data, created by the service and accessible only to administrators; its log is `data/logs/helper.log` |
 
 The `Rosetun` service starts automatically and restarts after a failure. From an elevated PowerShell session, `& 'C:\Program Files\Rosetun\rosetun-helper-privileged.exe' --install-service` installs or updates it, and the same executable with `--uninstall-service` removes it. Use the chosen folder instead of `C:\Program Files\Rosetun` if necessary. Upgrades stop the GUI and service before replacing files. At service startup, an unsafe folder is logged as a warning, but the service continues.
@@ -41,6 +41,14 @@ On failure, install-directory helper commands print `path=<offending folder>` fo
 `--secure-install-dir` and `--finalize-install-dir` return `0` on success or a nonzero verification/operation code. A silent install, including `/VERYSILENT /DIR=C:\Example\Rosetun`, runs the same checks and fails with a nonzero setup exit code on an unsafe directory. Uninstall removes the service and installation tree, including `{app}\data`. In interactive removal an unchecked-by-default option can additionally delete settings, subscriptions and rules in the displayed `{userappdata}\Rosetun` folder of the account running the elevated uninstaller. Other accounts' data stays; `/SILENT` and `/VERYSILENT` never delete user data.
 
 The installer is not signed yet, so SmartScreen may warn when it starts: choose **More info** → **Run anyway**. Test installation, upgrades, connectivity and removal on a clean VM snapshot, without the matrix test rig.
+
+## Bundled Wintun license and version updates
+
+The official sing-box 1.14.1 executable embeds the prebuilt Wintun 0.14.1 amd64 DLL. After verifying either the cached or downloaded sing-box executable, the build scans its bytes for `MZ` and hashes exactly 427552 bytes at each eligible offset. Packaging stops unless a candidate matches SHA-256 `E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE`. The executable remains unchanged; no DLL is extracted.
+
+The installer includes `licenses/wintun.txt` and the unchanged `licenses/wintun-prebuilt-binaries-license.txt`. The latter comes from [the upstream 0.14.1 tag](https://git.zx2c4.com/wintun/plain/prebuilt-binaries-license.txt?h=0.14.1), with SHA-256 `9aaf948856ce8845a762121306039ef09d0eeb4d9e4f4c355647d4081e818087`.
+
+When updating sing-box, also review its embedded Wintun version. Download the matching official `wintun-<version>.zip` from `https://www.wintun.net/builds/`, verify the byte length and SHA-256 of `bin/amd64/wintun.dll`, and compare the archive's license with the unchanged license from that upstream tag. Stop on any mismatch; do not bypass the guard. Update `$wintunVersion`, `$wintunDllLength` and `$wintunDllHash` beside the sing-box pin in `build.ps1`, the vendored license if it changed, and the version/hash documentation here. Review the public license notices and release-note template as well. Verify that the official sing-box executable passes the embedded-DLL guard before releasing.
 
 ## Releases
 
