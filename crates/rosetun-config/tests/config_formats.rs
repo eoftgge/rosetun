@@ -50,13 +50,17 @@ fn current_config() -> AppConfig {
             format: ListFormat::Text,
             updated_at: Some(1_700_000_004),
             size: Some(12),
-            sha256: Some("391196688aa55d3321deffa736f8d103b4813470952b748e9c2c9deb17fa60f5".to_owned()),
+            sha256: Some(
+                "391196688aa55d3321deffa736f8d103b4813470952b748e9c2c9deb17fa60f5".to_owned(),
+            ),
             categories: Vec::new(),
         },
         List {
             id: ListId::new("2"),
             name: "Example categories".to_owned(),
-            source: ListSource::File { original_name: "geosite.dat".to_owned() },
+            source: ListSource::File {
+                original_name: "geosite.dat".to_owned(),
+            },
             format: ListFormat::GeoSite,
             updated_at: Some(1_700_000_005),
             size: Some(7),
@@ -227,9 +231,15 @@ fn list_references_and_metadata_are_validated() {
 
     let mut config = current_config();
     config.lists[1].categories.push("example".to_owned());
-    assert!(matches!(config.validate(), Err(ConfigError::InvalidListMetadata)));
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidListMetadata)
+    ));
 
     let mut config = current_config();
     config.lists[1].format = ListFormat::GeoIp;
-    assert!(matches!(config.validate(), Err(ConfigError::InvalidListCategory)));
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidListCategory)
+    ));
 }

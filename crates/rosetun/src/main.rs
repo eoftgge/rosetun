@@ -232,9 +232,10 @@ fn temporary_rule_line(rule: &Rule) -> String {
             format!("process path {}", value.display())
         }
         RuleMatcher::IpCidr(value) => format!("ip {value}"),
-        RuleMatcher::List { list, category } => category
-            .as_ref()
-            .map_or_else(|| format!("list {list}"), |category| format!("list {list}:{category}")),
+        RuleMatcher::List { list, category } => category.as_ref().map_or_else(
+            || format!("list {list}"),
+            |category| format!("list {list}:{category}"),
+        ),
         RuleMatcher::Template(_) => "template".to_owned(),
     };
     format!("{target}: {}", terminal_text(&value))

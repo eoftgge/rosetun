@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{
-    ConnectionState, ListSource, Node, NodeId, Outbound, Subscription, SubscriptionId, SubscriptionInfo,
+    ConnectionState, ListSource, Node, NodeId, Outbound, Subscription, SubscriptionId,
+    SubscriptionInfo,
 };
 
 use crate::errors;
@@ -35,7 +36,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     |ui| {
                         let enabled = state.config_ready
                             && (!state.config.subscriptions.is_empty()
-                                || state.config.lists.iter().any(|list| matches!(&list.source, ListSource::Url(_))))
+                                || state
+                                    .config
+                                    .lists
+                                    .iter()
+                                    .any(|list| matches!(&list.source, ListSource::Url(_))))
                             && !state.operations.update_all
                             && state.operations.updating.is_empty()
                             && state.operations.updating_lists.is_empty()

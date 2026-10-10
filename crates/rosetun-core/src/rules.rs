@@ -157,7 +157,10 @@ pub fn set_default_target(
     })
 }
 
-pub fn validate_list_matcher(config: &AppConfig, matcher: &RuleMatcher) -> Result<(), RuleSetError> {
+pub fn validate_list_matcher(
+    config: &AppConfig,
+    matcher: &RuleMatcher,
+) -> Result<(), RuleSetError> {
     if let RuleMatcher::List { list, category } = matcher {
         let entry = config
             .lists
@@ -595,9 +598,10 @@ pub fn rule_value_text(matcher: &RuleMatcher) -> String {
         RuleMatcher::Process(ProcessMatch::Name(name)) => name.clone(),
         RuleMatcher::Process(ProcessMatch::Path(path)) => path.to_string_lossy().into_owned(),
         RuleMatcher::IpCidr(cidr) => cidr.clone(),
-        RuleMatcher::List { list, category } => category
-            .as_ref()
-            .map_or_else(|| format!("list:{list}"), |category| format!("list:{list}:{category}")),
+        RuleMatcher::List { list, category } => category.as_ref().map_or_else(
+            || format!("list:{list}"),
+            |category| format!("list:{list}:{category}"),
+        ),
         RuleMatcher::Template(template) => format!("template:{}", template.key()),
     }
 }

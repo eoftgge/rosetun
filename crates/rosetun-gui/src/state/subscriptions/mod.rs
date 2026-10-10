@@ -436,7 +436,11 @@ impl State {
             Action::UpdateAll => {
                 if self.config_ready
                     && (!self.config.subscriptions.is_empty()
-                        || self.config.lists.iter().any(|list| matches!(&list.source, ListSource::Url(_))))
+                        || self
+                            .config
+                            .lists
+                            .iter()
+                            .any(|list| matches!(&list.source, ListSource::Url(_))))
                     && !self.operations.update_all
                     && self.operations.updating.is_empty()
                     && self.operations.updating_lists.is_empty()

@@ -121,9 +121,11 @@ impl List {
             let key = attribute.strip_prefix('!').unwrap_or(attribute);
             if self.format != ListFormat::GeoSite
                 || key.is_empty()
-                || !key
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-'))
+                || !key.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
             {
                 return Err(ListCategoryError::InvalidFilter);
             }
@@ -140,12 +142,18 @@ mod tests {
         List {
             id: ListId::new("1"),
             name: "Example".to_owned(),
-            source: ListSource::Url("https://user:secret@lists.example.com/private?token=secret".to_owned()),
+            source: ListSource::Url(
+                "https://user:secret@lists.example.com/private?token=secret".to_owned(),
+            ),
             format,
             updated_at: None,
             size: None,
             sha256: None,
-            categories: if format.has_categories() { vec!["example".to_owned()] } else { vec![] },
+            categories: if format.has_categories() {
+                vec!["example".to_owned()]
+            } else {
+                vec![]
+            },
         }
     }
 
@@ -164,12 +172,27 @@ mod tests {
         let site = example(ListFormat::GeoSite);
         assert!(site.validate_category(Some("example@cn")).is_ok());
         assert!(site.validate_category(Some("example@!cn")).is_ok());
-        assert_eq!(site.validate_category(None), Err(ListCategoryError::Required));
-        assert_eq!(site.validate_category(Some("example@")), Err(ListCategoryError::InvalidFilter));
-        assert_eq!(site.validate_category(Some("unknown")), Err(ListCategoryError::Unknown));
+        assert_eq!(
+            site.validate_category(None),
+            Err(ListCategoryError::Required)
+        );
+        assert_eq!(
+            site.validate_category(Some("example@")),
+            Err(ListCategoryError::InvalidFilter)
+        );
+        assert_eq!(
+            site.validate_category(Some("unknown")),
+            Err(ListCategoryError::Unknown)
+        );
         let ip = example(ListFormat::GeoIp);
-        assert_eq!(ip.validate_category(Some("example@cn")), Err(ListCategoryError::InvalidFilter));
+        assert_eq!(
+            ip.validate_category(Some("example@cn")),
+            Err(ListCategoryError::InvalidFilter)
+        );
         let text = example(ListFormat::Text);
-        assert_eq!(text.validate_category(Some("example")), Err(ListCategoryError::Unexpected));
+        assert_eq!(
+            text.validate_category(Some("example")),
+            Err(ListCategoryError::Unexpected)
+        );
     }
 }

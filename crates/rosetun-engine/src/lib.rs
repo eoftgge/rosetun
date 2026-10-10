@@ -130,7 +130,9 @@ impl RuleCapabilities {
                 self.process_path
             }
             rosetun_config::RuleMatcher::IpCidr(_) => self.ip_cidr,
-            rosetun_config::RuleMatcher::List { .. } | rosetun_config::RuleMatcher::Template(_) => false,
+            rosetun_config::RuleMatcher::List { .. } | rosetun_config::RuleMatcher::Template(_) => {
+                false
+            }
         }
     }
 }

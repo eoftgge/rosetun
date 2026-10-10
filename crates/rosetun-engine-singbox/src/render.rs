@@ -419,7 +419,7 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use rosetun_config::{
-        Hysteria2Params, NodeId, Rule, RuleSetId, RuleTemplate, StreamSettings, TlsParams,
+        Hysteria2Params, ListId, NodeId, Rule, RuleSetId, RuleTemplate, StreamSettings, TlsParams,
     };
 
     use super::*;
@@ -523,6 +523,25 @@ mod tests {
             proxy_outbound(&node, "proxy"),
             Err(EngineError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn list_matcher_is_reported_without_a_match_all_route() {
+        let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
+        let list = Rule {
+            id: RuleId::new("list"),
+            enabled: true,
+            matcher: RuleMatcher::List {
+                list: ListId::new("1"),
+                category: None,
+            },
+            target: RuleTarget::Direct,
+        };
+        assert_eq!(route_rule(&list), None);
+        set.rules.push(list.clone());
+        let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
+        assert_eq!(unsupported, vec![list.id]);
+        assert_eq!(route["rules"].as_array().unwrap().len(), 2);
     }
 
     #[test]

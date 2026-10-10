@@ -65,7 +65,10 @@ struct CommittedList {
 
 fn list_dir(store: &Store) -> Result<PathBuf, ListError> {
     let parent = store.path().parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "configuration path has no directory")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "configuration path has no directory",
+        )
     })?;
     Ok(parent.join("lists"))
 }
@@ -137,20 +140,32 @@ fn publish_file(directory: &Path, change: &CommittedList, bytes: &[u8]) -> Resul
     let destination = list_path(directory, &change.current);
     let temp = temporary_path(&destination);
     let result = (|| -> Result<(), ListError> {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&temp)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
 
-        let old = change.previous.as_ref().map(|list| list_path(directory, list));
+        let old = change
+            .previous
+            .as_ref()
+            .map(|list| list_path(directory, list));
         if old.as_ref() != Some(&destination) && destination.exists() {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "list path already exists").into());
+            return Err(
+                io::Error::new(io::ErrorKind::AlreadyExists, "list path already exists").into(),
+            );
         }
         if let Some(old) = &old {
             read_verified(directory, change.previous.as_ref().expect("previous list"))?;
             let backup = previous_path(old);
             if backup.exists() {
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "list backup already exists").into());
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "list backup already exists",
+                )
+                .into());
             }
             fs::rename(old, &backup)?;
         }
@@ -198,7 +213,11 @@ fn commit_list(
     let directory = list_dir(store)?;
     let size = inspected.bytes.len() as u64;
     let sha256 = checksum(&inspected.bytes);
-    let formats::InspectedList { format, categories, bytes } = inspected;
+    let formats::InspectedList {
+        format,
+        categories,
+        bytes,
+    } = inspected;
     let change = store.modify_with_sidecar(
         |config| {
             let previous = if let Some(requested) = requested {
@@ -216,13 +235,18 @@ fn commit_list(
                 Some(current.clone())
             } else {
                 if let ListSource::Url(url) = &source
-                    && config.lists.iter().any(|item| item.source == ListSource::Url(url.clone()))
+                    && config
+                        .lists
+                        .iter()
+                        .any(|item| item.source == ListSource::Url(url.clone()))
                 {
                     return Err(ListError::AlreadyExists);
                 }
                 None
             };
-            let id = previous.as_ref().map_or_else(|| next_id(config), |item| item.id.clone());
+            let id = previous
+                .as_ref()
+                .map_or_else(|| next_id(config), |item| item.id.clone());
             let name = previous.as_ref().map_or(name, |item| item.name.clone());
             let current = List {
                 id,
@@ -235,7 +259,11 @@ fn commit_list(
                 categories,
             };
             if let Some(previous) = &previous {
-                let index = config.lists.iter().position(|item| item.id == previous.id).expect("list exists");
+                let index = config
+                    .lists
+                    .iter()
+                    .position(|item| item.id == previous.id)
+                    .expect("list exists");
                 config.lists[index] = current.clone();
             } else {
                 config.lists.push(current.clone());
@@ -266,7 +294,14 @@ pub fn add_list_from_url(
     };
     let bytes = crate::fetch::fetch_list_bytes(parsed.as_str(), timeouts)?;
     let inspected = formats::inspect(&bytes, Some(parsed.path()))?;
-    commit_list(store, None, name, ListSource::Url(parsed.to_string()), inspected, current_time()?)
+    commit_list(
+        store,
+        None,
+        name,
+        ListSource::Url(parsed.to_string()),
+        inspected,
+        current_time()?,
+    )
 }
 
 pub fn add_list_from_bytes(
@@ -284,7 +319,14 @@ pub fn add_list_from_bytes(
     }
     let original_name = file_name(original_name)?;
     let inspected = formats::inspect(bytes, Some(&original_name))?;
-    commit_list(store, None, name.to_owned(), ListSource::File { original_name }, inspected, current_time()?)
+    commit_list(
+        store,
+        None,
+        name.to_owned(),
+        ListSource::File { original_name },
+        inspected,
+        current_time()?,
+    )
 }
 
 pub fn update_list(
@@ -293,7 +335,13 @@ pub fn update_list(
     replacement: Option<(&str, &[u8])>,
     timeouts: Timeouts,
 ) -> Result<List, UpdateListError> {
-    update_list_with(store, id, replacement, timeouts, &mut crate::fetch::fetch_list_bytes)
+    update_list_with(
+        store,
+        id,
+        replacement,
+        timeouts,
+        &mut crate::fetch::fetch_list_bytes,
+    )
 }
 
 fn update_list_with(
@@ -314,7 +362,10 @@ fn update_list_with(
     let (bytes, name, source) = match (&requested.source, replacement) {
         (ListSource::Url(url), None) => (
             fetch(url, timeouts)?,
-            url::Url::parse(url).map_err(|_| ListError::InvalidUrl)?.path().to_owned(),
+            url::Url::parse(url)
+                .map_err(|_| ListError::InvalidUrl)?
+                .path()
+                .to_owned(),
             requested.source.clone(),
         ),
         (ListSource::File { .. }, Some((original_name, bytes))) => {
@@ -322,16 +373,30 @@ fn update_list_with(
                 return Err(ListError::TooLarge);
             }
             let original_name = file_name(original_name)?;
-            (bytes.to_vec(), original_name.clone(), ListSource::File { original_name })
+            (
+                bytes.to_vec(),
+                original_name.clone(),
+                ListSource::File { original_name },
+            )
         }
         (ListSource::File { .. }, None) => return Err(ListError::FileRequired),
         (ListSource::Url(_), Some(_)) => return Err(ListError::WrongSource),
     };
     let inspected = formats::inspect(&bytes, Some(&name))?;
-    commit_list(store, Some(&requested), requested.name.clone(), source, inspected, current_time()?)
+    commit_list(
+        store,
+        Some(&requested),
+        requested.name.clone(),
+        source,
+        inspected,
+        current_time()?,
+    )
 }
 
-pub fn update_all_lists(store: &Store, timeouts: Timeouts) -> Result<Vec<ListUpdateResult>, StoreError> {
+pub fn update_all_lists(
+    store: &Store,
+    timeouts: Timeouts,
+) -> Result<Vec<ListUpdateResult>, StoreError> {
     update_all_lists_with(store, timeouts, &mut crate::fetch::fetch_list_bytes)
 }
 
@@ -362,7 +427,11 @@ pub fn rename_list(store: &Store, id: &ListId, name: &str) -> Result<List, ListE
         return Err(ListError::EmptyName);
     }
     store.modify(|config| {
-        let list = config.lists.iter_mut().find(|item| &item.id == id).ok_or(ListError::NotFound)?;
+        let list = config
+            .lists
+            .iter_mut()
+            .find(|item| &item.id == id)
+            .ok_or(ListError::NotFound)?;
         list.name = name.to_owned();
         Ok(list.clone())
     })
@@ -397,7 +466,11 @@ pub fn remove_list(store: &Store, id: &ListId) -> Result<(), ListError> {
     Ok(())
 }
 
-pub fn list_payload(store: &Store, id: &ListId, category: Option<&str>) -> Result<ListPayload, ListError> {
+pub fn list_payload(
+    store: &Store,
+    id: &ListId,
+    category: Option<&str>,
+) -> Result<ListPayload, ListError> {
     let list = store
         .load()?
         .lists
@@ -427,7 +500,8 @@ pub fn reconcile_lists(store: &Store) -> Result<(), ListError> {
                     fs::File::open(&backup)?
                         .take(MAX_LIST_BYTES as u64 + 1)
                         .read_to_end(&mut bytes)?;
-                    if bytes.len() > MAX_LIST_BYTES || list.size != Some(bytes.len() as u64)
+                    if bytes.len() > MAX_LIST_BYTES
+                        || list.size != Some(bytes.len() as u64)
                         || list.sha256.as_deref() != Some(checksum(&bytes).as_str())
                     {
                         return Err(ListError::Integrity);
@@ -439,7 +513,11 @@ pub fn reconcile_lists(store: &Store) -> Result<(), ListError> {
                 }
             }
             read_verified(&directory, list)?;
-            active.insert(path.file_name().expect("list path has a name").to_os_string());
+            active.insert(
+                path.file_name()
+                    .expect("list path has a name")
+                    .to_os_string(),
+            );
         }
         for entry in fs::read_dir(&directory)? {
             let entry = entry?;
@@ -452,7 +530,9 @@ pub fn reconcile_lists(store: &Store) -> Result<(), ListError> {
                 continue;
             }
             let final_name = text.strip_suffix(".previous").unwrap_or(text);
-            let Some((id, extension)) = final_name.split_once('.') else { continue };
+            let Some((id, extension)) = final_name.split_once('.') else {
+                continue;
+            };
             if !id.is_empty()
                 && id.bytes().all(|byte| byte.is_ascii_digit())
                 && matches!(extension, "srs" | "json" | "dat" | "txt")
