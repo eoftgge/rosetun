@@ -366,7 +366,10 @@ delete-rule-set-detail = Набор и все его правила будут �
 delete-active-rule-set-warning = Подключения будут использовать «По умолчанию · всё через VPN».
 delete-rule = Удалить правило?
 delete-rule-detail = Правило будет удалено из набора.
-delete-rules-heading = Удалить правила: { $n }
+delete-rules-heading = { $count ->
+    [one] Удалить правила: { $n }
+   *[other] Удалить правила: { $n }
+}
 rule-unit = правило
 and-more-rules = и ещё { $k }
 move-to-top = Поднять наверх
@@ -460,7 +463,7 @@ servers = { $count ->
    *[other] { $n } серверов
 }
 rule-count = { $count ->
-    [one] { $n } правило
+    [one] { $n } { rule-unit }
     [few] { $n } правила
     [many] { $n } правил
    *[other] { $n } правил

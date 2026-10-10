@@ -20,7 +20,8 @@ macro_rules! tr {
 mod format;
 #[cfg(test)]
 mod tests;
-#[allow(unused_imports)] // The helpers become call sites as the GUI migrates.
+#[cfg(test)]
+mod validation;
 pub(crate) use format::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

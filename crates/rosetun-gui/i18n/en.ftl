@@ -366,7 +366,10 @@ delete-rule-set-detail = This set and all its rules will be removed.
 delete-active-rule-set-warning = Connections will use Default · through VPN.
 delete-rule = Delete rule?
 delete-rule-detail = This rule will be removed from the set.
-delete-rules-heading = Delete { $rules }
+delete-rules-heading = { $count ->
+    [one] Delete { $n } { rule-unit }
+   *[other] Delete { rule-count }
+}
 rule-unit = rule
 and-more-rules = and { $k } more
 move-to-top = Move to top
@@ -458,11 +461,13 @@ servers = { $count ->
    *[other] { $n } servers
 }
 rule-count = { $count ->
-    [one] { $n } rule
+    [one] { $n } { rule-unit }
    *[other] { $n } rules
 }
 add-rules = { $count ->
-    [one] { add-rule }
+    [1] { add-rule }
+    [one] { add-rules-one }
+    [2] { add-rules-few }
    *[other] { add-rules-many }
 }
 more-rules = and { $n } more
@@ -475,6 +480,7 @@ skipped-summary = Skipped { $count }: { $reason }
 helper-version = Helper { $version }
 verbose-hours = { $count ->
     [one] { $n } { verbose-log-hour-one }
+    [few] { $n } { verbose-log-hour-few }
    *[other] { $n } { verbose-log-hour-many }
 }
 updated-ago-just-now = just now

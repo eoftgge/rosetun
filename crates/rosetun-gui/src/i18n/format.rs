@@ -98,8 +98,7 @@ pub(crate) fn delete_selected_rules(count: usize) -> String {
 }
 
 pub(crate) fn delete_rules_heading(count: usize) -> String {
-    let rules = tr!("rule-count", count = count, n = count.to_string());
-    tr!("delete-rules-heading", n = count.to_string(), rules = rules)
+    tr!("delete-rules-heading", count = count, n = count.to_string())
 }
 
 pub(crate) fn and_more_rules(count: usize) -> String {
