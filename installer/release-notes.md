@@ -4,13 +4,16 @@ This is an alpha release. Bugs are expected. Report them in [Issues](https://git
 
 ## What's new
 
-- **Hysteria2.** Subscriptions can now carry Hysteria2 servers, as links or in sing-box JSON, with Salamander obfuscation and port hopping. Hysteria2 runs over UDP, so **TCP ping** does not apply to it; use **URL test**.
-- **New version notice.** Rosetun asks GitHub for its list of releases at launch, if a day has passed since the last check, and then once a day. A new version shows under **Settings → About**, with a dot on the Settings tab, **Open release page** and **Skip this version**. Nothing is downloaded or installed. **Check now** checks at once; **Check for updates** turns automatic checks off.
-- **TLS fingerprint.** TLS servers that do not set a fingerprint now present Chrome's, as most clients do, instead of Go's own.
-- **Settings survive upgrades.** The settings file now carries a format version. The first time it saves settings (also after the first update check), Rosetun 0.1.0-alpha.4 moves the file to the new format and keeps the previous one next to it as `config.v1.json`; it contains the same subscription links.
-- Server checks are now called **TCP ping** and **URL test**. Links use the rose accent colour.
+- **Clearer connection failures.** While connecting, Rosetun shows the current step and how long it has taken, and **Cancel** stops the attempt. When a connection fails, it says why: the server is not responding, rejected the connection, closed it, or did not respond in time, or the engine did not start in time. If another VPN is enabled, or a program that filters traffic (`winws.exe` or `goodbyedpi.exe`) is running, the error names it and says what to do.
+- **More reliable connects.** Rosetun waits for Windows to remove the previous tunnel adapter before starting again; a reconnect right after a failure could hang before. It allows more time when Windows creates the adapter slowly. The connection check through the server waits up to a minute for a slow server, but gives up early when the server clearly fails.
+- **Rule and DNS edits apply when you leave the tab.** While connected, edits no longer wait for a button: they apply when you leave **Rules** or **Settings**, or hide the window. **Apply now** applies them at once. If they cannot be applied, Rosetun brings back the previous rules and DNS, both in the tunnel and in the settings, and **Restore my edits** returns your edits so you can fix them.
+- **Select several rules.** Ctrl+click and Shift+click select several rules, Ctrl+A selects all shown. Selected rules can be dragged together, moved with **Move to top** and **Move to end**, or deleted with **Delete selected**. Esc clears the selection; Delete asks to delete the selected rules.
+- **Install folder.** On a first install you can choose another folder on a local drive. The installer checks that standard users cannot change it or the folders above it, because the service runs from it with SYSTEM rights, and names the folder that fails the check. Upgrades keep the previous folder.
+- **Delete your data on uninstall.** The uninstaller offers **Also delete settings, subscriptions and rules**. Other users' data on the computer stays.
+- **Privacy.** Engine messages in the log no longer contain site addresses unless **Verbose log** is on.
+- The connect button now blooms in layers when connected. The petals in the header are fainter.
 
-Settings, subscriptions and rules from 0.1.0-alpha.3 are kept. Going back to 0.1.0-alpha.3 after the settings were saved in the new format: the older version refuses to open the new file and leaves it untouched; replace `config.json` with `config.v1.json` to use it.
+Settings, subscriptions and rules from 0.1.0-alpha.4 are kept. The settings format has not changed, so going back to 0.1.0-alpha.4 keeps them too.
 
 ## Install
 
@@ -30,13 +33,16 @@ Rosetun includes the unmodified official sing-box {{sing_box_version}} build, li
 
 ### Что нового
 
-- **Hysteria2.** Подписки теперь могут содержать серверы Hysteria2, ссылками или в JSON sing-box, с обфускацией Salamander и сменой портов. Hysteria2 работает по UDP, поэтому **Пинг TCP** к нему неприменим; используйте **Проверку URL**.
-- **Сообщение о новой версии.** Rosetun запрашивает у GitHub список релизов при запуске, если с прошлой проверки прошли сутки, и затем раз в сутки. Новая версия появляется в **Настройки → О программе**, с точкой на вкладке настроек и кнопками **Открыть страницу релиза** и **Пропустить эту версию**. Ничего не скачивается и не устанавливается. **Проверить сейчас** проверяет сразу; **Проверять обновления** выключает автоматическую проверку.
-- **Отпечаток TLS.** TLS-серверы, у которых отпечаток не задан, теперь представляются как Chrome, как в большинстве клиентов, а не собственным отпечатком Go.
-- **Настройки переживают обновления.** У файла настроек появилась версия формата. При первом сохранении настроек (в том числе после первой проверки обновлений) Rosetun 0.1.0-alpha.4 переводит файл на новый формат и оставляет прежний рядом как `config.v1.json`; в нём те же ссылки подписок.
-- Проверки серверов теперь называются **Пинг TCP** и **Проверка URL**. Ссылки окрашены в розовый цвет оформления.
+- **Понятные ошибки подключения.** Во время подключения Rosetun показывает текущий шаг и сколько он длится, а **Отменить** останавливает попытку. Если подключиться не удалось, Rosetun пишет почему: сервер не отвечает, отклонил подключение, закрыл соединение или не ответил вовремя, или ядро не успело запуститься. Если включён другой VPN или запущена программа, которая фильтрует трафик (`winws.exe` или `goodbyedpi.exe`), в ошибке названа она и сказано, что сделать.
+- **Надёжнее подключение.** Перед новым запуском Rosetun ждёт, пока Windows уберёт прошлый адаптер туннеля; раньше переподключение сразу после ошибки могло зависнуть. Если Windows создаёт адаптер медленно, Rosetun ждёт дольше. Проверка связи через сервер ждёт медленный сервер до минуты, но заканчивается раньше, если сервер явно не работает.
+- **Правки правил и DNS применяются, когда вы уходите с вкладки.** При подключении правки больше не ждут кнопки: они применяются, когда вы уходите с вкладки **Правила** или **Настройки** или скрываете окно. **Применить сейчас** применяет их сразу. Если применить не получилось, Rosetun возвращает прежние правила и DNS и в туннеле, и в настройках, а **Вернуть мои правки** возвращает ваши правки, чтобы их можно было исправить.
+- **Выделение нескольких правил.** Ctrl+щелчок и Shift+щелчок выделяют несколько правил, Ctrl+A выделяет все показанные. Выделенные правила можно перетащить вместе, переместить кнопками **В начало** и **В конец** или удалить кнопкой **Удалить выбранные**. Esc снимает выделение, Delete предлагает удалить выделенные.
+- **Папка установки.** При первой установке можно выбрать другую папку на локальном диске. Установщик проверяет, что обычные пользователи не могут менять её и папки выше, потому что служба запускается из неё с правами SYSTEM, и называет папку, которая не прошла проверку. При обновлении папка остаётся прежней.
+- **Удаление данных вместе с программой.** При удалении Rosetun предлагает **Также удалить настройки, подписки и правила**. Данные других пользователей компьютера остаются.
+- **Приватность.** Сообщения ядра в журнале больше не содержат адресов сайтов, если не включён **Подробный журнал**.
+- Кнопка подключения теперь раскрывается слоями, как роза. Лепестки в заголовке стали бледнее.
 
-Настройки, подписки и правила из 0.1.0-alpha.3 сохраняются. Если вернуться на 0.1.0-alpha.3 после того, как настройки сохранены в новом формате, старая версия откажется открывать новый файл и не изменит его; чтобы пользоваться ею, замените `config.json` файлом `config.v1.json`.
+Настройки, подписки и правила из 0.1.0-alpha.4 сохраняются. Формат настроек не изменился, поэтому при возврате на 0.1.0-alpha.4 они тоже сохранятся.
 
 ### Установка
 
