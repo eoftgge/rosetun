@@ -263,6 +263,7 @@ impl App {
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
             Job::Add { input, options } => self.workers.add(input, options),
             Job::Update(id) => self.workers.update(id),
+            Job::UpdateList(id) => self.workers.update_list(id),
             Job::Ping(id) => self.workers.ping(id, None),
             Job::PingNode(id, node) => self.workers.ping(id, Some(node)),
             Job::FullCheck(id) => self.workers.full_check(id, None),

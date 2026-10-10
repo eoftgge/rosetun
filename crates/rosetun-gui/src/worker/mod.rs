@@ -10,21 +10,21 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, DnsSettings, LanguageSetting, Node, NodeId, Rule, RuleId, RuleMatcher, RuleSet,
-    RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
+    AppConfig, DnsSettings, LanguageSetting, ListId, Node, NodeId, Rule, RuleId, RuleMatcher,
+    RuleSet, RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitInfo, ExitInfoError,
     MoveSubscriptionError, PING_PARALLEL, PING_TIMEOUT, Ping, Release, RemoveSubscriptionError,
     RenameSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingChange,
     SettingsError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateCheckError,
-    UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule, add_rules,
-    create_rule_set, delete_rule_set, move_rule, move_rules, move_subscription, ping_all,
-    prepare_subscription, remove_rule, remove_rules, remove_subscription, rename_rule_set,
-    rename_subscription, reset_settings, restore_rules_and_dns, select_node, select_rule_set,
-    set_default_target, set_dns, set_interface_scale, set_kill_switch, set_language,
-    set_rule_enabled, set_rule_target, set_verbose_log, update_all, update_rule,
-    update_subscription,
+    UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule,
+    add_rules, create_rule_set, delete_rule_set, move_rule, move_rules, move_subscription,
+    ping_all, prepare_subscription, reconcile_lists, remove_rule, remove_rules,
+    remove_subscription, rename_rule_set, rename_subscription, reset_settings,
+    restore_rules_and_dns, select_node, select_rule_set, set_default_target, set_dns,
+    set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
+    set_verbose_log, update_all, update_all_lists, update_list, update_rule, update_subscription,
 };
 use rosetun_ipc::{
     ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeOutcome,
@@ -134,6 +134,7 @@ pub(crate) enum WorkerEvent {
         id: SubscriptionId,
         result: Result<(Subscription, UpdateReport), UpdateSubscriptionError>,
     },
+    UpdateList(ListId),
     Ping {
         subscription: SubscriptionId,
         node: NodeId,
@@ -205,7 +206,15 @@ impl WorkerDispatcher {
 }
 
 impl ConfigPublisher {
+    fn publish_initial(&self) -> bool {
+        self.publish_with_reconciliation(true)
+    }
+
     fn publish(&self) -> bool {
+        self.publish_with_reconciliation(false)
+    }
+
+    fn publish_with_reconciliation(&self, reconcile_on_start: bool) -> bool {
         // Loading and publication share one lock: a delayed reader must not
         // number an old snapshot after a newer mutation has been published.
         let mut generation = self
@@ -214,6 +223,9 @@ impl ConfigPublisher {
             .unwrap_or_else(|poison| poison.into_inner());
         let event = match self.store.load() {
             Ok(config) => {
+                if reconcile_on_start && let Err(error) = reconcile_lists(&self.store) {
+                    subscriptions::log_list_error("reconcile", &error);
+                }
                 *generation += 1;
                 WorkerEvent::Config {
                     generation: *generation,
@@ -247,7 +259,7 @@ pub(crate) fn start(
         .name("rosetun-config-watch".into())
         .spawn(move || {
             let mut previous = file_stamp(watcher.store.path()).ok();
-            if !watcher.publish() {
+            if !watcher.publish_initial() {
                 return;
             }
             loop {

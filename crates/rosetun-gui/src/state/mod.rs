@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AppConfig, DnsSettings, LanguageSetting, NodeId, RuleId, RuleMatcher, RuleSetId, RuleTarget,
-    RuleTemplate, Status, SubscriptionId,
+    AppConfig, DnsSettings, LanguageSetting, ListId, NodeId, RuleId, RuleMatcher, RuleSetId,
+    RuleTarget, RuleTemplate, Status, SubscriptionId,
 };
 use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset, SettingChange};
 use rosetun_ipc::{ClientError, ConnectRequest};
@@ -50,6 +50,7 @@ pub(crate) struct Operations {
     pub(crate) kill_switch: bool,
     pub(crate) settings: bool,
     pub(crate) updating: BTreeSet<SubscriptionId>,
+    pub(crate) updating_lists: BTreeSet<ListId>,
     pub(crate) pinging: BTreeSet<SubscriptionId>,
     pub(crate) update_all: bool,
     pub(crate) removing: bool,
@@ -300,6 +301,7 @@ pub(crate) enum Job {
         options: AddOptions,
     },
     Update(SubscriptionId),
+    UpdateList(ListId),
     Ping(SubscriptionId),
     PingNode(SubscriptionId, NodeId),
     FullCheck(SubscriptionId),
@@ -385,6 +387,7 @@ impl State {
             }
             event @ (WorkerEvent::Add(_)
             | WorkerEvent::Update { .. }
+            | WorkerEvent::UpdateList(_)
             | WorkerEvent::Ping { .. }
             | WorkerEvent::PingDone(_)
             | WorkerEvent::FullCheck { .. }) => self.reduce_subscriptions(event),

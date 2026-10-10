@@ -75,6 +75,19 @@ impl Store {
     where
         E: From<StoreError>,
     {
+        self.modify_with_sidecar(change, |_| Ok(()), |_| Ok(()), |_| {})
+    }
+
+    pub(crate) fn modify_with_sidecar<T, E>(
+        &self,
+        change: impl FnOnce(&mut AppConfig) -> Result<T, E>,
+        publish: impl FnOnce(&T) -> Result<(), E>,
+        rollback: impl FnOnce(&T) -> Result<(), E>,
+        cleanup: impl FnOnce(&T),
+    ) -> Result<T, E>
+    where
+        E: From<StoreError>,
+    {
         // Clones of one `Store` serialize their writes; separate processes are still not serialized.
         let _write = self
             .write_lock
@@ -95,8 +108,29 @@ impl Store {
         if let (Some(original), Some(version)) = (original, migrated_from) {
             backup(&self.path, version, &original).map_err(E::from)?;
         }
-        save(&self.path, &config).map_err(E::from)?;
+        publish(&result)?;
+        if let Err(error) = save(&self.path, &config) {
+            let save_error = E::from(error);
+            rollback(&result)?;
+            return Err(save_error);
+        }
+        cleanup(&result);
         Ok(result)
+    }
+
+    pub(crate) fn with_config<T, E>(
+        &self,
+        action: impl FnOnce(&AppConfig) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<StoreError>,
+    {
+        let _write = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let config = load(&self.path).map_err(E::from)?;
+        action(&config)
     }
 }
 

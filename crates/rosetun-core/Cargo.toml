@@ -15,6 +15,7 @@ ureq = { version = "3.4", default-features = false, features = ["rustls", "platf
 url.workspace = true
 idna = "1"
 serde_json.workspace = true
+sha2 = "0.10"
 thiserror.workspace = true
 tracing.workspace = true
 

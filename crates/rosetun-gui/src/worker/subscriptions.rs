@@ -29,6 +29,16 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn update_list(&self, id: ListId) {
+        self.spawn_complete("rosetun-update-list", move |store| {
+            let result = update_list(store, &id, None, Timeouts::default());
+            if let Err(error) = &result {
+                log_list_error("update", error);
+            }
+            WorkerEvent::UpdateList(id)
+        });
+    }
+
     pub(crate) fn ping(&self, id: SubscriptionId, node: Option<NodeId>) {
         self.spawn_task("rosetun-ping", move |publisher| {
             let subscription = publisher.store.load().ok().and_then(|config| {
@@ -117,6 +127,19 @@ impl WorkerDispatcher {
                 }
                 Err(error) => log_subscription_error("update all", error),
             }
+
+            let list_result = update_all_lists(store, Timeouts::default());
+            match &list_result {
+                Ok(results) => {
+                    for (_, outcome) in results {
+                        if let Err(error) = outcome {
+                            log_list_error("update all", error);
+                        }
+                    }
+                }
+                Err(error) => log_list_error("update all", error),
+            }
+
             WorkerEvent::UpdateAll(result)
         });
     }
@@ -170,6 +193,11 @@ fn ping_targets<'a>(nodes: &[&'a Node]) -> (Vec<&'a Node>, Vec<&'a Node>) {
 fn log_subscription_error(operation: &str, error: &impl std::fmt::Display) {
     let message = without_urls(&error.to_string());
     tracing::warn!(operation, error = %message, "Subscription operation failed");
+}
+
+pub(super) fn log_list_error(operation: &str, error: &impl std::fmt::Display) {
+    let message = without_urls(&error.to_string());
+    tracing::warn!(operation, error = %message, "List operation failed");
 }
 
 fn without_urls(message: &str) -> String {

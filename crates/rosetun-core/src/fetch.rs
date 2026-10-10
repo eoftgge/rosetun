@@ -9,6 +9,7 @@ use ureq::tls::{RootCerts, TlsConfig};
 use url::Url;
 
 pub(crate) const MAX_BODY_BYTES: u64 = 5 * 1024 * 1024;
+pub(crate) const MAX_LIST_BYTES: u64 = crate::MAX_LIST_BYTES as u64;
 pub(crate) const DEFAULT_USER_AGENT: &str = concat!("Rosetun/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +91,24 @@ impl fmt::Display for FetchError {
 
 impl std::error::Error for FetchError {}
 
+pub(crate) fn fetch_list_bytes(url: &str, timeouts: Timeouts) -> Result<Vec<u8>, FetchError> {
+    let url = parse_url(url)?;
+    let agent = agent_for(&url, timeouts);
+    let mut response = agent
+        .get(url.as_str())
+        .header("User-Agent", DEFAULT_USER_AGENT)
+        .header("Accept", "*/*")
+        .call()
+        .map_err(classify_request_error)?;
+
+    let status = response.status().as_u16();
+    if !(200..=299).contains(&status) {
+        return Err(FetchError::HttpStatus(status));
+    }
+
+    read_bounded_body(&mut response, MAX_LIST_BYTES)
+}
+
 pub fn fetch(subscription: &Subscription, timeouts: Timeouts) -> Result<Parsed, FetchError> {
     let device = if subscription.send_hwid {
         match rosetun_hwid::device_info() {
@@ -109,15 +128,86 @@ pub fn fetch(subscription: &Subscription, timeouts: Timeouts) -> Result<Parsed, 
     fetch_with_device(subscription, timeouts, device.as_ref())
 }
 
+fn parse_url(url: &str) -> Result<Url, FetchError> {
+    let url = Url::parse(url).map_err(|_| FetchError::InvalidUrl)?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(FetchError::InvalidUrl);
+    }
+    Ok(url)
+}
+
+fn agent_for(url: &Url, timeouts: Timeouts) -> ureq::Agent {
+    // Platform trust includes antivirus HTTPS-inspection and corporate proxy roots;
+    // a fixed webpki root set would reject certificates trusted by Windows.
+    let tls = TlsConfig::builder()
+        .root_certs(RootCerts::PlatformVerifier)
+        .build();
+
+    ureq::Agent::config_builder()
+        .tls_config(tls)
+        .timeout_connect(Some(timeouts.connect))
+        .timeout_global(Some(timeouts.global))
+        .max_redirects(5)
+        .https_only(url.scheme() == "https")
+        .http_status_as_error(false)
+        .build()
+        .into()
+}
+
+fn classify_request_error(error: ureq::Error) -> FetchError {
+    // ureq errors can embed the request URI, so only their kind is kept;
+    // rustls errors describe the certificate problem and carry no URI.
+    match error {
+        ureq::Error::Timeout(_) => FetchError::Timeout,
+        ureq::Error::HostNotFound => FetchError::HostNotFound,
+        ureq::Error::ConnectionFailed => FetchError::ConnectionFailed,
+        ureq::Error::Io(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::AddrNotAvailable
+                    | std::io::ErrorKind::NetworkUnreachable
+                    | std::io::ErrorKind::HostUnreachable
+            ) =>
+        {
+            FetchError::ConnectionFailed
+        }
+        ureq::Error::TooManyRedirects | ureq::Error::RedirectFailed => FetchError::TooManyRedirects,
+        ureq::Error::RequireHttpsOnly(_) => FetchError::InsecureRedirect,
+        ureq::Error::Rustls(error) => FetchError::Tls(error.to_string()),
+        _ => FetchError::RequestFailed,
+    }
+}
+
+fn read_bounded_body(
+    response: &mut ureq::http::Response<ureq::Body>,
+    max_bytes: u64,
+) -> Result<Vec<u8>, FetchError> {
+    // as_reader() streams the decoded body. Read at most one byte beyond
+    // the allowed size, without rejecting gzip by its encoded Content-Length.
+    let mut body = Vec::new();
+    response
+        .body_mut()
+        .as_reader()
+        .take(max_bytes + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| FetchError::BodyReadFailed)?;
+
+    if body.len() as u64 > max_bytes {
+        return Err(FetchError::ResponseTooLarge);
+    }
+
+    Ok(body)
+}
+
 fn fetch_with_device(
     subscription: &Subscription,
     timeouts: Timeouts,
     device: Option<&DeviceInfo>,
 ) -> Result<Parsed, FetchError> {
-    let url = Url::parse(&subscription.url).map_err(|_| FetchError::InvalidUrl)?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err(FetchError::InvalidUrl);
-    }
+    let url = parse_url(&subscription.url)?;
 
     let user_agent = subscription
         .user_agent
@@ -128,21 +218,7 @@ fn fetch_with_device(
         return Err(FetchError::InvalidUserAgent);
     }
 
-    // Platform trust includes antivirus HTTPS-inspection and corporate proxy roots;
-    // a fixed webpki root set would reject certificates trusted by Windows.
-    let tls = TlsConfig::builder()
-        .root_certs(RootCerts::PlatformVerifier)
-        .build();
-
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .tls_config(tls)
-        .timeout_connect(Some(timeouts.connect))
-        .timeout_global(Some(timeouts.global))
-        .max_redirects(5)
-        .https_only(url.scheme() == "https")
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent = agent_for(&url, timeouts);
 
     let device = device.filter(|_| subscription.send_hwid);
     let mut request = agent
@@ -167,30 +243,7 @@ fn fetch_with_device(
             .header("x-device-model", sanitize_header_value(&device.model));
     }
 
-    // ureq errors can embed the request URI, so only their kind is kept;
-    // rustls errors describe the certificate problem and carry no URI.
-    let mut response = request.call().map_err(|error| match error {
-        ureq::Error::Timeout(_) => FetchError::Timeout,
-        ureq::Error::HostNotFound => FetchError::HostNotFound,
-        ureq::Error::ConnectionFailed => FetchError::ConnectionFailed,
-        ureq::Error::Io(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::ConnectionRefused
-                    | std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::NotConnected
-                    | std::io::ErrorKind::AddrNotAvailable
-                    | std::io::ErrorKind::NetworkUnreachable
-                    | std::io::ErrorKind::HostUnreachable
-            ) =>
-        {
-            FetchError::ConnectionFailed
-        }
-        ureq::Error::TooManyRedirects | ureq::Error::RedirectFailed => FetchError::TooManyRedirects,
-        ureq::Error::RequireHttpsOnly(_) => FetchError::InsecureRedirect,
-        ureq::Error::Rustls(error) => FetchError::Tls(error.to_string()),
-        _ => FetchError::RequestFailed,
-    })?;
+    let mut response = request.call().map_err(classify_request_error)?;
 
     let status = response.status().as_u16();
     match status {
@@ -206,19 +259,7 @@ fn fetch_with_device(
 
     let headers = response.headers().clone();
 
-    // as_reader() streams the decoded body. Read at most one byte beyond
-    // the allowed size, without rejecting gzip by its encoded Content-Length.
-    let mut body = Vec::new();
-    response
-        .body_mut()
-        .as_reader()
-        .take(MAX_BODY_BYTES + 1)
-        .read_to_end(&mut body)
-        .map_err(|_| FetchError::BodyReadFailed)?;
-
-    if body.len() as u64 > MAX_BODY_BYTES {
-        return Err(FetchError::ResponseTooLarge);
-    }
+    let body = read_bounded_body(&mut response, MAX_BODY_BYTES)?;
 
     rosetun_subscription::parse(&body, &|name| {
         headers
@@ -425,6 +466,148 @@ mod tests {
             assert!(!text.contains("private-token"));
             assert!(!text.contains("query-secret"));
         }
+    }
+
+    #[derive(Default)]
+    struct BitWriter {
+        bytes: Vec<u8>,
+        current: u8,
+        bit_count: u8,
+    }
+
+    impl BitWriter {
+        fn write_bits(&mut self, mut value: u32, bit_count: u8) {
+            for _ in 0..bit_count {
+                self.current |= ((value & 1) as u8) << self.bit_count;
+                self.bit_count += 1;
+                value >>= 1;
+
+                if self.bit_count == 8 {
+                    self.bytes.push(self.current);
+                    self.current = 0;
+                    self.bit_count = 0;
+                }
+            }
+        }
+
+        fn write_fixed_symbol(&mut self, symbol: u16) {
+            let (code, bit_count) = match symbol {
+                0..=143 => (0x30 + symbol, 8),
+                144..=255 => (0x190 + symbol - 144, 9),
+                256..=279 => (symbol - 256, 7),
+                280..=287 => (0xc0 + symbol - 280, 8),
+                _ => panic!("invalid fixed-Huffman symbol"),
+            };
+            self.write_bits(
+                u32::from(code.reverse_bits() >> (u16::BITS - bit_count as u32)),
+                bit_count,
+            );
+        }
+
+        fn into_bytes(mut self) -> Vec<u8> {
+            if self.bit_count != 0 {
+                self.bytes.push(self.current);
+            }
+            self.bytes
+        }
+    }
+
+    fn write_length_distance(writer: &mut BitWriter, length: usize) {
+        let (symbol, extra_bits, extra) = match length {
+            3..=10 => (257 + (length - 3) as u16, 0, 0),
+            11..=12 => (265, 1, length - 11),
+            13..=14 => (266, 1, length - 13),
+            15..=16 => (267, 1, length - 15),
+            17..=18 => (268, 1, length - 17),
+            19..=22 => (269, 2, length - 19),
+            23..=26 => (270, 2, length - 23),
+            27..=30 => (271, 2, length - 27),
+            31..=34 => (272, 2, length - 31),
+            35..=42 => (273, 3, length - 35),
+            43..=50 => (274, 3, length - 43),
+            51..=58 => (275, 3, length - 51),
+            59..=66 => (276, 3, length - 59),
+            67..=82 => (277, 4, length - 67),
+            83..=98 => (278, 4, length - 83),
+            99..=114 => (279, 4, length - 99),
+            115..=130 => (280, 4, length - 115),
+            131..=162 => (281, 5, length - 131),
+            163..=194 => (282, 5, length - 163),
+            195..=226 => (283, 5, length - 195),
+            227..=257 => (284, 5, length - 227),
+            258 => (285, 0, 0),
+            _ => panic!("invalid DEFLATE match length"),
+        };
+
+        writer.write_fixed_symbol(symbol);
+        writer.write_bits(extra as u32, extra_bits);
+        writer.write_bits(0, 5);
+    }
+
+    fn crc32_repeated(byte: u8, length: usize) -> u32 {
+        let mut table = [0u32; 256];
+        for (index, entry) in table.iter_mut().enumerate() {
+            let mut value = index as u32;
+            for _ in 0..8 {
+                value = (value >> 1) ^ (0xedb8_8320 * (value & 1));
+            }
+            *entry = value;
+        }
+
+        let mut crc = !0u32;
+        for _ in 0..length {
+            crc = table[((crc ^ u32::from(byte)) & 0xff) as usize] ^ (crc >> 8);
+        }
+        !crc
+    }
+
+    fn gzip_repeated(byte: u8, length: usize) -> Vec<u8> {
+        assert!(length >= 3);
+
+        let mut writer = BitWriter::default();
+        writer.write_bits(0b011, 3);
+        writer.write_fixed_symbol(u16::from(byte));
+
+        let mut remaining = length - 1;
+        while remaining != 0 {
+            let match_length = remaining.min(258);
+            write_length_distance(&mut writer, match_length);
+            remaining -= match_length;
+        }
+        writer.write_fixed_symbol(256);
+
+        let mut gzip = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255];
+        gzip.extend(writer.into_bytes());
+        gzip.extend(crc32_repeated(byte, length).to_le_bytes());
+        gzip.extend((length as u32).to_le_bytes());
+        gzip
+    }
+
+    #[test]
+    fn list_fetch_returns_bytes_and_default_headers() {
+        let server = Server::start(vec![Reply::ok(b"example.com\n".to_vec())]);
+
+        let body = fetch_list_bytes(&server.url, timeouts()).unwrap();
+
+        assert_eq!(body, b"example.com\n");
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(requests[0].target, SECRET_SUFFIX);
+        assert_eq!(requests[0].headers["user-agent"], DEFAULT_USER_AGENT);
+        assert_eq!(requests[0].headers["accept"], "*/*");
+    }
+
+    #[test]
+    fn gzip_list_over_decoded_limit_is_rejected_without_url() {
+        let server = Server::start(vec![
+            Reply::ok(gzip_repeated(b'a', MAX_LIST_BYTES as usize + 1))
+                .header("Content-Encoding", "gzip"),
+        ]);
+
+        let error = fetch_list_bytes(&server.url, timeouts()).unwrap_err();
+
+        assert!(matches!(error, FetchError::ResponseTooLarge));
+        assert_eq!(error.to_string(), "response too large");
+        assert_redacted(&error);
     }
 
     #[test]

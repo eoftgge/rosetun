@@ -1,4 +1,4 @@
-use super::super::subscriptions::{AUTO_UPDATE_CHECK, update_due};
+use super::super::subscriptions::{AUTO_UPDATE_CHECK, list_update_due, update_due};
 use super::*;
 
 #[test]
@@ -144,6 +144,64 @@ fn update_due_uses_default_and_clamped_provider_intervals() {
     assert!(update_due(&sub, now, None));
     assert!(!update_due(&sub, now, Some(now - 10 * 60)));
     assert!(update_due(&sub, now, Some(now - 2 * 60 * 60)));
+}
+
+#[test]
+fn list_update_due_uses_default_interval_retries_failures_and_skips_files() {
+    let now = 200 * 60 * 60;
+    let mut list = rosetun_config::List {
+        id: ListId::new("1"),
+        name: "Example".into(),
+        source: rosetun_config::ListSource::Url("https://example.com/list".into()),
+        format: rosetun_config::ListFormat::Text,
+        updated_at: None,
+        size: None,
+        sha256: None,
+        categories: vec![],
+    };
+    assert!(list_update_due(&list, now, None));
+    list.updated_at = Some(now - 11 * 60 * 60);
+    assert!(!list_update_due(&list, now, None));
+    list.updated_at = Some(now - 12 * 60 * 60);
+    assert!(list_update_due(&list, now, None));
+    assert!(!list_update_due(&list, now, Some(now - 10 * 60)));
+    assert!(list_update_due(&list, now, Some(now - 2 * 60 * 60)));
+    list.source = rosetun_config::ListSource::File {
+        original_name: "list.txt".into(),
+    };
+    assert!(!list_update_due(&list, now, None));
+}
+
+#[test]
+fn automatic_list_update_runs_only_after_subscriptions_and_once_per_check() {
+    let mut state = state_with_subscriptions();
+    state.config.lists = vec![rosetun_config::List {
+        id: ListId::new("1"),
+        name: "Example".into(),
+        source: rosetun_config::ListSource::Url("https://example.com/list".into()),
+        format: rosetun_config::ListFormat::Text,
+        updated_at: None,
+        size: None,
+        sha256: None,
+        categories: vec![],
+    }];
+    let now = 200_000;
+    assert!(
+        matches!(state.take_auto_update(now), Some(Job::Update(id)) if id == SubscriptionId::new("1"))
+    );
+
+    let mut state = State {
+        config_ready: true,
+        config: AppConfig {
+            lists: state.config.lists,
+            ..AppConfig::default()
+        },
+        ..State::default()
+    };
+    assert!(
+        matches!(state.take_auto_update(now), Some(Job::UpdateList(id)) if id == ListId::new("1"))
+    );
+    assert!(state.take_auto_update(now).is_none());
 }
 
 #[test]

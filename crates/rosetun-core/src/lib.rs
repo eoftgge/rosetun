@@ -2,6 +2,7 @@
 
 mod exit;
 mod fetch;
+mod lists;
 mod ping;
 mod rules;
 mod selection;
@@ -15,6 +16,11 @@ mod updates;
 
 pub use exit::{ExitInfo, ExitInfoError, exit_info};
 pub use fetch::{FetchError, Timeouts, fetch};
+pub use lists::{
+    ListError, ListParseError, ListPayload, ListUpdateResult, MAX_LIST_BYTES, PayloadFormat,
+    UpdateListError, add_list_from_bytes, add_list_from_url, list_payload, reconcile_lists,
+    remove_list, rename_list, update_all_lists, update_list,
+};
 pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
 pub use rosetun_subscription::{ParseError, SkipReason, Skipped, UnsupportedTransport};
 pub use rules::{

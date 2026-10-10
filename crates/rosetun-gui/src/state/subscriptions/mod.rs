@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::RangeInclusive;
 
-use rosetun_config::{ConnectionState, NodeId, Subscription, SubscriptionId};
+use rosetun_config::{
+    ConnectionState, List, ListId, ListSource, NodeId, Subscription, SubscriptionId,
+};
 use rosetun_core::{AddFromUrlError, AddOptions, UpdateReport, UpdateSubscriptionError};
 
 use super::{Action, Job, State};
@@ -52,6 +54,14 @@ pub(in crate::state) fn update_due(
         && last_attempt.is_none_or(|attempt| now.saturating_sub(attempt) >= AUTO_UPDATE_RETRY)
 }
 
+pub(in crate::state) fn list_update_due(list: &List, now: u64, last_attempt: Option<u64>) -> bool {
+    matches!(&list.source, ListSource::Url(_))
+        && list
+            .updated_at
+            .is_none_or(|updated| now.saturating_sub(updated) >= AUTO_UPDATE_HOURS * 60 * 60)
+        && last_attempt.is_none_or(|attempt| now.saturating_sub(attempt) >= AUTO_UPDATE_RETRY)
+}
+
 pub(crate) struct AddDialog {
     pub(crate) url: String,
     pub(crate) name: String,
@@ -97,6 +107,7 @@ pub(crate) enum UpdateOutcome {
 pub(crate) struct SubscriptionsState {
     next_auto_update_check: u64,
     auto_update_attempts: HashMap<SubscriptionId, u64>,
+    list_auto_update_attempts: HashMap<ListId, u64>,
     pub(crate) expanded: BTreeSet<SubscriptionId>,
     pub(crate) reveal: Option<(SubscriptionId, NodeId)>,
     pub(crate) outcomes: BTreeMap<SubscriptionId, UpdateOutcome>,
@@ -116,6 +127,7 @@ impl State {
         if !self.config_ready
             || !self.config.interface.auto_update_subscriptions
             || self.operations.update_all
+            || !self.operations.updating_lists.is_empty()
             || self.operations.helper
             || matches!(
                 self.status.state,
@@ -126,7 +138,7 @@ impl State {
         {
             return None;
         }
-        let id = self
+        if let Some(id) = self
             .config
             .subscriptions
             .iter()
@@ -140,15 +152,39 @@ impl State {
                             .get(&subscription.id)
                             .copied(),
                     )
+            })
+            .map(|subscription| subscription.id.clone())
+        {
+            self.subscriptions
+                .auto_update_attempts
+                .insert(id.clone(), now);
+            self.operations.updating.insert(id.clone());
+            self.subscriptions.outcomes.remove(&id);
+            return Some(Job::Update(id));
+        }
+
+        let id = self
+            .config
+            .lists
+            .iter()
+            .find(|list| {
+                !self.operations.updating_lists.contains(&list.id)
+                    && list_update_due(
+                        list,
+                        now,
+                        self.subscriptions
+                            .list_auto_update_attempts
+                            .get(&list.id)
+                            .copied(),
+                    )
             })?
             .id
             .clone();
         self.subscriptions
-            .auto_update_attempts
+            .list_auto_update_attempts
             .insert(id.clone(), now);
-        self.operations.updating.insert(id.clone());
-        self.subscriptions.outcomes.remove(&id);
-        Some(Job::Update(id))
+        self.operations.updating_lists.insert(id.clone());
+        Some(Job::UpdateList(id))
     }
 
     pub(crate) fn subscription_busy(&self, id: &SubscriptionId) -> bool {
@@ -166,6 +202,7 @@ impl State {
         self.config_ready
             && !self.operations.update_all
             && self.operations.updating.is_empty()
+            && self.operations.updating_lists.is_empty()
             && !self
                 .subscriptions
                 .add
@@ -199,6 +236,12 @@ impl State {
         self.subscriptions
             .auto_update_attempts
             .retain(|id, _| self.config.subscriptions.iter().any(|sub| &sub.id == id));
+        self.subscriptions
+            .list_auto_update_attempts
+            .retain(|id, _| self.config.lists.iter().any(|list| &list.id == id));
+        self.operations
+            .updating_lists
+            .retain(|id| self.config.lists.iter().any(|list| &list.id == id));
         self.subscriptions.pings.retain(|(id, node), _| {
             self.config
                 .subscriptions
@@ -242,6 +285,9 @@ impl State {
             WorkerEvent::Update { id, result } => {
                 self.operations.updating.remove(&id);
                 self.update_result(id, result);
+            }
+            WorkerEvent::UpdateList(id) => {
+                self.operations.updating_lists.remove(&id);
             }
             event @ (WorkerEvent::Ping { .. }
             | WorkerEvent::PingDone(_)
@@ -389,9 +435,11 @@ impl State {
             Action::FullCheckNode(id, node) => return self.start_check(id, Some(node), true),
             Action::UpdateAll => {
                 if self.config_ready
-                    && !self.config.subscriptions.is_empty()
+                    && (!self.config.subscriptions.is_empty()
+                        || self.config.lists.iter().any(|list| matches!(&list.source, ListSource::Url(_))))
                     && !self.operations.update_all
                     && self.operations.updating.is_empty()
+                    && self.operations.updating_lists.is_empty()
                     && !self.operations.removing
                 {
                     self.operations.update_all = true;
