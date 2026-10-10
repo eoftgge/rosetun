@@ -11,6 +11,8 @@ publish.workspace = true
 rosetun-config.workspace = true
 rosetun-subscription.workspace = true
 rosetun-hwid.workspace = true
+rosetun-ipc.workspace = true
+base64.workspace = true
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier", "gzip"] }
 url.workspace = true
 idna = "1"

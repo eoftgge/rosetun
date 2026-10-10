@@ -237,6 +237,11 @@ fn list_references_and_metadata_are_validated() {
     ));
 
     let mut config = current_config();
+    config.lists[1].categories = vec!["other".to_owned()];
+    assert!(config.validate().is_ok(), "a vanished category must remain loadable");
+    assert!(from_json(&serde_json::to_vec(&config).unwrap()).is_ok());
+
+    let mut config = current_config();
     config.lists[1].format = ListFormat::GeoIp;
     assert!(matches!(
         config.validate(),

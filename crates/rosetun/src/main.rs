@@ -12,7 +12,7 @@ use tracing_subscriber::prelude::*;
 use rosetun_config::{
     DomainMatch, NodeId, ProcessMatch, Rule, RuleMatcher, RuleTarget, SubscriptionId,
 };
-use rosetun_core::terminal_text;
+use rosetun_core::{ListOperation, PreparedConnection, terminal_text};
 use rosetun_ipc::{ConnectRequest, HelperClient, ProbeOutcome, ProbeRequest};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -40,6 +40,11 @@ enum Command {
     Config,
     Disconnect,
     Shutdown,
+}
+
+enum PreparedCliRequest {
+    Raw(ConnectRequest),
+    Lists(PreparedConnection),
 }
 
 fn main() -> ExitCode {
@@ -75,12 +80,12 @@ fn main() -> ExitCode {
             local_result(subscriptions::nodes(subscription_id.as_deref()))
         }
         Command::Config => local_result(print_config()),
-        Command::Connect { request_path } => match prepare_connect_request(request_path.as_deref())
+        Command::Connect { request_path } => match prepare_list_request(request_path.as_deref())
         {
             Ok(request) => with_helper(|client| connect(client, request)),
             Err(message) => local_result(Err(message)),
         },
-        Command::Apply { request_path } => match prepare_connect_request(request_path.as_deref()) {
+        Command::Apply { request_path } => match prepare_list_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| apply(client, request)),
             Err(message) => local_result(Err(message)),
         },
@@ -96,8 +101,8 @@ fn main() -> ExitCode {
     }
 }
 
-fn connect(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
-    match client.connect_tunnel(request) {
+fn connect(client: &mut HelperClient, request: PreparedCliRequest) -> ExitCode {
+    match send_connection(client, request, ListOperation::Connect) {
         Ok(()) => {
             println!("tunnel connection started");
             ExitCode::SUCCESS
@@ -109,8 +114,8 @@ fn connect(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
     }
 }
 
-fn apply(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
-    match client.apply_tunnel(request) {
+fn apply(client: &mut HelperClient, request: PreparedCliRequest) -> ExitCode {
+    match send_connection(client, request, ListOperation::Apply) {
         Ok(()) => {
             println!("session changes applied");
             ExitCode::SUCCESS
@@ -118,6 +123,28 @@ fn apply(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
         Err(error) => {
             tracing::error!(%error, "failed to apply session changes");
             ExitCode::FAILURE
+        }
+    }
+}
+
+fn send_connection(
+    client: &mut HelperClient,
+    request: PreparedCliRequest,
+    operation: ListOperation,
+) -> Result<(), rosetun_ipc::ClientError> {
+    match request {
+        PreparedCliRequest::Raw(request) => match operation {
+            ListOperation::Connect => client.connect_tunnel(request),
+            ListOperation::Apply => client.apply_tunnel(request),
+        },
+        PreparedCliRequest::Lists(prepared) => {
+            if !prepared.missing_categories.is_empty() {
+                eprintln!(
+                    "warning: {} list category rules now block all traffic",
+                    prepared.missing_categories.len()
+                );
+            }
+            rosetun_core::send_prepared(client, &prepared, operation)
         }
     }
 }
@@ -306,6 +333,17 @@ fn prepare_connect_request(request_path: Option<&str>) -> Result<ConnectRequest,
         }
         rosetun_ipc::ConnectRequestError::RuleSetNotFound => error.to_string(),
     })
+}
+
+fn prepare_list_request(request_path: Option<&str>) -> Result<PreparedCliRequest, String> {
+    if let Some(path) = request_path {
+        return read_connect_request(Path::new(path)).map(PreparedCliRequest::Raw);
+    }
+    let request = prepare_connect_request(None)?;
+    let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
+    rosetun_core::prepare_lists(&store, request)
+        .map(PreparedCliRequest::Lists)
+        .map_err(|error| error.to_string())
 }
 
 fn select_node(subscription_id: &str, node_id: &str) -> Result<(), String> {

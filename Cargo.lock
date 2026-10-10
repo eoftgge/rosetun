@@ -2734,9 +2734,11 @@ dependencies = [
 name = "rosetun-core"
 version = "0.1.0-alpha.5"
 dependencies = [
+ "base64",
  "idna",
  "rosetun-config",
  "rosetun-hwid",
+ "rosetun-ipc",
  "rosetun-subscription",
  "serde_json",
  "sha2",

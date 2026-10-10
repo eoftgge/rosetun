@@ -307,9 +307,10 @@ impl AppConfig {
                     .iter()
                     .find(|entry| &entry.id == list)
                     .ok_or(ConfigError::MissingList)?;
-                entry
-                    .validate_category(category.as_deref())
-                    .map_err(|_| ConfigError::InvalidListCategory)?;
+                match entry.validate_category(category.as_deref()) {
+                    Ok(()) | Err(ListCategoryError::Unknown) => {}
+                    Err(_) => return Err(ConfigError::InvalidListCategory),
+                }
             }
         }
         Ok(())

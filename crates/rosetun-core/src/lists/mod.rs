@@ -1,4 +1,5 @@
 mod formats;
+mod prepare;
 
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
@@ -13,6 +14,10 @@ use sha2::{Digest, Sha256};
 use crate::{FetchError, Store, StoreError, Timeouts};
 
 pub use formats::{ListParseError, ListPayload, PayloadFormat};
+pub use prepare::{
+    ListOperation, ListPreparationError, PreparedConnection, PreparedListPayload, prepare_lists,
+    send_prepared,
+};
 
 pub const MAX_LIST_BYTES: usize = 32 * 1024 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
