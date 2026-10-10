@@ -112,7 +112,10 @@ pub fn prepare_lists(
                         sha256: sha256.clone(),
                         format,
                     };
-                    if !payloads.iter().any(|item| item.sha256 == sha256 && item.format == format) {
+                    if !payloads
+                        .iter()
+                        .any(|item| item.sha256 == sha256 && item.format == format)
+                    {
                         let size = payload.bytes.len() as u64;
                         total_bytes = total_bytes
                             .checked_add(size)
@@ -131,7 +134,9 @@ pub fn prepare_lists(
                     Some(reference)
                 }
                 Err(ListError::Category(ListCategoryError::Unknown)) if dat => None,
-                Err(ListError::Parse(ListParseError::EmptyResult)) if dat && category.is_some() => None,
+                Err(ListError::Parse(ListParseError::EmptyResult)) if dat && category.is_some() => {
+                    None
+                }
                 Err(error) => return Err(error.into()),
             };
             selected.insert(key, value.clone());

@@ -49,7 +49,9 @@ fn request() -> ConnectRequest {
             name: "Example node".into(),
             server: "203.0.113.10".into(),
             port: 443,
-            outbound: Outbound::Trojan(TrojanParams { password: "test-secret".into() }),
+            outbound: Outbound::Trojan(TrojanParams {
+                password: "test-secret".into(),
+            }),
             stream: StreamSettings::default(),
             raw: None,
         },
@@ -65,7 +67,10 @@ fn list_rule(id: &str, list: ListId, category: Option<&str>) -> Rule {
     Rule {
         id: RuleId::new(id),
         enabled: true,
-        matcher: RuleMatcher::List { list, category: category.map(str::to_owned) },
+        matcher: RuleMatcher::List {
+            list,
+            category: category.map(str::to_owned),
+        },
         target: RuleTarget::Direct,
     }
 }
@@ -97,12 +102,23 @@ fn enabled_rules_deduplicate_refs_and_payloads_including_temporary_rules() {
     let store = directory.store();
     let list = add_list_from_bytes(&store, "Example", "example.txt", b"example.com\n").unwrap();
     let mut request = request();
-    request.rule_set.rules.push(list_rule("one", list.id.clone(), None));
-    request.rule_set.rules.push(list_rule("two", list.id.clone(), None));
-    request.temporary_rules.push(list_rule("temporary", list.id.clone(), None));
+    request
+        .rule_set
+        .rules
+        .push(list_rule("one", list.id.clone(), None));
+    request
+        .rule_set
+        .rules
+        .push(list_rule("two", list.id.clone(), None));
+    request
+        .temporary_rules
+        .push(list_rule("temporary", list.id.clone(), None));
     request.rule_set.rules.push(Rule {
         enabled: false,
-        matcher: RuleMatcher::List { list: ListId::new("missing"), category: None },
+        matcher: RuleMatcher::List {
+            list: ListId::new("missing"),
+            category: None,
+        },
         ..list_rule("disabled", list.id.clone(), None)
     });
 
@@ -112,7 +128,10 @@ fn enabled_rules_deduplicate_refs_and_payloads_including_temporary_rules() {
     assert!(prepared.missing_categories.is_empty());
     let reference = &prepared.request.lists[0];
     assert_eq!(reference.tag, list_tag(&list.id, None));
-    assert_eq!(reference.sha256, format!("{:x}", Sha256::digest(&prepared.payloads[0].bytes)));
+    assert_eq!(
+        reference.sha256,
+        format!("{:x}", Sha256::digest(&prepared.payloads[0].bytes))
+    );
     assert_eq!(reference.format, UploadedListFormat::Source);
     assert!(!format!("{prepared:?}").contains("example.com"));
 }
@@ -124,21 +143,49 @@ fn vanished_and_empty_dat_categories_block_all_and_report_rules() {
     let dat = add_list_from_bytes(&store, "Geosite", "geosite.dat", &example_site_dat()).unwrap();
     let text = add_list_from_bytes(&store, "Text", "example.txt", b"example.org\n").unwrap();
     let mut request = request();
-    request.rule_set.rules.push(list_rule("vanished", dat.id.clone(), Some("removed")));
-    request.rule_set.rules.push(list_rule("empty-filter", dat.id.clone(), Some("example@!cn")));
-    request.rule_set.rules.push(list_rule("working", text.id.clone(), None));
-    request.rule_set.rules.push(list_rule("working-dat", dat.id.clone(), Some("example@cn")));
+    request
+        .rule_set
+        .rules
+        .push(list_rule("vanished", dat.id.clone(), Some("removed")));
+    request.rule_set.rules.push(list_rule(
+        "empty-filter",
+        dat.id.clone(),
+        Some("example@!cn"),
+    ));
+    request
+        .rule_set
+        .rules
+        .push(list_rule("working", text.id.clone(), None));
+    request
+        .rule_set
+        .rules
+        .push(list_rule("working-dat", dat.id.clone(), Some("example@cn")));
 
     let prepared = prepare_lists(&store, request).unwrap();
-    assert_eq!(prepared.missing_categories, [RuleId::new("vanished"), RuleId::new("empty-filter")]);
-    assert_eq!(prepared.request.fallback_block_rules, prepared.missing_categories);
+    assert_eq!(
+        prepared.missing_categories,
+        [RuleId::new("vanished"), RuleId::new("empty-filter")]
+    );
+    assert_eq!(
+        prepared.request.fallback_block_rules,
+        prepared.missing_categories
+    );
     assert_eq!(prepared.request.rule_set.rules[0].target, RuleTarget::Block);
     assert_eq!(prepared.request.rule_set.rules[1].target, RuleTarget::Block);
-    assert_eq!(prepared.request.rule_set.rules[2].target, RuleTarget::Direct);
-    assert_eq!(prepared.request.rule_set.rules[3].target, RuleTarget::Direct);
+    assert_eq!(
+        prepared.request.rule_set.rules[2].target,
+        RuleTarget::Direct
+    );
+    assert_eq!(
+        prepared.request.rule_set.rules[3].target,
+        RuleTarget::Direct
+    );
     assert_eq!(prepared.request.lists.len(), 2);
     assert_eq!(prepared.request.lists[0].tag, list_tag(&text.id, None));
-    assert_eq!(prepared.request.lists[1].tag, list_tag(&dat.id, Some("example@cn")));
+    assert_eq!(
+        prepared.request.lists[1].tag,
+        list_tag(&dat.id, Some("example@cn"))
+    );
     assert_eq!(prepared.payloads.len(), 2);
 }
 
@@ -151,7 +198,10 @@ fn updating_a_dat_can_remove_a_used_category_without_breaking_connect() {
     crate::add_rule(
         &store,
         &rules.id,
-        RuleMatcher::List { list: dat.id.clone(), category: Some("example@cn".into()) },
+        RuleMatcher::List {
+            list: dat.id.clone(),
+            category: Some("example@cn".into()),
+        },
         RuleTarget::Direct,
     )
     .unwrap();
@@ -163,7 +213,9 @@ fn updating_a_dat_can_remove_a_used_category_without_breaking_connect() {
         crate::Timeouts::default(),
     )
     .unwrap();
-    let config = store.load().expect("list updates keep saved rules loadable");
+    let config = store
+        .load()
+        .expect("list updates keep saved rules loadable");
     let mut request = request();
     request.rule_set = config.rule_sets[0].clone();
 
@@ -173,7 +225,11 @@ fn updating_a_dat_can_remove_a_used_category_without_breaking_connect() {
     assert!(prepared.request.lists.is_empty());
     assert!(prepared.payloads.is_empty());
 
-    fs::write(directory.0.join("lists").join(format!("{}.dat", dat.id)), b"damaged").unwrap();
+    fs::write(
+        directory.0.join("lists").join(format!("{}.dat", dat.id)),
+        b"damaged",
+    )
+    .unwrap();
     let mut after_damage = self::request();
     after_damage.rule_set = config.rule_sets[0].clone();
     assert!(matches!(
@@ -182,7 +238,11 @@ fn updating_a_dat_can_remove_a_used_category_without_breaking_connect() {
     ));
 
     let corrupted = b"not-a-dat";
-    fs::write(directory.0.join("lists").join(format!("{}.dat", dat.id)), corrupted).unwrap();
+    fs::write(
+        directory.0.join("lists").join(format!("{}.dat", dat.id)),
+        corrupted,
+    )
+    .unwrap();
     store
         .modify(|config| {
             config.lists[0].size = Some(corrupted.len() as u64);
@@ -204,17 +264,25 @@ fn damaged_list_and_dat_without_category_are_errors_before_transport() {
     let store = directory.store();
     let dat = add_list_from_bytes(&store, "Geosite", "geosite.dat", &example_site_dat()).unwrap();
     let mut without_category = request();
-    without_category.rule_set.rules.push(list_rule("invalid", dat.id.clone(), None));
+    without_category
+        .rule_set
+        .rules
+        .push(list_rule("invalid", dat.id.clone(), None));
     assert!(matches!(
         prepare_lists(&store, without_category),
-        Err(ListPreparationError::List(ListError::Category(ListCategoryError::Required)))
+        Err(ListPreparationError::List(ListError::Category(
+            ListCategoryError::Required
+        )))
     ));
 
     let text = add_list_from_bytes(&store, "Text", "example.txt", b"example.org\n").unwrap();
     let path = directory.0.join("lists").join(format!("{}.txt", text.id));
     fs::write(path, b"changed.example.invalid\n").unwrap();
     let mut damaged = request();
-    damaged.rule_set.rules.push(list_rule("damaged", text.id, None));
+    damaged
+        .rule_set
+        .rules
+        .push(list_rule("damaged", text.id, None));
     assert!(matches!(
         prepare_lists(&store, damaged),
         Err(ListPreparationError::List(ListError::Integrity))
@@ -239,12 +307,21 @@ impl ListClient for MockClient {
         Ok(vec![self.missing.clone()])
     }
 
-    fn put_chunk(&mut self, hash: &str, format: ListFormat, total_size: u64, offset: u64, data: String) -> Result<(), ClientError> {
+    fn put_chunk(
+        &mut self,
+        hash: &str,
+        format: ListFormat,
+        total_size: u64,
+        offset: u64,
+        data: String,
+    ) -> Result<(), ClientError> {
         self.calls.push("chunk");
         assert_eq!(hash, self.missing);
         assert_eq!(format, UploadedListFormat::Source);
         assert_eq!(total_size, 10 * 1024 * 1024 + 1);
-        let bytes = base64::engine::general_purpose::STANDARD.decode(data).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap();
         assert!(!bytes.is_empty() && bytes.len() <= MAX_LIST_CHUNK_BYTES);
         self.chunks.push((offset, bytes.len()));
         Ok(())
@@ -254,7 +331,10 @@ impl ListClient for MockClient {
         self.calls.push("connect");
         self.attempts += 1;
         if self.attempts == 1 || self.always_missing {
-            Err(ClientError::Helper(HelperError::new(ErrorCode::ListMissing, "evicted")))
+            Err(ClientError::Helper(HelperError::new(
+                ErrorCode::ListMissing,
+                "evicted",
+            )))
         } else {
             Ok(())
         }
@@ -280,7 +360,10 @@ fn upload_uses_one_client_and_retries_only_one_list_missing() {
         payloads: vec![payload],
         missing_categories: Vec::new(),
     };
-    let mut client = MockClient { missing: digest, ..MockClient::default() };
+    let mut client = MockClient {
+        missing: digest,
+        ..MockClient::default()
+    };
     send_with(&mut client, &prepared, ListOperation::Connect).unwrap();
     assert_eq!(client.status_count, 2);
     assert_eq!(client.attempts, 2);
@@ -290,7 +373,10 @@ fn upload_uses_one_client_and_retries_only_one_list_missing() {
     assert_eq!(client.chunks[10], (10 * 1024 * 1024, 1));
     assert_eq!(client.chunks[21], (10 * 1024 * 1024, 1));
 
-    let mut apply_client = MockClient { missing: client.missing, ..MockClient::default() };
+    let mut apply_client = MockClient {
+        missing: client.missing,
+        ..MockClient::default()
+    };
     send_with(&mut apply_client, &prepared, ListOperation::Apply).unwrap();
     assert_eq!(apply_client.attempts, 2);
     assert_eq!(apply_client.calls[12], "apply");
@@ -302,7 +388,10 @@ fn upload_uses_one_client_and_retries_only_one_list_missing() {
     };
     assert!(matches!(
         send_with(&mut twice_missing, &prepared, ListOperation::Connect),
-        Err(ClientError::Helper(HelperError { code: ErrorCode::ListMissing, .. }))
+        Err(ClientError::Helper(HelperError {
+            code: ErrorCode::ListMissing,
+            ..
+        }))
     ));
     assert_eq!(twice_missing.status_count, 2);
     assert_eq!(twice_missing.attempts, 2);

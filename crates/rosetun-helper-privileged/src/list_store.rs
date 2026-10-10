@@ -56,7 +56,10 @@ fn invalid(message: &'static str) -> HelperError {
 }
 
 fn internal() -> HelperError {
-    HelperError::new(ErrorCode::Internal, "could not access the service list store")
+    HelperError::new(
+        ErrorCode::Internal,
+        "could not access the service list store",
+    )
 }
 
 fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
@@ -65,7 +68,10 @@ fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
         .take(MAX_LIST_PAYLOAD_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_LIST_PAYLOAD_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "list is too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "list is too large",
+        ));
     }
     Ok(bytes)
 }
@@ -149,10 +155,15 @@ impl ListStore {
     }
 
     fn object_path(&self, hash: &str, format: ListFormat) -> PathBuf {
-        self.directory.join(format!("{hash}.{}", format.extension()))
+        self.directory
+            .join(format!("{hash}.{}", format.extension()))
     }
 
-    pub(crate) fn status(&mut self, hashes: &[String], now: Instant) -> Result<Vec<String>, HelperError> {
+    pub(crate) fn status(
+        &mut self,
+        hashes: &[String],
+        now: Instant,
+    ) -> Result<Vec<String>, HelperError> {
         self.expire(now);
         if hashes.len() > MAX_REFERENCES || hashes.iter().any(|hash| !valid_hash(hash)) {
             return Err(invalid("invalid list hashes"));
@@ -382,7 +393,10 @@ impl ListStore {
         let key = (reference.sha256.clone(), reference.format);
         let path = self.object_path(&reference.sha256, reference.format);
         let Some(object) = self.objects.get_mut(&key) else {
-            return Err(HelperError::new(ErrorCode::ListMissing, "a required list is unavailable"));
+            return Err(HelperError::new(
+                ErrorCode::ListMissing,
+                "a required list is unavailable",
+            ));
         };
         let bytes = read_bounded(&path).map_err(|_| {
             HelperError::new(ErrorCode::ListMissing, "a required list is unavailable")
@@ -391,7 +405,10 @@ impl ListStore {
             || bytes.len() as u64 > MAX_LIST_PAYLOAD_BYTES
             || format!("{:x}", Sha256::digest(&bytes)) != reference.sha256
         {
-            return Err(HelperError::new(ErrorCode::ListMissing, "a required list is invalid"));
+            return Err(HelperError::new(
+                ErrorCode::ListMissing,
+                "a required list is invalid",
+            ));
         }
         object.last_used = SystemTime::now();
         Ok(path)

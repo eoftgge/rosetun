@@ -26,8 +26,8 @@ use rosetun_routing::{
     ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
 };
 
-use crate::log_gate::VerboseGate;
 use crate::list_store::{ListStore, valid_hash, valid_tag};
+use crate::log_gate::VerboseGate;
 use watchdog::{DnsWatchdog, WatchdogTiming};
 
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -172,8 +172,14 @@ impl Helper {
 
     pub(crate) fn with_list_store(mut self, store: ListStore, run_dir: PathBuf) -> Self {
         let lists = Arc::new(Mutex::new(store));
-        self.session.get_mut().expect("new session is not poisoned").lists = Some(Arc::clone(&lists));
-        self.session.get_mut().expect("new session is not poisoned").list_run_dir = Some(run_dir);
+        self.session
+            .get_mut()
+            .expect("new session is not poisoned")
+            .lists = Some(Arc::clone(&lists));
+        self.session
+            .get_mut()
+            .expect("new session is not poisoned")
+            .list_run_dir = Some(run_dir);
         self.lists = Some(lists);
         self
     }
@@ -199,8 +205,15 @@ impl Helper {
         offset: u64,
         data: &str,
     ) -> Result<(), HelperError> {
-        self.list_store()?
-            .put_chunk(owner, hash, format, total_size, offset, data, Instant::now())
+        self.list_store()?.put_chunk(
+            owner,
+            hash,
+            format,
+            total_size,
+            offset,
+            data,
+            Instant::now(),
+        )
     }
 
     pub fn abort_list_uploads(&self, owner: u64) {
@@ -674,13 +687,21 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
     if request.lists.len() > MAX_TEMPORARY_RULES
         || request.fallback_block_rules.len() > MAX_TEMPORARY_RULES
     {
-        return Err(HelperError::new(ErrorCode::InvalidState, "too many list references"));
+        return Err(HelperError::new(
+            ErrorCode::InvalidState,
+            "too many list references",
+        ));
     }
     let rules = request.effective_rule_set();
     if request.settings.engine != rosetun_config::EngineKind::SingBox
-        && rules.enabled().any(|rule| matches!(rule.matcher, RuleMatcher::List { .. }))
+        && rules
+            .enabled()
+            .any(|rule| matches!(rule.matcher, RuleMatcher::List { .. }))
     {
-        return Err(HelperError::new(ErrorCode::UnsupportedRules, "engine does not support list rules"));
+        return Err(HelperError::new(
+            ErrorCode::UnsupportedRules,
+            "engine does not support list rules",
+        ));
     }
     let mut block_ids = std::collections::HashSet::new();
     for id in &request.fallback_block_rules {
@@ -691,7 +712,10 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
                     && rule.target == RuleTarget::Block
             })
         {
-            return Err(HelperError::new(ErrorCode::InvalidState, "invalid fallback block rule"));
+            return Err(HelperError::new(
+                ErrorCode::InvalidState,
+                "invalid fallback block rule",
+            ));
         }
     }
     let expected: std::collections::HashSet<_> = rules
@@ -709,7 +733,10 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
             || !expected.contains(&reference.tag)
             || !tags.insert(&reference.tag)
         {
-            return Err(HelperError::new(ErrorCode::InvalidState, "invalid list reference"));
+            return Err(HelperError::new(
+                ErrorCode::InvalidState,
+                "invalid list reference",
+            ));
         }
     }
     Ok(())
@@ -736,9 +763,11 @@ pub fn spawn_supervisor(helper: Arc<Helper>) -> std::io::Result<()> {
 pub fn spawn_list_reaper(helper: Arc<Helper>) -> std::io::Result<()> {
     thread::Builder::new()
         .name("list-upload-reaper".to_owned())
-        .spawn(move || loop {
-            thread::sleep(Duration::from_secs(5));
-            helper.expire_list_uploads(Instant::now());
+        .spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(5));
+                helper.expire_list_uploads(Instant::now());
+            }
         })?;
     Ok(())
 }
@@ -894,7 +923,10 @@ impl Session {
             return if request.lists.is_empty() {
                 Ok(())
             } else {
-                Err(HelperError::new(ErrorCode::ListMissing, "list storage is unavailable"))
+                Err(HelperError::new(
+                    ErrorCode::ListMissing,
+                    "list storage is unavailable",
+                ))
             };
         };
         let mut store = lists
@@ -929,8 +961,9 @@ impl Session {
         for entry in std::fs::read_dir(directory)
             .map_err(|_| HelperError::new(ErrorCode::Internal, "cannot inspect staged lists"))?
         {
-            let entry = entry
-                .map_err(|_| HelperError::new(ErrorCode::Internal, "cannot inspect staged lists"))?;
+            let entry = entry.map_err(|_| {
+                HelperError::new(ErrorCode::Internal, "cannot inspect staged lists")
+            })?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
             let file_name = name
@@ -940,10 +973,7 @@ impl Session {
             let Some((tag, extension)) = file_name.rsplit_once('.') else {
                 continue;
             };
-            if tag.starts_with("list-")
-                && valid_tag(tag)
-                && matches!(extension, "srs" | "json")
-            {
+            if tag.starts_with("list-") && valid_tag(tag) && matches!(extension, "srs" | "json") {
                 std::fs::remove_file(entry.path()).map_err(|_| {
                     HelperError::new(ErrorCode::Internal, "cannot remove a staged list")
                 })?;
@@ -987,7 +1017,10 @@ impl Session {
             }
             if std::fs::rename(&temporary, &destination).is_err() {
                 let _ = std::fs::remove_file(&temporary);
-                return Err(HelperError::new(ErrorCode::Internal, "cannot publish a staged list"));
+                return Err(HelperError::new(
+                    ErrorCode::Internal,
+                    "cannot publish a staged list",
+                ));
             }
         }
         Ok(())

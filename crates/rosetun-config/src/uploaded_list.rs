@@ -71,6 +71,10 @@ mod tests {
         assert_ne!(bare, filtered);
         assert_eq!(filtered, list_tag(&id, Some("ads@!mobile")));
         assert!(filtered.len() <= 64);
-        assert!(filtered.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'));
+        assert!(
+            filtered
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        );
     }
 }

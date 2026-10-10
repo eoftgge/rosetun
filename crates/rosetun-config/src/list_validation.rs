@@ -49,7 +49,8 @@ pub fn normalize_source(bytes: &[u8]) -> Result<Vec<u8>, ListValidationError> {
     if bytes.len() > MAX_UPLOADED_LIST_BYTES {
         return Err(ListValidationError::TooLarge);
     }
-    let source: Value = serde_json::from_slice(bytes).map_err(|_| ListValidationError::InvalidJson)?;
+    let source: Value =
+        serde_json::from_slice(bytes).map_err(|_| ListValidationError::InvalidJson)?;
     let root = source
         .as_object()
         .ok_or(ListValidationError::InvalidSource("expected an object"))?;
@@ -68,13 +69,15 @@ pub fn normalize_source(bytes: &[u8]) -> Result<Vec<u8>, ListValidationError> {
         .ok_or(ListValidationError::InvalidSource("rules must be an array"))?;
     let mut count = 0_usize;
     for rule in rules {
-        let rule = rule
-            .as_object()
-            .ok_or(ListValidationError::InvalidSource("each rule must be an object"))?;
+        let rule = rule.as_object().ok_or(ListValidationError::InvalidSource(
+            "each rule must be an object",
+        ))?;
         let before = count;
         for (key, values) in rule {
             if !ALLOWED_KEYS.contains(&key.as_str()) {
-                return Err(ListValidationError::UnsupportedRuleKey(safe_rule_key(key).to_owned()));
+                return Err(ListValidationError::UnsupportedRuleKey(
+                    safe_rule_key(key).to_owned(),
+                ));
             }
             let values = values.as_array().ok_or(ListValidationError::InvalidSource(
                 "rule conditions must be arrays of strings",
@@ -92,7 +95,9 @@ pub fn normalize_source(bytes: &[u8]) -> Result<Vec<u8>, ListValidationError> {
             }
         }
         if count == before {
-            return Err(ListValidationError::InvalidSource("a rule has no conditions"));
+            return Err(ListValidationError::InvalidSource(
+                "a rule has no conditions",
+            ));
         }
     }
     if count == 0 {
@@ -129,7 +134,9 @@ mod tests {
         assert!(!format!("{error:?}").contains("secret.example.com"));
         assert_eq!(
             normalize_source(br#"{"version":3,"rules":[{}]}"#),
-            Err(ListValidationError::InvalidSource("a rule has no conditions"))
+            Err(ListValidationError::InvalidSource(
+                "a rule has no conditions"
+            ))
         );
     }
 }

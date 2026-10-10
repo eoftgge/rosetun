@@ -3,9 +3,9 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use rosetun_config::{DomainMatch, ListCategoryError, ListFormat, ListValidationError};
-use serde_json::json;
 #[cfg(test)]
 use serde_json::Value;
+use serde_json::json;
 
 use crate::rules::parse_domain_input;
 
@@ -274,8 +274,9 @@ fn map_validation(error: ListValidationError) -> ListParseError {
         ListValidationError::TooLarge => ListParseError::PayloadTooLarge,
         ListValidationError::TooManyEntries => ListParseError::TooManyEntries,
         ListValidationError::InvalidSrs => ListParseError::InvalidSrs,
-        ListValidationError::UnsupportedSrsVersion(version) =>
-            ListParseError::UnsupportedSrsVersion(version),
+        ListValidationError::UnsupportedSrsVersion(version) => {
+            ListParseError::UnsupportedSrsVersion(version)
+        }
         ListValidationError::InvalidJson => ListParseError::InvalidJson,
         ListValidationError::InvalidSource(reason) => ListParseError::InvalidSource(reason),
         ListValidationError::UnsupportedRuleKey(key) => ListParseError::UnsupportedRuleKey(key),

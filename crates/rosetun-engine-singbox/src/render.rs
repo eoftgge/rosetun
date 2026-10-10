@@ -1,6 +1,6 @@
 use rosetun_config::{
-    DnsSettings, DomainMatch, ListRef, LogLevel, Node, Outbound, ProcessMatch, RuleId,
-    RuleMatcher, RuleSet, RuleTarget, Settings, TlsMode, Transport, UploadedListFormat, list_tag,
+    DnsSettings, DomainMatch, ListRef, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher,
+    RuleSet, RuleTarget, Settings, TlsMode, Transport, UploadedListFormat, list_tag,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities};
@@ -405,10 +405,10 @@ fn route_section_with_lists(
     };
 
     let mut route = json!({
-            "rules": route_rules,
-            "final": final_outbound,
-            "auto_detect_interface": true,
-        });
+        "rules": route_rules,
+        "final": final_outbound,
+        "auto_detect_interface": true,
+    });
     if !used_lists.is_empty() {
         route["rule_set"] = Value::Array(
             used_lists
@@ -502,16 +502,55 @@ mod tests {
             stream: StreamSettings::default(),
             raw: None,
         };
-        let mut rules = RuleSet::new(RuleSetId::new("example-rules"), "Examples", RuleTarget::Block);
+        let mut rules = RuleSet::new(
+            RuleSetId::new("example-rules"),
+            "Examples",
+            RuleTarget::Block,
+        );
         for (id, matcher, target) in [
-            ("exact", RuleMatcher::Domain(DomainMatch::Exact("example.com".into())), RuleTarget::Direct),
-            ("suffix", RuleMatcher::Domain(DomainMatch::Suffix("example.org".into())), RuleTarget::Proxy),
-            ("keyword", RuleMatcher::Domain(DomainMatch::Keyword("example".into())), RuleTarget::Block),
-            ("name", RuleMatcher::Process(ProcessMatch::Name("example.exe".into())), RuleTarget::Direct),
-            ("path", RuleMatcher::Process(ProcessMatch::Path("C:\\example\\example.exe".into())), RuleTarget::Proxy),
-            ("cidr", RuleMatcher::IpCidr("198.51.100.0/24".into()), RuleTarget::Block),
-            ("template", RuleMatcher::Template(RuleTemplate::Torrents), RuleTarget::Direct),
-            ("list", RuleMatcher::List { list: ListId::new("golden-list"), category: None }, RuleTarget::Direct),
+            (
+                "exact",
+                RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
+                RuleTarget::Direct,
+            ),
+            (
+                "suffix",
+                RuleMatcher::Domain(DomainMatch::Suffix("example.org".into())),
+                RuleTarget::Proxy,
+            ),
+            (
+                "keyword",
+                RuleMatcher::Domain(DomainMatch::Keyword("example".into())),
+                RuleTarget::Block,
+            ),
+            (
+                "name",
+                RuleMatcher::Process(ProcessMatch::Name("example.exe".into())),
+                RuleTarget::Direct,
+            ),
+            (
+                "path",
+                RuleMatcher::Process(ProcessMatch::Path("C:\\example\\example.exe".into())),
+                RuleTarget::Proxy,
+            ),
+            (
+                "cidr",
+                RuleMatcher::IpCidr("198.51.100.0/24".into()),
+                RuleTarget::Block,
+            ),
+            (
+                "template",
+                RuleMatcher::Template(RuleTemplate::Torrents),
+                RuleTarget::Direct,
+            ),
+            (
+                "list",
+                RuleMatcher::List {
+                    list: ListId::new("golden-list"),
+                    category: None,
+                },
+                RuleTarget::Direct,
+            ),
         ] {
             rules.rules.push(rosetun_config::Rule {
                 id: RuleId::new(id),
@@ -553,7 +592,10 @@ mod tests {
         })
         .unwrap();
         assert!(rendered.unsupported.is_empty());
-        assert_eq!(rendered.body, include_bytes!("../tests/fixtures/full-config.json"));
+        assert_eq!(
+            rendered.body,
+            include_bytes!("../tests/fixtures/full-config.json")
+        );
     }
 
     #[test]
@@ -697,16 +739,31 @@ mod tests {
                 target,
             });
         }
-        let (route, unsupported) = route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[]);
+        let (route, unsupported) =
+            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[]);
         assert!(unsupported.is_empty());
-        assert_eq!(route["rule_set"], json!([{
-            "type": "local", "tag": tag, "format": "binary", "path": format!("{tag}.srs")
-        }]));
-        assert_eq!(route["rules"][2], json!({
-            "rule_set": [tag], "action": "route", "outbound": "direct"
-        }));
-        assert_eq!(route["rules"][3], json!({"rule_set": [tag], "action": "reject"}));
-        assert!(route_section_with_lists(&set, RuleCapabilities::NONE, false, &[], &[]).1.len() == 2);
+        assert_eq!(
+            route["rule_set"],
+            json!([{
+                "type": "local", "tag": tag, "format": "binary", "path": format!("{tag}.srs")
+            }])
+        );
+        assert_eq!(
+            route["rules"][2],
+            json!({
+                "rule_set": [tag], "action": "route", "outbound": "direct"
+            })
+        );
+        assert_eq!(
+            route["rules"][3],
+            json!({"rule_set": [tag], "action": "reject"})
+        );
+        assert!(
+            route_section_with_lists(&set, RuleCapabilities::NONE, false, &[], &[])
+                .1
+                .len()
+                == 2
+        );
     }
 
     #[test]
@@ -727,7 +784,10 @@ mod tests {
         set.rules.push(rosetun_config::Rule {
             id: RuleId::new("remaining"),
             enabled: true,
-            matcher: RuleMatcher::List { list: remaining, category: None },
+            matcher: RuleMatcher::List {
+                list: remaining,
+                category: None,
+            },
             target: RuleTarget::Direct,
         });
         let reference = ListRef {
@@ -735,14 +795,16 @@ mod tests {
             sha256: "b".repeat(64),
             format: UploadedListFormat::Source,
         };
-        let (route, unsupported) = route_section_with_lists(
-            &set, RULE_CAPABILITIES, false, &[reference], &[vanished],
-        );
+        let (route, unsupported) =
+            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[vanished]);
         assert!(unsupported.is_empty());
         assert_eq!(route["rules"][2], json!({"action": "reject"}));
-        assert_eq!(route["rules"][3], json!({
-            "rule_set": [tag], "action": "route", "outbound": "direct"
-        }));
+        assert_eq!(
+            route["rules"][3],
+            json!({
+                "rule_set": [tag], "action": "route", "outbound": "direct"
+            })
+        );
         assert_eq!(route["rule_set"][0]["format"], "source");
         assert_eq!(route["rule_set"][0]["path"], format!("{tag}.json"));
     }

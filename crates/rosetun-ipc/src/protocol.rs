@@ -22,7 +22,9 @@ pub enum Request {
     },
     Status,
     TemporaryRules,
-    ListStatus { hashes: Vec<String> },
+    ListStatus {
+        hashes: Vec<String>,
+    },
     PutListChunk {
         sha256: String,
         format: ListFormat,
@@ -42,7 +44,9 @@ pub enum Request {
 impl std::fmt::Debug for Request {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Hello { protocol_version, .. } => f
+            Self::Hello {
+                protocol_version, ..
+            } => f
                 .debug_struct("Hello")
                 .field("protocol_version", protocol_version)
                 .finish_non_exhaustive(),
@@ -114,7 +118,10 @@ impl std::fmt::Debug for ConnectRequest {
             .field("rule_count", &self.rule_set.rules.len())
             .field("temporary_rule_count", &self.temporary_rules.len())
             .field("list_count", &self.lists.len())
-            .field("fallback_block_rule_count", &self.fallback_block_rules.len())
+            .field(
+                "fallback_block_rule_count",
+                &self.fallback_block_rules.len(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -200,7 +207,9 @@ pub enum Response {
     },
     Status(Status),
     TemporaryRules(Vec<Rule>),
-    ListStatus { missing: Vec<String> },
+    ListStatus {
+        missing: Vec<String>,
+    },
     Probe(Vec<ProbeResult>),
     Delay(ProbeOutcome),
     Ok,
@@ -343,7 +352,10 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["lists"][0]["format"], "binary");
         assert_eq!(json["fallback_block_rules"][0], "block");
-        assert_eq!(serde_json::from_value::<ConnectRequest>(json).unwrap(), request);
+        assert_eq!(
+            serde_json::from_value::<ConnectRequest>(json).unwrap(),
+            request
+        );
         assert!(!format!("{request:?}").contains("list-test"));
         assert!(!format!("{:?}", request.lists[0]).contains("list-test"));
     }

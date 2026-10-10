@@ -80,8 +80,7 @@ fn main() -> ExitCode {
             local_result(subscriptions::nodes(subscription_id.as_deref()))
         }
         Command::Config => local_result(print_config()),
-        Command::Connect { request_path } => match prepare_list_request(request_path.as_deref())
-        {
+        Command::Connect { request_path } => match prepare_list_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| connect(client, request)),
             Err(message) => local_result(Err(message)),
         },

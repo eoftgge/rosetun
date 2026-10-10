@@ -186,7 +186,13 @@ fn url_list(store: &Store) -> List {
             Ok::<_, StoreError>(())
         })
         .unwrap();
-    store.load().unwrap().lists.into_iter().find(|item| item.id == list.id).unwrap()
+    store
+        .load()
+        .unwrap()
+        .lists
+        .into_iter()
+        .find(|item| item.id == list.id)
+        .unwrap()
 }
 
 #[test]
@@ -203,7 +209,10 @@ fn updating_a_url_list_repairs_a_missing_file() {
     .unwrap();
 
     assert_eq!(fs::read(&path).unwrap(), b"example.invalid\n");
-    assert_eq!(updated.sha256.as_deref(), Some(checksum(b"example.invalid\n").as_str()));
+    assert_eq!(
+        updated.sha256.as_deref(),
+        Some(checksum(b"example.invalid\n").as_str())
+    );
     assert_eq!(store.load().unwrap().lists, vec![updated]);
     assert!(!previous_path(&path).exists());
 }

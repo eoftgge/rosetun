@@ -218,7 +218,10 @@ impl std::fmt::Debug for RenderRequest<'_> {
             .field("rule_set_id", &self.rules.id)
             .field("rule_count", &self.rules.rules.len())
             .field("list_count", &self.lists.len())
-            .field("fallback_block_rule_count", &self.fallback_block_rules.len())
+            .field(
+                "fallback_block_rule_count",
+                &self.fallback_block_rules.len(),
+            )
             .field("control", &self.control)
             .field("verbose_log", &self.verbose_log)
             .finish_non_exhaustive()

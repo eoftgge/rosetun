@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use rosetun_config::{
     DnsSettings, ListId, ListRef, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
-    RuleSetId, RuleTarget, Settings, ShadowsocksParams, StreamSettings, UploadedListFormat, list_tag,
+    RuleSetId, RuleTarget, Settings, ShadowsocksParams, StreamSettings, UploadedListFormat,
+    list_tag,
 };
 use rosetun_engine::{EngineBackend, RenderRequest};
 use rosetun_engine_singbox::SingBoxBackend;
@@ -36,7 +37,11 @@ impl Drop for TestDirectory {
 fn sing_box_check_validates_local_rule_set_config() {
     let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/installer/sing-box")
-        .join(if cfg!(windows) { "sing-box.exe" } else { "sing-box" });
+        .join(if cfg!(windows) {
+            "sing-box.exe"
+        } else {
+            "sing-box"
+        });
     if !binary.exists() {
         eprintln!("pinned sing-box binary is absent; syntax check skipped");
         return;
@@ -51,11 +56,18 @@ fn sing_box_check_validates_local_rule_set_config() {
     let source = br#"{"rules":[{"domain_suffix":["example.com"]}],"version":3}"#;
     let source = rosetun_config::normalize_source(source).unwrap();
     std::fs::write(directory.0.join(format!("{tag}.json")), source).unwrap();
-    let mut rules = RuleSet::new(RuleSetId::new("example-rules"), "Example", RuleTarget::Proxy);
+    let mut rules = RuleSet::new(
+        RuleSetId::new("example-rules"),
+        "Example",
+        RuleTarget::Proxy,
+    );
     rules.rules.push(Rule {
         id: RuleId::new("example-list-rule"),
         enabled: true,
-        matcher: RuleMatcher::List { list, category: None },
+        matcher: RuleMatcher::List {
+            list,
+            category: None,
+        },
         target: RuleTarget::Block,
     });
     let node = Node {
@@ -81,7 +93,11 @@ fn sing_box_check_validates_local_rule_set_config() {
         ..Settings::default()
     };
     settings.tun.ipv4 = "198.51.100.1/30".into();
-    let lists = [ListRef { tag, sha256: "a".repeat(64), format: UploadedListFormat::Source }];
+    let lists = [ListRef {
+        tag,
+        sha256: "a".repeat(64),
+        format: UploadedListFormat::Source,
+    }];
     let config = SingBoxBackend::new(&directory.0)
         .render(&RenderRequest {
             node: &node,
@@ -103,5 +119,9 @@ fn sing_box_check_validates_local_rule_set_config() {
         .current_dir(&directory.0)
         .status()
         .unwrap();
-    assert!(status.success(), "sing-box check failed with exit code {:?}", status.code());
+    assert!(
+        status.success(),
+        "sing-box check failed with exit code {:?}",
+        status.code()
+    );
 }
