@@ -25,6 +25,8 @@ Rosetun is a Windows VPN client powered by sing-box. A Windows service maintains
 
 Download the installer from [Releases](https://github.com/eoftgge/rosetun/releases). Windows 10 or 11, x64, is required. The installer is not code-signed yet; if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
 
+See the [code signing policy](CODE_SIGNING_POLICY.md) for the planned signing process; current releases remain unsigned.
+
 You can choose an installation folder, but not inside a user profile or where standard users can change it; the SYSTEM service requires a protected folder. Uninstalling keeps your configuration in `%APPDATA%\Rosetun` by default, or you can choose to delete your settings, subscriptions and rules.
 When the configuration format is upgraded, Rosetun keeps a copy of the previous file beside it (such as `config.v1.json`); the copy contains the same subscription URLs.
 
