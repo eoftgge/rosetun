@@ -3,6 +3,11 @@ use std::path::{Path, PathBuf};
 
 pub const ENDPOINT_ENV: &str = "ROSETUN_HELPER_ENDPOINT";
 
+// Generic write includes FILE_CREATE_PIPE_INSTANCE (0x4). Authenticated
+// clients may exchange frames, but only the helper may create pipe instances.
+#[cfg(any(windows, test))]
+const SECURITY_DESCRIPTOR_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x0012019B;;;AU)";
+
 pub fn default_endpoint() -> PathBuf {
     if let Some(custom) = std::env::var_os(ENDPOINT_ENV) {
         return PathBuf::from(custom);
@@ -107,23 +112,29 @@ mod platform {
     use std::sync::Mutex;
 
     use windows_sys::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE,
-        GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+        ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GetLastError, HANDLE,
+        INVALID_HANDLE_VALUE, LocalFree,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
     };
     use windows_sys::Win32::Security::{
-        IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES,
+        CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, IsWellKnownSid,
+        OWNER_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE,
+        TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenUser,
         WinBuiltinAdministratorsSid, WinLocalSystemSid,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
-        SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_GENERIC_READ, FILE_WRITE_DATA,
+        OPEN_EXISTING, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
     };
     use windows_sys::Win32::System::Pipes::{
-        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
-        PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
+        CreateNamedPipeW, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+        WaitNamedPipeW,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
     use super::*;
@@ -131,11 +142,6 @@ mod platform {
     const BUFFER_SIZE: u32 = 64 * 1024;
     const CONNECT_ATTEMPTS: u32 = 3;
     const CONNECT_WAIT_MS: u32 = 2_000;
-
-    // The transport is local-only and must not use the permissive default pipe
-    // DACL. A later IPC authentication phase can narrow this further to the
-    // launching user when the helper becomes a long-lived service.
-    const SECURITY_DESCRIPTOR_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)";
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -211,8 +217,134 @@ mod platform {
         Ok(())
     }
 
+    pub(super) fn trusted_server(is_system: bool, elevated: bool, administrator: bool) -> bool {
+        is_system || (elevated && administrator)
+    }
+
+    fn verify_server_process(handle: &OwnedHandle) -> io::Result<()> {
+        let mut pid = 0;
+        // SAFETY: The connected pipe handle stays live and pid is writable for the call.
+        if unsafe { GetNamedPipeServerProcessId(handle.as_raw_handle() as HANDLE, &mut pid) } == 0 {
+            return Err(last_error());
+        }
+
+        // SAFETY: OpenProcess receives a process ID returned by the connected pipe.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            return Err(last_error());
+        }
+        // SAFETY: OpenProcess returned a live handle whose ownership moves here.
+        let process = unsafe { OwnedHandle::from_raw_handle(process as RawHandle) };
+        let mut token = std::ptr::null_mut();
+        // SAFETY: The process handle is live and the token output is writable.
+        if unsafe { OpenProcessToken(process.as_raw_handle() as HANDLE, TOKEN_QUERY, &mut token) }
+            == 0
+        {
+            return Err(last_error());
+        }
+        // SAFETY: OpenProcessToken returned a live handle whose ownership moves here.
+        let token = unsafe { OwnedHandle::from_raw_handle(token as RawHandle) };
+
+        let mut length = 0;
+        // SAFETY: A null buffer and zero length request the required TokenUser buffer size.
+        unsafe {
+            GetTokenInformation(
+                token.as_raw_handle() as HANDLE,
+                TokenUser,
+                std::ptr::null_mut(),
+                0,
+                &mut length,
+            )
+        };
+        if (length as usize) < std::mem::size_of::<TOKEN_USER>() {
+            return Err(io::Error::other("invalid helper server token user"));
+        }
+        // usize provides pointer alignment for TOKEN_USER, including its borrowed SID.
+        let mut user = vec![0usize; (length as usize).div_ceil(std::mem::size_of::<usize>())];
+        // SAFETY: The buffer is aligned and at least length bytes long; both the
+        // TOKEN_USER and its SID remain live while this buffer is in scope.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle() as HANDLE,
+                TokenUser,
+                user.as_mut_ptr().cast(),
+                length,
+                &mut length,
+            )
+        } == 0
+        {
+            return Err(last_error());
+        }
+        // SAFETY: GetTokenInformation wrote a TOKEN_USER into the aligned buffer.
+        let sid = unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+        if sid.is_null() {
+            return Err(io::Error::other("invalid helper server token SID"));
+        }
+        // SAFETY: The SID points into the live token information buffer.
+        let is_system = unsafe { IsWellKnownSid(sid, WinLocalSystemSid) != 0 };
+        if is_system {
+            return Ok(());
+        }
+
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        // SAFETY: The token is live and the output is sized for TOKEN_ELEVATION.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle() as HANDLE,
+                TokenElevation,
+                (&raw mut elevation).cast(),
+                std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                &mut length,
+            )
+        } == 0
+        {
+            return Err(last_error());
+        }
+        if elevation.TokenIsElevated == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the helper pipe server is not SYSTEM or an elevated Administrator",
+            ));
+        }
+
+        let mut administrators = [0u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut sid_length = administrators.len() as u32;
+        // SAFETY: The SID output buffer has the advertised size and remains live
+        // while CheckTokenMembership reads it; no SID pointer is retained.
+        if unsafe {
+            CreateWellKnownSid(
+                WinBuiltinAdministratorsSid,
+                std::ptr::null_mut(),
+                administrators.as_mut_ptr().cast(),
+                &mut sid_length,
+            )
+        } == 0
+        {
+            return Err(last_error());
+        }
+        let mut member = 0;
+        // SAFETY: The server token and SID are live; the membership output is writable.
+        if unsafe {
+            CheckTokenMembership(
+                token.as_raw_handle() as HANDLE,
+                administrators.as_mut_ptr().cast(),
+                &mut member,
+            )
+        } == 0
+        {
+            return Err(last_error());
+        }
+        if !trusted_server(is_system, elevation.TokenIsElevated != 0, member != 0) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the helper pipe server is not SYSTEM or an elevated Administrator",
+            ));
+        }
+        Ok(())
+    }
+
     fn security_descriptor() -> io::Result<SecurityDescriptor> {
-        let sddl = wide_string(SECURITY_DESCRIPTOR_SDDL);
+        let sddl = wide_string(super::SECURITY_DESCRIPTOR_SDDL);
         let mut descriptor = std::ptr::null_mut();
 
         // SAFETY: The SDDL string and output pointer are valid for the call.
@@ -309,7 +441,7 @@ mod platform {
             let handle = unsafe {
                 CreateFileW(
                     name.as_ptr(),
-                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_GENERIC_READ | FILE_WRITE_DATA,
                     0,
                     std::ptr::null(),
                     OPEN_EXISTING,
@@ -323,6 +455,12 @@ mod platform {
                 let handle = unsafe { OwnedHandle::from_raw_handle(handle as RawHandle) };
                 if check_owner {
                     verify_owner(&handle)?;
+                    verify_server_process(&handle).map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            format!("cannot verify helper pipe server identity: {error}"),
+                        )
+                    })?;
                 }
                 return connection_from_handle(handle);
             }
@@ -428,6 +566,27 @@ mod platform {
 
 pub use platform::{Listener, connect};
 
+#[cfg(test)]
+mod security_descriptor_tests {
+    use super::SECURITY_DESCRIPTOR_SDDL;
+
+    #[test]
+    fn authenticated_users_cannot_create_pipe_instances() {
+        let ace = SECURITY_DESCRIPTOR_SDDL
+            .split('(')
+            .filter_map(|entry| entry.strip_suffix(')'))
+            .find(|entry| entry.ends_with(";;;AU"))
+            .expect("authenticated users ACE exists");
+        let rights = ace.split(';').nth(2).expect("ACE has a rights field");
+        assert!(!rights.contains("GW"));
+        assert!(!rights.contains("GA"));
+        let mask = u32::from_str_radix(rights.strip_prefix("0x").expect("explicit mask"), 16)
+            .expect("valid hexadecimal mask");
+        assert_eq!(mask, 0x0012_019B);
+        assert_eq!(mask & 0x4, 0);
+    }
+}
+
 #[cfg(all(test, windows))]
 #[allow(unsafe_code)]
 mod tests {
@@ -440,7 +599,7 @@ mod tests {
         WinLocalSystemSid, WinWorldSid,
     };
 
-    use super::platform::{open, trusted_owner};
+    use super::platform::{open, trusted_owner, trusted_server};
     use crate::{Connection, Frame, Listener, Request, Response};
 
     static NEXT_ENDPOINT_ID: AtomicU64 = AtomicU64::new(0);
@@ -479,6 +638,20 @@ mod tests {
                 std::io::Error::last_os_error()
             );
             assert_eq!(trusted_owner(sid.as_mut_ptr().cast()), trusted);
+        }
+    }
+
+    #[test]
+    fn server_token_must_be_system_or_elevated_administrator() {
+        for is_system in [false, true] {
+            for elevated in [false, true] {
+                for administrator in [false, true] {
+                    assert_eq!(
+                        trusted_server(is_system, elevated, administrator),
+                        is_system || (elevated && administrator),
+                    );
+                }
+            }
         }
     }
 
