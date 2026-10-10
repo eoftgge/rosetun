@@ -456,24 +456,36 @@ impl Helper {
     }
 
     pub fn disconnect(&self) -> Result<(), HelperError> {
-        let mut session = match self.session() {
-            Ok(session) => session,
-            Err(error) if error.code == ErrorCode::Busy => {
+        let (mut session, poisoned) = match self.session.try_lock() {
+            Ok(session) => (session, false),
+            Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),
+            Err(TryLockError::WouldBlock) => {
                 return self.with_status(|status| {
                     if status.state.is_transitional() {
                         self.cancelled.store(true, Ordering::Release);
                         Ok(())
                     } else {
-                        Err(error)
+                        Err(HelperError::new(
+                            ErrorCode::Busy,
+                            "another tunnel operation is in progress",
+                        ))
                     }
                 });
             }
-            Err(error) => return Err(error),
         };
+        if session.stopping {
+            return Err(HelperError::new(
+                ErrorCode::InvalidState,
+                "helper is shutting down",
+            ));
+        }
         session.request = None;
         session.reconnect = None;
         session.teardown();
         self.with_status(|status| *status = Status::default());
+        if poisoned {
+            self.session.clear_poison();
+        }
         Ok(())
     }
 

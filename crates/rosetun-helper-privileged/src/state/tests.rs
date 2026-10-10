@@ -2261,6 +2261,38 @@ fn connect_from_connected_is_still_rejected() {
 }
 
 #[test]
+fn disconnect_recovers_poisoned_session_and_releases_protection() {
+    let reverted = Arc::new(AtomicUsize::new(0));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(StubEngine));
+    let helper = Arc::new(Helper::new(
+        engines,
+        Box::new(CountingRouting {
+            reverted: Arc::clone(&reverted),
+        }),
+        VerboseGate::default(),
+    ));
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("protected connection starts");
+
+    let panicking_helper = Arc::clone(&helper);
+    let worker = thread::spawn(move || {
+        let _session = panicking_helper.session.lock().unwrap();
+        panic!("simulated session panic");
+    });
+    assert!(worker.join().is_err());
+    assert_eq!(helper.connect(&request).unwrap_err().code, ErrorCode::Internal);
+
+    helper.disconnect().expect("poisoned session is torn down");
+    assert_eq!(reverted.load(Ordering::Acquire), 1);
+    assert_eq!(helper.status(), Status::default());
+    helper.connect(&request).expect("a new connection is accepted");
+    helper.disconnect().expect("new connection is torn down");
+    assert_eq!(reverted.load(Ordering::Acquire), 2);
+}
+
+#[test]
 fn protected_endpoint_requires_matching_cache_but_accepts_literal_ip() {
     let mut request = protected_request();
     assert!(protected_endpoint(&request.node, None).is_err());
@@ -3275,6 +3307,8 @@ fn probe_cleans_up_when_engine_is_not_ready() {
 
 #[test]
 fn probe_cleans_up_after_spawn_error_and_worker_panic() {
+    use rosetun_ipc::ProbeOutcome;
+
     let (helper, stopped, dir) = probe_fixture_with_failures(true, None, true, false);
     assert_eq!(
         helper.probe_nodes(&probe_request()).unwrap_err().code,
@@ -3285,10 +3319,8 @@ fn probe_cleans_up_after_spawn_error_and_worker_panic() {
     std::fs::remove_dir(dir).unwrap();
 
     let (helper, stopped, dir) = probe_fixture_with_failures(true, None, false, true);
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        helper.probe_nodes(&probe_request())
-    }));
-    assert!(outcome.is_err());
+    let outcomes = helper.probe_nodes(&probe_request()).expect("worker panic is contained");
+    assert!(outcomes.iter().all(|result| result.outcome == ProbeOutcome::Fails));
     assert_eq!(stopped.load(Ordering::Acquire), 1);
     assert!(!dir.join("probe.json").exists());
     std::fs::remove_dir(dir).unwrap();

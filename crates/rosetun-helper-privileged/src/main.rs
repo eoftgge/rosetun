@@ -63,6 +63,22 @@ fn log_filter() -> tracing_subscriber::EnvFilter {
 }
 
 fn main() -> std::process::ExitCode {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("non-string panic payload");
+        let location = info
+            .location()
+            .map(|location| format!("{}:{}", location.file(), location.line()))
+            .unwrap_or_else(|| "unknown".to_owned());
+        tracing::error!(%location, message, "helper panicked");
+        default_hook(info);
+    }));
+
     let mode = match parse_mode(std::env::args_os().skip(1)) {
         Ok(mode) => mode,
         Err(message) => {

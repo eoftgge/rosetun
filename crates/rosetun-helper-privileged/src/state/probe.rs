@@ -211,6 +211,14 @@ impl Helper {
         let supported = nodes
             .iter()
             .filter(|(tag, _)| !config.unsupported_probes.contains(tag))
+            .map(|(tag, _)| {
+                (
+                    tag["probe-".len()..]
+                        .parse::<usize>()
+                        .expect("generated tag"),
+                    tag.as_str(),
+                )
+            })
             .collect::<Vec<_>>();
         if supported.is_empty() {
             return Ok(results);
@@ -234,6 +242,9 @@ impl Helper {
             )
         })?;
 
+        for &(index, _) in &supported {
+            results[index].outcome = ProbeOutcome::Fails;
+        }
         let next = AtomicUsize::new(0);
         thread::scope(|scope| {
             let workers = (0..supported.len().min(URL_TEST_WORKERS))
@@ -243,12 +254,9 @@ impl Helper {
                     let control = &control;
                     scope.spawn(move || {
                         let mut outcomes = Vec::new();
-                        while let Some((tag, _)) =
+                        while let Some(&(index, tag)) =
                             supported.get(next.fetch_add(1, Ordering::Relaxed))
                         {
-                            let index = tag["probe-".len()..]
-                                .parse::<usize>()
-                                .expect("generated tag");
                             let outcome = probe_outcome(backend.url_test(
                                 control,
                                 UrlTestTarget::Probe(tag),
@@ -262,8 +270,13 @@ impl Helper {
                 })
                 .collect::<Vec<_>>();
             for worker in workers {
-                for (index, outcome) in worker.join().expect("URL test worker panicked") {
-                    results[index].outcome = outcome;
+                match worker.join() {
+                    Ok(outcomes) => {
+                        for (index, outcome) in outcomes {
+                            results[index].outcome = outcome;
+                        }
+                    }
+                    Err(_) => tracing::warn!("URL test worker panicked"),
                 }
             }
         });
