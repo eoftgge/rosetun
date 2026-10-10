@@ -9,8 +9,8 @@ use rosetun_config::{
     Subscription, SubscriptionId,
 };
 use rosetun_core::{
-    AddFromUrlError, AddOptions, AppliedSnapshot, DnsPreset, Ping, Release, UpdateCheckError,
-    UpdateReport, UpdateSubscriptionError, is_newer,
+    AddFromUrlError, AddOptions, AppliedSnapshot, DnsPreset, Ping, UpdateReport,
+    UpdateSubscriptionError,
 };
 use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError, ProbeOutcome, ProbeResult};
 
@@ -22,6 +22,10 @@ use crate::rules::{
     ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes, visible_rules,
 };
 use crate::worker::{ConfigWorkerError, FailureInterference, HelperCommandError, WorkerEvent};
+
+mod updates;
+
+use updates::UpdatesState;
 
 pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
@@ -38,9 +42,6 @@ const AUTO_UPDATE_RANGE: RangeInclusive<u64> = 1..=168;
 const AUTO_UPDATE_RETRY: u64 = 60 * 60;
 /// How often the schedule is checked.
 const AUTO_UPDATE_CHECK: u64 = 60;
-const UPDATE_CHECK_DEFER: u64 = 60;
-const UPDATE_CHECK_INTERVAL: u64 = 24 * 60 * 60;
-const UPDATE_CHECK_RETRY: u64 = 6 * 60 * 60;
 const TRAFFIC_HISTORY: usize = 900;
 
 /// Hours between automatic updates of one subscription.
@@ -444,10 +445,7 @@ pub(crate) struct State {
     auto_connect_pending: bool,
     next_auto_update_check: u64,
     auto_update_attempts: HashMap<SubscriptionId, u64>,
-    next_update_check: Option<u64>,
-    pub(crate) update_check_pending: bool,
-    pub(crate) update_check_failed: bool,
-    pub(crate) newest_release: Option<Release>,
+    pub(crate) updates: UpdatesState,
     status_received: bool,
     pub(crate) config_generation: u64,
     pub(crate) config_error: Option<ConfigWorkerError>,
@@ -523,10 +521,7 @@ impl Default for State {
             auto_connect_pending: true,
             next_auto_update_check: 0,
             auto_update_attempts: HashMap::new(),
-            next_update_check: None,
-            update_check_pending: false,
-            update_check_failed: false,
-            newest_release: None,
+            updates: UpdatesState::default(),
             status_received: false,
             config_generation: 0,
             config_error: None,
@@ -1092,68 +1087,6 @@ impl State {
         self.operations.updating.insert(id.clone());
         self.outcomes.remove(&id);
         Some(Job::Update(id))
-    }
-
-    pub(crate) fn update_check_blocked_by_connection(&self) -> bool {
-        matches!(
-            self.visible_status().map(|status| &status.state),
-            Some(
-                ConnectionState::Connecting
-                    | ConnectionState::Reconnecting
-                    | ConnectionState::FailedProtected { .. }
-            )
-        )
-    }
-
-    pub(crate) fn can_check_updates(&self) -> bool {
-        self.config_ready
-            && !self.update_check_pending
-            && !self.update_check_blocked_by_connection()
-    }
-
-    pub(crate) fn available_update(&self) -> Option<&Release> {
-        self.newest_release.as_ref().filter(|release| {
-            self.config.interface.skipped_version.as_deref() != Some(release.version.as_str())
-        })
-    }
-
-    pub(crate) fn take_update_check(&mut self, now: u64) -> Option<Job> {
-        if !self.config_ready || !self.config.interface.check_updates || self.update_check_pending {
-            return None;
-        }
-        let due = match self.config.interface.last_update_check {
-            Some(last) if last <= now => last.saturating_add(UPDATE_CHECK_INTERVAL),
-            _ => now,
-        };
-        if now < due.max(self.next_update_check.unwrap_or(0)) {
-            return None;
-        }
-        if !self.can_check_updates() {
-            self.next_update_check = Some(now.saturating_add(UPDATE_CHECK_DEFER));
-            return None;
-        }
-        self.update_check_pending = true;
-        Some(Job::CheckUpdates)
-    }
-
-    fn finish_update_check(&mut self, result: Result<Option<Release>, UpdateCheckError>, now: u64) {
-        if !self.update_check_pending {
-            return;
-        }
-        self.update_check_pending = false;
-        match result {
-            Ok(release) => {
-                self.config.interface.last_update_check = Some(now);
-                self.next_update_check = None;
-                self.update_check_failed = false;
-                self.newest_release =
-                    release.filter(|release| is_newer(&release.version, env!("CARGO_PKG_VERSION")));
-            }
-            Err(_) => {
-                self.next_update_check = Some(now.saturating_add(UPDATE_CHECK_RETRY));
-                self.update_check_failed = true;
-            }
-        }
     }
 
     /// Starts one lookup after the route changes.
@@ -2004,7 +1937,7 @@ impl State {
             WorkerEvent::SetCheckUpdates(result) => self.finish_settings(result),
             WorkerEvent::SkipVersion(result) => self.finish_settings(result),
             WorkerEvent::UpdateCheck { checked_at, result } => {
-                self.finish_update_check(result, checked_at);
+                self.reduce_updates(result, checked_at);
             }
             WorkerEvent::SetDns(result) => {
                 if result.is_ok() {
@@ -2367,18 +2300,8 @@ impl State {
                     return self.start_settings(Job::SetCheckUpdates(enabled));
                 }
             }
-            Action::CheckUpdatesNow => {
-                if self.can_check_updates() {
-                    self.update_check_pending = true;
-                    return Some(Job::CheckUpdates);
-                }
-            }
-            Action::SkipVersion => {
-                if self.can_edit_settings()
-                    && let Some(release) = self.available_update()
-                {
-                    return self.start_settings(Job::SkipVersion(release.version.clone()));
-                }
+            action @ (Action::CheckUpdatesNow | Action::SkipVersion) => {
+                return self.act_updates(action);
             }
             Action::SaveDns => {
                 if self.can_edit_settings()

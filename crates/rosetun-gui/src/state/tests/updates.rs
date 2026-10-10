@@ -1,3 +1,4 @@
+use super::super::updates::{UPDATE_CHECK_INTERVAL, UPDATE_CHECK_RETRY};
 use super::*;
 
 #[test]
@@ -12,7 +13,7 @@ fn missing_last_check_starts_immediately_after_config_load_then_waits_a_day() {
     assert!(state.take_update_check(1_001).is_none());
     state.finish_update_check(Ok(None), 1_002);
     assert_eq!(state.config.interface.last_update_check, Some(1_002));
-    assert!(!state.update_check_failed);
+    assert!(!state.updates.update_check_failed);
     assert!(
         state
             .take_update_check(1_002 + UPDATE_CHECK_INTERVAL - 1)
@@ -73,7 +74,7 @@ fn failed_release_check_preserves_timestamp_and_retries_in_six_hours() {
     ));
     state.finish_update_check(Err(UpdateCheckError::Parse), 100_005);
     assert_eq!(state.config.interface.last_update_check, Some(1_000));
-    assert!(state.update_check_failed);
+    assert!(state.updates.update_check_failed);
     assert!(
         state
             .take_update_check(100_005 + UPDATE_CHECK_RETRY - 1)
@@ -84,7 +85,7 @@ fn failed_release_check_preserves_timestamp_and_retries_in_six_hours() {
         Some(Job::CheckUpdates)
     ));
     state.finish_update_check(Ok(None), 100_006 + UPDATE_CHECK_RETRY);
-    assert!(!state.update_check_failed);
+    assert!(!state.updates.update_check_failed);
     assert_eq!(
         state.config.interface.last_update_check,
         Some(100_006 + UPDATE_CHECK_RETRY)
@@ -134,7 +135,7 @@ fn skipped_release_stays_known_and_a_newer_release_is_shown() {
     state.finish_update_check(Ok(Some(release("999.0.0-alpha.3"))), 1_001);
     assert!(state.available_update().is_none());
     assert_eq!(
-        state.newest_release.as_ref().unwrap().version,
+        state.updates.newest_release.as_ref().unwrap().version,
         "999.0.0-alpha.3"
     );
 
@@ -152,7 +153,7 @@ fn skipped_release_stays_known_and_a_newer_release_is_shown() {
     });
     assert!(state.available_update().is_none());
     assert_eq!(
-        state.newest_release.as_ref().unwrap().version,
+        state.updates.newest_release.as_ref().unwrap().version,
         "999.0.0-alpha.4"
     );
     state.config.interface.check_updates = false;
@@ -177,7 +178,7 @@ fn manual_update_check_works_when_automatic_checks_are_off() {
         checked_at: 100_001,
         result: Err(UpdateCheckError::Parse),
     });
-    assert!(state.update_check_failed);
+    assert!(state.updates.update_check_failed);
     assert!(state.config.interface.last_update_check.is_none());
     assert!(matches!(
         state.act(Action::CheckUpdatesNow),
@@ -187,7 +188,7 @@ fn manual_update_check_works_when_automatic_checks_are_off() {
         checked_at: 100_002,
         result: Ok(None),
     });
-    assert!(!state.update_check_failed);
+    assert!(!state.updates.update_check_failed);
     assert_eq!(state.config.interface.last_update_check, Some(100_002));
 }
 

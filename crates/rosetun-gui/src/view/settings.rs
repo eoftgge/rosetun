@@ -681,13 +681,13 @@ fn update_status(state: &State, now: u64, language: crate::i18n::Language) -> (S
         .interface
         .last_update_check
         .map(|timestamp| crate::i18n::updated_ago_in(language, timestamp, now));
-    if state.update_check_pending {
+    if state.updates.update_check_pending {
         return (
             tr_in(language, "update-checking", &empty),
             tr_in(language, "update-checking-detail", &empty),
         );
     }
-    if state.update_check_failed {
+    if state.updates.update_check_failed {
         let detail = if state.config.interface.check_updates {
             tr_in(language, "update-failed-detail", &empty)
         } else {
@@ -708,7 +708,7 @@ fn update_status(state: &State, now: u64, language: crate::i18n::Language) -> (S
         );
         return (tr_in(language, "update-checks-off", &empty), detail);
     }
-    if let Some(release) = &state.newest_release {
+    if let Some(release) = &state.updates.newest_release {
         if state.available_update().is_none() {
             let detail = age.as_ref().map_or_else(
                 || tr_in(language, "update-skipped-next", &empty),
@@ -799,7 +799,7 @@ mod update_status_tests {
             update_status(&state, 200, Language::English).1,
             "Checked 2 minutes ago."
         );
-        state.newest_release = Some(Release {
+        state.updates.newest_release = Some(Release {
             version: "999.0.0-alpha.4".into(),
             url: "https://example.com/release".into(),
             prerelease: true,
@@ -821,12 +821,12 @@ mod update_status_tests {
             update_status(&state, 200, Language::English).0,
             "Automatic checks are off"
         );
-        state.update_check_failed = true;
+        state.updates.update_check_failed = true;
         assert_eq!(
             update_status(&state, 200, Language::English),
             ("Couldn't check".into(), "You can check manually.".into(),)
         );
-        state.update_check_pending = true;
+        state.updates.update_check_pending = true;
         assert_eq!(update_status(&state, 200, Language::English).0, "Checking…");
     }
 
@@ -836,7 +836,7 @@ mod update_status_tests {
         state.config_ready = true;
         state.config.interface.last_update_check = Some(80);
         state.config.interface.skipped_version = Some("999.0.0-alpha.4".into());
-        state.newest_release = Some(Release {
+        state.updates.newest_release = Some(Release {
             version: "999.0.0-alpha.4".into(),
             url: "https://example.com/release".into(),
             prerelease: true,

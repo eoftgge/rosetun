@@ -2,7 +2,10 @@ use super::*;
 use rosetun_config::{
     DomainMatch, Node, NodeId, Outbound, Rule, RuleMatcher, Selection, VlessParams,
 };
-use rosetun_core::{FetchError, ParseError, RemoveSubscriptionError, RuleSetError, StoreError};
+use rosetun_core::{
+    FetchError, ParseError, Release, RemoveSubscriptionError, RuleSetError, StoreError,
+    UpdateCheckError,
+};
 use rosetun_ipc::ConnectRequestError;
 use rosetun_processes::RunningProcess;
 

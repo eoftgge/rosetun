@@ -410,11 +410,14 @@ fn auto_update_setting_uses_settings_job_and_respects_busy_state() {
 fn release_settings_use_jobs_and_respect_busy_state() {
     let mut state = State {
         config_ready: true,
-        newest_release: Some(Release {
-            version: "999.0.0".into(),
-            url: "https://example.com/release".into(),
-            prerelease: false,
-        }),
+        updates: UpdatesState {
+            newest_release: Some(Release {
+                version: "999.0.0".into(),
+                url: "https://example.com/release".into(),
+                prerelease: false,
+            }),
+            ..UpdatesState::default()
+        },
         ..State::default()
     };
     assert!(matches!(
