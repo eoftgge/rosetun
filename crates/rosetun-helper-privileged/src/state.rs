@@ -707,16 +707,24 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
         .collect();
     let mut tags = std::collections::HashSet::new();
     for reference in &request.lists {
-        if !valid_tag(&reference.tag)
-            || !valid_hash(&reference.sha256)
-            || !expected.contains(&reference.tag)
-            || !tags.insert(&reference.tag)
-        {
+        if !valid_tag(&reference.tag) || !valid_hash(&reference.sha256) {
             return Err(HelperError::new(
                 ErrorCode::InvalidState,
                 "invalid list reference",
             ));
         }
+        if !expected.contains(&reference.tag) || !tags.insert(&reference.tag) {
+            return Err(HelperError::new(
+                ErrorCode::ListMissing,
+                "a list rule does not have exactly one matching reference",
+            ));
+        }
+    }
+    if tags.len() != expected.len() {
+        return Err(HelperError::new(
+            ErrorCode::ListMissing,
+            "a list rule does not have exactly one matching reference",
+        ));
     }
     Ok(())
 }

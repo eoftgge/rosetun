@@ -171,7 +171,40 @@ impl ListStore {
         let mut missing = Vec::new();
         let mut seen = HashSet::new();
         for hash in hashes {
-            if seen.insert(hash) && !self.objects.keys().any(|(stored, _)| stored == hash) {
+            if !seen.insert(hash) {
+                continue;
+            }
+            let formats: Vec<_> = self
+                .objects
+                .keys()
+                .filter(|(stored, _)| stored == hash)
+                .map(|(_, format)| *format)
+                .collect();
+            let mut present = false;
+            for format in formats {
+                let reference = ListRef {
+                    tag: "list-status".to_owned(),
+                    sha256: hash.clone(),
+                    format,
+                };
+                if self.verified_path(&reference).is_ok() {
+                    present = true;
+                    continue;
+                }
+                let path = self.object_path(hash, format);
+                if let Err(error) = fs::remove_file(path)
+                    && error.kind() != io::ErrorKind::NotFound
+                {
+                    return Err(internal());
+                }
+                let removed = self
+                    .objects
+                    .remove(&(hash.clone(), format))
+                    .expect("indexed list exists");
+                self.used_bytes -= removed.size;
+                tracing::warn!(hash = %&hash[..12], ?format, bytes = removed.size, "invalid list removed");
+            }
+            if !present {
                 missing.push(hash.clone());
             }
         }

@@ -104,6 +104,48 @@ fn chunks_are_sequential_verified_and_persist_after_restart() {
 }
 
 #[test]
+fn status_discards_a_damaged_object_so_it_can_be_uploaded_again() {
+    let directory = TestDirectory::new();
+    let mut store = directory.store();
+    let now = Instant::now();
+    let bytes = b"SRS\x05example";
+    let digest = hash(bytes);
+    chunk(
+        &mut store,
+        1,
+        &digest,
+        ListFormat::Binary,
+        bytes,
+        0,
+        bytes.len() as u64,
+        now,
+    )
+    .unwrap();
+    let path = store.object_path(&digest, ListFormat::Binary);
+    fs::write(&path, b"damaged").unwrap();
+    assert_eq!(
+        store.status(std::slice::from_ref(&digest), now).unwrap(),
+        [digest.clone()]
+    );
+    assert!(!path.exists());
+    assert_eq!(store.used_bytes, 0);
+
+    chunk(
+        &mut store,
+        2,
+        &digest,
+        ListFormat::Binary,
+        bytes,
+        0,
+        bytes.len() as u64,
+        now,
+    )
+    .unwrap();
+    assert!(store.status(&[digest], now).unwrap().is_empty());
+    assert_eq!(fs::read(path).unwrap(), bytes);
+}
+
+#[test]
 fn bad_offset_and_hash_remove_partial_files() {
     let directory = TestDirectory::new();
     let mut store = directory.store();
