@@ -14,19 +14,142 @@ pub(crate) enum SessionPart {
     Protection,
 }
 
+enum ApplyFlow {
+    Idle,
+    Applying {
+        baseline: Option<AppliedSnapshot>,
+        // Disconnect clears the snapshot but keeps the in-flight completion pending.
+        candidate: Option<AppliedSnapshot>,
+        temporary_before: Option<Vec<Rule>>,
+    },
+    RestoringApplied {
+        reason: String,
+        queued_baseline: Option<AppliedSnapshot>,
+    },
+    RestoringEdits,
+}
+
+impl ApplyFlow {
+    fn restore_pending(&self) -> bool {
+        matches!(self, Self::RestoringApplied { .. } | Self::RestoringEdits)
+    }
+
+    fn applying(&self) -> bool {
+        matches!(self, Self::Applying { .. })
+    }
+}
+
+// Recoverable edits remain available while a later apply is in flight.
+#[derive(Default)]
+enum ApplyRecovery {
+    #[default]
+    Clean,
+    Blocked(AppliedSnapshot),
+    Restorable {
+        edits: AppliedSnapshot,
+        message: Option<String>,
+        blocked: Option<AppliedSnapshot>,
+    },
+}
+
+impl ApplyRecovery {
+    fn failed_edits(&self) -> Option<&AppliedSnapshot> {
+        match self {
+            Self::Restorable { edits, .. } => Some(edits),
+            _ => None,
+        }
+    }
+
+    fn blocked(&self) -> Option<&AppliedSnapshot> {
+        match self {
+            Self::Blocked(candidate) => Some(candidate),
+            Self::Restorable { blocked, .. } => blocked.as_ref(),
+            Self::Clean => None,
+        }
+    }
+
+    fn message(&self) -> Option<&str> {
+        match self {
+            Self::Restorable { message, .. } => message.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn clear_message(&mut self) {
+        if let Self::Restorable { message, .. } = self {
+            *message = None;
+        }
+    }
+
+    fn clear_block(&mut self) {
+        match self {
+            Self::Blocked(_) => *self = Self::Clean,
+            Self::Restorable { blocked, .. } => *blocked = None,
+            Self::Clean => {}
+        }
+    }
+
+    fn block(&mut self, candidate: Option<AppliedSnapshot>) {
+        match self {
+            Self::Restorable { blocked, .. } => *blocked = candidate,
+            _ => *self = candidate.map_or(Self::Clean, Self::Blocked),
+        }
+    }
+
+    fn restored(&mut self, edits: AppliedSnapshot, message: String) {
+        *self = Self::Restorable {
+            edits,
+            message: Some(message),
+            blocked: self.blocked().cloned(),
+        };
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+enum AutoApplyIntent {
+    #[default]
+    None,
+    Choice,
+    Leave,
+    Both,
+}
+
+impl AutoApplyIntent {
+    fn after_choice(self) -> bool {
+        matches!(self, Self::Choice | Self::Both)
+    }
+
+    fn after_leave(self) -> bool {
+        matches!(self, Self::Leave | Self::Both)
+    }
+
+    fn set_choice(&mut self, enabled: bool) {
+        *self = match (enabled, self.after_leave()) {
+            (false, false) => Self::None,
+            (true, false) => Self::Choice,
+            (false, true) => Self::Leave,
+            (true, true) => Self::Both,
+        };
+    }
+
+    fn set_leave(&mut self, enabled: bool) {
+        *self = match (self.after_choice(), enabled) {
+            (false, false) => Self::None,
+            (true, false) => Self::Choice,
+            (false, true) => Self::Leave,
+            (true, true) => Self::Both,
+        };
+    }
+}
+
 pub(crate) struct SessionState {
     pub(super) session_request: Option<ConnectRequest>,
     pub(super) applied_snapshot: Option<AppliedSnapshot>,
     pub(super) connect_snapshot: Option<AppliedSnapshot>,
     pub(super) deferred_snapshot: Option<AppliedSnapshot>,
-    pub(super) apply_candidate: Option<AppliedSnapshot>,
-    pub(super) apply_baseline: Option<AppliedSnapshot>,
-    pub(super) failed_edits: Option<AppliedSnapshot>,
-    pub(super) blocked_auto_apply: Option<AppliedSnapshot>,
-    pub(super) restore_pending: bool,
-    pub(super) pending_restore: Option<Job>,
-    pub(super) restore_reason: Option<String>,
-    pub(crate) apply_failure: Option<String>,
+    flow: ApplyFlow,
+    recovery: ApplyRecovery,
+    intent: AutoApplyIntent,
     pub(crate) temporary_rules: Vec<Rule>,
     pub(super) temporary_rules_loaded: bool,
     pub(super) temporary_load: Option<u64>,
@@ -35,13 +158,9 @@ pub(crate) struct SessionState {
     pub(super) temporary_waiting_status: bool,
     pub(super) temporary_last_load: Option<u64>,
     pub(super) temporary_error_reported: bool,
-    pub(super) temporary_before_apply: Option<Vec<Rule>>,
     pub(super) keep_temporary: Option<RuleId>,
     pub(super) keep_apply: Option<RuleId>,
     pub(super) session_snapshot_checked: bool,
-    pub(super) apply_after_choice: bool,
-    pub(super) apply_in_flight: bool,
-    pub(super) apply_after_leave: bool,
     pub(super) queued_leave_apply: Option<Job>,
 }
 
@@ -52,14 +171,9 @@ impl Default for SessionState {
             applied_snapshot: None,
             connect_snapshot: None,
             deferred_snapshot: None,
-            apply_candidate: None,
-            apply_baseline: None,
-            failed_edits: None,
-            blocked_auto_apply: None,
-            restore_pending: false,
-            pending_restore: None,
-            restore_reason: None,
-            apply_failure: None,
+            flow: ApplyFlow::Idle,
+            recovery: ApplyRecovery::default(),
+            intent: AutoApplyIntent::None,
             temporary_rules: Vec::new(),
             temporary_rules_loaded: false,
             temporary_load: None,
@@ -68,15 +182,46 @@ impl Default for SessionState {
             temporary_waiting_status: false,
             temporary_last_load: None,
             temporary_error_reported: false,
-            temporary_before_apply: None,
             keep_temporary: None,
             keep_apply: None,
             session_snapshot_checked: false,
-            apply_after_choice: false,
-            apply_in_flight: false,
-            apply_after_leave: false,
             queued_leave_apply: None,
         }
+    }
+}
+
+impl SessionState {
+    pub(super) fn set_apply_after_choice(&mut self, enabled: bool) {
+        self.intent.set_choice(enabled);
+    }
+
+    pub(super) fn helper_lost(&mut self) {
+        self.flow = ApplyFlow::Idle;
+        self.intent = AutoApplyIntent::None;
+    }
+
+    #[cfg(test)]
+    pub(in crate::state) fn restore_pending(&self) -> bool {
+        self.flow.restore_pending()
+    }
+
+    #[cfg(test)]
+    pub(in crate::state) fn apply_after_leave(&self) -> bool {
+        self.intent.after_leave()
+    }
+
+    #[cfg(test)]
+    pub(in crate::state) fn apply_after_choice(&self) -> bool {
+        self.intent.after_choice()
+    }
+
+    pub(crate) fn apply_failure(&self) -> Option<&str> {
+        self.recovery.message()
+    }
+
+    #[cfg(test)]
+    pub(in crate::state) fn failed_edits(&self) -> Option<&AppliedSnapshot> {
+        self.recovery.failed_edits()
     }
 }
 
@@ -112,7 +257,7 @@ impl State {
             && self.config_ready
             && self.session.temporary_rules_loaded
             && !self.operations.helper
-            && !self.session.restore_pending
+            && !self.session.flow.restore_pending()
             && self.session.session_request.is_some()
             && matches!(
                 self.visible_status().map(|status| &status.state),
@@ -140,40 +285,42 @@ impl State {
         self.can_change_temporary() && !self.saving_config() && self.has_pending_apply()
     }
 
-    pub(super) fn start_apply(&mut self) {
+    pub(super) fn start_apply(&mut self, temporary_before: Option<Vec<Rule>>) {
         self.operations.helper = true;
-        self.session.apply_in_flight = true;
-        self.session.apply_baseline = self.session.applied_snapshot.clone();
-        self.session.apply_candidate = Some(AppliedSnapshot::from_config(&self.config));
-        self.session.apply_failure = None;
-        self.session.blocked_auto_apply = None;
+        self.session.flow = ApplyFlow::Applying {
+            baseline: self.session.applied_snapshot.clone(),
+            candidate: Some(AppliedSnapshot::from_config(&self.config)),
+            temporary_before,
+        };
+        self.session.recovery.clear_message();
+        self.session.recovery.clear_block();
         self.operation_error = None;
     }
 
     pub(crate) fn apply_on_leave(&mut self) -> Option<Job> {
         if self.saving_config() {
             if self.helper_available
-                && !self.session.restore_pending
+                && !self.session.flow.restore_pending()
                 && matches!(self.status.state, ConnectionState::Connected)
             {
-                self.session.apply_after_leave = true;
+                self.session.intent.set_leave(true);
             }
             return None;
         }
         if self
             .session
-            .blocked_auto_apply
-            .as_ref()
+            .recovery
+            .blocked()
             .is_some_and(|blocked| blocked == &AppliedSnapshot::from_config(&self.config))
         {
             return None;
         }
-        self.session.blocked_auto_apply = None;
+        self.session.recovery.clear_block();
         if self.can_apply() {
             return self.act(Action::Apply);
         }
-        if self.session.apply_in_flight && self.has_pending_apply() {
-            self.session.apply_after_leave = true;
+        if self.session.flow.applying() && self.has_pending_apply() {
+            self.session.intent.set_leave(true);
         }
         None
     }
@@ -194,29 +341,33 @@ impl State {
     }
 
     pub(crate) fn take_restore(&mut self) -> Option<Job> {
-        self.session.pending_restore.take()
+        match &mut self.session.flow {
+            ApplyFlow::RestoringApplied {
+                queued_baseline, ..
+            } => queued_baseline.take().map(Job::RestoreApplied),
+            _ => None,
+        }
     }
 
     pub(crate) fn can_restore_edits(&self) -> bool {
-        self.session.failed_edits.is_some()
+        self.session.recovery.failed_edits().is_some()
             && self.config_ready
-            && !self.session.restore_pending
+            && !self.session.flow.restore_pending()
             && !self.operations.helper
             && !self.operations.settings
             && !self.operations.rules_edit
     }
 
     pub(crate) fn take_apply(&mut self) -> Option<Job> {
-        if !(self.session.apply_after_choice || self.session.apply_after_leave)
+        if !(self.session.intent.after_choice() || self.session.intent.after_leave())
             || !self.session.temporary_rules_loaded
             || self.operations.helper
             || self.saving_config()
-            || self.session.restore_pending
+            || self.session.flow.restore_pending()
         {
             return None;
         }
-        self.session.apply_after_choice = false;
-        self.session.apply_after_leave = false;
+        self.session.intent = AutoApplyIntent::None;
         self.act(Action::Apply)
     }
 
@@ -254,15 +405,19 @@ impl State {
         self.session.applied_snapshot = None;
         self.session.connect_snapshot = None;
         self.session.deferred_snapshot = None;
-        self.session.apply_candidate = None;
-        self.session.apply_baseline = None;
-        self.session.failed_edits = None;
-        self.session.blocked_auto_apply = None;
-        self.session.apply_failure = None;
-        self.session.restore_reason = None;
-        self.session.restore_pending = false;
-        self.session.pending_restore = None;
-        self.session.apply_after_leave = false;
+        if let ApplyFlow::Applying {
+            baseline,
+            candidate,
+            ..
+        } = &mut self.session.flow
+        {
+            *baseline = None;
+            *candidate = None;
+        } else {
+            self.session.flow = ApplyFlow::Idle;
+        }
+        self.session.recovery = ApplyRecovery::default();
+        self.session.intent.set_leave(false);
     }
 
     pub(super) fn clear_temporary(&mut self) {
@@ -273,7 +428,12 @@ impl State {
         self.session.temporary_waiting_status = false;
         self.session.temporary_last_load = None;
         self.session.temporary_error_reported = false;
-        self.session.temporary_before_apply = None;
+        if let ApplyFlow::Applying {
+            temporary_before, ..
+        } = &mut self.session.flow
+        {
+            *temporary_before = None;
+        }
         self.session.keep_temporary = None;
         self.session.keep_apply = None;
     }
@@ -292,13 +452,13 @@ impl State {
                 | ConnectionState::FailedProtected { .. } => {
                     self.session.session_request = None;
                     self.session.session_snapshot_checked = false;
-                    self.session.apply_after_choice = false;
+                    self.session.intent.set_choice(false);
                     if matches!(status.state, ConnectionState::Disconnected) {
                         self.clear_applied_state();
                     } else {
                         self.session.applied_snapshot = None;
-                        if !self.session.apply_in_flight {
-                            self.session.apply_after_leave = false;
+                        if !self.session.flow.applying() {
+                            self.session.intent.set_leave(false);
                         }
                     }
                     self.clear_temporary();
@@ -308,7 +468,7 @@ impl State {
                         && !self.session.session_snapshot_checked
                         && self.config_ready
                         && !self.operations.helper
-                        && !self.session.restore_pending =>
+                        && !self.session.flow.restore_pending() =>
                 {
                     self.session.session_snapshot_checked = true;
                     if let Ok(mut request) = ConnectRequest::from_config(&self.config)
@@ -370,14 +530,22 @@ impl State {
             }
             WorkerEvent::Apply(result) => {
                 self.operations.helper = false;
-                self.session.apply_in_flight = false;
-                let before = self.session.temporary_before_apply.take();
-                let baseline = self.session.apply_baseline.take();
-                let candidate = self.session.apply_candidate.take();
+                let flow = std::mem::replace(&mut self.session.flow, ApplyFlow::Idle);
+                let (before, baseline, candidate) = match flow {
+                    ApplyFlow::Applying {
+                        baseline,
+                        candidate,
+                        temporary_before,
+                    } => (temporary_before, baseline, candidate),
+                    other => {
+                        self.session.flow = other;
+                        (None, None, None)
+                    }
+                };
                 if !self.helper_available
                     || matches!(self.status.state, ConnectionState::Disconnected)
                 {
-                    self.session.apply_after_leave = false;
+                    self.session.intent.set_leave(false);
                     return;
                 }
                 match result {
@@ -387,15 +555,13 @@ impl State {
                             ConnectionState::Failed { .. }
                                 | ConnectionState::FailedProtected { .. }
                         ) {
-                            self.session.apply_after_leave = false;
+                            self.session.intent.set_leave(false);
                             return;
                         }
                         self.session.temporary_rules = request.temporary_rules.clone();
                         self.session.session_request = Some(request);
                         self.session.applied_snapshot = candidate;
-                        self.session.failed_edits = None;
-                        self.session.blocked_auto_apply = None;
-                        self.session.apply_failure = None;
+                        self.session.recovery = ApplyRecovery::default();
                         self.operation_error = None;
                         self.exit_route = None;
                         self.tunnel_delay = TunnelDelay::Idle;
@@ -405,8 +571,7 @@ impl State {
                         if let Some(before) = before {
                             self.session.temporary_rules = before;
                         }
-                        self.session.apply_after_leave = false;
-                        self.session.apply_after_choice = false;
+                        self.session.intent = AutoApplyIntent::None;
                         let cancelled = matches!(
                             &error,
                             HelperCommandError::Client(ClientError::Helper(HelperError {
@@ -419,11 +584,12 @@ impl State {
                             .as_ref()
                             .zip(candidate.as_ref())
                             .is_some_and(|(running, edited)| running != edited);
-                        self.session.blocked_auto_apply = candidate;
+                        self.session.recovery.block(candidate);
                         if changed {
-                            self.session.restore_pending = true;
-                            self.session.restore_reason = Some(reason);
-                            self.session.pending_restore = baseline.map(Job::RestoreApplied);
+                            self.session.flow = ApplyFlow::RestoringApplied {
+                                reason,
+                                queued_baseline: baseline,
+                            };
                         } else if cancelled {
                             self.operation_error = None;
                         } else {
@@ -434,17 +600,19 @@ impl State {
                 }
             }
             WorkerEvent::RestoreApplied(result) => {
-                if !self.session.restore_pending {
+                if !self.session.flow.restore_pending() {
                     return;
                 }
-                self.session.restore_pending = false;
-                let reason = self.session.restore_reason.take().unwrap_or_default();
+                let flow = std::mem::replace(&mut self.session.flow, ApplyFlow::Idle);
+                let reason = match flow {
+                    ApplyFlow::RestoringApplied { reason, .. } => reason,
+                    _ => String::new(),
+                };
                 match result {
                     Ok(failed) => {
-                        self.session.failed_edits = Some(failed);
-                        self.session.apply_failure = Some(
-                            self.text(&tr!("apply-failed-restored-template", reason = &reason)),
-                        );
+                        let message =
+                            self.text(&tr!("apply-failed-restored-template", reason = &reason));
+                        self.session.recovery.restored(failed, message);
                         self.operation_error = None;
                         self.settings.screen.dirty = false;
                         if self.settings.screen.opened {
@@ -462,15 +630,13 @@ impl State {
                 }
             }
             WorkerEvent::RestoreEdits(result) => {
-                if !self.session.restore_pending {
+                if !self.session.flow.restore_pending() {
                     return;
                 }
-                self.session.restore_pending = false;
+                self.session.flow = ApplyFlow::Idle;
                 match result {
                     Ok(_) => {
-                        self.session.failed_edits = None;
-                        self.session.blocked_auto_apply = None;
-                        self.session.apply_failure = None;
+                        self.session.recovery = ApplyRecovery::default();
                         self.operation_error = None;
                         self.settings.screen.dirty = false;
                         if self.settings.screen.opened {
@@ -524,8 +690,7 @@ impl State {
                     self.session.temporary_rules =
                         added.into_iter().chain(before.iter().cloned()).collect();
                     if let Some(request) = self.apply_request() {
-                        self.session.temporary_before_apply = Some(before);
-                        self.start_apply();
+                        self.start_apply(Some(before));
                         self.rules.screen.add = None;
                         self.rules.screen.filter = RuleFilter::default();
                         self.rules.screen.clear_selection();
@@ -546,8 +711,7 @@ impl State {
                     let before = self.session.temporary_rules.clone();
                     self.session.temporary_rules.remove(index);
                     if let Some(request) = self.apply_request() {
-                        self.session.temporary_before_apply = Some(before);
-                        self.start_apply();
+                        self.start_apply(Some(before));
                         return Some(Job::Apply(Box::new(request)));
                     }
                     self.session.temporary_rules = before;
@@ -575,17 +739,22 @@ impl State {
                 if self.can_apply()
                     && let Some(request) = self.apply_request()
                 {
-                    self.start_apply();
+                    self.start_apply(None);
                     return Some(Job::Apply(Box::new(request)));
                 }
             }
             Action::RestoreMyEdits => {
                 if self.can_restore_edits() {
-                    self.session.restore_pending = true;
-                    return self.session.failed_edits.clone().map(Job::RestoreEdits);
+                    self.session.flow = ApplyFlow::RestoringEdits;
+                    return self
+                        .session
+                        .recovery
+                        .failed_edits()
+                        .cloned()
+                        .map(Job::RestoreEdits);
                 }
             }
-            Action::DismissApplyFailure => self.session.apply_failure = None,
+            Action::DismissApplyFailure => self.session.recovery.clear_message(),
             _ => unreachable!("only session actions are dispatched here"),
         }
         None

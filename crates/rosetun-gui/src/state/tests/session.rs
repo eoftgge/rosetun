@@ -49,7 +49,7 @@ fn leaving_while_rule_or_dns_save_is_running_applies_after_publication() {
     state.act(Action::OpenRules);
     state.operations.rules_edit = true;
     assert!(state.act(Action::ShowConnection).is_none());
-    assert!(state.session.apply_after_leave);
+    assert!(state.session.apply_after_leave());
     assert!(state.take_apply().is_none());
     let mut saved = state.config.clone();
     saved.rule_sets[0].rules[0].target = RuleTarget::Direct;
@@ -125,7 +125,7 @@ fn leaving_during_apply_coalesces_one_follow_up_after_success() {
     state.act(Action::OpenRules);
     state.config.rule_sets[0].rules[1].target = RuleTarget::Block;
     assert!(state.act(Action::ShowConnection).is_none());
-    assert!(state.session.apply_after_leave);
+    assert!(state.session.apply_after_leave());
     state.reduce(WorkerEvent::Apply(Ok(*first)));
     let Some(Job::Apply(second)) = state.take_apply() else {
         panic!("edits made during apply must run next");
@@ -660,7 +660,7 @@ fn selected_rule_set_waits_for_the_helper_overlay_before_applying() {
     state.config.active_rule_set = Some(RuleSetId::new("2"));
     state.reduce(WorkerEvent::SelectRuleSet(Ok(())));
     assert!(state.take_apply().is_none());
-    assert!(state.session.apply_after_choice);
+    assert!(state.session.apply_after_choice());
     state.session.temporary_load = Some(1);
     let temporary = temporary_rule("t1", "session.example");
     state.reduce(WorkerEvent::TemporaryRules {
@@ -679,7 +679,7 @@ fn selecting_the_same_server_consumes_auto_apply_without_a_job() {
     let mut state = connected_state_for_apply();
     state.reduce(WorkerEvent::SelectNode(Ok("Test".into())));
     assert!(state.take_apply().is_none());
-    assert!(!state.session.apply_after_choice);
+    assert!(!state.session.apply_after_choice());
 }
 
 #[test]
@@ -744,13 +744,12 @@ fn failed_apply_preserves_session_and_shows_error() {
     ))));
     assert_eq!(state.session.session_request, original);
     let failed = complete_applied_restore(&mut state);
-    assert_eq!(state.session.failed_edits, Some(failed));
+    assert_eq!(state.session.failed_edits().cloned(), Some(failed));
     assert!(!state.pending_reconnect(SessionPart::Dns));
     assert!(
         state
             .session
-            .apply_failure
-            .as_deref()
+            .apply_failure()
             .unwrap()
             .starts_with("The rules could not be applied: ")
     );
@@ -829,7 +828,7 @@ fn unsupported_rules_and_terminal_apply_failures_restore_config() {
         assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
         state.act(Action::OpenRules);
         assert!(state.act(Action::ShowConnection).is_none());
-        assert!(state.session.apply_after_leave);
+        assert!(state.session.apply_after_leave());
         if let Some(terminal) = terminal {
             state.reduce(WorkerEvent::Status(Status {
                 state: terminal,
@@ -840,11 +839,11 @@ fn unsupported_rules_and_terminal_apply_failures_restore_config() {
             ClientError::Helper(HelperError::new(ErrorCode::UnsupportedRules, "unsupported")),
         ))));
         assert!(state.take_apply().is_none());
-        assert!(state.session.restore_pending);
+        assert!(state.session.restore_pending());
         let failed = complete_applied_restore(&mut state);
-        assert_eq!(state.session.failed_edits, Some(failed));
+        assert_eq!(state.session.failed_edits().cloned(), Some(failed));
         assert_eq!(AppliedSnapshot::from_config(&state.config), running);
-        assert!(state.session.apply_failure.is_some());
+        assert!(state.session.apply_failure().is_some());
         assert!(state.take_apply().is_none());
         assert!(state.apply_on_leave().is_none());
     }
@@ -874,8 +873,8 @@ fn restore_my_edits_makes_the_failed_variant_pending_again() {
         config,
     });
     state.reduce(WorkerEvent::RestoreEdits(Ok(failed)));
-    assert!(state.session.failed_edits.is_none());
-    assert!(state.session.apply_failure.is_none());
+    assert!(state.session.failed_edits().is_none());
+    assert!(state.session.apply_failure().is_none());
     assert!(state.can_apply());
     state.act(Action::OpenRules);
     assert!(matches!(
@@ -896,8 +895,8 @@ fn failed_disk_rollback_does_not_claim_the_rules_were_restored() {
     state.reduce(WorkerEvent::RestoreApplied(Err(
         rosetun_core::RuleSetError::Store(StoreError::NoConfigDir),
     )));
-    assert!(state.session.apply_failure.is_none());
-    assert!(state.session.failed_edits.is_none());
+    assert!(state.session.apply_failure().is_none());
+    assert!(state.session.failed_edits().is_none());
     assert!(
         state
             .operation_error

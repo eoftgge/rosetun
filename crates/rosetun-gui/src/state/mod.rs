@@ -548,8 +548,7 @@ impl State {
                 self.session.session_request = None;
                 self.clear_applied_state();
                 self.session.session_snapshot_checked = false;
-                self.session.apply_after_choice = false;
-                self.session.apply_in_flight = false;
+                self.session.helper_lost();
                 self.session.queued_leave_apply = None;
                 self.clear_traffic_history();
                 self.helper_error = Some(error);
@@ -684,22 +683,26 @@ impl State {
             }
             WorkerEvent::SelectNode(result) => {
                 self.operations.selection = false;
-                self.session.apply_after_choice = result.is_ok()
-                    && matches!(
-                        self.visible_status().map(|status| &status.state),
-                        Some(ConnectionState::Connected)
-                    );
+                self.session.set_apply_after_choice(
+                    result.is_ok()
+                        && matches!(
+                            self.visible_status().map(|status| &status.state),
+                            Some(ConnectionState::Connected)
+                        ),
+                );
                 self.operation_error = result
                     .err()
                     .map(|error| self.text(&errors::select_node(crate::i18n::language(), &error)));
             }
             WorkerEvent::SelectRuleSet(result) => {
                 self.operations.rules = false;
-                self.session.apply_after_choice = result.is_ok()
-                    && matches!(
-                        self.visible_status().map(|status| &status.state),
-                        Some(ConnectionState::Connected)
-                    );
+                self.session.set_apply_after_choice(
+                    result.is_ok()
+                        && matches!(
+                            self.visible_status().map(|status| &status.state),
+                            Some(ConnectionState::Connected)
+                        ),
+                );
                 self.operation_error = result.err().map(|error| {
                     self.text(&errors::select_rule_set(crate::i18n::language(), &error))
                 });
