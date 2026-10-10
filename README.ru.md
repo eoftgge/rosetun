@@ -72,7 +72,7 @@ GUI (пользователь) ──именованный канал──► 
 
 ## Лицензии
 
-Лицензия Rosetun: **GPL-3.0-or-later**, © 2026 Sandaar. Текст в [LICENSE](LICENSE). В составе программы идёт официальная сборка sing-box без изменений, также под GPL-3.0-or-later. Шрифты Manrope и Cormorant Garamond распространяются под OFL-1.1. Уведомления о лицензиях крейтов Rust устанавливаются в `licenses/third-party.html`.
+Лицензия Rosetun: **GPL-3.0-or-later**, © 2026 Sandaar. Текст в [LICENSE](LICENSE). В составе программы идёт официальная сборка sing-box без изменений, также под GPL-3.0-or-later. В исполняемый файл встроен Wintun 0.14.1, авторские права принадлежат WireGuard LLC; он распространяется по [Wintun Prebuilt Binaries License](installer/third-party/wintun-prebuilt-binaries-license.txt). Лицензия и уведомление устанавливаются как `licenses/wintun-prebuilt-binaries-license.txt` и `licenses/wintun.txt`. Шрифты Manrope и Cormorant Garamond распространяются под OFL-1.1. Уведомления о лицензиях крейтов Rust устанавливаются в `licenses/third-party.html`.
 
 Rosetun не связан с sing-box или SagerNet.
 

@@ -27,6 +27,8 @@ Run `Get-FileHash .\{{setup}} -Algorithm SHA256` and compare the result with `{{
 
 Rosetun includes the unmodified official sing-box {{sing_box_version}} build, licensed under GPL-3.0-or-later. The corresponding source is attached as `sing-box-{{sing_box_version}}-source.tar.gz`.
 
+The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Prebuilt Binaries License; the license and notice are installed in `licenses/wintun-prebuilt-binaries-license.txt` and `licenses/wintun.txt`.
+
 ## Русский
 
 Это альфа-версия. Ошибки возможны. Сообщайте о них в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях сообщайте приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
@@ -55,3 +57,5 @@ Windows 10 или 11, x64. Скачайте `{{setup}}` из этого рели
 ### Состав
 
 Rosetun включает официальную сборку sing-box {{sing_box_version}} без изменений, лицензия GPL-3.0-or-later. Соответствующие исходники приложены в архиве `sing-box-{{sing_box_version}}-source.tar.gz`.
+
+В исполняемый файл встроен Wintun {{wintun_version}}, распространяемый по Wintun Prebuilt Binaries License; лицензия и уведомление устанавливаются в `licenses/wintun-prebuilt-binaries-license.txt` и `licenses/wintun.txt`.

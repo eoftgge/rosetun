@@ -210,6 +210,7 @@ if ($Release) {
     $notes = $notes.Replace('{{setup}}', [IO.Path]::GetFileName($setup))
     $notes = $notes.Replace('{{sha256}}', $setupHash)
     $notes = $notes.Replace('{{sing_box_version}}', $singBoxVersion)
+    $notes = $notes.Replace('{{wintun_version}}', $wintunVersion)
     [IO.File]::WriteAllText((Join-Path $outputDir 'release-notes.md'), $notes, $utf8)
 
     if ($env:GITHUB_OUTPUT) {
