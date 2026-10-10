@@ -49,7 +49,7 @@ fn leaving_while_rule_or_dns_save_is_running_applies_after_publication() {
     state.act(Action::OpenRules);
     state.operations.rules_edit = true;
     assert!(state.act(Action::ShowConnection).is_none());
-    assert!(state.apply_after_leave);
+    assert!(state.session.apply_after_leave);
     assert!(state.take_apply().is_none());
     let mut saved = state.config.clone();
     saved.rule_sets[0].rules[0].target = RuleTarget::Direct;
@@ -125,7 +125,7 @@ fn leaving_during_apply_coalesces_one_follow_up_after_success() {
     state.act(Action::OpenRules);
     state.config.rule_sets[0].rules[1].target = RuleTarget::Block;
     assert!(state.act(Action::ShowConnection).is_none());
-    assert!(state.apply_after_leave);
+    assert!(state.session.apply_after_leave);
     state.reduce(WorkerEvent::Apply(Ok(*first)));
     let Some(Job::Apply(second)) = state.take_apply() else {
         panic!("edits made during apply must run next");
@@ -176,9 +176,14 @@ fn temporary_rules_load_once_and_retry_busy_after_the_next_status() {
         request: next,
         result: Ok(vec![rule.clone()]),
     });
-    assert_eq!(state.temporary_rules, vec![rule.clone()]);
+    assert_eq!(state.session.temporary_rules, vec![rule.clone()]);
     assert_eq!(
-        state.session_request.as_ref().unwrap().temporary_rules,
+        state
+            .session
+            .session_request
+            .as_ref()
+            .unwrap()
+            .temporary_rules,
         vec![rule]
     );
     assert!(state.take_temporary_load(1_000).is_none());
@@ -222,7 +227,7 @@ fn temporary_rules_retry_closed_after_ten_seconds_and_restore_apply() {
         request: third,
         result: Ok(vec![]),
     });
-    assert!(state.temporary_rules_loaded);
+    assert!(state.session.temporary_rules_loaded);
     assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
     assert!(state.operation_error.is_none());
 }
@@ -250,7 +255,10 @@ fn temporary_rules_loaded_before_config_are_kept_in_the_session_snapshot() {
         node: Some(NodeId::new("node")),
         ..Status::default()
     }));
-    assert_eq!(state.session_request.unwrap().temporary_rules, vec![rule]);
+    assert_eq!(
+        state.session.session_request.unwrap().temporary_rules,
+        vec![rule]
+    );
 }
 
 #[test]
@@ -266,15 +274,18 @@ fn adding_temporary_rule_applies_immediately_without_saving() {
         request.temporary_rules,
         vec![temporary_rule("t1", "session.example")]
     );
-    assert_eq!(state.temporary_rules, request.temporary_rules);
+    assert_eq!(state.session.temporary_rules, request.temporary_rules);
     assert!(state.rules.screen.add.is_none());
     assert_eq!(state.config.rule_sets, config.rule_sets);
     assert_eq!(request.settings.dns, state.config.settings.dns);
     assert!(!state.pending_reconnect(SessionPart::Rules));
     assert!(state.operations.helper);
     state.reduce(WorkerEvent::Apply(Ok(*request.clone())));
-    assert_eq!(state.session_request.as_ref(), Some(request.as_ref()));
-    assert_eq!(state.temporary_rules, request.temporary_rules);
+    assert_eq!(
+        state.session.session_request.as_ref(),
+        Some(request.as_ref())
+    );
+    assert_eq!(state.session.temporary_rules, request.temporary_rules);
     assert!(!state.pending_reconnect(SessionPart::Rules));
     assert!(!state.pending_reconnect(SessionPart::Dns));
 }
@@ -285,7 +296,7 @@ fn temporary_rule_guards_and_duplicate_dialog_error() {
     temporary_dialog(&mut state, "first.example");
     assert!(state.act(Action::SubmitAddRule).is_none());
     assert!(state.rules.screen.add.as_ref().unwrap().error.is_some());
-    assert!(state.temporary_rules.is_empty());
+    assert!(state.session.temporary_rules.is_empty());
     state.reduce(WorkerEvent::Status(Status {
         state: ConnectionState::Disconnected,
         ..Status::default()
@@ -293,7 +304,7 @@ fn temporary_rule_guards_and_duplicate_dialog_error() {
     temporary_dialog(&mut state, "session.example");
     assert!(!state.can_change_temporary());
     assert!(state.act(Action::SubmitAddRule).is_none());
-    assert!(state.temporary_rules.is_empty());
+    assert!(state.session.temporary_rules.is_empty());
 }
 
 #[test]
@@ -316,8 +327,9 @@ fn disconnect_resets_the_open_rule_dialog_to_permanent() {
 fn new_temporary_rules_precede_existing_ones_and_survive_other_applies() {
     let mut state = connected_state_for_apply();
     let old = temporary_rule("t1", "old.example");
-    state.temporary_rules.push(old.clone());
+    state.session.temporary_rules.push(old.clone());
     state
+        .session
         .session_request
         .as_mut()
         .unwrap()
@@ -335,15 +347,16 @@ fn new_temporary_rules_precede_existing_ones_and_survive_other_applies() {
     let Some(Job::Apply(request)) = state.act(Action::Apply) else {
         panic!("DNS changes must apply with the temporary overlay");
     };
-    assert_eq!(request.temporary_rules, state.temporary_rules);
+    assert_eq!(request.temporary_rules, state.session.temporary_rules);
 }
 
 #[test]
 fn failed_temporary_apply_restores_the_last_helper_snapshot() {
     let mut state = connected_state_for_apply();
     let rule = temporary_rule("t1", "existing.example");
-    state.temporary_rules.push(rule.clone());
+    state.session.temporary_rules.push(rule.clone());
     state
+        .session
         .session_request
         .as_mut()
         .unwrap()
@@ -354,12 +367,15 @@ fn failed_temporary_apply_restores_the_last_helper_snapshot() {
         state.act(Action::SubmitAddRule),
         Some(Job::Apply(_))
     ));
-    assert_eq!(state.temporary_rules.len(), 2);
+    assert_eq!(state.session.temporary_rules.len(), 2);
     state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
         ClientError::Helper(HelperError::new(ErrorCode::Busy, "busy")),
     ))));
-    assert_eq!(state.temporary_rules, vec![rule.clone()]);
-    assert_eq!(state.session_request.unwrap().temporary_rules, vec![rule]);
+    assert_eq!(state.session.temporary_rules, vec![rule.clone()]);
+    assert_eq!(
+        state.session.session_request.unwrap().temporary_rules,
+        vec![rule]
+    );
     assert!(
         state
             .operation_error
@@ -372,8 +388,9 @@ fn failed_temporary_apply_restores_the_last_helper_snapshot() {
 fn removing_temporary_rule_applies_and_rolls_back_on_error() {
     let mut state = connected_state_for_apply();
     let rule = temporary_rule("t1", "session.example");
-    state.temporary_rules.push(rule.clone());
+    state.session.temporary_rules.push(rule.clone());
     state
+        .session
         .session_request
         .as_mut()
         .unwrap()
@@ -383,25 +400,33 @@ fn removing_temporary_rule_applies_and_rolls_back_on_error() {
         panic!("remove must apply");
     };
     assert!(request.temporary_rules.is_empty());
-    assert!(state.temporary_rules.is_empty());
+    assert!(state.session.temporary_rules.is_empty());
     state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
         ClientError::Helper(HelperError::new(ErrorCode::Busy, "busy")),
     ))));
-    assert_eq!(state.temporary_rules, vec![rule.clone()]);
+    assert_eq!(state.session.temporary_rules, vec![rule.clone()]);
     let Some(Job::Apply(request)) = state.act(Action::RemoveTemporary(rule.id)) else {
         panic!("remove must remain retryable");
     };
     state.reduce(WorkerEvent::Apply(Ok(*request)));
-    assert!(state.temporary_rules.is_empty());
-    assert!(state.session_request.unwrap().temporary_rules.is_empty());
+    assert!(state.session.temporary_rules.is_empty());
+    assert!(
+        state
+            .session
+            .session_request
+            .unwrap()
+            .temporary_rules
+            .is_empty()
+    );
 }
 
 #[test]
 fn keeping_temporary_rule_saves_first_then_applies_without_the_overlay() {
     let mut state = connected_state_for_apply();
     let rule = temporary_rule("t1", "session.example");
-    state.temporary_rules.push(rule.clone());
+    state.session.temporary_rules.push(rule.clone());
     state
+        .session
         .session_request
         .as_mut()
         .unwrap()
@@ -429,7 +454,7 @@ fn keeping_temporary_rule_saves_first_then_applies_without_the_overlay() {
     assert!(request.temporary_rules.is_empty());
     assert_eq!(request.rule_set.rules[0].id, RuleId::new("4"));
     state.reduce(WorkerEvent::Apply(Ok(*request)));
-    assert!(state.temporary_rules.is_empty());
+    assert!(state.session.temporary_rules.is_empty());
     assert!(!state.pending_reconnect(SessionPart::Rules));
 }
 
@@ -437,7 +462,7 @@ fn keeping_temporary_rule_saves_first_then_applies_without_the_overlay() {
 fn keep_failure_leaves_temporary_rule_in_place() {
     let mut state = connected_state_for_apply();
     let rule = temporary_rule("t1", "session.example");
-    state.temporary_rules.push(rule.clone());
+    state.session.temporary_rules.push(rule.clone());
     state.rules.screen.selected_set = Some(RuleSetId::new("1"));
     assert!(matches!(
         state.act(Action::KeepTemporary(rule.id.clone())),
@@ -447,7 +472,7 @@ fn keep_failure_leaves_temporary_rule_in_place() {
         rosetun_core::RuleSetError::DuplicateRule,
     )));
     assert!(state.take_keep_apply().is_none());
-    assert_eq!(state.temporary_rules, vec![rule]);
+    assert_eq!(state.session.temporary_rules, vec![rule]);
     assert!(state.operation_error.is_some());
 }
 
@@ -466,14 +491,15 @@ fn terminal_status_clears_temporary_rules_and_ignores_late_loads() {
     ] {
         let mut state = connected_state_for_apply();
         state
+            .session
             .temporary_rules
             .push(temporary_rule("t1", "session.example"));
         state.reduce(WorkerEvent::Status(Status {
             state: status,
             ..Status::default()
         }));
-        assert!(state.temporary_rules.is_empty());
-        assert!(!state.temporary_rules_loaded);
+        assert!(state.session.temporary_rules.is_empty());
+        assert!(!state.session.temporary_rules_loaded);
     }
     let mut state = state_for_auto_connect();
     state.reduce(WorkerEvent::Status(Status {
@@ -490,7 +516,7 @@ fn terminal_status_clears_temporary_rules_and_ignores_late_loads() {
         request,
         result: Ok(vec![temporary_rule("t1", "stale.example")]),
     });
-    assert!(state.temporary_rules.is_empty());
+    assert!(state.session.temporary_rules.is_empty());
 }
 
 #[test]
@@ -505,8 +531,8 @@ fn late_apply_cannot_restore_rules_after_disconnect() {
         ..Status::default()
     }));
     state.reduce(WorkerEvent::Apply(Ok(*request)));
-    assert!(state.temporary_rules.is_empty());
-    assert!(state.session_request.is_none());
+    assert!(state.session.temporary_rules.is_empty());
+    assert!(state.session.session_request.is_none());
 }
 
 #[test]
@@ -514,7 +540,7 @@ fn successful_connect_has_no_pending_changes_until_dns_or_protection_changes() {
     let mut state = state_for_auto_connect();
     let request = ConnectRequest::from_config(&state.config).unwrap();
     state.reduce(WorkerEvent::Connect(Ok(request.clone())));
-    assert_eq!(state.session_request, Some(request));
+    assert_eq!(state.session.session_request, Some(request));
     for part in [
         SessionPart::Server,
         SessionPart::Rules,
@@ -555,7 +581,7 @@ fn selecting_a_server_applies_once_with_the_running_protection() {
         subscription: SubscriptionId::new("1"),
         node: NodeId::new("other"),
     };
-    let original = state.session_request.clone().unwrap();
+    let original = state.session.session_request.clone().unwrap();
     state.config.settings.kill_switch = !original.settings.kill_switch;
     state.config.settings.allow_lan = !original.settings.allow_lan;
 
@@ -629,13 +655,13 @@ fn choosing_rule_set_applies_but_editing_a_rule_waits_for_apply() {
 #[test]
 fn selected_rule_set_waits_for_the_helper_overlay_before_applying() {
     let mut state = connected_state_for_apply();
-    state.temporary_rules_loaded = false;
+    state.session.temporary_rules_loaded = false;
     state.config.rule_sets.push(rule_set("2"));
     state.config.active_rule_set = Some(RuleSetId::new("2"));
     state.reduce(WorkerEvent::SelectRuleSet(Ok(())));
     assert!(state.take_apply().is_none());
-    assert!(state.apply_after_choice);
-    state.temporary_load = Some(1);
+    assert!(state.session.apply_after_choice);
+    state.session.temporary_load = Some(1);
     let temporary = temporary_rule("t1", "session.example");
     state.reduce(WorkerEvent::TemporaryRules {
         request: 1,
@@ -653,7 +679,7 @@ fn selecting_the_same_server_consumes_auto_apply_without_a_job() {
     let mut state = connected_state_for_apply();
     state.reduce(WorkerEvent::SelectNode(Ok("Test".into())));
     assert!(state.take_apply().is_none());
-    assert!(!state.apply_after_choice);
+    assert!(!state.session.apply_after_choice);
 }
 
 #[test]
@@ -688,7 +714,10 @@ fn applying_changes_refreshes_the_session_exit_and_delay() {
         panic!("DNS change must apply");
     };
     state.reduce(WorkerEvent::Apply(Ok(*request.clone())));
-    assert_eq!(state.session_request.as_ref(), Some(request.as_ref()));
+    assert_eq!(
+        state.session.session_request.as_ref(),
+        Some(request.as_ref())
+    );
     assert!(!state.pending_reconnect(SessionPart::Server));
     assert!(!state.pending_reconnect(SessionPart::Rules));
     assert!(!state.pending_reconnect(SessionPart::Dns));
@@ -707,18 +736,19 @@ fn applying_changes_refreshes_the_session_exit_and_delay() {
 #[test]
 fn failed_apply_preserves_session_and_shows_error() {
     let mut state = connected_state_for_apply();
-    let original = state.session_request.clone();
+    let original = state.session.session_request.clone();
     state.config.settings.dns = DnsPreset::Google.settings();
     assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
     state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
         ClientError::Helper(HelperError::new(ErrorCode::Busy, "busy")),
     ))));
-    assert_eq!(state.session_request, original);
+    assert_eq!(state.session.session_request, original);
     let failed = complete_applied_restore(&mut state);
-    assert_eq!(state.failed_edits, Some(failed));
+    assert_eq!(state.session.failed_edits, Some(failed));
     assert!(!state.pending_reconnect(SessionPart::Dns));
     assert!(
         state
+            .session
             .apply_failure
             .as_deref()
             .unwrap()
@@ -749,7 +779,7 @@ fn successful_connections_and_applies_capture_unexpanded_rule_sets() {
     state.reduce(WorkerEvent::ConnectSnapshot(running.clone()));
     state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
     state.reduce(WorkerEvent::Connect(Ok(request)));
-    assert_eq!(state.applied_snapshot, Some(running.clone()));
+    assert_eq!(state.session.applied_snapshot, Some(running.clone()));
     state.reduce(WorkerEvent::Status(Status {
         state: ConnectionState::Connected,
         node: Some(NodeId::new("node")),
@@ -759,11 +789,12 @@ fn successful_connections_and_applies_capture_unexpanded_rule_sets() {
     let Some(Job::Apply(request)) = state.act(Action::Apply) else {
         panic!("changed template must apply");
     };
-    assert_eq!(state.applied_snapshot, Some(running));
+    assert_eq!(state.session.applied_snapshot, Some(running));
     state.reduce(WorkerEvent::Apply(Ok(*request)));
-    assert_eq!(state.applied_snapshot, Some(candidate));
+    assert_eq!(state.session.applied_snapshot, Some(candidate));
     assert!(matches!(
         state
+            .session
             .applied_snapshot
             .as_ref()
             .unwrap()
@@ -775,7 +806,7 @@ fn successful_connections_and_applies_capture_unexpanded_rule_sets() {
         RuleMatcher::Template(RuleTemplate::Youtube)
     ));
     state.reduce(WorkerEvent::Status(Status::default()));
-    assert!(state.applied_snapshot.is_none());
+    assert!(state.session.applied_snapshot.is_none());
 }
 
 #[test]
@@ -792,13 +823,13 @@ fn unsupported_rules_and_terminal_apply_failures_restore_config() {
         }),
     ] {
         let mut state = connected_state_for_apply();
-        let running = state.applied_snapshot.clone().unwrap();
+        let running = state.session.applied_snapshot.clone().unwrap();
         state.config.rule_sets[0].rules[0].target = RuleTarget::Block;
         state.config.settings.dns = DnsPreset::Google.settings();
         assert!(matches!(state.act(Action::Apply), Some(Job::Apply(_))));
         state.act(Action::OpenRules);
         assert!(state.act(Action::ShowConnection).is_none());
-        assert!(state.apply_after_leave);
+        assert!(state.session.apply_after_leave);
         if let Some(terminal) = terminal {
             state.reduce(WorkerEvent::Status(Status {
                 state: terminal,
@@ -809,11 +840,11 @@ fn unsupported_rules_and_terminal_apply_failures_restore_config() {
             ClientError::Helper(HelperError::new(ErrorCode::UnsupportedRules, "unsupported")),
         ))));
         assert!(state.take_apply().is_none());
-        assert!(state.restore_pending);
+        assert!(state.session.restore_pending);
         let failed = complete_applied_restore(&mut state);
-        assert_eq!(state.failed_edits, Some(failed));
+        assert_eq!(state.session.failed_edits, Some(failed));
         assert_eq!(AppliedSnapshot::from_config(&state.config), running);
-        assert!(state.apply_failure.is_some());
+        assert!(state.session.apply_failure.is_some());
         assert!(state.take_apply().is_none());
         assert!(state.apply_on_leave().is_none());
     }
@@ -843,8 +874,8 @@ fn restore_my_edits_makes_the_failed_variant_pending_again() {
         config,
     });
     state.reduce(WorkerEvent::RestoreEdits(Ok(failed)));
-    assert!(state.failed_edits.is_none());
-    assert!(state.apply_failure.is_none());
+    assert!(state.session.failed_edits.is_none());
+    assert!(state.session.apply_failure.is_none());
     assert!(state.can_apply());
     state.act(Action::OpenRules);
     assert!(matches!(
@@ -865,8 +896,8 @@ fn failed_disk_rollback_does_not_claim_the_rules_were_restored() {
     state.reduce(WorkerEvent::RestoreApplied(Err(
         rosetun_core::RuleSetError::Store(StoreError::NoConfigDir),
     )));
-    assert!(state.apply_failure.is_none());
-    assert!(state.failed_edits.is_none());
+    assert!(state.session.apply_failure.is_none());
+    assert!(state.session.failed_edits.is_none());
     assert!(
         state
             .operation_error
@@ -890,7 +921,7 @@ fn active_status_during_connect_does_not_replace_the_submitted_request() {
         node: Some(NodeId::new("node")),
         ..Status::default()
     }));
-    assert!(state.session_request.is_none());
+    assert!(state.session.session_request.is_none());
     state.reduce(WorkerEvent::Connect(Ok(request)));
     assert!(state.pending_reconnect(SessionPart::Dns));
 }
@@ -930,12 +961,12 @@ fn disconnected_and_failed_statuses_clear_session_request_but_reconnecting_does_
             state: ConnectionState::Reconnecting,
             ..Status::default()
         }));
-        assert!(state.session_request.is_some());
+        assert!(state.session.session_request.is_some());
         state.reduce(WorkerEvent::Status(Status {
             state: status,
             ..Status::default()
         }));
-        assert!(state.session_request.is_none());
+        assert!(state.session.session_request.is_none());
         assert!(!state.pending_reconnect(SessionPart::Rules));
     }
 }
@@ -949,7 +980,7 @@ fn active_status_seeds_session_only_once_and_only_for_the_selected_node() {
         ..Status::default()
     }));
     assert_eq!(
-        matching.session_request,
+        matching.session.session_request,
         Some(ConnectRequest::from_config(&matching.config).unwrap())
     );
     assert!(!matching.pending_reconnect(SessionPart::Dns));
@@ -960,13 +991,13 @@ fn active_status_seeds_session_only_once_and_only_for_the_selected_node() {
         node: Some(NodeId::new("other")),
         ..Status::default()
     }));
-    assert!(mismatched.session_request.is_none());
+    assert!(mismatched.session.session_request.is_none());
     mismatched.reduce(WorkerEvent::Status(Status {
         state: ConnectionState::Connected,
         node: Some(NodeId::new("node")),
         ..Status::default()
     }));
-    assert!(mismatched.session_request.is_none());
+    assert!(mismatched.session.session_request.is_none());
 
     let mut missing_selection = state_for_auto_connect();
     missing_selection.config.active = None;
@@ -975,14 +1006,14 @@ fn active_status_seeds_session_only_once_and_only_for_the_selected_node() {
         node: Some(NodeId::new("node")),
         ..Status::default()
     }));
-    assert!(missing_selection.session_request.is_none());
+    assert!(missing_selection.session.session_request.is_none());
     assert!(!missing_selection.pending_reconnect(SessionPart::Dns));
 }
 
 #[test]
 fn grouped_edit_while_connected_requires_explicit_apply() {
     let mut state = connected_state_for_apply();
-    state.temporary_rules_loaded = true;
+    state.session.temporary_rules_loaded = true;
     state.act(Action::OpenRules);
     state.act(Action::SelectRule {
         rule: RuleId::new("0"),

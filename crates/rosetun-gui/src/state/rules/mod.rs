@@ -251,11 +251,11 @@ impl State {
             event @ WorkerEvent::BrowsedExecutable(_) => self.reduce_rule_dialog(event),
             WorkerEvent::AddRule(result) => self.finish_dialog_rule_edit(result.map(|_| ())),
             WorkerEvent::AddRules(result) => {
-                if let Some(id) = self.keep_temporary.take() {
+                if let Some(id) = self.session.keep_temporary.take() {
                     let success = result.is_ok();
                     self.finish_rule_edit(result.map(|_| ()));
-                    if success && self.temporary_rules_loaded {
-                        self.keep_apply = Some(id);
+                    if success && self.session.temporary_rules_loaded {
+                        self.session.keep_apply = Some(id);
                     }
                 } else {
                     self.finish_dialog_rule_edit(result.map(|_| ()));

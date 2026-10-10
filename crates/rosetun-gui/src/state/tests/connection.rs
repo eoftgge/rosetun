@@ -421,7 +421,7 @@ fn cancelling_a_connect_ignores_a_late_success_in_either_order() {
         if connect_first {
             state.reduce(WorkerEvent::Connect(Ok(request)));
             assert!(state.operations.helper);
-            assert!(state.session_request.is_none());
+            assert!(state.session.session_request.is_none());
             state.reduce(WorkerEvent::Disconnect(Ok(())));
         } else {
             state.reduce(WorkerEvent::Disconnect(Ok(())));
@@ -429,7 +429,7 @@ fn cancelling_a_connect_ignores_a_late_success_in_either_order() {
             state.reduce(WorkerEvent::Connect(Ok(request)));
         }
         state.reduce(WorkerEvent::Status(Status::default()));
-        assert!(state.session_request.is_none());
+        assert!(state.session.session_request.is_none());
         assert!(!state.operations.helper);
         assert!(!state.cancel_in_flight);
         assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
@@ -454,7 +454,7 @@ fn failed_cancellation_restores_a_completed_connect() {
     state.reduce(WorkerEvent::Disconnect(Err(HelperCommandError::Client(
         ClientError::Closed,
     ))));
-    assert_eq!(state.session_request, Some(request));
+    assert_eq!(state.session.session_request, Some(request));
     assert!(!state.cancel_in_flight);
     assert!(!state.cancelled_connect);
     assert!(!state.operations.helper);

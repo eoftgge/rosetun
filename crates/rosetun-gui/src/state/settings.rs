@@ -162,7 +162,7 @@ impl State {
                 let job = self.show_screen(Screen::Settings);
                 #[cfg(windows)]
                 {
-                    self.queued_leave_apply = job;
+                    self.session.queued_leave_apply = job;
                     self.settings.screen.autostart = None;
                     return Some(Job::LoadAutostart);
                 }

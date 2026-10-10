@@ -85,7 +85,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     template_section(ui, state, set, actions);
     ui.add_space(20.0);
     let temporary = if state.config.active_rule_set.as_ref() == Some(&set.id) {
-        state.temporary_rules.as_slice()
+        state.session.temporary_rules.as_slice()
     } else {
         &[]
     };

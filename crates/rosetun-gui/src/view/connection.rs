@@ -726,11 +726,13 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
             },
         );
         rule_set_picker(ui, state, actions);
-        if !state.temporary_rules.is_empty() {
+        if !state.session.temporary_rules.is_empty() {
             ui.label(
-                RichText::new(crate::i18n::temporary_count(state.temporary_rules.len()))
-                    .small()
-                    .color(theme::TEXT_DIM),
+                RichText::new(crate::i18n::temporary_count(
+                    state.session.temporary_rules.len(),
+                ))
+                .small()
+                .color(theme::TEXT_DIM),
             );
         }
         if let Some(rules) = state.config.active_rules() {

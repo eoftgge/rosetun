@@ -90,7 +90,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                     {
                         actions.push(Action::DismissOperationError);
                     }
-                    if let Some(error) = &state.apply_failure {
+                    if let Some(error) = &state.session.apply_failure {
                         let (dismissed, restore) = widgets::dismissible_error_with_action(
                             ui,
                             error,
