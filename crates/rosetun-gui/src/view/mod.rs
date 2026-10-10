@@ -129,7 +129,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
         rules::name_dialog(ctx, state, &mut actions);
         rules::delete_dialog(ctx, state, &mut actions);
         let can_temporary = state.can_change_temporary();
-        if let Some(dialog) = &mut state.rule_screen.add {
+        if let Some(dialog) = &mut state.rules.screen.add {
             if !can_temporary {
                 dialog.temporary_only = false;
             }

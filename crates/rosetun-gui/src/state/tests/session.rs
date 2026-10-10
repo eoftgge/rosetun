@@ -267,7 +267,7 @@ fn adding_temporary_rule_applies_immediately_without_saving() {
         vec![temporary_rule("t1", "session.example")]
     );
     assert_eq!(state.temporary_rules, request.temporary_rules);
-    assert!(state.rule_screen.add.is_none());
+    assert!(state.rules.screen.add.is_none());
     assert_eq!(state.config.rule_sets, config.rule_sets);
     assert_eq!(request.settings.dns, state.config.settings.dns);
     assert!(!state.pending_reconnect(SessionPart::Rules));
@@ -284,7 +284,7 @@ fn temporary_rule_guards_and_duplicate_dialog_error() {
     let mut state = connected_state_for_apply();
     temporary_dialog(&mut state, "first.example");
     assert!(state.act(Action::SubmitAddRule).is_none());
-    assert!(state.rule_screen.add.as_ref().unwrap().error.is_some());
+    assert!(state.rules.screen.add.as_ref().unwrap().error.is_some());
     assert!(state.temporary_rules.is_empty());
     state.reduce(WorkerEvent::Status(Status {
         state: ConnectionState::Disconnected,
@@ -300,12 +300,12 @@ fn temporary_rule_guards_and_duplicate_dialog_error() {
 fn disconnect_resets_the_open_rule_dialog_to_permanent() {
     let mut state = connected_state_for_apply();
     temporary_dialog(&mut state, "session.example");
-    assert!(state.rule_screen.add.as_ref().unwrap().temporary_only);
+    assert!(state.rules.screen.add.as_ref().unwrap().temporary_only);
     state.reduce(WorkerEvent::Status(Status {
         state: ConnectionState::Disconnected,
         ..Status::default()
     }));
-    assert!(!state.rule_screen.add.as_ref().unwrap().temporary_only);
+    assert!(!state.rules.screen.add.as_ref().unwrap().temporary_only);
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::AddRules(_, _, RuleTarget::Direct))
@@ -407,7 +407,7 @@ fn keeping_temporary_rule_saves_first_then_applies_without_the_overlay() {
         .unwrap()
         .temporary_rules
         .push(rule.clone());
-    state.rule_screen.selected_set = Some(RuleSetId::new("1"));
+    state.rules.screen.selected_set = Some(RuleSetId::new("1"));
     assert!(matches!(
         state.act(Action::KeepTemporary(rule.id.clone())),
         Some(Job::AddRules(set, matchers, RuleTarget::Direct))
@@ -438,7 +438,7 @@ fn keep_failure_leaves_temporary_rule_in_place() {
     let mut state = connected_state_for_apply();
     let rule = temporary_rule("t1", "session.example");
     state.temporary_rules.push(rule.clone());
-    state.rule_screen.selected_set = Some(RuleSetId::new("1"));
+    state.rules.screen.selected_set = Some(RuleSetId::new("1"));
     assert!(matches!(
         state.act(Action::KeepTemporary(rule.id.clone())),
         Some(Job::AddRules(_, _, _))
@@ -1018,13 +1018,13 @@ fn grouped_edit_while_connected_requires_explicit_apply() {
     let mut config = state.config.clone();
     config.rule_sets[0]
         .rules
-        .retain(|rule| !state.rule_screen.selected_rules.contains(&rule.id));
+        .retain(|rule| !state.rules.screen.selected_rules.contains(&rule.id));
     state.reduce(WorkerEvent::Config {
         generation: 2,
         config,
     });
     state.reduce(WorkerEvent::RemoveRules(Ok(())));
-    assert!(state.rule_screen.selected_rules.is_empty());
+    assert!(state.rules.screen.selected_rules.is_empty());
     assert!(state.pending_reconnect(SessionPart::Rules));
     assert!(state.can_apply());
     assert!(state.take_apply().is_none());

@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rosetun_config::{
-    DomainMatch, Node, NodeId, Outbound, Rule, RuleMatcher, Selection, VlessParams,
+    DomainMatch, Node, NodeId, Outbound, ProcessMatch, Rule, RuleMatcher, RuleSet, Selection,
+    VlessParams,
 };
 use rosetun_core::{
     AddFromUrlError, FetchError, ParseError, Ping, Release, RemoveSubscriptionError, RuleSetError,
@@ -11,6 +12,8 @@ use rosetun_core::{
 };
 use rosetun_ipc::{ConnectRequestError, ProbeResult};
 use rosetun_processes::RunningProcess;
+
+use crate::rules::{ProcessGroup, ProcessMatchMode};
 
 fn report() -> UpdateReport {
     UpdateReport {
@@ -143,14 +146,14 @@ fn temporary_rule(id: &str, domain: &str) -> Rule {
 
 fn temporary_dialog(state: &mut State, domain: &str) {
     let id = RuleSetId::new("1");
-    state.rule_screen.selected_set = Some(id.clone());
+    state.rules.screen.selected_set = Some(id.clone());
     let mut dialog = AddRuleDialog::new(id);
     dialog.kind = RuleInputKind::Domain;
     dialog.domains = domain.into();
     dialog.subdomains = false;
     dialog.target = RuleTarget::Direct;
     dialog.temporary_only = true;
-    state.rule_screen.add = Some(dialog);
+    state.rules.screen.add = Some(dialog);
 }
 
 fn complete_applied_restore(state: &mut State) -> AppliedSnapshot {

@@ -29,8 +29,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         && state
             .visible_status()
             .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
-        && state.rule_screen.selected_set.is_some()
-        && state.config.active_rule_set == state.rule_screen.selected_set
+        && state.rules.screen.selected_set.is_some()
+        && state.config.active_rule_set == state.rules.screen.selected_set
         && state.pending_reconnect(SessionPart::Rules);
     let can_apply = state.can_apply();
     let mut apply_clicked = false;
@@ -77,7 +77,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         .config
         .rule_sets
         .iter()
-        .find(|item| state.rule_screen.selected_set.as_ref() == Some(&item.id))
+        .find(|item| state.rules.screen.selected_set.as_ref() == Some(&item.id))
     else {
         widgets::button_fill(ui, tr!("new-rule-button"), false);
         return;
@@ -90,26 +90,26 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         &[]
     };
     let can_add = state.can_edit_rules();
-    let search_before = state.rule_screen.filter.search.clone();
+    let search_before = state.rules.screen.filter.search.clone();
     filter_controls(
         ui,
-        &mut state.rule_screen.filter,
+        &mut state.rules.screen.filter,
         set,
         temporary,
         can_add,
         actions,
     );
-    if state.rule_screen.filter.search != search_before {
+    if state.rules.screen.filter.search != search_before {
         actions.push(Action::ClearRuleSelection);
     }
     let mut selection_regions = Vec::new();
     let slot = selection_slot(ui, state, actions);
-    if state.rule_screen.selected_rules.len() >= 2 {
+    if state.rules.screen.selected_rules.len() >= 2 {
         selection_regions.push(slot.rect);
     }
 
-    let visible_temporary = visible_rules_slice(temporary, &state.rule_screen.filter);
-    let visible = visible_rules(set, &state.rule_screen.filter);
+    let visible_temporary = visible_rules_slice(temporary, &state.rules.screen.filter);
+    let visible = visible_rules(set, &state.rules.screen.filter);
     let value_width = (ui.available_width()
         - 2.0 * ROW_INSET
         - HANDLE_WIDTH
@@ -139,7 +139,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
             let row = ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
                 rule_row(ui, state, set, rule, Some(index), value_width, actions);
             });
-            if state.rule_screen.selected_rules.contains(&rule.id) {
+            if state.rules.screen.selected_rules.contains(&rule.id) {
                 let rect = row.response.rect;
                 selection_regions.push(egui::Rect::from_min_max(
                     rect.min,
@@ -167,10 +167,10 @@ fn clear_selection_on_click_away(
     selection_regions: &[egui::Rect],
     actions: &mut Vec<Action>,
 ) {
-    if state.rule_screen.selected_rules.is_empty()
-        || state.rule_screen.name.is_some()
-        || state.rule_screen.add.is_some()
-        || state.rule_screen.delete.is_some()
+    if state.rules.screen.selected_rules.is_empty()
+        || state.rules.screen.name.is_some()
+        || state.rules.screen.add.is_some()
+        || state.rules.screen.delete.is_some()
         || ctx.dragged_id().is_some()
         || actions.iter().any(|action| {
             matches!(
@@ -245,7 +245,7 @@ fn selection_slot(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -
         egui::vec2(ui.available_width(), 38.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            if state.rule_screen.selected_rules.len() >= 2 {
+            if state.rules.screen.selected_rules.len() >= 2 {
                 selection_toolbar(ui, state, actions);
             } else {
                 ui.add(
@@ -264,15 +264,15 @@ fn selection_slot(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -
 
 fn selection_toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let can_edit = state.can_edit_rules();
-    let can_move = can_edit && !state.rule_screen.filter.is_active();
-    let count = state.rule_screen.selected_rules.len();
+    let can_move = can_edit && !state.rules.screen.filter.is_active();
+    let count = state.rules.screen.selected_rules.len();
     ui.label(RichText::new(crate::i18n::selected_rule_count(count)).color(theme::TEXT_MUTED));
     for (label, action) in [
         (tr!("move-selected-to-top"), Action::MoveSelectedRulesToTop),
         (tr!("move-to-end"), Action::MoveSelectedRulesToEnd),
     ] {
         let button = widgets::outline_button_compact(ui, &label, can_move);
-        let button = if state.rule_screen.filter.is_active() {
+        let button = if state.rules.screen.filter.is_active() {
             button.on_hover_text(tr!("reorder-disabled"))
         } else {
             button
@@ -303,19 +303,19 @@ fn selection_shortcuts(
     actions: &mut Vec<Action>,
 ) {
     if text_edit_focused
-        || state.rule_screen.name.is_some()
-        || state.rule_screen.add.is_some()
-        || state.rule_screen.delete.is_some()
+        || state.rules.screen.name.is_some()
+        || state.rules.screen.add.is_some()
+        || state.rules.screen.delete.is_some()
     {
         return;
     }
     if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
         actions.push(Action::SelectVisibleRules);
-    } else if !state.rule_screen.selected_rules.is_empty()
+    } else if !state.rules.screen.selected_rules.is_empty()
         && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         actions.push(Action::ClearRuleSelection);
-    } else if !state.rule_screen.selected_rules.is_empty()
+    } else if !state.rules.screen.selected_rules.is_empty()
         && state.can_edit_rules()
         && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
     {
@@ -926,10 +926,10 @@ fn dragged_rules(state: &State, set: &RuleSet, dragged: &RuleId) -> Option<Vec<R
     if !set.rules.iter().any(|rule| &rule.id == dragged) {
         return None;
     }
-    Some(if state.rule_screen.selected_rules.contains(dragged) {
+    Some(if state.rules.screen.selected_rules.contains(dragged) {
         set.rules
             .iter()
-            .filter(|rule| state.rule_screen.selected_rules.contains(&rule.id))
+            .filter(|rule| state.rules.screen.selected_rules.contains(&rule.id))
             .map(|rule| rule.id.clone())
             .collect()
     } else {
@@ -981,11 +981,11 @@ fn rule_row(
     actions: &mut Vec<Action>,
 ) {
     let temporary = index.is_none();
-    let selected = !temporary && state.rule_screen.selected_rules.contains(&rule.id);
-    let reorder = !temporary && state.can_edit_rules() && !state.rule_screen.filter.is_active();
+    let selected = !temporary && state.rules.screen.selected_rules.contains(&rule.id);
+    let reorder = !temporary && state.can_edit_rules() && !state.rules.screen.filter.is_active();
     let dragged = reorder
         && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| {
-            *id == rule.id || (selected && state.rule_screen.selected_rules.contains(&*id))
+            *id == rule.id || (selected && state.rules.screen.selected_rules.contains(&*id))
         });
     let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(12, 0));
     let fill = if selected { theme::INPUT } else { theme::CARD };
@@ -1066,12 +1066,12 @@ fn rule_row(
                     let menu = icons::icon_button_sized(ui, Icon::More, can_open, MENU_WIDTH)
                         .on_hover_text(tr!("more-actions"));
                     if can_open {
-                        let group = selected && state.rule_screen.selected_rules.len() >= 2;
+                        let group = selected && state.rules.screen.selected_rules.len() >= 2;
                         let menu_width = if group {
                             ui.painter()
                                 .layout_no_wrap(
                                     crate::i18n::delete_selected_rules(
-                                        state.rule_screen.selected_rules.len(),
+                                        state.rules.screen.selected_rules.len(),
                                     ),
                                     egui::TextStyle::Button.resolve(ui.style()),
                                     theme::ERROR,
@@ -1103,13 +1103,13 @@ fn rule_row(
                                         ui,
                                         widgets::MenuItem {
                                             label: &label,
-                                            enabled: !state.rule_screen.filter.is_active(),
+                                            enabled: !state.rules.screen.filter.is_active(),
                                             selected: false,
                                             danger: false,
                                             note: None,
                                         },
                                     );
-                                    let item = if state.rule_screen.filter.is_active() {
+                                    let item = if state.rules.screen.filter.is_active() {
                                         item.on_hover_text(tr!("reorder-disabled"))
                                     } else {
                                         item
@@ -1123,7 +1123,7 @@ fn rule_row(
                                     ui,
                                     widgets::MenuItem {
                                         label: &crate::i18n::delete_selected_rules(
-                                            state.rule_screen.selected_rules.len(),
+                                            state.rules.screen.selected_rules.len(),
                                         ),
                                         enabled: true,
                                         selected: false,
@@ -1398,7 +1398,7 @@ fn default_rule(
         Stroke::new(1.0, theme::BORDER_STRONG),
     );
     if state.can_edit_rules()
-        && !state.rule_screen.filter.is_active()
+        && !state.rules.screen.filter.is_active()
         && let Some(dragged_id) = response.inner.dnd_hover_payload::<RuleId>()
         && drag_target(state, set, &dragged_id, set.rules.len()).is_some()
     {
@@ -1434,7 +1434,7 @@ pub(crate) fn target_color(target: RuleTarget) -> Color32 {
 }
 
 pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Action>) {
-    let Some(dialog) = &mut state.rule_screen.name else {
+    let Some(dialog) = &mut state.rules.screen.name else {
         return;
     };
     let busy = state.operations.rules_edit;
@@ -1492,7 +1492,7 @@ fn delete_rule_value(rule: &Rule) -> String {
 }
 
 pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
-    let Some(dialog) = &state.rule_screen.delete else {
+    let Some(dialog) = &state.rules.screen.delete else {
         return;
     };
     let busy = state.operations.rules_edit;
@@ -1589,7 +1589,7 @@ mod tests {
     fn selected_drag_targets_use_the_list_without_selected_rules() {
         let set = drag_set();
         let mut state = State::default();
-        state.rule_screen.selected_rules = [RuleId::new("1"), RuleId::new("3")].into();
+        state.rules.screen.selected_rules = [RuleId::new("1"), RuleId::new("3")].into();
         assert!(matches!(
             drag_target(&state, &set, &RuleId::new("1"), 0),
             Some((rules, 0)) if rules == [RuleId::new("1"), RuleId::new("3")]
@@ -1602,9 +1602,9 @@ mod tests {
             drag_target(&state, &set, &RuleId::new("1"), 4),
             Some((_, 2))
         ));
-        state.rule_screen.selected_rules = [RuleId::new("1"), RuleId::new("2")].into();
+        state.rules.screen.selected_rules = [RuleId::new("1"), RuleId::new("2")].into();
         assert!(drag_target(&state, &set, &RuleId::new("1"), 2).is_none());
-        state.rule_screen.selected_rules = [RuleId::new("1"), RuleId::new("3")].into();
+        state.rules.screen.selected_rules = [RuleId::new("1"), RuleId::new("3")].into();
         let (rules, target) = drag_target(&state, &set, &RuleId::new("3"), 5).unwrap();
         assert_eq!(target, 3);
         assert!(matches!(
@@ -1617,7 +1617,7 @@ mod tests {
             drop_action(rules, 0, target),
             Action::DropRule(_, 0)
         ));
-        assert_eq!(state.rule_screen.selected_rules.len(), 2);
+        assert_eq!(state.rules.screen.selected_rules.len(), 2);
     }
 
     fn row_input_actions(
@@ -1699,7 +1699,7 @@ mod tests {
                 "click at {pos:?}"
             );
         }
-        assert!(state.rule_screen.selected_rules.is_empty());
+        assert!(state.rules.screen.selected_rules.is_empty());
     }
 
     #[test]
@@ -1763,7 +1763,7 @@ mod tests {
     fn clicking_away_clears_selection_but_selected_rows_and_actions_keep_it() {
         let ctx = egui::Context::default();
         let mut state = State::default();
-        state.rule_screen.selected_rules.insert(RuleId::new("1"));
+        state.rules.screen.selected_rules.insert(RuleId::new("1"));
         let handle = egui::Rect::from_min_size(egui::pos2(100.0, 20.0), egui::vec2(40.0, 60.0));
         let menu = egui::Rect::from_min_size(egui::pos2(270.0, 20.0), egui::vec2(30.0, 60.0));
         let frame = |events, mut actions: Vec<Action>| {
@@ -1898,9 +1898,9 @@ mod tests {
         let mut state = State::default();
         state.config_ready = true;
         for selected in [false, true] {
-            state.rule_screen.selected_rules.clear();
+            state.rules.screen.selected_rules.clear();
             if selected {
-                state.rule_screen.selected_rules = [RuleId::new("1"), RuleId::new("2")].into();
+                state.rules.screen.selected_rules = [RuleId::new("1"), RuleId::new("2")].into();
             }
             let mut output = ctx.run_ui(
                 egui::RawInput {
@@ -1926,7 +1926,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = State::default();
         state.config_ready = true;
-        state.rule_screen.selected_rules.insert(RuleId::new("1"));
+        state.rules.screen.selected_rules.insert(RuleId::new("1"));
         for (key, modifiers, focused, expected) in [
             (egui::Key::A, egui::Modifiers::COMMAND, false, true),
             (egui::Key::Escape, egui::Modifiers::NONE, false, true),
@@ -1959,7 +1959,7 @@ mod tests {
                 ));
             }
         }
-        state.rule_screen.delete = Some(DeleteDialog::Set(rosetun_config::RuleSetId::new("1")));
+        state.rules.screen.delete = Some(DeleteDialog::Set(rosetun_config::RuleSetId::new("1")));
         let mut actions = Vec::new();
         let mut output = ctx.run_ui(
             egui::RawInput {

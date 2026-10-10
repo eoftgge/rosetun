@@ -15,7 +15,7 @@ fn rule_selection_click_toggle_and_visible_range() {
         range: false,
     });
     assert_eq!(
-        state.rule_screen.selected_rules,
+        state.rules.screen.selected_rules,
         [RuleId::new("0"), RuleId::new("2")].into()
     );
     state.act(Action::SelectRule {
@@ -23,19 +23,19 @@ fn rule_selection_click_toggle_and_visible_range() {
         additive: true,
         range: false,
     });
-    assert_eq!(state.rule_screen.selected_rules, [RuleId::new("2")].into());
+    assert_eq!(state.rules.screen.selected_rules, [RuleId::new("2")].into());
     state.act(Action::SelectRule {
         rule: RuleId::new("0"),
         additive: false,
         range: true,
     });
     assert_eq!(
-        state.rule_screen.selected_rules,
+        state.rules.screen.selected_rules,
         [RuleId::new("0"), RuleId::new("1"), RuleId::new("2")].into()
     );
 
     state.act(Action::SetRuleTypeFilter(TypeFilter::Processes));
-    assert!(state.rule_screen.selected_rules.is_empty());
+    assert!(state.rules.screen.selected_rules.is_empty());
     state.act(Action::SetRuleTypeFilter(TypeFilter::All));
     state.config.rule_sets[1].rules[1].target = RuleTarget::Direct;
     state.act(Action::SetRuleTargetFilter(Some(RuleTarget::Proxy)));
@@ -50,7 +50,7 @@ fn rule_selection_click_toggle_and_visible_range() {
         range: true,
     });
     assert_eq!(
-        state.rule_screen.selected_rules,
+        state.rules.screen.selected_rules,
         [RuleId::new("0"), RuleId::new("2")].into()
     );
 }
@@ -59,9 +59,9 @@ fn rule_selection_click_toggle_and_visible_range() {
 fn select_all_ignores_temporary_and_unknown_rules_and_clears_on_set_change() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
-    state.rule_screen.filter.search = "second".into();
+    state.rules.screen.filter.search = "second".into();
     state.act(Action::SelectVisibleRules);
-    assert_eq!(state.rule_screen.selected_rules, [RuleId::new("1")].into());
+    assert_eq!(state.rules.screen.selected_rules, [RuleId::new("1")].into());
     state.act(Action::SelectRule {
         rule: RuleId::new("t1"),
         additive: true,
@@ -72,15 +72,15 @@ fn select_all_ignores_temporary_and_unknown_rules_and_clears_on_set_change() {
         additive: true,
         range: false,
     });
-    assert_eq!(state.rule_screen.selected_rules, [RuleId::new("1")].into());
+    assert_eq!(state.rules.screen.selected_rules, [RuleId::new("1")].into());
     state.act(Action::ChooseRuleSet(RuleSetId::new("1")));
-    assert!(state.rule_screen.selected_rules.is_empty());
-    assert!(state.rule_screen.selection_anchor.is_none());
-    state.rule_screen.filter.search.clear();
+    assert!(state.rules.screen.selected_rules.is_empty());
+    assert!(state.rules.screen.selection_anchor.is_none());
+    state.rules.screen.filter.search.clear();
     state.act(Action::SelectVisibleRules);
-    assert_eq!(state.rule_screen.selected_rules.len(), 3);
+    assert_eq!(state.rules.screen.selected_rules.len(), 3);
     state.act(Action::ClearRuleSelection);
-    assert!(state.rule_screen.selected_rules.is_empty());
+    assert!(state.rules.screen.selected_rules.is_empty());
 }
 
 #[test]
@@ -105,10 +105,10 @@ fn configuration_reload_prunes_missing_rule_ids_and_anchor() {
         generation: 1,
         config,
     });
-    assert_eq!(state.rule_screen.selected_rules, [RuleId::new("0")].into());
-    assert!(state.rule_screen.selection_anchor.is_none());
+    assert_eq!(state.rules.screen.selected_rules, [RuleId::new("0")].into());
+    assert!(state.rules.screen.selection_anchor.is_none());
     state.act(Action::OpenActiveRules);
-    assert_eq!(state.rule_screen.selected_rules, [RuleId::new("0")].into());
+    assert_eq!(state.rules.screen.selected_rules, [RuleId::new("0")].into());
 }
 
 #[test]
@@ -117,13 +117,13 @@ fn opening_and_reloading_rules_selects_active_then_first_if_missing() {
     assert_eq!(state.screen, Screen::Connection);
     state.act(Action::OpenRules);
     assert_eq!(state.screen, Screen::Rules);
-    assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("2")));
+    assert_eq!(state.rules.screen.selected_set, Some(RuleSetId::new("2")));
     state.act(Action::ChooseRuleSet(RuleSetId::new("1")));
     state.act(Action::ShowConnection);
     state.act(Action::OpenRules);
-    assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("1")));
+    assert_eq!(state.rules.screen.selected_set, Some(RuleSetId::new("1")));
     state.act(Action::OpenActiveRules);
-    assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("2")));
+    assert_eq!(state.rules.screen.selected_set, Some(RuleSetId::new("2")));
     state.reduce(WorkerEvent::Config {
         generation: 1,
         config: AppConfig {
@@ -131,12 +131,12 @@ fn opening_and_reloading_rules_selects_active_then_first_if_missing() {
             ..AppConfig::default()
         },
     });
-    assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("1")));
+    assert_eq!(state.rules.screen.selected_set, Some(RuleSetId::new("1")));
     state.reduce(WorkerEvent::Config {
         generation: 2,
         config: AppConfig::default(),
     });
-    assert!(state.rule_screen.selected_set.is_none());
+    assert!(state.rules.screen.selected_set.is_none());
     state.reduce(WorkerEvent::Config {
         generation: 3,
         config: AppConfig {
@@ -144,7 +144,7 @@ fn opening_and_reloading_rules_selects_active_then_first_if_missing() {
             ..AppConfig::default()
         },
     });
-    assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("3")));
+    assert_eq!(state.rules.screen.selected_set, Some(RuleSetId::new("3")));
 
     let mut before_load = State::default();
     before_load.act(Action::OpenRules);
@@ -153,14 +153,14 @@ fn opening_and_reloading_rules_selects_active_then_first_if_missing() {
         config: state_with_rules().config,
     });
     assert_eq!(
-        before_load.rule_screen.selected_set,
+        before_load.rules.screen.selected_set,
         Some(RuleSetId::new("2"))
     );
     let mut no_active = state_with_rules();
     no_active.config.active_rule_set = None;
     no_active.act(Action::OpenRules);
     assert_eq!(
-        no_active.rule_screen.selected_set,
+        no_active.rules.screen.selected_set,
         Some(RuleSetId::new("1"))
     );
     no_active.act(Action::ChooseRuleSet(RuleSetId::new("2")));
@@ -173,7 +173,7 @@ fn opening_and_reloading_rules_selects_active_then_first_if_missing() {
         },
     });
     assert_eq!(
-        no_active.rule_screen.selected_set,
+        no_active.rules.screen.selected_set,
         Some(RuleSetId::new("1"))
     );
 }
@@ -182,27 +182,27 @@ fn opening_and_reloading_rules_selects_active_then_first_if_missing() {
 fn set_name_dialog_keeps_errors_and_success_selects_created_set() {
     let mut state = state_with_rules();
     state.act(Action::OpenCreateSet);
-    assert_eq!(state.rule_screen.name.as_ref().unwrap().name, tr!("basic"));
-    state.rule_screen.name.as_mut().unwrap().name = "   ".into();
+    assert_eq!(state.rules.screen.name.as_ref().unwrap().name, tr!("basic"));
+    state.rules.screen.name.as_mut().unwrap().name = "   ".into();
     assert!(state.act(Action::SubmitSetName).is_none());
-    state.rule_screen.name.as_mut().unwrap().name = "  Work  ".into();
+    state.rules.screen.name.as_mut().unwrap().name = "  Work  ".into();
     assert!(matches!(
         state.act(Action::SubmitSetName),
         Some(Job::CreateRuleSet(name)) if name == "Work"
     ));
     assert!(state.operations.rules_edit);
     assert!(state.act(Action::CancelSetName).is_none());
-    assert!(state.rule_screen.name.is_some());
+    assert!(state.rules.screen.name.is_some());
     state.reduce(WorkerEvent::CreateRuleSet(Err(RuleSetError::EmptyName)));
     assert!(!state.operations.rules_edit);
     assert!(state.operation_error.is_none());
     assert_eq!(
-        state.rule_screen.name.as_ref().unwrap().error.as_deref(),
+        state.rules.screen.name.as_ref().unwrap().error.as_deref(),
         Some("rule set name must not be empty")
     );
     state.reduce(WorkerEvent::CreateRuleSet(Ok(rule_set("3"))));
-    assert_eq!(state.rule_screen.selected_set, Some(RuleSetId::new("3")));
-    assert!(state.rule_screen.name.is_none());
+    assert_eq!(state.rules.screen.selected_set, Some(RuleSetId::new("3")));
+    assert!(state.rules.screen.name.is_none());
 
     state.act(Action::ChooseRuleSet(RuleSetId::new("1")));
     state.act(Action::OpenRenameSet);
@@ -213,9 +213,9 @@ fn set_name_dialog_keeps_errors_and_success_selects_created_set() {
     state.reduce(WorkerEvent::RenameRuleSet(Err(RuleSetError::SetNotFound)));
     assert!(!state.operations.rules_edit);
     assert!(state.operation_error.is_none());
-    assert!(state.rule_screen.name.as_ref().unwrap().error.is_some());
+    assert!(state.rules.screen.name.as_ref().unwrap().error.is_some());
     state.reduce(WorkerEvent::RenameRuleSet(Ok(())));
-    assert!(state.rule_screen.name.is_none());
+    assert!(state.rules.screen.name.is_none());
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn set_deletion_requires_confirmation_and_reports_errors_outside_dialog() {
     assert!(state.act(Action::ConfirmRuleDelete).is_none());
     state.act(Action::RequestDeleteSet);
     assert!(matches!(
-        state.rule_screen.delete,
+        state.rules.screen.delete,
         Some(DeleteDialog::Set(_))
     ));
     assert!(matches!(
@@ -275,7 +275,7 @@ fn set_deletion_requires_confirmation_and_reports_errors_outside_dialog() {
     ));
     assert!(state.act(Action::CancelRuleDelete).is_none());
     state.reduce(WorkerEvent::DeleteRuleSet(Err(RuleSetError::SetNotFound)));
-    assert!(state.rule_screen.delete.is_none());
+    assert!(state.rules.screen.delete.is_none());
     assert_eq!(
         state.operation_error.as_deref(),
         Some("rule set does not exist")
@@ -292,14 +292,14 @@ fn browse_executable_requires_an_idle_process_dialog() {
         state.act(Action::OpenAddRule),
         Some(Job::LoadProcesses(_))
     ));
-    state.rule_screen.add.as_mut().unwrap().busy = true;
+    state.rules.screen.add.as_mut().unwrap().busy = true;
     assert!(state.act(Action::BrowseExecutable).is_none());
-    state.rule_screen.add.as_mut().unwrap().busy = false;
+    state.rules.screen.add.as_mut().unwrap().busy = false;
     assert!(matches!(
         state.act(Action::BrowseExecutable),
         Some(Job::BrowseExecutable)
     ));
-    assert!(state.rule_screen.add.as_ref().unwrap().browsing);
+    assert!(state.rules.screen.add.as_ref().unwrap().browsing);
     assert!(state.act(Action::BrowseExecutable).is_none());
 }
 
@@ -314,7 +314,7 @@ fn browsed_executable_uses_the_selected_match_mode_and_clears_process_selection(
         state.act(Action::OpenRules);
         state.act(Action::OpenAddRule);
         state.act(Action::SelectRuleInput(RuleInputKind::Process));
-        let dialog = state.rule_screen.add.as_mut().unwrap();
+        let dialog = state.rules.screen.add.as_mut().unwrap();
         dialog.match_mode = mode;
         dialog.selected_process = Some(0);
         dialog.processes.push(ProcessGroup {
@@ -332,7 +332,7 @@ fn browsed_executable_uses_the_selected_match_mode_and_clears_process_selection(
         ));
         let path = PathBuf::from(r"C:\Apps\Tool.exe");
         state.reduce(WorkerEvent::BrowsedExecutable(Some(path.clone())));
-        let dialog = state.rule_screen.add.as_ref().unwrap();
+        let dialog = state.rules.screen.add.as_ref().unwrap();
         assert!(!dialog.browsing);
         assert_eq!(dialog.browsed.as_ref(), Some(&path));
         assert_eq!(dialog.process, expected);
@@ -349,10 +349,10 @@ fn cancelled_or_late_browse_does_not_replace_input() {
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Process));
-    state.rule_screen.add.as_mut().unwrap().process = "current.exe".into();
+    state.rules.screen.add.as_mut().unwrap().process = "current.exe".into();
     state.act(Action::BrowseExecutable);
     state.reduce(WorkerEvent::BrowsedExecutable(None));
-    let dialog = state.rule_screen.add.as_ref().unwrap();
+    let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(!dialog.browsing);
     assert_eq!(dialog.process, "current.exe");
     assert!(dialog.browsed.is_none());
@@ -362,7 +362,7 @@ fn cancelled_or_late_browse_does_not_replace_input() {
     state.reduce(WorkerEvent::BrowsedExecutable(Some(
         r"C:\Apps\Tool.exe".into(),
     )));
-    let dialog = state.rule_screen.add.as_ref().unwrap();
+    let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(!dialog.browsing);
     assert_eq!(dialog.process, "current.exe");
     assert!(dialog.browsed.is_none());
@@ -373,7 +373,7 @@ fn cancelled_or_late_browse_does_not_replace_input() {
     state.reduce(WorkerEvent::BrowsedExecutable(Some(
         r"C:\Apps\Tool.exe".into(),
     )));
-    assert!(state.rule_screen.add.is_none());
+    assert!(state.rules.screen.add.is_none());
 }
 
 #[cfg(windows)]
@@ -387,7 +387,7 @@ fn browsed_executable_switches_between_name_and_path_without_a_running_process()
     state.reduce(WorkerEvent::BrowsedExecutable(Some(
         r"C:\Apps\Tool.exe".into(),
     )));
-    let dialog = state.rule_screen.add.as_mut().unwrap();
+    let dialog = state.rules.screen.add.as_mut().unwrap();
     assert_eq!(dialog.process, "Tool.exe");
     assert!(dialog.selected_process.is_none());
     dialog.set_process_match_mode(ProcessMatchMode::Path);
@@ -414,12 +414,12 @@ fn process_results_fill_only_the_current_dialog_and_are_dropped_on_close() {
             has_window: true,
         }]),
     });
-    let dialog = state.rule_screen.add.as_ref().unwrap();
+    let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(dialog.processes_loaded);
     assert_eq!(dialog.processes[0].name, "Telegram.exe");
     assert_eq!(dialog.processes[0].count, 1);
     state.act(Action::CancelAddRule);
-    assert!(state.rule_screen.add.is_none());
+    assert!(state.rules.screen.add.is_none());
 
     let Some(Job::LoadProcesses(second)) = state.act(Action::OpenAddRule) else {
         panic!("reopened dialog must start a new worker job");
@@ -434,14 +434,23 @@ fn process_results_fill_only_the_current_dialog_and_are_dropped_on_close() {
             has_window: false,
         }]),
     });
-    assert!(state.rule_screen.add.as_ref().unwrap().processes.is_empty());
+    assert!(
+        state
+            .rules
+            .screen
+            .add
+            .as_ref()
+            .unwrap()
+            .processes
+            .is_empty()
+    );
     state.reduce(WorkerEvent::Processes {
         request: second,
         result: Err(rosetun_processes::ProcessListError::Snapshot(
             std::io::Error::from_raw_os_error(5),
         )),
     });
-    let dialog = state.rule_screen.add.as_ref().unwrap();
+    let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(!dialog.processes_loaded);
     assert!(dialog.processes_error.is_some());
     assert!(matches!(
@@ -475,15 +484,15 @@ fn site_batch_requires_every_line_to_be_valid_and_obeys_subdomain_toggle() {
             Some(Job::LoadProcesses(_))
         ));
         assert_eq!(
-            state.rule_screen.add.as_ref().unwrap().kind,
+            state.rules.screen.add.as_ref().unwrap().kind,
             RuleInputKind::Process
         );
         state.act(Action::SelectRuleInput(RuleInputKind::Domain));
-        let dialog = state.rule_screen.add.as_mut().unwrap();
+        let dialog = state.rules.screen.add.as_mut().unwrap();
         dialog.domains = "https://www.youtube.com/watch?v=1\n192.168.1.1\ninstagram.com".into();
         dialog.subdomains = subdomains;
         assert!(state.act(Action::SubmitAddRule).is_none());
-        state.rule_screen.add.as_mut().unwrap().domains =
+        state.rules.screen.add.as_mut().unwrap().domains =
             "https://www.youtube.com/watch?v=1\ninstagram.com".into();
         assert!(matches!(
             state.act(Action::SubmitAddRule),
@@ -501,34 +510,34 @@ fn editing_a_suffix_rule_populates_the_site_form_and_saves_only_changes() {
     state.config.rule_sets[1].rules[0].enabled = false;
     state.act(Action::OpenRules);
     assert!(state.act(Action::OpenEditRule(id.clone())).is_none());
-    let dialog = state.rule_screen.add.as_ref().unwrap();
+    let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.editing.as_ref(), Some(&id));
     assert_eq!(dialog.kind, RuleInputKind::Domain);
     assert_eq!(dialog.domains, "example.com");
     assert!(dialog.subdomains);
     state.act(Action::SelectRuleInput(RuleInputKind::Process));
     assert_eq!(
-        state.rule_screen.add.as_ref().unwrap().kind,
+        state.rules.screen.add.as_ref().unwrap().kind,
         RuleInputKind::Domain
     );
     assert!(state.act(Action::SubmitAddRule).is_none());
-    assert!(state.rule_screen.add.is_none());
+    assert!(state.rules.screen.add.is_none());
     assert!(!state.operations.rules_edit);
 
     state.act(Action::OpenEditRule(id.clone()));
-    state.rule_screen.add.as_mut().unwrap().target = RuleTarget::Direct;
+    state.rules.screen.add.as_mut().unwrap().target = RuleTarget::Direct;
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::UpdateRule(set, rule, RuleMatcher::Domain(DomainMatch::Suffix(domain)), RuleTarget::Direct))
             if set == RuleSetId::new("2") && rule == id && domain == "example.com"
     ));
-    assert!(state.rule_screen.add.as_ref().unwrap().busy);
+    assert!(state.rules.screen.add.as_ref().unwrap().busy);
     state.reduce(WorkerEvent::UpdateRule(Err(RuleSetError::DuplicateRule)));
-    let dialog = state.rule_screen.add.as_ref().unwrap();
+    let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(!dialog.busy);
     assert!(dialog.error.is_some());
     state.reduce(WorkerEvent::UpdateRule(Ok(())));
-    assert!(state.rule_screen.add.is_none());
+    assert!(state.rules.screen.add.is_none());
 }
 
 #[test]
@@ -540,11 +549,11 @@ fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
             RuleMatcher::Domain(DomainMatch::Suffix(domain.into()));
         state.act(Action::OpenRules);
         state.act(Action::OpenEditRule(id.clone()));
-        assert_eq!(state.rule_screen.add.as_ref().unwrap().domains, domain);
+        assert_eq!(state.rules.screen.add.as_ref().unwrap().domains, domain);
         assert!(state.act(Action::SubmitAddRule).is_none());
-        assert!(state.rule_screen.add.is_none());
+        assert!(state.rules.screen.add.is_none());
         state.act(Action::OpenEditRule(id.clone()));
-        state.rule_screen.add.as_mut().unwrap().target = RuleTarget::Block;
+        state.rules.screen.add.as_mut().unwrap().target = RuleTarget::Block;
         assert!(matches!(
             state.act(Action::SubmitAddRule),
             Some(Job::UpdateRule(_, _, RuleMatcher::Domain(DomainMatch::Suffix(value)), RuleTarget::Block))
@@ -569,7 +578,7 @@ fn editing_a_path_rule_opens_advanced_and_rejects_templates() {
     );
     state.act(Action::OpenRules);
     assert!(state.act(Action::OpenEditRule(RuleId::new("2"))).is_none());
-    assert!(state.rule_screen.add.is_none());
+    assert!(state.rules.screen.add.is_none());
     assert!(
         state
             .act(Action::OpenEditRule(RuleId::new("missing")))
@@ -577,7 +586,7 @@ fn editing_a_path_rule_opens_advanced_and_rejects_templates() {
     );
     let request = state.act(Action::OpenEditRule(id.clone()));
     assert!(matches!(request, Some(Job::LoadProcesses(_))));
-    let dialog = state.rule_screen.add.as_ref().unwrap();
+    let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.editing.as_ref(), Some(&id));
     assert_eq!(dialog.kind, RuleInputKind::Process);
     assert_eq!(dialog.process_filter, "Tool.exe");
@@ -586,20 +595,20 @@ fn editing_a_path_rule_opens_advanced_and_rejects_templates() {
     assert_eq!(dialog.match_mode, ProcessMatchMode::Path);
     assert!(dialog.selected_process.is_none());
     assert!(state.act(Action::SubmitAddRule).is_none());
-    assert!(state.rule_screen.add.is_none());
+    assert!(state.rules.screen.add.is_none());
 }
 
 #[test]
 fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
-    state.rule_screen.filter.search = "other".into();
-    state.rule_screen.filter.kind = TypeFilter::Processes;
-    state.rule_screen.filter.target = Some(RuleTarget::Direct);
+    state.rules.screen.filter.search = "other".into();
+    state.rules.screen.filter.kind = TypeFilter::Processes;
+    state.rules.screen.filter.target = Some(RuleTarget::Direct);
     state.act(Action::OpenAddRule);
     assert!(state.act(Action::SubmitAddRule).is_none());
     state.act(Action::SelectRuleInput(RuleInputKind::Domain));
-    let dialog = state.rule_screen.add.as_mut().unwrap();
+    let dialog = state.rules.screen.add.as_mut().unwrap();
     dialog.domains = "*.example.com".into();
     dialog.target = RuleTarget::Direct;
     assert!(matches!(
@@ -609,7 +618,7 @@ fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
     ));
     assert!(state.act(Action::CancelAddRule).is_none());
     state.reduce(WorkerEvent::AddRules(Err(RuleSetError::DuplicateRule)));
-    let dialog = state.rule_screen.add.as_ref().unwrap();
+    let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.domains, "*.example.com");
     assert_eq!(
         dialog.error.as_deref(),
@@ -618,7 +627,7 @@ fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
     assert!(!dialog.busy);
     assert!(!state.operations.rules_edit);
     assert!(state.operation_error.is_none());
-    assert!(state.rule_screen.filter.is_active());
+    assert!(state.rules.screen.filter.is_active());
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::AddRules(_, _, _))
@@ -627,8 +636,8 @@ fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
         added: vec![rule_set("2").rules[0].clone()],
         skipped: 0,
     })));
-    assert!(state.rule_screen.add.is_none());
-    assert!(!state.rule_screen.filter.is_active());
+    assert!(state.rules.screen.add.is_none());
+    assert!(!state.rules.screen.filter.is_active());
 }
 
 #[test]
@@ -637,7 +646,7 @@ fn process_input_and_missing_set_guard_submission() {
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Process));
-    state.rule_screen.add.as_mut().unwrap().process = r#""C:\Apps\curl.exe""#.into();
+    state.rules.screen.add.as_mut().unwrap().process = r#""C:\Apps\curl.exe""#.into();
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::AddRule(
@@ -647,19 +656,19 @@ fn process_input_and_missing_set_guard_submission() {
         ))
     ));
     state.reduce(WorkerEvent::AddRule(Err(RuleSetError::SetNotFound)));
-    state.rule_screen.selected_set = None;
+    state.rules.screen.selected_set = None;
     assert!(state.act(Action::SubmitAddRule).is_none());
     state.act(Action::CancelAddRule);
-    assert!(state.rule_screen.add.is_none());
+    assert!(state.rules.screen.add.is_none());
 }
 
 #[test]
 fn rule_target_filter_can_be_set_and_cleared() {
     let mut state = state_with_rules();
     state.act(Action::SetRuleTargetFilter(Some(RuleTarget::Block)));
-    assert_eq!(state.rule_screen.filter.target, Some(RuleTarget::Block));
+    assert_eq!(state.rules.screen.filter.target, Some(RuleTarget::Block));
     state.act(Action::SetRuleTargetFilter(None));
-    assert_eq!(state.rule_screen.filter.target, None);
+    assert_eq!(state.rules.screen.filter.target, None);
 }
 
 #[test]
@@ -714,7 +723,7 @@ fn move_rule_to_top_checks_position_and_busy_state_but_not_filters() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
     assert!(state.act(Action::MoveRuleToTop(RuleId::new("0"))).is_none());
-    state.rule_screen.filter.search = "third".into();
+    state.rules.screen.filter.search = "third".into();
     assert!(matches!(
         state.act(Action::MoveRuleToTop(RuleId::new("2"))),
         Some(Job::MoveRule(set, rule, 0))
@@ -723,7 +732,7 @@ fn move_rule_to_top_checks_position_and_busy_state_but_not_filters() {
     assert!(state.act(Action::MoveRuleToTop(RuleId::new("1"))).is_none());
     state.reduce(WorkerEvent::MoveRule(Ok(())));
     assert!(state.act(Action::MoveRuleToTop(RuleId::new("0"))).is_none());
-    state.rule_screen.selected_set = None;
+    state.rules.screen.selected_set = None;
     assert!(state.act(Action::MoveRuleToTop(RuleId::new("2"))).is_none());
 }
 
@@ -755,7 +764,7 @@ fn selected_rules_move_as_one_job_and_filters_block_reordering() {
         Some(Job::MoveRules(_, rules, 1)) if rules.len() == 2
     ));
     state.reduce(WorkerEvent::MoveRules(Ok(())));
-    state.rule_screen.filter.search = "first".into();
+    state.rules.screen.filter.search = "first".into();
     assert!(state.act(Action::MoveSelectedRulesToTop).is_none());
     assert!(state.act(Action::MoveSelectedRulesToEnd).is_none());
     assert!(
@@ -766,7 +775,7 @@ fn selected_rules_move_as_one_job_and_filters_block_reordering() {
             ))
             .is_none()
     );
-    state.rule_screen.filter.search.clear();
+    state.rules.screen.filter.search.clear();
     assert!(
         state
             .act(Action::DropRules(
@@ -792,21 +801,21 @@ fn selected_rules_delete_in_one_confirmed_job_and_clear_after_success() {
     state.act(Action::SelectVisibleRules);
     state.act(Action::RequestDeleteSelectedRules);
     assert!(matches!(
-        &state.rule_screen.delete,
+        &state.rules.screen.delete,
         Some(DeleteDialog::Rules { set, rules })
             if set == &RuleSetId::new("2") && rules.len() == 3
     ));
     state.act(Action::CancelRuleDelete);
-    assert!(state.rule_screen.delete.is_none());
-    assert_eq!(state.rule_screen.selected_rules.len(), 3);
-    state.rule_screen.filter.search = "first".into();
+    assert!(state.rules.screen.delete.is_none());
+    assert_eq!(state.rules.screen.selected_rules.len(), 3);
+    state.rules.screen.filter.search = "first".into();
     state.act(Action::RequestDeleteSelectedRules);
     assert!(matches!(
-        state.rule_screen.delete,
+        state.rules.screen.delete,
         Some(DeleteDialog::Rule { .. })
     ));
     state.act(Action::CancelRuleDelete);
-    state.rule_screen.filter.search.clear();
+    state.rules.screen.filter.search.clear();
     state.act(Action::RequestDeleteSelectedRules);
     assert!(matches!(
         state.act(Action::ConfirmRuleDelete),
@@ -815,8 +824,8 @@ fn selected_rules_delete_in_one_confirmed_job_and_clear_after_success() {
     ));
     assert!(state.act(Action::CancelRuleDelete).is_none());
     state.reduce(WorkerEvent::RemoveRules(Ok(())));
-    assert!(state.rule_screen.delete.is_none());
-    assert!(state.rule_screen.selected_rules.is_empty());
+    assert!(state.rules.screen.delete.is_none());
+    assert!(state.rules.screen.selected_rules.is_empty());
 }
 
 #[test]
@@ -836,10 +845,10 @@ fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
     );
     assert!(state.act(Action::SelectRuleSet(None)).is_none());
     state.reduce(WorkerEvent::MoveRule(Ok(())));
-    state.rule_screen.filter.search = "second".into();
+    state.rules.screen.filter.search = "second".into();
     assert!(state.act(Action::DropRule(rule.clone(), 0)).is_none());
     assert!(state.act(Action::DropRule(rule.clone(), 3)).is_none());
-    state.rule_screen.filter.search.clear();
+    state.rules.screen.filter.search.clear();
     assert!(state.act(Action::DropRule(rule.clone(), 2)).is_none());
     assert!(matches!(
         state.act(Action::DropRule(rule.clone(), 3)),
@@ -868,7 +877,7 @@ fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
     );
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Domain));
-    let dialog = state.rule_screen.add.as_mut().unwrap();
+    let dialog = state.rules.screen.add.as_mut().unwrap();
     dialog.domains = "new.example".into();
     dialog.subdomains = false;
     dialog.target = RuleTarget::Block;
@@ -887,5 +896,5 @@ fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
         Some(Job::RemoveRule(_, _))
     ));
     state.reduce(WorkerEvent::RemoveRule(Ok(())));
-    assert!(state.rule_screen.delete.is_none());
+    assert!(state.rules.screen.delete.is_none());
 }

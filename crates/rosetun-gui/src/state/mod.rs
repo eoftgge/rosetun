@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AppConfig, ConnectionState, DnsSettings, DomainMatch, FailureKind, LanguageSetting, NodeId,
-    ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Status,
-    SubscriptionId,
+    AppConfig, ConnectionState, DnsSettings, FailureKind, LanguageSetting, NodeId, Rule, RuleId,
+    RuleMatcher, RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId,
 };
 use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset};
 use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError, ProbeOutcome};
@@ -13,17 +12,17 @@ use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError, ProbeOutc
 use crate::actions::{self, PrimaryAction};
 use crate::display;
 use crate::errors;
-use crate::reorder::drop_target;
-use crate::rules::{
-    ProcessGroup, ProcessMatchMode, RuleFilter, TypeFilter, group_processes, visible_rules,
-};
+use crate::rules::{RuleFilter, TypeFilter};
 use crate::worker::{ConfigWorkerError, FailureInterference, HelperCommandError, WorkerEvent};
 
+mod rules;
 mod settings;
 mod subscriptions;
 mod traffic;
 mod updates;
 
+use rules::RulesState;
+pub(crate) use rules::{AddRuleDialog, DeleteDialog, NameDialogKind, RuleInputKind};
 use settings::SettingsState;
 pub(crate) use settings::{AboutFolder, SettingsSection};
 use subscriptions::SubscriptionsState;
@@ -91,201 +90,6 @@ pub(crate) enum Screen {
     Settings,
 }
 
-pub(crate) enum NameDialogKind {
-    Create,
-    Rename(RuleSetId),
-}
-
-pub(crate) struct NameDialog {
-    pub(crate) kind: NameDialogKind,
-    pub(crate) name: String,
-    pub(crate) error: Option<String>,
-    pub(crate) focus: bool,
-}
-
-pub(crate) enum DeleteDialog {
-    Set(RuleSetId),
-    Rule { set: RuleSetId, rule: RuleId },
-    Rules { set: RuleSetId, rules: Vec<RuleId> },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum RuleInputKind {
-    Domain,
-    #[default]
-    Process,
-}
-
-pub(crate) struct AddRuleDialog {
-    pub(crate) set: RuleSetId,
-    pub(crate) kind: RuleInputKind,
-    pub(crate) target: RuleTarget,
-    pub(crate) domains: String,
-    pub(crate) subdomains: bool,
-    pub(crate) show_all: bool,
-    pub(crate) advanced: bool,
-    pub(crate) temporary_only: bool,
-    pub(crate) editing: Option<RuleId>,
-    original_domain: Option<DomainMatch>,
-    pub(crate) process: String,
-    pub(crate) process_filter: String,
-    pub(crate) processes: Vec<ProcessGroup>,
-    pub(crate) selected_process: Option<usize>,
-    pub(crate) match_mode: ProcessMatchMode,
-    #[cfg(windows)]
-    pub(crate) browsing: bool,
-    #[cfg(windows)]
-    pub(crate) browsed: Option<PathBuf>,
-    pub(crate) load_request: Option<u64>,
-    pub(crate) processes_loaded: bool,
-    pub(crate) processes_error: Option<String>,
-    pub(crate) busy: bool,
-    pub(crate) error: Option<String>,
-    pub(crate) focus_input: bool,
-}
-
-impl AddRuleDialog {
-    pub(crate) fn new(set: RuleSetId) -> Self {
-        Self {
-            set,
-            kind: RuleInputKind::Process,
-            target: RuleTarget::Proxy,
-            domains: String::new(),
-            subdomains: true,
-            show_all: false,
-            advanced: false,
-            temporary_only: false,
-            editing: None,
-            original_domain: None,
-            process: String::new(),
-            process_filter: String::new(),
-            processes: Vec::new(),
-            selected_process: None,
-            match_mode: ProcessMatchMode::Name,
-            #[cfg(windows)]
-            browsing: false,
-            #[cfg(windows)]
-            browsed: None,
-            load_request: None,
-            processes_loaded: false,
-            processes_error: None,
-            busy: false,
-            error: None,
-            focus_input: true,
-        }
-    }
-
-    fn for_rule(set: RuleSetId, rule: &Rule) -> Option<Self> {
-        let mut dialog = Self::new(set);
-        dialog.editing = Some(rule.id.clone());
-        dialog.target = rule.target;
-        match &rule.matcher {
-            RuleMatcher::Domain(domain) => {
-                dialog.kind = RuleInputKind::Domain;
-                dialog.subdomains = matches!(domain, DomainMatch::Suffix(_));
-                dialog.domains = rosetun_core::rule_value_text(&rule.matcher)
-                    .trim_start_matches("*.")
-                    .to_owned();
-                dialog.original_domain = Some(domain.clone());
-            }
-            RuleMatcher::Process(process) => {
-                dialog.process = rosetun_core::rule_value_text(&rule.matcher);
-                match process {
-                    ProcessMatch::Name(name) => dialog.process_filter = name.clone(),
-                    ProcessMatch::Path(path) => {
-                        dialog.match_mode = ProcessMatchMode::Path;
-                        dialog.advanced = true;
-                        dialog.process_filter = path
-                            .file_name()
-                            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
-                            .into_owned();
-                        #[cfg(windows)]
-                        {
-                            dialog.browsed = Some(path.clone());
-                        }
-                    }
-                }
-            }
-            _ => return None,
-        }
-        Some(dialog)
-    }
-
-    pub(crate) fn unchanged_domain(&self) -> Option<DomainMatch> {
-        let original = self.original_domain.as_ref()?;
-        let matcher = RuleMatcher::Domain(original.clone());
-        let value = rosetun_core::rule_value_text(&matcher);
-        let value = value.strip_prefix("*.").unwrap_or(&value);
-        (self.domains.trim() == value
-            && self.subdomains == matches!(original, DomainMatch::Suffix(_)))
-        .then(|| original.clone())
-    }
-
-    pub(crate) fn set_process_match_mode(&mut self, mode: ProcessMatchMode) {
-        self.match_mode = mode;
-        if let Some(group) = self
-            .selected_process
-            .and_then(|index| self.processes.get(index))
-        {
-            let value = match mode {
-                ProcessMatchMode::Name => Some(group.name.clone()),
-                ProcessMatchMode::Path => group
-                    .path
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-            };
-            if let Some(value) = value {
-                self.process = value;
-            }
-        } else {
-            #[cfg(windows)]
-            if let Some(path) = &self.browsed {
-                self.process = browsed_process_value(path, mode);
-                self.error = None;
-                return;
-            }
-            if mode == ProcessMatchMode::Name
-                && let Ok(ProcessMatch::Path(path)) =
-                    rosetun_core::parse_process_input(&self.process)
-                && let Some(name) = path.file_name()
-            {
-                self.process = name.to_string_lossy().into_owned();
-            }
-        }
-        self.error = None;
-    }
-}
-
-#[cfg(windows)]
-fn browsed_process_value(path: &std::path::Path, mode: ProcessMatchMode) -> String {
-    match mode {
-        ProcessMatchMode::Name => path
-            .file_name()
-            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
-            .into_owned(),
-        ProcessMatchMode::Path => path.to_string_lossy().into_owned(),
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct RuleScreen {
-    pub(crate) selected_set: Option<RuleSetId>,
-    pub(crate) filter: RuleFilter,
-    pub(crate) selected_rules: BTreeSet<RuleId>,
-    pub(crate) selection_anchor: Option<RuleId>,
-    pub(crate) name: Option<NameDialog>,
-    pub(crate) delete: Option<DeleteDialog>,
-    pub(crate) add: Option<AddRuleDialog>,
-    opened: bool,
-}
-
-impl RuleScreen {
-    fn clear_selection(&mut self) {
-        self.selected_rules.clear();
-        self.selection_anchor = None;
-    }
-}
-
 pub(crate) enum SessionPart {
     Server,
     Rules,
@@ -350,9 +154,8 @@ pub(crate) struct State {
     cancelled_connect: bool,
     deferred_connect: Option<ConnectRequest>,
     pub(crate) screen: Screen,
-    pub(crate) rule_screen: RuleScreen,
+    pub(crate) rules: RulesState,
     pub(crate) settings: SettingsState,
-    next_process_request: u64,
     pub(crate) operations: Operations,
     pub(crate) protection_confirmation: bool,
 }
@@ -416,9 +219,8 @@ impl Default for State {
             cancelled_connect: false,
             deferred_connect: None,
             screen: Screen::default(),
-            rule_screen: RuleScreen::default(),
+            rules: RulesState::default(),
             settings: SettingsState::default(),
-            next_process_request: 0,
             operations: Operations::default(),
             protection_confirmation: false,
         }
@@ -965,118 +767,6 @@ impl State {
         redact(&self.config, value)
     }
 
-    pub(crate) fn selected_rules(&self) -> Option<&RuleSet> {
-        let id = self.rule_screen.selected_set.as_ref()?;
-        self.config.rule_sets.iter().find(|set| &set.id == id)
-    }
-
-    fn visible_rule_ids(&self) -> Vec<RuleId> {
-        self.selected_rules()
-            .map(|set| {
-                visible_rules(set, &self.rule_screen.filter)
-                    .into_iter()
-                    .map(|(_, rule)| rule.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn selected_rule_ids(&self) -> Vec<RuleId> {
-        self.visible_rule_ids()
-            .into_iter()
-            .filter(|id| self.rule_screen.selected_rules.contains(id))
-            .collect()
-    }
-
-    fn select_rule(&mut self, rule: RuleId, additive: bool, range: bool) {
-        let visible = self.visible_rule_ids();
-        let Some(index) = visible.iter().position(|id| id == &rule) else {
-            return;
-        };
-        let selection = &mut self.rule_screen.selected_rules;
-        if range {
-            let anchor = self
-                .rule_screen
-                .selection_anchor
-                .as_ref()
-                .filter(|id| selection.contains(*id))
-                .and_then(|id| visible.iter().position(|item| item == id))
-                .or_else(|| visible.iter().rposition(|id| selection.contains(id)))
-                .unwrap_or(index);
-            selection.clear();
-            selection.extend(
-                visible[anchor.min(index)..=anchor.max(index)]
-                    .iter()
-                    .cloned(),
-            );
-            self.rule_screen.selection_anchor = Some(visible[anchor].clone());
-        } else if additive {
-            if !selection.insert(rule.clone()) {
-                selection.remove(&rule);
-                self.rule_screen.selection_anchor = visible
-                    .iter()
-                    .rev()
-                    .find(|id| selection.contains(*id))
-                    .cloned();
-            } else {
-                self.rule_screen.selection_anchor = Some(rule);
-            }
-        } else {
-            selection.clear();
-            selection.insert(rule.clone());
-            self.rule_screen.selection_anchor = Some(rule);
-        }
-    }
-
-    pub(crate) fn can_edit_rules(&self) -> bool {
-        self.config_ready
-            && !self.operations.rules_edit
-            && !self.operations.rules
-            && !self.operations.helper
-    }
-
-    fn preferred_set(&self) -> Option<RuleSetId> {
-        self.config
-            .active_rules()
-            .or_else(|| self.config.rule_sets.first())
-            .map(|set| set.id.clone())
-    }
-
-    fn reconcile_selected_set(&mut self) {
-        let previous = self.rule_screen.selected_set.clone();
-        if self.rule_screen.opened && self.selected_rules().is_none() {
-            self.rule_screen.selected_set = self.preferred_set();
-        }
-        if self.rule_screen.selected_set != previous {
-            self.rule_screen.clear_selection();
-        } else {
-            let existing: BTreeSet<_> = self
-                .selected_rules()
-                .into_iter()
-                .flat_map(|set| set.rules.iter().map(|rule| rule.id.clone()))
-                .collect();
-            self.rule_screen
-                .selected_rules
-                .retain(|id| existing.contains(id));
-            if self
-                .rule_screen
-                .selection_anchor
-                .as_ref()
-                .is_some_and(|id| !self.rule_screen.selected_rules.contains(id))
-            {
-                self.rule_screen.selection_anchor = None;
-            }
-        }
-        if self
-            .rule_screen
-            .add
-            .as_ref()
-            .is_some_and(|dialog| !self.config.rule_sets.iter().any(|set| set.id == dialog.set))
-        {
-            self.rule_screen.add = None;
-        }
-    }
-
     pub(crate) fn reduce(&mut self, event: WorkerEvent) {
         match event {
             WorkerEvent::Config { generation, config } => {
@@ -1136,7 +826,7 @@ impl State {
                     self.reset_failure_interference();
                 }
                 if (!self.helper_available || !matches!(status.state, ConnectionState::Connected))
-                    && let Some(dialog) = &mut self.rule_screen.add
+                    && let Some(dialog) = &mut self.rules.screen.add
                 {
                     dialog.temporary_only = false;
                 }
@@ -1461,98 +1151,22 @@ impl State {
                     self.text(&errors::select_rule_set(crate::i18n::language(), &error))
                 });
             }
-            WorkerEvent::CreateRuleSet(result) => {
-                self.operations.rules_edit = false;
-                match result {
-                    Ok(set) => {
-                        self.rule_screen.selected_set = Some(set.id);
-                        self.rule_screen.name = None;
-                    }
-                    Err(error) => {
-                        self.name_error(errors::rule_set(crate::i18n::language(), &error))
-                    }
-                }
-            }
-            WorkerEvent::RenameRuleSet(result) => {
-                self.operations.rules_edit = false;
-                match result {
-                    Ok(()) => self.rule_screen.name = None,
-                    Err(error) => {
-                        self.name_error(errors::rule_set(crate::i18n::language(), &error))
-                    }
-                }
-            }
-            WorkerEvent::DeleteRuleSet(result) => {
-                self.rule_screen.delete = None;
-                self.finish_rule_edit(result);
-            }
-            WorkerEvent::SetDefaultTarget(result) => self.finish_rule_edit(result),
-            WorkerEvent::Processes { request, result } => {
-                let message = result
-                    .as_ref()
-                    .err()
-                    .map(|error| self.text(&errors::process_list(crate::i18n::language(), error)));
-                if let Some(dialog) = &mut self.rule_screen.add
-                    && dialog.load_request == Some(request)
-                {
-                    dialog.load_request = None;
-                    match result {
-                        Ok(processes) => {
-                            dialog.processes = group_processes(processes);
-                            dialog.processes_loaded = true;
-                            dialog.selected_process = None;
-                            dialog.processes_error = None;
-                        }
-                        Err(_) => dialog.processes_error = message,
-                    }
-                }
-            }
+            event @ (WorkerEvent::CreateRuleSet(_)
+            | WorkerEvent::RenameRuleSet(_)
+            | WorkerEvent::DeleteRuleSet(_)
+            | WorkerEvent::SetDefaultTarget(_)
+            | WorkerEvent::Processes { .. }
+            | WorkerEvent::AddRule(_)
+            | WorkerEvent::AddRules(_)
+            | WorkerEvent::UpdateRule(_)
+            | WorkerEvent::SetRuleTarget(_)
+            | WorkerEvent::SetRuleEnabled(_)
+            | WorkerEvent::MoveRule(_)
+            | WorkerEvent::MoveRules(_)
+            | WorkerEvent::RemoveRule(_)
+            | WorkerEvent::RemoveRules(_)) => self.reduce_rules(event),
             #[cfg(windows)]
-            WorkerEvent::BrowsedExecutable(path) => {
-                if let Some(dialog) = &mut self.rule_screen.add {
-                    if !dialog.browsing {
-                        return;
-                    }
-                    dialog.browsing = false;
-                    if dialog.kind == RuleInputKind::Process
-                        && let Some(path) = path
-                    {
-                        dialog.process = browsed_process_value(&path, dialog.match_mode);
-                        dialog.process_filter = path
-                            .file_name()
-                            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
-                            .into_owned();
-                        dialog.browsed = Some(path);
-                        dialog.selected_process = None;
-                        dialog.error = None;
-                        dialog.focus_input = true;
-                    }
-                }
-            }
-            WorkerEvent::AddRule(result) => self.finish_dialog_rule_edit(result.map(|_| ())),
-            WorkerEvent::AddRules(result) => {
-                if let Some(id) = self.keep_temporary.take() {
-                    let success = result.is_ok();
-                    self.finish_rule_edit(result.map(|_| ()));
-                    if success && self.temporary_rules_loaded {
-                        self.keep_apply = Some(id);
-                    }
-                } else {
-                    self.finish_dialog_rule_edit(result.map(|_| ()));
-                }
-            }
-            WorkerEvent::UpdateRule(result) => self.finish_dialog_rule_edit(result),
-            WorkerEvent::SetRuleTarget(result) => self.finish_rule_edit(result),
-            WorkerEvent::SetRuleEnabled(result) => self.finish_rule_edit(result),
-            WorkerEvent::MoveRule(result) => self.finish_rule_edit(result),
-            WorkerEvent::MoveRules(result) => self.finish_rule_edit(result),
-            WorkerEvent::RemoveRule(result) | WorkerEvent::RemoveRules(result) => {
-                if result.is_ok() {
-                    self.rule_screen.clear_selection();
-                }
-                self.rule_screen.delete = None;
-                self.finish_rule_edit(result);
-            }
+            event @ WorkerEvent::BrowsedExecutable(_) => self.reduce_rules(event),
             WorkerEvent::SetKillSwitch(result) => {
                 self.operations.kill_switch = false;
                 self.operation_error = result
@@ -1609,63 +1223,6 @@ impl State {
         }
     }
 
-    fn name_error(&mut self, error: String) {
-        let message = self.text(&error);
-        if let Some(dialog) = &mut self.rule_screen.name {
-            dialog.error = Some(message);
-        } else {
-            self.operation_error = Some(message);
-        }
-    }
-
-    fn finish_rule_edit(&mut self, result: Result<(), rosetun_core::RuleSetError>) {
-        self.operations.rules_edit = false;
-        self.operation_error = result
-            .err()
-            .map(|error| self.text(&errors::rule_set(crate::i18n::language(), &error)));
-    }
-
-    fn finish_dialog_rule_edit(&mut self, result: Result<(), rosetun_core::RuleSetError>) {
-        self.operations.rules_edit = false;
-        if self.rule_screen.add.is_some() {
-            match result {
-                Ok(()) => {
-                    self.rule_screen.add = None;
-                    self.rule_screen.filter = RuleFilter::default();
-                    self.rule_screen.clear_selection();
-                }
-                Err(error) => {
-                    let message = self.text(&errors::rule_set(crate::i18n::language(), &error));
-                    if let Some(dialog) = &mut self.rule_screen.add {
-                        dialog.busy = false;
-                        dialog.error = Some(message);
-                    }
-                }
-            }
-        } else {
-            self.operation_error = result
-                .err()
-                .map(|error| self.text(&errors::rule_set(crate::i18n::language(), &error)));
-        }
-    }
-
-    fn start_rule_edit(&mut self, job: Job) -> Option<Job> {
-        self.operations.rules_edit = true;
-        self.operation_error = None;
-        Some(job)
-    }
-
-    fn load_processes(&mut self) -> Option<Job> {
-        let dialog = self.rule_screen.add.as_mut()?;
-        if dialog.kind != RuleInputKind::Process || dialog.load_request.is_some() || dialog.busy {
-            return None;
-        }
-        self.next_process_request += 1;
-        dialog.load_request = Some(self.next_process_request);
-        dialog.processes_error = None;
-        Some(Job::LoadProcesses(self.next_process_request))
-    }
-
     fn helper_result(&mut self, result: Result<(), HelperCommandError>) {
         self.operation_error = result
             .err()
@@ -1697,326 +1254,51 @@ impl State {
             | Action::ConfirmResetSettings
             | Action::SetVerboseLog(_)) => return self.act_settings(action),
             #[cfg(windows)]
-            action @ (Action::SetAutostart(_) | Action::SetCloseToTray(_) | Action::OpenFolder(_)) => {
+            action @ (Action::SetAutostart(_)
+            | Action::SetCloseToTray(_)
+            | Action::OpenFolder(_)) => {
                 return self.act_settings(action);
             }
             action @ (Action::CheckUpdatesNow | Action::SkipVersion) => {
                 return self.act_updates(action);
             }
-            Action::OpenRules => {
-                if !self.rule_screen.opened {
-                    self.rule_screen.selected_set = self.preferred_set();
-                    self.rule_screen.clear_selection();
-                }
-                self.rule_screen.opened = true;
-                return self.show_screen(Screen::Rules);
-            }
-            Action::OpenActiveRules => {
-                let preferred = self.preferred_set();
-                if self.rule_screen.selected_set != preferred {
-                    self.rule_screen.clear_selection();
-                }
-                self.rule_screen.selected_set = preferred;
-                self.rule_screen.opened = true;
-                return self.show_screen(Screen::Rules);
-            }
-            Action::ChooseRuleSet(id) => {
-                if self.config.rule_sets.iter().any(|set| set.id == id) {
-                    if self.rule_screen.selected_set.as_ref() != Some(&id) {
-                        self.rule_screen.clear_selection();
-                    }
-                    self.rule_screen.selected_set = Some(id);
-                }
-            }
-            Action::SetRuleTypeFilter(kind) => {
-                if self.rule_screen.filter.kind != kind {
-                    self.rule_screen.filter.kind = kind;
-                    self.rule_screen.clear_selection();
-                }
-            }
-            Action::SetRuleTargetFilter(target) => {
-                if self.rule_screen.filter.target != target {
-                    self.rule_screen.filter.target = target;
-                    self.rule_screen.clear_selection();
-                }
-            }
-            Action::SelectRule {
-                rule,
-                additive,
-                range,
-            } => {
-                if self.screen == Screen::Rules {
-                    self.select_rule(rule, additive, range);
-                }
-            }
-            Action::SelectVisibleRules => {
-                if self.screen == Screen::Rules {
-                    let visible = self.visible_rule_ids();
-                    self.rule_screen.selected_rules = visible.iter().cloned().collect();
-                    self.rule_screen.selection_anchor = visible.last().cloned();
-                }
-            }
-            Action::ClearRuleSelection => self.rule_screen.clear_selection(),
-            Action::OpenCreateSet => {
-                if self.can_edit_rules() && self.rule_screen.name.is_none() {
-                    self.rule_screen.name = Some(NameDialog {
-                        kind: NameDialogKind::Create,
-                        name: tr!("basic").to_owned(),
-                        error: None,
-                        focus: true,
-                    });
-                }
-            }
-            Action::OpenRenameSet => {
-                if self.can_edit_rules()
-                    && self.rule_screen.name.is_none()
-                    && let Some(set) = self.selected_rules()
-                {
-                    self.rule_screen.name = Some(NameDialog {
-                        kind: NameDialogKind::Rename(set.id.clone()),
-                        name: set.name.clone(),
-                        error: None,
-                        focus: true,
-                    });
-                }
-            }
-            Action::CancelSetName => {
-                if !self.operations.rules_edit {
-                    self.rule_screen.name = None;
-                }
-            }
-            Action::SubmitSetName => {
-                if self.can_edit_rules()
-                    && let Some(dialog) = &self.rule_screen.name
-                    && !dialog.name.trim().is_empty()
-                {
-                    let name = dialog.name.trim().to_owned();
-                    let job = match &dialog.kind {
-                        NameDialogKind::Create => Job::CreateRuleSet(name),
-                        NameDialogKind::Rename(id) => Job::RenameRuleSet(id.clone(), name),
-                    };
-                    if let Some(dialog) = &mut self.rule_screen.name {
-                        dialog.error = None;
-                    }
-                    return self.start_rule_edit(job);
-                }
-            }
-            Action::RequestDeleteSet => {
-                if self.can_edit_rules()
-                    && self.rule_screen.delete.is_none()
-                    && let Some(set) = self.selected_rules()
-                {
-                    self.rule_screen.delete = Some(DeleteDialog::Set(set.id.clone()));
-                }
-            }
-            Action::RequestDeleteRule(rule) => {
-                if self.can_edit_rules()
-                    && self.rule_screen.delete.is_none()
-                    && let Some(set) = self.selected_rules()
-                    && set.rules.iter().any(|item| item.id == rule)
-                {
-                    self.rule_screen.delete = Some(DeleteDialog::Rule {
-                        set: set.id.clone(),
-                        rule,
-                    });
-                }
-            }
-            Action::RequestDeleteSelectedRules => {
-                if self.can_edit_rules()
-                    && self.rule_screen.delete.is_none()
-                    && let Some(set) = self.selected_rules()
-                {
-                    let set_id = set.id.clone();
-                    let rules = self.selected_rule_ids();
-                    self.rule_screen.delete = match rules.as_slice() {
-                        [] => None,
-                        [rule] => Some(DeleteDialog::Rule {
-                            set: set_id,
-                            rule: rule.clone(),
-                        }),
-                        _ => Some(DeleteDialog::Rules { set: set_id, rules }),
-                    };
-                }
-            }
-            Action::CancelRuleDelete => {
-                if !self.operations.rules_edit {
-                    self.rule_screen.delete = None;
-                }
-            }
-            Action::ConfirmRuleDelete => {
-                if self.can_edit_rules()
-                    && let Some(dialog) = &self.rule_screen.delete
-                {
-                    let job = match dialog {
-                        DeleteDialog::Set(id) => Job::DeleteRuleSet(id.clone()),
-                        DeleteDialog::Rule { set, rule } => {
-                            Job::RemoveRule(set.clone(), rule.clone())
-                        }
-                        DeleteDialog::Rules { set, rules } => {
-                            Job::RemoveRules(set.clone(), rules.clone())
-                        }
-                    };
-                    return self.start_rule_edit(job);
-                }
-            }
-            Action::SetDefaultTarget(target) => {
-                if self.can_edit_rules()
-                    && matches!(target, RuleTarget::Proxy | RuleTarget::Direct)
-                    && let Some(set) = self.selected_rules()
-                    && set.default_target != target
-                {
-                    return self.start_rule_edit(Job::SetDefaultTarget(set.id.clone(), target));
-                }
-            }
-            Action::AddTemplate(template) => {
-                if self.can_edit_rules()
-                    && let Some(set) = self.selected_rules()
-                    && !set.rules.iter().any(|rule| {
-                        matches!(&rule.matcher, RuleMatcher::Template(current) if *current == template)
-                    })
-                {
-                    return self.start_rule_edit(Job::AddRule(
-                        set.id.clone(),
-                        RuleMatcher::Template(template),
-                        template.default_target(),
-                    ));
-                }
-            }
-            Action::RemoveTemplate(template) => {
-                if self.can_edit_rules()
-                    && let Some(set) = self.selected_rules()
-                    && let Some(rule) = set.rules.iter().find(|rule| {
-                        matches!(&rule.matcher, RuleMatcher::Template(current) if *current == template)
-                    })
-                {
-                    return self.start_rule_edit(Job::RemoveRule(set.id.clone(), rule.id.clone()));
-                }
-            }
-            Action::OpenAddRule => {
-                if self.can_edit_rules()
-                    && self.rule_screen.add.is_none()
-                    && let Some(set) = self.selected_rules()
-                {
-                    self.rule_screen.add = Some(AddRuleDialog::new(set.id.clone()));
-                    return self.load_processes();
-                }
-            }
-            Action::OpenEditRule(id) => {
-                if self.can_edit_rules()
-                    && self.rule_screen.add.is_none()
-                    && let Some(set) = self.selected_rules()
-                    && let Some(rule) = set
-                        .rules
-                        .iter()
-                        .find(|rule| rule.id == id && crate::rules::editable(&rule.matcher))
-                    && let Some(dialog) = AddRuleDialog::for_rule(set.id.clone(), rule)
-                {
-                    self.rule_screen.add = Some(dialog);
-                    if self.rule_screen.add.as_ref().unwrap().kind == RuleInputKind::Process {
-                        return self.load_processes();
-                    }
-                }
-            }
-            Action::CancelAddRule => {
-                if self
-                    .rule_screen
-                    .add
-                    .as_ref()
-                    .is_some_and(|dialog| !dialog.busy)
-                {
-                    self.rule_screen.add = None;
-                }
-            }
-            Action::SelectRuleInput(kind) => {
-                if let Some(dialog) = &mut self.rule_screen.add
-                    && !dialog.busy
-                    && dialog.kind != kind
-                    && dialog.editing.is_none()
-                {
-                    dialog.kind = kind;
-                    dialog.error = None;
-                    dialog.focus_input = true;
-                    if kind == RuleInputKind::Process && !dialog.processes_loaded {
-                        return self.load_processes();
-                    }
-                }
-            }
-            Action::RefreshProcesses => return self.load_processes(),
+            action @ (Action::OpenRules
+            | Action::OpenActiveRules
+            | Action::ChooseRuleSet(_)
+            | Action::SetRuleTypeFilter(_)
+            | Action::SetRuleTargetFilter(_)
+            | Action::SelectRule { .. }
+            | Action::SelectVisibleRules
+            | Action::ClearRuleSelection
+            | Action::OpenCreateSet
+            | Action::OpenRenameSet
+            | Action::CancelSetName
+            | Action::SubmitSetName
+            | Action::RequestDeleteSet
+            | Action::RequestDeleteRule(_)
+            | Action::RequestDeleteSelectedRules
+            | Action::CancelRuleDelete
+            | Action::ConfirmRuleDelete
+            | Action::SetDefaultTarget(_)
+            | Action::AddTemplate(_)
+            | Action::RemoveTemplate(_)
+            | Action::OpenAddRule
+            | Action::OpenEditRule(_)
+            | Action::CancelAddRule
+            | Action::SelectRuleInput(_)
+            | Action::RefreshProcesses
+            | Action::SubmitAddRule) => return self.act_rules(action),
             #[cfg(windows)]
-            Action::BrowseExecutable => {
-                if let Some(dialog) = &mut self.rule_screen.add
-                    && dialog.kind == RuleInputKind::Process
-                    && !dialog.busy
-                    && !dialog.browsing
-                {
-                    dialog.browsing = true;
-                    return Some(Job::BrowseExecutable);
-                }
-            }
-            Action::SubmitAddRule => {
-                if self.can_edit_rules()
-                    && let Some(dialog) = &self.rule_screen.add
-                    && !dialog.busy
-                    && self.rule_screen.selected_set.as_ref() == Some(&dialog.set)
-                {
-                    let matchers: Option<Vec<_>> = match dialog.kind {
-                        RuleInputKind::Domain => {
-                            if let Some(original) = dialog.unchanged_domain() {
-                                Some(vec![RuleMatcher::Domain(original)])
-                            } else {
-                                let parsed = rosetun_core::parse_domain_lines(
-                                    &dialog.domains,
-                                    dialog.subdomains,
-                                );
-                                (parsed.errors.is_empty() && !parsed.domains.is_empty()).then(|| {
-                                    parsed.domains.into_iter().map(RuleMatcher::Domain).collect()
-                                })
-                            }
-                        }
-                        RuleInputKind::Process => rosetun_core::parse_process_input(&dialog.process)
-                            .ok()
-                            .map(|process| vec![RuleMatcher::Process(process)]),
-                    };
-                    if let Some(mut matchers) = matchers {
-                        if dialog.temporary_only && dialog.editing.is_none() {
-                            let target = dialog.target;
-                            return self.act(Action::AddTemporary(matchers, target));
-                        }
-                        let job = if let Some(id) = &dialog.editing {
-                            if matchers.len() != 1 {
-                                return None;
-                            }
-                            let current = self
-                                .selected_rules()
-                                .and_then(|set| set.rules.iter().find(|rule| &rule.id == id))?;
-                            let matcher = matchers.pop().unwrap();
-                            if current.matcher == matcher && current.target == dialog.target {
-                                self.rule_screen.add = None;
-                                return None;
-                            }
-                            Job::UpdateRule(dialog.set.clone(), id.clone(), matcher, dialog.target)
-                        } else if dialog.kind == RuleInputKind::Domain {
-                            Job::AddRules(dialog.set.clone(), matchers, dialog.target)
-                        } else {
-                            Job::AddRule(dialog.set.clone(), matchers.pop().unwrap(), dialog.target)
-                        };
-                        if let Some(dialog) = &mut self.rule_screen.add {
-                            dialog.busy = true;
-                            dialog.error = None;
-                        }
-                        return self.start_rule_edit(job);
-                    }
-                }
-            }
+            action @ Action::BrowseExecutable => return self.act_rules(action),
             Action::AddTemporary(matchers, target) => {
                 if self.can_change_temporary()
                     && self.can_edit_rules()
-                    && let Some(dialog) = &self.rule_screen.add
+                    && let Some(dialog) = &self.rules.screen.add
                     && dialog.temporary_only
                     && dialog.editing.is_none()
                     && !dialog.busy
                     && self.config.active_rule_set.as_ref() == Some(&dialog.set)
-                    && self.rule_screen.selected_set.as_ref() == Some(&dialog.set)
+                    && self.rules.screen.selected_set.as_ref() == Some(&dialog.set)
                     && let Some(set) = self.selected_rules()
                 {
                     let existing: Vec<_> = self
@@ -2031,19 +1313,20 @@ impl State {
                             crate::i18n::language(),
                             &rosetun_core::RuleSetError::DuplicateRule,
                         ));
-                        if let Some(dialog) = &mut self.rule_screen.add {
+                        if let Some(dialog) = &mut self.rules.screen.add {
                             dialog.error = Some(message);
                         }
                         return None;
                     }
                     let before = std::mem::take(&mut self.temporary_rules);
-                    self.temporary_rules = added.into_iter().chain(before.iter().cloned()).collect();
+                    self.temporary_rules =
+                        added.into_iter().chain(before.iter().cloned()).collect();
                     if let Some(request) = self.apply_request() {
                         self.temporary_before_apply = Some(before);
                         self.start_apply();
-                        self.rule_screen.add = None;
-                        self.rule_screen.filter = RuleFilter::default();
-                        self.rule_screen.clear_selection();
+                        self.rules.screen.add = None;
+                        self.rules.screen.filter = RuleFilter::default();
+                        self.rules.screen.clear_selection();
                         return Some(Job::Apply(Box::new(request)));
                     }
                     self.temporary_rules = before;
@@ -2068,106 +1351,23 @@ impl State {
                 if self.can_change_temporary()
                     && self.can_edit_rules()
                     && self.keep_apply.is_none()
-                    && self.config.active_rule_set == self.rule_screen.selected_set
+                    && self.config.active_rule_set == self.rules.screen.selected_set
                     && let Some(set) = self.selected_rules()
                     && let Some(rule) = self.temporary_rules.iter().find(|rule| rule.id == id)
                 {
-                    let job = Job::AddRules(set.id.clone(), vec![rule.matcher.clone()], rule.target);
+                    let job =
+                        Job::AddRules(set.id.clone(), vec![rule.matcher.clone()], rule.target);
                     self.keep_temporary = Some(id);
                     return self.start_rule_edit(job);
                 }
             }
-            Action::SetRuleTarget(rule, target) => {
-                if self.can_edit_rules()
-                    && let Some(set) = self.selected_rules()
-                    && set
-                        .rules
-                        .iter()
-                        .any(|item| item.id == rule && item.target != target)
-                {
-                    return self.start_rule_edit(Job::SetRuleTarget(set.id.clone(), rule, target));
-                }
-            }
-            Action::SetRuleEnabled(rule, enabled) => {
-                if self.can_edit_rules()
-                    && let Some(set) = self.selected_rules()
-                    && set
-                        .rules
-                        .iter()
-                        .any(|item| item.id == rule && item.enabled != enabled)
-                {
-                    return self.start_rule_edit(Job::SetRuleEnabled(
-                        set.id.clone(),
-                        rule,
-                        enabled,
-                    ));
-                }
-            }
-            Action::DropRule(rule, slot) => {
-                if self.can_edit_rules()
-                    && !self.rule_screen.filter.is_active()
-                    && let Some(set) = self.selected_rules()
-                    && let Some(from) = set.rules.iter().position(|item| item.id == rule)
-                    && let Some(to) = drop_target(from, slot, set.rules.len())
-                {
-                    return self.start_rule_edit(Job::MoveRule(set.id.clone(), rule, to));
-                }
-            }
-            Action::DropRules(rules, slot) => {
-                if self.can_edit_rules()
-                    && !self.rule_screen.filter.is_active()
-                    && rules.len() >= 2
-                    && rules.len() == self.rule_screen.selected_rules.len()
-                    && rules.iter().cloned().collect::<BTreeSet<_>>()
-                        == self.rule_screen.selected_rules
-                    && let Some(set) = self.selected_rules()
-                    && rules.len() <= set.rules.len()
-                    && slot <= set.rules.len() - rules.len()
-                    && rules
-                        .iter()
-                        .all(|id| set.rules.iter().any(|rule| &rule.id == id))
-                {
-                    return self.start_rule_edit(Job::MoveRules(set.id.clone(), rules, slot));
-                }
-            }
-            Action::MoveRuleToTop(rule) => {
-                if self.can_edit_rules()
-                    && let Some(set) = self.selected_rules()
-                    && set
-                        .rules
-                        .iter()
-                        .position(|item| item.id == rule)
-                        .is_some_and(|index| index > 0)
-                {
-                    return self.start_rule_edit(Job::MoveRule(set.id.clone(), rule, 0));
-                }
-            }
-            move_action @ (Action::MoveSelectedRulesToTop | Action::MoveSelectedRulesToEnd) => {
-                if self.can_edit_rules()
-                    && !self.rule_screen.filter.is_active()
-                    && let Some(set) = self.selected_rules()
-                {
-                    let set_id = set.id.clone();
-                    let len = set.rules.len();
-                    let rules = self.selected_rule_ids();
-                    if rules.len() >= 2 {
-                        let at_end = matches!(move_action, Action::MoveSelectedRulesToEnd);
-                        let index = if at_end { len - rules.len() } else { 0 };
-                        let already_there = if at_end {
-                            set.rules[len - rules.len()..]
-                                .iter()
-                                .all(|rule| self.rule_screen.selected_rules.contains(&rule.id))
-                        } else {
-                            set.rules[..rules.len()]
-                                .iter()
-                                .all(|rule| self.rule_screen.selected_rules.contains(&rule.id))
-                        };
-                        if !already_there {
-                            return self.start_rule_edit(Job::MoveRules(set_id, rules, index));
-                        }
-                    }
-                }
-            }
+            action @ (Action::SetRuleTarget(_, _)
+            | Action::SetRuleEnabled(_, _)
+            | Action::DropRule(_, _)
+            | Action::DropRules(_, _)
+            | Action::MoveRuleToTop(_)
+            | Action::MoveSelectedRulesToTop
+            | Action::MoveSelectedRulesToEnd) => return self.act_rules(action),
             Action::Primary => {
                 let job = match self.primary_action() {
                     PrimaryAction::Connect | PrimaryAction::Retry | PrimaryAction::Reconnect => {
@@ -2199,7 +1399,9 @@ impl State {
                 }
             }
             Action::Apply => {
-                if self.can_apply() && let Some(request) = self.apply_request() {
+                if self.can_apply()
+                    && let Some(request) = self.apply_request()
+                {
                     self.start_apply();
                     return Some(Job::Apply(Box::new(request)));
                 }
@@ -2251,7 +1453,10 @@ impl State {
             }
             Action::MeasureDelay => {
                 if self.status_received
-                    && matches!(self.visible_status().map(|status| &status.state), Some(ConnectionState::Connected))
+                    && matches!(
+                        self.visible_status().map(|status| &status.state),
+                        Some(ConnectionState::Connected)
+                    )
                     && !matches!(self.tunnel_delay, TunnelDelay::Measuring)
                 {
                     self.tunnel_delay = TunnelDelay::Measuring;
