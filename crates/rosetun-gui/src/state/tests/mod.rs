@@ -3,17 +3,20 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rosetun_config::{
-    DomainMatch, Node, NodeId, Outbound, ProcessMatch, Rule, RuleMatcher, RuleSet, Selection,
-    VlessParams,
+    ConnectionState, DomainMatch, FailureKind, Node, NodeId, Outbound, ProcessMatch, Rule,
+    RuleMatcher, RuleSet, Selection, VlessParams,
 };
 use rosetun_core::{
     AddFromUrlError, FetchError, ParseError, Ping, Release, RemoveSubscriptionError, RuleSetError,
     StoreError, UpdateCheckError, UpdateReport, UpdateSubscriptionError,
 };
-use rosetun_ipc::{ConnectRequestError, ProbeResult};
+use rosetun_ipc::{ConnectRequestError, ErrorCode, HelperError, ProbeOutcome, ProbeResult};
 use rosetun_processes::RunningProcess;
 
+use crate::actions::PrimaryAction;
+use crate::errors;
 use crate::rules::{ProcessGroup, ProcessMatchMode};
+use crate::worker::HelperCommandError;
 
 fn report() -> UpdateReport {
     UpdateReport {
