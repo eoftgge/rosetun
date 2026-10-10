@@ -6,6 +6,8 @@ param(
     [Parameter(Mandatory)][string]$RequestPath,
     [string]$BuildDir = (Join-Path $PSScriptRoot '..\..\target\release'),
     [switch]$UseHostNode,
+    [string]$NodeBindInterface,
+    [switch]$KeepNode,
     [switch]$Build
 )
 
@@ -50,7 +52,9 @@ function Invoke-ListCli {
         $env:ROSETUN_CONFIG = $configPath
         try {
             $output = & "$dir\rosetun.exe" $action 2>&1 | ForEach-Object { "$_" }
-            [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
         }
         finally {
             Remove-Item Env:ROSETUN_CONFIG -ErrorAction SilentlyContinue
@@ -58,10 +62,23 @@ function Invoke-ListCli {
     } -ArgumentList (Get-RosetunGuestDir), $ConfigPath, $Action
 }
 
+$nodeStartedByMatrix = $false
+try {
 if ($Build) {
     & cargo build -q --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
-    if ($LASTEXITCODE -ne 0) {
-        throw "cargo build failed with exit code $LASTEXITCODE."
+    $exitCode = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($exitCode -ne 0) {
+        throw "cargo build failed with exit code $exitCode."
+    }
+}
+
+if ($UseHostNode) {
+    if ($NodeBindInterface) {
+        $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface
+    }
+    else {
+        $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath
     }
 }
 
@@ -148,6 +165,7 @@ try {
         $output = & "$dir\sing-box.exe" rule-set compile --output $binary $source 2>&1 |
             ForEach-Object { "$_" }
         $exitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
         if ($exitCode -eq 0) {
             $config = Get-Content -Path $configPath -Raw | ConvertFrom-Json
             $config.lists[0].format = 'sing_box_binary'
@@ -188,6 +206,14 @@ finally {
         Remove-Item -Path (Split-Path -Parent $configPath) -Recurse -Force -ErrorAction SilentlyContinue
     } -ArgumentList $configPath
 }
+}
+finally {
+    if ($nodeStartedByMatrix -and -not $KeepNode) {
+        try { Stop-RosetunTestNode }
+        catch { Write-Warning "Could not stop the test node: $_" }
+    }
+}
 
 $results | Format-Table -AutoSize
 if ($results.Result -contains 'FAIL') { exit 1 }
+exit 0

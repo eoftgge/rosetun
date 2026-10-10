@@ -10,6 +10,8 @@ param(
     [string]$BuildDir = (Join-Path $PSScriptRoot '..\..\target\release'),
     [switch]$RestoreCheckpoint,
     [switch]$UseHostNode,
+    [string]$NodeBindInterface,
+    [switch]$KeepNode,
     # Builds the workspace first, so a forgotten build cannot deploy stale binaries.
     [switch]$Build
 )
@@ -54,11 +56,24 @@ function Format-Egress {
     "curl $($Egress.CurlExit), local '$($Egress.LocalIp)', tun '$($Egress.TunAddresses)': $($Egress.Error)"
 }
 
+$nodeStartedByMatrix = $false
+try {
 if ($Build) {
     Write-Host 'Building...'
     & cargo build -q --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
-    if ($LASTEXITCODE -ne 0) {
-        throw "cargo build failed with exit code $LASTEXITCODE."
+    $exitCode = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($exitCode -ne 0) {
+        throw "cargo build failed with exit code $exitCode."
+    }
+}
+
+if ($UseHostNode) {
+    if ($NodeBindInterface) {
+        $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface
+    }
+    else {
+        $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath
     }
 }
 
@@ -316,7 +331,9 @@ $cancel = Invoke-RosetunGuest -ScriptBlock {
     function Read-TunnelState {
         param($exe)
         $output = & $exe status 2>&1 | Out-String
-        if ($output -match '(?m)^state: (\w+)') { return $Matches[1] }
+        $exitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        if ($exitCode -eq 0 -and $output -match '(?m)^state: (\w+)') { return $Matches[1] }
         return 'unknown'
     }
     $process = Start-Process -FilePath $cli -ArgumentList @('connect', "`"$request`"") `
@@ -333,6 +350,7 @@ $cancel = Invoke-RosetunGuest -ScriptBlock {
         $watch = [Diagnostics.Stopwatch]::StartNew()
         $output = & $cli disconnect 2>&1 | Out-String
         $exit = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
         $state = Read-TunnelState $cli
         while ($state -ne 'Disconnected' -and $watch.Elapsed.TotalSeconds -lt 2) {
             Start-Sleep -Milliseconds 50
@@ -501,6 +519,14 @@ if ($ipv6NeighborCreated) {
     }
 }
 
+}
+finally {
+    if ($nodeStartedByMatrix -and -not $KeepNode) {
+        try { Stop-RosetunTestNode }
+        catch { Write-Warning "Could not stop the test node: $_" }
+    }
+}
+
 # Result first, so a long note cannot push it off the screen.
 $results | Format-Table Result, Scenario, Check, Note -AutoSize
 
@@ -510,3 +536,4 @@ if ($results.Result -contains 'FAIL') {
     Write-Host "All helper logs of this run: $(Save-RosetunLogs)"
     exit 1
 }
+exit 0

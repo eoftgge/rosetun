@@ -50,8 +50,10 @@ function Install-RosetunSingBox {
     $unpacked = Join-Path $env:TEMP $name
 
     & curl.exe --fail --silent --show-error --location --output $zip $url
-    if ($LASTEXITCODE -ne 0) {
-        throw "Downloading $url failed with curl exit code $LASTEXITCODE."
+    $exitCode = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($exitCode -ne 0) {
+        throw "Downloading $url failed with curl exit code $exitCode."
     }
     try {
         Expand-Archive -Path $zip -DestinationPath $env:TEMP -Force
@@ -85,7 +87,7 @@ function Start-RosetunTestNode {
     $udpListening = Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
     if ($tcpListening -and $udpListening) {
         Write-Host "Test node already listens on TCP $tcpPort and UDP $udpPort."
-        return
+        return $false
     }
     if ($tcpListening -or $udpListening) {
         throw 'One test port is already in use; stop the existing node before starting both inbounds.'
@@ -105,8 +107,10 @@ function Start-RosetunTestNode {
     }
     if (-not (Test-Path $keyPath)) {
         $pair = (& $SingBoxPath generate tls-keypair rosetun-test.invalid 2>&1) -join "`n"
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Could not generate the test TLS certificate.'
+        $exitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        if ($exitCode -ne 0) {
+            throw "Could not generate the test TLS certificate (exit $exitCode)."
         }
         $key = [regex]::Match($pair, '(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----')
         $cert = [regex]::Match($pair, '(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----')
@@ -131,20 +135,57 @@ function Start-RosetunTestNode {
     $node = Start-Process -FilePath $SingBoxPath -ArgumentList 'run', '--disable-color', '-c', $configPath `
         -WindowStyle Hidden -PassThru
     $deadline = (Get-Date).AddSeconds(15)
-    while (-not (Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue) -or
-           -not (Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue)) {
+    while ($true) {
+        $tcpListening = @(Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue)
+        $udpListening = @(Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue)
+        if (-not $node.HasExited -and $tcpListening.Count -gt 0 -and $udpListening.Count -gt 0 -and
+            -not ($tcpListening | Where-Object { $_.OwningProcess -ne $node.Id }) -and
+            -not ($udpListening | Where-Object { $_.OwningProcess -ne $node.Id })) {
+            break
+        }
         if ($node.HasExited -or (Get-Date) -gt $deadline) {
+            if (-not $node.HasExited) {
+                Stop-Process -InputObject $node -Force -ErrorAction SilentlyContinue
+                Wait-Process -InputObject $node -Timeout 5 -ErrorAction SilentlyContinue
+            }
             throw "The test node did not start on TCP $tcpPort and UDP $udpPort; see $logDir\test-node.log."
         }
         Start-Sleep -Milliseconds 200
     }
     Write-Host "Test node listening on TCP $tcpPort and UDP $udpPort, log: $logDir\test-node.log"
+    return $true
 }
 
 function Stop-RosetunTestNode {
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
-    Get-NetTCPConnection -LocalPort $config.inbounds[0].listen_port -State Listen -ErrorAction SilentlyContinue |
-        ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+    $tcpPort = ($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' }).listen_port
+    $udpPort = ($config.inbounds | Where-Object { $_.type -eq 'hysteria2' }).listen_port
+    $tcpListening = @(Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue)
+    $udpListening = @(Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue)
+    if ($tcpListening.Count -eq 0 -or $udpListening.Count -eq 0) {
+        Write-Warning "No complete test node listens on TCP $tcpPort and UDP $udpPort; nothing stopped."
+        return
+    }
+    $tcpOwners = @($tcpListening | Select-Object -ExpandProperty OwningProcess -Unique)
+    $udpOwners = @($udpListening | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($tcpOwners.Count -ne 1 -or $udpOwners.Count -ne 1 -or $tcpOwners[0] -ne $udpOwners[0]) {
+        Write-Warning "TCP $tcpPort and UDP $udpPort do not have one common owner; nothing stopped."
+        return
+    }
+    $node = Get-Process -Id $tcpOwners[0] -ErrorAction SilentlyContinue
+    if (-not $node -or $node.ProcessName -ne 'sing-box') {
+        Write-Warning "The process on TCP $tcpPort and UDP $udpPort is not sing-box.exe; nothing stopped."
+        return
+    }
+    $tcpListening = @(Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue)
+    $udpListening = @(Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue)
+    if ($tcpListening.Count -eq 0 -or $udpListening.Count -eq 0 -or
+        @($tcpListening | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0 -or
+        @($udpListening | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0) {
+        Write-Warning "Test node port ownership changed; nothing stopped."
+        return
+    }
+    Stop-Process -InputObject $node -Force
 }
 
 function Connect-RosetunVm {
@@ -408,8 +449,10 @@ function Update-Rosetun {
     )
     if ($Build) {
         & cargo build --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
-        if ($LASTEXITCODE -ne 0) {
-            throw "cargo build failed with exit code $LASTEXITCODE."
+        $exitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        if ($exitCode -ne 0) {
+            throw "cargo build failed with exit code $exitCode."
         }
     }
     # A running helper keeps its executable locked.
@@ -510,7 +553,9 @@ function Invoke-RosetunCli {
     $result = Invoke-RosetunGuest -ScriptBlock {
         param($dir, [string[]]$cliArgs)
         $output = & "$dir\rosetun.exe" @cliArgs 2>&1 | ForEach-Object { "$_" }
-        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
+        $exitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
     } -ArgumentList $script:Config.GuestDir, $Arguments
 
     # Callers usually discard the result, so a failure must be visible here.
