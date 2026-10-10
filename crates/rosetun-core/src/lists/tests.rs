@@ -177,6 +177,74 @@ fn source_json_is_normalized_before_it_is_saved() {
     assert_eq!(payload.bytes, saved);
 }
 
+fn url_list(store: &Store) -> List {
+    let list = add_list_from_bytes(store, "Example", "example.txt", b"example.com\n").unwrap();
+    store
+        .modify(|config| {
+            config.lists[0].source =
+                ListSource::Url("https://lists.example.com/example.txt".to_owned());
+            Ok::<_, StoreError>(())
+        })
+        .unwrap();
+    store.load().unwrap().lists.into_iter().find(|item| item.id == list.id).unwrap()
+}
+
+#[test]
+fn updating_a_url_list_repairs_a_missing_file() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let list = url_list(&store);
+    let path = list_path(&directory.0.join("lists"), &list);
+    fs::remove_file(&path).unwrap();
+
+    let updated = update_list_with(&store, &list.id, None, Timeouts::default(), &mut |_, _| {
+        Ok(b"example.invalid\n".to_vec())
+    })
+    .unwrap();
+
+    assert_eq!(fs::read(&path).unwrap(), b"example.invalid\n");
+    assert_eq!(updated.sha256.as_deref(), Some(checksum(b"example.invalid\n").as_str()));
+    assert_eq!(store.load().unwrap().lists, vec![updated]);
+    assert!(!previous_path(&path).exists());
+}
+
+#[test]
+fn updating_a_url_list_repairs_a_damaged_file() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let list = url_list(&store);
+    let path = list_path(&directory.0.join("lists"), &list);
+    fs::write(&path, b"damaged\n").unwrap();
+
+    let updated = update_list_with(&store, &list.id, None, Timeouts::default(), &mut |_, _| {
+        Ok(b"example.invalid\n".to_vec())
+    })
+    .unwrap();
+
+    assert_eq!(fs::read(&path).unwrap(), b"example.invalid\n");
+    assert_eq!(store.load().unwrap().lists, vec![updated]);
+    assert!(!previous_path(&path).exists());
+}
+
+#[test]
+fn failed_download_preserves_the_old_url_list() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let list = url_list(&store);
+    let path = list_path(&directory.0.join("lists"), &list);
+    let original_config = fs::read(store.path()).unwrap();
+
+    assert!(matches!(
+        update_list_with(&store, &list.id, None, Timeouts::default(), &mut |_, _| {
+            Err(FetchError::Timeout)
+        }),
+        Err(ListError::Fetch(FetchError::Timeout))
+    ));
+    assert_eq!(fs::read(&path).unwrap(), b"example.com\n");
+    assert_eq!(fs::read(store.path()).unwrap(), original_config);
+    assert!(!previous_path(&path).exists());
+}
+
 #[test]
 fn update_rolls_back_file_if_configuration_save_fails() {
     let directory = TestDirectory::new();

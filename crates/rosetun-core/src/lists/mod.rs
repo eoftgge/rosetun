@@ -157,8 +157,13 @@ fn publish_file(directory: &Path, change: &CommittedList, bytes: &[u8]) -> Resul
                 io::Error::new(io::ErrorKind::AlreadyExists, "list path already exists").into(),
             );
         }
-        if let Some(old) = &old {
-            read_verified(directory, change.previous.as_ref().expect("previous list"))?;
+        let old_exists = match old.as_deref().map(fs::symlink_metadata) {
+            Some(Ok(_)) => true,
+            Some(Err(error)) if error.kind() == io::ErrorKind::NotFound => false,
+            Some(Err(error)) => return Err(error.into()),
+            None => false,
+        };
+        if let Some(old) = old.as_ref().filter(|_| old_exists) {
             let backup = previous_path(old);
             if backup.exists() {
                 return Err(io::Error::new(
@@ -170,7 +175,7 @@ fn publish_file(directory: &Path, change: &CommittedList, bytes: &[u8]) -> Resul
             fs::rename(old, &backup)?;
         }
         if let Err(error) = fs::rename(&temp, &destination) {
-            if let Some(old) = old {
+            if let Some(old) = old.filter(|_| old_exists) {
                 fs::rename(previous_path(&old), old)?;
             }
             return Err(error.into());
@@ -188,7 +193,10 @@ fn rollback_file(directory: &Path, change: &CommittedList) -> Result<(), ListErr
     fs::remove_file(current)?;
     if let Some(previous) = &change.previous {
         let old = list_path(directory, previous);
-        fs::rename(previous_path(&old), old)?;
+        let backup = previous_path(&old);
+        if backup.exists() {
+            fs::rename(backup, old)?;
+        }
     }
     Ok(())
 }
@@ -196,7 +204,9 @@ fn rollback_file(directory: &Path, change: &CommittedList) -> Result<(), ListErr
 fn cleanup_previous(directory: &Path, previous: Option<&List>) {
     if let Some(previous) = previous {
         let path = previous_path(&list_path(directory, previous));
-        if let Err(error) = fs::remove_file(path) {
+        if let Err(error) = fs::remove_file(path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
             tracing::warn!(%error, "could not remove previous list data");
         }
     }
@@ -357,8 +367,6 @@ fn update_list_with(
         .into_iter()
         .find(|item| &item.id == id)
         .ok_or(ListError::NotFound)?;
-    let directory = list_dir(store)?;
-    read_verified(&directory, &requested)?;
     let (bytes, name, source) = match (&requested.source, replacement) {
         (ListSource::Url(url), None) => (
             fetch(url, timeouts)?,
