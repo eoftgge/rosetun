@@ -7,13 +7,13 @@ use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
     Helper, RECONNECT_BACKOFF, Reconnect, StartMode, node_with_endpoint, normalize_server,
-    probe::resolve_for_apply, render_config, validate_temporary_rules,
+    probe::resolve_for_apply, render_config, validate_request,
 };
 
 impl Helper {
     pub fn apply(&self, request: &ConnectRequest) -> Result<(), HelperError> {
         let mut session = self.session()?;
-        validate_temporary_rules(request)?;
+        validate_request(request)?;
         if !matches!(
             self.with_status(|status| status.state.clone()),
             ConnectionState::Connected

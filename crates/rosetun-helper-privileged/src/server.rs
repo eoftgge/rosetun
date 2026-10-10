@@ -1,6 +1,8 @@
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant};
 
 use rosetun_ipc::{
     Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request, Response,
@@ -9,10 +11,30 @@ use rosetun_ipc::{
 pub(crate) use crate::state::Helper;
 
 const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MAX_ACTIVE_CONNECTIONS: usize = 32;
 
 enum ServerEvent {
-    Accepted(Connection),
+    Accepted(Connection, ConnectionPermit),
     Shutdown,
+}
+
+struct ConnectionPermit(Arc<AtomicUsize>);
+
+impl ConnectionPermit {
+    fn acquire(active: &Arc<AtomicUsize>) -> Option<Self> {
+        active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < MAX_ACTIVE_CONNECTIONS).then_some(count + 1)
+            })
+            .ok()
+            .map(|_| Self(Arc::clone(active)))
+    }
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 pub(crate) struct Server {
@@ -42,18 +64,37 @@ impl Server {
         tracing::info!(endpoint = %listener.path().display(), "helper listener started");
 
         let accept_tx = self.tx.clone();
+        let active = Arc::new(AtomicUsize::new(0));
         std::thread::Builder::new()
             .name("rosetun-ipc-accept".to_owned())
             .spawn(move || {
+                let mut last_limit_warning: Option<Instant> = None;
                 loop {
                     match listener.accept() {
                         Ok(connection) => {
-                            if accept_tx.send(ServerEvent::Accepted(connection)).is_err() {
+                            let Some(permit) = ConnectionPermit::acquire(&active) else {
+                                let now = Instant::now();
+                                if last_limit_warning.is_none_or(|last| {
+                                    now.duration_since(last) >= Duration::from_secs(60)
+                                }) {
+                                    tracing::warn!(
+                                        limit = MAX_ACTIVE_CONNECTIONS,
+                                        "helper pipe connection limit reached"
+                                    );
+                                    last_limit_warning = Some(now);
+                                }
+                                continue;
+                            };
+                            if accept_tx
+                                .send(ServerEvent::Accepted(connection, permit))
+                                .is_err()
+                            {
                                 break;
                             }
                         }
                         Err(error) => {
                             tracing::error!(%error, "failed to accept connection");
+                            std::thread::sleep(Duration::from_millis(100));
                         }
                     }
                 }
@@ -61,11 +102,12 @@ impl Server {
 
         while let Ok(event) = self.rx.recv() {
             match event {
-                ServerEvent::Accepted(connection) => {
+                ServerEvent::Accepted(connection, permit) => {
                     let helper = Arc::clone(&helper);
                     let event_tx = self.tx.clone();
                     let ipc_shutdown = self.ipc_shutdown;
                     std::thread::spawn(move || {
+                        let _permit = permit;
                         if let Err(error) = handle(connection, helper, event_tx, ipc_shutdown) {
                             tracing::warn!(%error, "the connection was closed with an error");
                         }
@@ -220,6 +262,21 @@ fn reply(connection: &mut Connection, id: u64, body: Response) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_limit_releases_permits_on_drop() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let permits = (0..MAX_ACTIVE_CONNECTIONS)
+            .map(|_| ConnectionPermit::acquire(&active).expect("permit available"))
+            .collect::<Vec<_>>();
+        assert_eq!(active.load(Ordering::Acquire), MAX_ACTIVE_CONNECTIONS);
+        assert!(ConnectionPermit::acquire(&active).is_none());
+
+        drop(permits);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+        assert!(ConnectionPermit::acquire(&active).is_some());
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
 
     #[test]
     fn shutdown_is_rejected_only_in_service_mode() {

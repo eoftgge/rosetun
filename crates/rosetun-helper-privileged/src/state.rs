@@ -360,7 +360,7 @@ impl Helper {
 
     pub fn connect(&self, request: &ConnectRequest) -> Result<(), HelperError> {
         let mut session = self.session()?;
-        validate_temporary_rules(request)?;
+        validate_request(request)?;
         let state = self.with_status(|status| status.state.clone());
 
         let mode = match state {
@@ -571,7 +571,33 @@ impl Helper {
     }
 }
 
-fn validate_temporary_rules(request: &ConnectRequest) -> Result<(), HelperError> {
+fn validate_tun_name(name: &str) -> Result<(), HelperError> {
+    if !(1..=64).contains(&name.len())
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'_' | b'.' | b'-'))
+    {
+        return Err(HelperError::new(
+            ErrorCode::InvalidState,
+            "TUN name must contain 1 to 64 characters from [A-Za-z0-9 _.-]",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
+    validate_tun_name(&request.settings.tun.name)?;
+    if request
+        .rule_set
+        .rules
+        .iter()
+        .any(|rule| matches!(rule.matcher, RuleMatcher::Template(_)))
+    {
+        return Err(HelperError::new(
+            ErrorCode::UnsupportedRules,
+            "rule set contains a template; expand templates before sending the request",
+        ));
+    }
     if request.temporary_rules.len() > MAX_TEMPORARY_RULES
         || request
             .temporary_rules

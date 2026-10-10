@@ -15,7 +15,10 @@ use rosetun_ipc::{
     ErrorCode, HelperError, MAX_PROBE_NODES, ProbeOutcome, ProbeRequest, ProbeResult,
 };
 
-use super::{Helper, node_with_endpoint, resolve_quiet, select_endpoint, wait_for_engine_ready};
+use super::{
+    Helper, node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name,
+    wait_for_engine_ready,
+};
 
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const APPLY_DNS_SLOT_POLL: Duration = Duration::from_millis(25);
@@ -109,6 +112,7 @@ impl Helper {
                 "server check requires between 1 and 256 nodes",
             ));
         }
+        validate_tun_name(&request.settings.tun.name)?;
         let backend = self.engines.get(request.settings.engine).ok_or_else(|| {
             HelperError::new(
                 ErrorCode::EngineFailed,

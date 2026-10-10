@@ -2274,7 +2274,9 @@ fn disconnect_recovers_poisoned_session_and_releases_protection() {
     ));
     let mut request = connect_request();
     request.settings.kill_switch = true;
-    helper.connect(&request).expect("protected connection starts");
+    helper
+        .connect(&request)
+        .expect("protected connection starts");
 
     let panicking_helper = Arc::clone(&helper);
     let worker = thread::spawn(move || {
@@ -2282,12 +2284,17 @@ fn disconnect_recovers_poisoned_session_and_releases_protection() {
         panic!("simulated session panic");
     });
     assert!(worker.join().is_err());
-    assert_eq!(helper.connect(&request).unwrap_err().code, ErrorCode::Internal);
+    assert_eq!(
+        helper.connect(&request).unwrap_err().code,
+        ErrorCode::Internal
+    );
 
     helper.disconnect().expect("poisoned session is torn down");
     assert_eq!(reverted.load(Ordering::Acquire), 1);
     assert_eq!(helper.status(), Status::default());
-    helper.connect(&request).expect("a new connection is accepted");
+    helper
+        .connect(&request)
+        .expect("a new connection is accepted");
     helper.disconnect().expect("new connection is torn down");
     assert_eq!(reverted.load(Ordering::Acquire), 2);
 }
@@ -2823,6 +2830,65 @@ fn invalid_temporary_rules_leave_connect_and_apply_untouched() {
 }
 
 #[test]
+fn invalid_tun_names_leave_connect_and_apply_untouched() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    assert!(validate_tun_name("a").is_ok());
+    assert!(validate_tun_name(&"a".repeat(64)).is_ok());
+
+    let too_long = "a".repeat(65);
+    for name in ["", too_long.as_str(), "bad/name", "tün"] {
+        let mut invalid = request.clone();
+        invalid.settings.tun.name = name.to_owned();
+        let error = helper.connect(&invalid).expect_err("invalid TUN name");
+        assert_eq!(error.code, ErrorCode::InvalidState);
+        assert!(error.message.contains("TUN name"));
+        assert_eq!(helper.status(), Status::default());
+        assert_eq!(controls.spawns(), 0);
+    }
+
+    helper.connect(&request).expect("connect");
+    let mut invalid = request.clone();
+    invalid.settings.tun.name = "bad/name".to_owned();
+    let error = helper.apply(&invalid).expect_err("invalid TUN name");
+    assert_eq!(error.code, ErrorCode::InvalidState);
+    assert!(error.message.contains("TUN name"));
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn base_rule_set_templates_leave_connect_and_apply_untouched() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let mut invalid = request.clone();
+    invalid.rule_set.rules.push(Rule {
+        matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+        enabled: false,
+        ..temporary_rule()
+    });
+
+    let error = helper
+        .connect(&invalid)
+        .expect_err("base template rejected");
+    assert_eq!(error.code, ErrorCode::UnsupportedRules);
+    assert!(error.message.contains("rule set contains a template"));
+    assert_eq!(helper.status(), Status::default());
+    assert_eq!(controls.spawns(), 0);
+
+    helper.connect(&request).expect("connect");
+    let error = helper.apply(&invalid).expect_err("base template rejected");
+    assert_eq!(error.code, ErrorCode::UnsupportedRules);
+    assert!(error.message.contains("rule set contains a template"));
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+}
+
+#[test]
 fn temporary_rules_are_busy_while_apply_holds_the_session() {
     let (helper, controls, _, _) = supervised_helper(true);
     let helper = Arc::new(helper);
@@ -3319,8 +3385,14 @@ fn probe_cleans_up_after_spawn_error_and_worker_panic() {
     std::fs::remove_dir(dir).unwrap();
 
     let (helper, stopped, dir) = probe_fixture_with_failures(true, None, false, true);
-    let outcomes = helper.probe_nodes(&probe_request()).expect("worker panic is contained");
-    assert!(outcomes.iter().all(|result| result.outcome == ProbeOutcome::Fails));
+    let outcomes = helper
+        .probe_nodes(&probe_request())
+        .expect("worker panic is contained");
+    assert!(
+        outcomes
+            .iter()
+            .all(|result| result.outcome == ProbeOutcome::Fails)
+    );
     assert_eq!(stopped.load(Ordering::Acquire), 1);
     assert!(!dir.join("probe.json").exists());
     std::fs::remove_dir(dir).unwrap();
@@ -3373,6 +3445,11 @@ fn probe_rejects_empty_and_oversized_batches() {
         helper.probe_nodes(&request).unwrap_err().code,
         ErrorCode::InvalidState
     );
+    request.nodes = vec![connect_request().node];
+    request.settings.tun.name = "bad/name".into();
+    let error = helper.probe_nodes(&request).expect_err("invalid TUN name");
+    assert_eq!(error.code, ErrorCode::InvalidState);
+    assert!(error.message.contains("TUN name"));
     std::fs::remove_dir(dir).unwrap();
 }
 
