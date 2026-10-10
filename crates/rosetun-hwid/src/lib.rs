@@ -6,8 +6,14 @@ mod registry;
 
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Hwid(String);
+
+impl std::fmt::Debug for Hwid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Hwid").field(&"[redacted]").finish()
+    }
+}
 
 impl Hwid {
     pub fn new(value: impl Into<String>) -> Self {
@@ -16,12 +22,6 @@ impl Hwid {
 
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-impl std::fmt::Display for Hwid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
     }
 }
 
@@ -147,7 +147,7 @@ pub fn device_info() -> Result<DeviceInfo, HwidError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HwidError, hwid_from_machine_id, sanitize_header_value};
+    use super::{Hwid, HwidError, hwid_from_machine_id, sanitize_header_value};
 
     #[test]
     fn same_machine_id_produces_same_hwid() {
@@ -207,8 +207,15 @@ mod tests {
         let raw = "12345678-abcd-1234-abcd-123456789abc";
         let hwid = hwid_from_machine_id(raw).unwrap();
 
-        assert!(!hwid.to_string().contains(raw));
+        assert!(!hwid.as_str().contains(raw));
         assert!(!format!("{hwid:?}").contains(raw));
+    }
+
+    #[test]
+    fn hwid_debug_redacts_the_identifier() {
+        let hwid = Hwid::new("known-secret");
+        assert_eq!(hwid.as_str(), "known-secret");
+        assert_eq!(format!("{hwid:?}"), "Hwid(\"[redacted]\")");
     }
 
     #[test]

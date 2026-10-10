@@ -32,7 +32,7 @@ impl fmt::Debug for Node {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outbound {
     Vless(VlessParams),
@@ -46,20 +46,56 @@ pub enum Outbound {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl fmt::Debug for Outbound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Vless(params) => f.debug_tuple("Vless").field(params).finish(),
+            Self::Vmess(params) => f.debug_tuple("Vmess").field(params).finish(),
+            Self::Trojan(params) => f.debug_tuple("Trojan").field(params).finish(),
+            Self::Shadowsocks(params) => f.debug_tuple("Shadowsocks").field(params).finish(),
+            Self::Hysteria2(params) => f.debug_tuple("Hysteria2").field(params).finish(),
+            Self::Unknown { scheme, params } => f
+                .debug_struct("Unknown")
+                .field("scheme", scheme)
+                .field("params_count", &params.len())
+                .finish(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VlessParams {
     pub uuid: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl fmt::Debug for VlessParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VlessParams")
+            .field("uuid", &"[redacted]")
+            .field("flow", &self.flow)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmessParams {
     pub uuid: String,
     #[serde(default)]
     pub alter_id: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<String>,
+}
+
+impl fmt::Debug for VmessParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VmessParams")
+            .field("uuid", &"[redacted]")
+            .field("alter_id", &self.alter_id)
+            .field("security", &self.security)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,8 +251,30 @@ mod tests {
                 method: "aes-128-gcm".into(),
                 password: "test-secret".into(),
             }),
+            Outbound::Vless(VlessParams {
+                uuid: "test-secret".into(),
+                flow: None,
+            }),
+            Outbound::Vmess(VmessParams {
+                uuid: "test-secret".into(),
+                alter_id: 0,
+                security: None,
+            }),
         ] {
             assert!(!format!("{outbound:?}").contains("test-secret"));
         }
+    }
+
+    #[test]
+    fn unknown_outbound_debug_hides_parameter_keys_and_values() {
+        let outbound = Outbound::Unknown {
+            scheme: "example".into(),
+            params: [("secret-key".into(), "secret-value".into())].into(),
+        };
+        let debug = format!("{outbound:?}");
+        assert!(debug.contains("example"));
+        assert!(debug.contains("params_count: 1"));
+        assert!(!debug.contains("secret-key"));
+        assert!(!debug.contains("secret-value"));
     }
 }
