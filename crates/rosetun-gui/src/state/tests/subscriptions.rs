@@ -1,3 +1,4 @@
+use super::super::subscriptions::{AUTO_UPDATE_CHECK, update_due};
 use super::*;
 
 #[test]
@@ -6,10 +7,10 @@ fn reveal_server_opens_the_selected_subscription_and_clears_after_scroll() {
     let id = SubscriptionId::new("1");
     let node = NodeId::new("node");
     assert!(state.act(Action::RevealServer).is_none());
-    assert!(state.expanded.contains(&id));
-    assert_eq!(state.reveal, Some((id, node)));
+    assert!(state.subscriptions.expanded.contains(&id));
+    assert_eq!(state.subscriptions.reveal, Some((id, node)));
     assert!(state.act(Action::RevealDone).is_none());
-    assert_eq!(state.reveal, None);
+    assert_eq!(state.subscriptions.reveal, None);
 }
 
 #[test]
@@ -20,16 +21,21 @@ fn reveal_server_clears_a_node_removed_by_a_config_update() {
         generation: 1,
         config: AppConfig::default(),
     });
-    assert_eq!(state.reveal, None);
+    assert_eq!(state.subscriptions.reveal, None);
 }
 
 #[test]
 fn reveal_server_without_selection_opens_the_first_subscription() {
     let mut state = state_with_subscriptions();
     assert!(state.act(Action::RevealServer).is_none());
-    assert_eq!(state.expanded.len(), 1);
-    assert!(state.expanded.contains(&SubscriptionId::new("1")));
-    assert_eq!(state.reveal, None);
+    assert_eq!(state.subscriptions.expanded.len(), 1);
+    assert!(
+        state
+            .subscriptions
+            .expanded
+            .contains(&SubscriptionId::new("1"))
+    );
+    assert_eq!(state.subscriptions.reveal, None);
 }
 
 #[test]
@@ -72,12 +78,12 @@ fn subscription_drops_wait_for_other_subscription_operations() {
     state.operations.update_all = true;
     assert!(state.act(drop()).is_none());
     state.operations.update_all = false;
-    state.add = Some(AddDialog {
+    state.subscriptions.add = Some(AddDialog {
         busy: true,
         ..AddDialog::default()
     });
     assert!(state.act(drop()).is_none());
-    state.add = None;
+    state.subscriptions.add = None;
     state.operations.removing = true;
     assert!(state.act(drop()).is_none());
     state.operations.removing = false;
@@ -160,22 +166,25 @@ fn renaming_subscription_validates_and_tracks_the_result() {
     let id = SubscriptionId::new("1");
     state.config.subscriptions[0].name = "🇳🇱 Provider".to_owned();
     state.act(Action::RequestRename(id.clone()));
-    let dialog = state.rename.as_ref().unwrap();
+    let dialog = state.subscriptions.rename.as_ref().unwrap();
     assert_eq!(dialog.name, "[NL] Provider");
     assert_eq!(dialog.original, dialog.name);
     assert!(dialog.focus);
     assert!(state.act(Action::RequestRename(id.clone())).is_none());
-    assert_eq!(state.rename.as_ref().unwrap().name, "[NL] Provider");
+    assert_eq!(
+        state.subscriptions.rename.as_ref().unwrap().name,
+        "[NL] Provider"
+    );
 
-    state.rename.as_mut().unwrap().name = "  [NL] Provider  ".to_owned();
+    state.subscriptions.rename.as_mut().unwrap().name = "  [NL] Provider  ".to_owned();
     assert!(state.act(Action::SubmitRename).is_none());
-    assert!(state.rename.is_none());
+    assert!(state.subscriptions.rename.is_none());
     state.act(Action::RequestRename(id.clone()));
-    state.rename.as_mut().unwrap().name = "   ".to_owned();
+    state.subscriptions.rename.as_mut().unwrap().name = "   ".to_owned();
     assert!(state.act(Action::SubmitRename).is_none());
-    assert!(state.rename.is_some());
+    assert!(state.subscriptions.rename.is_some());
 
-    state.rename.as_mut().unwrap().name = "  New name  ".to_owned();
+    state.subscriptions.rename.as_mut().unwrap().name = "  New name  ".to_owned();
     assert!(matches!(
         state.act(Action::SubmitRename),
         Some(Job::RenameSubscription(job_id, name)) if job_id == id && name == "New name"
@@ -183,18 +192,24 @@ fn renaming_subscription_validates_and_tracks_the_result() {
     assert!(state.operations.renaming);
     assert!(state.act(Action::SubmitRename).is_none());
     state.act(Action::CancelRename);
-    assert!(state.rename.is_some());
+    assert!(state.subscriptions.rename.is_some());
     state.reduce(WorkerEvent::RenameSubscription(Err(
         rosetun_core::RenameSubscriptionError::EmptyName,
     )));
     assert!(!state.operations.renaming);
     assert_eq!(
-        state.rename.as_ref().unwrap().error.as_deref(),
+        state
+            .subscriptions
+            .rename
+            .as_ref()
+            .unwrap()
+            .error
+            .as_deref(),
         Some(tr!("error-subscription-name-empty")).as_deref()
     );
     assert!(state.act(Action::SubmitRename).is_some());
     state.reduce(WorkerEvent::RenameSubscription(Ok(())));
-    assert!(state.rename.is_none());
+    assert!(state.subscriptions.rename.is_none());
     assert!(!state.operations.renaming);
 }
 
@@ -276,7 +291,10 @@ fn ping_starts_only_with_tunnel_down_and_marks_nodes_pending() {
     assert!(state.act(Action::Ping(id.clone())).is_none());
     state.operations.helper = false;
     assert!(matches!(state.act(Action::Ping(id.clone())), Some(Job::Ping(found)) if found == id));
-    assert_eq!(state.pings[&(id.clone(), node)], PingResult::Pending);
+    assert_eq!(
+        state.subscriptions.pings[&(id.clone(), node)],
+        PingResult::Pending
+    );
     assert!(state.operations.pinging.contains(&id));
     assert!(state.act(Action::Ping(id.clone())).is_none());
     state.reduce(WorkerEvent::PingDone(id.clone()));
@@ -318,15 +336,15 @@ fn ping_results_finish_missing_answers_and_prune_removed_nodes() {
     });
     state.reduce(WorkerEvent::PingDone(id.clone()));
     assert_eq!(
-        state.pings[&(id.clone(), first.clone())],
+        state.subscriptions.pings[&(id.clone(), first.clone())],
         PingResult::Answered(Duration::from_millis(118))
     );
     assert_eq!(
-        state.pings[&(id.clone(), second.clone())],
+        state.subscriptions.pings[&(id.clone(), second.clone())],
         PingResult::NoAnswer
     );
     assert_eq!(
-        state.pings[&(id.clone(), NodeId::new("udp"))],
+        state.subscriptions.pings[&(id.clone(), NodeId::new("udp"))],
         PingResult::Unsupported
     );
     assert_eq!(
@@ -341,7 +359,7 @@ fn ping_results_finish_missing_answers_and_prune_removed_nodes() {
         generation: 1,
         config: state.config.clone(),
     });
-    assert!(!state.pings.contains_key(&(id, first)));
+    assert!(!state.subscriptions.pings.contains_key(&(id, first)));
     assert!(state.best_ping(&state.config.subscriptions[0]).is_none());
 }
 
@@ -355,17 +373,23 @@ fn single_node_ping_preserves_other_results_and_rejects_busy_checks() {
     state.config.subscriptions[0].nodes.push(other);
     let second = NodeId::new("second");
     let previous = PingResult::Works(Duration::from_millis(44));
-    state.pings.insert((id.clone(), second.clone()), previous);
+    state
+        .subscriptions
+        .pings
+        .insert((id.clone(), second.clone()), previous);
 
     assert!(matches!(
         state.act(Action::PingNode(id.clone(), first.clone())),
         Some(Job::PingNode(subscription, node)) if subscription == id && node == first
     ));
     assert_eq!(
-        state.pings[&(id.clone(), first.clone())],
+        state.subscriptions.pings[&(id.clone(), first.clone())],
         PingResult::Pending
     );
-    assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+    assert_eq!(
+        state.subscriptions.pings[&(id.clone(), second.clone())],
+        previous
+    );
     assert!(state.act(Action::Ping(id.clone())).is_none());
     assert!(
         state
@@ -375,10 +399,13 @@ fn single_node_ping_preserves_other_results_and_rejects_busy_checks() {
 
     state.reduce(WorkerEvent::PingDone(id.clone()));
     assert_eq!(
-        state.pings[&(id.clone(), first.clone())],
+        state.subscriptions.pings[&(id.clone(), first.clone())],
         PingResult::NoAnswer
     );
-    assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+    assert_eq!(
+        state.subscriptions.pings[&(id.clone(), second.clone())],
+        previous
+    );
     assert!(matches!(
         state.act(Action::PingNode(id.clone(), first.clone())),
         Some(Job::PingNode(_, _))
@@ -390,10 +417,10 @@ fn single_node_ping_preserves_other_results_and_rejects_busy_checks() {
     });
     state.reduce(WorkerEvent::PingDone(id.clone()));
     assert_eq!(
-        state.pings[&(id.clone(), first)],
+        state.subscriptions.pings[&(id.clone(), first)],
         PingResult::Answered(Duration::from_millis(90))
     );
-    assert_eq!(state.pings[&(id, second)], previous);
+    assert_eq!(state.subscriptions.pings[&(id, second)], previous);
 }
 
 #[test]
@@ -412,7 +439,7 @@ fn single_node_check_rejects_missing_nodes_and_connected_quick_checks() {
             .act(Action::FullCheckNode(id.clone(), missing))
             .is_none()
     );
-    assert!(state.pings.is_empty());
+    assert!(state.subscriptions.pings.is_empty());
     assert!(!state.operations.pinging.contains(&id));
 
     state.status.state = ConnectionState::Connected;
@@ -437,23 +464,37 @@ fn single_node_full_check_preserves_other_results_and_ignores_removed_node() {
     state.config.subscriptions[0].nodes.push(other);
     let second = NodeId::new("second");
     let previous = PingResult::Answered(Duration::from_millis(55));
-    state.pings.insert((id.clone(), second.clone()), previous);
+    state
+        .subscriptions
+        .pings
+        .insert((id.clone(), second.clone()), previous);
 
     assert!(matches!(
         state.act(Action::FullCheckNode(id.clone(), first.clone())),
         Some(Job::FullCheckNode(_, _))
     ));
     assert_eq!(
-        state.pings[&(id.clone(), first.clone())],
+        state.subscriptions.pings[&(id.clone(), first.clone())],
         PingResult::Pending
     );
-    assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+    assert_eq!(
+        state.subscriptions.pings[&(id.clone(), second.clone())],
+        previous
+    );
     state.reduce(WorkerEvent::FullCheck {
         subscription: id.clone(),
         result: Err(HelperCommandError::Client(ClientError::Closed)),
     });
-    assert!(!state.pings.contains_key(&(id.clone(), first.clone())));
-    assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+    assert!(
+        !state
+            .subscriptions
+            .pings
+            .contains_key(&(id.clone(), first.clone()))
+    );
+    assert_eq!(
+        state.subscriptions.pings[&(id.clone(), second.clone())],
+        previous
+    );
     assert!(!state.operations.pinging.contains(&id));
 
     state.act(Action::FullCheckNode(id.clone(), first.clone()));
@@ -465,10 +506,13 @@ fn single_node_full_check_preserves_other_results_and_ignores_removed_node() {
         }]),
     });
     assert_eq!(
-        state.pings[&(id.clone(), first.clone())],
+        state.subscriptions.pings[&(id.clone(), first.clone())],
         PingResult::Works(Duration::from_millis(76))
     );
-    assert_eq!(state.pings[&(id.clone(), second.clone())], previous);
+    assert_eq!(
+        state.subscriptions.pings[&(id.clone(), second.clone())],
+        previous
+    );
 
     state.act(Action::FullCheckNode(id.clone(), first.clone()));
     state.config.subscriptions[0]
@@ -485,8 +529,8 @@ fn single_node_full_check_preserves_other_results_and_ignores_removed_node() {
             outcome: ProbeOutcome::Fails,
         }]),
     });
-    assert!(!state.pings.contains_key(&(id.clone(), first)));
-    assert_eq!(state.pings[&(id.clone(), second)], previous);
+    assert!(!state.subscriptions.pings.contains_key(&(id.clone(), first)));
+    assert_eq!(state.subscriptions.pings[&(id.clone(), second)], previous);
     assert!(!state.operations.pinging.contains(&id));
 }
 
@@ -505,11 +549,11 @@ fn full_check_runs_while_connected_and_maps_outcomes() {
         Some(Job::FullCheck(_))
     ));
     assert_eq!(
-        state.pings[&(id.clone(), NodeId::new("node"))],
+        state.subscriptions.pings[&(id.clone(), NodeId::new("node"))],
         PingResult::Pending
     );
     assert_eq!(
-        state.pings[&(id.clone(), NodeId::new("second"))],
+        state.subscriptions.pings[&(id.clone(), NodeId::new("second"))],
         PingResult::Pending
     );
     assert!(state.act(Action::FullCheck(id.clone())).is_none());
@@ -531,15 +575,16 @@ fn full_check_runs_while_connected_and_maps_outcomes() {
         ]),
     });
     assert_eq!(
-        state.pings[&(id.clone(), NodeId::new("node"))],
+        state.subscriptions.pings[&(id.clone(), NodeId::new("node"))],
         PingResult::Works(Duration::from_millis(85))
     );
     assert_eq!(
-        state.pings[&(id.clone(), NodeId::new("second"))],
+        state.subscriptions.pings[&(id.clone(), NodeId::new("second"))],
         PingResult::Fails
     );
     assert!(
         !state
+            .subscriptions
             .pings
             .contains_key(&(id.clone(), NodeId::new("removed")))
     );
@@ -562,11 +607,12 @@ fn full_check_clears_missing_results_and_pending_on_error() {
         }]),
     });
     assert_eq!(
-        state.pings[&(id.clone(), NodeId::new("node"))],
+        state.subscriptions.pings[&(id.clone(), NodeId::new("node"))],
         PingResult::Unresolved
     );
     assert!(
         !state
+            .subscriptions
             .pings
             .contains_key(&(id.clone(), NodeId::new("second")))
     );
@@ -577,7 +623,12 @@ fn full_check_clears_missing_results_and_pending_on_error() {
             HelperError::new(ErrorCode::Busy, ""),
         ))),
     });
-    assert!(!state.pings.contains_key(&(id.clone(), NodeId::new("node"))));
+    assert!(
+        !state
+            .subscriptions
+            .pings
+            .contains_key(&(id.clone(), NodeId::new("node")))
+    );
     assert!(!state.operations.pinging.contains(&id));
     assert_eq!(
         state.operation_error.as_deref(),
@@ -599,7 +650,12 @@ fn full_check_clears_missing_results_and_pending_on_error() {
             .as_str()
         )
     );
-    assert!(!state.pings.contains_key(&(id, NodeId::new("second"))));
+    assert!(
+        !state
+            .subscriptions
+            .pings
+            .contains_key(&(id, NodeId::new("second")))
+    );
 }
 
 #[test]
@@ -610,11 +666,11 @@ fn best_ping_ignores_unanswered_nodes_and_chooses_smallest_answer() {
     second.id = NodeId::new("second");
     state.config.subscriptions[0].nodes.push(second);
     assert!(state.best_ping(&state.config.subscriptions[0]).is_none());
-    state.pings.insert(
+    state.subscriptions.pings.insert(
         (id.clone(), NodeId::new("node")),
         PingResult::Answered(Duration::from_millis(118)),
     );
-    state.pings.insert(
+    state.subscriptions.pings.insert(
         (id.clone(), NodeId::new("second")),
         PingResult::Works(Duration::from_millis(40)),
     );
@@ -623,6 +679,7 @@ fn best_ping_ignores_unanswered_nodes_and_chooses_smallest_answer() {
         Some(Duration::from_millis(40))
     );
     state
+        .subscriptions
         .pings
         .insert((id, NodeId::new("second")), PingResult::Fails);
     assert_eq!(
@@ -644,11 +701,11 @@ fn update_all_associates_outcomes_with_subscription_ids() {
     ])));
     assert!(!state.operations.update_all);
     assert!(matches!(
-        state.outcomes[&SubscriptionId::new("1")],
+        state.subscriptions.outcomes[&SubscriptionId::new("1")],
         UpdateOutcome::Success(_)
     ));
     assert!(matches!(
-        state.outcomes[&SubscriptionId::new("2")],
+        state.subscriptions.outcomes[&SubscriptionId::new("2")],
         UpdateOutcome::Error(_)
     ));
     state.operations.update_all = true;
@@ -686,21 +743,26 @@ fn provider_announcement_in_translated_error_redacts_subscription_url() {
 fn add_failure_keeps_inputs_and_success_closes_and_expands() {
     let mut state = State::default();
     state.act(Action::OpenAdd);
-    state.add.as_mut().unwrap().url = "https://example.com/sub".into();
+    state.subscriptions.add.as_mut().unwrap().url = "https://example.com/sub".into();
     assert!(matches!(
         state.act(Action::SubmitAdd),
         Some(Job::Add { .. })
     ));
     assert!(state.act(Action::CancelAdd).is_none());
-    assert!(state.add.is_some());
+    assert!(state.subscriptions.add.is_some());
     state.reduce(WorkerEvent::Add(Err(AddFromUrlError::MissingHost)));
-    let dialog = state.add.as_ref().unwrap();
+    let dialog = state.subscriptions.add.as_ref().unwrap();
     assert_eq!(dialog.url, "https://example.com/sub");
     assert!(!dialog.busy);
     assert!(dialog.error.is_some());
     state.reduce(WorkerEvent::Add(Ok((subscription("1"), report()))));
-    assert!(state.add.is_none());
-    assert!(state.expanded.contains(&SubscriptionId::new("1")));
+    assert!(state.subscriptions.add.is_none());
+    assert!(
+        state
+            .subscriptions
+            .expanded
+            .contains(&SubscriptionId::new("1"))
+    );
 }
 
 #[test]
@@ -727,7 +789,7 @@ fn individual_update_and_remove_failures_clear_their_flags() {
         result: Err(RemoveSubscriptionError::SubscriptionNotFound),
     });
     assert!(!state.operations.removing);
-    assert!(state.remove.as_ref().unwrap().error.is_some());
+    assert!(state.subscriptions.remove.as_ref().unwrap().error.is_some());
 }
 
 #[test]

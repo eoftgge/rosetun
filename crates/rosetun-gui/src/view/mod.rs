@@ -113,13 +113,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
         });
 
     let ctx = ui.ctx();
-    if let Some(dialog) = &mut state.add {
+    if let Some(dialog) = &mut state.subscriptions.add {
         add_subscription::show(ctx, &state.config, dialog, &mut actions);
     }
-    if state.remove.is_some() {
+    if state.subscriptions.remove.is_some() {
         subscriptions::remove_dialog(ctx, state, &mut actions);
     }
-    if state.rename.is_some() {
+    if state.subscriptions.rename.is_some() {
         subscriptions::rename_dialog(ctx, state, &mut actions);
     }
     if state.protection_confirmation && state.screen == Screen::Connection {

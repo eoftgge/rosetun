@@ -44,7 +44,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         )
                         .clicked()
                     },
-                    |ui| widgets::button_fill(ui, tr!("add-short"), state.add.is_none()).clicked(),
+                    |ui| {
+                        widgets::button_fill(
+                            ui,
+                            tr!("add-short"),
+                            state.subscriptions.add.is_none(),
+                        )
+                        .clicked()
+                    },
                 );
             if update_all {
                 actions.push(Action::UpdateAll);
@@ -155,7 +162,7 @@ fn subscription_card(
     let dragged = reorder
         && egui::DragAndDrop::payload::<SubscriptionId>(ui.ctx())
             .is_some_and(|id| *id == subscription.id);
-    let expanded = state.expanded.contains(&subscription.id);
+    let expanded = state.subscriptions.expanded.contains(&subscription.id);
     let selected = state
         .config
         .active
@@ -281,8 +288,8 @@ fn subscription_card(
                                 label: &tr!("rename"),
                                 enabled: state.config_ready
                                     && !state.operations.renaming
-                                    && state.rename.is_none()
-                                    && state.remove.is_none(),
+                                    && state.subscriptions.rename.is_none()
+                                    && state.subscriptions.remove.is_none(),
                                 selected: false,
                                 danger: false,
                                 note: None,
@@ -357,7 +364,8 @@ fn subscription_card(
                         },
                     );
                 });
-                if let Some(UpdateOutcome::Error(error)) = state.outcomes.get(&subscription.id)
+                if let Some(UpdateOutcome::Error(error)) =
+                    state.subscriptions.outcomes.get(&subscription.id)
                     && widgets::dismissible_error(
                         ui,
                         &state.text(&errors::update_subscription(crate::i18n::language(), error)),
@@ -473,7 +481,9 @@ fn subscription_card(
                         }
                     });
                 }
-                if let Some(UpdateOutcome::Success(report)) = state.outcomes.get(&subscription.id) {
+                if let Some(UpdateOutcome::Success(report)) =
+                    state.subscriptions.outcomes.get(&subscription.id)
+                {
                     ui.add(
                         egui::Label::new(
                             RichText::new(crate::i18n::updated(
@@ -545,6 +555,7 @@ fn subscription_card(
                     .iter()
                     .filter_map(|node| {
                         state
+                            .subscriptions
                             .pings
                             .get(&(subscription.id.clone(), node.id.clone()))
                             .map(|&result| (node, result))
@@ -773,6 +784,7 @@ fn server_row(
     let name = provider_text(ui, state, remainder, egui::TextStyle::Body);
     let full_name = state.text(&node.name);
     let ping_result = state
+        .subscriptions
         .pings
         .get(&(subscription.id.clone(), node.id.clone()))
         .copied();
@@ -816,6 +828,7 @@ fn server_row(
         response
     };
     if state
+        .subscriptions
         .reveal
         .as_ref()
         .is_some_and(|(id, selected)| id == &subscription.id && selected == &node.id)
@@ -1014,7 +1027,7 @@ fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, value: &str) {
 }
 
 pub(crate) fn rename_dialog(ctx: &egui::Context, state: &mut State, actions: &mut Vec<Action>) {
-    let Some(dialog) = &mut state.rename else {
+    let Some(dialog) = &mut state.subscriptions.rename else {
         return;
     };
     let busy = state.operations.renaming;
@@ -1066,7 +1079,7 @@ pub(crate) fn rename_dialog(ctx: &egui::Context, state: &mut State, actions: &mu
 }
 
 pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
-    let Some(dialog) = &state.remove else {
+    let Some(dialog) = &state.subscriptions.remove else {
         return;
     };
     let response = egui::Modal::new(egui::Id::new("remove_subscription"))

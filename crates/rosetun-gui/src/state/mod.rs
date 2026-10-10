@@ -1,18 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::ops::RangeInclusive;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
     AppConfig, ConnectionState, DnsSettings, DomainMatch, FailureKind, LanguageSetting, NodeId,
     ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Status,
-    Subscription, SubscriptionId,
+    SubscriptionId,
 };
-use rosetun_core::{
-    AddFromUrlError, AddOptions, AppliedSnapshot, DnsPreset, Ping, UpdateReport,
-    UpdateSubscriptionError,
-};
-use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError, ProbeOutcome, ProbeResult};
+use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset};
+use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperError, ProbeOutcome};
 
 use crate::actions::{self, PrimaryAction};
 use crate::display;
@@ -24,11 +20,14 @@ use crate::rules::{
 use crate::worker::{ConfigWorkerError, FailureInterference, HelperCommandError, WorkerEvent};
 
 mod settings;
+mod subscriptions;
 mod traffic;
 mod updates;
 
 use settings::SettingsState;
 pub(crate) use settings::{AboutFolder, SettingsSection};
+use subscriptions::SubscriptionsState;
+pub(crate) use subscriptions::{AddDialog, PingResult, UpdateOutcome, shared_auto_update_hours};
 pub(crate) use traffic::TrafficRange;
 use traffic::TrafficState;
 use updates::UpdatesState;
@@ -38,41 +37,6 @@ pub(crate) fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_secs())
         .unwrap_or_default()
-}
-
-/// Default refresh interval when the provider names none.
-const AUTO_UPDATE_HOURS: u64 = 12;
-/// Provider intervals outside this range are clamped.
-const AUTO_UPDATE_RANGE: RangeInclusive<u64> = 1..=168;
-/// A failed automatic update is retried after this long.
-const AUTO_UPDATE_RETRY: u64 = 60 * 60;
-/// How often the schedule is checked.
-const AUTO_UPDATE_CHECK: u64 = 60;
-
-/// Hours between automatic updates of one subscription.
-pub(crate) fn auto_update_hours(subscription: &Subscription) -> u64 {
-    subscription
-        .update_interval_hours
-        .map(|hours| hours.clamp(*AUTO_UPDATE_RANGE.start(), *AUTO_UPDATE_RANGE.end()))
-        .unwrap_or(AUTO_UPDATE_HOURS)
-}
-
-/// The interval the panel footer names: one value when every subscription shares it.
-pub(crate) fn shared_auto_update_hours(subscriptions: &[Subscription]) -> Option<u64> {
-    let first = auto_update_hours(subscriptions.first()?);
-    subscriptions
-        .iter()
-        .all(|subscription| auto_update_hours(subscription) == first)
-        .then_some(first)
-}
-
-/// Whether one subscription is due, in Unix seconds.
-fn update_due(subscription: &Subscription, now: u64, last_attempt: Option<u64>) -> bool {
-    let hours = auto_update_hours(subscription);
-    subscription
-        .updated_at_unix
-        .is_none_or(|updated| now.saturating_sub(updated) >= hours * 60 * 60)
-        && last_attempt.is_none_or(|attempt| now.saturating_sub(attempt) >= AUTO_UPDATE_RETRY)
 }
 
 #[derive(Default)]
@@ -89,62 +53,6 @@ pub(crate) struct Operations {
     pub(crate) removing: bool,
     pub(crate) renaming: bool,
     pub(crate) moving_subscription: bool,
-}
-
-pub(crate) struct AddDialog {
-    pub(crate) url: String,
-    pub(crate) name: String,
-    pub(crate) send_hwid: bool,
-    pub(crate) busy: bool,
-    pub(crate) error: Option<AddFromUrlError>,
-    pub(crate) focus_url: bool,
-}
-
-impl Default for AddDialog {
-    fn default() -> Self {
-        Self {
-            url: String::new(),
-            name: String::new(),
-            send_hwid: true,
-            busy: false,
-            error: None,
-            focus_url: true,
-        }
-    }
-}
-
-pub(crate) struct RemoveDialog {
-    pub(crate) id: SubscriptionId,
-    pub(crate) error: Option<String>,
-}
-
-pub(crate) struct RenameDialog {
-    pub(crate) id: SubscriptionId,
-    /// The name as the dialog first showed it: submitting it unchanged saves nothing.
-    pub(crate) original: String,
-    pub(crate) name: String,
-    pub(crate) error: Option<String>,
-    pub(crate) focus: bool,
-}
-
-pub(crate) enum UpdateOutcome {
-    Success(UpdateReport),
-    Error(UpdateSubscriptionError),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PingResult {
-    Pending,
-    /// TCP connect time.
-    Answered(Duration),
-    /// No TCP answer.
-    NoAnswer,
-    /// A request through the node answered.
-    Works(Duration),
-    /// A request through the node failed.
-    Fails,
-    Unresolved,
-    Unsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -389,8 +297,7 @@ pub(crate) struct State {
     pub(crate) config: AppConfig,
     pub(crate) config_ready: bool,
     auto_connect_pending: bool,
-    next_auto_update_check: u64,
-    auto_update_attempts: HashMap<SubscriptionId, u64>,
+    pub(crate) subscriptions: SubscriptionsState,
     pub(crate) updates: UpdatesState,
     status_received: bool,
     pub(crate) config_generation: u64,
@@ -446,14 +353,7 @@ pub(crate) struct State {
     pub(crate) rule_screen: RuleScreen,
     pub(crate) settings: SettingsState,
     next_process_request: u64,
-    pub(crate) expanded: BTreeSet<SubscriptionId>,
-    pub(crate) reveal: Option<(SubscriptionId, NodeId)>,
-    pub(crate) outcomes: BTreeMap<SubscriptionId, UpdateOutcome>,
-    pub(crate) pings: HashMap<(SubscriptionId, NodeId), PingResult>,
     pub(crate) operations: Operations,
-    pub(crate) add: Option<AddDialog>,
-    pub(crate) remove: Option<RemoveDialog>,
-    pub(crate) rename: Option<RenameDialog>,
     pub(crate) protection_confirmation: bool,
 }
 
@@ -463,8 +363,7 @@ impl Default for State {
             config: AppConfig::default(),
             config_ready: false,
             auto_connect_pending: true,
-            next_auto_update_check: 0,
-            auto_update_attempts: HashMap::new(),
+            subscriptions: SubscriptionsState::default(),
             updates: UpdatesState::default(),
             status_received: false,
             config_generation: 0,
@@ -520,14 +419,7 @@ impl Default for State {
             rule_screen: RuleScreen::default(),
             settings: SettingsState::default(),
             next_process_request: 0,
-            expanded: BTreeSet::new(),
-            reveal: None,
-            outcomes: BTreeMap::new(),
-            pings: HashMap::new(),
             operations: Operations::default(),
-            add: None,
-            remove: None,
-            rename: None,
             protection_confirmation: false,
         }
     }
@@ -987,45 +879,6 @@ impl State {
         None
     }
 
-    /// Starts at most one due subscription on each schedule check.
-    pub(crate) fn take_auto_update(&mut self, now: u64) -> Option<Job> {
-        if now < self.next_auto_update_check {
-            return None;
-        }
-        self.next_auto_update_check = now.saturating_add(AUTO_UPDATE_CHECK);
-        if !self.config_ready
-            || !self.config.interface.auto_update_subscriptions
-            || self.operations.update_all
-            || self.operations.helper
-            || matches!(
-                self.status.state,
-                ConnectionState::Connecting
-                    | ConnectionState::Reconnecting
-                    | ConnectionState::FailedProtected { .. }
-            )
-        {
-            return None;
-        }
-        let id = self
-            .config
-            .subscriptions
-            .iter()
-            .find(|subscription| {
-                !self.subscription_busy(&subscription.id)
-                    && update_due(
-                        subscription,
-                        now,
-                        self.auto_update_attempts.get(&subscription.id).copied(),
-                    )
-            })?
-            .id
-            .clone();
-        self.auto_update_attempts.insert(id.clone(), now);
-        self.operations.updating.insert(id.clone());
-        self.outcomes.remove(&id);
-        Some(Job::Update(id))
-    }
-
     /// Starts one lookup after the route changes.
     pub(crate) fn take_exit_lookup(&mut self) -> Option<Job> {
         let route = if !self.helper_available {
@@ -1106,86 +959,6 @@ impl State {
         self.delay_last_auto = Some(now);
         self.tunnel_delay = TunnelDelay::Measuring;
         Some(Job::TunnelDelay)
-    }
-
-    pub(crate) fn can_ping(&self) -> bool {
-        !self.operations.helper
-            && (!self.helper_available
-                || matches!(
-                    self.status.state,
-                    ConnectionState::Disconnected | ConnectionState::Failed { .. }
-                ))
-    }
-
-    pub(crate) fn can_full_check(&self) -> bool {
-        self.helper_available && self.config_ready
-    }
-
-    pub(crate) fn best_ping(&self, subscription: &Subscription) -> Option<Duration> {
-        subscription
-            .nodes
-            .iter()
-            .filter_map(
-                |node| match self.pings.get(&(subscription.id.clone(), node.id.clone())) {
-                    Some(PingResult::Answered(elapsed) | PingResult::Works(elapsed)) => {
-                        Some(*elapsed)
-                    }
-                    _ => None,
-                },
-            )
-            .min()
-    }
-
-    fn start_check(&mut self, id: SubscriptionId, node: Option<NodeId>, full: bool) -> Option<Job> {
-        if !(if full {
-            self.can_full_check()
-        } else {
-            self.can_ping()
-        }) || self.operations.pinging.contains(&id)
-            || self.subscription_busy(&id)
-        {
-            return None;
-        }
-        let subscription = self
-            .config
-            .subscriptions
-            .iter()
-            .find(|subscription| subscription.id == id && !subscription.nodes.is_empty())?;
-        if node
-            .as_ref()
-            .is_some_and(|selected| subscription.node(selected).is_none())
-        {
-            return None;
-        }
-        for current in &subscription.nodes {
-            if node.as_ref().is_none_or(|selected| selected == &current.id) {
-                self.pings
-                    .insert((id.clone(), current.id.clone()), PingResult::Pending);
-            }
-        }
-        self.operations.pinging.insert(id.clone());
-        Some(match (full, node) {
-            (false, None) => Job::Ping(id),
-            (false, Some(node)) => Job::PingNode(id, node),
-            (true, None) => Job::FullCheck(id),
-            (true, Some(node)) => Job::FullCheckNode(id, node),
-        })
-    }
-
-    pub(crate) fn subscription_busy(&self, id: &SubscriptionId) -> bool {
-        self.operations.update_all
-            || self.operations.updating.contains(id)
-            || (self.operations.removing
-                && self.remove.as_ref().is_some_and(|dialog| &dialog.id == id))
-    }
-
-    pub(crate) fn can_reorder_subscriptions(&self) -> bool {
-        self.config_ready
-            && !self.operations.update_all
-            && self.operations.updating.is_empty()
-            && !self.add.as_ref().is_some_and(|dialog| dialog.busy)
-            && !self.operations.removing
-            && !self.operations.moving_subscription
     }
 
     pub(crate) fn text(&self, value: &str) -> String {
@@ -1317,30 +1090,7 @@ impl State {
                 if self.settings.screen.opened && !self.settings.screen.dirty {
                     self.settings.screen.sync_dns(&self.config.settings.dns);
                 }
-                self.expanded
-                    .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));
-                if self.reveal.as_ref().is_some_and(|(id, node)| {
-                    !self
-                        .config
-                        .subscriptions
-                        .iter()
-                        .any(|sub| &sub.id == id && sub.node(node).is_some())
-                }) {
-                    self.reveal = None;
-                }
-                self.outcomes
-                    .retain(|id, _| self.config.subscriptions.iter().any(|sub| &sub.id == id));
-                self.auto_update_attempts
-                    .retain(|id, _| self.config.subscriptions.iter().any(|sub| &sub.id == id));
-                self.pings.retain(|(id, node), _| {
-                    self.config
-                        .subscriptions
-                        .iter()
-                        .any(|sub| &sub.id == id && sub.node(node).is_some())
-                });
-                self.operations
-                    .pinging
-                    .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));
+                self.reconcile_subscriptions();
                 self.reconcile_selected_set();
             }
             WorkerEvent::ConfigError(error) => self.config_error = Some(error),
@@ -1828,99 +1578,11 @@ impl State {
             WorkerEvent::UpdateCheck { checked_at, result } => {
                 self.reduce_updates(result, checked_at);
             }
-            WorkerEvent::Add(result) => match result {
-                Ok((subscription, report)) => {
-                    self.expanded.insert(subscription.id.clone());
-                    self.outcomes
-                        .insert(subscription.id, UpdateOutcome::Success(report));
-                    self.add = None;
-                }
-                Err(error) => {
-                    if let Some(dialog) = &mut self.add {
-                        dialog.busy = false;
-                        dialog.error = Some(error);
-                    }
-                }
-            },
-            WorkerEvent::Update { id, result } => {
-                self.operations.updating.remove(&id);
-                self.update_result(id, result);
-            }
-            WorkerEvent::Ping {
-                subscription,
-                node,
-                result,
-            } => {
-                if self.operations.pinging.contains(&subscription)
-                    && self
-                        .config
-                        .subscriptions
-                        .iter()
-                        .any(|sub| sub.id == subscription && sub.node(&node).is_some())
-                {
-                    let result = match result {
-                        Ping::Answered(elapsed) => PingResult::Answered(elapsed),
-                        Ping::NoAnswer => PingResult::NoAnswer,
-                        Ping::Unsupported => PingResult::Unsupported,
-                    };
-                    self.pings.insert((subscription, node), result);
-                }
-            }
-            WorkerEvent::PingDone(subscription) => {
-                self.operations.pinging.remove(&subscription);
-                for ((id, _), result) in &mut self.pings {
-                    if id == &subscription && *result == PingResult::Pending {
-                        *result = PingResult::NoAnswer;
-                    }
-                }
-            }
-            WorkerEvent::FullCheck {
-                subscription,
-                result,
-            } => {
-                if !self.operations.pinging.remove(&subscription) {
-                    return;
-                }
-                self.pings
-                    .retain(|(id, _), ping| id != &subscription || *ping != PingResult::Pending);
-                match result {
-                    Ok(results) => {
-                        for ProbeResult { node, outcome } in results {
-                            if self
-                                .config
-                                .subscriptions
-                                .iter()
-                                .any(|sub| sub.id == subscription && sub.node(&node).is_some())
-                            {
-                                let ping = match outcome {
-                                    ProbeOutcome::Works { millis } => {
-                                        PingResult::Works(Duration::from_millis(u64::from(millis)))
-                                    }
-                                    ProbeOutcome::Fails => PingResult::Fails,
-                                    ProbeOutcome::Unresolved => PingResult::Unresolved,
-                                    ProbeOutcome::Unsupported => PingResult::Unsupported,
-                                };
-                                self.pings.insert((subscription.clone(), node), ping);
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        self.operation_error = Some(
-                            if matches!(
-                                &error,
-                                HelperCommandError::Client(ClientError::Helper(HelperError {
-                                    code: ErrorCode::Busy,
-                                    ..
-                                }))
-                            ) {
-                                tr!("full-check-busy").to_owned()
-                            } else {
-                                self.text(&errors::helper_command(crate::i18n::language(), &error))
-                            },
-                        );
-                    }
-                }
-            }
+            event @ (WorkerEvent::Add(_)
+            | WorkerEvent::Update { .. }
+            | WorkerEvent::Ping { .. }
+            | WorkerEvent::PingDone(_)
+            | WorkerEvent::FullCheck { .. }) => self.reduce_subscriptions(event),
             WorkerEvent::TunnelDelay(result) => {
                 if !self.status_received
                     || !matches!(
@@ -1940,62 +1602,10 @@ impl State {
                     Err(_) => TunnelDelay::Done(ProbeOutcome::Fails),
                 };
             }
-            WorkerEvent::UpdateAll(result) => {
-                self.operations.update_all = false;
-                match result {
-                    Ok(results) => {
-                        for (id, result) in results {
-                            self.update_result(id, result);
-                        }
-                    }
-                    Err(error) => {
-                        self.operation_error =
-                            Some(self.text(&errors::store(crate::i18n::language(), &error)));
-                    }
-                }
-            }
-            WorkerEvent::Remove { id, result } => {
-                self.operations.removing = false;
-                match result {
-                    Ok(()) => {
-                        self.expanded.remove(&id);
-                        self.outcomes.remove(&id);
-                        self.remove = None;
-                    }
-                    Err(error) => {
-                        let message = self.text(&errors::remove_subscription(
-                            crate::i18n::language(),
-                            &error,
-                        ));
-                        if let Some(dialog) = &mut self.remove {
-                            dialog.error = Some(message);
-                        }
-                    }
-                }
-            }
-            WorkerEvent::RenameSubscription(result) => {
-                self.operations.renaming = false;
-                match result {
-                    Ok(()) => self.rename = None,
-                    Err(error) => {
-                        let message = self.text(&errors::rename_subscription(
-                            crate::i18n::language(),
-                            &error,
-                        ));
-                        if let Some(dialog) = &mut self.rename {
-                            dialog.error = Some(message);
-                        } else {
-                            self.operation_error = Some(message);
-                        }
-                    }
-                }
-            }
-            WorkerEvent::MoveSubscription(result) => {
-                self.operations.moving_subscription = false;
-                self.operation_error = result.err().map(|error| {
-                    self.text(&errors::move_subscription(crate::i18n::language(), &error))
-                });
-            }
+            event @ (WorkerEvent::UpdateAll(_)
+            | WorkerEvent::Remove { .. }
+            | WorkerEvent::RenameSubscription(_)
+            | WorkerEvent::MoveSubscription(_)) => self.reduce_subscriptions(event),
         }
     }
 
@@ -2060,18 +1670,6 @@ impl State {
         self.operation_error = result
             .err()
             .map(|error| self.text(&errors::helper_command(crate::i18n::language(), &error)));
-    }
-
-    fn update_result(
-        &mut self,
-        id: SubscriptionId,
-        result: Result<(rosetun_config::Subscription, UpdateReport), UpdateSubscriptionError>,
-    ) {
-        let outcome = match result {
-            Ok((_, report)) => UpdateOutcome::Success(report),
-            Err(error) => UpdateOutcome::Error(error),
-        };
-        self.outcomes.insert(id, outcome);
     }
 
     pub(crate) fn act(&mut self, action: Action) -> Option<Job> {
@@ -2643,17 +2241,9 @@ impl State {
                     return Some(Job::SelectNode(subscription, node));
                 }
             }
-            Action::RevealServer => {
-                self.reveal = None;
-                if let Some((subscription, node)) = self.config.active_node() {
-                    let id = subscription.id.clone();
-                    self.expanded.insert(id.clone());
-                    self.reveal = Some((id, node.id.clone()));
-                } else if let Some(subscription) = self.config.subscriptions.first() {
-                    self.expanded.insert(subscription.id.clone());
-                }
+            action @ (Action::RevealServer | Action::RevealDone) => {
+                return self.act_subscriptions(action);
             }
-            Action::RevealDone => self.reveal = None,
             Action::ToggleExitReveal => {
                 if matches!(self.exit, ExitLookup::Known { .. }) {
                     self.exit_revealed = !self.exit_revealed;
@@ -2686,150 +2276,27 @@ impl State {
                     return Some(Job::SetKillSwitch(enabled));
                 }
             }
-            Action::ToggleExpanded(id) => {
-                if !self.expanded.remove(&id) {
-                    self.expanded.insert(id);
-                }
-            }
-            Action::DropSubscription(id, slot) => {
-                if self.can_reorder_subscriptions()
-                    && let Some(from) = self
-                        .config
-                        .subscriptions
-                        .iter()
-                        .position(|subscription| subscription.id == id)
-                    && let Some(to) = drop_target(from, slot, self.config.subscriptions.len())
-                {
-                    self.operations.moving_subscription = true;
-                    self.operation_error = None;
-                    return Some(Job::MoveSubscription(id, to));
-                }
-            }
-            Action::OpenAdd => {
-                if self.add.is_none() {
-                    self.add = Some(AddDialog::default());
-                }
-            }
-            Action::CancelAdd => {
-                if self.add.as_ref().is_some_and(|dialog| !dialog.busy) {
-                    self.add = None;
-                }
-            }
-            Action::SubmitAdd => {
-                if let Some(dialog) = &mut self.add
-                    && !dialog.busy
-                {
-                    match rosetun_core::normalize_subscription_url(&dialog.url) {
-                        Ok(input) => {
-                            dialog.busy = true;
-                            dialog.error = None;
-                            let name = (!dialog.name.trim().is_empty())
-                                .then(|| dialog.name.trim().to_owned());
-                            return Some(Job::Add {
-                                input,
-                                options: AddOptions {
-                                    name,
-                                    user_agent: None,
-                                    send_hwid: dialog.send_hwid,
-                                },
-                            });
-                        }
-                        Err(error) => dialog.error = Some(AddFromUrlError::Url(error)),
-                    }
-                }
-            }
-            Action::Update(id) => {
-                if !self.subscription_busy(&id) {
-                    self.operations.updating.insert(id.clone());
-                    self.outcomes.remove(&id);
-                    return Some(Job::Update(id));
-                }
-            }
-            Action::Ping(id) => return self.start_check(id, None, false),
-            Action::PingNode(id, node) => return self.start_check(id, Some(node), false),
-            Action::FullCheck(id) => return self.start_check(id, None, true),
-            Action::FullCheckNode(id, node) => return self.start_check(id, Some(node), true),
-            Action::UpdateAll => {
-                if self.config_ready
-                    && !self.config.subscriptions.is_empty()
-                    && !self.operations.update_all
-                    && self.operations.updating.is_empty()
-                    && !self.operations.removing
-                {
-                    self.operations.update_all = true;
-                    self.outcomes.clear();
-                    return Some(Job::UpdateAll);
-                }
-            }
-            Action::RequestRemove(id) => {
-                if !self.subscription_busy(&id) && !self.operations.removing {
-                    self.remove = Some(RemoveDialog { id, error: None });
-                }
-            }
-            Action::CancelRemove => {
-                if !self.operations.removing {
-                    self.remove = None;
-                }
-            }
-            Action::ConfirmRemove => {
-                if let Some(dialog) = &mut self.remove
-                    && !self.operations.removing
-                    && !self.operations.update_all
-                    && !self.operations.updating.contains(&dialog.id)
-                {
-                    self.operations.removing = true;
-                    dialog.error = None;
-                    return Some(Job::Remove(dialog.id.clone()));
-                }
-            }
-            Action::RequestRename(id) => {
-                if self.config_ready
-                    && self.rename.is_none()
-                    && self.remove.is_none()
-                    && !self.operations.renaming
-                    && let Some(subscription) =
-                        self.config.subscriptions.iter().find(|sub| sub.id == id)
-                {
-                    let original = self.text(&subscription.name);
-                    self.rename = Some(RenameDialog {
-                        id,
-                        name: original.clone(),
-                        original,
-                        error: None,
-                        focus: true,
-                    });
-                }
-            }
-            Action::CancelRename => {
-                if !self.operations.renaming {
-                    self.rename = None;
-                }
-            }
-            Action::SubmitRename => {
-                if let Some(dialog) = &mut self.rename
-                    && !self.operations.renaming
-                {
-                    let name = dialog.name.trim();
-                    if !name.is_empty() {
-                        if name == dialog.original.trim() {
-                            self.rename = None;
-                        } else {
-                            self.operations.renaming = true;
-                            dialog.error = None;
-                            return Some(Job::RenameSubscription(
-                                dialog.id.clone(),
-                                name.to_owned(),
-                            ));
-                        }
-                    }
-                }
-            }
+            action @ (Action::ToggleExpanded(_)
+            | Action::DropSubscription(_, _)
+            | Action::OpenAdd
+            | Action::CancelAdd
+            | Action::SubmitAdd
+            | Action::Update(_)
+            | Action::Ping(_)
+            | Action::PingNode(_, _)
+            | Action::FullCheck(_)
+            | Action::FullCheckNode(_, _)
+            | Action::UpdateAll
+            | Action::RequestRemove(_)
+            | Action::CancelRemove
+            | Action::ConfirmRemove
+            | Action::RequestRename(_)
+            | Action::CancelRename
+            | Action::SubmitRename
+            | Action::DismissOutcome(_)) => return self.act_subscriptions(action),
             Action::DismissOperationError => self.operation_error = None,
             Action::DismissApplyFailure => self.apply_failure = None,
             Action::DismissConfigError => self.config_error = None,
-            Action::DismissOutcome(id) => {
-                self.outcomes.remove(&id);
-            }
         }
         None
     }
