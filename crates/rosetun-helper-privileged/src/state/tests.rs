@@ -8,6 +8,8 @@ use rosetun_engine::{
 };
 use rosetun_routing::errors::RoutingError;
 use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -1139,6 +1141,376 @@ fn fresh_dns_timeout_stops_engine_and_releases_protection() {
         assert!(session.tunnel_dns.is_none());
         assert!(session.watchdog.is_none());
     }
+}
+
+#[derive(Clone, Copy)]
+enum ClashReply {
+    Works,
+    Fails,
+    Hangs,
+}
+
+struct FakeClashApi {
+    control: ControlEndpoint,
+    calls: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl FakeClashApi {
+    fn start(reply: ClashReply) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fake Clash API");
+        listener.set_nonblocking(true).unwrap();
+        let control = ControlEndpoint {
+            address: listener.local_addr().unwrap(),
+            secret: "test-secret".to_owned(),
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker = {
+            let calls = Arc::clone(&calls);
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    let (socket, _) = match listener.accept() {
+                        Ok(connection) => connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                        Err(error) => panic!("fake Clash API accept failed: {error}"),
+                    };
+                    socket.set_nonblocking(false).unwrap();
+                    socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                    let mut reader = BufReader::new(socket);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    assert!(line.starts_with("GET /proxies/proxy/delay?"));
+                    assert!(line.contains("timeout=5000"));
+                    assert!(line.contains("url=https%3A%2F%2F"));
+                    let mut authorized = false;
+                    loop {
+                        line.clear();
+                        reader.read_line(&mut line).unwrap();
+                        if line == "\r\n" {
+                            break;
+                        }
+                        if let Some((name, value)) = line.split_once(':')
+                            && name.eq_ignore_ascii_case("authorization")
+                        {
+                            authorized = value.trim() == "Bearer test-secret";
+                        }
+                    }
+                    assert!(authorized);
+                    calls.fetch_add(1, Ordering::AcqRel);
+                    match reply {
+                        ClashReply::Works | ClashReply::Fails => {
+                            let (status, body) = match reply {
+                                ClashReply::Works => (200, r#"{"delay":12}"#),
+                                ClashReply::Fails => (503, ""),
+                                ClashReply::Hangs => unreachable!(),
+                            };
+                            write!(
+                                reader.get_mut(),
+                                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\n\r\n{body}",
+                                body.len()
+                            )
+                            .unwrap();
+                        }
+                        ClashReply::Hangs => {
+                            while !stop.load(Ordering::Acquire) {
+                                thread::sleep(Duration::from_millis(5));
+                            }
+                        }
+                    }
+                }
+            })
+        };
+        Self {
+            control,
+            calls,
+            stop,
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for FakeClashApi {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            if thread::panicking() {
+                let _ = worker.join();
+            } else {
+                worker.join().expect("fake Clash API worker");
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ServerCheckEngine {
+    server: SocketAddr,
+    control: ControlEndpoint,
+    stopped: Arc<AtomicUsize>,
+    api_stop: Arc<AtomicBool>,
+    api_calls: Arc<AtomicUsize>,
+    log_failures: bool,
+}
+
+impl EngineBackend for ServerCheckEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            rules: RuleCapabilities::ALL,
+        }
+    }
+
+    fn tunnel_dns_server(&self, _: &rosetun_config::TunSettings) -> Option<SocketAddr> {
+        Some(self.server)
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        Ok(PathBuf::from("sing-box"))
+    }
+
+    fn render(&self, _: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        Ok(RenderedConfig {
+            file_name: "config.json".to_owned(),
+            body: Vec::new(),
+            unsupported: Vec::new(),
+            unsupported_probes: Vec::new(),
+        })
+    }
+
+    fn url_test(
+        &self,
+        _: &ControlEndpoint,
+        target: UrlTestTarget<'_>,
+        url: &str,
+        timeout: Duration,
+    ) -> Result<Duration, EngineError> {
+        rosetun_engine_singbox::SingBoxBackend::new("unused").url_test(
+            &self.control,
+            target,
+            url,
+            timeout,
+        )
+    }
+
+    fn spawn(&self, _: &Path, _: &RenderedConfig) -> Result<Box<dyn EngineProcess>, EngineError> {
+        Ok(Box::new(ServerCheckProcess {
+            stopped: Arc::clone(&self.stopped),
+            api_stop: Arc::clone(&self.api_stop),
+            api_calls: Arc::clone(&self.api_calls),
+            log_failures: self.log_failures,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct ServerCheckProcess {
+    stopped: Arc<AtomicUsize>,
+    api_stop: Arc<AtomicBool>,
+    api_calls: Arc<AtomicUsize>,
+    log_failures: bool,
+}
+
+impl EngineProcess for ServerCheckProcess {
+    fn is_running(&mut self) -> Result<bool, EngineError> {
+        Ok(true)
+    }
+
+    fn outbound_failures(&self) -> rosetun_engine::OutboundFailures {
+        rosetun_engine::OutboundFailures {
+            unreachable: u64::from(
+                self.log_failures && self.api_calls.load(Ordering::Acquire) > 0,
+            ) * 2,
+            ..Default::default()
+        }
+    }
+
+    fn stop(&mut self) -> Result<(), EngineError> {
+        self.api_stop.store(true, Ordering::Release);
+        self.stopped.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+}
+
+fn server_check_helper(
+    server: SocketAddr,
+    api: &FakeClashApi,
+    stopped: Arc<AtomicUsize>,
+) -> Helper {
+    server_check_helper_with_logs(server, api, stopped, false)
+}
+
+fn server_check_helper_with_logs(
+    server: SocketAddr,
+    api: &FakeClashApi,
+    stopped: Arc<AtomicUsize>,
+    log_failures: bool,
+) -> Helper {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ServerCheckEngine {
+        server,
+        control: api.control.clone(),
+        stopped,
+        api_stop: Arc::clone(&api.stop),
+        api_calls: Arc::clone(&api.calls),
+        log_failures,
+    }));
+    let helper = Helper::new(
+        engines,
+        Box::new(CountingRouting {
+            reverted: Arc::new(AtomicUsize::new(0)),
+        }),
+        VerboseGate::default(),
+    );
+    {
+        let mut session = helper.session().unwrap();
+        session.dns_timeout = Duration::from_secs(2);
+        session.dns_attempt_timeout = Duration::from_millis(20);
+        session.server_check_interval = Duration::from_millis(20);
+    }
+    helper
+}
+
+#[test]
+fn three_server_checks_fail_before_the_dns_deadline() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Silent);
+    let api = FakeClashApi::start(ClashReply::Fails);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped));
+    let started = Instant::now();
+    let error = helper.connect(&connect_request()).expect_err("server is unreachable");
+
+    assert_eq!(error.code, ErrorCode::ServerUnreachable);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(api.calls.load(Ordering::Acquire) >= 3);
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+    assert!(matches!(helper.status().state, ConnectionState::Failed { .. }));
+}
+
+#[test]
+fn server_check_and_engine_log_failures_share_the_threshold() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Silent);
+    let api = FakeClashApi::start(ClashReply::Fails);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let helper = server_check_helper_with_logs(dns.address(), &api, Arc::clone(&stopped), true);
+    helper.session().unwrap().server_check_interval = Duration::from_millis(400);
+    let error = helper.connect(&connect_request()).expect_err("failures combine");
+
+    assert_eq!(error.code, ErrorCode::ServerUnreachable);
+    assert!(api.calls.load(Ordering::Acquire) < 3);
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn successful_server_checks_do_not_fail_slow_dns_early() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Silent);
+    let api = FakeClashApi::start(ClashReply::Works);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped));
+    helper.session().unwrap().dns_timeout = Duration::from_millis(150);
+    let error = helper.connect(&connect_request()).expect_err("DNS remains silent");
+
+    assert_eq!(error.code, ErrorCode::DnsTimeout);
+    assert!(api.calls.load(Ordering::Acquire) >= 3);
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn server_checks_stop_after_dns_connects() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::DelayedNoerror);
+    let api = FakeClashApi::start(ClashReply::Works);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped));
+    helper.connect(&connect_request()).expect("DNS answers");
+
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    let calls = api.calls.load(Ordering::Acquire);
+    assert!(calls > 0);
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(api.calls.load(Ordering::Acquire), calls);
+    helper.disconnect().unwrap();
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn cancelling_a_server_check_stops_the_worker() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Silent);
+    let api = FakeClashApi::start(ClashReply::Hangs);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let helper = Arc::new(server_check_helper(dns.address(), &api, Arc::clone(&stopped)));
+    let worker = {
+        let helper = Arc::clone(&helper);
+        thread::spawn(move || helper.connect(&connect_request()))
+    };
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while api.calls.load(Ordering::Acquire) == 0 {
+        assert!(Instant::now() < deadline, "server check never started");
+        thread::sleep(Duration::from_millis(5));
+    }
+    let started = Instant::now();
+    helper.disconnect().expect("cancel during server check");
+    assert_eq!(
+        worker.join().unwrap().unwrap_err().code,
+        ErrorCode::Cancelled
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(helper.status(), Status::default());
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+    let calls = api.calls.load(Ordering::Acquire);
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(api.calls.load(Ordering::Acquire), calls);
+}
+
+#[test]
+fn cancellation_after_dns_answer_aborts_an_inflight_server_check() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::DelayedNoerror);
+    let api = FakeClashApi::start(ClashReply::Hangs);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let helper = Arc::new(server_check_helper(dns.address(), &api, Arc::clone(&stopped)));
+    let worker = {
+        let helper = Arc::clone(&helper);
+        thread::spawn(move || helper.connect(&connect_request()))
+    };
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while api.calls.load(Ordering::Acquire) == 0 {
+        assert!(Instant::now() < deadline, "server check never started");
+        thread::sleep(Duration::from_millis(5));
+    }
+    thread::sleep(Duration::from_millis(80));
+    assert!(matches!(helper.status().state, ConnectionState::Connecting));
+    let started = Instant::now();
+    helper.disconnect().expect("cancel during server check");
+    assert_eq!(
+        worker.join().unwrap().unwrap_err().code,
+        ErrorCode::Cancelled
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(helper.status(), Status::default());
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
 }
 
 #[test]

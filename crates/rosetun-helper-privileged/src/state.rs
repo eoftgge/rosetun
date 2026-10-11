@@ -8,7 +8,7 @@ mod watchdog;
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
@@ -17,8 +17,8 @@ use rosetun_config::{
     ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic, list_tag,
 };
 use rosetun_engine::{
-    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
-    TrafficProbe, TrafficTotals,
+    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, PROBE_URL, RenderRequest,
+    RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget,
 };
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_TEMPORARY_RULES};
 use rosetun_routing::{
@@ -33,6 +33,9 @@ const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(60);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
+const SERVER_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const SERVER_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const SERVER_CHECK_FAILURES: u64 = 3;
 const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
     interval: Duration::from_secs(30),
     retry: Duration::from_secs(5),
@@ -110,6 +113,7 @@ struct Session {
     stopping: bool,
     dns_timeout: Duration,
     dns_attempt_timeout: Duration,
+    server_check_interval: Duration,
     watchdog_timing: WatchdogTiming,
     adapter_lookup: fn(&str) -> std::io::Result<bool>,
     cancelled: Arc<AtomicBool>,
@@ -157,6 +161,7 @@ impl Helper {
                 stopping: false,
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
+                server_check_interval: SERVER_CHECK_INTERVAL,
                 watchdog_timing: WATCHDOG_TIMING,
                 cancelled,
                 lists: None,
@@ -1244,22 +1249,99 @@ impl Session {
 
         if let Some(server) = dns_server {
             self.stage(rosetun_config::ConnectStage::CheckingServer)?;
-            let process = self.process.as_mut().ok_or_else(|| {
-                HelperError::new(
-                    ErrorCode::EngineFailed,
-                    "engine process disappeared before DNS check",
-                )
+            let engines = Arc::clone(&self.engines);
+            let backend = engines
+                .get(settings.engine)
+                .expect("engine was registered before spawn");
+            let control = self.control.clone();
+            let interval = self.server_check_interval;
+            let started = AtomicBool::new(false);
+            let stopped = AtomicBool::new(false);
+            let failures = AtomicU64::new(0);
+            let cancelled = Arc::clone(&self.cancelled);
+            thread::scope(|scope| {
+                let _stop = StopServerCheck(&stopped);
+                let worker = control.and_then(|control| {
+                    let worker_started = &started;
+                    let worker_stopped = &stopped;
+                    let worker_cancelled = &cancelled;
+                    let worker_failures = &failures;
+                    match thread::Builder::new()
+                        .name("rosetun-server-check".to_owned())
+                        .spawn_scoped(scope, move || {
+                            check_server_outbound(
+                                backend,
+                                &control,
+                                interval,
+                                worker_started,
+                                worker_stopped,
+                                worker_cancelled,
+                                worker_failures,
+                            );
+                        }) {
+                        Ok(worker) => Some(worker),
+                        Err(error) => {
+                            tracing::warn!(%error, "server check worker is unavailable");
+                            None
+                        }
+                    }
+                });
+                let result = {
+                    let process = self
+                        .process
+                        .as_mut()
+                        .expect("engine process was stored before DNS check");
+                    dns::check_cancellable(
+                        server,
+                        self.dns_timeout,
+                        self.dns_attempt_timeout,
+                        || {
+                            let running = process.is_running()?;
+                            let mut counters = process.outbound_failures();
+                            counters.unreachable = counters
+                                .unreachable
+                                .saturating_add(failures.load(Ordering::Acquire));
+                            // DNS must capture its baseline before the first check can fail.
+                            started.store(true, Ordering::Release);
+                            Ok((running, counters))
+                        },
+                        || cancelled.load(Ordering::Acquire),
+                    )
+                };
+                stopped.store(true, Ordering::Release);
+                let mut engine_stopped = false;
+                if matches!(result, Err(ref error) if error.code == ErrorCode::Cancelled) {
+                    if let Err(error) = self.stop_engine() {
+                        tracing::error!(%error, "failed to stop engine after cancellation");
+                    }
+                    engine_stopped = true;
+                }
+                if let Some(worker) = worker {
+                    while !worker.is_finished() {
+                        if cancelled.load(Ordering::Acquire) && !engine_stopped {
+                            if let Err(error) = self.stop_engine() {
+                                tracing::error!(%error, "failed to stop engine after cancellation");
+                            }
+                            engine_stopped = true;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    if worker.join().is_err() {
+                        return Err(HelperError::new(
+                            ErrorCode::Internal,
+                            "server check worker panicked",
+                        ));
+                    }
+                }
+                check_cancelled(&cancelled)?;
+                let count = failures.load(Ordering::Acquire);
+                if count != 0 && result.is_err() {
+                    tracing::warn!(
+                        "server check during connect failed: {count} of {SERVER_CHECK_FAILURES}"
+                    );
+                }
+                result
             })?;
-            dns::check_cancellable(
-                server,
-                self.dns_timeout,
-                self.dns_attempt_timeout,
-                || {
-                    let running = process.is_running()?;
-                    Ok((running, process.outbound_failures()))
-                },
-                || self.cancelled.load(Ordering::Acquire),
-            )?;
             self.tunnel_dns = Some(server);
         } else {
             tracing::info!(
@@ -1411,6 +1493,59 @@ impl Session {
             && let Err(error) = guard.routing.revert()
         {
             tracing::error!(%error, "failed to roll back routes");
+        }
+    }
+}
+
+struct StopServerCheck<'a>(&'a AtomicBool);
+
+impl Drop for StopServerCheck<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+fn check_server_outbound(
+    backend: &dyn EngineBackend,
+    control: &ControlEndpoint,
+    interval: Duration,
+    started: &AtomicBool,
+    stopped: &AtomicBool,
+    cancelled: &AtomicBool,
+    failures: &AtomicU64,
+) {
+    while !started.load(Ordering::Acquire) && !stopped.load(Ordering::Acquire) {
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut next = Instant::now();
+    while !stopped.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
+        let result = backend.url_test(
+            control,
+            UrlTestTarget::Session,
+            PROBE_URL,
+            SERVER_CHECK_TIMEOUT,
+        );
+        if stopped.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire) {
+            return;
+        }
+        match result {
+            Ok(_) => {}
+            Err(rosetun_engine::errors::EngineError::Unsupported(_)) => return,
+            Err(_) => {
+                failures.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        next += interval;
+        while !stopped.load(Ordering::Acquire)
+            && !cancelled.load(Ordering::Acquire)
+            && Instant::now() < next
+        {
+            thread::sleep(
+                next.saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(20)),
+            );
         }
     }
 }

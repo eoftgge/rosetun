@@ -142,7 +142,7 @@ impl EngineBackend for SingBoxBackend {
         };
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
-                .timeout_global(Some(timeout + Duration::from_secs(2)))
+                .timeout_global(Some(timeout))
                 .http_status_as_error(false)
                 .proxy(None)
                 .build(),

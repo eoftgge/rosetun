@@ -434,6 +434,7 @@ pub(crate) mod test_support {
     #[derive(Debug, Clone, Copy)]
     pub(crate) enum Behavior {
         Noerror,
+        DelayedNoerror,
         Nxdomain,
         Servfail,
         Silent,
@@ -467,6 +468,7 @@ pub(crate) mod test_support {
                                 io::ErrorKind::TimedOut
                                     | io::ErrorKind::WouldBlock
                                     | io::ErrorKind::Interrupted
+                                    | io::ErrorKind::ConnectionReset
                             ) =>
                         {
                             continue;
@@ -476,6 +478,9 @@ pub(crate) mod test_support {
 
                     if matches!(behavior, Behavior::Silent) {
                         continue;
+                    }
+                    if matches!(behavior, Behavior::DelayedNoerror) {
+                        thread::sleep(Duration::from_millis(50));
                     }
 
                     let mut response = buffer[..length].to_vec();
