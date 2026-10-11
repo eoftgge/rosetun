@@ -332,8 +332,7 @@ fn filter_controls(
     };
     if two_rows {
         let search_width = (available - widgets::segmented_width(ui, &options) - gap)
-            .min(SEARCH_WIDTH)
-            .max(MIN_SEARCH_WIDTH);
+            .clamp(MIN_SEARCH_WIDTH, SEARCH_WIDTH);
         ui.horizontal(|ui| primary(ui, search_width, filter, &mut rects, actions));
         ui.horizontal(|ui| {
             rects.filter = target_filter(ui, filter, actions).rect;
