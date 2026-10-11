@@ -519,6 +519,33 @@ fn terminal_status_clears_temporary_rules_and_ignores_late_loads() {
     assert!(state.session.temporary_rules.is_empty());
 }
 
+#[cfg(windows)]
+#[test]
+fn helper_loss_drops_queued_apply_and_ignores_late_response() {
+    let mut state = connected_state_for_apply();
+    state.act(Action::OpenRules);
+    state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+    let request = state.apply_request().unwrap();
+    assert!(matches!(state.act(Action::OpenSettings), Some(Job::LoadAutostart)));
+    assert!(state.operations.helper);
+
+    state.reduce(WorkerEvent::HelperUnavailable(ClientError::Helper(
+        HelperError::new(ErrorCode::Internal, "gone"),
+    )));
+    assert!(!state.operations.helper);
+    assert!(state.take_leave_apply().is_none());
+    assert!(state.session.session_request.is_none());
+    let error = state.operation_error.clone();
+
+    state.reduce(WorkerEvent::HelperAvailable {
+        version: "test".to_owned(),
+    });
+    state.reduce(WorkerEvent::Apply(Ok(request)));
+    assert!(!state.operations.helper);
+    assert!(state.session.session_request.is_none());
+    assert_eq!(state.operation_error, error);
+}
+
 #[test]
 fn late_apply_cannot_restore_rules_after_disconnect() {
     let mut state = connected_state_for_apply();

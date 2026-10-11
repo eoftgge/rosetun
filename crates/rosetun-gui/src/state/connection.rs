@@ -223,6 +223,7 @@ impl State {
                 self.session.session_snapshot_checked = false;
                 self.session.helper_lost();
                 self.session.queued_leave_apply = None;
+                self.operations.helper = false;
                 self.clear_traffic_history();
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;

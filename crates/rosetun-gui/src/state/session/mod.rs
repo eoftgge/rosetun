@@ -576,6 +576,9 @@ impl State {
                 }
             }
             WorkerEvent::Apply(result) => {
+                if !self.helper_available || !self.session.flow.applying() {
+                    return;
+                }
                 self.operations.helper = false;
                 let flow = std::mem::replace(&mut self.session.flow, ApplyFlow::Idle);
                 let (before, baseline, candidate) = match flow {
