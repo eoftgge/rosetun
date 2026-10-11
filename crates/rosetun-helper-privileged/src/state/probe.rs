@@ -16,7 +16,7 @@ use rosetun_ipc::{
 };
 
 use super::{
-    Helper, node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name,
+    Caller, Helper, node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name,
     wait_for_engine_ready,
 };
 
@@ -287,8 +287,10 @@ impl Helper {
         Ok(results)
     }
 
-    pub fn tunnel_delay(&self) -> Result<ProbeOutcome, HelperError> {
+    pub(crate) fn tunnel_delay_as(&self, caller: &Caller) -> Result<ProbeOutcome, HelperError> {
+        self.check_owner(caller)?;
         let session = self.session()?;
+        self.check_owner(caller)?;
         let (state, engine) = self.with_status(|status| (status.state.clone(), status.engine));
         if !matches!(state, ConnectionState::Connected) {
             return Err(HelperError::new(
@@ -323,6 +325,11 @@ impl Helper {
             PROBE_URL,
             PROBE_TIMEOUT,
         )))
+    }
+
+    #[cfg(test)]
+    pub fn tunnel_delay(&self) -> Result<ProbeOutcome, HelperError> {
+        self.tunnel_delay_as(&super::test_caller())
     }
 }
 

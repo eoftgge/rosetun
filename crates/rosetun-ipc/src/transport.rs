@@ -41,6 +41,31 @@ pub fn default_endpoint() -> PathBuf {
 pub struct Connection {
     reader: BufReader<Box<dyn Read + Send>>,
     writer: Box<dyn Write + Send>,
+    #[cfg(windows)]
+    peer_pipe: Option<std::fs::File>,
+}
+
+pub struct PeerIdentity {
+    user_sid: Vec<u8>,
+    administrator: bool,
+}
+
+impl std::fmt::Debug for PeerIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PeerIdentity")
+            .field("administrator", &self.administrator)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PeerIdentity {
+    pub fn user_sid(&self) -> &[u8] {
+        &self.user_sid
+    }
+
+    pub fn is_administrator(&self) -> bool {
+        self.administrator
+    }
 }
 
 impl std::fmt::Debug for Connection {
@@ -54,6 +79,27 @@ impl Connection {
         Self {
             reader: BufReader::new(reader),
             writer,
+            #[cfg(windows)]
+            peer_pipe: None,
+        }
+    }
+
+    pub fn identify_peer(&self) -> io::Result<PeerIdentity> {
+        #[cfg(windows)]
+        {
+            let pipe = self
+                .peer_pipe
+                .as_ref()
+                .ok_or_else(|| io::Error::other("not a server pipe connection"))?;
+            platform::identify_peer(pipe)
+        }
+        #[cfg(not(windows))]
+        {
+            // Unix transport is for development only; releases use Windows named pipes.
+            Ok(PeerIdentity {
+                user_sid: b"development-user".to_vec(),
+                administrator: false,
+            })
         }
     }
 
@@ -135,19 +181,19 @@ mod platform {
         ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
     };
     use windows_sys::Win32::Security::{
-        CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, IsWellKnownSid,
-        OWNER_SECURITY_INFORMATION, PSID, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE,
-        TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenUser,
-        WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        CheckTokenMembership, CreateWellKnownSid, GetLengthSid, GetTokenInformation, IsValidSid,
+        IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSID, RevertToSelf, SECURITY_ATTRIBUTES,
+        SECURITY_MAX_SID_SIZE, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation,
+        TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_GENERIC_READ, FILE_WRITE_DATA,
         OPEN_EXISTING, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
     };
     use windows_sys::Win32::System::Pipes::{
-        CreateNamedPipeW, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
-        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
-        WaitNamedPipeW,
+        CreateNamedPipeW, GetNamedPipeServerProcessId, ImpersonateNamedPipeClient,
+        PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+        PIPE_WAIT, WaitNamedPipeW,
     };
     use windows_sys::Win32::System::Services::{
         CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx, SC_HANDLE,
@@ -155,7 +201,8 @@ mod platform {
         SERVICE_STOPPED,
     };
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+        GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
+        PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
     use super::*;
@@ -323,7 +370,55 @@ mod platform {
         }
         // SAFETY: OpenProcessToken returned a live handle whose ownership moves here.
         let token = unsafe { OwnedHandle::from_raw_handle(token as RawHandle) };
+        let (_, administrator) = token_identity(&token)?;
+        if !administrator {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the helper pipe server is not SYSTEM or an elevated Administrator",
+            ));
+        }
+        Ok(())
+    }
 
+    struct Impersonation;
+
+    impl Drop for Impersonation {
+        fn drop(&mut self) {
+            // SAFETY: This guard exists only after successful pipe impersonation on
+            // this thread. Continuing under a client's token would compromise the helper.
+            if unsafe { RevertToSelf() } == 0 {
+                std::process::abort();
+            }
+        }
+    }
+
+    pub(super) fn identify_peer(pipe: &std::fs::File) -> io::Result<PeerIdentity> {
+        // SAFETY: The server pipe remains live throughout this call, after its first
+        // Hello frame was read on the same thread. The client permits identification.
+        if unsafe { ImpersonateNamedPipeClient(pipe.as_raw_handle() as HANDLE) } == 0 {
+            return Err(last_error());
+        }
+        let impersonation = Impersonation;
+        let mut token = std::ptr::null_mut();
+        // SAFETY: The current thread is impersonating at identification level;
+        // OpenAsSelf allows the helper to open that token for queries only.
+        let result = if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) }
+            == 0
+        {
+            Err(last_error())
+        } else {
+            // SAFETY: OpenThreadToken returned a live handle now owned by OwnedHandle.
+            Ok(unsafe { OwnedHandle::from_raw_handle(token as RawHandle) })
+        };
+        drop(impersonation);
+        let (user_sid, administrator) = token_identity(&result?)?;
+        Ok(PeerIdentity {
+            user_sid,
+            administrator,
+        })
+    }
+
+    fn token_identity(token: &OwnedHandle) -> io::Result<(Vec<u8>, bool)> {
         let mut length = 0;
         // SAFETY: A null buffer and zero length request the required TokenUser buffer size.
         unsafe {
@@ -336,12 +431,12 @@ mod platform {
             )
         };
         if (length as usize) < std::mem::size_of::<TOKEN_USER>() {
-            return Err(io::Error::other("invalid helper server token user"));
+            return Err(io::Error::other("invalid token user"));
         }
-        // usize provides pointer alignment for TOKEN_USER, including its borrowed SID.
+        // usize provides pointer alignment for TOKEN_USER and its borrowed SID.
         let mut user = vec![0usize; (length as usize).div_ceil(std::mem::size_of::<usize>())];
-        // SAFETY: The buffer is aligned and at least length bytes long; both the
-        // TOKEN_USER and its SID remain live while this buffer is in scope.
+        // SAFETY: The aligned buffer has at least length bytes; TOKEN_USER and its
+        // SID remain live while the buffer is in scope.
         if unsafe {
             GetTokenInformation(
                 token.as_raw_handle() as HANDLE,
@@ -354,18 +449,32 @@ mod platform {
         {
             return Err(last_error());
         }
-        // SAFETY: GetTokenInformation wrote a TOKEN_USER into the aligned buffer.
+        // SAFETY: GetTokenInformation wrote TOKEN_USER into the aligned buffer.
         let sid = unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid };
-        if sid.is_null() {
-            return Err(io::Error::other("invalid helper server token SID"));
+        // SAFETY: The SID is borrowed from the live token information buffer.
+        if sid.is_null() || unsafe { IsValidSid(sid) } == 0 {
+            return Err(io::Error::other("invalid token SID"));
         }
+        let administrator = token_administrator(token, sid)?;
+        // SAFETY: The valid SID belongs to the live token buffer and GetLengthSid
+        // bounds the borrowed bytes, which are copied before the buffer is dropped.
+        let sid_length = unsafe { GetLengthSid(sid) } as usize;
+        if !(8..=SECURITY_MAX_SID_SIZE as usize).contains(&sid_length) {
+            return Err(io::Error::other("invalid token SID length"));
+        }
+        // SAFETY: IsValidSid validated the SID, and sid_length is its actual size.
+        let user_sid = unsafe { std::slice::from_raw_parts(sid.cast(), sid_length) }.to_vec();
+        Ok((user_sid, administrator))
+    }
+
+    fn token_administrator(token: &OwnedHandle, sid: PSID) -> io::Result<bool> {
         // SAFETY: The SID points into the live token information buffer.
         let is_system = unsafe { IsWellKnownSid(sid, WinLocalSystemSid) != 0 };
         if is_system {
-            return Ok(());
+            return Ok(true);
         }
-
         let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut length = 0;
         // SAFETY: The token is live and the output is sized for TOKEN_ELEVATION.
         if unsafe {
             GetTokenInformation(
@@ -379,17 +488,9 @@ mod platform {
         {
             return Err(last_error());
         }
-        if elevation.TokenIsElevated == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "the helper pipe server is not SYSTEM or an elevated Administrator",
-            ));
-        }
-
         let mut administrators = [0u8; SECURITY_MAX_SID_SIZE as usize];
         let mut sid_length = administrators.len() as u32;
-        // SAFETY: The SID output buffer has the advertised size and remains live
-        // while CheckTokenMembership reads it; no SID pointer is retained.
+        // SAFETY: The output buffer remains live while CheckTokenMembership reads it.
         if unsafe {
             CreateWellKnownSid(
                 WinBuiltinAdministratorsSid,
@@ -402,7 +503,8 @@ mod platform {
             return Err(last_error());
         }
         let mut member = 0;
-        // SAFETY: The server token and SID are live; the membership output is writable.
+        // SAFETY: The impersonation token and administrator SID are live; the
+        // membership output is writable and no pointer is retained.
         if unsafe {
             CheckTokenMembership(
                 token.as_raw_handle() as HANDLE,
@@ -413,13 +515,7 @@ mod platform {
         {
             return Err(last_error());
         }
-        if !trusted_server(is_system, elevation.TokenIsElevated != 0, member != 0) {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "the helper pipe server is not SYSTEM or an elevated Administrator",
-            ));
-        }
-        Ok(())
+        Ok(trusted_server(is_system, elevation.TokenIsElevated != 0, member != 0))
     }
 
     fn security_descriptor() -> io::Result<SecurityDescriptor> {
@@ -505,11 +601,13 @@ mod platform {
         }
     }
 
-    fn connection_from_handle(handle: OwnedHandle) -> io::Result<Connection> {
+    fn connection_from_handle(handle: OwnedHandle, server: bool) -> io::Result<Connection> {
         let reader = std::fs::File::from(handle);
         let writer = reader.try_clone()?;
-
-        Ok(Connection::new(Box::new(reader), Box::new(writer)))
+        let peer_pipe = server.then(|| reader.try_clone()).transpose()?;
+        let mut connection = Connection::new(Box::new(reader), Box::new(writer));
+        connection.peer_pipe = peer_pipe;
+        Ok(connection)
     }
 
     pub(super) fn open(endpoint: &Path, check_owner: bool) -> io::Result<Connection> {
@@ -541,7 +639,7 @@ mod platform {
                         )
                     })?;
                 }
-                return connection_from_handle(handle);
+                return connection_from_handle(handle, false);
             }
 
             let error = last_error();
@@ -634,7 +732,7 @@ mod platform {
             }
             drop(slot);
 
-            connection_from_handle(pending)
+            connection_from_handle(pending, true)
         }
 
         pub fn path(&self) -> &Path {

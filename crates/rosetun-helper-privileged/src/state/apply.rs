@@ -6,13 +6,19 @@ use rosetun_config::{ConnectionState, Settings};
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
-    Helper, RECONNECT_BACKOFF, Reconnect, StartMode, node_with_endpoint, normalize_server,
-    probe::resolve_for_apply, render_config, validate_request,
+    Caller, Helper, RECONNECT_BACKOFF, Reconnect, StartMode, node_with_endpoint,
+    normalize_server, probe::resolve_for_apply, render_config, validate_request,
 };
 
 impl Helper {
-    pub fn apply(&self, request: &ConnectRequest) -> Result<(), HelperError> {
+    pub(crate) fn apply_as(
+        &self,
+        caller: &Caller,
+        request: &ConnectRequest,
+    ) -> Result<(), HelperError> {
+        self.check_owner(caller)?;
         let mut session = self.session()?;
+        self.check_owner(caller)?;
         validate_request(request)?;
         if !matches!(
             self.with_status(|status| status.state.clone()),
@@ -223,6 +229,11 @@ impl Helper {
                 }
             }
         }
+    }
+
+    #[cfg(test)]
+    pub fn apply(&self, request: &ConnectRequest) -> Result<(), HelperError> {
+        self.apply_as(&super::test_caller(), request)
     }
 }
 

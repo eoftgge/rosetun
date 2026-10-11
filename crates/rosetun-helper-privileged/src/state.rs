@@ -21,6 +21,7 @@ use rosetun_engine::{
     RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget,
 };
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_TEMPORARY_RULES};
+use rosetun_ipc::transport::PeerIdentity;
 use rosetun_routing::{
     ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
 };
@@ -59,9 +60,34 @@ const SUPERVISOR_TICK: Duration = Duration::from_millis(500);
 /// A wall-clock jump this large between two ticks means the machine slept.
 const SLEEP_GAP: Duration = Duration::from_secs(30);
 
+pub(crate) struct Caller {
+    sid: Vec<u8>,
+    administrator: bool,
+}
+
+#[cfg(test)]
+impl Caller {
+    pub(crate) fn fake(sid: &[u8], administrator: bool) -> Self {
+        Self {
+            sid: sid.to_vec(),
+            administrator,
+        }
+    }
+}
+
+impl From<PeerIdentity> for Caller {
+    fn from(peer: PeerIdentity) -> Self {
+        Self {
+            sid: peer.user_sid().to_vec(),
+            administrator: peer.is_administrator(),
+        }
+    }
+}
+
 pub struct Helper {
     status: Arc<Mutex<Status>>,
     session: Mutex<Session>,
+    owner: Arc<Mutex<Option<Vec<u8>>>>,
     engines: Arc<EngineRegistry>,
     probe: Mutex<()>,
     lists: Option<Arc<Mutex<ListStore>>>,
@@ -109,6 +135,7 @@ struct Session {
     guard: Option<Guard>,
     last_endpoint: Option<SuccessfulEndpoint>,
     request: Option<ConnectRequest>,
+    owner: Arc<Mutex<Option<Vec<u8>>>>,
     reconnect: Option<Reconnect>,
     stopping: bool,
     dns_timeout: Duration,
@@ -136,8 +163,10 @@ impl Helper {
         let status = Arc::new(Mutex::new(Status::default()));
         let engines = Arc::new(engines);
         let cancelled = Arc::new(AtomicBool::new(false));
+        let owner = Arc::new(Mutex::new(None));
         Self {
             status: Arc::clone(&status),
+            owner: Arc::clone(&owner),
             engines: Arc::clone(&engines),
             probe: Mutex::new(()),
             lists: None,
@@ -157,6 +186,7 @@ impl Helper {
                 guard: None,
                 last_endpoint: None,
                 request: None,
+                owner,
                 reconnect: None,
                 stopping: false,
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
@@ -238,13 +268,20 @@ impl Helper {
         self.with_status(|status| status.clone())
     }
 
-    pub fn temporary_rules(&self) -> Result<Vec<Rule>, HelperError> {
+    pub(crate) fn temporary_rules_as(&self, caller: &Caller) -> Result<Vec<Rule>, HelperError> {
+        self.check_owner(caller)?;
         let session = self.session()?;
+        self.check_owner(caller)?;
         Ok(session
             .request
             .as_ref()
             .map(|request| request.temporary_rules.clone())
             .unwrap_or_default())
+    }
+
+    #[cfg(test)]
+    pub fn temporary_rules(&self) -> Result<Vec<Rule>, HelperError> {
+        self.temporary_rules_as(&test_caller())
     }
 
     /// The machine woke from sleep; the supervisor restarts a live tunnel.
@@ -434,8 +471,14 @@ impl Helper {
         }
     }
 
-    pub fn connect(&self, request: &ConnectRequest) -> Result<(), HelperError> {
+    pub(crate) fn connect_as(
+        &self,
+        caller: &Caller,
+        request: &ConnectRequest,
+    ) -> Result<(), HelperError> {
+        self.check_owner(caller)?;
         let mut session = self.session()?;
+        self.check_owner(caller)?;
         validate_request(request)?;
         let state = self.with_status(|status| status.state.clone());
 
@@ -463,9 +506,9 @@ impl Helper {
             "starting tunnel connection"
         );
 
+        let previous_owner = self.begin_connect(caller)?;
         session.request = None;
         session.reconnect = None;
-        self.begin_attempt(ConnectionState::Connecting);
 
         match session
             .start(
@@ -489,6 +532,13 @@ impl Helper {
                 self.resumed.store(false, Ordering::Release);
                 session.start_monitor(request.settings.engine);
                 session.start_watchdog();
+                if caller.administrator
+                    && previous_owner
+                        .as_ref()
+                        .is_some_and(|previous| previous != &caller.sid)
+                {
+                    tracing::info!("session owner changed by an administrator");
+                }
                 Ok(())
             }
             Err(error) => {
@@ -525,6 +575,11 @@ impl Helper {
                     status.since_unix = None;
                     status.connect_stage = None;
                     status.stage_since_unix = None;
+                    if protected {
+                        *self.owner.lock().unwrap_or_else(|poison| poison.into_inner()) =
+                            previous_owner.clone();
+                        self.owner.clear_poison();
+                    }
                 }) {
                     self.finish_cancelled(&mut session);
                     return Err(cancelled);
@@ -534,12 +589,25 @@ impl Helper {
         }
     }
 
-    pub fn disconnect(&self) -> Result<(), HelperError> {
+    #[cfg(test)]
+    pub fn connect(&self, request: &ConnectRequest) -> Result<(), HelperError> {
+        self.connect_as(&test_caller(), request)
+    }
+
+    pub(crate) fn disconnect_as(&self, caller: &Caller) -> Result<(), HelperError> {
         let (mut session, poisoned) = match self.session.try_lock() {
             Ok(session) => (session, false),
             Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),
             Err(TryLockError::WouldBlock) => {
                 return self.with_status(|status| {
+                    let owner = self.owner.lock().map_err(|_| access_denied())?;
+                    if owner
+                        .as_ref()
+                        .is_some_and(|sid| sid != &caller.sid && !caller.administrator)
+                        || (owner.is_none() && status.state.is_transitional())
+                    {
+                        return Err(access_denied());
+                    }
                     if status.state.is_transitional() {
                         self.cancelled.store(true, Ordering::Release);
                         Ok(())
@@ -552,6 +620,7 @@ impl Helper {
                 });
             }
         };
+        self.check_owner(caller)?;
         if session.stopping {
             return Err(HelperError::new(
                 ErrorCode::InvalidState,
@@ -566,6 +635,11 @@ impl Helper {
             self.session.clear_poison();
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn disconnect(&self) -> Result<(), HelperError> {
+        self.disconnect_as(&test_caller())
     }
 
     pub fn shutdown(&self) {
@@ -620,6 +694,32 @@ impl Helper {
         apply(&mut status)
     }
 
+    fn check_owner(&self, caller: &Caller) -> Result<(), HelperError> {
+        let owner = self.owner.lock().map_err(|_| access_denied())?;
+        if owner
+            .as_ref()
+            .is_some_and(|sid| sid != &caller.sid && !caller.administrator)
+        {
+            return Err(access_denied());
+        }
+        Ok(())
+    }
+
+    fn begin_connect(&self, caller: &Caller) -> Result<Option<Vec<u8>>, HelperError> {
+        self.with_status(|status| {
+            let mut owner = self.owner.lock().map_err(|_| access_denied())?;
+            let previous = owner.replace(caller.sid.clone());
+            self.cancelled.store(false, Ordering::Release);
+            if self.shutting_down.load(Ordering::Acquire) {
+                self.cancelled.store(true, Ordering::Release);
+            }
+            status.state = ConnectionState::Connecting;
+            status.connect_stage = None;
+            status.stage_since_unix = None;
+            Ok(previous)
+        })
+    }
+
     fn begin_attempt(&self, state: ConnectionState) {
         self.with_status(|status| {
             self.cancelled.store(false, Ordering::Release);
@@ -648,6 +748,18 @@ impl Helper {
         session.teardown();
         self.with_status(|status| *status = Status::default());
     }
+}
+
+#[cfg(test)]
+fn test_caller() -> Caller {
+    Caller::fake(b"test-session-owner", false)
+}
+
+pub(crate) fn access_denied() -> HelperError {
+    HelperError::new(
+        ErrorCode::AccessDenied,
+        "the tunnel belongs to another Windows account; only that account or an administrator can control it",
+    )
 }
 
 fn validate_tun_name(name: &str) -> Result<(), HelperError> {
@@ -1494,6 +1606,8 @@ impl Session {
         {
             tracing::error!(%error, "failed to roll back routes");
         }
+        *self.owner.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        self.owner.clear_poison();
     }
 }
 

@@ -1774,6 +1774,153 @@ fn disconnect_cancels_while_a_second_connect_reports_busy() {
     assert_eq!(helper.status(), Status::default());
 }
 
+fn owned_helper() -> Helper {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(StubEngine));
+    Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default())
+}
+
+#[test]
+fn session_owner_controls_connected_operations_and_releases_it_on_disconnect() {
+    let helper = owned_helper();
+    let owner = Caller::fake(b"owner", false);
+    let other = Caller::fake(b"other", false);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request.temporary_rules.push(temporary_rule());
+
+    helper.connect_as(&owner, &request).expect("owner connects");
+    assert_eq!(helper.temporary_rules_as(&owner).unwrap(), request.temporary_rules);
+    helper.apply_as(&owner, &request).expect("owner applies");
+    assert!(!matches!(
+        helper.tunnel_delay_as(&owner),
+        Err(HelperError { code: ErrorCode::AccessDenied, .. })
+    ));
+    helper.disconnect_as(&owner).expect("owner disconnects");
+
+    helper.connect_as(&other, &request).expect("another account connects after disconnect");
+    assert_eq!(helper.disconnect_as(&owner).unwrap_err().code, ErrorCode::AccessDenied);
+    helper.disconnect_as(&other).expect("new owner disconnects");
+}
+
+#[test]
+fn another_account_cannot_change_or_read_an_active_session() {
+    let helper = owned_helper();
+    let owner = Caller::fake(b"owner", false);
+    let other = Caller::fake(b"other", false);
+    let admin = Caller::fake(b"admin", true);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    request.temporary_rules.push(temporary_rule());
+    helper.connect_as(&owner, &request).expect("owner connects");
+
+    for result in [
+        helper.connect_as(&other, &request),
+        helper.apply_as(&other, &request),
+        helper.temporary_rules_as(&other).map(|_| ()),
+        helper.tunnel_delay_as(&other).map(|_| ()),
+        helper.disconnect_as(&other),
+    ] {
+        assert_eq!(result.unwrap_err().code, ErrorCode::AccessDenied);
+    }
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.temporary_rules_as(&owner).unwrap(), request.temporary_rules);
+    assert_eq!(helper.connect_as(&admin, &request).unwrap_err().code, ErrorCode::InvalidState);
+    helper.apply_as(&admin, &request).expect("admin applies");
+    assert_eq!(helper.temporary_rules_as(&admin).unwrap(), request.temporary_rules);
+    assert!(!matches!(
+        helper.tunnel_delay_as(&admin),
+        Err(HelperError { code: ErrorCode::AccessDenied, .. })
+    ));
+    helper.disconnect_as(&admin).expect("admin disconnects");
+}
+
+#[test]
+fn another_account_cannot_cancel_a_connect_holding_the_session() {
+    let (entered, entered_rx) = channel();
+    let (release_tx, release) = channel();
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(StubEngine));
+    let helper = Arc::new(Helper::new(
+        engines,
+        Box::new(BlockingRouting {
+            entered,
+            release,
+            received_plan: Arc::new(Mutex::new(None)),
+        }),
+        VerboseGate::default(),
+    ));
+    let owner = Caller::fake(b"owner", false);
+    let other = Caller::fake(b"other", false);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let worker = {
+        let helper = Arc::clone(&helper);
+        let caller = Caller::fake(b"owner", false);
+        let request = request.clone();
+        std::thread::spawn(move || helper.connect_as(&caller, &request))
+    };
+    entered_rx.recv().expect("connect holds the session");
+
+    assert_eq!(helper.connect_as(&other, &request).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(helper.disconnect_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(helper.apply_as(&other, &request).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(helper.temporary_rules_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(helper.tunnel_delay_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    assert!(!helper.cancelled.load(Ordering::Acquire));
+    helper.disconnect_as(&owner).expect("owner cancels");
+    release_tx.send(()).expect("release routing");
+    assert_eq!(worker.join().unwrap().unwrap_err().code, ErrorCode::Cancelled);
+    assert_eq!(helper.status(), Status::default());
+}
+
+#[test]
+fn failed_connect_releases_owner_for_another_account() {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(StubEngine));
+    let helper = Helper::new(engines, Box::new(FailingRouting), VerboseGate::default());
+    let owner = Caller::fake(b"owner", false);
+    let other = Caller::fake(b"other", false);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+
+    assert_eq!(helper.connect_as(&owner, &request).unwrap_err().code, ErrorCode::RoutingFailed);
+    assert!(matches!(helper.status().state, ConnectionState::Failed { .. }));
+    request.settings.kill_switch = false;
+    helper.connect_as(&other, &request).expect("new owner after failure");
+    assert_eq!(helper.disconnect_as(&owner).unwrap_err().code, ErrorCode::AccessDenied);
+    helper.disconnect_as(&other).expect("new owner disconnects");
+}
+
+#[test]
+fn administrator_takes_over_a_protected_session() {
+    let (helper, _, _, _) = protected_helper(Box::new(StubEngine));
+    let owner = Caller::fake(b"owner", false);
+    let admin = Caller::fake(b"admin", true);
+    *helper.owner.lock().unwrap() = Some(owner.sid.clone());
+
+    helper.connect_as(&admin, &protected_request()).expect("admin reconnects");
+    assert_eq!(helper.disconnect_as(&owner).unwrap_err().code, ErrorCode::AccessDenied);
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    helper.disconnect_as(&admin).expect("administrator disconnects");
+}
+
+#[test]
+fn failed_protected_connect_keeps_the_previous_owner() {
+    let (helper, _, _, _) = protected_helper(Box::new(ExitedEngine));
+    let owner = Caller::fake(b"owner", false);
+    let other = Caller::fake(b"other", false);
+    let admin = Caller::fake(b"admin", true);
+    *helper.owner.lock().unwrap() = Some(owner.sid.clone());
+
+    helper.connect_as(&admin, &protected_request()).expect_err("engine exits");
+    assert!(matches!(helper.status().state, ConnectionState::FailedProtected { .. }));
+    assert_eq!(helper.disconnect_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(*helper.owner.lock().unwrap(), Some(owner.sid.clone()));
+    assert!(helper.temporary_rules_as(&admin).is_ok());
+    helper.disconnect_as(&owner).expect("previous owner retains protected session");
+}
+
 #[test]
 fn connect_without_kill_switch_does_not_use_routing_backend() {
     let mut engines = EngineRegistry::new();
@@ -4081,7 +4228,7 @@ fn cancellation_during_protected_apply_does_not_roll_back() {
 #[test]
 fn accepted_cancellation_cannot_publish_connected() {
     let (helper, _, _, _) = supervised_helper(false);
-    helper.begin_attempt(ConnectionState::Connecting);
+    helper.begin_connect(&test_caller()).unwrap();
     let _session = helper.session().unwrap();
     helper.disconnect().unwrap();
     assert_eq!(

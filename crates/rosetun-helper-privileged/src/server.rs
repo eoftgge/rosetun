@@ -8,6 +8,7 @@ use rosetun_ipc::{
     Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request, Response,
 };
 
+use crate::state::Caller;
 pub(crate) use crate::state::Helper;
 
 const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -151,6 +152,7 @@ fn handle(
     ipc_shutdown: bool,
 ) -> Result<(), String> {
     let mut greeted = false;
+    let mut caller = None;
     let owner = UploadOwner {
         helper: Arc::clone(&helper),
         id: NEXT_CONNECTION.fetch_add(1, Ordering::Relaxed),
@@ -179,8 +181,22 @@ fn handle(
             return Err("client did not handshake".to_owned());
         }
 
+        if !greeted && matches!(body, Request::Hello { .. }) {
+            match connection.identify_peer() {
+                Ok(identity) => caller = Some(Caller::from(identity)),
+                Err(error) => tracing::warn!(%error, "could not identify helper pipe client"),
+            }
+        }
+
         tracing::debug!(request = ?body, "handling helper request");
-        let response = dispatch(&body, &helper, &mut greeted, ipc_shutdown, owner.id);
+        let response = dispatch(
+            &body,
+            &helper,
+            &mut greeted,
+            caller.as_ref(),
+            ipc_shutdown,
+            owner.id,
+        );
         let fatal = matches!(
             response,
             Response::Error(HelperError {
@@ -210,6 +226,7 @@ fn dispatch(
     request: &Request,
     helper: &Helper,
     greeted: &mut bool,
+    caller: Option<&Caller>,
     ipc_shutdown: bool,
     owner: u64,
 ) -> Response {
@@ -234,7 +251,11 @@ fn dispatch(
             }
         }
         Request::Status => Response::Status(helper.status()),
-        Request::TemporaryRules => match helper.temporary_rules() {
+        _ if caller.is_none() => Response::Error(HelperError::new(
+            ErrorCode::AccessDenied,
+            "the Windows account for this connection could not be verified",
+        )),
+        Request::TemporaryRules => match helper.temporary_rules_as(caller.expect("caller checked")) {
             Ok(rules) => Response::TemporaryRules(rules),
             Err(error) => Response::Error(error),
         },
@@ -252,7 +273,7 @@ fn dispatch(
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
-        Request::Connect(connect) => match helper.connect(connect) {
+        Request::Connect(connect) => match helper.connect_as(caller.expect("caller checked"), connect) {
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
@@ -260,15 +281,15 @@ fn dispatch(
             Ok(results) => Response::Probe(results),
             Err(error) => Response::Error(error),
         },
-        Request::TunnelDelay => match helper.tunnel_delay() {
+        Request::TunnelDelay => match helper.tunnel_delay_as(caller.expect("caller checked")) {
             Ok(outcome) => Response::Delay(outcome),
             Err(error) => Response::Error(error),
         },
-        Request::Disconnect => match helper.disconnect() {
+        Request::Disconnect => match helper.disconnect_as(caller.expect("caller checked")) {
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
-        Request::Apply(request) => match helper.apply(request) {
+        Request::Apply(request) => match helper.apply_as(caller.expect("caller checked"), request) {
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
@@ -317,17 +338,107 @@ mod tests {
             crate::log_gate::VerboseGate::default(),
         );
         let mut greeted = true;
+        let caller = Caller::fake(b"owner", false);
         assert!(matches!(
-            dispatch(&Request::Shutdown, &helper, &mut greeted, false, 0),
+            dispatch(&Request::Shutdown, &helper, &mut greeted, Some(&caller), false, 0),
             Response::Error(HelperError {
                 code: ErrorCode::InvalidState,
                 ..
             })
         ));
         assert!(matches!(
-            dispatch(&Request::Shutdown, &helper, &mut greeted, true, 0),
+            dispatch(&Request::Shutdown, &helper, &mut greeted, Some(&caller), true, 0),
             Response::Ok
         ));
+    }
+
+    #[test]
+    fn unidentified_caller_can_only_hello_and_read_status() {
+        let helper = Helper::new(
+            rosetun_engine::EngineRegistry::new(),
+            rosetun_routing::backend(),
+            crate::log_gate::VerboseGate::default(),
+        );
+        let mut greeted = false;
+        assert!(matches!(
+            dispatch(
+                &Request::Hello {
+                    client: "test".to_owned(),
+                    protocol_version: PROTOCOL_VERSION,
+                },
+                &helper,
+                &mut greeted,
+                None,
+                false,
+                0,
+            ),
+            Response::Hello { protocol_version: 8, .. }
+        ));
+        assert!(greeted);
+        assert!(matches!(
+            dispatch(&Request::Status, &helper, &mut greeted, None, false, 0),
+            Response::Status(_)
+        ));
+        for request in [
+            Request::TemporaryRules,
+            Request::TunnelDelay,
+            Request::Disconnect,
+            Request::Shutdown,
+            Request::ListStatus { hashes: Vec::new() },
+            Request::PutListChunk {
+                sha256: "0".repeat(64),
+                format: rosetun_ipc::ListFormat::Source,
+                total_size: 1,
+                offset: 0,
+                data: String::new(),
+            },
+            Request::ProbeNodes(Box::new(rosetun_ipc::ProbeRequest {
+                nodes: Vec::new(),
+                settings: rosetun_config::Settings::default(),
+            })),
+            Request::Subscribe,
+        ] {
+            assert!(matches!(
+                dispatch(&request, &helper, &mut greeted, None, true, 0),
+                Response::Error(HelperError {
+                    code: ErrorCode::AccessDenied,
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn identified_account_can_use_public_list_and_probe_requests() {
+        let helper = Helper::new(
+            rosetun_engine::EngineRegistry::new(),
+            rosetun_routing::backend(),
+            crate::log_gate::VerboseGate::default(),
+        );
+        let caller = Caller::fake(b"other", false);
+        let mut greeted = true;
+        for request in [
+            Request::ListStatus { hashes: Vec::new() },
+            Request::PutListChunk {
+                sha256: "0".repeat(64),
+                format: rosetun_ipc::ListFormat::Source,
+                total_size: 1,
+                offset: 0,
+                data: String::new(),
+            },
+            Request::ProbeNodes(Box::new(rosetun_ipc::ProbeRequest {
+                nodes: Vec::new(),
+                settings: rosetun_config::Settings::default(),
+            })),
+        ] {
+            assert!(!matches!(
+                dispatch(&request, &helper, &mut greeted, Some(&caller), false, 0),
+                Response::Error(HelperError {
+                    code: ErrorCode::AccessDenied,
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]
@@ -338,19 +449,20 @@ mod tests {
             crate::log_gate::VerboseGate::default(),
         );
         let mut greeted = true;
+        let caller = Caller::fake(b"owner", false);
         let probe = Request::ProbeNodes(Box::new(rosetun_ipc::ProbeRequest {
             nodes: Vec::new(),
             settings: rosetun_config::Settings::default(),
         }));
         assert!(matches!(
-            dispatch(&probe, &helper, &mut greeted, false, 0),
+            dispatch(&probe, &helper, &mut greeted, Some(&caller), false, 0),
             Response::Error(HelperError {
                 code: ErrorCode::InvalidState,
                 ..
             })
         ));
         assert!(matches!(
-            dispatch(&Request::TunnelDelay, &helper, &mut greeted, false, 0),
+            dispatch(&Request::TunnelDelay, &helper, &mut greeted, Some(&caller), false, 0),
             Response::Error(HelperError {
                 code: ErrorCode::InvalidState,
                 ..
