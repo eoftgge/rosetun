@@ -431,6 +431,10 @@ fn list_picker(
         egui::ScrollArea::vertical()
             .max_height(240.0)
             .show(ui, |ui| {
+                // `menu_item` takes its width from the ui's current extent; inside
+                // the scroll area that starts empty, so the first row (the
+                // selected list) was squeezed to nothing.
+                ui.set_min_width(ui.available_width());
                 for list in lists {
                     let note = super::lists::format_name(list.format);
                     if widgets::menu_item(
