@@ -1188,10 +1188,9 @@ impl FakeClashApi {
                     let mut line = String::new();
                     reader.read_line(&mut line).unwrap();
                     assert!(line.starts_with("GET /proxies/proxy/delay?"));
-                    assert!(line.contains(&format!(
-                        "timeout={}",
-                        SERVER_CHECK_TIMEOUT.as_millis()
-                    )));
+                    assert!(
+                        line.contains(&format!("timeout={}", SERVER_CHECK_TIMEOUT.as_millis()))
+                    );
                     assert!(line.contains("url=https%3A%2F%2F"));
                     let mut authorized = false;
                     loop {
