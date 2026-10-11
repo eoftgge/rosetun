@@ -19,7 +19,7 @@ pub(crate) use frames::{
 };
 pub(crate) use menu::{MenuItem, context_menu_popup, menu_item, menu_popup};
 pub(crate) use search::{search_field, search_field_with_suffix};
-pub(crate) use segmented::segmented;
+pub(crate) use segmented::{segmented, segmented_width};
 pub(crate) use settings_card::settings_card;
-pub(crate) use status_pill::status_pill;
+pub(crate) use status_pill::{status_pill, status_pill_width};
 pub(crate) use toggle::{toggle, toggle_row};

@@ -26,7 +26,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     let peak = chart_peak(&columns);
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.horizontal_top(|ui| {
+        let narrow = ui.available_width() < 620.0;
+        ui.with_layout(
+            if narrow {
+                egui::Layout::top_down(egui::Align::Min)
+            } else {
+                egui::Layout::left_to_right(egui::Align::Min)
+            },
+            |ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(232.0, 178.0),
                 egui::Layout::top_down(egui::Align::Min),
@@ -80,10 +87,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     });
                 },
             );
-            ui.add_space(24.0);
+            ui.add_space(if narrow { 12.0 } else { 24.0 });
             ui.vertical(|ui| {
                 ui.set_min_width(ui.available_width());
-                egui::Sides::new().shrink_left().show(
+                egui::Sides::new().shrink_left().wrap().show(
                     ui,
                     |ui| {
                         let range = match state.traffic.traffic_range {
@@ -120,7 +127,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 ui.add_space(12.0);
                 traffic_chart(ui, &columns);
             });
-        });
+            },
+        );
     });
 }
 

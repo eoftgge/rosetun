@@ -96,12 +96,13 @@ pub(crate) fn show(
     };
     let top = DIALOG_TOP
         .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0));
+    let dialog_width = DIALOG_WIDTH.min((ctx.content_rect().width() - 144.0).max(320.0));
     let response = egui::Modal::new(id)
         .area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, top)))
         .frame(widgets::modal_frame())
         .show(ctx, |ui| {
-            ui.set_width(DIALOG_WIDTH);
-            ui.set_max_width(DIALOG_WIDTH);
+            ui.set_width(dialog_width);
+            ui.set_max_width(dialog_width);
             ui.spacing_mut().item_spacing.y = 4.0;
             ui.heading(if dialog.editing.is_some() {
                 tr!("edit-rule")
@@ -155,10 +156,10 @@ pub(crate) fn show(
                         };
                     let height = process_body_height(ui.cursor().top(), limit, dialog.advanced);
                     ui.allocate_ui_with_layout(
-                        egui::vec2(DIALOG_WIDTH, height),
+                        egui::vec2(ui.available_width(), height),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            ui.set_min_size(egui::vec2(DIALOG_WIDTH, height));
+                            ui.set_min_size(egui::vec2(dialog_width, height));
                             process_input(ui, dialog, actions)
                         },
                     )
@@ -675,13 +676,13 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     let input = if dialog.editing.is_some() {
         ui.add_enabled(
             !dialog.busy,
-            egui::TextEdit::singleline(&mut dialog.domains).desired_width(DIALOG_WIDTH),
+            egui::TextEdit::singleline(&mut dialog.domains).desired_width(ui.available_width()),
         )
     } else {
         ui.add_enabled(
             !dialog.busy,
             egui::TextEdit::multiline(&mut dialog.domains)
-                .desired_width(DIALOG_WIDTH)
+                .desired_width(ui.available_width())
                 .desired_rows(5)
                 .font(FontId::monospace(14.0))
                 .hint_text(constants::SITES_EXAMPLE),
@@ -1120,11 +1121,11 @@ fn full_path_available(dialog: &AddRuleDialog) -> bool {
 fn target_cards(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
+        let width = (ui.available_width() - 16.0) / 3.0;
         for (index, target) in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
             .into_iter()
             .enumerate()
         {
-            let width = (DIALOG_WIDTH - 16.0) / 3.0;
             let response = widgets::choice_card(
                 ui,
                 index,
@@ -1281,6 +1282,35 @@ mod tests {
             .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
             .unwrap();
         assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
+    }
+
+    #[test]
+    fn modal_fits_width_at_minimum_window_scales() {
+        use super::*;
+        use rosetun_config::RuleSetId;
+
+        for scale in [1.0, 1.25, 1.5] {
+            let width = 960.0 / scale;
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            dialog.kind = RuleInputKind::Domain;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 640.0 / scale),
+                    )),
+                    ..egui::RawInput::default()
+                },
+                |ctx| show(ctx, &mut dialog, &[], false, 0, &mut Vec::new()),
+            );
+            output.textures_delta.clear();
+            let rect = ctx
+                .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+                .unwrap();
+            assert!(rect.left() >= 0.0 && rect.right() <= width, "{scale}: {rect:?}");
+        }
     }
 
     #[test]

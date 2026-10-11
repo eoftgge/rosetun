@@ -18,6 +18,7 @@ use crate::{theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     let mut actions = Vec::new();
+    let narrow = ui.available_width() < 800.0;
     egui::Panel::top("header")
         .exact_size(76.0)
         .show_separator_line(false)
@@ -25,7 +26,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
         .show(ui, |ui| header::show(ui, state, &mut actions));
     if state.screen == Screen::Connection {
         egui::Panel::left("subscriptions")
-            .exact_size(316.0)
+            .exact_size(if narrow { 240.0 } else { 316.0 })
             .resizable(false)
             .frame(
                 egui::Frame::new()
@@ -42,7 +43,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     }
     if state.screen == Screen::Settings {
         egui::Panel::left("settings_nav")
-            .exact_size(240.0)
+            .exact_size(if narrow { 200.0 } else { 240.0 })
             .resizable(false)
             .frame(
                 egui::Frame::new()
@@ -62,8 +63,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             egui::Frame::new()
                 .fill(theme::BG)
                 .inner_margin(egui::Margin {
-                    left: 36,
-                    right: 36,
+                    left: if narrow { 16 } else { 36 },
+                    right: if narrow { 16 } else { 36 },
                     top: 28,
                     bottom: 32,
                 }),

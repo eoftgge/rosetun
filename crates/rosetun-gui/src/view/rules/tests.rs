@@ -20,6 +20,53 @@ fn drag_set() -> RuleSet {
 }
 
 #[test]
+fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
+    let set = drag_set();
+    for scale in [1.0, 1.25, 1.5] {
+        let width = 960.0 / scale;
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut filter = RuleFilter::default();
+        let mut rects = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 640.0 / scale),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().inner_margin(36.0))
+                    .show(ctx, |ui| {
+                        rects = Some(filter_controls(
+                            ui,
+                            &mut filter,
+                            &set,
+                            &[],
+                            true,
+                            &mut Vec::new(),
+                        ));
+                    });
+            },
+        );
+        output.textures_delta.clear();
+        let rects = rects.unwrap();
+        assert!(rects.search.right() <= rects.tabs.left(), "{scale}");
+        assert!(rects.filter.right() <= rects.add.left(), "{scale}");
+        assert!(rects.filter.width() >= TARGET_FILTER_WIDTH, "{scale}");
+        assert!(rects.add.right() <= width - 36.0, "{scale}");
+        if rects.two_rows {
+            assert!(rects.tabs.bottom() <= rects.filter.top(), "{scale}");
+            assert!(rects.tabs.bottom() <= rects.add.top(), "{scale}");
+        } else {
+            assert!(rects.tabs.right() <= rects.filter.left(), "{scale}");
+        }
+    }
+}
+
+#[test]
 fn rule_set_controls_only_appear_on_rules_tab() {
     let mut state = State::default();
     state.config_ready = true;

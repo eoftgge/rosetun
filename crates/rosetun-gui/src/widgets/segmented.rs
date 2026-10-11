@@ -17,6 +17,22 @@ fn segment_widths(natural: &[f32], fill: Option<f32>, gap: f32) -> Vec<f32> {
     vec![width; natural.len()]
 }
 
+pub(crate) fn segmented_width<T, L: AsRef<str>>(ui: &egui::Ui, options: &[(T, L)]) -> f32 {
+    let font = TextStyle::Button.resolve(ui.style());
+    options
+        .iter()
+        .map(|(_, label)| {
+            ui.painter()
+                .layout_no_wrap(label.as_ref().to_owned(), font.clone(), TEXT)
+                .size()
+                .x
+                + 28.0
+        })
+        .sum::<f32>()
+        + 2.0 * options.len().saturating_sub(1) as f32
+        + 8.0
+}
+
 /// Options side by side on one track. Returns the option the user clicked
 /// when it differs from `selected`.
 pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(

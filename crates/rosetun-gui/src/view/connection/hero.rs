@@ -1,8 +1,9 @@
 use super::*;
 
 pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let narrow = ui.available_width() < 560.0;
     widgets::card_frame()
-        .inner_margin(egui::Margin::symmetric(28, 20))
+        .inner_margin(egui::Margin::symmetric(if narrow { 12 } else { 28 }, 20))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             let visible_status = state.visible_status();
@@ -19,7 +20,13 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                 status.node.as_ref() != Some(&selection.node)
                             }))
                 });
-            ui.horizontal_top(|ui| {
+            ui.with_layout(
+                if narrow {
+                    egui::Layout::top_down(egui::Align::Center)
+                } else {
+                    egui::Layout::left_to_right(egui::Align::Min)
+                },
+                |ui| {
                 ui.allocate_ui_with_layout(
                     egui::vec2(240.0, 260.0),
                     egui::Layout::top_down(egui::Align::Center),
@@ -45,7 +52,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                         }
                     },
                 );
-                ui.add_space(36.0);
+                ui.add_space(if narrow { 12.0 } else { 36.0 });
                 ui.vertical(|ui| {
                     ui.set_min_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 14.0;
@@ -335,7 +342,8 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                         });
                     });
                 });
-            });
+                },
+            );
         });
 }
 

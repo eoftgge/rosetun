@@ -22,6 +22,18 @@ const HANDLE_GAP: f32 = 10.0;
 const ICON_GAP: f32 = 12.0;
 const TARGET_GAP: f32 = 16.0;
 const MENU_GAP: f32 = 12.0;
+const SEARCH_WIDTH: f32 = 260.0;
+const MIN_SEARCH_WIDTH: f32 = 120.0;
+const TARGET_FILTER_WIDTH: f32 = 166.0;
+
+#[cfg_attr(not(test), allow(dead_code))]
+struct ToolbarRects {
+    search: egui::Rect,
+    tabs: egui::Rect,
+    filter: egui::Rect,
+    add: egui::Rect,
+    two_rows: bool,
+}
 
 mod dialogs;
 mod selection;
@@ -227,7 +239,7 @@ fn filter_controls(
     temporary: &[Rule],
     can_add: bool,
     actions: &mut Vec<Action>,
-) {
+) -> ToolbarRects {
     let mut counts = rule_counts(set);
     let extra = rule_counts_slice(temporary);
     counts.domains += extra.domains;
@@ -247,24 +259,103 @@ fn filter_controls(
         .iter()
         .map(|(kind, label)| (*kind, label.as_str()))
         .collect();
-    let (_, add_rule) = egui::Sides::new().shrink_left().wrap().show(
-        ui,
-        |ui| {
-            ui.horizontal_wrapped(|ui| {
-                widgets::search_field(ui, &mut filter.search, &tr!("search-rules"), 260.0);
+    let gap = ui.spacing().item_spacing.x;
+    let add_label = tr!("new-rule-button");
+    let add_width = ui
+        .painter()
+        .layout_no_wrap(
+            add_label.clone(),
+            egui::TextStyle::Button.resolve(ui.style()),
+            theme::TEXT,
+        )
+        .size()
+        .x
+        + 2.0 * ui.spacing().button_padding.x
+        + 16.0;
+    let available = ui.available_width();
+    let two_rows = SEARCH_WIDTH
+        + widgets::segmented_width(ui, &options)
+        + TARGET_FILTER_WIDTH
+        + add_width
+        + 3.0 * gap
+        > available;
+    let plain_labels;
+    let options = if two_rows
+        && widgets::segmented_width(ui, &options) + MIN_SEARCH_WIDTH + gap > available
+    {
+        plain_labels = labels
+            .iter()
+            .map(|(kind, _)| {
+                (
+                    *kind,
+                    match kind {
+                        TypeFilter::All => tr!("all"),
+                        TypeFilter::Domains => tr!("domains"),
+                        TypeFilter::Processes => tr!("processes"),
+                        TypeFilter::Other => tr!("other"),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        plain_labels
+            .iter()
+            .map(|(kind, label)| (*kind, label.as_str()))
+            .collect::<Vec<_>>()
+    } else {
+        options
+    };
+    let mut rects = ToolbarRects {
+        search: egui::Rect::NOTHING,
+        tabs: egui::Rect::NOTHING,
+        filter: egui::Rect::NOTHING,
+        add: egui::Rect::NOTHING,
+        two_rows,
+    };
+    let mut add_rule = false;
+    let primary = |ui: &mut egui::Ui,
+                   search_width: f32,
+                   filter: &mut RuleFilter,
+                   rects: &mut ToolbarRects,
+                   actions: &mut Vec<Action>| {
+        rects.search = widgets::search_field(ui, &mut filter.search, &tr!("search-rules"), search_width)
+            .rect;
+        rects.tabs = ui
+            .scope(|ui| {
                 if let Some(kind) =
                     widgets::segmented(ui, "rule_type_filter", filter.kind, &options, false, true)
                 {
                     actions.push(Action::SetRuleTypeFilter(kind));
                 }
-                target_filter(ui, filter, actions);
+            })
+            .response
+            .rect;
+    };
+    if two_rows {
+        let search_width = (available - widgets::segmented_width(ui, &options) - gap)
+            .min(SEARCH_WIDTH)
+            .max(MIN_SEARCH_WIDTH);
+        ui.horizontal(|ui| primary(ui, search_width, filter, &mut rects, actions));
+        ui.horizontal(|ui| {
+            rects.filter = target_filter(ui, filter, actions).rect;
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let response = widgets::button_fill(ui, add_label, can_add);
+                rects.add = response.rect;
+                add_rule = response.clicked();
             });
-        },
-        |ui| widgets::button_fill(ui, tr!("new-rule-button"), can_add).clicked(),
-    );
+        });
+    } else {
+        ui.horizontal(|ui| {
+            primary(ui, SEARCH_WIDTH, filter, &mut rects, actions);
+            rects.filter = target_filter(ui, filter, actions).rect;
+            let response = widgets::button_fill(ui, add_label, can_add);
+            rects.add = response.rect;
+            add_rule = response.clicked();
+        });
+    }
     if add_rule {
         actions.push(Action::OpenAddRule);
     }
+    rects
 }
 
 fn target_filter(
@@ -287,20 +378,26 @@ fn target_filter(
             let selected_text = selected
                 .map(|target| RichText::new(target_label(target)).color(target_color(target)))
                 .unwrap_or_else(|| RichText::new(tr!("any-action")));
-            egui::ComboBox::from_id_salt("rule_target_filter")
-                .width(166.0)
-                .selected_text(selected_text)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut selected, None, tr!("any-action"));
-                    for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
-                        ui.selectable_value(
-                            &mut selected,
-                            Some(target),
-                            RichText::new(target_label(target)).color(target_color(target)),
-                        );
-                    }
-                })
-                .response
+            ui.allocate_ui(egui::vec2(TARGET_FILTER_WIDTH, 38.0), |ui| {
+                ui.set_width(TARGET_FILTER_WIDTH);
+                egui::ComboBox::from_id_salt("rule_target_filter")
+                    .width(TARGET_FILTER_WIDTH)
+                    .truncate()
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut selected, None, tr!("any-action"));
+                        for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
+                            ui.selectable_value(
+                                &mut selected,
+                                Some(target),
+                                RichText::new(target_label(target)).color(target_color(target)),
+                            );
+                        }
+                    })
+                    .response
+                    .on_hover_text(selected.map_or_else(|| tr!("any-action"), target_label))
+            })
+            .inner
         })
         .inner;
     if selected != filter.target {

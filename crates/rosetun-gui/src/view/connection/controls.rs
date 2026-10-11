@@ -1,6 +1,12 @@
 use super::*;
 
 pub(super) fn control_cards(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    if ui.available_width() < 520.0 {
+        protection_card(ui, state, actions, 0.0);
+        ui.add_space(theme::SECTION_GAP);
+        rules_card(ui, state, actions, 0.0);
+        return;
+    }
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = theme::SECTION_GAP;
         ui.columns(2, |columns| {
