@@ -41,6 +41,14 @@ fn save_config(path: &std::path::Path, config: &AppConfig) -> Result<(), crate::
     })
 }
 
+fn assert_no_save_temporaries(directory: &TestDirectory) {
+    assert!(std::fs::read_dir(&directory.0).unwrap().all(|entry| {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy();
+        !name.starts_with("config.json.") || !name.ends_with(".tmp")
+    }));
+}
+
 fn test_subscription(id: &str) -> Subscription {
     serde_json::from_value(serde_json::json!({
         "id": id,
@@ -417,7 +425,7 @@ fn fetch_and_parse_errors_preserve_disk_and_snapshot() {
         assert_eq!(snapshot, original);
         assert_eq!(store.load().unwrap(), original);
         assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
-        assert!(!directory.0.join("config.json.tmp").exists());
+        assert_no_save_temporaries(&directory);
     }
 }
 
@@ -429,7 +437,7 @@ fn failed_save_preserves_snapshot_and_previous_file() {
     let original = test_config();
     save_config(&path, &original).unwrap();
     let original_bytes = std::fs::read(&path).unwrap();
-    std::fs::create_dir(directory.0.join("config.json.tmp")).unwrap();
+    store.fail_next_save_for_test();
 
     let result = update_subscription_with(
         &store,
@@ -510,7 +518,7 @@ fn unknown_update_target_does_not_create_configuration() {
     assert!(matches!(result, Err(UpdateSubscriptionError::NotFound)));
     assert_eq!(store.load().unwrap(), AppConfig::default());
     assert!(!path.exists());
-    assert!(!directory.0.join("config.json.tmp").exists());
+    assert_no_save_temporaries(&directory);
 }
 
 #[test]

@@ -167,8 +167,7 @@ fn failed_snapshot_save_leaves_rules_and_dns_unchanged() {
     snapshot.rule_set.as_mut().unwrap().default_target = RuleTarget::Block;
     snapshot.dns.server_name = "dns.invalid".into();
 
-    let temporary = directory.0.join("config.json.tmp");
-    fs::create_dir(&temporary).unwrap();
+    store.fail_next_save_for_test();
     assert_no_write!(
         store,
         restore_rules_and_dns(&store, &snapshot),

@@ -331,7 +331,7 @@ fn update_rolls_back_file_if_configuration_save_fails() {
     let list = add_list_from_bytes(&store, "Example", "example.txt", first).unwrap();
     let path = list_path(&directory.0.join("lists"), &list);
     let original_config = fs::read(store.path()).unwrap();
-    fs::create_dir(directory.0.join("config.json.tmp")).unwrap();
+    store.fail_next_save_for_test();
 
     assert!(matches!(
         update_list(
@@ -353,7 +353,7 @@ fn removal_restores_file_if_configuration_save_fails() {
     let store = directory.store();
     let list = add_list_from_bytes(&store, "Example", "example.txt", b"example.com\n").unwrap();
     let path = list_path(&directory.0.join("lists"), &list);
-    fs::create_dir(directory.0.join("config.json.tmp")).unwrap();
+    store.fail_next_save_for_test();
 
     assert!(matches!(
         remove_list(&store, &list.id),

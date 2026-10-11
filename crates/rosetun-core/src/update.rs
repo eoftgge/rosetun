@@ -325,7 +325,7 @@ mod tests {
         initialize(&store, config(Some("remove")));
         let requested = store.load().unwrap().subscriptions[0].clone();
         let before = std::fs::read(store.path()).unwrap();
-        std::fs::create_dir(directory.0.join("config.json.tmp")).unwrap();
+        store.fail_next_save_for_test();
 
         let result = commit_subscription_update(&store, &requested, parsed(), 42);
 

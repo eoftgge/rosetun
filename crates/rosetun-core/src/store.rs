@@ -1,13 +1,19 @@
+use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use rosetun_config::{AppConfig, ConfigError, FormatError, from_json};
 
 static NEXT_BACKUP_TEMP: AtomicU64 = AtomicU64::new(0);
+static NEXT_SAVE_TEMP: AtomicU64 = AtomicU64::new(0);
+static WRITE_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(thiserror::Error)]
 pub enum StoreError {
@@ -47,6 +53,61 @@ impl std::fmt::Debug for StoreError {
 pub struct Store {
     path: PathBuf,
     write_lock: Arc<Mutex<()>>,
+    #[cfg(test)]
+    fail_next_save: Arc<AtomicBool>,
+}
+
+fn write_lock_for(path: &Path) -> Arc<Mutex<()>> {
+    let key = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    let mut locks = WRITE_LOCKS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
+fn lock_config(path: &Path) -> Result<File, StoreError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|source| StoreError::Io {
+        path: parent.to_owned(),
+        source,
+    })?;
+    let mut name = path
+        .file_name()
+        .ok_or_else(|| StoreError::Io {
+            path: path.to_owned(),
+            source: io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "configuration path must name a file",
+            ),
+        })?
+        .to_os_string();
+    name.push(".lock");
+    let lock_path = parent.join(name);
+    let mut options = OpenOptions::new();
+    options.write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&lock_path).map_err(|source| StoreError::Io {
+        path: lock_path.clone(),
+        source,
+    })?;
+    file.lock().map_err(|source| StoreError::Io {
+        path: lock_path,
+        source,
+    })?;
+    Ok(file)
 }
 
 impl Store {
@@ -55,9 +116,12 @@ impl Store {
     }
 
     pub fn at(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
         Self {
-            path: path.into(),
-            write_lock: Arc::new(Mutex::new(())),
+            write_lock: write_lock_for(&path),
+            path,
+            #[cfg(test)]
+            fail_next_save: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -88,11 +152,11 @@ impl Store {
     where
         E: From<StoreError>,
     {
-        // Clones of one `Store` serialize their writes; separate processes are still not serialized.
         let _write = self
             .write_lock
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
+        let _file_lock = lock_config(&self.path).map_err(E::from)?;
         let LoadedConfig {
             mut config,
             original,
@@ -109,13 +173,29 @@ impl Store {
             backup(&self.path, version, &original).map_err(E::from)?;
         }
         publish(&result)?;
-        if let Err(error) = save(&self.path, &config) {
+        if let Err(error) = self.save_config(&config) {
             let save_error = E::from(error);
             rollback(&result)?;
             return Err(save_error);
         }
         cleanup(&result);
         Ok(result)
+    }
+
+    fn save_config(&self, config: &AppConfig) -> Result<(), StoreError> {
+        #[cfg(test)]
+        if self.fail_next_save.swap(false, Ordering::SeqCst) {
+            return Err(StoreError::Io {
+                path: self.path.clone(),
+                source: io::Error::other("test config save failure"),
+            });
+        }
+        save(&self.path, config)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_save_for_test(&self) {
+        self.fail_next_save.store(true, Ordering::SeqCst);
     }
 
     pub(crate) fn with_config<T, E>(
@@ -394,53 +474,51 @@ fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
 
-    let mut temporary_name = file_name.to_os_string();
-    temporary_name.push(".tmp");
-    let temporary_path = parent.join(temporary_name);
+    fs::create_dir_all(parent).map_err(|source| StoreError::Io {
+        path: parent.to_owned(),
+        source,
+    })?;
 
-    // One writer at a time is assumed, so a fixed temporary name is fine; a file
-    // left behind by a crashed save is simply overwritten.
-    let result = (|| {
-        fs::create_dir_all(parent).map_err(|source| StoreError::Io {
-            path: parent.to_owned(),
-            source,
-        })?;
-
+    let (temporary_path, mut file) = loop {
+        let mut name = file_name.to_os_string();
+        let sequence = NEXT_SAVE_TEMP.fetch_add(1, Ordering::Relaxed);
+        name.push(format!(".{}.{sequence}.tmp", std::process::id()));
+        let temporary_path = parent.join(name);
         let mut options = OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
+        match options.open(&temporary_path) {
+            Ok(file) => break (temporary_path, file),
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(StoreError::Io {
+                    path: temporary_path,
+                    source,
+                });
+            }
+        }
+    };
 
-        let mut file = options
-            .open(&temporary_path)
-            .map_err(|source| StoreError::Io {
-                path: temporary_path.clone(),
-                source,
-            })?;
-
-        file.write_all(&contents)
-            .and_then(|()| file.sync_all())
-            .map_err(|source| StoreError::Io {
-                path: temporary_path.clone(),
-                source,
-            })?;
-
-        drop(file);
-
-        fs::rename(&temporary_path, path).map_err(|source| StoreError::Io {
-            path: path.to_owned(),
+    let write_result = file.write_all(&contents).and_then(|()| file.sync_all());
+    drop(file);
+    let result = write_result
+        .map_err(|source| StoreError::Io {
+            path: temporary_path.clone(),
             source,
         })
-    })();
-
+        .and_then(|()| {
+            fs::rename(&temporary_path, path).map_err(|source| StoreError::Io {
+                path: path.to_owned(),
+                source,
+            })
+        });
     if result.is_err() {
         let _ = fs::remove_file(&temporary_path);
     }
-
     result
 }
 
@@ -491,6 +569,17 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    fn config_temporaries(directory: &TestDirectory) -> Vec<PathBuf> {
+        fs::read_dir(&directory.path)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.starts_with("config.json.") && name.ends_with(".tmp")
+            })
+            .collect()
     }
 
     fn selected_config() -> AppConfig {
@@ -692,7 +781,7 @@ mod tests {
         let initial = selected_config();
         save(store.path(), &initial).unwrap();
         let before = fs::read(store.path()).unwrap();
-        fs::create_dir(directory.path.join("config.json.tmp")).unwrap();
+        store.fail_next_save_for_test();
 
         let mut prepared = initial.subscriptions[0].clone();
         prepared.url = "https://new.example.com/subscription".into();
@@ -781,7 +870,7 @@ mod tests {
         let initial = selected_config();
         save(store.path(), &initial).unwrap();
         let before = fs::read(store.path()).unwrap();
-        fs::create_dir(directory.path.join("config.json.tmp")).unwrap();
+        store.fail_next_save_for_test();
 
         let result = crate::remove_subscription(&store, &SubscriptionId::new("subscription"));
 
@@ -876,7 +965,7 @@ mod tests {
         initial.active = None;
         save(store.path(), &initial).unwrap();
         let before = fs::read(store.path()).unwrap();
-        fs::create_dir(directory.path.join("config.json.tmp")).unwrap();
+        store.fail_next_save_for_test();
 
         let result = crate::select_node(
             &store,
@@ -1002,6 +1091,70 @@ mod tests {
     }
 
     #[test]
+    fn independently_opened_stores_preserve_concurrent_edits() {
+        let directory = TestDirectory::new();
+        let first = Store::at(directory.config_path());
+        let second = Store::at(directory.config_path());
+        save(first.path(), &selected_config()).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let first_barrier = barrier.clone();
+        let rules = std::thread::spawn(move || {
+            first_barrier.wait();
+            for index in 0..100 {
+                first
+                    .modify(|config| {
+                        config.rule_sets.push(RuleSet::new(
+                            RuleSetId::new(format!("rules-{index}")),
+                            "Added rules",
+                            RuleTarget::Proxy,
+                        ));
+                        Ok::<_, StoreError>(())
+                    })
+                    .unwrap();
+            }
+        });
+        let subscriptions = std::thread::spawn(move || {
+            barrier.wait();
+            for index in 0..100 {
+                second
+                    .modify(|config| {
+                        let mut subscription = config.subscriptions[0].clone();
+                        subscription.id = SubscriptionId::new(format!("subscription-{index}"));
+                        config.subscriptions.push(subscription);
+                        Ok::<_, StoreError>(())
+                    })
+                    .unwrap();
+            }
+        });
+        rules.join().unwrap();
+        subscriptions.join().unwrap();
+
+        let persisted = Store::at(directory.config_path()).load().unwrap();
+        assert!(directory.path.join("config.json.lock").is_file());
+        assert_eq!(persisted.rule_sets.len(), 101);
+        assert_eq!(persisted.subscriptions.len(), 101);
+        assert_eq!(
+            persisted
+                .rule_sets
+                .iter()
+                .map(|rules| &rules.id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            101
+        );
+        assert_eq!(
+            persisted
+                .subscriptions
+                .iter()
+                .map(|subscription| &subscription.id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            101
+        );
+    }
+
+    #[test]
     fn poisoned_write_lock_does_not_prevent_later_writes() {
         let directory = TestDirectory::new();
         let store = Store::at(directory.config_path());
@@ -1060,7 +1213,7 @@ mod tests {
         let store = Store::at(directory.config_path());
         save(store.path(), &selected_config()).unwrap();
         let original = fs::read(store.path()).unwrap();
-        fs::create_dir(directory.path.join("config.json.tmp")).unwrap();
+        store.fail_next_save_for_test();
 
         let result = store.modify(|config| {
             config.subscriptions[0].name = "Unsaved name".to_owned();
@@ -1101,7 +1254,19 @@ mod tests {
         save(&path, &config).unwrap();
 
         assert_eq!(load(&path).unwrap(), config);
-        assert!(!directory.path.join("config.json.tmp").exists());
+        assert!(config_temporaries(&directory).is_empty());
+    }
+
+    #[test]
+    fn save_does_not_touch_old_temporary_files() {
+        let directory = TestDirectory::new();
+        let old = directory.path.join("config.json.12345.0.tmp");
+        fs::write(&old, b"unfinished").unwrap();
+
+        save(&directory.config_path(), &selected_config()).unwrap();
+
+        assert_eq!(fs::read(&old).unwrap(), b"unfinished");
+        assert_eq!(config_temporaries(&directory), vec![old]);
     }
 
     #[test]
@@ -1418,7 +1583,7 @@ mod tests {
             ));
             assert_eq!(fs::read(&path).unwrap(), original_bytes);
             assert_eq!(load(&path).unwrap(), original);
-            assert!(!directory.path.join("config.json.tmp").exists());
+            assert!(config_temporaries(&directory).is_empty());
         }
     }
 
@@ -1440,20 +1605,24 @@ mod tests {
     #[test]
     fn failed_save_leaves_old_configuration_usable() {
         let directory = TestDirectory::new();
-        let path = directory.config_path();
+        let store = Store::at(directory.config_path());
         let original = selected_config();
 
-        save(&path, &original).unwrap();
-        let original_bytes = fs::read(&path).unwrap();
-        let temporary_path = directory.path.join("config.json.tmp");
-        fs::create_dir(&temporary_path).unwrap();
+        save(store.path(), &original).unwrap();
+        let original_bytes = fs::read(store.path()).unwrap();
+        store.fail_next_save_for_test();
 
         assert!(matches!(
-            save(&path, &AppConfig::default()),
-            Err(StoreError::Io { path: error_path, .. }) if error_path == temporary_path
+            store.modify(|config| {
+                config.subscriptions.clear();
+                config.active = None;
+                Ok::<_, StoreError>(())
+            }),
+            Err(StoreError::Io { .. })
         ));
-        assert_eq!(fs::read(&path).unwrap(), original_bytes);
-        assert_eq!(load(&path).unwrap(), original);
+        assert_eq!(fs::read(store.path()).unwrap(), original_bytes);
+        assert_eq!(store.load().unwrap(), original);
+        assert!(config_temporaries(&directory).is_empty());
     }
 
     #[test]
@@ -1481,7 +1650,7 @@ mod tests {
             save(&path, &AppConfig::default()),
             Err(StoreError::Io { path: error_path, .. }) if error_path == path
         ));
-        assert!(!directory.path.join("config.json.tmp").exists());
+        assert!(config_temporaries(&directory).is_empty());
         assert_eq!(fs::read(path.join("keep")).unwrap(), b"unchanged");
     }
 
