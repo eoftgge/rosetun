@@ -142,7 +142,7 @@ impl EngineBackend for SingBoxBackend {
         };
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
-                .timeout_global(Some(timeout))
+                .timeout_global(Some(timeout.saturating_add(Duration::from_secs(2))))
                 .http_status_as_error(false)
                 .proxy(None)
                 .build(),
@@ -757,6 +757,8 @@ mod tests {
     fn delay_against_server(
         status: u16,
         target: UrlTestTarget<'_>,
+        timeout: Duration,
+        response_delay: Duration,
     ) -> Result<Duration, EngineError> {
         use std::io::Write;
         use std::net::TcpListener;
@@ -771,6 +773,7 @@ mod tests {
             UrlTestTarget::Probe(tag) => tag,
         }
         .to_owned();
+        let expected_timeout = format!("timeout={}", timeout.as_millis());
         let server = thread::spawn(move || {
             let (socket, _) = listener.accept().unwrap();
             socket
@@ -782,7 +785,7 @@ mod tests {
             assert!(line.starts_with(&format!("GET /proxies/{expected_tag}/delay?")));
             assert!(line.contains("/delay?"));
             assert!(line.contains("url=https%3A%2F%2Fcp.cloudflare.com%2Fgenerate_204"));
-            assert!(line.contains("timeout=5000"));
+            assert!(line.contains(&expected_timeout));
             let mut authorized = false;
             loop {
                 line.clear();
@@ -797,6 +800,7 @@ mod tests {
                 }
             }
             assert!(authorized);
+            thread::sleep(response_delay);
             let body = r#"{"delay":42}"#;
             write!(
                 reader.get_mut(),
@@ -805,8 +809,7 @@ mod tests {
             )
             .unwrap();
         });
-        let result =
-            SingBoxBackend::new("unused").url_test(&control, target, PROBE_URL, PROBE_TIMEOUT);
+        let result = SingBoxBackend::new("unused").url_test(&control, target, PROBE_URL, timeout);
         server.join().unwrap();
         result
     }
@@ -814,13 +817,33 @@ mod tests {
     #[test]
     fn url_test_reads_delay_and_reports_failure() {
         assert_eq!(
-            delay_against_server(200, UrlTestTarget::Session).unwrap(),
+            delay_against_server(200, UrlTestTarget::Session, PROBE_TIMEOUT, Duration::ZERO)
+                .unwrap(),
             Duration::from_millis(42)
         );
         assert!(matches!(
-            delay_against_server(504, UrlTestTarget::Probe("probe-1")),
+            delay_against_server(
+                504,
+                UrlTestTarget::Probe("probe-1"),
+                PROBE_TIMEOUT,
+                Duration::ZERO,
+            ),
             Err(EngineError::Stats(_))
         ));
+    }
+
+    #[test]
+    fn url_test_waits_for_the_local_response_after_the_probe_deadline() {
+        assert_eq!(
+            delay_against_server(
+                200,
+                UrlTestTarget::Session,
+                Duration::from_millis(80),
+                Duration::from_millis(250),
+            )
+            .unwrap(),
+            Duration::from_millis(42)
+        );
     }
 
     fn probe_against_server(status: u16, chunked: bool) -> Result<TrafficTotals, EngineError> {
