@@ -438,7 +438,10 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
             value.insert("domain_keyword".into(), json!([keyword]));
         }
         RuleMatcher::Process(ProcessMatch::Name(name)) => {
-            value.insert("process_name".into(), json!([name]));
+            value.insert(
+                "process_path_regex".into(),
+                json!([format!(r"(?i)(?:^|[\\/]){}$", quote_process_name(name))]),
+            );
         }
         RuleMatcher::Process(ProcessMatch::Path(path)) => {
             value.insert("process_path".into(), json!([path.to_string_lossy()]));
@@ -452,6 +455,17 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
     route_action(&mut value, rule.target);
 
     Some(Value::Object(value))
+}
+
+fn quote_process_name(name: &str) -> String {
+    let mut quoted = String::with_capacity(name.len());
+    for character in name.chars() {
+        if "\\.+*?()|[]{}^$".contains(character) {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+    }
+    quoted
 }
 
 fn route_action(value: &mut Map<String, Value>, target: RuleTarget) {
@@ -480,6 +494,30 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn process_names_match_complete_paths_without_case_sensitivity() {
+        let mut rule = Rule {
+            id: rosetun_config::RuleId::new("process"),
+            enabled: true,
+            matcher: RuleMatcher::Process(ProcessMatch::Name("Telegram.exe".into())),
+            target: RuleTarget::Direct,
+        };
+        assert_eq!(
+            route_rule(&rule).unwrap()["process_path_regex"],
+            json!([r"(?i)(?:^|[\\/])Telegram\.exe$"])
+        );
+
+        rule.matcher = RuleMatcher::Process(ProcessMatch::Name("C++(test).exe".into()));
+        assert_eq!(
+            route_rule(&rule).unwrap()["process_path_regex"],
+            json!([r"(?i)(?:^|[\\/])C\+\+\(test\)\.exe$"])
+        );
+        assert_eq!(
+            quote_process_name(r"a\.+*?()|[]{}^$"),
+            r"a\\\.\+\*\?\(\)\|\[\]\{\}\^\$"
+        );
+    }
 
     #[test]
     fn full_rendered_config_matches_golden() {

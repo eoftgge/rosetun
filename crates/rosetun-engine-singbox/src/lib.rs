@@ -1111,7 +1111,7 @@ mod tests {
         assert_eq!(rules[1]["action"], "hijack-dns");
         assert_eq!(rules[2]["domain_suffix"][0], "google.com");
         assert_eq!(rules[3]["ip_is_private"], true);
-        assert!(rules.iter().all(|rule| rule.get("process_name").is_none()));
+        assert!(rules.iter().all(|rule| rule.get("process_path_regex").is_none()));
     }
 
     #[test]
@@ -1124,7 +1124,7 @@ mod tests {
         assert_eq!(rules[1]["action"], "hijack-dns");
         assert_eq!(rules[2]["domain_suffix"][0], "google.com");
         assert_eq!(rules[2]["outbound"], "proxy");
-        assert_eq!(rules[3]["process_name"][0], "steam.exe");
+        assert_eq!(rules[3]["process_path_regex"][0], r"(?i)(?:^|[\\/])steam\.exe$");
         assert_eq!(rules[3]["outbound"], "direct");
         assert_eq!(rules[4]["ip_is_private"], true);
         assert_eq!(rules[4]["outbound"], "direct");
@@ -1150,8 +1150,8 @@ mod tests {
             ),
             (
                 RuleMatcher::Process(ProcessMatch::Name("app.exe".into())),
-                "process_name",
-                "app.exe",
+                "process_path_regex",
+                r"(?i)(?:^|[\\/])app\.exe$",
             ),
             (
                 RuleMatcher::Process(ProcessMatch::Path(std::path::PathBuf::from("app.exe"))),
@@ -1235,7 +1235,7 @@ mod tests {
         assert_eq!(rules[2]["action"], "reject");
         assert!(rules[2].get("outbound").is_none());
 
-        assert_eq!(rules[3]["process_name"][0], "steam.exe");
+        assert_eq!(rules[3]["process_path_regex"][0], r"(?i)(?:^|[\\/])steam\.exe$");
         assert_eq!(rules[3]["outbound"], "direct");
 
         assert_eq!(rules[4]["ip_is_private"], true);
@@ -1410,7 +1410,7 @@ mod tests {
                     "outbound": "proxy",
                 }),
                 serde_json::json!({
-                    "process_name": ["steam.exe"],
+                    "process_path_regex": [r"(?i)(?:^|[\\/])steam\.exe$"],
                     "action": "route",
                     "outbound": "direct",
                 }),

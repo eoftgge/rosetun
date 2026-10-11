@@ -100,8 +100,8 @@
       {
         "action": "route",
         "outbound": "direct",
-        "process_name": [
-          "example.exe"
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])example\\.exe$"
         ]
       },
       {
@@ -120,50 +120,50 @@
       {
         "action": "route",
         "outbound": "direct",
-        "process_name": [
-          "qbittorrent.exe"
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])qbittorrent\\.exe$"
         ]
       },
       {
         "action": "route",
         "outbound": "direct",
-        "process_name": [
-          "utorrent.exe"
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])utorrent\\.exe$"
         ]
       },
       {
         "action": "route",
         "outbound": "direct",
-        "process_name": [
-          "bittorrent.exe"
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])bittorrent\\.exe$"
         ]
       },
       {
         "action": "route",
         "outbound": "direct",
-        "process_name": [
-          "transmission-qt.exe"
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])transmission-qt\\.exe$"
         ]
       },
       {
         "action": "route",
         "outbound": "direct",
-        "process_name": [
-          "tixati.exe"
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])tixati\\.exe$"
         ]
       },
       {
         "action": "route",
         "outbound": "direct",
-        "process_name": [
-          "deluge.exe"
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])deluge\\.exe$"
         ]
       },
       {
         "action": "route",
         "outbound": "direct",
-        "process_name": [
-          "biglybt.exe"
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])biglybt\\.exe$"
         ]
       },
       {
