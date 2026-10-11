@@ -31,7 +31,10 @@ fn discard_corrupt(tag: &str, paths: &[&Path]) -> Result<(), ListError> {
             return Err(error.into());
         }
     }
-    tracing::warn!(tag, "damaged last good list copy removed; category rule skipped");
+    tracing::warn!(
+        tag,
+        "damaged last good list copy removed; category rule skipped"
+    );
     Ok(())
 }
 

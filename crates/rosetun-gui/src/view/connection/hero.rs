@@ -27,321 +27,333 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                     egui::Layout::left_to_right(egui::Align::Min)
                 },
                 |ui| {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(240.0, 260.0),
-                    egui::Layout::top_down(egui::Align::Center),
-                    |ui| {
-                        let action = state.primary_action();
-                        let phase = rose_button::rose_phase(
-                            state.helper_available,
-                            visible_status.map(|status| &status.state),
-                        );
-                        let button_label = if phase == RosePhase::Unavailable {
-                            tr!("unavailable").to_owned()
-                        } else {
-                            primary_label(state)
-                        };
-                        if rose_button::rose_button(
-                            ui,
-                            phase,
-                            &button_label,
-                            action != PrimaryAction::Disabled,
-                            state.config.interface.reduce_motion,
-                        ) {
-                            actions.push(Action::Primary);
-                        }
-                    },
-                );
-                ui.add_space(if narrow { 12.0 } else { 36.0 });
-                ui.vertical(|ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = 14.0;
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        ui.label(RichText::new(label).size(26.0).color(color));
-                        let session = visible_status
-                            .and_then(|status| status.since_unix)
-                            .map_or_else(
-                                || tr!("no-session").to_owned(),
-                                |since| display::session_text(Some(since), display::now_unix()),
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(240.0, 260.0),
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            let action = state.primary_action();
+                            let phase = rose_button::rose_phase(
+                                state.helper_available,
+                                visible_status.map(|status| &status.state),
                             );
-                        ui.colored_label(
-                            theme::TEXT_MUTED,
-                            i18n::plain_link(&tr!("session"), &session),
-                        );
-                    });
-                    if let Some(status) = visible_status {
-                        if status.state.is_transitional() {
-                            if let Some(stage) = status.connect_stage {
-                                let seconds = display::now_unix().saturating_sub(
-                                    status.stage_since_unix.unwrap_or_else(display::now_unix),
-                                );
-                                ui.label(
-                                    RichText::new(crate::i18n::connection_stage(stage, seconds))
-                                        .small()
-                                        .color(theme::TEXT_MUTED),
-                                );
-                                ui.ctx()
-                                    .request_repaint_after(std::time::Duration::from_secs(1));
-                            }
-                            if widgets::outline_button(
-                                ui,
-                                if state.cancel_in_flight {
-                                    tr!("cancelling")
-                                } else {
-                                    tr!("cancel-connection")
-                                },
-                                !state.cancel_in_flight,
-                            )
-                            .clicked()
-                            {
-                                actions.push(Action::CancelConnection);
-                            }
-                        }
-                        if let ConnectionState::Failed {
-                            reason,
-                            failure_kind,
-                        }
-                        | ConnectionState::FailedProtected {
-                            reason,
-                            failure_kind,
-                        } = &status.state
-                        {
-                            if let Some(kind) = failure_kind {
-                                let (title, hint) = crate::i18n::connection_failure(*kind);
-                                ui.colored_label(theme::ERROR, title)
-                                    .on_hover_text(state.text(reason));
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(hint).small().color(theme::TEXT_MUTED),
-                                    )
-                                    .wrap(),
-                                );
-                                if let Some(conflicts) = &state.failure_interference {
-                                    if !conflicts.other_vpns.is_empty() {
-                                        ui.add(
-                                            egui::Label::new(crate::i18n::other_vpn(
-                                                &conflict_names(state, &conflicts.other_vpns),
-                                            ))
-                                            .wrap(),
-                                        );
-                                    }
-                                    if !conflicts.traffic_tools.is_empty() {
-                                        ui.add(
-                                            egui::Label::new(crate::i18n::traffic_tool(
-                                                &conflict_names(state, &conflicts.traffic_tools),
-                                            ))
-                                            .wrap(),
-                                        );
-                                    }
-                                }
-                                if let Some(selection) = &state.config.active
-                                    && widgets::outline_button(
-                                        ui,
-                                        tr!("check-full"),
-                                        !state.operations.helper,
-                                    )
-                                    .clicked()
-                                {
-                                    actions.push(Action::FullCheckNode(
-                                        selection.subscription.clone(),
-                                        selection.node.clone(),
-                                    ));
-                                }
+                            let button_label = if phase == RosePhase::Unavailable {
+                                tr!("unavailable").to_owned()
                             } else {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(state.text(reason))
-                                            .small()
-                                            .color(theme::ERROR),
-                                    )
-                                    .wrap(),
-                                );
+                                primary_label(state)
+                            };
+                            if rose_button::rose_button(
+                                ui,
+                                phase,
+                                &button_label,
+                                action != PrimaryAction::Disabled,
+                                state.config.interface.reduce_motion,
+                            ) {
+                                actions.push(Action::Primary);
                             }
-                        }
-                        if protection_action(status, state.operations.helper)
-                            == ProtectionAction::ConfirmDisconnect
-                            && widgets::outline_button(ui, tr!("turn-off-protection"), true)
-                                .clicked()
-                        {
-                            actions.push(Action::RequestProtectionOff);
-                        }
-                    }
-                    if server_button(ui, state) {
-                        actions.push(Action::RevealServer);
-                    }
-                    if selection_changed.is_some() {
-                        let applying = server_pending && state.operations.helper;
-                        let can_apply = server_pending && state.can_apply();
-                        let message = state.config.active_node().map_or_else(
-                            || tr!("selection-cleared").to_owned(),
-                            |(_, node)| {
-                                let name = display::drop_missing_glyphs(
-                                    ui.ctx(),
-                                    &egui::TextStyle::Body.resolve(ui.style()),
-                                    &state.text(&node.name),
-                                );
-                                if applying {
-                                    crate::i18n::switching_to(&name)
-                                } else if can_apply {
-                                    crate::i18n::selected_not_applied(&name)
-                                } else {
-                                    crate::i18n::selected_pending(&name)
-                                }
-                            },
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            ui.label(RichText::new(message).small().color(theme::ROSE_LIGHT));
-                            if can_apply {
-                                ui.label(
-                                    RichText::new(tr!("apply-separator"))
-                                        .small()
-                                        .color(theme::ROSE_LIGHT),
-                                );
-                                if widgets::link(ui, &tr!("apply"), true)
-                                    .on_hover_text(tr!("apply-hint"))
-                                    .clicked()
-                                {
-                                    actions.push(Action::Apply);
-                                }
-                            }
-                        });
-                    }
-                    let protocol = state.config.active_node().map_or_else(
-                        || tr!("ping-pending").to_owned(),
-                        |(_, node)| {
-                            i18n::node_details(
-                                rosetun_core::node_protocol(node),
-                                rosetun_core::node_tls(node),
-                                rosetun_core::node_transport(node),
-                            )
                         },
                     );
-                    let engine = visible_status
-                        .and_then(|status| status.engine)
-                        .unwrap_or(state.config.settings.engine);
-                    let (ip, ip_color, toggle) = exit_line(&state.exit, state.exit_revealed);
+                    ui.add_space(if narrow { 12.0 } else { 36.0 });
                     ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 8.0;
-                        ui.add_space(2.0);
-                        detail_row(ui, tr!("external-ip"), |ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            let row_height = ui.text_style_height(&egui::TextStyle::Body);
-                            let toggle_width = toggle.as_ref().map_or(0.0, |text| {
-                                ui.painter()
-                                    .layout_no_wrap(
-                                        text.to_owned(),
-                                        egui::TextStyle::Body.resolve(ui.style()),
-                                        theme::ROSE_LIGHT,
-                                    )
-                                    .size()
-                                    .x
-                                    + 12.0
-                            });
-                            let address_width = (ui.available_width() - toggle_width).max(0.0);
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(address_width, row_height),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    ui.set_width(address_width);
-                                    ui.add(
-                                        egui::Label::new(RichText::new(ip).color(ip_color))
-                                            .truncate(),
-                                    );
-                                },
+                        ui.set_min_width(ui.available_width());
+                        ui.spacing_mut().item_spacing.y = 14.0;
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 4.0;
+                            ui.label(RichText::new(label).size(26.0).color(color));
+                            let session = visible_status
+                                .and_then(|status| status.since_unix)
+                                .map_or_else(
+                                    || tr!("no-session").to_owned(),
+                                    |since| display::session_text(Some(since), display::now_unix()),
+                                );
+                            ui.colored_label(
+                                theme::TEXT_MUTED,
+                                i18n::plain_link(&tr!("session"), &session),
                             );
-                            if let Some(toggle) = toggle {
-                                ui.add_space(12.0);
-                                if ui
-                                    .add(
-                                        egui::Label::new(
-                                            RichText::new(toggle).color(theme::ROSE_LIGHT),
-                                        )
-                                        .sense(egui::Sense::click()),
-                                    )
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
+                        });
+                        if let Some(status) = visible_status {
+                            if status.state.is_transitional() {
+                                if let Some(stage) = status.connect_stage {
+                                    let seconds = display::now_unix().saturating_sub(
+                                        status.stage_since_unix.unwrap_or_else(display::now_unix),
+                                    );
+                                    ui.label(
+                                        RichText::new(crate::i18n::connection_stage(
+                                            stage, seconds,
+                                        ))
+                                        .small()
+                                        .color(theme::TEXT_MUTED),
+                                    );
+                                    ui.ctx()
+                                        .request_repaint_after(std::time::Duration::from_secs(1));
+                                }
+                                if widgets::outline_button(
+                                    ui,
+                                    if state.cancel_in_flight {
+                                        tr!("cancelling")
+                                    } else {
+                                        tr!("cancel-connection")
+                                    },
+                                    !state.cancel_in_flight,
+                                )
+                                .clicked()
                                 {
-                                    actions.push(Action::ToggleExitReveal);
+                                    actions.push(Action::CancelConnection);
                                 }
                             }
-                        });
-                        if visible_status.is_some_and(|status| {
-                            matches!(status.state, ConnectionState::Connected)
-                        }) {
-                            detail_row(ui, tr!("delay"), |ui| {
-                                ui.spacing_mut().item_spacing.x = 6.0;
-                                let (text, color) = match state.tunnel_delay {
-                                    TunnelDelay::Done(ProbeOutcome::Works { millis }) => (
-                                        tr!("ping-ms", ms = millis.max(1).to_string()),
-                                        theme::TEXT,
-                                    ),
-                                    TunnelDelay::Done(_) => {
-                                        (tr!("ping-no-answer").to_owned(), theme::ERROR)
+                            if let ConnectionState::Failed {
+                                reason,
+                                failure_kind,
+                            }
+                            | ConnectionState::FailedProtected {
+                                reason,
+                                failure_kind,
+                            } = &status.state
+                            {
+                                if let Some(kind) = failure_kind {
+                                    let (title, hint) = crate::i18n::connection_failure(*kind);
+                                    ui.colored_label(theme::ERROR, title)
+                                        .on_hover_text(state.text(reason));
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(hint).small().color(theme::TEXT_MUTED),
+                                        )
+                                        .wrap(),
+                                    );
+                                    if let Some(conflicts) = &state.failure_interference {
+                                        if !conflicts.other_vpns.is_empty() {
+                                            ui.add(
+                                                egui::Label::new(crate::i18n::other_vpn(
+                                                    &conflict_names(state, &conflicts.other_vpns),
+                                                ))
+                                                .wrap(),
+                                            );
+                                        }
+                                        if !conflicts.traffic_tools.is_empty() {
+                                            ui.add(
+                                                egui::Label::new(crate::i18n::traffic_tool(
+                                                    &conflict_names(
+                                                        state,
+                                                        &conflicts.traffic_tools,
+                                                    ),
+                                                ))
+                                                .wrap(),
+                                            );
+                                        }
                                     }
-                                    TunnelDelay::Idle | TunnelDelay::Measuring => {
-                                        (tr!("ping-pending").to_owned(), theme::TEXT_DIM)
-                                    }
-                                };
-                                let enabled = !matches!(state.tunnel_delay, TunnelDelay::Measuring);
-                                let response = ui
-                                    .add(egui::Label::new(RichText::new(text).color(color)).sense(
-                                        if enabled {
-                                            egui::Sense::click()
-                                        } else {
-                                            egui::Sense::hover()
-                                        },
-                                    ))
-                                    .on_hover_text(tr!("delay-hint"));
-                                let refresh = if matches!(state.tunnel_delay, TunnelDelay::Done(_))
-                                {
-                                    icons::icon_button_sized(ui, Icon::Refresh, enabled, 18.0)
-                                        .on_hover_text(tr!("delay-hint"))
+                                    if let Some(selection) = &state.config.active
+                                        && widgets::outline_button(
+                                            ui,
+                                            tr!("check-full"),
+                                            !state.operations.helper,
+                                        )
                                         .clicked()
+                                    {
+                                        actions.push(Action::FullCheckNode(
+                                            selection.subscription.clone(),
+                                            selection.node.clone(),
+                                        ));
+                                    }
                                 } else {
-                                    false
-                                };
-                                if response.clicked() || refresh {
-                                    actions.push(Action::MeasureDelay);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(state.text(reason))
+                                                .small()
+                                                .color(theme::ERROR),
+                                        )
+                                        .wrap(),
+                                    );
                                 }
-                            });
-                        }
-                        if let Some(status) = visible_status.filter(|status| {
-                            matches!(
-                                status.state,
-                                ConnectionState::Connected | ConnectionState::Reconnecting
-                            )
-                        }) {
-                            detail_row(ui, tr!("traffic"), |ui| {
-                                let rates = crate::i18n::traffic_rates(
-                                    &crate::i18n::rate(status.traffic.down_bps),
-                                    &crate::i18n::rate(status.traffic.up_bps),
-                                );
-                                if ui
-                                    .add(
-                                        egui::Label::new(rates)
-                                            .truncate()
-                                            .sense(egui::Sense::click()),
-                                    )
-                                    .on_hover_text(tr!("traffic-open-hint"))
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            }
+                            if protection_action(status, state.operations.helper)
+                                == ProtectionAction::ConfirmDisconnect
+                                && widgets::outline_button(ui, tr!("turn-off-protection"), true)
                                     .clicked()
-                                {
-                                    actions.push(Action::OpenTraffic);
+                            {
+                                actions.push(Action::RequestProtectionOff);
+                            }
+                        }
+                        if server_button(ui, state) {
+                            actions.push(Action::RevealServer);
+                        }
+                        if selection_changed.is_some() {
+                            let applying = server_pending && state.operations.helper;
+                            let can_apply = server_pending && state.can_apply();
+                            let message = state.config.active_node().map_or_else(
+                                || tr!("selection-cleared").to_owned(),
+                                |(_, node)| {
+                                    let name = display::drop_missing_glyphs(
+                                        ui.ctx(),
+                                        &egui::TextStyle::Body.resolve(ui.style()),
+                                        &state.text(&node.name),
+                                    );
+                                    if applying {
+                                        crate::i18n::switching_to(&name)
+                                    } else if can_apply {
+                                        crate::i18n::selected_not_applied(&name)
+                                    } else {
+                                        crate::i18n::selected_pending(&name)
+                                    }
+                                },
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                ui.label(RichText::new(message).small().color(theme::ROSE_LIGHT));
+                                if can_apply {
+                                    ui.label(
+                                        RichText::new(tr!("apply-separator"))
+                                            .small()
+                                            .color(theme::ROSE_LIGHT),
+                                    );
+                                    if widgets::link(ui, &tr!("apply"), true)
+                                        .on_hover_text(tr!("apply-hint"))
+                                        .clicked()
+                                    {
+                                        actions.push(Action::Apply);
+                                    }
                                 }
                             });
                         }
-                        detail_row(ui, tr!("protocol"), |ui| {
-                            ui.add(egui::Label::new(&protocol).truncate())
-                                .on_hover_text(&protocol);
-                        });
-                        detail_row(ui, tr!("engine"), |ui| {
-                            ui.add(egui::Label::new(engine.as_str()).truncate())
-                                .on_hover_text(crate::i18n::engine_detail(engine.as_str()));
+                        let protocol = state.config.active_node().map_or_else(
+                            || tr!("ping-pending").to_owned(),
+                            |(_, node)| {
+                                i18n::node_details(
+                                    rosetun_core::node_protocol(node),
+                                    rosetun_core::node_tls(node),
+                                    rosetun_core::node_transport(node),
+                                )
+                            },
+                        );
+                        let engine = visible_status
+                            .and_then(|status| status.engine)
+                            .unwrap_or(state.config.settings.engine);
+                        let (ip, ip_color, toggle) = exit_line(&state.exit, state.exit_revealed);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 8.0;
+                            ui.add_space(2.0);
+                            detail_row(ui, tr!("external-ip"), |ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                let row_height = ui.text_style_height(&egui::TextStyle::Body);
+                                let toggle_width = toggle.as_ref().map_or(0.0, |text| {
+                                    ui.painter()
+                                        .layout_no_wrap(
+                                            text.to_owned(),
+                                            egui::TextStyle::Body.resolve(ui.style()),
+                                            theme::ROSE_LIGHT,
+                                        )
+                                        .size()
+                                        .x
+                                        + 12.0
+                                });
+                                let address_width = (ui.available_width() - toggle_width).max(0.0);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(address_width, row_height),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_width(address_width);
+                                        ui.add(
+                                            egui::Label::new(RichText::new(ip).color(ip_color))
+                                                .truncate(),
+                                        );
+                                    },
+                                );
+                                if let Some(toggle) = toggle {
+                                    ui.add_space(12.0);
+                                    if ui
+                                        .add(
+                                            egui::Label::new(
+                                                RichText::new(toggle).color(theme::ROSE_LIGHT),
+                                            )
+                                            .sense(egui::Sense::click()),
+                                        )
+                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                        .clicked()
+                                    {
+                                        actions.push(Action::ToggleExitReveal);
+                                    }
+                                }
+                            });
+                            if visible_status.is_some_and(|status| {
+                                matches!(status.state, ConnectionState::Connected)
+                            }) {
+                                detail_row(ui, tr!("delay"), |ui| {
+                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    let (text, color) = match state.tunnel_delay {
+                                        TunnelDelay::Done(ProbeOutcome::Works { millis }) => (
+                                            tr!("ping-ms", ms = millis.max(1).to_string()),
+                                            theme::TEXT,
+                                        ),
+                                        TunnelDelay::Done(_) => {
+                                            (tr!("ping-no-answer").to_owned(), theme::ERROR)
+                                        }
+                                        TunnelDelay::Idle | TunnelDelay::Measuring => {
+                                            (tr!("ping-pending").to_owned(), theme::TEXT_DIM)
+                                        }
+                                    };
+                                    let enabled =
+                                        !matches!(state.tunnel_delay, TunnelDelay::Measuring);
+                                    let response = ui
+                                        .add(
+                                            egui::Label::new(RichText::new(text).color(color))
+                                                .sense(if enabled {
+                                                    egui::Sense::click()
+                                                } else {
+                                                    egui::Sense::hover()
+                                                }),
+                                        )
+                                        .on_hover_text(tr!("delay-hint"));
+                                    let refresh =
+                                        if matches!(state.tunnel_delay, TunnelDelay::Done(_)) {
+                                            icons::icon_button_sized(
+                                                ui,
+                                                Icon::Refresh,
+                                                enabled,
+                                                18.0,
+                                            )
+                                            .on_hover_text(tr!("delay-hint"))
+                                            .clicked()
+                                        } else {
+                                            false
+                                        };
+                                    if response.clicked() || refresh {
+                                        actions.push(Action::MeasureDelay);
+                                    }
+                                });
+                            }
+                            if let Some(status) = visible_status.filter(|status| {
+                                matches!(
+                                    status.state,
+                                    ConnectionState::Connected | ConnectionState::Reconnecting
+                                )
+                            }) {
+                                detail_row(ui, tr!("traffic"), |ui| {
+                                    let rates = crate::i18n::traffic_rates(
+                                        &crate::i18n::rate(status.traffic.down_bps),
+                                        &crate::i18n::rate(status.traffic.up_bps),
+                                    );
+                                    if ui
+                                        .add(
+                                            egui::Label::new(rates)
+                                                .truncate()
+                                                .sense(egui::Sense::click()),
+                                        )
+                                        .on_hover_text(tr!("traffic-open-hint"))
+                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                        .clicked()
+                                    {
+                                        actions.push(Action::OpenTraffic);
+                                    }
+                                });
+                            }
+                            detail_row(ui, tr!("protocol"), |ui| {
+                                ui.add(egui::Label::new(&protocol).truncate())
+                                    .on_hover_text(&protocol);
+                            });
+                            detail_row(ui, tr!("engine"), |ui| {
+                                ui.add(egui::Label::new(engine.as_str()).truncate())
+                                    .on_hover_text(crate::i18n::engine_detail(engine.as_str()));
+                            });
                         });
                     });
-                });
                 },
             );
         });

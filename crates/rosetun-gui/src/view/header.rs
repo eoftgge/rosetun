@@ -114,7 +114,12 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             Screen::Traffic,
             Action::OpenTraffic,
         ),
-        (TabIcon::Rules, tr!("rules"), Screen::Rules, Action::OpenRules),
+        (
+            TabIcon::Rules,
+            tr!("rules"),
+            Screen::Rules,
+            Action::OpenRules,
+        ),
         (
             TabIcon::Settings,
             tr!("settings"),
@@ -136,22 +141,25 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     let icon_tabs_width = 4.0 * 46.0 + 12.0;
     let width = ui.available_width();
     let icons_only = 22.0 + full_brand_width + 44.0 + full_tabs_width + right_width + 8.0 > width;
-    let compact_brand = icons_only
-        && 22.0 + full_brand_width + 44.0 + icon_tabs_width + right_width + 8.0 > width;
-    let brand_width = if compact_brand { 40.0 } else { full_brand_width };
+    let compact_brand =
+        icons_only && 22.0 + full_brand_width + 44.0 + icon_tabs_width + right_width + 8.0 > width;
+    let brand_width = if compact_brand {
+        40.0
+    } else {
+        full_brand_width
+    };
     let left_margin = if compact_brand { 12.0 } else { 22.0 };
     let brand_gap = if compact_brand { 12.0 } else { 44.0 };
-    let status_label = if left_margin + brand_width + brand_gap + icon_tabs_width + right_width + 8.0
-        > width
-    {
-        if connected {
-            header_country(state).unwrap_or("…")
+    let status_label =
+        if left_margin + brand_width + brand_gap + icon_tabs_width + right_width + 8.0 > width {
+            if connected {
+                header_country(state).unwrap_or("…")
+            } else {
+                "…"
+            }
         } else {
-            "…"
-        }
-    } else {
-        &status_text
-    };
+            &status_text
+        };
 
     ui.spacing_mut().item_spacing.x = 0.0;
     let mut tab_rects = [Rect::NOTHING; 4];
@@ -441,16 +449,15 @@ fn tab_width(ui: &egui::Ui, label: &str, icons_only: bool) -> f32 {
     if icons_only {
         return 46.0;
     }
-    63.0
-        + ui
-            .painter()
-            .layout_no_wrap(
-                label.to_owned(),
-                FontId::new(15.0, FontFamily::Proportional),
-                theme::TEXT,
-            )
-            .size()
-            .x
+    63.0 + ui
+        .painter()
+        .layout_no_wrap(
+            label.to_owned(),
+            FontId::new(15.0, FontFamily::Proportional),
+            theme::TEXT,
+        )
+        .size()
+        .x
 }
 
 fn tab(
@@ -690,11 +697,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::Panel::top("header")
-                        .exact_size(76.0)
-                        .show(ctx, |ui| {
-                            rects = Some(show_with_rects(ui, &state, &mut Vec::new()));
-                        });
+                    egui::Panel::top("header").exact_size(76.0).show(ctx, |ui| {
+                        rects = Some(show_with_rects(ui, &state, &mut Vec::new()));
+                    });
                 },
             );
             output.textures_delta.clear();
@@ -707,7 +712,10 @@ mod tests {
             assert!(rects.status.width() >= 40.0, "{scale}");
             assert!(rects.status.right() <= width, "{scale}");
             if CUSTOM_FRAME {
-                assert!(rects.status.right() <= rects.controls.unwrap().left(), "{scale}");
+                assert!(
+                    rects.status.right() <= rects.controls.unwrap().left(),
+                    "{scale}"
+                );
             }
             if scale == 1.5 {
                 assert!(rects.icons_only, "tabs need a compact layout at 640 points");

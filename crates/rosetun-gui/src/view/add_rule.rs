@@ -1309,7 +1309,10 @@ mod tests {
             let rect = ctx
                 .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
                 .unwrap();
-            assert!(rect.left() >= 0.0 && rect.right() <= width, "{scale}: {rect:?}");
+            assert!(
+                rect.left() >= 0.0 && rect.right() <= width,
+                "{scale}: {rect:?}"
+            );
         }
     }
 

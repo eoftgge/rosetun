@@ -302,19 +302,24 @@ fn dns_choice(
 fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     let editable = state.can_edit_settings();
     let form = &mut state.settings.screen;
-    let label_width = [tr!("resolver-ip"), tr!("tls-name"), tr!("port"), tr!("dns-path")]
-        .into_iter()
-        .map(|label| {
-            ui.painter()
-                .layout_no_wrap(
-                    label,
-                    egui::TextStyle::Body.resolve(ui.style()),
-                    theme::TEXT,
-                )
-                .size()
-                .x
-        })
-        .fold(0.0, f32::max);
+    let label_width = [
+        tr!("resolver-ip"),
+        tr!("tls-name"),
+        tr!("port"),
+        tr!("dns-path"),
+    ]
+    .into_iter()
+    .map(|label| {
+        ui.painter()
+            .layout_no_wrap(
+                label,
+                egui::TextStyle::Body.resolve(ui.style()),
+                theme::TEXT,
+            )
+            .size()
+            .x
+    })
+    .fold(0.0, f32::max);
     let input_width = (ui.available_width() - label_width - 16.0).clamp(120.0, 300.0);
     egui::Grid::new("dns_settings_fields")
         .num_columns(2)

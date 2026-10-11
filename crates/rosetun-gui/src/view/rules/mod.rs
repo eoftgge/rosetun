@@ -317,8 +317,8 @@ fn filter_controls(
                    filter: &mut RuleFilter,
                    rects: &mut ToolbarRects,
                    actions: &mut Vec<Action>| {
-        rects.search = widgets::search_field(ui, &mut filter.search, &tr!("search-rules"), search_width)
-            .rect;
+        rects.search =
+            widgets::search_field(ui, &mut filter.search, &tr!("search-rules"), search_width).rect;
         rects.tabs = ui
             .scope(|ui| {
                 if let Some(kind) =

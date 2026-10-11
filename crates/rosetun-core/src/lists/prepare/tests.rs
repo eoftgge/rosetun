@@ -430,7 +430,10 @@ fn damaged_last_good_copy_is_removed_and_only_its_rule_is_skipped() {
     )
     .unwrap();
     let text = add_list_from_bytes(&store, "Text", "example.txt", b"example.org\n").unwrap();
-    request.rule_set.rules.push(list_rule("good", text.id, None));
+    request
+        .rule_set
+        .rules
+        .push(list_rule("good", text.id, None));
     let tag = list_tag(&dat.id, Some("example"));
     let cache_path = directory
         .0
@@ -440,8 +443,14 @@ fn damaged_last_good_copy_is_removed_and_only_its_rule_is_skipped() {
     fs::write(&cache_path, b"invalid json").unwrap();
     let prepared = prepare_lists(&store, request).unwrap();
     assert!(!cache_path.exists());
-    assert_eq!(prepared.missing_categories, [rosetun_config::RuleId::new("cached")]);
-    assert_eq!(prepared.skipped_categories, [rosetun_config::RuleId::new("cached")]);
+    assert_eq!(
+        prepared.missing_categories,
+        [rosetun_config::RuleId::new("cached")]
+    );
+    assert_eq!(
+        prepared.skipped_categories,
+        [rosetun_config::RuleId::new("cached")]
+    );
     assert!(!prepared.request.rule_set.rules[0].enabled);
     assert!(prepared.request.rule_set.rules[1].enabled);
     assert_eq!(prepared.request.lists.len(), 1);
@@ -471,7 +480,10 @@ fn conflicting_last_good_formats_are_removed_and_the_category_is_skipped() {
     let source = directory.join(format!("{tag}.json"));
     fs::write(&binary, b"SRS\x05invalid").unwrap();
     let prepared = prepare_lists(&store, request).unwrap();
-    assert_eq!(prepared.skipped_categories, [rosetun_config::RuleId::new("cached")]);
+    assert_eq!(
+        prepared.skipped_categories,
+        [rosetun_config::RuleId::new("cached")]
+    );
     assert!(!binary.exists() && !source.exists());
 }
 

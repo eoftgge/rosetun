@@ -475,7 +475,9 @@ impl ListStore {
             }
         };
         if before.as_ref().is_some_and(|file| file.size != object.size)
-            || before.as_ref().is_some_and(|file| file.size > MAX_LIST_PAYLOAD_BYTES)
+            || before
+                .as_ref()
+                .is_some_and(|file| file.size > MAX_LIST_PAYLOAD_BYTES)
         {
             object.verified = None;
             return Err(missing());

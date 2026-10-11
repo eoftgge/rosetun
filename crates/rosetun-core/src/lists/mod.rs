@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rosetun_config::{List, ListCategoryError, ListFormat, ListId, ListSource, RuleMatcher, digest_hex};
+use rosetun_config::{
+    List, ListCategoryError, ListFormat, ListId, ListSource, RuleMatcher, digest_hex,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{FetchError, Store, StoreError, Timeouts};

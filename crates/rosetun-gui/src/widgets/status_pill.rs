@@ -24,9 +24,8 @@ pub(crate) fn status_pill(
         egui::vec2(galley.size().x + 40.0, 32.0),
         egui::Sense::click(),
     );
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, accessible_text)
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, accessible_text));
     if ui.is_rect_visible(rect) {
         ui.painter().rect(
             rect,

@@ -175,7 +175,12 @@ fn verification_cache_tracks_file_metadata_and_staging_always_rehashes() {
         format: ListFormat::Binary,
     };
     let modified = fs::metadata(&path).unwrap().modified().unwrap();
-    assert!(store.status(std::slice::from_ref(&digest), now).unwrap().is_empty());
+    assert!(
+        store
+            .status(std::slice::from_ref(&digest), now)
+            .unwrap()
+            .is_empty()
+    );
     fs::write(&path, b"SRS\x05damaged").unwrap();
     File::options()
         .write(true)
@@ -183,9 +188,17 @@ fn verification_cache_tracks_file_metadata_and_staging_always_rehashes() {
         .unwrap()
         .set_times(FileTimes::new().set_modified(modified))
         .unwrap();
-    assert!(store.status(std::slice::from_ref(&digest), now).unwrap().is_empty());
+    assert!(
+        store
+            .status(std::slice::from_ref(&digest), now)
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
-        store.verified_path_for_staging(&reference).unwrap_err().code,
+        store
+            .verified_path_for_staging(&reference)
+            .unwrap_err()
+            .code,
         ErrorCode::ListMissing
     );
     assert_eq!(store.status(&[digest], now).unwrap().len(), 1);

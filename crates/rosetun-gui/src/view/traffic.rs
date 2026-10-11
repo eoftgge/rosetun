@@ -34,99 +34,99 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 egui::Layout::left_to_right(egui::Align::Min)
             },
             |ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(232.0, 178.0),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.set_width(232.0);
-                    traffic_row(
-                        ui,
-                        theme::ROSE_LIGHT,
-                        &tr!("traffic-down"),
-                        down,
-                        traffic.is_some(),
-                    );
-                    ui.add_space(10.0);
-                    traffic_row(
-                        ui,
-                        theme::ROSE_DARK,
-                        &tr!("traffic-up"),
-                        up,
-                        traffic.is_some(),
-                    );
-                    ui.add_space(14.0);
-                    let (line, _) =
-                        ui.allocate_exact_size(egui::vec2(232.0, 1.0), egui::Sense::hover());
-                    ui.painter().hline(
-                        line.x_range(),
-                        line.center().y,
-                        egui::Stroke::new(1.0, theme::BORDER),
-                    );
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(tr!("traffic-session"))
-                                .small()
-                                .color(theme::TEXT_DIM),
-                        );
-                        let totals = crate::i18n::traffic_rates(
-                            &crate::i18n::bytes(down_total),
-                            &crate::i18n::bytes(up_total),
-                        );
-                        ui.add(
-                            egui::Label::new(RichText::new(&totals).small().color(
-                                if traffic.is_some() {
-                                    theme::TEXT
-                                } else {
-                                    theme::TEXT_DIM
-                                },
-                            ))
-                            .truncate(),
-                        )
-                        .on_hover_text(totals);
-                    });
-                },
-            );
-            ui.add_space(if narrow { 12.0 } else { 24.0 });
-            ui.vertical(|ui| {
-                ui.set_min_width(ui.available_width());
-                egui::Sides::new().shrink_left().wrap().show(
-                    ui,
+                ui.allocate_ui_with_layout(
+                    egui::vec2(232.0, 178.0),
+                    egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        let range = match state.traffic.traffic_range {
-                            TrafficRange::OneMinute => tr!("traffic-range-1m"),
-                            TrafficRange::FiveMinutes => tr!("traffic-range-5m"),
-                            TrafficRange::FifteenMinutes => tr!("traffic-range-15m"),
-                        };
-                        ui.label(
-                            RichText::new(crate::i18n::traffic_chart_caption(
-                                &range,
-                                &crate::i18n::rate(peak),
-                            ))
-                            .small()
-                            .color(theme::TEXT_DIM),
-                        );
-                    },
-                    |ui| {
-                        if let Some(range) = widgets::segmented(
+                        ui.set_width(232.0);
+                        traffic_row(
                             ui,
-                            "traffic_range",
-                            state.traffic.traffic_range,
-                            &[
-                                (TrafficRange::OneMinute, tr!("traffic-range-1m")),
-                                (TrafficRange::FiveMinutes, tr!("traffic-range-5m")),
-                                (TrafficRange::FifteenMinutes, tr!("traffic-range-15m")),
-                            ],
-                            false,
-                            true,
-                        ) {
-                            actions.push(Action::SetTrafficRange(range));
-                        }
+                            theme::ROSE_LIGHT,
+                            &tr!("traffic-down"),
+                            down,
+                            traffic.is_some(),
+                        );
+                        ui.add_space(10.0);
+                        traffic_row(
+                            ui,
+                            theme::ROSE_DARK,
+                            &tr!("traffic-up"),
+                            up,
+                            traffic.is_some(),
+                        );
+                        ui.add_space(14.0);
+                        let (line, _) =
+                            ui.allocate_exact_size(egui::vec2(232.0, 1.0), egui::Sense::hover());
+                        ui.painter().hline(
+                            line.x_range(),
+                            line.center().y,
+                            egui::Stroke::new(1.0, theme::BORDER),
+                        );
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(tr!("traffic-session"))
+                                    .small()
+                                    .color(theme::TEXT_DIM),
+                            );
+                            let totals = crate::i18n::traffic_rates(
+                                &crate::i18n::bytes(down_total),
+                                &crate::i18n::bytes(up_total),
+                            );
+                            ui.add(
+                                egui::Label::new(RichText::new(&totals).small().color(
+                                    if traffic.is_some() {
+                                        theme::TEXT
+                                    } else {
+                                        theme::TEXT_DIM
+                                    },
+                                ))
+                                .truncate(),
+                            )
+                            .on_hover_text(totals);
+                        });
                     },
                 );
-                ui.add_space(12.0);
-                traffic_chart(ui, &columns);
-            });
+                ui.add_space(if narrow { 12.0 } else { 24.0 });
+                ui.vertical(|ui| {
+                    ui.set_min_width(ui.available_width());
+                    egui::Sides::new().shrink_left().wrap().show(
+                        ui,
+                        |ui| {
+                            let range = match state.traffic.traffic_range {
+                                TrafficRange::OneMinute => tr!("traffic-range-1m"),
+                                TrafficRange::FiveMinutes => tr!("traffic-range-5m"),
+                                TrafficRange::FifteenMinutes => tr!("traffic-range-15m"),
+                            };
+                            ui.label(
+                                RichText::new(crate::i18n::traffic_chart_caption(
+                                    &range,
+                                    &crate::i18n::rate(peak),
+                                ))
+                                .small()
+                                .color(theme::TEXT_DIM),
+                            );
+                        },
+                        |ui| {
+                            if let Some(range) = widgets::segmented(
+                                ui,
+                                "traffic_range",
+                                state.traffic.traffic_range,
+                                &[
+                                    (TrafficRange::OneMinute, tr!("traffic-range-1m")),
+                                    (TrafficRange::FiveMinutes, tr!("traffic-range-5m")),
+                                    (TrafficRange::FifteenMinutes, tr!("traffic-range-15m")),
+                                ],
+                                false,
+                                true,
+                            ) {
+                                actions.push(Action::SetTrafficRange(range));
+                            }
+                        },
+                    );
+                    ui.add_space(12.0);
+                    traffic_chart(ui, &columns);
+                });
             },
         );
     });
