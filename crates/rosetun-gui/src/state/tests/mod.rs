@@ -185,6 +185,7 @@ fn complete_applied_restore(state: &mut State) -> AppliedSnapshot {
 }
 
 mod connection;
+mod lists;
 mod rules;
 mod session;
 mod settings;

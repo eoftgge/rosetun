@@ -104,6 +104,38 @@ error-code-busy = служба занята другой операцией
 error-code-invalid-state = в текущем состоянии туннеля это невозможно
 error-code-unsupported-rules = ядро не поддерживает эти правила
 error-code-list-missing = нужный список больше не доступен в службе
+error-list-url = Укажите ссылку на список с http:// или https://
+error-list-name = Укажите имя списка
+error-list-file-name = У выбранного файла нет имени
+error-list-not-found = Этого списка больше нет
+error-list-duplicate = Список по этой ссылке уже добавлен
+error-list-file-required = Выберите новый файл для обновления списка
+error-list-wrong-source = Способ обновления не соответствует источнику списка
+error-list-changed = Список изменился при обновлении · попробуйте ещё раз
+error-list-in-use = Список используется в наборах: { $sets }
+error-list-too-large = Список больше допустимых 32 МиБ
+error-list-integrity = Сохранённый список повреждён или не совпадает с контрольной суммой
+error-list-io = Не удалось прочитать или сохранить файл списка
+error-list-category-required = Выберите категорию из списка
+error-list-category-unexpected = У этого списка нет категорий
+error-list-category-unknown = Этой категории больше нет в списке
+error-list-category-filter = Недопустимый фильтр атрибута категории
+error-list-payload-too-large = Подготовленный список больше допустимых 16 МиБ
+error-list-too-many-entries = В списке больше 1 000 000 записей
+error-list-invalid-srs = Некорректный двоичный список sing-box
+error-list-srs-version = Версия двоичного списка sing-box { $version } не поддерживается
+error-list-invalid-json = Некорректный исходный список sing-box
+error-list-unsupported-key = В списке sing-box есть неподдерживаемый тип правила
+error-list-invalid-dat = Некорректный список Xray geosite или geoip
+error-list-text-lines = Некорректный текстовый список · { $details }
+error-list-text-line = строка { $line }: { $reason }
+error-list-text-more = и ещё { $count }
+error-list-text-utf8 = некорректный UTF-8
+error-list-text-domain = некорректный домен
+error-list-text-ip = некорректный IP-адрес или диапазон
+error-list-text-empty = пустая запись
+error-list-reverse-match = Категории с reverse_match не поддерживаются
+error-list-empty = В выбранном списке нет записей
 error-code-not-implemented = служба пока этого не умеет
 error-code-internal = внутренняя ошибка службы
 error-autostart-read = не удалось прочитать настройку автозапуска: { $detail }
@@ -112,6 +144,46 @@ error-open-folder = не удалось открыть папку: { $detail }
 connection = Подключение
 traffic = Трафик
 rules = Правила
+lists-title = Списки
+lists-empty = Списки сайтов и адресов из файла или по ссылке. Форматы: sing-box, Xray geosite и geoip, текст.
+add-list = Добавить список
+rename-list = Переименовать список
+list-url = Ссылка на список
+choose-list-file = Выбрать файл…
+list-selected-file = Файл: { $name }
+list-source-file = Файл: { $name }
+list-source-unknown = источник неизвестен
+list-format-singbox = sing-box
+list-format-geosite = Xray geosite
+list-format-geoip = Xray geoip
+list-format-text = Текст
+list-format-source = { $format } · { $source }
+list-size-unknown = размер неизвестен
+list-detail = { $size } · { $updated }
+list-detail-categories = { $size } · { $updated } · { $count ->
+    [one] { $n } категория
+    [few] { $n } категории
+    [many] { $n } категорий
+   *[other] { $n } категории
+}
+list-added-categories = { $format } · { $count ->
+    [one] { $n } категория
+    [few] { $n } категории
+    [many] { $n } категорий
+   *[other] { $n } категории
+}
+list-added-entries = { $format } · { $count ->
+    [one] { $n } запись
+    [few] { $n } записи
+    [many] { $n } записей
+   *[other] { $n } записи
+}
+list-updated = Обновлён
+list-updated-later = Обновлён · применится при следующем подключении
+list-delete-in-use = Используется в наборах: { $sets }
+delete-list = Удалить список?
+delete-list-detail = Список будет удалён. Сначала измените правила, которые его используют.
+done = Готово
 settings = Настройки
 settings-saved-instantly = Изменения сохраняются сразу
 section-general = Основные

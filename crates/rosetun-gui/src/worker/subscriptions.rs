@@ -35,7 +35,11 @@ impl WorkerDispatcher {
             if let Err(error) = &result {
                 log_list_error("update", error);
             }
-            WorkerEvent::UpdateList(id)
+            WorkerEvent::UpdateList {
+                id,
+                result,
+                manual: false,
+            }
         });
     }
 
@@ -140,7 +144,10 @@ impl WorkerDispatcher {
                 Err(error) => log_list_error("update all", error),
             }
 
-            WorkerEvent::UpdateAll(result)
+            WorkerEvent::UpdateAll {
+                subscriptions: result,
+                lists: list_result,
+            }
         });
     }
 

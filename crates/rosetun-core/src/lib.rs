@@ -18,9 +18,10 @@ pub use exit::{ExitInfo, ExitInfoError, exit_info};
 pub use fetch::{FetchError, Timeouts, fetch};
 pub use lists::{
     ListError, ListOperation, ListParseError, ListPayload, ListPreparationError, ListUpdateResult,
-    MAX_LIST_BYTES, PayloadFormat, PreparedConnection, PreparedListPayload, UpdateListError,
+    MAX_LIST_BYTES, PayloadFormat, PreparedConnection, PreparedListPayload, TextErrorKind,
+    TextLineError, UpdateListError,
     add_list_from_bytes, add_list_from_url, list_payload, prepare_lists, reconcile_lists,
-    remove_list, rename_list, send_prepared, update_all_lists, update_list,
+    remove_list, rename_list, send_prepared, text_entry_count, update_all_lists, update_list,
 };
 pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
 pub use rosetun_subscription::{ParseError, SkipReason, Skipped, UnsupportedTransport};

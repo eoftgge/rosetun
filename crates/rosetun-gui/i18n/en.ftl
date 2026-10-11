@@ -104,6 +104,38 @@ error-code-busy = the service is busy with another operation
 error-code-invalid-state = the tunnel is not in a state that allows this
 error-code-unsupported-rules = the engine does not support these rules
 error-code-list-missing = a required list is no longer available in the service
+error-list-url = Enter a list URL beginning with http:// or https://
+error-list-name = Enter a name for the list
+error-list-file-name = The selected file has no name
+error-list-not-found = This list no longer exists
+error-list-duplicate = This list URL has already been added
+error-list-file-required = Select a new file to update this list
+error-list-wrong-source = This update does not match the list source
+error-list-changed = The list changed while updating · try again
+error-list-in-use = This list is used in: { $sets }
+error-list-too-large = The list exceeds the 32 MiB size limit
+error-list-integrity = The saved list is damaged or does not match its checksum
+error-list-io = Could not read or save the list file
+error-list-category-required = Select a category from this list
+error-list-category-unexpected = This list does not have categories
+error-list-category-unknown = This category is no longer in the list
+error-list-category-filter = Invalid category attribute filter
+error-list-payload-too-large = The prepared list exceeds the 16 MiB limit
+error-list-too-many-entries = The list has more than 1,000,000 entries
+error-list-invalid-srs = Invalid sing-box binary list
+error-list-srs-version = Unsupported sing-box binary list version { $version }
+error-list-invalid-json = Invalid sing-box source list
+error-list-unsupported-key = This sing-box list contains an unsupported rule key
+error-list-invalid-dat = Invalid Xray geosite or geoip list
+error-list-text-lines = Invalid text list · { $details }
+error-list-text-line = line { $line }: { $reason }
+error-list-text-more = and { $count } more
+error-list-text-utf8 = invalid UTF-8
+error-list-text-domain = invalid domain
+error-list-text-ip = invalid IP address or range
+error-list-text-empty = empty entry
+error-list-reverse-match = Reverse-match categories are not supported
+error-list-empty = The selected list contains no entries
 error-code-not-implemented = the service does not support this yet
 error-code-internal = internal service error
 error-autostart-read = could not read the autostart setting: { $detail }
@@ -112,6 +144,40 @@ error-open-folder = could not open the folder: { $detail }
 connection = Connection
 traffic = Traffic
 rules = Rules
+lists-title = Lists
+lists-empty = Site and address lists from a file or a link. Formats: sing-box, Xray geosite and geoip, text.
+add-list = Add list
+rename-list = Rename list
+list-url = List URL
+choose-list-file = Choose file…
+list-selected-file = File: { $name }
+list-source-file = File: { $name }
+list-source-unknown = unknown source
+list-format-singbox = sing-box
+list-format-geosite = Xray geosite
+list-format-geoip = Xray geoip
+list-format-text = Text
+list-format-source = { $format } · { $source }
+list-size-unknown = size unknown
+list-detail = { $size } · { $updated }
+list-detail-categories = { $size } · { $updated } · { $count ->
+    [one] { $n } category
+   *[other] { $n } categories
+}
+list-added-categories = { $format } · { $count ->
+    [one] { $n } category
+   *[other] { $n } categories
+}
+list-added-entries = { $format } · { $count ->
+    [one] { $n } entry
+   *[other] { $n } entries
+}
+list-updated = Updated
+list-updated-later = Updated · takes effect at next connection
+list-delete-in-use = Used in: { $sets }
+delete-list = Delete list?
+delete-list-detail = The list will be removed. Rules that use a list must be changed first.
+done = Done
 settings = Settings
 settings-saved-instantly = Changes are saved instantly
 section-general = General

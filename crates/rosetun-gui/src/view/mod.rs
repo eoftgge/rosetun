@@ -2,6 +2,7 @@ pub(crate) mod add_rule;
 pub(crate) mod add_subscription;
 pub(crate) mod connection;
 pub(crate) mod header;
+pub(crate) mod lists;
 pub(crate) mod rose_button;
 pub(crate) mod rules;
 pub(crate) mod settings;
@@ -115,6 +116,15 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     let ctx = ui.ctx();
     if let Some(dialog) = &mut state.subscriptions.add {
         add_subscription::show(ctx, &state.config, dialog, &mut actions);
+    }
+    if let Some(dialog) = &mut state.lists.add {
+        lists::add_dialog(ctx, dialog, &mut actions);
+    }
+    if state.lists.rename.is_some() {
+        lists::rename_dialog(ctx, state, &mut actions);
+    }
+    if state.lists.remove.is_some() {
+        lists::remove_dialog(ctx, state, &mut actions);
     }
     if state.subscriptions.remove.is_some() {
         subscriptions::remove_dialog(ctx, state, &mut actions);

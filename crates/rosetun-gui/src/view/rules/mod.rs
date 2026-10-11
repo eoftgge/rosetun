@@ -7,7 +7,7 @@ use crate::rules::{
     RuleCaption, RuleFilter, TypeFilter, rule_counts, rule_counts_slice, rule_lines, visible_rules,
     visible_rules_slice,
 };
-use crate::state::{Action, DeleteDialog, NameDialogKind, SessionPart, State};
+use crate::state::{Action, DeleteDialog, NameDialogKind, RulesTab, SessionPart, State};
 use crate::{i18n, theme, widgets};
 
 const HANDLE_WIDTH: f32 = 22.0;
@@ -40,6 +40,24 @@ use templates::template_card;
 use templates::template_section;
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
+    if let Some(tab) = widgets::segmented(
+        ui,
+        "rules_lists_tab",
+        state.lists.tab,
+        &[(RulesTab::Rules, tr!("rules")), (RulesTab::Lists, tr!("lists-title"))],
+        false,
+        true,
+    ) {
+        actions.push(match tab {
+            RulesTab::Rules => Action::ShowRuleSets,
+            RulesTab::Lists => Action::ShowLists,
+        });
+    }
+    ui.add_space(20.0);
+    if state.lists.tab == RulesTab::Lists {
+        super::lists::show(ui, state, actions);
+        return;
+    }
     let text_edit_focused = ui.ctx().text_edit_focused();
     let pending_apply = state.config_ready
         && state

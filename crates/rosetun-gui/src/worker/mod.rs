@@ -1,7 +1,5 @@
 use std::fs;
-use std::path::Path;
-#[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc::Sender};
@@ -10,13 +8,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, DnsSettings, LanguageSetting, ListId, Node, NodeId, Rule, RuleId, RuleMatcher,
+    AppConfig, DnsSettings, LanguageSetting, List, ListId, Node, NodeId, Rule, RuleId, RuleMatcher,
     RuleSet, RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitInfo, ExitInfoError,
-    MoveSubscriptionError, PING_PARALLEL, PING_TIMEOUT, Ping, Release, RemoveSubscriptionError,
-    RenameSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingChange,
+    ListError, ListUpdateResult, MoveSubscriptionError, PING_PARALLEL, PING_TIMEOUT, Ping, Release,
+    RemoveSubscriptionError, RenameSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingChange,
     SettingsError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateCheckError,
     UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule, add_rules,
     create_rule_set, delete_rule_set, move_rule, move_rules, move_subscription, ping_all,
@@ -130,11 +128,20 @@ pub(crate) enum WorkerEvent {
     RemoveRules(Result<(), RuleSetError>),
     SetKillSwitch(Result<(), StoreError>),
     Add(Result<(Subscription, UpdateReport), AddFromUrlError>),
+    BrowsedListFile(Option<PathBuf>),
+    AddList(Result<(List, Option<usize>), ListError>),
+    RenameList(Result<List, ListError>),
+    RemoveList(Result<(), ListError>),
+    FileListUpdateCancelled(ListId),
     Update {
         id: SubscriptionId,
         result: Result<(Subscription, UpdateReport), UpdateSubscriptionError>,
     },
-    UpdateList(ListId),
+    UpdateList {
+        id: ListId,
+        result: Result<List, ListError>,
+        manual: bool,
+    },
     Ping {
         subscription: SubscriptionId,
         node: NodeId,
@@ -146,7 +153,10 @@ pub(crate) enum WorkerEvent {
         result: Result<Vec<ProbeResult>, HelperCommandError>,
     },
     TunnelDelay(Result<ProbeOutcome, HelperCommandError>),
-    UpdateAll(Result<Vec<SubscriptionUpdateResult>, StoreError>),
+    UpdateAll {
+        subscriptions: Result<Vec<SubscriptionUpdateResult>, StoreError>,
+        lists: Result<Vec<ListUpdateResult>, StoreError>,
+    },
     Remove {
         id: SubscriptionId,
         result: Result<(), RemoveSubscriptionError>,
@@ -169,6 +179,7 @@ struct ConfigPublisher {
 }
 
 mod helper;
+mod lists;
 mod rules;
 mod settings;
 mod subscriptions;

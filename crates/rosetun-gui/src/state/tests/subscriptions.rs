@@ -750,13 +750,16 @@ fn best_ping_ignores_unanswered_nodes_and_chooses_smallest_answer() {
 fn update_all_associates_outcomes_with_subscription_ids() {
     let mut state = State::default();
     state.operations.update_all = true;
-    state.reduce(WorkerEvent::UpdateAll(Ok(vec![
-        (
-            SubscriptionId::new("2"),
-            Err(UpdateSubscriptionError::NotFound),
-        ),
-        (SubscriptionId::new("1"), Ok((subscription("1"), report()))),
-    ])));
+    state.reduce(WorkerEvent::UpdateAll {
+        subscriptions: Ok(vec![
+            (
+                SubscriptionId::new("2"),
+                Err(UpdateSubscriptionError::NotFound),
+            ),
+            (SubscriptionId::new("1"), Ok((subscription("1"), report()))),
+        ]),
+        lists: Ok(Vec::new()),
+    });
     assert!(!state.operations.update_all);
     assert!(matches!(
         state.subscriptions.outcomes[&SubscriptionId::new("1")],
@@ -767,7 +770,10 @@ fn update_all_associates_outcomes_with_subscription_ids() {
         UpdateOutcome::Error(_)
     ));
     state.operations.update_all = true;
-    state.reduce(WorkerEvent::UpdateAll(Err(StoreError::NoConfigDir)));
+    state.reduce(WorkerEvent::UpdateAll {
+        subscriptions: Err(StoreError::NoConfigDir),
+        lists: Ok(Vec::new()),
+    });
     assert!(!state.operations.update_all);
     assert!(state.operation_error.is_some());
 }

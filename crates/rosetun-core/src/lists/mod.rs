@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rosetun_config::{List, ListCategoryError, ListId, ListSource, RuleMatcher};
+use rosetun_config::{List, ListCategoryError, ListFormat, ListId, ListSource, RuleMatcher};
 use sha2::{Digest, Sha256};
 
 use crate::{FetchError, Store, StoreError, Timeouts};
 
-pub use formats::{ListParseError, ListPayload, PayloadFormat};
+pub use formats::{ListParseError, ListPayload, PayloadFormat, TextErrorKind, TextLineError};
 pub use prepare::{
     ListOperation, ListPreparationError, PreparedConnection, PreparedListPayload, prepare_lists,
     send_prepared,
@@ -478,6 +478,20 @@ pub fn remove_list(store: &Store, id: &ListId) -> Result<(), ListError> {
         |list| cleanup_previous(&directory, Some(list)),
     )?;
     Ok(())
+}
+
+pub fn text_entry_count(store: &Store, id: &ListId) -> Result<Option<usize>, ListError> {
+    let config = store.load()?;
+    let list = config
+        .lists
+        .iter()
+        .find(|list| &list.id == id)
+        .ok_or(ListError::NotFound)?;
+    if list.format != ListFormat::Text {
+        return Ok(None);
+    }
+    let bytes = read_verified(&list_dir(store)?, list)?;
+    Ok(Some(formats::text_entry_count(&bytes)?))
 }
 
 pub fn list_payload(

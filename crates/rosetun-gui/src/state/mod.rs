@@ -14,6 +14,7 @@ use crate::rules::TypeFilter;
 use crate::worker::{ConfigWorkerError, FailureInterference, WorkerEvent};
 
 mod connection;
+mod lists;
 mod rules;
 mod session;
 mod settings;
@@ -22,6 +23,8 @@ mod traffic;
 mod updates;
 
 pub(crate) use connection::{ExitLookup, ExitRoute, TunnelDelay, primary_label};
+use lists::ListsState;
+pub(crate) use lists::{AddListDialog, ListOutcome, RulesTab, source_file_name, used_by};
 use rules::RulesState;
 pub(crate) use rules::{AddRuleDialog, DeleteDialog, NameDialogKind, RuleInputKind};
 pub(crate) use session::SessionPart;
@@ -98,6 +101,7 @@ pub(crate) struct State {
     deferred_connect: Option<ConnectRequest>,
     pub(crate) screen: Screen,
     pub(crate) rules: RulesState,
+    pub(crate) lists: ListsState,
     pub(crate) settings: SettingsState,
     pub(crate) operations: Operations,
     pub(crate) protection_confirmation: bool,
@@ -136,6 +140,7 @@ impl Default for State {
             deferred_connect: None,
             screen: Screen::default(),
             rules: RulesState::default(),
+            lists: ListsState::default(),
             settings: SettingsState::default(),
             operations: Operations::default(),
             protection_confirmation: false,
@@ -175,6 +180,21 @@ pub(crate) enum Action {
     OpenFolder(AboutFolder),
     OpenRules,
     OpenActiveRules,
+    ShowLists,
+    ShowRuleSets,
+    OpenAddList,
+    CancelAddList,
+    BrowseListFile,
+    SubmitAddList,
+    UpdateListManual(ListId),
+    UpdateListFile(ListId),
+    OpenRenameList(ListId),
+    CancelRenameList,
+    SubmitRenameList,
+    OpenRemoveList(ListId),
+    CancelRemoveList,
+    ConfirmRemoveList,
+    DismissListsError,
     ChooseRuleSet(RuleSetId),
     SetRuleTypeFilter(TypeFilter),
     SetRuleTargetFilter(Option<RuleTarget>),
@@ -302,6 +322,13 @@ pub(crate) enum Job {
     },
     Update(SubscriptionId),
     UpdateList(ListId),
+    UpdateListManual(ListId),
+    UpdateListFile(ListId),
+    AddListUrl(String, String),
+    AddListFile(PathBuf, String),
+    BrowseListFile,
+    RenameList(ListId, String),
+    RemoveList(ListId),
     Ping(SubscriptionId),
     PingNode(SubscriptionId, NodeId),
     FullCheck(SubscriptionId),
@@ -337,6 +364,7 @@ impl State {
                     self.settings.screen.sync_dns(&self.config.settings.dns);
                 }
                 self.reconcile_subscriptions();
+                self.reconcile_lists();
                 self.reconcile_selected_set();
             }
             WorkerEvent::ConfigError(error) => self.config_error = Some(error),
@@ -388,14 +416,19 @@ impl State {
             }
             event @ (WorkerEvent::Add(_)
             | WorkerEvent::Update { .. }
-            | WorkerEvent::UpdateList(_)
             | WorkerEvent::Ping { .. }
             | WorkerEvent::PingDone(_)
             | WorkerEvent::FullCheck { .. }) => self.reduce_subscriptions(event),
-            event @ (WorkerEvent::UpdateAll(_)
+            event @ (WorkerEvent::UpdateAll { .. }
             | WorkerEvent::Remove { .. }
             | WorkerEvent::RenameSubscription(_)
             | WorkerEvent::MoveSubscription(_)) => self.reduce_subscriptions(event),
+            event @ (WorkerEvent::BrowsedListFile(_)
+            | WorkerEvent::AddList(_)
+            | WorkerEvent::UpdateList { .. }
+            | WorkerEvent::FileListUpdateCancelled(_)
+            | WorkerEvent::RenameList(_)
+            | WorkerEvent::RemoveList(_)) => self.reduce_lists(event),
         }
     }
 
@@ -442,6 +475,21 @@ impl State {
             action @ (Action::CheckUpdatesNow | Action::SkipVersion) => {
                 return self.act_updates(action);
             }
+            action @ (Action::ShowLists
+            | Action::ShowRuleSets
+            | Action::OpenAddList
+            | Action::CancelAddList
+            | Action::BrowseListFile
+            | Action::SubmitAddList
+            | Action::UpdateListManual(_)
+            | Action::UpdateListFile(_)
+            | Action::OpenRenameList(_)
+            | Action::CancelRenameList
+            | Action::SubmitRenameList
+            | Action::OpenRemoveList(_)
+            | Action::CancelRemoveList
+            | Action::ConfirmRemoveList
+            | Action::DismissListsError) => return self.act_lists(action),
             action @ (Action::OpenRules
             | Action::OpenActiveRules
             | Action::ChooseRuleSet(_)

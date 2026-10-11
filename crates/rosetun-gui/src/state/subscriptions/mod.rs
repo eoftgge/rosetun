@@ -286,15 +286,15 @@ impl State {
                 self.operations.updating.remove(&id);
                 self.update_result(id, result);
             }
-            WorkerEvent::UpdateList(id) => {
-                self.operations.updating_lists.remove(&id);
-            }
             event @ (WorkerEvent::Ping { .. }
             | WorkerEvent::PingDone(_)
             | WorkerEvent::FullCheck { .. }) => self.reduce_subscription_check(event),
-            WorkerEvent::UpdateAll(result) => {
+            WorkerEvent::UpdateAll {
+                subscriptions,
+                lists,
+            } => {
                 self.operations.update_all = false;
-                match result {
+                match subscriptions {
                     Ok(results) => {
                         for (id, result) in results {
                             self.update_result(id, result);
@@ -302,6 +302,23 @@ impl State {
                     }
                     Err(error) => {
                         self.operation_error =
+                            Some(self.text(&errors::store(crate::i18n::language(), &error)));
+                    }
+                }
+                match lists {
+                    Ok(results) => {
+                        for (id, result) in results {
+                            self.lists.outcomes.insert(
+                                id,
+                                match result {
+                                    Ok(_) => super::lists::ListOutcome::Updated { manual: false },
+                                    Err(error) => super::lists::ListOutcome::Failed(error),
+                                },
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        self.lists.error =
                             Some(self.text(&errors::store(crate::i18n::language(), &error)));
                     }
                 }

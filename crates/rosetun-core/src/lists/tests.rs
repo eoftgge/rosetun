@@ -92,6 +92,21 @@ fn local_import_is_copied_without_storing_its_original_path() {
 }
 
 #[test]
+fn text_entry_count_is_transient_and_uses_verified_contents() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let list = add_list_from_bytes(
+        &store,
+        "Example",
+        "example.txt",
+        b"example.com\n# comment\n192.0.2.0/24\n",
+    )
+    .unwrap();
+    assert_eq!(text_entry_count(&store, &list.id).unwrap(), Some(2));
+    assert!(!fs::read_to_string(store.path()).unwrap().contains("entry_count"));
+}
+
+#[test]
 fn dat_categories_are_stored_once_and_rendered_only_when_selected() {
     let directory = TestDirectory::new();
     let store = directory.store();

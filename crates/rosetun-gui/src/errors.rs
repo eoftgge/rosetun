@@ -1,6 +1,7 @@
-use rosetun_config::ConfigError;
+use rosetun_config::{ConfigError, ListCategoryError};
 use rosetun_core::{
-    AddFromUrlError, AddSubscriptionError, DnsInputError, FetchError, MoveSubscriptionError,
+    AddFromUrlError, AddSubscriptionError, DnsInputError, FetchError, ListError, ListParseError,
+    MoveSubscriptionError, TextErrorKind,
     ParseError, RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
     SelectNodeError, SelectRuleSetError, SettingsError, SkipReason, StoreError,
     SubscriptionUrlError, UnsupportedTransport, UpdateSubscriptionError,
@@ -129,6 +130,126 @@ pub(crate) fn rule_set(language: Language, error: &RuleSetError) -> String {
         RuleSetError::EmptyName => tr_in(language, "error-rule-set-name-empty", &FluentArgs::new()),
         RuleSetError::DuplicateRule => tr_in(language, "error-duplicate-rule", &FluentArgs::new()),
         RuleSetError::ListNotFound | RuleSetError::ListCategory(_) => error.to_string(),
+    }
+}
+
+pub(crate) fn list(language: Language, error: &ListError) -> String {
+    match error {
+        ListError::Store(error) => store(language, error),
+        ListError::InvalidUrl => tr_in(language, "error-list-url", &FluentArgs::new()),
+        ListError::EmptyName => tr_in(language, "error-list-name", &FluentArgs::new()),
+        ListError::EmptyFileName => tr_in(language, "error-list-file-name", &FluentArgs::new()),
+        ListError::NotFound => tr_in(language, "error-list-not-found", &FluentArgs::new()),
+        ListError::AlreadyExists => tr_in(language, "error-list-duplicate", &FluentArgs::new()),
+        ListError::FileRequired => tr_in(language, "error-list-file-required", &FluentArgs::new()),
+        ListError::WrongSource => tr_in(language, "error-list-wrong-source", &FluentArgs::new()),
+        ListError::ChangedDuringUpdate => tr_in(language, "error-list-changed", &FluentArgs::new()),
+        ListError::InUse { sets } => {
+            tr_in(
+                language,
+                "error-list-in-use",
+                &arguments(&[("sets", &display::safe_text(&sets.join(", ")))]),
+            )
+        }
+        ListError::TooLarge => tr_in(language, "error-list-too-large", &FluentArgs::new()),
+        ListError::Integrity => tr_in(language, "error-list-integrity", &FluentArgs::new()),
+        ListError::Category(error) => list_category(language, error),
+        ListError::Parse(error) => list_parse(language, error),
+        ListError::Fetch(error) => fetch(language, error),
+        ListError::Io(_) => tr_in(language, "error-list-io", &FluentArgs::new()),
+        ListError::Clock(_) => tr_in(language, "error-clock-before-epoch", &FluentArgs::new()),
+    }
+}
+
+pub(crate) fn list_category(language: Language, error: &ListCategoryError) -> String {
+    match error {
+        ListCategoryError::Required => {
+            tr_in(language, "error-list-category-required", &FluentArgs::new())
+        }
+        ListCategoryError::Unexpected => {
+            tr_in(language, "error-list-category-unexpected", &FluentArgs::new())
+        }
+        ListCategoryError::Unknown => {
+            tr_in(language, "error-list-category-unknown", &FluentArgs::new())
+        }
+        ListCategoryError::InvalidFilter => {
+            tr_in(language, "error-list-category-filter", &FluentArgs::new())
+        }
+    }
+}
+
+fn list_parse(language: Language, error: &ListParseError) -> String {
+    match error {
+        ListParseError::InputTooLarge => tr_in(language, "error-list-too-large", &FluentArgs::new()),
+        ListParseError::PayloadTooLarge => {
+            tr_in(language, "error-list-payload-too-large", &FluentArgs::new())
+        }
+        ListParseError::TooManyEntries => {
+            tr_in(language, "error-list-too-many-entries", &FluentArgs::new())
+        }
+        ListParseError::InvalidSrs => tr_in(language, "error-list-invalid-srs", &FluentArgs::new()),
+        ListParseError::UnsupportedSrsVersion(version) => {
+            tr_in(
+                language,
+                "error-list-srs-version",
+                &arguments(&[("version", &version.to_string())]),
+            )
+        }
+        ListParseError::InvalidJson | ListParseError::InvalidSource(_) => {
+            tr_in(language, "error-list-invalid-json", &FluentArgs::new())
+        }
+        ListParseError::UnsupportedRuleKey(_) => {
+            tr_in(language, "error-list-unsupported-key", &FluentArgs::new())
+        }
+        ListParseError::InvalidProtobuf | ListParseError::UnknownDatType => {
+            tr_in(language, "error-list-invalid-dat", &FluentArgs::new())
+        }
+        ListParseError::TextLines { errors, remaining } => {
+            let mut lines = errors
+                .iter()
+                .map(|error| {
+                    let reason = match error.kind {
+                        TextErrorKind::InvalidUtf8 => {
+                            tr_in(language, "error-list-text-utf8", &FluentArgs::new())
+                        }
+                        TextErrorKind::InvalidDomain => {
+                            tr_in(language, "error-list-text-domain", &FluentArgs::new())
+                        }
+                        TextErrorKind::InvalidIpCidr => {
+                            tr_in(language, "error-list-text-ip", &FluentArgs::new())
+                        }
+                        TextErrorKind::EmptyValue => {
+                            tr_in(language, "error-list-text-empty", &FluentArgs::new())
+                        }
+                    };
+                    tr_in(
+                        language,
+                        "error-list-text-line",
+                        &arguments(&[
+                            ("line", &error.line.to_string()),
+                            ("reason", &reason),
+                        ]),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if *remaining > 0 {
+                lines.push(tr_in(
+                    language,
+                    "error-list-text-more",
+                    &arguments(&[("count", &remaining.to_string())]),
+                ));
+            }
+            tr_in(
+                language,
+                "error-list-text-lines",
+                &arguments(&[("details", &lines.join("; "))]),
+            )
+        }
+        ListParseError::Category(error) => list_category(language, error),
+        ListParseError::ReverseMatch => {
+            tr_in(language, "error-list-reverse-match", &FluentArgs::new())
+        }
+        ListParseError::EmptyResult => tr_in(language, "error-list-empty", &FluentArgs::new()),
     }
 }
 

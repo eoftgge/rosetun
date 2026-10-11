@@ -306,6 +306,10 @@ fn source_payload(records: Vec<Record>) -> Result<Vec<u8>, ListParseError> {
     Ok(bytes)
 }
 
+pub(super) fn text_entry_count(bytes: &[u8]) -> Result<usize, ListParseError> {
+    Ok(read_text(bytes)?.len())
+}
+
 fn read_text(bytes: &[u8]) -> Result<Vec<Record>, ListParseError> {
     let text = std::str::from_utf8(bytes).map_err(|error| ListParseError::TextLines {
         errors: vec![TextLineError {
