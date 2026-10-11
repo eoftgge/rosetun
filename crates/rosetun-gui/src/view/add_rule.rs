@@ -11,16 +11,17 @@ use crate::{constants, i18n, theme, widgets};
 
 const DIALOG_WIDTH: f32 = 640.0;
 const DIALOG_TOP: f32 = 100.0;
-const COMPACT_DIALOG_HEIGHT: f32 = 600.0;
-const TEMPORARY_HINT_HEIGHT: f32 = 20.0;
+const COMPACT_DIALOG_HEIGHT: f32 = 632.0;
 const ERROR_HEIGHT: f32 = 28.0;
 const PROCESS_ROW_HEIGHT: f32 = 44.0;
 const PROCESS_ROW_GAP: f32 = 4.0;
 const MIN_PROCESS_LIST: f32 = 2.0 * PROCESS_ROW_HEIGHT + PROCESS_ROW_GAP;
 const MAX_PROCESS_LIST: f32 = 5.0 * PROCESS_ROW_HEIGHT + 4.0 * PROCESS_ROW_GAP;
-const PROCESS_FOOTER_HEIGHT: f32 = 100.0;
+const PROCESS_FOOTER_HEIGHT: f32 = 80.0;
 const BUTTON_ROW_HEIGHT: f32 = 40.0;
-const ACTIONS_GAP: f32 = 2.0;
+const ADVANCED_HEADER_HEIGHT: f32 = 32.0;
+const ADVANCED_ROW_HEIGHT: f32 = 44.0;
+const DIVIDER_HEIGHT: f32 = 16.0;
 const BOTTOM_GAP: f32 = 24.0;
 
 fn process_body_height(top: f32, limit: f32, advanced: bool) -> f32 {
@@ -35,6 +36,25 @@ fn process_body_height(top: f32, limit: f32, advanced: bool) -> f32 {
     )
 }
 
+fn has_advanced(dialog: &AddRuleDialog) -> bool {
+    dialog.kind == RuleInputKind::Process || dialog.editing.is_none()
+}
+
+fn advanced_height(dialog: &AddRuleDialog) -> f32 {
+    if !has_advanced(dialog) {
+        0.0
+    } else {
+        ADVANCED_HEADER_HEIGHT
+            + if dialog.advanced {
+                ADVANCED_ROW_HEIGHT
+                    * (usize::from(dialog.kind == RuleInputKind::Process)
+                        + usize::from(dialog.editing.is_none())) as f32
+            } else {
+                0.0
+            }
+    }
+}
+
 pub(crate) fn show(
     ctx: &egui::Context,
     dialog: &mut AddRuleDialog,
@@ -46,17 +66,9 @@ pub(crate) fn show(
         dialog.temporary_only = false;
     }
     let id = egui::Id::new("add_rule");
-    let top = if dialog.editing.is_some() {
-        DIALOG_TOP
-    } else {
-        let error_height = if dialog.error.is_some() {
-            ERROR_HEIGHT
-        } else {
-            0.0
-        };
-        DIALOG_TOP
-            .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0))
-    };
+    let error_height = if dialog.error.is_some() { ERROR_HEIGHT } else { 0.0 };
+    let top = DIALOG_TOP
+        .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0));
     let response = egui::Modal::new(id)
         .area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, top)))
         .frame(widgets::modal_frame())
@@ -102,19 +114,13 @@ pub(crate) fn show(
             let valid = match dialog.kind {
                 RuleInputKind::Process => {
                     let frame = widgets::modal_frame();
-                    let advanced_height = if dialog.advanced { 52.0 } else { 0.0 };
                     let limit = ui.ctx().content_rect().bottom()
                         - BOTTOM_GAP
                         - (frame.inner_margin.bottom as f32 + frame.stroke.width)
                         - BUTTON_ROW_HEIGHT
-                        - ACTIONS_GAP
+                        - DIVIDER_HEIGHT
                         - 104.0
-                        - if dialog.editing.is_none() && dialog.temporary_only {
-                            TEMPORARY_HINT_HEIGHT
-                        } else {
-                            0.0
-                        }
-                        - advanced_height
+                        - advanced_height(dialog)
                         - if dialog.error.is_some() {
                             ERROR_HEIGHT
                         } else {
@@ -141,9 +147,36 @@ pub(crate) fn show(
                     .color(theme::TEXT_DIM),
             );
             target_cards(ui, dialog);
-            if dialog.kind == RuleInputKind::Process {
-                ui.add_space(4.0);
-                if dialog.advanced {
+            if has_advanced(dialog) {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let chevron = icons::icon_button_sized(
+                        ui,
+                        Icon::Chevron {
+                            open: dialog.advanced,
+                        },
+                        !dialog.busy,
+                        20.0,
+                    );
+                    let label = if !dialog.advanced && dialog.temporary_only {
+                        tr!("advanced-temporary")
+                    } else {
+                        tr!("advanced")
+                    };
+                    let color = if !dialog.advanced && dialog.temporary_only {
+                        theme::ROSE_LIGHT
+                    } else {
+                        theme::TEXT_MUTED
+                    };
+                    let link = ui.add_enabled(
+                        !dialog.busy,
+                        egui::Button::new(RichText::new(label).color(color)).frame(false),
+                    );
+                    if chevron.clicked() || link.clicked() {
+                        dialog.advanced = !dialog.advanced;
+                    }
+                });
+                if dialog.advanced && dialog.kind == RuleInputKind::Process {
                     let available = full_path_available(dialog);
                     let mut match_path = dialog.match_mode == ProcessMatchMode::Path;
                     let response = widgets::toggle_row(
@@ -164,52 +197,48 @@ pub(crate) fn show(
                         });
                     }
                 }
+                if dialog.advanced && dialog.editing.is_none() {
+                    let response = widgets::toggle_row(
+                        ui,
+                        tr!("temporary-only"),
+                        tr!("temporary-dialog-hint"),
+                        &mut dialog.temporary_only,
+                        can_temporary && !dialog.busy,
+                    );
+                    if !can_temporary {
+                        response.on_hover_text(tr!("temporary-needs-connection"));
+                    }
+                }
             }
             if let Some(error) = &dialog.error {
                 ui.add_space(6.0);
                 ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
             }
-            ui.add_space(ACTIONS_GAP);
+            ui.add_space(8.0);
+            let (divider, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+            ui.painter().hline(divider.x_range(), divider.center().y, Stroke::new(1.0, theme::BORDER));
+            ui.add_space(8.0);
             let can_submit = valid && !dialog.busy && (!dialog.temporary_only || can_temporary);
+            let reason = if dialog.busy || dialog.error.is_some() || can_submit {
+                None
+            } else if dialog.temporary_only && !can_temporary {
+                Some(tr!("temporary-needs-connection"))
+            } else {
+                Some(match dialog.kind {
+                    RuleInputKind::Process => tr!("choose-program"),
+                    RuleInputKind::Domain => tr!("enter-site"),
+                    RuleInputKind::List => tr!("choose-list-category"),
+                })
+            };
             egui::Sides::new().show(
                 ui,
                 |ui| {
-                    ui.horizontal(|ui| {
-                        if dialog.editing.is_none() {
-                            temporary_chip(
-                                ui,
-                                &mut dialog.temporary_only,
-                                can_temporary,
-                                dialog.busy,
-                            );
-                        }
-                        if dialog.kind == RuleInputKind::Process {
-                            let chevron = icons::icon_button_sized(
-                                ui,
-                                Icon::Chevron {
-                                    open: dialog.advanced,
-                                },
-                                !dialog.busy,
-                                20.0,
-                            );
-                            let link = ui.add_enabled(
-                                !dialog.busy,
-                                egui::Button::new(
-                                    RichText::new(tr!("advanced")).color(theme::TEXT_MUTED),
-                                )
-                                .frame(false),
-                            );
-                            if chevron.clicked() || link.clicked() {
-                                dialog.advanced = !dialog.advanced;
-                            }
-                        }
-                    });
+                    if let Some(reason) = &reason {
+                        ui.label(RichText::new(reason).small().color(theme::TEXT_DIM));
+                    }
                 },
                 |ui| {
                     ui.horizontal(|ui| {
-                        if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
-                            actions.push(Action::CancelAddRule);
-                        }
                         let label = if dialog.busy {
                             if dialog.editing.is_some() {
                                 tr!("saving").to_owned()
@@ -227,19 +256,21 @@ pub(crate) fn show(
                         } else {
                             tr!("add-rule").to_owned()
                         };
-                        if widgets::button_fill(ui, &label, can_submit).clicked() {
+                        let submit = widgets::button_fill(ui, &label, can_submit);
+                        let submit = if let Some(reason) = &reason {
+                            submit.on_disabled_hover_text(reason)
+                        } else {
+                            submit
+                        };
+                        if submit.clicked() {
                             actions.push(Action::SubmitAddRule);
+                        }
+                        if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
+                            actions.push(Action::CancelAddRule);
                         }
                     });
                 },
             );
-            if dialog.editing.is_none() && dialog.temporary_only {
-                ui.label(
-                    RichText::new(tr!("temporary-dialog-hint"))
-                        .small()
-                        .color(theme::ROSE_LIGHT),
-                );
-            }
         });
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAddRule);
@@ -320,7 +351,7 @@ fn list_input(
         }
         egui::ScrollArea::vertical()
             .id_salt("rule_list_categories")
-            .max_height(116.0)
+            .max_height(64.0)
             .show_rows(ui, 28.0, matches.len(), |ui, rows| {
                 for index in rows {
                     let category = matches[index];
@@ -360,76 +391,7 @@ fn list_input(
     } else {
         dialog.category.clear();
     }
-    true
-}
-
-fn temporary_chip(ui: &mut egui::Ui, temporary_only: &mut bool, can_temporary: bool, busy: bool) {
-    let color = if !can_temporary {
-        theme::TEXT_DIM
-    } else if *temporary_only {
-        theme::ROSE_LIGHT
-    } else {
-        theme::TEXT_MUTED
-    };
-    let font = egui::TextStyle::Small.resolve(ui.style());
-    let text = ui
-        .painter()
-        .layout_no_wrap(tr!("temporary-chip").to_owned(), font, color);
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(12.0 * 2.0 + 14.0 + 6.0 + text.size().x, 32.0),
-        if can_temporary && !busy {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        },
-    );
-    if ui.is_rect_visible(rect) {
-        ui.painter().rect(
-            rect,
-            16.0,
-            if *temporary_only {
-                theme::INPUT
-            } else {
-                Color32::TRANSPARENT
-            },
-            Stroke::new(
-                1.0,
-                if *temporary_only {
-                    theme::ROSE
-                } else {
-                    theme::BORDER_STRONG
-                },
-            ),
-            egui::StrokeKind::Inside,
-        );
-        icons::paint(
-            ui.painter(),
-            egui::pos2(rect.left() + 19.0, rect.center().y),
-            Icon::Clock,
-            color,
-        );
-        ui.painter().galley(
-            egui::pos2(
-                rect.left() + 12.0 + 14.0 + 6.0,
-                rect.center().y - text.size().y / 2.0,
-            ),
-            text,
-            color,
-        );
-    }
-    let response = if can_temporary && !busy {
-        response.on_hover_cursor(egui::CursorIcon::PointingHand)
-    } else {
-        response
-    };
-    let response = response.on_hover_text(if can_temporary {
-        tr!("temporary-hint")
-    } else {
-        tr!("temporary-needs-connection")
-    });
-    if response.clicked() {
-        *temporary_only = !*temporary_only;
-    }
+    !selected.format.has_categories() || !dialog.category.trim().is_empty()
 }
 
 fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
@@ -951,6 +913,7 @@ mod tests {
             (960.0, 640.0, false, false, true, true, false, false),
             (960.0, 640.0, true, false, true, true, false, false),
             (960.0, 640.0, false, true, true, true, false, false),
+            (960.0, 640.0, true, true, true, true, false, false),
             (960.0, 640.0, true, false, false, true, false, false),
             (960.0, 640.0, false, false, true, true, false, true),
             (960.0, 640.0, true, false, true, false, true, false),
@@ -961,6 +924,7 @@ mod tests {
             let ctx = egui::Context::default();
             theme::apply(&ctx);
             let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            dialog.advanced = advanced;
             dialog.temporary_only = temporary;
             if error {
                 dialog.error = Some("This rule is already in the set.".into());
@@ -972,7 +936,6 @@ mod tests {
                 dialog.kind = RuleInputKind::Domain;
                 dialog.domains = "youtube.com\n192.168.1.1\nru\n127.0.0.1\ninvalid host".into();
             } else {
-                dialog.advanced = advanced;
                 dialog.process = r"C:\Apps\Tool.exe".into();
                 dialog.match_mode = ProcessMatchMode::Path;
             }
@@ -1040,6 +1003,24 @@ mod tests {
             .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
             .unwrap();
         assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
+    }
+
+    #[test]
+    fn advanced_is_available_only_when_options_exist() {
+        use super::*;
+        use rosetun_config::{RuleId, RuleSetId};
+
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        for kind in [RuleInputKind::Process, RuleInputKind::Domain, RuleInputKind::List] {
+            dialog.kind = kind;
+            assert!(has_advanced(&dialog));
+        }
+        dialog.editing = Some(RuleId::new("rule"));
+        assert!(!has_advanced(&dialog));
+        dialog.kind = RuleInputKind::Domain;
+        assert!(!has_advanced(&dialog));
+        dialog.kind = RuleInputKind::Process;
+        assert!(has_advanced(&dialog));
     }
 
     #[test]
