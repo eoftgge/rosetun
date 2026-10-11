@@ -89,7 +89,11 @@ pub(crate) fn show(
         dialog.temporary_only = false;
     }
     let id = egui::Id::new("add_rule");
-    let error_height = if dialog.error.is_some() { ERROR_HEIGHT } else { 0.0 };
+    let error_height = if dialog.error.is_some() {
+        ERROR_HEIGHT
+    } else {
+        0.0
+    };
     let top = DIALOG_TOP
         .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0));
     let response = egui::Modal::new(id)
@@ -238,13 +242,26 @@ pub(crate) fn show(
                 ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
             }
             ui.add_space(8.0);
-            let (divider, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
-            ui.painter().hline(divider.x_range(), divider.center().y, Stroke::new(1.0, theme::BORDER));
+            let (divider, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+            ui.painter().hline(
+                divider.x_range(),
+                divider.center().y,
+                Stroke::new(1.0, theme::BORDER),
+            );
             ui.add_space(8.0);
             let exceeds_list_limit = dialog.kind == RuleInputKind::List
-                && dialog.list.as_ref().and_then(|id| lists.iter().find(|list| &list.id == id))
-                    .is_some_and(|list| dialog.exceeds_list_limit(existing_list_rules, list.format.has_categories()));
-            let can_submit = valid && !exceeds_list_limit && !dialog.busy && (!dialog.temporary_only || can_temporary);
+                && dialog
+                    .list
+                    .as_ref()
+                    .and_then(|id| lists.iter().find(|list| &list.id == id))
+                    .is_some_and(|list| {
+                        dialog.exceeds_list_limit(existing_list_rules, list.format.has_categories())
+                    });
+            let can_submit = valid
+                && !exceeds_list_limit
+                && !dialog.busy
+                && (!dialog.temporary_only || can_temporary);
             let reason = if dialog.busy || dialog.error.is_some() || can_submit {
                 None
             } else if exceeds_list_limit {
@@ -343,9 +360,7 @@ fn list_picker(
             egui::Sense::hover()
         },
     );
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, enabled, &name)
-    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, enabled, &name));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect(
@@ -364,7 +379,9 @@ fn list_picker(
         );
         let detail_font = egui::TextStyle::Small.resolve(ui.style());
         let detail_galley = egui::WidgetText::from(
-            RichText::new(&detail).font(detail_font).color(theme::TEXT_DIM),
+            RichText::new(&detail)
+                .font(detail_font)
+                .color(theme::TEXT_DIM),
         )
         .into_galley(
             ui,
@@ -383,15 +400,17 @@ fn list_picker(
             theme::TEXT_DIM,
         );
         let name_width = (rect.width() - 58.0 - detail_width).max(40.0);
-        let name_galley = egui::WidgetText::from(RichText::new(name).strong())
-            .into_galley(
-                ui,
-                Some(egui::TextWrapMode::Truncate),
-                name_width,
-                egui::TextStyle::Body,
-            );
+        let name_galley = egui::WidgetText::from(RichText::new(name).strong()).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            name_width,
+            egui::TextStyle::Body,
+        );
         painter.galley(
-            egui::pos2(rect.left() + 12.0, rect.center().y - name_galley.size().y / 2.0),
+            egui::pos2(
+                rect.left() + 12.0,
+                rect.center().y - name_galley.size().y / 2.0,
+            ),
             name_galley,
             theme::TEXT,
         );
@@ -409,26 +428,28 @@ fn list_picker(
     };
     widgets::menu_popup(&response).show(|ui| {
         ui.set_min_width(rect.width());
-        egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-            for list in lists {
-                let note = super::lists::format_name(list.format);
-                if widgets::menu_item(
-                    ui,
-                    widgets::MenuItem {
-                        label: &display::safe_text(&list.name),
-                        enabled,
-                        selected: selected.id == list.id,
-                        danger: false,
-                        note: Some(&note),
-                    },
-                )
-                .clicked()
-                {
-                    *choice = Some(list.id.clone());
-                    ui.close();
+        egui::ScrollArea::vertical()
+            .max_height(240.0)
+            .show(ui, |ui| {
+                for list in lists {
+                    let note = super::lists::format_name(list.format);
+                    if widgets::menu_item(
+                        ui,
+                        widgets::MenuItem {
+                            label: &display::safe_text(&list.name),
+                            enabled,
+                            selected: selected.id == list.id,
+                            danger: false,
+                            note: Some(&note),
+                        },
+                    )
+                    .clicked()
+                    {
+                        *choice = Some(list.id.clone());
+                        ui.close();
+                    }
                 }
-            }
-        });
+            });
     });
 }
 
@@ -470,7 +491,10 @@ fn category_checkbox(
 }
 
 fn category_row(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, category: &str, attribute: bool) {
-    let selected = dialog.selected_categories.iter().any(|item| item == category);
+    let selected = dialog
+        .selected_categories
+        .iter()
+        .any(|item| item == category);
     let mut checked = selected;
     let response = egui::Frame::new()
         .fill(if selected { theme::INPUT } else { theme::CARD })
@@ -557,7 +581,11 @@ fn list_input(
         .iter()
         .find(|list| Some(&list.id) == dialog.list.as_ref())
         .unwrap_or(&lists[0]);
-    ui.label(RichText::new(tr!("rule-list-select")).small().color(theme::TEXT_DIM));
+    ui.label(
+        RichText::new(tr!("rule-list-select"))
+            .small()
+            .color(theme::TEXT_DIM),
+    );
     list_picker(ui, selected, lists, &mut choice, !dialog.busy);
     if let Some(choice) = choice {
         dialog.select_list(choice);
@@ -1265,7 +1293,9 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.set_width(DIALOG_WIDTH);
-                height = category_view(ui, &mut dialog, &matches, false).rect.height();
+                height = category_view(ui, &mut dialog, &matches, false)
+                    .rect
+                    .height();
             });
         });
         output.textures_delta.clear();
@@ -1360,7 +1390,10 @@ mod tests {
         let matches = category_matches(&categories, "google@cn");
         assert_eq!(matches[0], "google@cn");
         assert_eq!(matches.len(), 1_501);
-        assert_eq!(matches.iter().filter(|item| **item == "google@cn").count(), 1);
+        assert_eq!(
+            matches.iter().filter(|item| **item == "google@cn").count(),
+            1
+        );
     }
 
     #[test]
@@ -1369,7 +1402,11 @@ mod tests {
         use rosetun_config::{RuleId, RuleSetId};
 
         let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
-        for kind in [RuleInputKind::Process, RuleInputKind::Domain, RuleInputKind::List] {
+        for kind in [
+            RuleInputKind::Process,
+            RuleInputKind::Domain,
+            RuleInputKind::List,
+        ] {
             dialog.kind = kind;
             assert!(has_advanced(&dialog));
         }

@@ -146,7 +146,11 @@ impl AddRuleDialog {
     }
 
     pub(crate) fn toggle_category(&mut self, category: &str) {
-        if let Some(index) = self.selected_categories.iter().position(|item| item == category) {
+        if let Some(index) = self
+            .selected_categories
+            .iter()
+            .position(|item| item == category)
+        {
             self.selected_categories.remove(index);
         } else {
             if self.editing.is_some() {
@@ -159,7 +163,12 @@ impl AddRuleDialog {
 
     pub(crate) fn exceeds_list_limit(&self, existing: usize, has_categories: bool) -> bool {
         self.editing.is_none()
-            && existing + if has_categories { self.selected_categories.len() } else { 1 }
+            && existing
+                + if has_categories {
+                    self.selected_categories.len()
+                } else {
+                    1
+                }
                 > MAX_LIST_RULES
     }
 
@@ -395,7 +404,12 @@ impl State {
                                 if dialog.selected_categories.is_empty() {
                                     return None;
                                 }
-                                dialog.selected_categories.iter().cloned().map(Some).collect()
+                                dialog
+                                    .selected_categories
+                                    .iter()
+                                    .cloned()
+                                    .map(Some)
+                                    .collect()
                             } else {
                                 vec![None]
                             };
@@ -413,7 +427,8 @@ impl State {
                     if let Some(mut matchers) = matchers {
                         if dialog.kind == RuleInputKind::List {
                             let over_limit = dialog.editing.is_none()
-                                && self.selected_list_rule_count() + matchers.len() > MAX_LIST_RULES;
+                                && self.selected_list_rule_count() + matchers.len()
+                                    > MAX_LIST_RULES;
                             if over_limit {
                                 return None;
                             }
@@ -445,7 +460,8 @@ impl State {
                                 return None;
                             }
                             Job::UpdateRule(dialog.set.clone(), id.clone(), matcher, dialog.target)
-                        } else if matches!(dialog.kind, RuleInputKind::Domain | RuleInputKind::List) {
+                        } else if matches!(dialog.kind, RuleInputKind::Domain | RuleInputKind::List)
+                        {
                             Job::AddRules(dialog.set.clone(), matchers, dialog.target)
                         } else {
                             Job::AddRule(dialog.set.clone(), matchers.pop().unwrap(), dialog.target)

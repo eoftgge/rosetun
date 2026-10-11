@@ -46,10 +46,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             ui.vertical(|ui| {
                 ui.heading(tr!("lists-title"));
                 ui.add(
-                    egui::Label::new(
-                        RichText::new(tr!("lists-empty")).color(theme::TEXT_MUTED),
-                    )
-                    .wrap(),
+                    egui::Label::new(RichText::new(tr!("lists-empty")).color(theme::TEXT_MUTED))
+                        .wrap(),
                 );
             });
         },
@@ -182,9 +180,9 @@ fn list_card(
         .rule_sets
         .iter()
         .flat_map(|set| &set.rules)
-        .filter(|rule| {
-            matches!(&rule.matcher, RuleMatcher::List { list: id, .. } if id == &list.id)
-        })
+        .filter(
+            |rule| matches!(&rule.matcher, RuleMatcher::List { list: id, .. } if id == &list.id),
+        )
         .count();
     let usage = if count == 0 {
         tr!("list-unused")
@@ -214,11 +212,13 @@ fn list_card(
                         ui.add(egui::Label::new(RichText::new(&name).strong()).truncate())
                             .on_hover_text(&name);
                         ui.add(
-                            egui::Label::new(RichText::new(&detail).small().color(if has_warning {
-                                theme::WARNING
-                            } else {
-                                theme::TEXT_MUTED
-                            }))
+                            egui::Label::new(RichText::new(&detail).small().color(
+                                if has_warning {
+                                    theme::WARNING
+                                } else {
+                                    theme::TEXT_MUTED
+                                },
+                            ))
                             .truncate(),
                         )
                         .on_hover_text(&detail);
