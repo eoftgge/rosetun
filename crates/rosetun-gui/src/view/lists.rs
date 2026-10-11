@@ -10,6 +10,8 @@ use crate::state::{Action, AddListDialog, ListOutcome, State, source_file_name, 
 use crate::{i18n, theme, widgets};
 
 const CARD_HEIGHT: f32 = theme::RULE_ROW;
+// Two border pixels plus 5 and 6 points of vertical margin.
+const CARD_CONTENT_HEIGHT: f32 = CARD_HEIGHT - 13.0;
 
 pub(crate) fn format_name(format: ListFormat) -> String {
     match format {
@@ -208,13 +210,12 @@ fn list_card(
         })
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.set_min_height(CARD_HEIGHT - 15.0);
-            // A fixed-height row, so the badge and the menu centre on the
-            // two-line text instead of the first line (as in the rules table).
+            ui.set_min_height(CARD_CONTENT_HEIGHT);
             ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), CARD_HEIGHT - 15.0),
+                egui::vec2(ui.available_width(), CARD_CONTENT_HEIGHT),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
+                    ui.set_min_height(CARD_CONTENT_HEIGHT);
                     ui.spacing_mut().item_spacing.x = 10.0;
                     icons::icon_badge(ui, Icon::List, 32.0);
                     let width = (ui.available_width() - 170.0).max(100.0);
@@ -223,6 +224,7 @@ fn list_card(
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.set_width(width);
+                            ui.spacing_mut().item_spacing.y = 0.0;
                             ui.add(egui::Label::new(RichText::new(&name).strong()).truncate())
                                 .on_hover_text(&name);
                             ui.add(
@@ -538,6 +540,34 @@ mod tests {
                 height = list_card(ui, &state, &list, &mut Vec::new()).rect.height();
             });
         });
+        let badge = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.fill == theme::INPUT && rect.rect.size() == egui::vec2(32.0, 32.0) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("list badge must be visible");
+        let text_rows: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text().contains("Example")
+                        || text.galley.text().contains("example.com") =>
+                {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text_rows.len(), 2);
+        let text_center = (text_rows[0].top() + text_rows[1].bottom()) / 2.0;
+        assert!((badge.center().y - text_center).abs() <= 2.0);
         output.textures_delta.clear();
         assert_eq!(height, theme::RULE_ROW);
     }
