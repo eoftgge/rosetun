@@ -486,14 +486,27 @@ fn connected_state_with_list_rule() -> (State, ListId) {
     (state, id)
 }
 
+fn background_update_list(state: &mut State, list: List) {
+    state.reduce(WorkerEvent::UpdateAll {
+        subscriptions: Ok(Vec::new()),
+        lists: Ok(vec![(list.id.clone(), Ok(list))]),
+    });
+}
+
 #[test]
 fn manual_update_of_active_list_applies_on_leave_and_clears_after_apply() {
     let (mut state, id) = connected_state_with_list_rule();
     state.reduce(WorkerEvent::UpdateList {
-        id,
+        id: id.clone(),
         result: Ok(state.config.lists[0].clone()),
         manual: true,
     });
+    assert!(matches!(
+        state.lists.outcomes.get(&id),
+        Some(ListOutcome::Updated {
+            applies_later: false
+        })
+    ));
     let Some(Job::Apply(request)) = state.apply_on_leave() else {
         panic!("manual update of the active list must apply");
     };
@@ -514,6 +527,97 @@ fn background_update_of_active_list_does_not_apply_on_leave() {
     });
     assert!(!state.session.lists_changed_since_apply);
     assert!(state.apply_on_leave().is_none());
+}
+
+#[test]
+fn background_update_of_used_list_is_marked_until_connect() {
+    let (mut state, id) = connected_state_with_list_rule();
+    let list = state.config.lists[0].clone();
+    background_update_list(&mut state, list);
+
+    assert!(matches!(
+        state.lists.outcomes.get(&id),
+        Some(ListOutcome::Updated {
+            applies_later: true
+        })
+    ));
+    assert!(!state.session.lists_changed_since_apply);
+    assert!(state.apply_on_leave().is_none());
+
+    let request = state.session.session_request.as_ref().unwrap().clone();
+    state.reduce(WorkerEvent::Connect(Ok(request)));
+    assert!(!state.lists.outcomes.contains_key(&id));
+}
+
+#[test]
+fn background_update_marker_clears_after_apply() {
+    let (mut state, id) = connected_state_with_list_rule();
+    let list = state.config.lists[0].clone();
+    background_update_list(&mut state, list);
+    state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+    let Some(Job::Apply(request)) = state.apply_on_leave() else {
+        panic!("rule edit must apply");
+    };
+    state.reduce(WorkerEvent::Apply(Ok(*request)));
+    assert!(!state.lists.outcomes.contains_key(&id));
+}
+
+#[test]
+fn background_update_of_unused_or_disconnected_list_is_not_marked() {
+    let (mut state, id) = connected_state_with_list_rule();
+    let unused = list("2", ListSource::Url("https://example.com/unused.txt".into()));
+    state.config.lists.push(unused.clone());
+    background_update_list(&mut state, unused.clone());
+    assert!(matches!(
+        state.lists.outcomes.get(&unused.id),
+        Some(ListOutcome::Updated {
+            applies_later: false
+        })
+    ));
+
+    state.reduce(WorkerEvent::Status(Status {
+        state: ConnectionState::Disconnected,
+        ..Status::default()
+    }));
+    let used = state.config.lists[0].clone();
+    background_update_list(&mut state, used);
+    assert!(matches!(
+        state.lists.outcomes.get(&id),
+        Some(ListOutcome::Updated {
+            applies_later: false
+        })
+    ));
+}
+
+#[test]
+fn background_update_of_temporary_list_needs_an_enabled_rule() {
+    let (mut state, _) = connected_state_with_list_rule();
+    let temporary = list("2", ListSource::Url("https://example.com/temporary.txt".into()));
+    state.config.lists.push(temporary.clone());
+    state.session.temporary_rules.push(Rule {
+        id: RuleId::new("temporary-list"),
+        enabled: true,
+        matcher: RuleMatcher::List {
+            list: temporary.id.clone(),
+            category: None,
+        },
+        target: RuleTarget::Block,
+    });
+    background_update_list(&mut state, temporary.clone());
+    assert!(matches!(
+        state.lists.outcomes.get(&temporary.id),
+        Some(ListOutcome::Updated {
+            applies_later: true
+        })
+    ));
+    state.session.temporary_rules[0].enabled = false;
+    background_update_list(&mut state, temporary.clone());
+    assert!(matches!(
+        state.lists.outcomes.get(&temporary.id),
+        Some(ListOutcome::Updated {
+            applies_later: false
+        })
+    ));
 }
 
 #[test]

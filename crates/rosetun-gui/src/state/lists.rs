@@ -89,7 +89,7 @@ pub(crate) struct RemoveListDialog {
 }
 
 pub(crate) enum ListOutcome {
-    Updated,
+    Updated { applies_later: bool },
     Failed(ListError),
 }
 
@@ -122,6 +122,22 @@ pub(crate) fn used_by(config: &AppConfig, id: &ListId) -> Vec<String> {
 }
 
 impl State {
+    pub(super) fn active_rules_use_list(&self, id: &ListId) -> bool {
+        let uses_list = |rule: &Rule| {
+            rule.enabled && matches!(&rule.matcher, RuleMatcher::List { list, .. } if list == id)
+        };
+        self.config
+            .active_rules()
+            .is_some_and(|set| set.rules.iter().any(uses_list))
+            || self.session.temporary_rules.iter().any(uses_list)
+    }
+
+    pub(super) fn clear_delayed_list_updates(&mut self) {
+        self.lists.outcomes.retain(|_, outcome| {
+            !matches!(outcome, ListOutcome::Updated { applies_later: true })
+        });
+    }
+
     pub(super) fn request_list_inspection(&mut self) {
         self.lists.scan_revision = self.lists.scan_revision.wrapping_add(1);
         self.lists.scan_needed = true;
@@ -254,24 +270,19 @@ impl State {
             }
             WorkerEvent::UpdateList { id, result, manual } => {
                 self.operations.updating_lists.remove(&id);
-                if manual && result.is_ok() && self.session.session_request.is_some() {
-                    let uses_list = |rule: &Rule| {
-                        rule.enabled
-                            && matches!(&rule.matcher, RuleMatcher::List { list, .. } if list == &id)
-                    };
-                    if self
-                        .config
-                        .active_rules()
-                        .is_some_and(|set| set.rules.iter().any(uses_list))
-                        || self.session.temporary_rules.iter().any(uses_list)
-                    {
-                        self.session.lists_changed_since_apply = true;
-                    }
+                if manual
+                    && result.is_ok()
+                    && self.session.session_request.is_some()
+                    && self.active_rules_use_list(&id)
+                {
+                    self.session.lists_changed_since_apply = true;
                 }
                 self.lists.outcomes.insert(
                     id,
                     match result {
-                        Ok(_) => ListOutcome::Updated,
+                        Ok(_) => ListOutcome::Updated {
+                            applies_later: false,
+                        },
                         Err(error) => ListOutcome::Failed(error),
                     },
                 );

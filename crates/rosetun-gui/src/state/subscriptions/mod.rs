@@ -308,13 +308,15 @@ impl State {
                 match lists {
                     Ok(results) => {
                         for (id, result) in results {
-                            self.lists.outcomes.insert(
-                                id,
-                                match result {
-                                    Ok(_) => super::lists::ListOutcome::Updated,
-                                    Err(error) => super::lists::ListOutcome::Failed(error),
+                            let outcome = match result {
+                                Ok(_) => super::lists::ListOutcome::Updated {
+                                    applies_later: self.session.session_request.is_some()
+                                        && matches!(self.status.state, ConnectionState::Connected)
+                                        && self.active_rules_use_list(&id),
                                 },
-                            );
+                                Err(error) => super::lists::ListOutcome::Failed(error),
+                            };
+                            self.lists.outcomes.insert(id, outcome);
                         }
                     }
                     Err(error) => {

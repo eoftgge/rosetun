@@ -163,6 +163,7 @@ list-format-text = Text
 list-name-format = { $name } · { $format }
 list-size-unknown = size unknown
 list-row-detail = { $source } · { $size } · { $updated }
+list-updated-later = Updated · takes effect on the next connection
 list-row-detail-categories = { $source } · { $size } · { $updated } · { $count ->
     [one] { $n } category
    *[other] { $n } categories

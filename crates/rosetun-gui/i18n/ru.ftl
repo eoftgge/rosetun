@@ -163,6 +163,7 @@ list-format-text = Текст
 list-name-format = { $name } · { $format }
 list-size-unknown = размер неизвестен
 list-row-detail = { $source } · { $size } · { $updated }
+list-updated-later = Обновлён · применится при следующем подключении
 list-row-detail-categories = { $source } · { $size } · { $updated } · { $count ->
     [one] { $n } категория
     [few] { $n } категории

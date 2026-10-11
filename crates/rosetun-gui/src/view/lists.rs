@@ -137,14 +137,12 @@ fn list_card(
             updated = &updated
         )
     };
-    let failed = state
-        .lists
-        .outcomes
-        .get(&list.id)
-        .and_then(|outcome| match outcome {
-            ListOutcome::Failed(error) => Some(state.text(&errors::list(i18n::language(), error))),
-            ListOutcome::Updated => None,
-        });
+    let outcome = state.lists.outcomes.get(&list.id);
+    let failed = outcome.and_then(|outcome| match outcome {
+        ListOutcome::Failed(error) => Some(state.text(&errors::list(i18n::language(), error))),
+        ListOutcome::Updated { .. } => None,
+    });
+    let applies_later = matches!(outcome, Some(ListOutcome::Updated { applies_later: true }));
     let affected: Vec<_> = state
         .lists
         .missing
@@ -169,7 +167,13 @@ fn list_card(
         ))
     };
     let has_warning = failed.is_some() || !affected.is_empty();
-    let detail = failed.or(warning).unwrap_or(detail);
+    let detail = failed.or(warning).unwrap_or_else(|| {
+        if applies_later {
+            tr!("list-updated-later")
+        } else {
+            detail
+        }
+    });
     let name = tr!(
         "list-name-format",
         name = state.text(&list.name),
@@ -215,6 +219,8 @@ fn list_card(
                             egui::Label::new(RichText::new(&detail).small().color(
                                 if has_warning {
                                     theme::WARNING
+                                } else if applies_later {
+                                    theme::ROSE_LIGHT
                                 } else {
                                     theme::TEXT_MUTED
                                 },
