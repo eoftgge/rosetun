@@ -13,7 +13,9 @@ use rosetun_config::{
     DomainMatch, NodeId, ProcessMatch, Rule, RuleMatcher, RuleTarget, SubscriptionId,
 };
 use rosetun_core::{ListOperation, PreparedConnection, terminal_text};
-use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperClient, ProbeOutcome, ProbeRequest};
+use rosetun_ipc::{
+    ClientError, ConnectRequest, ErrorCode, HelperClient, ProbeOutcome, ProbeRequest,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -368,7 +370,9 @@ fn prepare_list_request(request_path: Option<&str>) -> Result<PreparedCliRequest
 }
 
 fn prepare_apply_request(client: &mut HelperClient) -> Result<PreparedCliRequest, String> {
-    let temporary = client.temporary_rules().map_err(|error| error.to_string())?;
+    let temporary = client
+        .temporary_rules()
+        .map_err(|error| error.to_string())?;
     let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = store.load().map_err(|error| error.to_string())?;
     let request =

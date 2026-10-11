@@ -142,7 +142,12 @@ fn list_card(
         ListOutcome::Failed(error) => Some(state.text(&errors::list(i18n::language(), error))),
         ListOutcome::Updated { .. } => None,
     });
-    let applies_later = matches!(outcome, Some(ListOutcome::Updated { applies_later: true }));
+    let applies_later = matches!(
+        outcome,
+        Some(ListOutcome::Updated {
+            applies_later: true
+        })
+    );
     let affected: Vec<_> = state
         .lists
         .missing

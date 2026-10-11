@@ -478,7 +478,10 @@ mod tests {
         assert_eq!(request.settings.kill_switch, running.kill_switch);
         assert_eq!(request.settings.allow_lan, running.allow_lan);
         assert_eq!(request.settings.dns, config.settings.dns);
-        assert_eq!(request.settings.auto_reconnect, config.settings.auto_reconnect);
+        assert_eq!(
+            request.settings.auto_reconnect,
+            config.settings.auto_reconnect
+        );
     }
 
     #[test]

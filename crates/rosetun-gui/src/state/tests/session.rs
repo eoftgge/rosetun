@@ -526,7 +526,10 @@ fn helper_loss_drops_queued_apply_and_ignores_late_response() {
     state.act(Action::OpenRules);
     state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
     let request = state.apply_request().unwrap();
-    assert!(matches!(state.act(Action::OpenSettings), Some(Job::LoadAutostart)));
+    assert!(matches!(
+        state.act(Action::OpenSettings),
+        Some(Job::LoadAutostart)
+    ));
     assert!(state.operations.helper);
 
     state.reduce(WorkerEvent::HelperUnavailable(ClientError::Helper(

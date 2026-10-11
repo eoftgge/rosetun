@@ -134,7 +134,12 @@ impl State {
 
     pub(super) fn clear_delayed_list_updates(&mut self) {
         self.lists.outcomes.retain(|_, outcome| {
-            !matches!(outcome, ListOutcome::Updated { applies_later: true })
+            !matches!(
+                outcome,
+                ListOutcome::Updated {
+                    applies_later: true
+                }
+            )
         });
     }
 

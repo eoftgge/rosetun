@@ -565,7 +565,10 @@ fn background_update_marker_clears_after_apply() {
 #[test]
 fn background_update_of_unused_or_disconnected_list_is_not_marked() {
     let (mut state, id) = connected_state_with_list_rule();
-    let unused = list("2", ListSource::Url("https://example.com/unused.txt".into()));
+    let unused = list(
+        "2",
+        ListSource::Url("https://example.com/unused.txt".into()),
+    );
     state.config.lists.push(unused.clone());
     background_update_list(&mut state, unused.clone());
     assert!(matches!(
@@ -592,7 +595,10 @@ fn background_update_of_unused_or_disconnected_list_is_not_marked() {
 #[test]
 fn background_update_of_temporary_list_needs_an_enabled_rule() {
     let (mut state, _) = connected_state_with_list_rule();
-    let temporary = list("2", ListSource::Url("https://example.com/temporary.txt".into()));
+    let temporary = list(
+        "2",
+        ListSource::Url("https://example.com/temporary.txt".into()),
+    );
     state.config.lists.push(temporary.clone());
     state.session.temporary_rules.push(Rule {
         id: RuleId::new("temporary-list"),
