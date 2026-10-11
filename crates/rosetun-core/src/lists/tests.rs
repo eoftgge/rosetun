@@ -135,13 +135,13 @@ fn missing_category_inspection_covers_every_set_and_temporary_rule_without_writi
         })
         .to_vec();
     assert!(
-        inspect_missing_categories(&store, &config, &[rule.clone()])
+        inspect_missing_categories(&store, &config, std::slice::from_ref(&rule))
             .unwrap()
             .is_empty()
     );
 
     config.lists[0].categories.clear();
-    let missing = inspect_missing_categories(&store, &config, &[rule.clone()]).unwrap();
+    let missing = inspect_missing_categories(&store, &config, std::slice::from_ref(&rule)).unwrap();
     assert_eq!(missing.len(), 3);
     assert!(!missing.iter().any(|item| item.last_good));
     assert_eq!(missing[0].set, Some(RuleSetId::new("first")));
