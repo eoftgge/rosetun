@@ -1,2 +1,5 @@
 # Preserve the upstream license bytes, including line endings.
 installer/third-party/wintun-prebuilt-binaries-license.txt -text
+
+# Golden files are compared byte for byte; keep LF on every platform.
+crates/*/tests/fixtures/** text eol=lf
