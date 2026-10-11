@@ -56,8 +56,187 @@ function Format-Egress {
     "curl $($Egress.CurlExit), local '$($Egress.LocalIp)', tun '$($Egress.TunAddresses)': $($Egress.Error)"
 }
 
+function Install-OtherAccountService {
+    param([string]$GuestDir)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') --install-service 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not start the test service: $($output -join ' ')"
+        }
+        $global:LASTEXITCODE = 0
+        $deadline = (Get-Date).AddSeconds(60)
+        while ((Get-Service -Name 'Rosetun' -ErrorAction Stop).Status -ne 'Running' -or
+            -not ([IO.Directory]::GetFiles('\\.\pipe\') -contains '\\.\pipe\rosetun-helper')) {
+            if ((Get-Date) -gt $deadline) {
+                throw 'The test service did not open its pipe within 60 seconds.'
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    } -ArgumentList $GuestDir
+}
+
+function Remove-OtherAccountService {
+    param([string]$GuestDir)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') --uninstall-service 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not remove the test service: $($output -join ' ')"
+        }
+        $global:LASTEXITCODE = 0
+    } -ArgumentList $GuestDir
+}
+
+function Remove-OtherAccount {
+    param([string]$Name, [string]$TaskName, [string]$WorkDir)
+    if (-not $Name) { return }
+    Invoke-RosetunGuest -ScriptBlock {
+        param($name, $taskName, $workDir)
+        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+            try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
+            catch { Write-Warning "Could not stop the other-account task: $_" }
+            try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop }
+            catch { Write-Warning "Could not unregister the other-account task: $_" }
+        }
+        if (Test-Path -LiteralPath $workDir) {
+            try { Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction Stop }
+            catch { Write-Warning "Could not remove other-account output: $_" }
+        }
+        if (Get-LocalUser -Name $name -ErrorAction SilentlyContinue) {
+            try { Remove-LocalUser -Name $name -ErrorAction Stop }
+            catch { Write-Warning "Could not remove the other-account test user: $_" }
+        }
+    } -ArgumentList $Name, $TaskName, $WorkDir
+}
+
+function Invoke-OtherAccountCommands {
+    param([string]$Name, [string]$TaskName, [string]$WorkDir, [string]$GuestDir)
+    try {
+        Invoke-RosetunGuest -ScriptBlock {
+            param($name, $taskName, $workDir, $dir)
+            $bytes = New-Object byte[] 24
+            $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+            try { $random.GetBytes($bytes) }
+            finally { $random.Dispose() }
+            $password = 'Rt1!' + [Convert]::ToBase64String($bytes)
+            $secure = ConvertTo-SecureString -String $password -AsPlainText -Force
+            New-LocalUser -Name $name -Password $secure -PasswordNeverExpires |
+                Out-Null
+            $credential = [pscredential]::new("$env:COMPUTERNAME\$name", $secure)
+            New-Item -ItemType Directory -Path $workDir -ErrorAction Stop | Out-Null
+            $identity = [System.Security.Principal.NTAccount]::new($env:COMPUTERNAME, $name)
+            $acl = Get-Acl -LiteralPath $workDir
+            $acl.SetAccessRuleProtection($true, $false)
+            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+                $principal = [System.Security.Principal.SecurityIdentifier]::new($sid)
+                $access = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                    $principal, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+                $acl.AddAccessRule($access)
+            }
+            $access = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $identity, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+            $acl.AddAccessRule($access)
+            Set-Acl -LiteralPath $workDir -AclObject $acl
+            Copy-Item -LiteralPath (Join-Path $dir 'request.json') `
+                -Destination (Join-Path $workDir 'request.json')
+
+            $cli = Join-Path $dir 'rosetun.exe'
+            $useTask = $false
+            foreach ($command in @('status', 'disconnect', 'temporary', 'apply')) {
+                $stdout = Join-Path $workDir "$command.out"
+                $stderr = Join-Path $workDir "$command.err"
+                $exitFile = Join-Path $workDir "$command.exit"
+                $cliArgs = if ($command -eq 'apply') {
+                    @($command, (Join-Path $workDir 'request.json'))
+                } else { @($command) }
+                $exitCode = $null
+                if (-not $useTask) {
+                    try {
+                        $process = Start-Process -FilePath $cli -ArgumentList $cliArgs `
+                            -Credential $credential -WorkingDirectory $dir -Wait -PassThru `
+                            -RedirectStandardOutput $stdout -RedirectStandardError $stderr `
+                            -ErrorAction Stop
+                        $exitCode = $process.ExitCode
+                    }
+                    catch {
+                        Write-Host 'Start-Process -Credential is unavailable; using a scheduled task.'
+                        $useTask = $true
+                    }
+                    if (-not $useTask -and $null -eq $exitCode) {
+                        Write-Host 'Start-Process did not return an exit code; using a scheduled task.'
+                        $useTask = $true
+                    }
+                }
+                if ($useTask) {
+                    Remove-Item -LiteralPath $stdout, $stderr, $exitFile -Force `
+                        -ErrorAction SilentlyContinue
+                    $arguments = if ($command -eq 'apply') {
+                        "apply `"$(Join-Path $workDir 'request.json')`""
+                    } else { $command }
+                    $batch = Join-Path $workDir 'run-other.cmd'
+                    @(
+                        '@echo off',
+                        "`"$cli`" $arguments 1>`"$stdout`" 2>`"$stderr`"",
+                        "echo %errorlevel% > `"$exitFile`""
+                    ) | Set-Content -LiteralPath $batch -Encoding Ascii
+                    $action = New-ScheduledTaskAction -Execute 'cmd.exe' `
+                        -Argument "/d /c `"$batch`"" -WorkingDirectory $dir
+                    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
+                        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+                    Register-ScheduledTask -TaskName $taskName -Action $action -Settings $settings `
+                        -User "$env:COMPUTERNAME\$name" -Password $password -RunLevel Limited `
+                        -Force | Out-Null
+                    try {
+                        Start-ScheduledTask -TaskName $taskName
+                        $deadline = (Get-Date).AddSeconds(90)
+                        while (-not (Test-Path -LiteralPath $exitFile)) {
+                            if ((Get-Date) -gt $deadline) {
+                                throw "The other-account $command task did not finish within 90 seconds."
+                            }
+                            Start-Sleep -Milliseconds 100
+                        }
+                        $exitCode = [int]((Get-Content -LiteralPath $exitFile -Raw).Trim())
+                    }
+                    finally {
+                        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false `
+                            -ErrorAction Stop
+                    }
+                }
+                $output = @()
+                if (Test-Path -LiteralPath $stdout) {
+                    $output += Get-Content -LiteralPath $stdout -Raw
+                }
+                if (Test-Path -LiteralPath $stderr) {
+                    $output += Get-Content -LiteralPath $stderr -Raw
+                }
+                $adminStatus = & $cli status 2>&1 | ForEach-Object { "$_" }
+                $adminExit = $LASTEXITCODE
+                $global:LASTEXITCODE = 0
+                [pscustomobject]@{
+                    Command = $command
+                    ExitCode = $exitCode
+                    Output = ($output -join "`n")
+                    StillConnected = ($adminExit -eq 0 -and
+                        ($adminStatus -join "`n") -match '(?m)^state: Connected\r?$')
+                }
+            }
+        } -ArgumentList $Name, $TaskName, $WorkDir, $GuestDir
+    }
+    finally {
+        try { Remove-OtherAccount -Name $Name -TaskName $TaskName -WorkDir $WorkDir }
+        catch { Write-Warning "Could not clean up the other-account test: $_" }
+    }
+}
+
 $nodeStartedByMatrix = $false
 $lanListener = $null
+$otherAccountName = $null
+$otherTaskName = $null
+$otherWorkDir = $null
+$serviceAttempted = $false
+$consoleStoppedForOther = $false
 try {
 if ($Build) {
     Write-Host 'Building...'
@@ -119,6 +298,61 @@ Test-Step 'connect' 'server check works while connected' -Note "exit $($probe.Ex
 $delay = Invoke-RosetunCli -Quiet 'delay'
 Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
     $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
+}
+
+Write-Host 'Another Windows account cannot control the tunnel...'
+$serviceAlreadyInstalled = Invoke-RosetunGuest -ScriptBlock {
+    [bool](Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue)
+}
+if ($serviceAlreadyInstalled) {
+    throw 'A Rosetun service is already installed in the guest; refusing to change it.'
+}
+Disconnect-RosetunTunnel | Out-Null
+Stop-RosetunHelper
+$consoleStoppedForOther = $true
+$serviceAttempted = $true
+Install-OtherAccountService -GuestDir (Get-RosetunGuestDir)
+$serviceConnect = Connect-RosetunTunnel -Quiet
+Test-Step 'other account' 'administrator connects through the service' -Note "exit $($serviceConnect.ExitCode)" {
+    $serviceConnect.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+}
+$otherSuffix = [guid]::NewGuid().ToString('N').Substring(0, 10)
+$otherAccountName = "rt-$otherSuffix"
+$otherTaskName = "RosetunOther-$otherSuffix"
+$otherWorkDir = "C:\ProgramData\RosetunOther-$otherSuffix"
+$otherResults = @(Invoke-OtherAccountCommands -Name $otherAccountName `
+    -TaskName $otherTaskName -WorkDir $otherWorkDir -GuestDir (Get-RosetunGuestDir))
+if ($otherResults.Count -ne 4) {
+    throw 'The other-account commands did not return all four results.'
+}
+foreach ($command in @('status', 'disconnect', 'temporary', 'apply')) {
+    $result = $otherResults | Where-Object Command -eq $command | Select-Object -First 1
+    $note = "exit $($result.ExitCode)"
+    if ($command -eq 'status') {
+        Test-Step 'other account' 'status reports Connected' -Note $note {
+            $result.ExitCode -eq 0 -and $result.Output -match '(?m)^state: Connected\r?$'
+        }
+    }
+    else {
+        Test-Step 'other account' "$command is denied with an account explanation" -Note $note {
+            $result.ExitCode -ne 0 -and $result.Output -match 'another Windows account'
+        }
+    }
+    Test-Step 'other account' "tunnel remains Connected after $command" {
+        $result.StillConnected
+    }
+}
+Disconnect-RosetunTunnel | Out-Null
+Test-Step 'other account' 'administrator disconnects the tunnel' {
+    Wait-RosetunState 'Disconnected'
+}
+Remove-OtherAccountService -GuestDir (Get-RosetunGuestDir)
+$serviceAttempted = $false
+Start-RosetunHelper
+$consoleStoppedForOther = $false
+Connect-RosetunTunnel | Out-Null
+Test-Step 'other account' 'administrator reconnects for the remaining matrix' {
+    Wait-RosetunState 'Connected'
 }
 
 $initialNodeId = (Get-Content -Path $RequestPath -Raw | ConvertFrom-Json).node.id
@@ -541,6 +775,21 @@ if ($ipv6NeighborCreated) {
 
 }
 finally {
+    if ($otherAccountName) {
+        try {
+            Remove-OtherAccount -Name $otherAccountName -TaskName $otherTaskName `
+                -WorkDir $otherWorkDir
+        }
+        catch { Write-Warning "Could not finish other-account cleanup: $_" }
+    }
+    if ($serviceAttempted) {
+        try { Remove-OtherAccountService -GuestDir (Get-RosetunGuestDir) }
+        catch { Write-Warning "Could not remove the temporary Rosetun service: $_" }
+    }
+    if ($consoleStoppedForOther) {
+        try { Start-RosetunHelper }
+        catch { Write-Warning "Could not restore the console helper: $_" }
+    }
     if ($null -ne $lanListener) {
         try { Stop-RosetunLanListener $lanListener }
         catch { Write-Warning "Could not remove the LAN listener or firewall rule: $_" }
