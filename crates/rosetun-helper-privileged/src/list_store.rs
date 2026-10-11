@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine as _;
-use rosetun_config::{ListRef, UploadedListFormat as ListFormat};
+use rosetun_config::{ListRef, UploadedListFormat as ListFormat, digest_hex};
 use rosetun_ipc::{ErrorCode, HelperError, MAX_LIST_CHUNK_BYTES, MAX_LIST_PAYLOAD_BYTES};
 use sha2::{Digest, Sha256};
 
@@ -328,7 +328,7 @@ impl ListStore {
             upload.file.sync_all().map_err(|_| internal())?;
             let bytes = fs::read(&upload.path).map_err(|_| internal())?;
             if bytes.len() as u64 != upload.total_size
-                || format!("{:x}", Sha256::digest(&bytes)) != key.1
+                || digest_hex(&Sha256::digest(&bytes)) != key.1
             {
                 return Err(invalid("list size or SHA-256 does not match"));
             }
@@ -489,7 +489,7 @@ impl ListStore {
         let after = fingerprint(&path).map_err(|_| missing())?;
         if bytes.len() as u64 != object.size
             || before.is_some() && after.is_some() && before != after
-            || format!("{:x}", Sha256::digest(&bytes)) != reference.sha256
+            || digest_hex(&Sha256::digest(&bytes)) != reference.sha256
         {
             return Err(HelperError::new(
                 ErrorCode::ListMissing,

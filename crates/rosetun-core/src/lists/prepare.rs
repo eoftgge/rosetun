@@ -4,7 +4,7 @@ use std::fmt;
 use base64::Engine as _;
 use rosetun_config::{
     ListCategoryError, ListFormat as StoredFormat, ListId, ListRef, RuleId, RuleMatcher,
-    UploadedListFormat, list_tag,
+    UploadedListFormat, digest_hex, list_tag,
 };
 use rosetun_ipc::{
     ClientError, ConnectRequest, ErrorCode, HelperClient, ListFormat, MAX_LIST_CHUNK_BYTES,
@@ -137,7 +137,7 @@ pub fn prepare_lists(
                     PayloadFormat::Binary => UploadedListFormat::Binary,
                     PayloadFormat::Source => UploadedListFormat::Source,
                 };
-                let sha256 = format!("{:x}", Sha256::digest(&payload.bytes));
+                let sha256 = digest_hex(&Sha256::digest(&payload.bytes));
                 let reference = ListRef {
                     tag: tag.clone(),
                     sha256: sha256.clone(),

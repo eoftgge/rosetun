@@ -135,7 +135,7 @@ fn enabled_rules_deduplicate_refs_and_payloads_including_temporary_rules() {
     assert_eq!(reference.tag, list_tag(&list.id, None));
     assert_eq!(
         reference.sha256,
-        format!("{:x}", Sha256::digest(&prepared.payloads[0].bytes))
+        rosetun_config::digest_hex(&Sha256::digest(&prepared.payloads[0].bytes))
     );
     assert_eq!(reference.format, UploadedListFormat::Source);
     assert!(!format!("{prepared:?}").contains("example.com"));
@@ -255,7 +255,7 @@ fn updating_a_dat_can_remove_a_used_category_without_breaking_connect() {
     store
         .modify(|config| {
             config.lists[0].size = Some(corrupted.len() as u64);
-            config.lists[0].sha256 = Some(format!("{:x}", Sha256::digest(corrupted)));
+            config.lists[0].sha256 = Some(rosetun_config::digest_hex(&Sha256::digest(corrupted)));
             Ok::<_, crate::StoreError>(())
         })
         .unwrap();
@@ -566,7 +566,7 @@ impl ListClient for MockClient {
 #[test]
 fn upload_uses_one_client_and_retries_only_one_list_missing() {
     let bytes = vec![b'x'; 10 * 1024 * 1024 + 1];
-    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let digest = rosetun_config::digest_hex(&Sha256::digest(&bytes));
     let payload = PreparedListPayload {
         sha256: digest.clone(),
         format: UploadedListFormat::Source,

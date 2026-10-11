@@ -3,7 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::ListId;
+use crate::{ListId, digest_hex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,12 +49,7 @@ pub fn list_tag(id: &ListId, category: Option<&str>) -> String {
         None => hash.update([0]),
     }
     let digest = hash.finalize();
-    let mut tag = String::from("list-");
-    for byte in &digest[..24] {
-        use std::fmt::Write;
-        write!(&mut tag, "{byte:02x}").expect("writing to a string cannot fail");
-    }
-    tag
+    format!("list-{}", digest_hex(&digest[..24]))
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod hash;
 mod ids;
 mod list;
 mod list_validation;
@@ -10,6 +11,7 @@ mod settings;
 mod subscription;
 mod uploaded_list;
 
+pub use hash::digest_hex;
 pub use ids::{ListId, NodeId, RuleId, RuleSetId, SubscriptionId};
 pub use list::{List, ListCategoryError, ListFormat, ListSource};
 pub use list_validation::{

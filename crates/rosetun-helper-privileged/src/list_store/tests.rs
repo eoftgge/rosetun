@@ -29,7 +29,7 @@ impl Drop for TestDirectory {
 }
 
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    digest_hex(&Sha256::digest(bytes))
 }
 
 fn chunk(

@@ -4113,7 +4113,7 @@ impl ListSessionDirectory {
         use sha2::Digest;
         let source = format!(r#"{{"version":3,"rules":[{{"domain":["{domain}"]}}]}}"#);
         let bytes = rosetun_config::normalize_source(source.as_bytes()).unwrap();
-        let hash = format!("{:x}", sha2::Sha256::digest(&bytes));
+        let hash = rosetun_config::digest_hex(&sha2::Sha256::digest(&bytes));
         std::fs::write(self.0.join("lists").join(format!("{hash}.json")), bytes).unwrap();
         rosetun_config::ListRef {
             tag: rosetun_config::list_tag(id, None),

@@ -8,7 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-sha2 = "0.10"
+rosetun-config.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]

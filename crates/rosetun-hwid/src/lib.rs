@@ -4,6 +4,7 @@
 #[allow(unsafe_code)]
 mod registry;
 
+use rosetun_config::digest_hex;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -64,14 +65,7 @@ pub fn hwid_from_machine_id(machine_id: &str) -> Result<Hwid, HwidError> {
     hasher.update(normalized.as_bytes());
     let digest = hasher.finalize();
 
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut value = String::with_capacity(32);
-    for byte in &digest[..16] {
-        value.push(char::from(HEX[usize::from(byte >> 4)]));
-        value.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-
-    Ok(Hwid(value))
+    Ok(Hwid(digest_hex(&digest[..16])))
 }
 
 pub fn sanitize_header_value(value: &str) -> String {
