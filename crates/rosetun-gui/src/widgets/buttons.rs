@@ -1,14 +1,27 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
 
-use crate::theme::{self, BORDER, BORDER_STRONG, CARD, ROSE};
+use crate::theme::{self, BORDER, BORDER_STRONG, ROSE};
+
+fn primary_fill(enabled: bool) -> Color32 {
+    if enabled {
+        ROSE
+    } else {
+        theme::ROSE_DARK.gamma_multiply(0.65)
+    }
+}
 
 pub(crate) fn button_fill(
     ui: &mut egui::Ui,
     text: impl Into<egui::WidgetText>,
     enabled: bool,
 ) -> egui::Response {
-    let button = egui::Button::new(text).fill(if enabled { ROSE } else { CARD });
-    ui.add_enabled(enabled, button)
+    ui.scope(|ui| {
+        if !enabled {
+            ui.visuals_mut().override_text_color = Some(theme::TEXT_MUTED);
+        }
+        ui.add_enabled(enabled, egui::Button::new(text).fill(primary_fill(enabled)))
+    })
+    .inner
 }
 
 pub(crate) fn outline_button(
@@ -52,13 +65,15 @@ fn compact_button(ui: &mut egui::Ui, text: &str, enabled: bool, outlined: bool) 
             if enabled { BORDER_STRONG } else { BORDER },
         ))
     } else {
-        button.fill(if enabled { ROSE } else { CARD })
+        button.fill(primary_fill(enabled))
     };
     ui.scope(|ui| {
         ui.spacing_mut().button_padding = egui::vec2(12.0, 4.0);
         ui.spacing_mut().interact_size.y = 28.0;
         if outlined {
             ui.visuals_mut().widgets.inactive.bg_stroke.width = 1.0;
+        } else if !enabled {
+            ui.visuals_mut().override_text_color = Some(theme::TEXT_MUTED);
         }
         ui.add_enabled(enabled, button)
     })
@@ -97,6 +112,24 @@ pub(crate) fn link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_primary_keeps_its_size_and_rose_fill() {
+        assert_eq!(primary_fill(true), theme::ROSE);
+        assert_ne!(primary_fill(false), theme::CARD);
+        assert_eq!(primary_fill(false), theme::ROSE_DARK.gamma_multiply(0.65));
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let enabled = button_fill(ui, "Add", true);
+                let disabled = button_fill(ui, "Add", false);
+                assert_eq!(enabled.rect.size(), disabled.rect.size());
+                assert!(!disabled.enabled());
+            });
+        });
+        output.textures_delta.clear();
+    }
 
     #[test]
     fn compact_buttons_are_28_points_high() {
