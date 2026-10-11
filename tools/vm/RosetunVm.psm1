@@ -1044,8 +1044,38 @@ function Save-RosetunLogs {
     param([string]$Destination = (Join-Path $PSScriptRoot ("logs\" + (Get-Date -Format 'yyyyMMdd-HHmmss'))))
 
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-    Copy-Item -FromSession (Connect-RosetunVm) -Path (Join-Path $script:Config.GuestDir 'helper*.log') `
-        -Destination $Destination
+    # The running helper keeps helper.log open, so Copy-Item cannot read it
+    # directly. Snapshot every log on the guest with shared read access first.
+    $snapshot = Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        $snapshot = Join-Path $env:TEMP ('rosetun-logs-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $snapshot | Out-Null
+        foreach ($log in Get-ChildItem -Path $dir -Filter 'helper*.log' -File) {
+            try {
+                $source = [IO.File]::Open($log.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+                    [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+                try {
+                    $target = [IO.File]::Create((Join-Path $snapshot $log.Name))
+                    try { $source.CopyTo($target) } finally { $target.Dispose() }
+                }
+                finally { $source.Dispose() }
+            }
+            catch {
+                Write-Warning "Could not copy $($log.Name): $($_.Exception.Message)"
+            }
+        }
+        $snapshot
+    } -ArgumentList $script:Config.GuestDir
+    try {
+        Copy-Item -FromSession (Connect-RosetunVm) -Path (Join-Path $snapshot '*.log') `
+            -Destination $Destination -ErrorAction Continue
+    }
+    finally {
+        Invoke-RosetunGuest -ScriptBlock {
+            param($snapshot)
+            Remove-Item -Path $snapshot -Recurse -Force -ErrorAction SilentlyContinue
+        } -ArgumentList $snapshot
+    }
     # The host-side node log, written when the node runs via Start-RosetunTestNode.
     Copy-Item -Path (Join-Path $PSScriptRoot 'logs\test-node.log') -Destination $Destination -ErrorAction SilentlyContinue
     return $Destination
