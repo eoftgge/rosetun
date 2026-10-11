@@ -225,9 +225,10 @@ fn print_probe_outcome(outcome: ProbeOutcome) {
 }
 
 fn status(client: &mut HelperClient) -> ExitCode {
-    let result = client
-        .status()
-        .and_then(|status| client.temporary_rules().map(|rules| (status, rules.len())));
+    let result = client.status().and_then(|status| {
+        temporary_rules_status(client.temporary_rules())
+            .map(|temporary_count| (status, temporary_count))
+    });
     match result {
         Ok((status, temporary_count)) => {
             println!("state: {:?}", status.state);
@@ -251,6 +252,16 @@ fn status(client: &mut HelperClient) -> ExitCode {
             tracing::error!(%error, "failed to get status");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn temporary_rules_status(result: Result<Vec<Rule>, ClientError>) -> Result<String, ClientError> {
+    match result {
+        Ok(rules) => Ok(rules.len().to_string()),
+        Err(ClientError::Helper(helper)) if helper.code == ErrorCode::Busy => {
+            Ok("unavailable while the service is busy".to_owned())
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -545,7 +556,10 @@ Options for sub add may appear in any order after the URL."
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, apply_error_message, parse_command_arguments, temporary_rule_line};
+    use super::{
+        Command, apply_error_message, parse_command_arguments, temporary_rule_line,
+        temporary_rules_status,
+    };
     use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleTarget};
     use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
@@ -617,6 +631,30 @@ mod tests {
             None
         );
         assert_eq!(apply_error_message(&ClientError::Closed), None);
+    }
+
+    #[test]
+    fn status_shows_temporary_rules_as_unavailable_only_while_busy() {
+        assert_eq!(temporary_rules_status(Ok(Vec::new())).unwrap(), "0");
+        assert_eq!(
+            temporary_rules_status(Err(ClientError::Helper(HelperError::new(
+                ErrorCode::Busy,
+                "another tunnel operation is in progress",
+            ))))
+            .unwrap(),
+            "unavailable while the service is busy"
+        );
+        assert!(matches!(
+            temporary_rules_status(Err(ClientError::Helper(HelperError::new(
+                ErrorCode::InvalidState,
+                "no session",
+            )))),
+            Err(ClientError::Helper(_))
+        ));
+        assert!(matches!(
+            temporary_rules_status(Err(ClientError::Closed)),
+            Err(ClientError::Closed)
+        ));
     }
 
     #[test]
