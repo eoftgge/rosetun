@@ -150,6 +150,81 @@ fn status_discards_a_damaged_object_so_it_can_be_uploaded_again() {
 }
 
 #[test]
+fn verification_cache_tracks_file_metadata_and_staging_always_rehashes() {
+    use std::fs::FileTimes;
+
+    let directory = TestDirectory::new();
+    let mut store = directory.store();
+    let now = Instant::now();
+    let bytes = b"SRS\x05example";
+    let digest = hash(bytes);
+    chunk(
+        &mut store,
+        1,
+        &digest,
+        ListFormat::Binary,
+        bytes,
+        (0, bytes.len() as u64),
+        now,
+    )
+    .unwrap();
+    let path = store.object_path(&digest, ListFormat::Binary);
+    let reference = ListRef {
+        tag: "list-test".to_owned(),
+        sha256: digest.clone(),
+        format: ListFormat::Binary,
+    };
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    assert!(store.status(std::slice::from_ref(&digest), now).unwrap().is_empty());
+    fs::write(&path, b"SRS\x05damaged").unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert!(store.status(std::slice::from_ref(&digest), now).unwrap().is_empty());
+    assert_eq!(
+        store.verified_path_for_staging(&reference).unwrap_err().code,
+        ErrorCode::ListMissing
+    );
+    assert_eq!(store.status(&[digest], now).unwrap().len(), 1);
+    assert!(!path.exists());
+}
+
+#[test]
+fn changed_modification_time_invalidates_cached_verification() {
+    use std::fs::FileTimes;
+
+    let directory = TestDirectory::new();
+    let mut store = directory.store();
+    let now = Instant::now();
+    let bytes = b"SRS\x05example";
+    let digest = hash(bytes);
+    chunk(
+        &mut store,
+        1,
+        &digest,
+        ListFormat::Binary,
+        bytes,
+        (0, bytes.len() as u64),
+        now,
+    )
+    .unwrap();
+    let path = store.object_path(&digest, ListFormat::Binary);
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    fs::write(&path, b"SRS\x05damaged").unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified + Duration::from_secs(2)))
+        .unwrap();
+    assert_eq!(store.status(&[digest], now).unwrap().len(), 1);
+    assert!(!path.exists());
+}
+
+#[test]
 fn bad_offset_and_hash_remove_partial_files() {
     let directory = TestDirectory::new();
     let mut store = directory.store();
@@ -273,6 +348,7 @@ fn pinned_objects_are_not_evicted() {
         Stored {
             size: MAX_STORE_BYTES,
             last_used: SystemTime::UNIX_EPOCH,
+            verified: None,
         },
     );
     store.used_bytes = MAX_STORE_BYTES;

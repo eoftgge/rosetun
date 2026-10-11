@@ -722,8 +722,8 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
         }
         if !expected.contains(&reference.tag) || !tags.insert(&reference.tag) {
             return Err(HelperError::new(
-                ErrorCode::ListMissing,
-                "a list rule does not have exactly one matching reference",
+                ErrorCode::InvalidState,
+                "unexpected or duplicate list reference",
             ));
         }
     }
@@ -994,7 +994,7 @@ impl Session {
             let source = lists
                 .lock()
                 .map_err(|_| HelperError::new(ErrorCode::Internal, "list storage is unavailable"))?
-                .verified_path(reference)?;
+                .verified_path_for_staging(reference)?;
             let name = format!("{}.{}", reference.tag, reference.format.extension());
             let destination = directory.join(&name);
             let temporary = directory.join(format!(".{name}.part"));

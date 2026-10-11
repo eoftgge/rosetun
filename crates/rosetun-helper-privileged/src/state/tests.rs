@@ -4192,7 +4192,7 @@ fn invalid_list_tag_is_rejected_before_spawn() {
 }
 
 #[test]
-fn enabled_list_rule_requires_exactly_one_matching_reference_before_spawn() {
+fn missing_rule_reference_retries_but_extra_references_are_invalid() {
     let directory = ListSessionDirectory::new();
     let list_id = rosetun_config::ListId::new("one");
     let reference = directory.reference(&list_id, "example.com");
@@ -4207,13 +4207,13 @@ fn enabled_list_rule_requires_exactly_one_matching_reference_before_spawn() {
     request.lists = vec![reference.clone(), reference.clone()];
     assert_eq!(
         helper.connect(&request).unwrap_err().code,
-        ErrorCode::ListMissing
+        ErrorCode::InvalidState
     );
     request.lists = vec![reference];
     request.lists[0].tag = rosetun_config::list_tag(&rosetun_config::ListId::new("other"), None);
     assert_eq!(
         helper.connect(&request).unwrap_err().code,
-        ErrorCode::ListMissing
+        ErrorCode::InvalidState
     );
     assert_eq!(controls.spawns(), 0);
     assert!(matches!(

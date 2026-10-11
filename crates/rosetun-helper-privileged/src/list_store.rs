@@ -39,6 +39,21 @@ struct Upload {
 struct Stored {
     size: u64,
     last_used: SystemTime,
+    verified: Option<FileFingerprint>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileFingerprint {
+    size: u64,
+    modified: SystemTime,
+}
+
+fn fingerprint(path: &Path) -> io::Result<Option<FileFingerprint>> {
+    let metadata = fs::metadata(path)?;
+    Ok(metadata.modified().ok().map(|modified| FileFingerprint {
+        size: metadata.len(),
+        modified,
+    }))
 }
 
 pub(crate) struct ListStore {
@@ -148,6 +163,7 @@ impl ListStore {
                 Stored {
                     size: metadata.len(),
                     last_used: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                    verified: None,
                 },
             );
         }
@@ -343,6 +359,7 @@ impl ListStore {
                     Stored {
                         size: upload.received,
                         last_used: SystemTime::now(),
+                        verified: fingerprint(&destination).ok().flatten(),
                     },
                 );
             }
@@ -427,6 +444,17 @@ impl ListStore {
     }
 
     pub(crate) fn verified_path(&mut self, reference: &ListRef) -> Result<PathBuf, HelperError> {
+        self.verify(reference, false)
+    }
+
+    pub(crate) fn verified_path_for_staging(
+        &mut self,
+        reference: &ListRef,
+    ) -> Result<PathBuf, HelperError> {
+        self.verify(reference, true)
+    }
+
+    fn verify(&mut self, reference: &ListRef, force: bool) -> Result<PathBuf, HelperError> {
         if !valid_hash(&reference.sha256) || !valid_tag(&reference.tag) {
             return Err(invalid("invalid list reference"));
         }
@@ -438,11 +466,29 @@ impl ListStore {
                 "a required list is unavailable",
             ));
         };
-        let bytes = read_bounded(&path).map_err(|_| {
-            HelperError::new(ErrorCode::ListMissing, "a required list is unavailable")
-        })?;
+        let missing = || HelperError::new(ErrorCode::ListMissing, "a required list is invalid");
+        let before = match fingerprint(&path) {
+            Ok(fingerprint) => fingerprint,
+            Err(_) => {
+                object.verified = None;
+                return Err(missing());
+            }
+        };
+        if before.as_ref().is_some_and(|file| file.size != object.size)
+            || before.as_ref().is_some_and(|file| file.size > MAX_LIST_PAYLOAD_BYTES)
+        {
+            object.verified = None;
+            return Err(missing());
+        }
+        if !force && before.is_some() && object.verified == before {
+            object.last_used = SystemTime::now();
+            return Ok(path);
+        }
+        object.verified = None;
+        let bytes = read_bounded(&path).map_err(|_| missing())?;
+        let after = fingerprint(&path).map_err(|_| missing())?;
         if bytes.len() as u64 != object.size
-            || bytes.len() as u64 > MAX_LIST_PAYLOAD_BYTES
+            || before.is_some() && after.is_some() && before != after
             || format!("{:x}", Sha256::digest(&bytes)) != reference.sha256
         {
             return Err(HelperError::new(
@@ -450,6 +496,7 @@ impl ListStore {
                 "a required list is invalid",
             ));
         }
+        object.verified = after;
         object.last_used = SystemTime::now();
         Ok(path)
     }
