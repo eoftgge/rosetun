@@ -24,13 +24,20 @@ pub(crate) enum PingResult {
 }
 
 impl State {
+    /// A TCP ping leaves through the default route, so it must not run while
+    /// the tunnel may be up: through the TUN every server answers in about
+    /// the same time. Until the service has answered once, nothing is known.
     pub(crate) fn can_ping(&self) -> bool {
         !self.operations.helper
-            && (!self.helper_available
-                || matches!(
-                    self.status.state,
-                    ConnectionState::Disconnected | ConnectionState::Failed { .. }
-                ))
+            && if self.helper_available {
+                self.status_received
+                    && matches!(
+                        self.status.state,
+                        ConnectionState::Disconnected | ConnectionState::Failed { .. }
+                    )
+            } else {
+                self.helper_error.is_some()
+            }
     }
 
     pub(crate) fn can_full_check(&self) -> bool {
@@ -106,6 +113,7 @@ impl State {
                 result,
             } => {
                 if self.operations.pinging.contains(&subscription)
+                    && self.can_ping()
                     && self
                         .config
                         .subscriptions
@@ -124,11 +132,14 @@ impl State {
             }
             WorkerEvent::PingDone(subscription) => {
                 self.operations.pinging.remove(&subscription);
-                for ((id, _), result) in &mut self.subscriptions.pings {
-                    if id == &subscription && *result == PingResult::Pending {
-                        *result = PingResult::NoAnswer;
+                let finished = self.can_ping();
+                self.subscriptions.pings.retain(|(id, _), result| {
+                    if id != &subscription || *result != PingResult::Pending {
+                        return true;
                     }
-                }
+                    *result = PingResult::NoAnswer;
+                    finished
+                });
             }
             WorkerEvent::FullCheck {
                 subscription,

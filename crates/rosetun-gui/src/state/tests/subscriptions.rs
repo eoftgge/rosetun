@@ -337,9 +337,15 @@ fn auto_update_respects_setting_and_connection_transitions() {
     ));
 }
 
+fn state_for_ping() -> State {
+    let mut state = state_for_auto_connect();
+    state.status_received = true;
+    state
+}
+
 #[test]
 fn ping_starts_only_with_tunnel_down_and_marks_nodes_pending() {
-    let mut state = state_for_auto_connect();
+    let mut state = state_for_ping();
     let id = SubscriptionId::new("1");
     let node = NodeId::new("node");
     state.status.state = ConnectionState::Connected;
@@ -361,7 +367,7 @@ fn ping_starts_only_with_tunnel_down_and_marks_nodes_pending() {
 
 #[test]
 fn ping_results_finish_missing_answers_and_prune_removed_nodes() {
-    let mut state = state_for_auto_connect();
+    let mut state = state_for_ping();
     let mut second = state.config.subscriptions[0].nodes[0].clone();
     second.id = NodeId::new("second");
     state.config.subscriptions[0].nodes.push(second.clone());
@@ -422,8 +428,35 @@ fn ping_results_finish_missing_answers_and_prune_removed_nodes() {
 }
 
 #[test]
-fn single_node_ping_preserves_other_results_and_rejects_busy_checks() {
+fn ping_waits_for_the_first_status_and_drops_answers_once_connecting() {
     let mut state = state_for_auto_connect();
+    let id = SubscriptionId::new("1");
+    let node = NodeId::new("node");
+    assert!(!state.can_ping());
+    state.helper_available = false;
+    assert!(!state.can_ping());
+    state.helper_error = Some(rosetun_ipc::ClientError::Closed);
+    assert!(state.can_ping());
+
+    let mut state = state_for_ping();
+    assert!(matches!(
+        state.act(Action::Ping(id.clone())),
+        Some(Job::Ping(_))
+    ));
+    state.status.state = ConnectionState::Connecting;
+    state.reduce(WorkerEvent::Ping {
+        subscription: id.clone(),
+        node: node.clone(),
+        result: Ping::Answered(Duration::from_millis(1)),
+    });
+    state.reduce(WorkerEvent::PingDone(id.clone()));
+    assert!(!state.subscriptions.pings.contains_key(&(id.clone(), node)));
+    assert!(!state.operations.pinging.contains(&id));
+}
+
+#[test]
+fn single_node_ping_preserves_other_results_and_rejects_busy_checks() {
+    let mut state = state_for_ping();
     let id = SubscriptionId::new("1");
     let first = NodeId::new("node");
     let mut other = state.config.subscriptions[0].nodes[0].clone();
@@ -483,7 +516,7 @@ fn single_node_ping_preserves_other_results_and_rejects_busy_checks() {
 
 #[test]
 fn single_node_check_rejects_missing_nodes_and_connected_quick_checks() {
-    let mut state = state_for_auto_connect();
+    let mut state = state_for_ping();
     let id = SubscriptionId::new("1");
     let node = NodeId::new("node");
     let missing = NodeId::new("missing");
