@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, FontFamily, FontId, RichText, Stroke};
-use rosetun_config::{List, ProcessMatch, RuleTarget};
+use rosetun_config::{List, ListId, ProcessMatch, RuleTarget};
 
 use crate::display;
 use crate::errors;
@@ -15,8 +15,8 @@ const COMPACT_DIALOG_HEIGHT: f32 = 632.0;
 const ERROR_HEIGHT: f32 = 28.0;
 const PROCESS_ROW_HEIGHT: f32 = 44.0;
 const PROCESS_ROW_GAP: f32 = 4.0;
-const CATEGORY_ROW_HEIGHT: f32 = 24.0;
-const CATEGORY_VIEW_HEIGHT: f32 = 5.0 * CATEGORY_ROW_HEIGHT;
+const CATEGORY_ROW_HEIGHT: f32 = 22.0;
+const CATEGORY_VIEW_HEIGHT: f32 = 120.0;
 const MIN_PROCESS_LIST: f32 = 2.0 * PROCESS_ROW_HEIGHT + PROCESS_ROW_GAP;
 const MAX_PROCESS_LIST: f32 = 5.0 * PROCESS_ROW_HEIGHT + 4.0 * PROCESS_ROW_GAP;
 const PROCESS_FOOTER_HEIGHT: f32 = 80.0;
@@ -55,6 +55,26 @@ fn advanced_height(dialog: &AddRuleDialog) -> f32 {
                 0.0
             }
     }
+}
+
+fn footer_buttons(
+    ui: &mut egui::Ui,
+    label: &str,
+    can_submit: bool,
+    can_cancel: bool,
+    reason: Option<&str>,
+) -> (egui::Response, egui::Response) {
+    ui.horizontal(|ui| {
+        let cancel = widgets::outline_button(ui, tr!("cancel"), can_cancel);
+        let submit = widgets::button_fill(ui, label, can_submit);
+        let submit = if let Some(reason) = reason {
+            submit.on_disabled_hover_text(reason)
+        } else {
+            submit
+        };
+        (submit, cancel)
+    })
+    .inner
 }
 
 pub(crate) fn show(
@@ -246,39 +266,33 @@ pub(crate) fn show(
                     }
                 },
                 |ui| {
-                    ui.horizontal(|ui| {
-                        let label = if dialog.busy {
-                            if dialog.editing.is_some() {
-                                tr!("saving").to_owned()
-                            } else {
-                                tr!("adding-rule").to_owned()
-                            }
-                        } else if dialog.editing.is_some() {
-                            tr!("save").to_owned()
-                        } else if dialog.kind == RuleInputKind::Domain {
-                            let domains = rosetun_core::parse_domain_lines(
-                                &dialog.domains,
-                                dialog.subdomains,
-                            );
-                            crate::i18n::add_rules(domains.domains.len())
-                        } else if dialog.kind == RuleInputKind::List && dialog.selected_categories.len() > 1 {
-                            crate::i18n::add_rules(dialog.selected_categories.len())
+                    let label = if dialog.busy {
+                        if dialog.editing.is_some() {
+                            tr!("saving").to_owned()
                         } else {
-                            tr!("add-rule").to_owned()
-                        };
-                        let submit = widgets::button_fill(ui, &label, can_submit);
-                        let submit = if let Some(reason) = &reason {
-                            submit.on_disabled_hover_text(reason)
-                        } else {
-                            submit
-                        };
-                        if submit.clicked() {
-                            actions.push(Action::SubmitAddRule);
+                            tr!("adding-rule").to_owned()
                         }
-                        if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
-                            actions.push(Action::CancelAddRule);
-                        }
-                    });
+                    } else if dialog.editing.is_some() {
+                        tr!("save").to_owned()
+                    } else if dialog.kind == RuleInputKind::Domain {
+                        let domains =
+                            rosetun_core::parse_domain_lines(&dialog.domains, dialog.subdomains);
+                        crate::i18n::add_rules(domains.domains.len())
+                    } else if dialog.kind == RuleInputKind::List
+                        && dialog.selected_categories.len() > 1
+                    {
+                        crate::i18n::add_rules(dialog.selected_categories.len())
+                    } else {
+                        tr!("add-rule").to_owned()
+                    };
+                    let (submit, cancel) =
+                        footer_buttons(ui, &label, can_submit, !dialog.busy, reason.as_deref());
+                    if submit.clicked() {
+                        actions.push(Action::SubmitAddRule);
+                    }
+                    if cancel.clicked() {
+                        actions.push(Action::CancelAddRule);
+                    }
                 },
             );
         });
@@ -300,6 +314,220 @@ fn category_matches<'a>(categories: &'a [String], query: &'a str) -> Vec<&'a str
             .then_some(category.as_str())
         }))
         .collect()
+}
+
+fn list_picker(
+    ui: &mut egui::Ui,
+    selected: &List,
+    lists: &[List],
+    choice: &mut Option<ListId>,
+    enabled: bool,
+) {
+    let name = display::safe_text(&selected.name);
+    let format = super::lists::format_name(selected.format);
+    let detail = if selected.format.has_categories() {
+        tr!(
+            "list-added-categories",
+            format = &format,
+            count = selected.categories.len(),
+            n = selected.categories.len().to_string()
+        )
+    } else {
+        format
+    };
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 38.0),
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, enabled, &name)
+    });
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect(
+            rect,
+            theme::RADIUS,
+            theme::INPUT,
+            Stroke::new(
+                1.0,
+                if response.hovered() && enabled {
+                    theme::BORDER_STRONG
+                } else {
+                    theme::BORDER
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        let detail_font = egui::TextStyle::Small.resolve(ui.style());
+        let detail_galley = egui::WidgetText::from(
+            RichText::new(&detail).font(detail_font).color(theme::TEXT_DIM),
+        )
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (rect.width() * 0.45).max(40.0),
+            egui::TextStyle::Small,
+        );
+        let detail_right = rect.right() - 34.0;
+        let detail_width = detail_galley.size().x;
+        painter.galley(
+            egui::pos2(
+                detail_right - detail_width,
+                rect.center().y - detail_galley.size().y / 2.0,
+            ),
+            detail_galley,
+            theme::TEXT_DIM,
+        );
+        let name_width = (rect.width() - 58.0 - detail_width).max(40.0);
+        let name_galley = egui::WidgetText::from(RichText::new(name).strong())
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                name_width,
+                egui::TextStyle::Body,
+            );
+        painter.galley(
+            egui::pos2(rect.left() + 12.0, rect.center().y - name_galley.size().y / 2.0),
+            name_galley,
+            theme::TEXT,
+        );
+        icons::paint(
+            painter,
+            egui::pos2(rect.right() - 16.0, rect.center().y),
+            Icon::Chevron { open: true },
+            theme::TEXT_DIM,
+        );
+    }
+    let response = if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    };
+    widgets::menu_popup(&response).show(|ui| {
+        ui.set_min_width(rect.width());
+        egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+            for list in lists {
+                let note = super::lists::format_name(list.format);
+                if widgets::menu_item(
+                    ui,
+                    widgets::MenuItem {
+                        label: &display::safe_text(&list.name),
+                        enabled,
+                        selected: selected.id == list.id,
+                        danger: false,
+                        note: Some(&note),
+                    },
+                )
+                .clicked()
+                {
+                    *choice = Some(list.id.clone());
+                    ui.close();
+                }
+            }
+        });
+    });
+}
+
+fn category_checkbox(
+    ui: &mut egui::Ui,
+    checked: &mut bool,
+    label: &str,
+    enabled: bool,
+) -> egui::Response {
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = CATEGORY_ROW_HEIGHT;
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        let fill = if *checked { theme::ROSE } else { theme::CARD };
+        let border = if *checked {
+            theme::ROSE
+        } else {
+            theme::BORDER_STRONG
+        };
+        let check = if *checked {
+            Color32::WHITE
+        } else {
+            theme::TEXT_MUTED
+        };
+        let widgets = &mut ui.visuals_mut().widgets;
+        for visuals in [
+            &mut widgets.noninteractive,
+            &mut widgets.inactive,
+            &mut widgets.hovered,
+            &mut widgets.active,
+        ] {
+            visuals.corner_radius = egui::CornerRadius::same(0);
+            visuals.bg_fill = fill;
+            visuals.bg_stroke = Stroke::new(1.0, border);
+            visuals.fg_stroke = Stroke::new(1.5, check);
+        }
+        ui.add_enabled(enabled, egui::Checkbox::new(checked, label))
+    })
+    .inner
+}
+
+fn category_row(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, category: &str, attribute: bool) {
+    let selected = dialog.selected_categories.iter().any(|item| item == category);
+    let mut checked = selected;
+    let response = egui::Frame::new()
+        .fill(if selected { theme::INPUT } else { theme::CARD })
+        .corner_radius(theme::RADIUS_INNER)
+        .inner_margin(egui::Margin::symmetric(4, 0))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.set_min_height(CATEGORY_ROW_HEIGHT);
+            ui.horizontal(|ui| {
+                let response = category_checkbox(
+                    ui,
+                    &mut checked,
+                    &display::safe_text(category),
+                    !dialog.busy,
+                );
+                if attribute {
+                    ui.label(
+                        RichText::new(tr!("rule-list-attribute"))
+                            .small()
+                            .color(theme::TEXT_DIM),
+                    );
+                }
+                response
+            })
+            .inner
+        })
+        .inner;
+    if response.changed() {
+        dialog.toggle_category(category);
+    }
+}
+
+fn category_view(
+    ui: &mut egui::Ui,
+    dialog: &mut AddRuleDialog,
+    matches: &[&str],
+    custom: bool,
+) -> egui::Response {
+    egui::Frame::new()
+        .fill(theme::CARD)
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .corner_radius(theme::RADIUS)
+        .inner_margin(egui::Margin::same(4))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            egui::ScrollArea::vertical()
+                .id_salt("rule_list_categories")
+                .max_height(CATEGORY_VIEW_HEIGHT - 10.0)
+                .auto_shrink([false, false])
+                .show_rows(ui, CATEGORY_ROW_HEIGHT, matches.len(), |ui, rows| {
+                    for index in rows {
+                        category_row(ui, dialog, matches[index], custom && index == 0);
+                    }
+                });
+        })
+        .response
 }
 
 fn list_input(
@@ -329,31 +557,8 @@ fn list_input(
         .iter()
         .find(|list| Some(&list.id) == dialog.list.as_ref())
         .unwrap_or(&lists[0]);
-    egui::Sides::new().show(ui, |ui| {
-        ui.label(RichText::new(tr!("rule-list-select")).small().color(theme::TEXT_DIM));
-    }, |ui| {
-        let format = super::lists::format_name(selected.format);
-        let detail = if selected.format.has_categories() {
-            tr!("list-added-categories", format = &format, count = selected.categories.len(), n = selected.categories.len().to_string())
-        } else {
-            format
-        };
-        ui.label(RichText::new(detail).small().color(theme::TEXT_DIM));
-    });
-    ui.add_enabled_ui(!dialog.busy, |ui| {
-        egui::ComboBox::from_id_salt("rule_list")
-            .selected_text(display::safe_text(&selected.name))
-            .width(ui.available_width())
-            .show_ui(ui, |ui| {
-                for list in lists {
-                    ui.selectable_value(
-                        &mut choice,
-                        Some(list.id.clone()),
-                        display::safe_text(&list.name),
-                    );
-                }
-            });
-    });
+    ui.label(RichText::new(tr!("rule-list-select")).small().color(theme::TEXT_DIM));
+    list_picker(ui, selected, lists, &mut choice, !dialog.busy);
     if let Some(choice) = choice {
         dialog.select_list(choice);
     }
@@ -363,44 +568,66 @@ fn list_input(
         .unwrap_or(&lists[0]);
     if selected.format.has_categories() {
         ui.add_space(8.0);
-        ui.label(RichText::new(tr!("rule-list-category-search")).small().color(theme::TEXT_DIM));
+        let selected_count = dialog.selected_categories.len();
+        egui::Sides::new().show(
+            ui,
+            |ui| {
+                ui.label(
+                    RichText::new(tr!("rule-list-categories"))
+                        .small()
+                        .color(theme::TEXT_DIM),
+                );
+            },
+            |ui| {
+                if selected_count == 0 {
+                    ui.label(
+                        RichText::new(tr!("rule-list-none-selected"))
+                            .small()
+                            .color(theme::TEXT_DIM),
+                    );
+                } else {
+                    ui.horizontal(|ui| {
+                        if widgets::link(ui, &tr!("rule-list-clear"), !dialog.busy).clicked() {
+                            dialog.selected_categories.clear();
+                            dialog.error = None;
+                        }
+                        ui.label(
+                            RichText::new(tr!(
+                                "rule-list-selected",
+                                n = selected_count.to_string()
+                            ))
+                            .small()
+                            .color(theme::ROSE_LIGHT),
+                        );
+                    });
+                }
+            },
+        );
         let input = dialog.category_filter.trim().to_owned();
         let custom = input.contains('@');
         let matches = category_matches(&selected.categories, &input);
-        ui.horizontal(|ui| {
-            let width = (ui.available_width() - 116.0).max(100.0);
-            ui.add_enabled_ui(!dialog.busy, |ui| {
-                widgets::search_field(ui, &mut dialog.category_filter, &tr!("rule-list-category-search-hint"), width)
-            });
-            ui.label(RichText::new(tr!("rule-list-match-count", shown = matches.len() - usize::from(custom), total = selected.categories.len())).small().color(theme::TEXT_DIM));
+        let count = tr!(
+            "rule-list-match-count",
+            shown = matches.len() - usize::from(custom),
+            total = selected.categories.len()
+        );
+        ui.add_enabled_ui(!dialog.busy, |ui| {
+            let width = ui.available_width();
+            widgets::search_field_with_suffix(
+                ui,
+                &mut dialog.category_filter,
+                &tr!("rule-list-category-search-hint"),
+                width,
+                &count,
+            )
         });
-        let selected_count = dialog.selected_categories.len();
-        egui::Sides::new().show(ui, |ui| {
-            ui.label(RichText::new(tr!("rule-list-selected", n = selected_count.to_string())).small().color(theme::TEXT_DIM));
-        }, |ui| {
-            if widgets::link(ui, &tr!("rule-list-clear"), !dialog.busy && !dialog.selected_categories.is_empty()).clicked() {
-                dialog.selected_categories.clear();
-                dialog.error = None;
-            }
-        });
-        egui::ScrollArea::vertical()
-            .id_salt("rule_list_categories")
-            .max_height(CATEGORY_VIEW_HEIGHT)
-            .auto_shrink([false, false])
-            .show_rows(ui, CATEGORY_ROW_HEIGHT, matches.len(), |ui, rows| {
-                for index in rows {
-                    let category = matches[index];
-                    let mut checked = dialog.selected_categories.iter().any(|item| item == category);
-                    ui.horizontal(|ui| {
-                        if ui.add_enabled(!dialog.busy, egui::Checkbox::new(&mut checked, display::safe_text(category))).changed() {
-                            dialog.toggle_category(category);
-                        }
-                        if custom && index == 0 {
-                            ui.label(RichText::new(tr!("rule-list-attribute")).small().color(theme::TEXT_DIM));
-                        }
-                    });
-                }
-            });
+        category_view(ui, dialog, &matches, custom);
+        ui.label(
+            RichText::new(tr!("rule-list-per-category"))
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+        ui.add_space(8.0);
     } else {
         dialog.selected_categories.clear();
     }
@@ -982,6 +1209,10 @@ mod tests {
         let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
         dialog.kind = RuleInputKind::List;
         dialog.advanced = true;
+        dialog.selected_categories = ["category1", "category2", "category3"]
+            .map(str::to_owned)
+            .to_vec();
+        dialog.category_filter = "category@cn".into();
         let list = List {
             id: ListId::new("1"),
             name: "Example".into(),
@@ -1018,6 +1249,105 @@ mod tests {
             .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
             .unwrap();
         assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
+    }
+
+    #[test]
+    fn category_view_has_fixed_framed_height() {
+        use super::*;
+        use rosetun_config::RuleSetId;
+
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        let categories: Vec<_> = (0..1_000).map(|index| format!("category{index}")).collect();
+        let matches: Vec<_> = categories.iter().map(String::as_str).collect();
+        let mut height = 0.0;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_width(DIALOG_WIDTH);
+                height = category_view(ui, &mut dialog, &matches, false).rect.height();
+            });
+        });
+        output.textures_delta.clear();
+        assert_eq!(height, CATEGORY_VIEW_HEIGHT);
+    }
+
+    #[test]
+    fn category_checkboxes_are_square_with_distinct_selection_colours() {
+        use super::*;
+
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut unchecked = false;
+        let mut checked = true;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                category_checkbox(ui, &mut unchecked, "alpha", true);
+                category_checkbox(ui, &mut checked, "beta", true);
+            });
+        });
+        let rectangles: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) => Some(rect),
+                _ => None,
+            })
+            .collect();
+        assert!(rectangles.iter().any(|rect| {
+            rect.corner_radius == egui::CornerRadius::same(0)
+                && rect.fill == theme::CARD
+                && rect.stroke.color == theme::BORDER_STRONG
+        }));
+        assert!(rectangles.iter().any(|rect| {
+            rect.corner_radius == egui::CornerRadius::same(0) && rect.fill == theme::ROSE
+        }));
+        assert!(output.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(Color32::WHITE)
+        )));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn selected_category_row_has_input_background() {
+        use super::*;
+        use rosetun_config::RuleSetId;
+
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.selected_categories.push("alpha".into());
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_width(DIALOG_WIDTH);
+                category_row(ui, &mut dialog, "alpha", false);
+            });
+        });
+        assert!(output.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Rect(rect) if rect.fill == theme::INPUT && rect.rect.width() > 100.0
+        )));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn primary_action_precedes_cancel_visually() {
+        use super::*;
+
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (_, (submit, cancel)) = egui::Sides::new().show(
+                    ui,
+                    |_| {},
+                    |ui| footer_buttons(ui, &tr!("add-rule"), true, true, None),
+                );
+                assert!(submit.rect.right() < cancel.rect.left());
+            });
+        });
+        output.textures_delta.clear();
     }
 
     #[test]
