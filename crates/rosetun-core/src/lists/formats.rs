@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::rules::parse_domain_input;
 
-const MAX_INPUT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_INPUT_BYTES: usize = crate::MAX_LIST_BYTES;
 const MAX_PAYLOAD_BYTES: usize = rosetun_config::MAX_UPLOADED_LIST_BYTES;
 const MAX_ENTRIES: usize = rosetun_config::MAX_UPLOADED_LIST_ENTRIES;
 
@@ -65,7 +65,7 @@ pub struct TextLineError {
 
 #[derive(thiserror::Error)]
 pub enum ListParseError {
-    #[error("list exceeds the 32 MiB input limit")]
+    #[error("list exceeds the 128 MiB input limit")]
     InputTooLarge,
     #[error("list payload exceeds the 16 MiB limit")]
     PayloadTooLarge,

@@ -1,0 +1,70 @@
+diff --git a/crates/rosetun-core/src/lists/formats.rs b/crates/rosetun-core/src/lists/formats.rs
+index d12a5be..9f26f1b 100644
+--- a/crates/rosetun-core/src/lists/formats.rs
++++ b/crates/rosetun-core/src/lists/formats.rs
+@@ -9,7 +9,7 @@ use serde_json::json;
+ 
+ use crate::rules::parse_domain_input;
+ 
+-const MAX_INPUT_BYTES: usize = 32 * 1024 * 1024;
++const MAX_INPUT_BYTES: usize = crate::MAX_LIST_BYTES;
+ const MAX_PAYLOAD_BYTES: usize = rosetun_config::MAX_UPLOADED_LIST_BYTES;
+ const MAX_ENTRIES: usize = rosetun_config::MAX_UPLOADED_LIST_ENTRIES;
+ 
+@@ -65,7 +65,7 @@ pub struct TextLineError {
+ 
+ #[derive(thiserror::Error)]
+ pub enum ListParseError {
+-    #[error("list exceeds the 32 MiB input limit")]
++    #[error("list exceeds the 128 MiB input limit")]
+     InputTooLarge,
+     #[error("list payload exceeds the 16 MiB limit")]
+     PayloadTooLarge,
+diff --git a/crates/rosetun-core/src/lists/mod.rs b/crates/rosetun-core/src/lists/mod.rs
+index 949bbec..bdabfa8 100644
+--- a/crates/rosetun-core/src/lists/mod.rs
++++ b/crates/rosetun-core/src/lists/mod.rs
+@@ -22,7 +22,7 @@ pub use prepare::{
+     send_prepared,
+ };
+ 
+-pub const MAX_LIST_BYTES: usize = 32 * 1024 * 1024;
++pub const MAX_LIST_BYTES: usize = 128 * 1024 * 1024;
+ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+ 
+ #[derive(Debug, thiserror::Error)]
+@@ -47,7 +47,7 @@ pub enum ListError {
+     ChangedDuringUpdate,
+     #[error("list is used by rule sets: {}", .sets.join(", "))]
+     InUse { sets: Vec<String> },
+-    #[error("list exceeds the 32 MiB size limit")]
++    #[error("list exceeds the 128 MiB size limit")]
+     TooLarge,
+     #[error("the stored list does not match its saved checksum and size")]
+     Integrity,
+diff --git a/crates/rosetun-gui/i18n/en.ftl b/crates/rosetun-gui/i18n/en.ftl
+index cabb668..453dc33 100644
+--- a/crates/rosetun-gui/i18n/en.ftl
++++ b/crates/rosetun-gui/i18n/en.ftl
+@@ -113,7 +113,7 @@ error-list-file-required = Select a new file to update this list
+ error-list-wrong-source = This update does not match the list source
+ error-list-changed = The list changed while updating · try again
+ error-list-in-use = This list is used in: { $sets }
+-error-list-too-large = The list exceeds the 32 MiB size limit
++error-list-too-large = The list exceeds the 128 MiB size limit
+ error-list-storage-limit = The lists for this connection exceed the service's storage limits
+ error-list-integrity = The saved list is damaged or does not match its checksum
+ error-list-io = Could not read or save the list file
+diff --git a/crates/rosetun-gui/i18n/ru.ftl b/crates/rosetun-gui/i18n/ru.ftl
+index 72de242..7327ef8 100644
+--- a/crates/rosetun-gui/i18n/ru.ftl
++++ b/crates/rosetun-gui/i18n/ru.ftl
+@@ -113,7 +113,7 @@ error-list-file-required = Выберите новый файл для обно
+ error-list-wrong-source = Способ обновления не соответствует источнику списка
+ error-list-changed = Список изменился при обновлении · попробуйте ещё раз
+ error-list-in-use = Список используется в наборах: { $sets }
+-error-list-too-large = Список больше допустимых 32 МиБ
++error-list-too-large = Список больше допустимых 128 МиБ
+ error-list-storage-limit = Списки для этого подключения превышают лимиты хранилища службы
+ error-list-integrity = Сохранённый список повреждён или не совпадает с контрольной суммой
+ error-list-io = Не удалось прочитать или сохранить файл списка

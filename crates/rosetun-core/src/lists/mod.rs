@@ -22,7 +22,7 @@ pub use prepare::{
     send_prepared,
 };
 
-pub const MAX_LIST_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_LIST_BYTES: usize = 128 * 1024 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, thiserror::Error)]
@@ -47,7 +47,7 @@ pub enum ListError {
     ChangedDuringUpdate,
     #[error("list is used by rule sets: {}", .sets.join(", "))]
     InUse { sets: Vec<String> },
-    #[error("list exceeds the 32 MiB size limit")]
+    #[error("list exceeds the 128 MiB size limit")]
     TooLarge,
     #[error("the stored list does not match its saved checksum and size")]
     Integrity,
