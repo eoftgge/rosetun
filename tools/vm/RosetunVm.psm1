@@ -347,6 +347,14 @@ function Publish-Rosetun {
     }
     $derived['request-process-rules.json'] = $processRules
 
+    foreach ($allowLan in @($true, $false)) {
+        $lan = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+        $lan.settings | Add-Member -NotePropertyName kill_switch -NotePropertyValue $true -Force
+        $lan.settings | Add-Member -NotePropertyName allow_lan -NotePropertyValue $allowLan -Force
+        $name = if ($allowLan) { 'request-lan-allowed.json' } else { 'request-lan-blocked.json' }
+        $derived[$name] = $lan
+    }
+
     $dnsLock = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
     $dnsLock.settings.kill_switch = $false
     $dnsLock.settings.auto_reconnect = $true
@@ -660,6 +668,49 @@ function Get-RosetunEgressInterface {
 
 function Get-RosetunEgressAddress {
     (Get-RosetunEgressInterface).Address
+}
+
+function Start-RosetunLanListener {
+    $address = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4 -AddressState Preferred -ErrorAction Stop |
+        Where-Object { $_.IPAddress -notlike '169.254.*' } |
+        Select-Object -First 1 -ExpandProperty IPAddress
+    if (-not $address) {
+        throw 'The Default Switch has no usable IPv4 gateway address.'
+    }
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Parse($address), 0)
+    $name = "Rosetun-LAN-matrix-$([guid]::NewGuid().ToString('N'))"
+    try {
+        $listener.Start(8)
+        $port = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
+        New-NetFirewallRule -Name $name -DisplayName 'Rosetun LAN matrix listener' -Direction Inbound `
+            -Action Allow -Protocol TCP -LocalAddress $address -LocalPort $port `
+            -InterfaceAlias 'vEthernet (Default Switch)' -Profile Any -ErrorAction Stop | Out-Null
+        return [pscustomobject]@{ Address = $address; Port = $port; Listener = $listener; RuleName = $name }
+    }
+    catch {
+        Remove-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
+        $listener.Stop()
+        throw
+    }
+}
+
+function Stop-RosetunLanListener {
+    param([Parameter(Mandatory)]$Lan)
+    try { Remove-NetFirewallRule -Name $Lan.RuleName -ErrorAction Stop }
+    finally { $Lan.Listener.Stop() }
+}
+
+function Test-RosetunLanListener {
+    param([Parameter(Mandatory)]$Lan)
+    $localAddress = Get-RosetunEgressAddress
+    Invoke-RosetunGuest -ScriptBlock {
+        param($localAddress, $hostAddress, $port)
+        $endpoint = [Net.IPEndPoint]::new([Net.IPAddress]::Parse($localAddress), 0)
+        $client = [Net.Sockets.TcpClient]::new($endpoint)
+        try { return $client.ConnectAsync($hostAddress, $port).Wait(2000) }
+        catch { return $false }
+        finally { $client.Dispose() }
+    } -ArgumentList $localAddress, $Lan.Address, $Lan.Port
 }
 
 function Test-RosetunDirectEgress {

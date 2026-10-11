@@ -57,6 +57,7 @@ function Format-Egress {
 }
 
 $nodeStartedByMatrix = $false
+$lanListener = $null
 try {
 if ($Build) {
     Write-Host 'Building...'
@@ -88,6 +89,7 @@ Stop-RosetunHelper
 Publish-Rosetun -BuildDir $BuildDir -SingBoxPath $SingBoxPath -RequestPath $RequestPath -UseHostNode:$UseHostNode
 Register-RosetunHelper
 Start-RosetunHelper
+$lanListener = Start-RosetunLanListener
 
 $ipv6NeighborCreated = Initialize-RosetunIpv6Neighbor
 
@@ -97,6 +99,7 @@ Test-Step 'baseline' 'direct egress works before connect' { Test-RosetunDirectEg
 Test-Step 'baseline' 'direct DNS works before connect' { Test-RosetunDirectDns }
 Test-Step 'baseline' 'direct TCP DNS works before connect' { Test-RosetunDirectDns -Tcp }
 Test-Step 'baseline' 'IPv6 to the host works before connect' { Test-RosetunIpv6Egress }
+Test-Step 'baseline' 'LAN listener is reachable before connect' { Test-RosetunLanListener $lanListener }
 
 Write-Host 'Connect...'
 Connect-RosetunTunnel | Out-Null
@@ -308,6 +311,22 @@ Test-Step 'process rules' 'another process hits the default block' {
 Test-Step 'process rules' 'direct egress is still blocked' { -not (Test-RosetunDirectEgress) }
 Disconnect-RosetunTunnel | Out-Null
 Wait-RosetunState 'Disconnected' | Out-Null
+
+Write-Host 'LAN with kill switch...'
+Connect-RosetunTunnel -RequestName 'request-lan-allowed.json' | Out-Null
+Test-Step 'allow LAN' 'state is Connected' { Wait-RosetunState 'Connected' }
+Test-Step 'allow LAN' 'host LAN listener is reachable' { Test-RosetunLanListener $lanListener }
+Test-Step 'allow LAN' 'direct internet is still blocked' { -not (Test-RosetunDirectEgress) }
+Disconnect-RosetunTunnel | Out-Null
+Test-Step 'allow LAN' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
+
+Connect-RosetunTunnel -RequestName 'request-lan-blocked.json' | Out-Null
+Test-Step 'block LAN' 'state is Connected' { Wait-RosetunState 'Connected' }
+Test-Step 'block LAN' 'host LAN listener is blocked' { -not (Test-RosetunLanListener $lanListener) }
+Test-Step 'block LAN' 'direct internet is still blocked' { -not (Test-RosetunDirectEgress) }
+Disconnect-RosetunTunnel | Out-Null
+Test-Step 'block LAN' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
+Test-Step 'block LAN' 'direct internet works afterwards' { Test-RosetunDirectEgress }
 
 Write-Host 'Connect to an unreachable node...'
 $attempt = Connect-RosetunTunnel -RequestName 'request-unreachable.json' -Quiet
@@ -522,6 +541,10 @@ if ($ipv6NeighborCreated) {
 
 }
 finally {
+    if ($null -ne $lanListener) {
+        try { Stop-RosetunLanListener $lanListener }
+        catch { Write-Warning "Could not remove the LAN listener or firewall rule: $_" }
+    }
     if ($nodeStartedByMatrix -and -not $KeepNode) {
         try { Stop-RosetunTestNode }
         catch { Write-Warning "Could not stop the test node: $_" }
