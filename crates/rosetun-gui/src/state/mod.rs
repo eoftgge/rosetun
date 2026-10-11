@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AppConfig, DnsSettings, LanguageSetting, ListId, ListSource, NodeId, RuleId, RuleMatcher, RuleSetId,
-    RuleTarget, RuleTemplate, Status, SubscriptionId,
+    AppConfig, DnsSettings, LanguageSetting, ListId, ListSource, NodeId, RuleId, RuleMatcher,
+    RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId,
 };
 use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset, SettingChange};
 use rosetun_ipc::{ClientError, ConnectRequest};
@@ -327,7 +327,10 @@ pub(crate) enum Job {
     AddListUrl(String, String),
     AddListFile(PathBuf, String),
     BrowseListFile,
-    InspectListCategories { revision: u64, temporary: Vec<rosetun_config::Rule> },
+    InspectListCategories {
+        revision: u64,
+        temporary: Vec<rosetun_config::Rule>,
+    },
     RenameList(ListId, String),
     RemoveList(ListId),
     Ping(SubscriptionId),

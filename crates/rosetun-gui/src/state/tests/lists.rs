@@ -34,7 +34,10 @@ fn adding_url_list_keeps_detection_result_in_dialog() {
     ));
     let added = list("1", ListSource::Url("https://example.com/sites.txt".into()));
     state.reduce(WorkerEvent::AddList(Ok((added.clone(), Some(56)))));
-    assert_eq!(state.lists.add.as_ref().unwrap().result, Some((ListFormat::Text, 0, Some(56))));
+    assert_eq!(
+        state.lists.add.as_ref().unwrap().result,
+        Some((ListFormat::Text, 0, Some(56)))
+    );
     let mut config = state.config.clone();
     config.lists.push(added);
     state.reduce(WorkerEvent::Config {
@@ -49,7 +52,10 @@ fn adding_url_list_keeps_detection_result_in_dialog() {
 fn list_urls_are_redacted_from_visible_text() {
     let mut state = State::default();
     let url = "https://user:secret@example.com/private?token=private";
-    state.config.lists.push(list("1", ListSource::Url(url.into())));
+    state
+        .config
+        .lists
+        .push(list("1", ListSource::Url(url.into())));
     assert_eq!(state.text(url), "example.com");
     assert!(!state.text(&format!("Failed: {url}")).contains("private"));
 }
@@ -61,7 +67,10 @@ fn adding_file_list_uses_only_a_transient_path() {
         ..State::default()
     };
     state.act(Action::OpenAddList);
-    assert!(matches!(state.act(Action::BrowseListFile), Some(Job::BrowseListFile)));
+    assert!(matches!(
+        state.act(Action::BrowseListFile),
+        Some(Job::BrowseListFile)
+    ));
     state.reduce(WorkerEvent::BrowsedListFile(Some(PathBuf::from(
         "C:/lists/example.srs",
     ))));
@@ -151,7 +160,10 @@ fn stale_category_inspection_is_ignored_and_retried_for_new_config() {
 #[test]
 fn list_rule_requires_a_dat_category_and_submits_a_valid_matcher() {
     let mut state = state_with_rules();
-    let mut added = list("1", ListSource::Url("https://example.com/geosite.dat".into()));
+    let mut added = list(
+        "1",
+        ListSource::Url("https://example.com/geosite.dat".into()),
+    );
     added.format = ListFormat::GeoSite;
     added.categories = vec!["example".into()];
     state.config.lists.push(added);
@@ -166,18 +178,30 @@ fn list_rule_requires_a_dat_category_and_submits_a_valid_matcher() {
         Some("Select a category from this list")
     );
     state.rules.screen.add.as_mut().unwrap().category = "example@cn".into();
-    let Some(Job::AddRule(set, matcher, RuleTarget::Proxy)) = state.act(Action::SubmitAddRule) else {
+    let Some(Job::AddRule(set, matcher, RuleTarget::Proxy)) = state.act(Action::SubmitAddRule)
+    else {
         panic!("a valid category must produce a list rule job");
     };
-    assert!(matches!(&matcher, RuleMatcher::List { category: Some(value), .. } if value == "example@cn"));
+    assert!(
+        matches!(&matcher, RuleMatcher::List { category: Some(value), .. } if value == "example@cn")
+    );
     let mut config = state.config.clone();
-    config.rule_sets.iter_mut().find(|item| item.id == set).unwrap().rules.push(Rule {
-        id: RuleId::new("list-rule"),
-        enabled: true,
-        matcher,
-        target: RuleTarget::Proxy,
+    config
+        .rule_sets
+        .iter_mut()
+        .find(|item| item.id == set)
+        .unwrap()
+        .rules
+        .push(Rule {
+            id: RuleId::new("list-rule"),
+            enabled: true,
+            matcher,
+            target: RuleTarget::Proxy,
+        });
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config,
     });
-    state.reduce(WorkerEvent::Config { generation: 1, config });
     assert!(state.config.rule_sets[1].rules.iter().any(|rule| {
         matches!(&rule.matcher, RuleMatcher::List { category: Some(value), .. } if value == "example@cn")
     }));
@@ -186,10 +210,16 @@ fn list_rule_requires_a_dat_category_and_submits_a_valid_matcher() {
 #[test]
 fn missing_categories_expose_fallback_and_disabled_states_then_clear() {
     let mut state = state_with_rules();
-    let mut added = list("1", ListSource::Url("https://example.com/geosite.dat".into()));
+    let mut added = list(
+        "1",
+        ListSource::Url("https://example.com/geosite.dat".into()),
+    );
     added.format = ListFormat::GeoSite;
     state.config.lists.push(added);
-    assert_eq!(state.list_rule_name(&ListId::new("1"), Some("example@cn")), "Example: example@cn");
+    assert_eq!(
+        state.list_rule_name(&ListId::new("1"), Some("example@cn")),
+        "Example: example@cn"
+    );
     state.config.rule_sets[1].rules[0].matcher = RuleMatcher::List {
         list: ListId::new("1"),
         category: Some("example@cn".into()),
@@ -214,16 +244,34 @@ fn missing_categories_expose_fallback_and_disabled_states_then_clear() {
         result: Ok(vec![item.clone()]),
     });
     assert_eq!(state.active_missing_categories(), 1);
-    assert!(state.missing_list_rule(Some(&RuleSetId::new("2")), &RuleId::new("0")).unwrap().last_good);
+    assert!(
+        state
+            .missing_list_rule(Some(&RuleSetId::new("2")), &RuleId::new("0"))
+            .unwrap()
+            .last_good
+    );
     assert_eq!(state.lists.missing[0].category, "example@cn");
     assert_eq!(
-        crate::i18n::tr_in(crate::i18n::Language::Russian, "rule-category-last-good", &fluent_bundle::FluentArgs::new()),
+        crate::i18n::tr_in(
+            crate::i18n::Language::Russian,
+            "rule-category-last-good",
+            &fluent_bundle::FluentArgs::new()
+        ),
         "Категории больше нет в списке · используется прошлая версия"
     );
     state.lists.missing[0].last_good = false;
-    assert!(!state.missing_list_rule(Some(&RuleSetId::new("2")), &RuleId::new("0")).unwrap().last_good);
+    assert!(
+        !state
+            .missing_list_rule(Some(&RuleSetId::new("2")), &RuleId::new("0"))
+            .unwrap()
+            .last_good
+    );
     assert_eq!(
-        crate::i18n::tr_in(crate::i18n::Language::English, "rule-category-disabled", &fluent_bundle::FluentArgs::new()),
+        crate::i18n::tr_in(
+            crate::i18n::Language::English,
+            "rule-category-disabled",
+            &fluent_bundle::FluentArgs::new()
+        ),
         "Category no longer in list · rule does not work"
     );
     state.config.rule_sets[1].rules[0].matcher = RuleMatcher::List {
@@ -241,7 +289,10 @@ fn missing_categories_expose_fallback_and_disabled_states_then_clear() {
 fn connected_state_with_list_rule() -> (State, ListId) {
     let mut state = state_for_auto_connect();
     let id = ListId::new("1");
-    state.config.lists.push(list("1", ListSource::Url("https://example.com/rules.txt".into())));
+    state.config.lists.push(list(
+        "1",
+        ListSource::Url("https://example.com/rules.txt".into()),
+    ));
     let mut set = rule_set("1");
     set.rules[0].matcher = RuleMatcher::List {
         list: id.clone(),
@@ -292,7 +343,10 @@ fn background_update_of_active_list_does_not_apply_on_leave() {
 #[test]
 fn manual_update_of_unused_list_does_not_apply_on_leave() {
     let (mut state, _) = connected_state_with_list_rule();
-    let unused = list("2", ListSource::Url("https://example.com/unused.txt".into()));
+    let unused = list(
+        "2",
+        ListSource::Url("https://example.com/unused.txt".into()),
+    );
     state.config.lists.push(unused.clone());
     state.reduce(WorkerEvent::UpdateList {
         id: unused.id.clone(),
@@ -306,7 +360,10 @@ fn manual_update_of_unused_list_does_not_apply_on_leave() {
 #[test]
 fn manual_update_of_temporary_list_applies_on_leave() {
     let (mut state, _) = connected_state_with_list_rule();
-    let temporary = list("2", ListSource::Url("https://example.com/temporary.txt".into()));
+    let temporary = list(
+        "2",
+        ListSource::Url("https://example.com/temporary.txt".into()),
+    );
     state.config.lists.push(temporary.clone());
     state.session.temporary_rules.push(Rule {
         id: RuleId::new("temporary-list"),
@@ -328,7 +385,10 @@ fn manual_update_of_temporary_list_applies_on_leave() {
 #[test]
 fn connecting_with_original_list_request_has_no_pending_apply() {
     let (mut state, _) = connected_state_with_list_rule();
-    assert_eq!(state.session.session_request.as_ref().unwrap().lists.len(), 0);
+    assert_eq!(
+        state.session.session_request.as_ref().unwrap().lists.len(),
+        0
+    );
     assert!(!state.has_pending_apply());
     assert!(state.apply_on_leave().is_none());
 }
@@ -343,11 +403,17 @@ fn list_update_failures_stay_local_and_unrelated_success_does_not_clear_them() {
         result: Err(ListError::Integrity),
         manual: false,
     });
-    assert!(matches!(state.lists.outcomes.get(&id), Some(ListOutcome::Failed(_))));
+    assert!(matches!(
+        state.lists.outcomes.get(&id),
+        Some(ListOutcome::Failed(_))
+    ));
     assert!(state.operation_error.is_none());
     state.reduce(WorkerEvent::UpdateAll {
         subscriptions: Ok(Vec::new()),
         lists: Ok(Vec::new()),
     });
-    assert!(matches!(state.lists.outcomes.get(&id), Some(ListOutcome::Failed(_))));
+    assert!(matches!(
+        state.lists.outcomes.get(&id),
+        Some(ListOutcome::Failed(_))
+    ));
 }

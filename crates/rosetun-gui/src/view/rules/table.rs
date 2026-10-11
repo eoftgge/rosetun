@@ -596,8 +596,15 @@ fn rule_value(
                 .on_hover_text(tr!("rule-category-hint"));
         });
     } else {
-        ui.add(egui::Label::new(RichText::new(state.text(&caption)).small().color(theme::TEXT_DIM)).truncate())
-            .on_hover_text(tooltip);
+        ui.add(
+            egui::Label::new(
+                RichText::new(state.text(&caption))
+                    .small()
+                    .color(theme::TEXT_DIM),
+            )
+            .truncate(),
+        )
+        .on_hover_text(tooltip);
     }
 }
 

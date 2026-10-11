@@ -52,7 +52,8 @@ pub(crate) fn editable(matcher: &RuleMatcher) -> bool {
         matcher,
         RuleMatcher::Domain(
             rosetun_config::DomainMatch::Exact(_) | rosetun_config::DomainMatch::Suffix(_)
-        ) | RuleMatcher::Process(_) | RuleMatcher::List { .. }
+        ) | RuleMatcher::Process(_)
+            | RuleMatcher::List { .. }
     )
 }
 

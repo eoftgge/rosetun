@@ -229,7 +229,10 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
                 stroke,
             ));
             painter.line_segment(
-                [center + egui::vec2(0.0, -2.5), center + egui::vec2(0.0, 2.0)],
+                [
+                    center + egui::vec2(0.0, -2.5),
+                    center + egui::vec2(0.0, 2.0),
+                ],
                 stroke,
             );
             painter.circle_filled(center + egui::vec2(0.0, 4.0), 0.8, color);

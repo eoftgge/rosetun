@@ -2,7 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rosetun_config::{ListSource, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, list_tag};
+use rosetun_config::{
+    ListSource, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, list_tag,
+};
 
 use super::*;
 
@@ -103,7 +105,11 @@ fn text_entry_count_is_transient_and_uses_verified_contents() {
     )
     .unwrap();
     assert_eq!(text_entry_count(&store, &list.id).unwrap(), Some(2));
-    assert!(!fs::read_to_string(store.path()).unwrap().contains("entry_count"));
+    assert!(
+        !fs::read_to_string(store.path())
+            .unwrap()
+            .contains("entry_count")
+    );
 }
 
 #[test]
@@ -128,9 +134,11 @@ fn missing_category_inspection_covers_every_set_and_temporary_rule_without_writi
             set
         })
         .to_vec();
-    assert!(inspect_missing_categories(&store, &config, &[rule.clone()])
-        .unwrap()
-        .is_empty());
+    assert!(
+        inspect_missing_categories(&store, &config, &[rule.clone()])
+            .unwrap()
+            .is_empty()
+    );
 
     config.lists[0].categories.clear();
     let missing = inspect_missing_categories(&store, &config, &[rule.clone()]).unwrap();

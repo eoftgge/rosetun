@@ -23,7 +23,10 @@ fn read_list_file(path: &Path) -> Result<(String, Vec<u8>), ListError> {
     Ok((name, bytes))
 }
 
-fn add_result(store: &Store, result: Result<List, ListError>) -> Result<(List, Option<usize>), ListError> {
+fn add_result(
+    store: &Store,
+    result: Result<List, ListError>,
+) -> Result<(List, Option<usize>), ListError> {
     result.map(|list| {
         let entries = text_entry_count(store, &list.id)
             .inspect_err(|error| subscriptions::log_list_error("count", error))
@@ -40,7 +43,9 @@ impl WorkerDispatcher {
                 .store
                 .load()
                 .map_err(ListError::Store)
-                .and_then(|config| inspect_missing_categories(&publisher.store, &config, &temporary));
+                .and_then(|config| {
+                    inspect_missing_categories(&publisher.store, &config, &temporary)
+                });
             emit(
                 &publisher.tx,
                 &publisher.repaint,
@@ -57,13 +62,20 @@ impl WorkerDispatcher {
                 .pick_file();
             #[cfg(not(windows))]
             let path = None;
-            emit(&publisher.tx, &publisher.repaint, WorkerEvent::BrowsedListFile(path));
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::BrowsedListFile(path),
+            );
         });
     }
 
     pub(crate) fn add_list_url(&self, url: String, name: String) {
         self.spawn_complete("rosetun-add-list-url", move |store| {
-            let result = add_result(store, add_list_from_url(store, &url, &name, Timeouts::default()));
+            let result = add_result(
+                store,
+                add_list_from_url(store, &url, &name, Timeouts::default()),
+            );
             if let Err(error) = &result {
                 subscriptions::log_list_error("add", error);
             }
@@ -114,7 +126,12 @@ impl WorkerDispatcher {
                 return;
             };
             let result = read_list_file(&path).and_then(|(name, bytes)| {
-                update_list(&publisher.store, &id, Some((&name, &bytes)), Timeouts::default())
+                update_list(
+                    &publisher.store,
+                    &id,
+                    Some((&name, &bytes)),
+                    Timeouts::default(),
+                )
             });
             if let Err(error) = &result {
                 subscriptions::log_list_error("update", error);

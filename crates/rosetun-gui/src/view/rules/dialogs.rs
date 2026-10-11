@@ -59,50 +59,49 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             confirm_enabled: !busy,
             button_gap: 18.0,
         },
-        |ui| {
-            match dialog {
-                DeleteDialog::Set(id) => {
-                    if let Some(set) = state.config.rule_sets.iter().find(|set| &set.id == id) {
-                        ui.label(state.text(&set.name));
-                    }
-                    ui.add(egui::Label::new(tr!("delete-rule-set-detail")).wrap());
-                    if state.config.active_rule_set.as_ref() == Some(id) {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(tr!("delete-active-rule-set-warning"))
-                                    .color(theme::ERROR),
-                            )
-                            .wrap(),
-                        );
-                    }
+        |ui| match dialog {
+            DeleteDialog::Set(id) => {
+                if let Some(set) = state.config.rule_sets.iter().find(|set| &set.id == id) {
+                    ui.label(state.text(&set.name));
                 }
-                DeleteDialog::Rule { set, rule } => {
-                    if let Some(rule) = state
-                        .config
-                        .rule_sets
-                        .iter()
-                        .find(|item| &item.id == set)
-                        .and_then(|set| set.rules.iter().find(|item| &item.id == rule))
-                    {
-                        ui.label(state.text(&delete_rule_value(state, rule)));
-                    }
-                    ui.label(tr!("delete-rule-detail"));
+                ui.add(egui::Label::new(tr!("delete-rule-set-detail")).wrap());
+                if state.config.active_rule_set.as_ref() == Some(id) {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(tr!("delete-active-rule-set-warning"))
+                                .color(theme::ERROR),
+                        )
+                        .wrap(),
+                    );
                 }
-                DeleteDialog::Rules { set, rules } => {
-                    if let Some(set) = state.config.rule_sets.iter().find(|item| &item.id == set) {
-                        for id in rules.iter().take(5) {
-                            if let Some(rule) = set.rules.iter().find(|item| &item.id == id) {
-                                ui.add(
-                                    egui::Label::new(state.text(&delete_rule_value(state, rule))).wrap(),
-                                );
-                            }
+            }
+            DeleteDialog::Rule { set, rule } => {
+                if let Some(rule) = state
+                    .config
+                    .rule_sets
+                    .iter()
+                    .find(|item| &item.id == set)
+                    .and_then(|set| set.rules.iter().find(|item| &item.id == rule))
+                {
+                    ui.label(state.text(&delete_rule_value(state, rule)));
+                }
+                ui.label(tr!("delete-rule-detail"));
+            }
+            DeleteDialog::Rules { set, rules } => {
+                if let Some(set) = state.config.rule_sets.iter().find(|item| &item.id == set) {
+                    for id in rules.iter().take(5) {
+                        if let Some(rule) = set.rules.iter().find(|item| &item.id == id) {
+                            ui.add(
+                                egui::Label::new(state.text(&delete_rule_value(state, rule)))
+                                    .wrap(),
+                            );
                         }
                     }
-                    if rules.len() > 5 {
-                        ui.label(crate::i18n::and_more_rules(rules.len() - 5));
-                    }
-                    ui.label(tr!("delete-rule-detail"));
                 }
+                if rules.len() > 5 {
+                    ui.label(crate::i18n::and_more_rules(rules.len() - 5));
+                }
+                ui.label(tr!("delete-rule-detail"));
             }
         },
     );

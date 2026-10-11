@@ -59,7 +59,9 @@ fn inspect_rules(
         if !list.format.has_categories() {
             continue;
         }
-        let base = category.split_once('@').map_or(category.as_str(), |(base, _)| base);
+        let base = category
+            .split_once('@')
+            .map_or(category.as_str(), |(base, _)| base);
         if list.categories.iter().any(|name| name == base) {
             continue;
         }

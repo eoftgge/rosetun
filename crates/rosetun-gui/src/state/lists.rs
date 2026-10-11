@@ -69,7 +69,10 @@ impl AddListDialog {
 
 fn suggested_url_name(input: &str) -> Option<String> {
     let url = url::Url::parse(input.trim()).ok()?;
-    let name = url.path_segments()?.filter(|part| !part.is_empty()).next_back()?;
+    let name = url
+        .path_segments()?
+        .filter(|part| !part.is_empty())
+        .next_back()?;
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
     (!stem.is_empty()).then(|| stem.to_owned())
 }
@@ -113,9 +116,9 @@ pub(crate) fn used_by(config: &AppConfig, id: &ListId) -> Vec<String> {
         .rule_sets
         .iter()
         .filter(|set| {
-            set.rules.iter().any(|rule| {
-                matches!(&rule.matcher, RuleMatcher::List { list, .. } if list == id)
-            })
+            set.rules
+                .iter()
+                .any(|rule| matches!(&rule.matcher, RuleMatcher::List { list, .. } if list == id))
         })
         .map(|set| set.name.clone())
         .collect()
@@ -147,9 +150,10 @@ impl State {
         set: Option<&rosetun_config::RuleSetId>,
         rule: &rosetun_config::RuleId,
     ) -> Option<&MissingListCategory> {
-        self.lists.missing.iter().find(|missing| {
-            missing.set.as_ref() == set && &missing.rule == rule
-        })
+        self.lists
+            .missing
+            .iter()
+            .find(|missing| missing.set.as_ref() == set && &missing.rule == rule)
     }
 
     pub(crate) fn list_rule_name(&self, id: &ListId, category: Option<&str>) -> String {
@@ -170,15 +174,20 @@ impl State {
             .config
             .active_rules()
             .map(|set| {
-                set.rules.iter().filter(|rule| {
-                    rule.enabled && self.missing_list_rule(Some(&set.id), &rule.id).is_some()
-                }).count()
+                set.rules
+                    .iter()
+                    .filter(|rule| {
+                        rule.enabled && self.missing_list_rule(Some(&set.id), &rule.id).is_some()
+                    })
+                    .count()
             })
             .unwrap_or_default();
         let temporary = if active.is_some() {
-            self.session.temporary_rules.iter().filter(|rule| {
-                rule.enabled && self.missing_list_rule(None, &rule.id).is_some()
-            }).count()
+            self.session
+                .temporary_rules
+                .iter()
+                .filter(|rule| rule.enabled && self.missing_list_rule(None, &rule.id).is_some())
+                .count()
         } else {
             0
         };
@@ -221,7 +230,8 @@ impl State {
                 match result {
                     Ok(missing) => self.lists.missing = missing,
                     Err(error) => {
-                        self.lists.scan_error = Some(self.text(&errors::list(crate::i18n::language(), &error)));
+                        self.lists.scan_error =
+                            Some(self.text(&errors::list(crate::i18n::language(), &error)));
                     }
                 }
             }
@@ -252,7 +262,10 @@ impl State {
                         rule.enabled
                             && matches!(&rule.matcher, RuleMatcher::List { list, .. } if list == &id)
                     };
-                    if self.config.active_rules().is_some_and(|set| set.rules.iter().any(uses_list))
+                    if self
+                        .config
+                        .active_rules()
+                        .is_some_and(|set| set.rules.iter().any(uses_list))
                         || self.session.temporary_rules.iter().any(uses_list)
                     {
                         self.session.lists_changed_since_apply = true;
@@ -270,9 +283,8 @@ impl State {
                 self.operations.updating_lists.remove(&id);
             }
             WorkerEvent::RenameList(result) => {
-                let result = result.map_err(|error| {
-                    self.text(&errors::list(crate::i18n::language(), &error))
-                });
+                let result = result
+                    .map_err(|error| self.text(&errors::list(crate::i18n::language(), &error)));
                 if let Some(dialog) = &mut self.lists.rename {
                     dialog.busy = false;
                     match result {
@@ -282,9 +294,8 @@ impl State {
                 }
             }
             WorkerEvent::RemoveList(result) => {
-                let result = result.map_err(|error| {
-                    self.text(&errors::list(crate::i18n::language(), &error))
-                });
+                let result = result
+                    .map_err(|error| self.text(&errors::list(crate::i18n::language(), &error)));
                 if let Some(dialog) = &mut self.lists.remove {
                     dialog.busy = false;
                     match result {
@@ -347,7 +358,10 @@ impl State {
                     }) {
                         dialog.busy = true;
                         dialog.error = None;
-                        return Some(Job::AddListUrl(dialog.url.trim().to_owned(), name.to_owned()));
+                        return Some(Job::AddListUrl(
+                            dialog.url.trim().to_owned(),
+                            name.to_owned(),
+                        ));
                     } else {
                         dialog.error = Some(ListError::InvalidUrl);
                     }
@@ -390,7 +404,12 @@ impl State {
                 }
             }
             Action::CancelRenameList => {
-                if self.lists.rename.as_ref().is_some_and(|dialog| !dialog.busy) {
+                if self
+                    .lists
+                    .rename
+                    .as_ref()
+                    .is_some_and(|dialog| !dialog.busy)
+                {
                     self.lists.rename = None;
                 }
             }
@@ -400,7 +419,10 @@ impl State {
                 {
                     dialog.busy = true;
                     dialog.error = None;
-                    return Some(Job::RenameList(dialog.id.clone(), dialog.name.trim().to_owned()));
+                    return Some(Job::RenameList(
+                        dialog.id.clone(),
+                        dialog.name.trim().to_owned(),
+                    ));
                 }
             }
             Action::OpenRemoveList(id) => {
@@ -416,7 +438,12 @@ impl State {
                 }
             }
             Action::CancelRemoveList => {
-                if self.lists.remove.as_ref().is_some_and(|dialog| !dialog.busy) {
+                if self
+                    .lists
+                    .remove
+                    .as_ref()
+                    .is_some_and(|dialog| !dialog.busy)
+                {
                     self.lists.remove = None;
                 }
             }

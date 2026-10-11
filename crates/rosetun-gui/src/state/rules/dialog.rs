@@ -1,7 +1,9 @@
 #[cfg(windows)]
 use std::path::PathBuf;
 
-use rosetun_config::{DomainMatch, ListId, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget};
+use rosetun_config::{
+    DomainMatch, ListId, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget,
+};
 
 use super::super::{Action, Job, State};
 use crate::errors;
@@ -346,7 +348,8 @@ impl State {
                             && let Err(error) =
                                 rosetun_core::validate_list_matcher(&self.config, &matchers[0])
                         {
-                            let message = self.text(&errors::rule_set(crate::i18n::language(), &error));
+                            let message =
+                                self.text(&errors::rule_set(crate::i18n::language(), &error));
                             if let Some(dialog) = &mut self.rules.screen.add {
                                 dialog.error = Some(message);
                             }

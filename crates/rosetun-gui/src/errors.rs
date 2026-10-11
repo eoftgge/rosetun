@@ -1,10 +1,10 @@
 use rosetun_config::{ConfigError, ListCategoryError};
 use rosetun_core::{
     AddFromUrlError, AddSubscriptionError, DnsInputError, FetchError, ListError, ListParseError,
-    ListPreparationError, MoveSubscriptionError, TextErrorKind,
-    ParseError, RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
-    SelectNodeError, SelectRuleSetError, SettingsError, SkipReason, StoreError,
-    SubscriptionUrlError, UnsupportedTransport, UpdateSubscriptionError,
+    ListPreparationError, MoveSubscriptionError, ParseError, RemoveSubscriptionError,
+    RenameSubscriptionError, RuleInputError, RuleSetError, SelectNodeError, SelectRuleSetError,
+    SettingsError, SkipReason, StoreError, SubscriptionUrlError, TextErrorKind,
+    UnsupportedTransport, UpdateSubscriptionError,
 };
 use rosetun_ipc::{ClientError, ConnectRequestError, ErrorCode};
 use rosetun_processes::ProcessListError;
@@ -145,13 +145,11 @@ pub(crate) fn list(language: Language, error: &ListError) -> String {
         ListError::FileRequired => tr_in(language, "error-list-file-required", &FluentArgs::new()),
         ListError::WrongSource => tr_in(language, "error-list-wrong-source", &FluentArgs::new()),
         ListError::ChangedDuringUpdate => tr_in(language, "error-list-changed", &FluentArgs::new()),
-        ListError::InUse { sets } => {
-            tr_in(
-                language,
-                "error-list-in-use",
-                &arguments(&[("sets", &display::safe_text(&sets.join(", ")))]),
-            )
-        }
+        ListError::InUse { sets } => tr_in(
+            language,
+            "error-list-in-use",
+            &arguments(&[("sets", &display::safe_text(&sets.join(", ")))]),
+        ),
         ListError::TooLarge => tr_in(language, "error-list-too-large", &FluentArgs::new()),
         ListError::Integrity => tr_in(language, "error-list-integrity", &FluentArgs::new()),
         ListError::Category(error) => list_category(language, error),
@@ -167,9 +165,11 @@ pub(crate) fn list_category(language: Language, error: &ListCategoryError) -> St
         ListCategoryError::Required => {
             tr_in(language, "error-list-category-required", &FluentArgs::new())
         }
-        ListCategoryError::Unexpected => {
-            tr_in(language, "error-list-category-unexpected", &FluentArgs::new())
-        }
+        ListCategoryError::Unexpected => tr_in(
+            language,
+            "error-list-category-unexpected",
+            &FluentArgs::new(),
+        ),
         ListCategoryError::Unknown => {
             tr_in(language, "error-list-category-unknown", &FluentArgs::new())
         }
@@ -181,7 +181,9 @@ pub(crate) fn list_category(language: Language, error: &ListCategoryError) -> St
 
 fn list_parse(language: Language, error: &ListParseError) -> String {
     match error {
-        ListParseError::InputTooLarge => tr_in(language, "error-list-too-large", &FluentArgs::new()),
+        ListParseError::InputTooLarge => {
+            tr_in(language, "error-list-too-large", &FluentArgs::new())
+        }
         ListParseError::PayloadTooLarge => {
             tr_in(language, "error-list-payload-too-large", &FluentArgs::new())
         }
@@ -189,13 +191,11 @@ fn list_parse(language: Language, error: &ListParseError) -> String {
             tr_in(language, "error-list-too-many-entries", &FluentArgs::new())
         }
         ListParseError::InvalidSrs => tr_in(language, "error-list-invalid-srs", &FluentArgs::new()),
-        ListParseError::UnsupportedSrsVersion(version) => {
-            tr_in(
-                language,
-                "error-list-srs-version",
-                &arguments(&[("version", &version.to_string())]),
-            )
-        }
+        ListParseError::UnsupportedSrsVersion(version) => tr_in(
+            language,
+            "error-list-srs-version",
+            &arguments(&[("version", &version.to_string())]),
+        ),
         ListParseError::InvalidJson | ListParseError::InvalidSource(_) => {
             tr_in(language, "error-list-invalid-json", &FluentArgs::new())
         }
@@ -226,10 +226,7 @@ fn list_parse(language: Language, error: &ListParseError) -> String {
                     tr_in(
                         language,
                         "error-list-text-line",
-                        &arguments(&[
-                            ("line", &error.line.to_string()),
-                            ("reason", &reason),
-                        ]),
+                        &arguments(&[("line", &error.line.to_string()), ("reason", &reason)]),
                     )
                 })
                 .collect::<Vec<_>>();

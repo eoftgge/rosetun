@@ -101,35 +101,35 @@ pub(crate) fn show(
             ui.add_space(2.0);
             let valid = match dialog.kind {
                 RuleInputKind::Process => {
-                let frame = widgets::modal_frame();
-                let advanced_height = if dialog.advanced { 52.0 } else { 0.0 };
-                let limit = ui.ctx().content_rect().bottom()
-                    - BOTTOM_GAP
-                    - (frame.inner_margin.bottom as f32 + frame.stroke.width)
-                    - BUTTON_ROW_HEIGHT
-                    - ACTIONS_GAP
-                    - 104.0
-                    - if dialog.editing.is_none() && dialog.temporary_only {
-                        TEMPORARY_HINT_HEIGHT
-                    } else {
-                        0.0
-                    }
-                    - advanced_height
-                    - if dialog.error.is_some() {
-                        ERROR_HEIGHT
-                    } else {
-                        0.0
-                    };
-                let height = process_body_height(ui.cursor().top(), limit, dialog.advanced);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(DIALOG_WIDTH, height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.set_min_size(egui::vec2(DIALOG_WIDTH, height));
-                        process_input(ui, dialog, actions)
-                    },
-                )
-                .inner
+                    let frame = widgets::modal_frame();
+                    let advanced_height = if dialog.advanced { 52.0 } else { 0.0 };
+                    let limit = ui.ctx().content_rect().bottom()
+                        - BOTTOM_GAP
+                        - (frame.inner_margin.bottom as f32 + frame.stroke.width)
+                        - BUTTON_ROW_HEIGHT
+                        - ACTIONS_GAP
+                        - 104.0
+                        - if dialog.editing.is_none() && dialog.temporary_only {
+                            TEMPORARY_HINT_HEIGHT
+                        } else {
+                            0.0
+                        }
+                        - advanced_height
+                        - if dialog.error.is_some() {
+                            ERROR_HEIGHT
+                        } else {
+                            0.0
+                        };
+                    let height = process_body_height(ui.cursor().top(), limit, dialog.advanced);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(DIALOG_WIDTH, height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_min_size(egui::vec2(DIALOG_WIDTH, height));
+                            process_input(ui, dialog, actions)
+                        },
+                    )
+                    .inner
                 }
                 RuleInputKind::Domain => domain_input(ui, dialog),
                 RuleInputKind::List => list_input(ui, dialog, lists, actions),
@@ -340,7 +340,10 @@ fn list_input(
                 }
             });
         if count > matches.len() {
-            ui.label(tr!("rule-list-more-categories", n = (count - matches.len()).to_string()));
+            ui.label(tr!(
+                "rule-list-more-categories",
+                n = (count - matches.len()).to_string()
+            ));
         }
         ui.label(tr!("rule-list-category"));
         if ui
@@ -1005,7 +1008,9 @@ mod tests {
         let list = List {
             id: ListId::new("1"),
             name: "Example".into(),
-            source: ListSource::File { original_name: "geosite.dat".into() },
+            source: ListSource::File {
+                original_name: "geosite.dat".into(),
+            },
             format: ListFormat::GeoSite,
             updated_at: None,
             size: None,
@@ -1020,10 +1025,20 @@ mod tests {
                 )),
                 ..egui::RawInput::default()
             },
-            |ctx| show(ctx, &mut dialog, std::slice::from_ref(&list), true, &mut Vec::new()),
+            |ctx| {
+                show(
+                    ctx,
+                    &mut dialog,
+                    std::slice::from_ref(&list),
+                    true,
+                    &mut Vec::new(),
+                )
+            },
         );
         output.textures_delta.clear();
-        let rect = ctx.memory(|memory| memory.area_rect(egui::Id::new("add_rule"))).unwrap();
+        let rect = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+            .unwrap();
         assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
     }
 

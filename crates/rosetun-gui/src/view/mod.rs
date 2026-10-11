@@ -143,7 +143,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             if !can_temporary {
                 dialog.temporary_only = false;
             }
-            add_rule::show(ctx, dialog, &state.config.lists, can_temporary, &mut actions);
+            add_rule::show(
+                ctx,
+                dialog,
+                &state.config.lists,
+                can_temporary,
+                &mut actions,
+            );
         }
     }
     if state.settings.screen.reset_open {

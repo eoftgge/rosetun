@@ -25,11 +25,13 @@ fn source_name(source: &ListSource) -> String {
         ListSource::Url(value) => url::Url::parse(value)
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
-            .map_or_else(|| tr!("list-source-unknown"), |host| display::safe_text(&host)),
-        ListSource::File { original_name } => tr!(
-            "list-source-file",
-            name = display::safe_text(original_name)
-        ),
+            .map_or_else(
+                || tr!("list-source-unknown"),
+                |host| display::safe_text(&host),
+            ),
+        ListSource::File { original_name } => {
+            tr!("list-source-file", name = display::safe_text(original_name))
+        }
     }
 }
 
@@ -83,7 +85,10 @@ fn list_card(ui: &mut egui::Ui, state: &State, list: &List, actions: &mut Vec<Ac
         .updated_at
         .map(|time| i18n::last_updated(&i18n::updated_ago(time, display::now_unix())))
         .unwrap_or_else(|| tr!("never-updated"));
-    let size = list.size.map(i18n::bytes).unwrap_or_else(|| tr!("list-size-unknown"));
+    let size = list
+        .size
+        .map(i18n::bytes)
+        .unwrap_or_else(|| tr!("list-size-unknown"));
     let detail = if list.format.has_categories() {
         tr!(
             "list-detail-categories",
@@ -171,11 +176,14 @@ fn list_card(ui: &mut egui::Ui, state: &State, list: &List, actions: &mut Vec<Ac
                     }
                 });
             });
-            ui.add(egui::Label::new(tr!(
-                "list-format-source",
-                format = format_name(list.format),
-                source = &source
-            )).truncate());
+            ui.add(
+                egui::Label::new(tr!(
+                    "list-format-source",
+                    format = format_name(list.format),
+                    source = &source
+                ))
+                .truncate(),
+            );
             ui.add(egui::Label::new(detail).truncate());
             if busy {
                 ui.label(tr!("updating"));
@@ -184,7 +192,8 @@ fn list_card(ui: &mut egui::Ui, state: &State, list: &List, actions: &mut Vec<Ac
                     ListOutcome::Updated { manual } => {
                         ui.colored_label(
                             theme::TEXT_MUTED,
-                            if !manual && matches!(&state.status.state, ConnectionState::Connected) {
+                            if !manual && matches!(&state.status.state, ConnectionState::Connected)
+                            {
                                 tr!("list-updated-later")
                             } else {
                                 tr!("list-updated")
@@ -227,7 +236,11 @@ fn list_card(ui: &mut egui::Ui, state: &State, list: &List, actions: &mut Vec<Ac
         });
 }
 
-pub(crate) fn add_dialog(ctx: &egui::Context, dialog: &mut AddListDialog, actions: &mut Vec<Action>) {
+pub(crate) fn add_dialog(
+    ctx: &egui::Context,
+    dialog: &mut AddListDialog,
+    actions: &mut Vec<Action>,
+) {
     let busy = dialog.busy || dialog.browsing;
     let response = egui::Modal::new(egui::Id::new("add_list"))
         .frame(widgets::modal_frame())
@@ -312,8 +325,9 @@ pub(crate) fn add_dialog(ctx: &egui::Context, dialog: &mut AddListDialog, action
                 if widgets::button_fill(
                     ui,
                     if busy { tr!("adding") } else { tr!("add") },
-                    !busy && !dialog.name.trim().is_empty() &&
-                        (dialog.file.is_some() || !dialog.url.trim().is_empty()),
+                    !busy
+                        && !dialog.name.trim().is_empty()
+                        && (dialog.file.is_some() || !dialog.url.trim().is_empty()),
                 )
                 .clicked()
                 {
@@ -357,9 +371,8 @@ mod tests {
 
     #[test]
     fn card_source_contains_only_the_url_host() {
-        let source = ListSource::Url(
-            "https://user:secret@example.com/private/path?token=secret".into(),
-        );
+        let source =
+            ListSource::Url("https://user:secret@example.com/private/path?token=secret".into());
         assert_eq!(source_name(&source), "example.com");
     }
 }

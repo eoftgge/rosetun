@@ -269,9 +269,10 @@ impl App {
             Job::AddListUrl(url, name) => self.workers.add_list_url(url, name),
             Job::AddListFile(path, name) => self.workers.add_list_file(path, name),
             Job::BrowseListFile => self.workers.browse_list_file(),
-            Job::InspectListCategories { revision, temporary } => {
-                self.workers.inspect_list_categories(revision, temporary)
-            }
+            Job::InspectListCategories {
+                revision,
+                temporary,
+            } => self.workers.inspect_list_categories(revision, temporary),
             Job::RenameList(id, name) => self.workers.rename_list(id, name),
             Job::RemoveList(id) => self.workers.remove_list(id),
             Job::Ping(id) => self.workers.ping(id, None),

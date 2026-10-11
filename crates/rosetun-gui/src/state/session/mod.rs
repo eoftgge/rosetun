@@ -248,10 +248,12 @@ impl State {
     }
 
     pub(super) fn cache_config_request(&mut self) {
-        self.session.cached_request = Some(ConnectRequest::from_config(&self.config).map(|mut request| {
-            request.temporary_rules = self.session.temporary_rules.clone();
-            request
-        }));
+        self.session.cached_request = Some(ConnectRequest::from_config(&self.config).map(
+            |mut request| {
+                request.temporary_rules = self.session.temporary_rules.clone();
+                request
+            },
+        ));
         #[cfg(test)]
         {
             self.session.request_builds += 1;

@@ -44,7 +44,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         ui,
         "rules_lists_tab",
         state.lists.tab,
-        &[(RulesTab::Rules, tr!("rules")), (RulesTab::Lists, tr!("lists-title"))],
+        &[
+            (RulesTab::Rules, tr!("rules")),
+            (RulesTab::Lists, tr!("lists-title")),
+        ],
         false,
         true,
     ) {
