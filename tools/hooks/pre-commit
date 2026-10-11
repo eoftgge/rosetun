@@ -1,0 +1,10 @@
+#!/bin/sh
+# Keeps patch files, private folders, real proxy hosts, the local account name
+# and long dashes in Fluent strings out of commits. Only staged changes are read.
+. "$(dirname "$0")/lib.sh"
+
+problems=$(rosetun_staged_problems)
+if [ -n "$problems" ]; then
+    printf 'pre-commit: %s\n' "$problems" >&2
+    exit 1
+fi

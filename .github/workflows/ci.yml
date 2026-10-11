@@ -45,6 +45,29 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+  commits:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check commit messages and added lines
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # A new branch or a rewritten history has no usable "before": check the last commit.
+          if [ -n "$BASE" ]; then
+            from=$BASE
+          elif printf '%s' "$BEFORE" | grep -q '[^0]' && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            from=$BEFORE
+          else
+            from=$(git rev-parse "$HEAD~1")
+          fi
+          sh tools/hooks/check-range.sh "$from" "$HEAD"
+
   msrv:
     runs-on: windows-2025
     steps:

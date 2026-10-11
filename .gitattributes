@@ -3,3 +3,6 @@ installer/third-party/wintun-prebuilt-binaries-license.txt -text
 
 # Golden files are compared byte for byte; keep LF on every platform.
 crates/*/tests/fixtures/** text eol=lf
+
+# Hooks run with sh; CRLF would break them on Windows checkouts.
+tools/hooks/** text eol=lf

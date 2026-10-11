@@ -1,0 +1,36 @@
+#!/bin/sh
+# Before a push: messages of the commits being pushed (they may have been
+# made with --no-verify) and formatting.
+. "$(dirname "$0")/lib.sh"
+
+zero=0000000000000000000000000000000000000000
+failed=0
+pushes_commits=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$local_sha" in
+        *[!0]*) ;;
+        *) continue ;;
+    esac
+    case "$local_ref" in
+        refs/tags/*) continue ;;
+    esac
+    pushes_commits=1
+    if [ "$remote_sha" = "$zero" ]; then
+        range="$local_sha --not --remotes"
+    else
+        range="$remote_sha..$local_sha"
+    fi
+    # shellcheck disable=SC2086
+    if ! rosetun_check_commits $range; then
+        failed=1
+    fi
+done
+
+if [ "$pushes_commits" = 1 ] && [ -f "$(git rev-parse --show-toplevel)/Cargo.toml" ] \
+    && command -v cargo >/dev/null 2>&1; then
+    if ! cargo fmt --all --check >/dev/null 2>&1; then
+        echo 'pre-push: run `cargo fmt --all` and amend the last commit' >&2
+        failed=1
+    fi
+fi
+exit "$failed"

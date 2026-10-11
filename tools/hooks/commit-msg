@@ -1,0 +1,10 @@
+#!/bin/sh
+# Rejects AI attribution and non-Conventional subjects. Enable with
+# `git config core.hooksPath tools/hooks`.
+. "$(dirname "$0")/lib.sh"
+
+problems=$(rosetun_message_problems < "$1")
+if [ -n "$problems" ]; then
+    printf 'commit-msg: %s\n' "$problems" >&2
+    exit 1
+fi

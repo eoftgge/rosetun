@@ -68,6 +68,8 @@ The service owns protection, so closing the GUI does not remove it. If the servi
 
 Use Rust 1.96 or newer with the MSVC toolchain on Windows. Run `cargo build --release` to build the binaries and `cargo test --workspace` to run tests. See [installer instructions](installer/README.md) for packaging and the [VM test rig](tools/README.md) for elevated failure testing.
 
+Before committing, run `git config core.hooksPath tools/hooks` once. The hooks reject AI attribution and non-Conventional commit messages, patch files, real proxy hosts and your Windows account name in added lines, and unformatted code on push. CI runs the same message and added-line checks.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
