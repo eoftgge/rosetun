@@ -12,6 +12,8 @@ This is an alpha release, the last one of 0.1: from here 0.1 only gets fixes, in
 - **Rules screen.** The rule set selector moved up, next to the **Rules · Lists** switch.
 - **Program rules ignore letter case.** A rule for `telegram.exe` now also matches `Telegram.exe`, as Windows does with file names.
 - **Edits are not lost on quit.** Quitting from the tray while connected applies pending rule and DNS edits first.
+- **A dead server is recognized sooner.** When the server does not answer at all, Rosetun now says so in about 15 seconds instead of waiting a full minute, even when no other program is using the network. The same applies when you switch to such a server while connected.
+- **`rosetun status` while connecting** now shows the state instead of failing while the service is busy.
 - **The command line and the app agree.** `rosetun apply` keeps temporary rules added in the app, and settings changed in the app and in `rosetun` at the same time are both kept.
 - **Security.**
   - The app checks that it talks to the real Rosetun service, and other accounts on the computer can no longer pose as it.
@@ -50,6 +52,8 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 - **Экран правил.** Выбор набора правил переехал наверх, к переключателю **Правила · Списки**.
 - **Правила для программ без учёта регистра.** Правило для `telegram.exe` теперь срабатывает и для `Telegram.exe`, как и принято в Windows для имён файлов.
 - **Правки не теряются при выходе.** Выход из трея при подключении сначала применяет непримененные правки правил и DNS.
+- **Неработающий сервер распознаётся быстрее.** Если сервер совсем не отвечает, Rosetun сообщает об этом примерно через 15 секунд, а не ждёт целую минуту, даже когда другие программы не пользуются сетью. То же при переключении на такой сервер во время подключения.
+- **`rosetun status` во время подключения** теперь показывает состояние, а не завершается с ошибкой, пока служба занята.
 - **Командная строка и программа заодно.** `rosetun apply` сохраняет временные правила, добавленные в программе, а настройки, измененные одновременно в программе и в `rosetun`, сохраняются обе.
 - **Безопасность.**
   - Программа проверяет, что говорит с настоящей службой Rosetun, и другие учётные записи компьютера больше не могут выдать себя за неё.
