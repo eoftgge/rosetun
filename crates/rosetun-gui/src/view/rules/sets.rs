@@ -8,7 +8,7 @@ pub(super) fn set_controls(ui: &mut egui::Ui, state: &State, actions: &mut Vec<A
     ui.horizontal(|ui| {
         set_picker(ui, state, set, actions);
         let menu =
-            icons::icon_button_sized(ui, Icon::More, true, 40.0).on_hover_text(tr!("more-actions"));
+            icons::icon_button_sized(ui, Icon::More, true, 38.0).on_hover_text(tr!("more-actions"));
         widgets::menu_popup(&menu).show(|ui| {
             ui.set_min_width(180.0);
             if !active
@@ -107,7 +107,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
     let response = ui
         .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
             ui.style_mut().interaction.selectable_labels = false;
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::hover());
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 38.0), egui::Sense::hover());
             let painter = ui.painter();
             painter.rect_filled(
                 rect,
