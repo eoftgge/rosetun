@@ -8,3 +8,16 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # Minor and patch updates of every crate arrive as one pull request;
+      # a major update gets its own, since it may need code changes.
+      cargo:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
