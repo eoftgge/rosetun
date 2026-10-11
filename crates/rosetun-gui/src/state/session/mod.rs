@@ -241,6 +241,7 @@ impl State {
             .is_some_and(|request| request.temporary_rules != self.session.temporary_rules)
         {
             self.cache_config_request();
+            self.request_list_inspection();
         }
     }
 

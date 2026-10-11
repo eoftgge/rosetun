@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rosetun_config::{ListSource, RuleMatcher, RuleTarget};
+use rosetun_config::{ListSource, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, list_tag};
 
 use super::*;
 
@@ -104,6 +104,52 @@ fn text_entry_count_is_transient_and_uses_verified_contents() {
     .unwrap();
     assert_eq!(text_entry_count(&store, &list.id).unwrap(), Some(2));
     assert!(!fs::read_to_string(store.path()).unwrap().contains("entry_count"));
+}
+
+#[test]
+fn missing_category_inspection_covers_every_set_and_temporary_rule_without_writing() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let list = add_list_from_bytes(&store, "Example", "geosite.dat", &example_site_dat()).unwrap();
+    let rule = Rule {
+        id: RuleId::new("same-id"),
+        enabled: true,
+        matcher: RuleMatcher::List {
+            list: list.id.clone(),
+            category: Some("example@cn".into()),
+        },
+        target: RuleTarget::Direct,
+    };
+    let mut config = store.load().unwrap();
+    config.rule_sets = ["first", "second"]
+        .map(|id| {
+            let mut set = RuleSet::new(RuleSetId::new(id), id, RuleTarget::Proxy);
+            set.rules.push(rule.clone());
+            set
+        })
+        .to_vec();
+    assert!(inspect_missing_categories(&store, &config, &[rule.clone()])
+        .unwrap()
+        .is_empty());
+
+    config.lists[0].categories.clear();
+    let missing = inspect_missing_categories(&store, &config, &[rule.clone()]).unwrap();
+    assert_eq!(missing.len(), 3);
+    assert!(!missing.iter().any(|item| item.last_good));
+    assert_eq!(missing[0].set, Some(RuleSetId::new("first")));
+    assert_eq!(missing[1].set, Some(RuleSetId::new("second")));
+    assert_eq!(missing[2].set, None);
+
+    let payload = list_payload(&store, &list.id, Some("example@cn")).unwrap();
+    last_good::save(
+        &store,
+        &list_tag(&list.id, Some("example@cn")),
+        payload.format,
+        &payload.bytes,
+    )
+    .unwrap();
+    let fallback = inspect_missing_categories(&store, &config, &[rule]).unwrap();
+    assert!(fallback.iter().all(|item| item.last_good));
 }
 
 #[test]

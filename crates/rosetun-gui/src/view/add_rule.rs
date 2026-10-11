@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, FontFamily, FontId, RichText, Stroke};
-use rosetun_config::{ProcessMatch, RuleTarget};
+use rosetun_config::{List, ProcessMatch, RuleTarget};
 
 use crate::display;
 use crate::errors;
@@ -38,6 +38,7 @@ fn process_body_height(top: f32, limit: f32, advanced: bool) -> f32 {
 pub(crate) fn show(
     ctx: &egui::Context,
     dialog: &mut AddRuleDialog,
+    lists: &[List],
     can_temporary: bool,
     actions: &mut Vec<Action>,
 ) {
@@ -90,6 +91,7 @@ pub(crate) fn show(
                 &[
                     (RuleInputKind::Process, tr!("rule-kind-app")),
                     (RuleInputKind::Domain, tr!("rule-kind-site")),
+                    (RuleInputKind::List, tr!("rule-kind-list")),
                 ],
                 true,
                 !dialog.busy && dialog.editing.is_none(),
@@ -97,7 +99,8 @@ pub(crate) fn show(
                 actions.push(Action::SelectRuleInput(kind));
             }
             ui.add_space(2.0);
-            let valid = if dialog.kind == RuleInputKind::Process {
+            let valid = match dialog.kind {
+                RuleInputKind::Process => {
                 let frame = widgets::modal_frame();
                 let advanced_height = if dialog.advanced { 52.0 } else { 0.0 };
                 let limit = ui.ctx().content_rect().bottom()
@@ -127,8 +130,9 @@ pub(crate) fn show(
                     },
                 )
                 .inner
-            } else {
-                domain_input(ui, dialog)
+                }
+                RuleInputKind::Domain => domain_input(ui, dialog),
+                RuleInputKind::List => list_input(ui, dialog, lists, actions),
             };
             ui.add_space(0.0);
             ui.label(
@@ -240,6 +244,120 @@ pub(crate) fn show(
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAddRule);
     }
+}
+
+fn list_input(
+    ui: &mut egui::Ui,
+    dialog: &mut AddRuleDialog,
+    lists: &[List],
+    actions: &mut Vec<Action>,
+) -> bool {
+    if lists.is_empty() {
+        ui.add(egui::Label::new(tr!("rule-list-empty")).wrap());
+        if widgets::outline_button(ui, tr!("add-list"), !dialog.busy).clicked() {
+            actions.push(Action::CancelAddRule);
+            actions.push(Action::ShowLists);
+            actions.push(Action::OpenAddList);
+        }
+        return false;
+    }
+    if dialog
+        .list
+        .as_ref()
+        .is_none_or(|id| !lists.iter().any(|list| &list.id == id))
+    {
+        dialog.list = Some(lists[0].id.clone());
+        dialog.category.clear();
+    }
+    ui.label(tr!("rule-list-select"));
+    let before = dialog.list.clone();
+    let selected = lists
+        .iter()
+        .find(|list| Some(&list.id) == dialog.list.as_ref())
+        .unwrap_or(&lists[0]);
+    ui.add_enabled_ui(!dialog.busy, |ui| {
+        egui::ComboBox::from_id_salt("rule_list")
+            .selected_text(display::safe_text(&selected.name))
+            .width(ui.available_width())
+            .show_ui(ui, |ui| {
+                for list in lists {
+                    ui.selectable_value(
+                        &mut dialog.list,
+                        Some(list.id.clone()),
+                        display::safe_text(&list.name),
+                    );
+                }
+            });
+    });
+    if dialog.list != before {
+        dialog.category.clear();
+        dialog.category_filter.clear();
+        dialog.error = None;
+    }
+    let selected = lists
+        .iter()
+        .find(|list| Some(&list.id) == dialog.list.as_ref())
+        .unwrap_or(&lists[0]);
+    if selected.format.has_categories() {
+        ui.add_space(8.0);
+        ui.label(tr!("rule-list-category-search"));
+        ui.add_enabled(
+            !dialog.busy,
+            egui::TextEdit::singleline(&mut dialog.category_filter)
+                .hint_text(tr!("rule-list-category-search-hint"))
+                .desired_width(f32::INFINITY),
+        );
+        let filter = dialog.category_filter.trim().to_ascii_lowercase();
+        let mut matches = Vec::with_capacity(200);
+        let mut count = 0;
+        for category in &selected.categories {
+            if category.to_ascii_lowercase().contains(&filter) {
+                count += 1;
+                if matches.len() < 200 {
+                    matches.push(category);
+                }
+            }
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("rule_list_categories")
+            .max_height(116.0)
+            .show_rows(ui, 28.0, matches.len(), |ui, rows| {
+                for index in rows {
+                    let category = matches[index];
+                    if ui
+                        .add_enabled(
+                            !dialog.busy,
+                            egui::Button::selectable(
+                                dialog.category == *category,
+                                display::safe_text(category),
+                            ),
+                        )
+                        .clicked()
+                    {
+                        dialog.category = category.clone();
+                        dialog.error = None;
+                    }
+                }
+            });
+        if count > matches.len() {
+            ui.label(tr!("rule-list-more-categories", n = (count - matches.len()).to_string()));
+        }
+        ui.label(tr!("rule-list-category"));
+        if ui
+            .add_enabled(
+                !dialog.busy,
+                egui::TextEdit::singleline(&mut dialog.category)
+                    .hint_text(tr!("rule-list-category-hint"))
+                    .desired_width(f32::INFINITY),
+            )
+            .changed()
+        {
+            dialog.error = None;
+        }
+    } else {
+        dialog.category.clear();
+    }
+    true
 }
 
 fn temporary_chip(ui: &mut egui::Ui, temporary_only: &mut bool, can_temporary: bool, busy: bool) {
@@ -863,7 +981,7 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, can_temporary, &mut Vec::new()),
+                |ctx| show(ctx, &mut dialog, &[], can_temporary, &mut Vec::new()),
             );
             output.textures_delta.clear();
             assert_eq!(dialog.temporary_only, can_temporary && temporary);
@@ -873,6 +991,40 @@ mod tests {
             assert!(rect.top() >= 0.0, "{rect:?} in {width}×{height}");
             assert!(rect.bottom() <= height, "{rect:?} in {width}×{height}");
         }
+    }
+
+    #[test]
+    fn list_dialog_fits_compact_window_with_many_categories() {
+        use super::*;
+        use rosetun_config::{List, ListFormat, ListId, ListSource, RuleSetId};
+
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.kind = RuleInputKind::List;
+        let list = List {
+            id: ListId::new("1"),
+            name: "Example".into(),
+            source: ListSource::File { original_name: "geosite.dat".into() },
+            format: ListFormat::GeoSite,
+            updated_at: None,
+            size: None,
+            sha256: None,
+            categories: (0..1_000).map(|index| format!("category{index}")).collect(),
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(960.0, 640.0),
+                )),
+                ..egui::RawInput::default()
+            },
+            |ctx| show(ctx, &mut dialog, std::slice::from_ref(&list), true, &mut Vec::new()),
+        );
+        output.textures_delta.clear();
+        let rect = ctx.memory(|memory| memory.area_rect(egui::Id::new("add_rule"))).unwrap();
+        assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use eframe::egui::{self, RichText, Stroke};
 use rosetun_config::{ConnectionState, List, ListFormat, ListSource};
 
@@ -7,7 +9,7 @@ use crate::icons::{self, Icon};
 use crate::state::{Action, AddListDialog, ListOutcome, State, source_file_name, used_by};
 use crate::{i18n, theme, widgets};
 
-const CARD_HEIGHT: f32 = 136.0;
+const CARD_HEIGHT: f32 = 160.0;
 
 fn format_name(format: ListFormat) -> String {
     match format {
@@ -43,6 +45,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         && widgets::dismissible_error(ui, error)
     {
         actions.push(Action::DismissListsError);
+    }
+    if let Some(error) = &state.lists.scan_error {
+        ui.colored_label(theme::ERROR, error);
     }
     if !state.config_ready {
         ui.colored_label(theme::TEXT_DIM, tr!("loading"));
@@ -104,7 +109,7 @@ fn list_card(ui: &mut egui::Ui, state: &State, list: &List, actions: &mut Vec<Ac
                     |ui| {
                         ui.set_width(width);
                         ui.add(
-                            egui::Label::new(RichText::new(display::safe_text(&list.name)).strong())
+                            egui::Label::new(RichText::new(state.text(&list.name)).strong())
                                 .truncate(),
                         );
                     },
@@ -195,6 +200,29 @@ fn list_card(ui: &mut egui::Ui, state: &State, list: &List, actions: &mut Vec<Ac
                         .on_hover_text(message);
                     }
                 }
+            }
+            let affected: Vec<_> = state
+                .lists
+                .missing
+                .iter()
+                .filter(|missing| missing.list == list.id)
+                .collect();
+            if !affected.is_empty() {
+                let categories = affected
+                    .iter()
+                    .map(|missing| state.text(&missing.category))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let warning = tr!(
+                    "list-missing-card",
+                    categories = &categories,
+                    count = affected.len(),
+                    n = affected.len().to_string()
+                );
+                ui.add(egui::Label::new(RichText::new(&warning).color(theme::ERROR)).truncate())
+                    .on_hover_text(warning);
             }
         });
 }
@@ -353,7 +381,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
         },
         |ui| {
             if let Some(list) = state.config.lists.iter().find(|list| list.id == dialog.id) {
-                ui.label(display::safe_text(&list.name));
+                ui.label(state.text(&list.name));
             }
             ui.add_space(12.0);
             ui.add(egui::Label::new(tr!("delete-list-detail")).wrap());

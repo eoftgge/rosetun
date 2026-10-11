@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AppConfig, DnsSettings, LanguageSetting, ListId, NodeId, RuleId, RuleMatcher, RuleSetId,
+    AppConfig, DnsSettings, LanguageSetting, ListId, ListSource, NodeId, RuleId, RuleMatcher, RuleSetId,
     RuleTarget, RuleTemplate, Status, SubscriptionId,
 };
 use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset, SettingChange};
@@ -327,6 +327,7 @@ pub(crate) enum Job {
     AddListUrl(String, String),
     AddListFile(PathBuf, String),
     BrowseListFile,
+    InspectListCategories { revision: u64, temporary: Vec<rosetun_config::Rule> },
     RenameList(ListId, String),
     RemoveList(ListId),
     Ping(SubscriptionId),
@@ -366,6 +367,7 @@ impl State {
                 self.reconcile_subscriptions();
                 self.reconcile_lists();
                 self.reconcile_selected_set();
+                self.request_list_inspection();
             }
             WorkerEvent::ConfigError(error) => self.config_error = Some(error),
             event @ (WorkerEvent::HelperAvailable { .. }
@@ -425,6 +427,7 @@ impl State {
             | WorkerEvent::MoveSubscription(_)) => self.reduce_subscriptions(event),
             event @ (WorkerEvent::BrowsedListFile(_)
             | WorkerEvent::AddList(_)
+            | WorkerEvent::ListAvailability { .. }
             | WorkerEvent::UpdateList { .. }
             | WorkerEvent::FileListUpdateCancelled(_)
             | WorkerEvent::RenameList(_)
@@ -561,12 +564,25 @@ impl State {
 }
 
 pub(crate) fn redact(config: &AppConfig, value: &str) -> String {
-    config
+    let text = config
         .subscriptions
         .iter()
         .fold(display::safe_multiline(value), |text, subscription| {
             display::provider_multiline(&text, &subscription.url)
-        })
+        });
+    config.lists.iter().fold(text, |text, list| {
+        let ListSource::Url(url) = &list.source else {
+            return text;
+        };
+        if url.is_empty() {
+            return text;
+        }
+        let host = url::Url::parse(url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "[URL]".to_owned());
+        text.replace(url, &host)
+    })
 }
 
 #[cfg(test)]

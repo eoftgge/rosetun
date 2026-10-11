@@ -107,10 +107,12 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 shown += 1;
                 ui.horizontal(|ui| {
                     let width = (ui.available_width() - 90.0).max(0.0);
-                    let value = if matches!(&rule.matcher, RuleMatcher::Template(_)) {
-                        crate::rules::rule_lines(&rule.matcher).0
-                    } else {
-                        rosetun_core::rule_value_text(&rule.matcher)
+                    let value = match &rule.matcher {
+                        RuleMatcher::Template(_) => crate::rules::rule_lines(&rule.matcher).0,
+                        RuleMatcher::List { list, category } => {
+                            state.list_rule_name(list, category.as_deref())
+                        }
+                        _ => rosetun_core::rule_value_text(&rule.matcher),
                     };
                     ui.allocate_ui_with_layout(
                         egui::vec2(width, ui.text_style_height(&egui::TextStyle::Body)),
@@ -152,6 +154,18 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 )
                 .wrap(),
             );
+        }
+        let missing = state.active_missing_categories();
+        if missing > 0 {
+            ui.horizontal(|ui| {
+                ui.colored_label(
+                    theme::ERROR,
+                    tr!("list-missing-summary", n = missing.to_string()),
+                );
+                if widgets::link(ui, &tr!("rules"), true).clicked() {
+                    actions.push(Action::OpenActiveRules);
+                }
+            });
         }
         if tunnel_up(state) && state.pending_reconnect(SessionPart::Rules) {
             if state.can_apply() {

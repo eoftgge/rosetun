@@ -217,7 +217,8 @@ fn rule_icon(matcher: &RuleMatcher) -> Icon {
     match matcher {
         RuleMatcher::Domain(_) => Icon::Globe,
         RuleMatcher::Process(_) => Icon::App,
-        RuleMatcher::IpCidr(_) | RuleMatcher::List { .. } => Icon::Stack,
+        RuleMatcher::IpCidr(_) => Icon::Stack,
+        RuleMatcher::List { .. } => Icon::List,
         RuleMatcher::Template(template) => template_icon(*template),
     }
 }
@@ -285,7 +286,7 @@ pub(super) fn rule_row(
                 let value_height = ui.text_style_height(&egui::TextStyle::Body)
                     + ui.text_style_height(&egui::TextStyle::Small);
                 value_cell(ui, value_width, value_height, |ui| {
-                    rule_value(ui, state, rule);
+                    rule_value(ui, state, rule, index.map(|_| &set.id));
                 });
                 table_cell(ui, TARGET_WIDTH, theme::RULE_ROW, |ui| {
                     if let Some(target) = target_button(
@@ -527,19 +528,33 @@ pub(super) fn rule_row(
     }
 }
 
-fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
-    let (value, caption) = rule_lines(&rule.matcher);
+fn rule_value(
+    ui: &mut egui::Ui,
+    state: &State,
+    rule: &Rule,
+    set: Option<&rosetun_config::RuleSetId>,
+) {
+    let (value, caption) = match &rule.matcher {
+        RuleMatcher::List { list, category } => (
+            state.list_rule_name(list, category.as_deref()),
+            RuleCaption::Template,
+        ),
+        _ => rule_lines(&rule.matcher),
+    };
     let value = state.text(&value);
     let caption = match caption {
-        RuleCaption::ThisAddress => tr!("caption-this-address").to_owned(),
-        RuleCaption::WithSubdomains => tr!("caption-subdomains").to_owned(),
-        RuleCaption::Keyword => tr!("caption-keyword").to_owned(),
-        RuleCaption::AnyFolder => tr!("caption-any-folder").to_owned(),
+        RuleCaption::ThisAddress => tr!("caption-this-address"),
+        RuleCaption::WithSubdomains => tr!("caption-subdomains"),
+        RuleCaption::Keyword => tr!("caption-keyword"),
+        RuleCaption::AnyFolder => tr!("caption-any-folder"),
         RuleCaption::Path(path) => path,
-        RuleCaption::Addresses => tr!("caption-addresses").to_owned(),
-        RuleCaption::Template => tr!("caption-template").to_owned(),
+        RuleCaption::Addresses => tr!("caption-addresses"),
+        RuleCaption::Template if matches!(&rule.matcher, RuleMatcher::List { .. }) => {
+            tr!("caption-list")
+        }
+        RuleCaption::Template => tr!("caption-template"),
     };
-    let caption = state.text(&caption);
+    let missing = state.missing_list_rule(set, &rule.id);
     let tooltip = if let RuleMatcher::Template(template) = &rule.matcher {
         let list = template
             .matchers()
@@ -548,6 +563,8 @@ fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
             .collect::<Vec<_>>()
             .join(", ");
         state.text(&tr!("template-contents", list = &list))
+    } else if matches!(&rule.matcher, RuleMatcher::List { .. }) {
+        value.clone()
     } else {
         let full_value = state.text(&rosetun_core::rule_value_text(&rule.matcher));
         rosetun_core::rule_value_ascii(&rule.matcher)
@@ -565,8 +582,23 @@ fn rule_value(ui: &mut egui::Ui, state: &State, rule: &Rule) {
     );
     ui.add(egui::Label::new(RichText::new(value).font(font).color(theme::TEXT)).truncate())
         .on_hover_text(&tooltip);
-    ui.add(egui::Label::new(RichText::new(caption).small().color(theme::TEXT_DIM)).truncate())
-        .on_hover_text(tooltip);
+    if let Some(missing) = missing {
+        let warning = if missing.last_good {
+            tr!("rule-category-last-good")
+        } else {
+            tr!("rule-category-disabled")
+        };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            icons::icon_badge_colored(ui, Icon::Warning, 16.0, theme::ERROR)
+                .on_hover_text(tr!("rule-category-hint"));
+            ui.add(egui::Label::new(RichText::new(warning).small().color(theme::ERROR)).truncate())
+                .on_hover_text(tr!("rule-category-hint"));
+        });
+    } else {
+        ui.add(egui::Label::new(RichText::new(state.text(&caption)).small().color(theme::TEXT_DIM)).truncate())
+            .on_hover_text(tooltip);
+    }
 }
 
 pub(super) fn default_rule(

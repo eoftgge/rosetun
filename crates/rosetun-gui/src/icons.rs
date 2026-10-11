@@ -14,6 +14,8 @@ pub(crate) enum Icon {
     App,
     Globe,
     Stack,
+    List,
+    Warning,
     Chat,
     Play,
     Download,
@@ -207,6 +209,30 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
                     color,
                 );
             }
+        }
+        Icon::List => {
+            for y in [-4.0, 0.0, 4.0] {
+                painter.circle_filled(center + egui::vec2(-5.0, y), 1.2, color);
+                painter.line_segment(
+                    [center + egui::vec2(-2.0, y), center + egui::vec2(6.0, y)],
+                    stroke,
+                );
+            }
+        }
+        Icon::Warning => {
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    center + egui::vec2(0.0, -7.0),
+                    center + egui::vec2(7.0, 6.0),
+                    center + egui::vec2(-7.0, 6.0),
+                ],
+                stroke,
+            ));
+            painter.line_segment(
+                [center + egui::vec2(0.0, -2.5), center + egui::vec2(0.0, 2.0)],
+                stroke,
+            );
+            painter.circle_filled(center + egui::vec2(0.0, 4.0), 0.8, color);
         }
         Icon::Chat => {
             let rect = egui::Rect::from_center_size(

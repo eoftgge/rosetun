@@ -1,3 +1,4 @@
+mod availability;
 mod formats;
 mod last_good;
 mod prepare;
@@ -14,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{FetchError, Store, StoreError, Timeouts};
 
+pub use availability::{MissingListCategory, inspect_missing_categories};
 pub use formats::{ListParseError, ListPayload, PayloadFormat, TextErrorKind, TextLineError};
 pub use prepare::{
     ListOperation, ListPreparationError, PreparedConnection, PreparedListPayload, prepare_lists,

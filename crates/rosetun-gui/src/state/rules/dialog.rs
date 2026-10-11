@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use std::path::PathBuf;
 
-use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget};
+use rosetun_config::{DomainMatch, ListId, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget};
 
 use super::super::{Action, Job, State};
 use crate::errors;
@@ -11,6 +11,7 @@ use crate::worker::WorkerEvent;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum RuleInputKind {
     Domain,
+    List,
     #[default]
     Process,
 }
@@ -20,6 +21,9 @@ pub(crate) struct AddRuleDialog {
     pub(crate) kind: RuleInputKind,
     pub(crate) target: RuleTarget,
     pub(crate) domains: String,
+    pub(crate) list: Option<ListId>,
+    pub(crate) category: String,
+    pub(crate) category_filter: String,
     pub(crate) subdomains: bool,
     pub(crate) show_all: bool,
     pub(crate) advanced: bool,
@@ -50,6 +54,9 @@ impl AddRuleDialog {
             kind: RuleInputKind::Process,
             target: RuleTarget::Proxy,
             domains: String::new(),
+            list: None,
+            category: String::new(),
+            category_filter: String::new(),
             subdomains: true,
             show_all: false,
             advanced: false,
@@ -86,6 +93,11 @@ impl AddRuleDialog {
                     .trim_start_matches("*.")
                     .to_owned();
                 dialog.original_domain = Some(domain.clone());
+            }
+            RuleMatcher::List { list, category } => {
+                dialog.kind = RuleInputKind::List;
+                dialog.list = Some(list.clone());
+                dialog.category = category.clone().unwrap_or_default();
             }
             RuleMatcher::Process(process) => {
                 dialog.process = rosetun_core::rule_value_text(&rule.matcher);
@@ -321,8 +333,25 @@ impl State {
                                 .ok()
                                 .map(|process| vec![RuleMatcher::Process(process)])
                         }
+                        RuleInputKind::List => dialog.list.as_ref().map(|list| {
+                            vec![RuleMatcher::List {
+                                list: list.clone(),
+                                category: (!dialog.category.trim().is_empty())
+                                    .then(|| dialog.category.trim().to_owned()),
+                            }]
+                        }),
                     };
                     if let Some(mut matchers) = matchers {
+                        if dialog.kind == RuleInputKind::List
+                            && let Err(error) =
+                                rosetun_core::validate_list_matcher(&self.config, &matchers[0])
+                        {
+                            let message = self.text(&errors::rule_set(crate::i18n::language(), &error));
+                            if let Some(dialog) = &mut self.rules.screen.add {
+                                dialog.error = Some(message);
+                            }
+                            return None;
+                        }
                         if dialog.temporary_only && dialog.editing.is_none() {
                             let target = dialog.target;
                             return self.act(Action::AddTemporary(matchers, target));

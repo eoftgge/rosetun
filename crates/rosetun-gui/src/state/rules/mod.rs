@@ -288,6 +288,7 @@ impl State {
                 return self.show_screen(Screen::Rules);
             }
             Action::OpenActiveRules => {
+                self.lists.tab = super::RulesTab::Rules;
                 let preferred = self.preferred_set();
                 if self.rules.screen.selected_set != preferred {
                     self.rules.screen.clear_selection();

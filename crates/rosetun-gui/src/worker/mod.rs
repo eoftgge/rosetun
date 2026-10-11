@@ -13,7 +13,8 @@ use rosetun_config::{
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitInfo, ExitInfoError,
-    ListError, ListUpdateResult, MoveSubscriptionError, PING_PARALLEL, PING_TIMEOUT, Ping, Release,
+    ListError, ListUpdateResult, MissingListCategory, MoveSubscriptionError, PING_PARALLEL,
+    PING_TIMEOUT, Ping, Release,
     RemoveSubscriptionError, RenameSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingChange,
     SettingsError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateCheckError,
     UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule, add_rules,
@@ -130,6 +131,10 @@ pub(crate) enum WorkerEvent {
     Add(Result<(Subscription, UpdateReport), AddFromUrlError>),
     BrowsedListFile(Option<PathBuf>),
     AddList(Result<(List, Option<usize>), ListError>),
+    ListAvailability {
+        revision: u64,
+        result: Result<Vec<MissingListCategory>, ListError>,
+    },
     RenameList(Result<List, ListError>),
     RemoveList(Result<(), ListError>),
     FileListUpdateCancelled(ListId),

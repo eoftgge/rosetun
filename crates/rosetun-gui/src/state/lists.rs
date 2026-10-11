@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rosetun_config::{AppConfig, ListFormat, ListId, ListSource, RuleMatcher};
-use rosetun_core::ListError;
+use rosetun_core::{ListError, MissingListCategory};
 
 use super::{Action, Job, State};
 use crate::errors;
@@ -101,6 +101,11 @@ pub(crate) struct ListsState {
     pub(crate) remove: Option<RemoveListDialog>,
     pub(crate) outcomes: BTreeMap<ListId, ListOutcome>,
     pub(crate) error: Option<String>,
+    pub(crate) missing: Vec<MissingListCategory>,
+    pub(crate) scan_error: Option<String>,
+    scan_revision: u64,
+    scan_needed: bool,
+    scan_in_flight: Option<u64>,
 }
 
 pub(crate) fn used_by(config: &AppConfig, id: &ListId) -> Vec<String> {
@@ -117,6 +122,69 @@ pub(crate) fn used_by(config: &AppConfig, id: &ListId) -> Vec<String> {
 }
 
 impl State {
+    pub(super) fn request_list_inspection(&mut self) {
+        self.lists.scan_revision = self.lists.scan_revision.wrapping_add(1);
+        self.lists.scan_needed = true;
+        self.lists.missing.clear();
+        self.lists.scan_error = None;
+    }
+
+    pub(crate) fn take_list_inspection(&mut self) -> Option<Job> {
+        if !self.config_ready || !self.lists.scan_needed || self.lists.scan_in_flight.is_some() {
+            return None;
+        }
+        let revision = self.lists.scan_revision;
+        self.lists.scan_in_flight = Some(revision);
+        self.lists.scan_needed = false;
+        Some(Job::InspectListCategories {
+            revision,
+            temporary: self.session.temporary_rules.clone(),
+        })
+    }
+
+    pub(crate) fn missing_list_rule(
+        &self,
+        set: Option<&rosetun_config::RuleSetId>,
+        rule: &rosetun_config::RuleId,
+    ) -> Option<&MissingListCategory> {
+        self.lists.missing.iter().find(|missing| {
+            missing.set.as_ref() == set && &missing.rule == rule
+        })
+    }
+
+    pub(crate) fn list_rule_name(&self, id: &ListId, category: Option<&str>) -> String {
+        let name = self
+            .config
+            .lists
+            .iter()
+            .find(|list| &list.id == id)
+            .map_or_else(|| tr!("list-source-unknown"), |list| self.text(&list.name));
+        category.map_or(name.clone(), |category| {
+            format!("{name}: {}", self.text(category))
+        })
+    }
+
+    pub(crate) fn active_missing_categories(&self) -> usize {
+        let active = self.config.active_rule_set.as_ref();
+        let saved = self
+            .config
+            .active_rules()
+            .map(|set| {
+                set.rules.iter().filter(|rule| {
+                    rule.enabled && self.missing_list_rule(Some(&set.id), &rule.id).is_some()
+                }).count()
+            })
+            .unwrap_or_default();
+        let temporary = if active.is_some() {
+            self.session.temporary_rules.iter().filter(|rule| {
+                rule.enabled && self.missing_list_rule(None, &rule.id).is_some()
+            }).count()
+        } else {
+            0
+        };
+        saved + temporary
+    }
+
     pub(super) fn reconcile_lists(&mut self) {
         self.lists
             .outcomes
@@ -141,6 +209,22 @@ impl State {
 
     pub(super) fn reduce_lists(&mut self, event: WorkerEvent) {
         match event {
+            WorkerEvent::ListAvailability { revision, result } => {
+                if self.lists.scan_in_flight != Some(revision) {
+                    return;
+                }
+                self.lists.scan_in_flight = None;
+                if revision != self.lists.scan_revision {
+                    self.lists.scan_needed = true;
+                    return;
+                }
+                match result {
+                    Ok(missing) => self.lists.missing = missing,
+                    Err(error) => {
+                        self.lists.scan_error = Some(self.text(&errors::list(crate::i18n::language(), &error)));
+                    }
+                }
+            }
             WorkerEvent::BrowsedListFile(path) => {
                 if let Some(dialog) = &mut self.lists.add {
                     dialog.browsing = false;

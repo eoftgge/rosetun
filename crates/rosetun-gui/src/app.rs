@@ -269,6 +269,9 @@ impl App {
             Job::AddListUrl(url, name) => self.workers.add_list_url(url, name),
             Job::AddListFile(path, name) => self.workers.add_list_file(path, name),
             Job::BrowseListFile => self.workers.browse_list_file(),
+            Job::InspectListCategories { revision, temporary } => {
+                self.workers.inspect_list_categories(revision, temporary)
+            }
             Job::RenameList(id, name) => self.workers.rename_list(id, name),
             Job::RemoveList(id) => self.workers.remove_list(id),
             Job::Ping(id) => self.workers.ping(id, None),
@@ -334,6 +337,9 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_temporary_load(display::now_unix()) {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_list_inspection() {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_keep_apply() {

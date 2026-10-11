@@ -30,11 +30,11 @@ pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
     }
 }
 
-fn delete_rule_value(rule: &Rule) -> String {
-    if matches!(&rule.matcher, RuleMatcher::Template(_)) {
-        rule_lines(&rule.matcher).0
-    } else {
-        rosetun_core::rule_value_text(&rule.matcher)
+fn delete_rule_value(state: &State, rule: &Rule) -> String {
+    match &rule.matcher {
+        RuleMatcher::Template(_) => rule_lines(&rule.matcher).0,
+        RuleMatcher::List { list, category } => state.list_rule_name(list, category.as_deref()),
+        _ => rosetun_core::rule_value_text(&rule.matcher),
     }
 }
 
@@ -84,7 +84,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                         .find(|item| &item.id == set)
                         .and_then(|set| set.rules.iter().find(|item| &item.id == rule))
                     {
-                        ui.label(state.text(&delete_rule_value(rule)));
+                        ui.label(state.text(&delete_rule_value(state, rule)));
                     }
                     ui.label(tr!("delete-rule-detail"));
                 }
@@ -93,7 +93,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                         for id in rules.iter().take(5) {
                             if let Some(rule) = set.rules.iter().find(|item| &item.id == id) {
                                 ui.add(
-                                    egui::Label::new(state.text(&delete_rule_value(rule))).wrap(),
+                                    egui::Label::new(state.text(&delete_rule_value(state, rule))).wrap(),
                                 );
                             }
                         }

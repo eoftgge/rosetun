@@ -46,6 +46,15 @@ fn adding_url_list_keeps_detection_result_in_dialog() {
 }
 
 #[test]
+fn list_urls_are_redacted_from_visible_text() {
+    let mut state = State::default();
+    let url = "https://user:secret@example.com/private?token=private";
+    state.config.lists.push(list("1", ListSource::Url(url.into())));
+    assert_eq!(state.text(url), "example.com");
+    assert!(!state.text(&format!("Failed: {url}")).contains("private"));
+}
+
+#[test]
 fn adding_file_list_uses_only_a_transient_path() {
     let mut state = State {
         config_ready: true,
@@ -106,6 +115,127 @@ fn used_list_cannot_be_removed_and_switching_tabs_preserves_rule_selection() {
     assert_eq!(state.rules.screen.selected_rules, rule_selection);
     state.act(Action::OpenRemoveList(list.id));
     assert!(state.lists.remove.is_none());
+}
+
+#[test]
+fn stale_category_inspection_is_ignored_and_retried_for_new_config() {
+    let mut state = State::default();
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config: AppConfig::default(),
+    });
+    let Some(Job::InspectListCategories { revision, .. }) = state.take_list_inspection() else {
+        panic!("config must schedule inspection");
+    };
+    state.reduce(WorkerEvent::Config {
+        generation: 2,
+        config: AppConfig::default(),
+    });
+    state.reduce(WorkerEvent::ListAvailability {
+        revision,
+        result: Ok(vec![rosetun_core::MissingListCategory {
+            set: None,
+            rule: RuleId::new("old"),
+            list: ListId::new("1"),
+            category: "old".into(),
+            last_good: false,
+        }]),
+    });
+    assert!(state.lists.missing.is_empty());
+    assert!(matches!(
+        state.take_list_inspection(),
+        Some(Job::InspectListCategories { revision: next, .. }) if next != revision
+    ));
+}
+
+#[test]
+fn list_rule_requires_a_dat_category_and_submits_a_valid_matcher() {
+    let mut state = state_with_rules();
+    let mut added = list("1", ListSource::Url("https://example.com/geosite.dat".into()));
+    added.format = ListFormat::GeoSite;
+    added.categories = vec!["example".into()];
+    state.config.lists.push(added);
+    state.act(Action::OpenRules);
+    state.act(Action::OpenAddRule);
+    state.act(Action::SelectRuleInput(RuleInputKind::List));
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.list = Some(ListId::new("1"));
+    assert!(state.act(Action::SubmitAddRule).is_none());
+    assert_eq!(
+        state.rules.screen.add.as_ref().unwrap().error.as_deref(),
+        Some("Select a category from this list")
+    );
+    state.rules.screen.add.as_mut().unwrap().category = "example@cn".into();
+    let Some(Job::AddRule(set, matcher, RuleTarget::Proxy)) = state.act(Action::SubmitAddRule) else {
+        panic!("a valid category must produce a list rule job");
+    };
+    assert!(matches!(&matcher, RuleMatcher::List { category: Some(value), .. } if value == "example@cn"));
+    let mut config = state.config.clone();
+    config.rule_sets.iter_mut().find(|item| item.id == set).unwrap().rules.push(Rule {
+        id: RuleId::new("list-rule"),
+        enabled: true,
+        matcher,
+        target: RuleTarget::Proxy,
+    });
+    state.reduce(WorkerEvent::Config { generation: 1, config });
+    assert!(state.config.rule_sets[1].rules.iter().any(|rule| {
+        matches!(&rule.matcher, RuleMatcher::List { category: Some(value), .. } if value == "example@cn")
+    }));
+}
+
+#[test]
+fn missing_categories_expose_fallback_and_disabled_states_then_clear() {
+    let mut state = state_with_rules();
+    let mut added = list("1", ListSource::Url("https://example.com/geosite.dat".into()));
+    added.format = ListFormat::GeoSite;
+    state.config.lists.push(added);
+    assert_eq!(state.list_rule_name(&ListId::new("1"), Some("example@cn")), "Example: example@cn");
+    state.config.rule_sets[1].rules[0].matcher = RuleMatcher::List {
+        list: ListId::new("1"),
+        category: Some("example@cn".into()),
+    };
+    state.config.active_rule_set = Some(RuleSetId::new("2"));
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config: state.config.clone(),
+    });
+    let Some(Job::InspectListCategories { revision, .. }) = state.take_list_inspection() else {
+        panic!("config must schedule inspection");
+    };
+    let item = rosetun_core::MissingListCategory {
+        set: Some(RuleSetId::new("2")),
+        rule: RuleId::new("0"),
+        list: ListId::new("1"),
+        category: "example@cn".into(),
+        last_good: true,
+    };
+    state.reduce(WorkerEvent::ListAvailability {
+        revision,
+        result: Ok(vec![item.clone()]),
+    });
+    assert_eq!(state.active_missing_categories(), 1);
+    assert!(state.missing_list_rule(Some(&RuleSetId::new("2")), &RuleId::new("0")).unwrap().last_good);
+    assert_eq!(state.lists.missing[0].category, "example@cn");
+    assert_eq!(
+        crate::i18n::tr_in(crate::i18n::Language::Russian, "rule-category-last-good", &fluent_bundle::FluentArgs::new()),
+        "Категории больше нет в списке · используется прошлая версия"
+    );
+    state.lists.missing[0].last_good = false;
+    assert!(!state.missing_list_rule(Some(&RuleSetId::new("2")), &RuleId::new("0")).unwrap().last_good);
+    assert_eq!(
+        crate::i18n::tr_in(crate::i18n::Language::English, "rule-category-disabled", &fluent_bundle::FluentArgs::new()),
+        "Category no longer in list · rule does not work"
+    );
+    state.config.rule_sets[1].rules[0].matcher = RuleMatcher::List {
+        list: ListId::new("1"),
+        category: Some("replacement".into()),
+    };
+    state.reduce(WorkerEvent::Config {
+        generation: 2,
+        config: state.config.clone(),
+    });
+    assert_eq!(state.active_missing_categories(), 0);
+    assert!(state.lists.missing.is_empty());
 }
 
 #[test]

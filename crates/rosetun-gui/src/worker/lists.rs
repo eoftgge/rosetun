@@ -1,8 +1,8 @@
 use std::io::Read;
 
 use rosetun_core::{
-    MAX_LIST_BYTES, add_list_from_bytes, add_list_from_url, remove_list, rename_list,
-    text_entry_count,
+    MAX_LIST_BYTES, add_list_from_bytes, add_list_from_url, inspect_missing_categories,
+    remove_list, rename_list, text_entry_count,
 };
 
 use super::*;
@@ -34,6 +34,21 @@ fn add_result(store: &Store, result: Result<List, ListError>) -> Result<(List, O
 }
 
 impl WorkerDispatcher {
+    pub(crate) fn inspect_list_categories(&self, revision: u64, temporary: Vec<Rule>) {
+        self.spawn_task("rosetun-inspect-lists", move |publisher| {
+            let result = publisher
+                .store
+                .load()
+                .map_err(ListError::Store)
+                .and_then(|config| inspect_missing_categories(&publisher.store, &config, &temporary));
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::ListAvailability { revision, result },
+            );
+        });
+    }
+
     pub(crate) fn browse_list_file(&self) {
         self.spawn_task("rosetun-browse-list", move |publisher| {
             #[cfg(windows)]
