@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 base64.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 rosetun-config.workspace = true
 rosetun-engine.workspace = true
 rosetun-engine-singbox.workspace = true
