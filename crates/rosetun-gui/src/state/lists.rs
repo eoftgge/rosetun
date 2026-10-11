@@ -71,8 +71,7 @@ fn suggested_url_name(input: &str) -> Option<String> {
     let url = url::Url::parse(input.trim()).ok()?;
     let name = url
         .path_segments()?
-        .filter(|part| !part.is_empty())
-        .next_back()?;
+        .rfind(|part| !part.is_empty())?;
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
     (!stem.is_empty()).then(|| stem.to_owned())
 }
