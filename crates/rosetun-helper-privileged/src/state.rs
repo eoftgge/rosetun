@@ -20,8 +20,8 @@ use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, PROBE_URL, RenderRequest,
     RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget,
 };
-use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_TEMPORARY_RULES};
 use rosetun_ipc::transport::PeerIdentity;
+use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_TEMPORARY_RULES};
 use rosetun_routing::{
     ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
 };
@@ -576,8 +576,10 @@ impl Helper {
                     status.connect_stage = None;
                     status.stage_since_unix = None;
                     if protected {
-                        *self.owner.lock().unwrap_or_else(|poison| poison.into_inner()) =
-                            previous_owner.clone();
+                        *self
+                            .owner
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner()) = previous_owner.clone();
                         self.owner.clear_poison();
                     }
                 }) {

@@ -6,8 +6,8 @@ use rosetun_config::{ConnectionState, Settings};
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
-    Caller, Helper, RECONNECT_BACKOFF, Reconnect, StartMode, node_with_endpoint,
-    normalize_server, probe::resolve_for_apply, render_config, validate_request,
+    Caller, Helper, RECONNECT_BACKOFF, Reconnect, StartMode, node_with_endpoint, normalize_server,
+    probe::resolve_for_apply, render_config, validate_request,
 };
 
 impl Helper {

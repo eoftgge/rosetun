@@ -255,7 +255,8 @@ fn dispatch(
             ErrorCode::AccessDenied,
             "the Windows account for this connection could not be verified",
         )),
-        Request::TemporaryRules => match helper.temporary_rules_as(caller.expect("caller checked")) {
+        Request::TemporaryRules => match helper.temporary_rules_as(caller.expect("caller checked"))
+        {
             Ok(rules) => Response::TemporaryRules(rules),
             Err(error) => Response::Error(error),
         },
@@ -273,10 +274,12 @@ fn dispatch(
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
-        Request::Connect(connect) => match helper.connect_as(caller.expect("caller checked"), connect) {
-            Ok(()) => Response::Ok,
-            Err(error) => Response::Error(error),
-        },
+        Request::Connect(connect) => {
+            match helper.connect_as(caller.expect("caller checked"), connect) {
+                Ok(()) => Response::Ok,
+                Err(error) => Response::Error(error),
+            }
+        }
         Request::ProbeNodes(request) => match helper.probe_nodes(request) {
             Ok(results) => Response::Probe(results),
             Err(error) => Response::Error(error),
@@ -289,10 +292,12 @@ fn dispatch(
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
-        Request::Apply(request) => match helper.apply_as(caller.expect("caller checked"), request) {
-            Ok(()) => Response::Ok,
-            Err(error) => Response::Error(error),
-        },
+        Request::Apply(request) => {
+            match helper.apply_as(caller.expect("caller checked"), request) {
+                Ok(()) => Response::Ok,
+                Err(error) => Response::Error(error),
+            }
+        }
         Request::Subscribe => Response::Error(HelperError::new(
             ErrorCode::NotImplemented,
             "events are not pushed yet; poll with status",
@@ -340,14 +345,28 @@ mod tests {
         let mut greeted = true;
         let caller = Caller::fake(b"owner", false);
         assert!(matches!(
-            dispatch(&Request::Shutdown, &helper, &mut greeted, Some(&caller), false, 0),
+            dispatch(
+                &Request::Shutdown,
+                &helper,
+                &mut greeted,
+                Some(&caller),
+                false,
+                0
+            ),
             Response::Error(HelperError {
                 code: ErrorCode::InvalidState,
                 ..
             })
         ));
         assert!(matches!(
-            dispatch(&Request::Shutdown, &helper, &mut greeted, Some(&caller), true, 0),
+            dispatch(
+                &Request::Shutdown,
+                &helper,
+                &mut greeted,
+                Some(&caller),
+                true,
+                0
+            ),
             Response::Ok
         ));
     }
@@ -372,7 +391,10 @@ mod tests {
                 false,
                 0,
             ),
-            Response::Hello { protocol_version: 8, .. }
+            Response::Hello {
+                protocol_version: 8,
+                ..
+            }
         ));
         assert!(greeted);
         assert!(matches!(
@@ -462,7 +484,14 @@ mod tests {
             })
         ));
         assert!(matches!(
-            dispatch(&Request::TunnelDelay, &helper, &mut greeted, Some(&caller), false, 0),
+            dispatch(
+                &Request::TunnelDelay,
+                &helper,
+                &mut greeted,
+                Some(&caller),
+                false,
+                0
+            ),
             Response::Error(HelperError {
                 code: ErrorCode::InvalidState,
                 ..

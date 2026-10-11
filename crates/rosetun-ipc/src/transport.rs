@@ -183,8 +183,8 @@ mod platform {
     use windows_sys::Win32::Security::{
         CheckTokenMembership, CreateWellKnownSid, GetLengthSid, GetTokenInformation, IsValidSid,
         IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSID, RevertToSelf, SECURITY_ATTRIBUTES,
-        SECURITY_MAX_SID_SIZE, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation,
-        TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        SECURITY_MAX_SID_SIZE, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenUser,
+        WinBuiltinAdministratorsSid, WinLocalSystemSid,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_GENERIC_READ, FILE_WRITE_DATA,
@@ -402,14 +402,13 @@ mod platform {
         let mut token = std::ptr::null_mut();
         // SAFETY: The current thread is impersonating at identification level;
         // OpenAsSelf allows the helper to open that token for queries only.
-        let result = if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) }
-            == 0
-        {
-            Err(last_error())
-        } else {
-            // SAFETY: OpenThreadToken returned a live handle now owned by OwnedHandle.
-            Ok(unsafe { OwnedHandle::from_raw_handle(token as RawHandle) })
-        };
+        let result =
+            if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) } == 0 {
+                Err(last_error())
+            } else {
+                // SAFETY: OpenThreadToken returned a live handle now owned by OwnedHandle.
+                Ok(unsafe { OwnedHandle::from_raw_handle(token as RawHandle) })
+            };
         drop(impersonation);
         let (user_sid, administrator) = token_identity(&result?)?;
         Ok(PeerIdentity {
@@ -515,7 +514,11 @@ mod platform {
         {
             return Err(last_error());
         }
-        Ok(trusted_server(is_system, elevation.TokenIsElevated != 0, member != 0))
+        Ok(trusted_server(
+            is_system,
+            elevation.TokenIsElevated != 0,
+            member != 0,
+        ))
     }
 
     fn security_descriptor() -> io::Result<SecurityDescriptor> {

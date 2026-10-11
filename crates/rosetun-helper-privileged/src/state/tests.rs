@@ -1790,16 +1790,27 @@ fn session_owner_controls_connected_operations_and_releases_it_on_disconnect() {
     request.temporary_rules.push(temporary_rule());
 
     helper.connect_as(&owner, &request).expect("owner connects");
-    assert_eq!(helper.temporary_rules_as(&owner).unwrap(), request.temporary_rules);
+    assert_eq!(
+        helper.temporary_rules_as(&owner).unwrap(),
+        request.temporary_rules
+    );
     helper.apply_as(&owner, &request).expect("owner applies");
     assert!(!matches!(
         helper.tunnel_delay_as(&owner),
-        Err(HelperError { code: ErrorCode::AccessDenied, .. })
+        Err(HelperError {
+            code: ErrorCode::AccessDenied,
+            ..
+        })
     ));
     helper.disconnect_as(&owner).expect("owner disconnects");
 
-    helper.connect_as(&other, &request).expect("another account connects after disconnect");
-    assert_eq!(helper.disconnect_as(&owner).unwrap_err().code, ErrorCode::AccessDenied);
+    helper
+        .connect_as(&other, &request)
+        .expect("another account connects after disconnect");
+    assert_eq!(
+        helper.disconnect_as(&owner).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
     helper.disconnect_as(&other).expect("new owner disconnects");
 }
 
@@ -1824,13 +1835,25 @@ fn another_account_cannot_change_or_read_an_active_session() {
         assert_eq!(result.unwrap_err().code, ErrorCode::AccessDenied);
     }
     assert!(matches!(helper.status().state, ConnectionState::Connected));
-    assert_eq!(helper.temporary_rules_as(&owner).unwrap(), request.temporary_rules);
-    assert_eq!(helper.connect_as(&admin, &request).unwrap_err().code, ErrorCode::InvalidState);
+    assert_eq!(
+        helper.temporary_rules_as(&owner).unwrap(),
+        request.temporary_rules
+    );
+    assert_eq!(
+        helper.connect_as(&admin, &request).unwrap_err().code,
+        ErrorCode::InvalidState
+    );
     helper.apply_as(&admin, &request).expect("admin applies");
-    assert_eq!(helper.temporary_rules_as(&admin).unwrap(), request.temporary_rules);
+    assert_eq!(
+        helper.temporary_rules_as(&admin).unwrap(),
+        request.temporary_rules
+    );
     assert!(!matches!(
         helper.tunnel_delay_as(&admin),
-        Err(HelperError { code: ErrorCode::AccessDenied, .. })
+        Err(HelperError {
+            code: ErrorCode::AccessDenied,
+            ..
+        })
     ));
     helper.disconnect_as(&admin).expect("admin disconnects");
 }
@@ -1862,15 +1885,33 @@ fn another_account_cannot_cancel_a_connect_holding_the_session() {
     };
     entered_rx.recv().expect("connect holds the session");
 
-    assert_eq!(helper.connect_as(&other, &request).unwrap_err().code, ErrorCode::AccessDenied);
-    assert_eq!(helper.disconnect_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
-    assert_eq!(helper.apply_as(&other, &request).unwrap_err().code, ErrorCode::AccessDenied);
-    assert_eq!(helper.temporary_rules_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
-    assert_eq!(helper.tunnel_delay_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(
+        helper.connect_as(&other, &request).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert_eq!(
+        helper.disconnect_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert_eq!(
+        helper.apply_as(&other, &request).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert_eq!(
+        helper.temporary_rules_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert_eq!(
+        helper.tunnel_delay_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
     assert!(!helper.cancelled.load(Ordering::Acquire));
     helper.disconnect_as(&owner).expect("owner cancels");
     release_tx.send(()).expect("release routing");
-    assert_eq!(worker.join().unwrap().unwrap_err().code, ErrorCode::Cancelled);
+    assert_eq!(
+        worker.join().unwrap().unwrap_err().code,
+        ErrorCode::Cancelled
+    );
     assert_eq!(helper.status(), Status::default());
 }
 
@@ -1884,11 +1925,22 @@ fn failed_connect_releases_owner_for_another_account() {
     let mut request = connect_request();
     request.settings.kill_switch = true;
 
-    assert_eq!(helper.connect_as(&owner, &request).unwrap_err().code, ErrorCode::RoutingFailed);
-    assert!(matches!(helper.status().state, ConnectionState::Failed { .. }));
+    assert_eq!(
+        helper.connect_as(&owner, &request).unwrap_err().code,
+        ErrorCode::RoutingFailed
+    );
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed { .. }
+    ));
     request.settings.kill_switch = false;
-    helper.connect_as(&other, &request).expect("new owner after failure");
-    assert_eq!(helper.disconnect_as(&owner).unwrap_err().code, ErrorCode::AccessDenied);
+    helper
+        .connect_as(&other, &request)
+        .expect("new owner after failure");
+    assert_eq!(
+        helper.disconnect_as(&owner).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
     helper.disconnect_as(&other).expect("new owner disconnects");
 }
 
@@ -1899,10 +1951,17 @@ fn administrator_takes_over_a_protected_session() {
     let admin = Caller::fake(b"admin", true);
     *helper.owner.lock().unwrap() = Some(owner.sid.clone());
 
-    helper.connect_as(&admin, &protected_request()).expect("admin reconnects");
-    assert_eq!(helper.disconnect_as(&owner).unwrap_err().code, ErrorCode::AccessDenied);
+    helper
+        .connect_as(&admin, &protected_request())
+        .expect("admin reconnects");
+    assert_eq!(
+        helper.disconnect_as(&owner).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
     assert!(matches!(helper.status().state, ConnectionState::Connected));
-    helper.disconnect_as(&admin).expect("administrator disconnects");
+    helper
+        .disconnect_as(&admin)
+        .expect("administrator disconnects");
 }
 
 #[test]
@@ -1913,12 +1972,22 @@ fn failed_protected_connect_keeps_the_previous_owner() {
     let admin = Caller::fake(b"admin", true);
     *helper.owner.lock().unwrap() = Some(owner.sid.clone());
 
-    helper.connect_as(&admin, &protected_request()).expect_err("engine exits");
-    assert!(matches!(helper.status().state, ConnectionState::FailedProtected { .. }));
-    assert_eq!(helper.disconnect_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    helper
+        .connect_as(&admin, &protected_request())
+        .expect_err("engine exits");
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected { .. }
+    ));
+    assert_eq!(
+        helper.disconnect_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
     assert_eq!(*helper.owner.lock().unwrap(), Some(owner.sid.clone()));
     assert!(helper.temporary_rules_as(&admin).is_ok());
-    helper.disconnect_as(&owner).expect("previous owner retains protected session");
+    helper
+        .disconnect_as(&owner)
+        .expect("previous owner retains protected session");
 }
 
 #[test]
