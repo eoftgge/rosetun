@@ -15,6 +15,8 @@ const COMPACT_DIALOG_HEIGHT: f32 = 632.0;
 const ERROR_HEIGHT: f32 = 28.0;
 const PROCESS_ROW_HEIGHT: f32 = 44.0;
 const PROCESS_ROW_GAP: f32 = 4.0;
+const CATEGORY_ROW_HEIGHT: f32 = 24.0;
+const CATEGORY_VIEW_HEIGHT: f32 = 5.0 * CATEGORY_ROW_HEIGHT;
 const MIN_PROCESS_LIST: f32 = 2.0 * PROCESS_ROW_HEIGHT + PROCESS_ROW_GAP;
 const MAX_PROCESS_LIST: f32 = 5.0 * PROCESS_ROW_HEIGHT + 4.0 * PROCESS_ROW_GAP;
 const PROCESS_FOOTER_HEIGHT: f32 = 80.0;
@@ -60,6 +62,7 @@ pub(crate) fn show(
     dialog: &mut AddRuleDialog,
     lists: &[List],
     can_temporary: bool,
+    existing_list_rules: usize,
     actions: &mut Vec<Action>,
 ) {
     if !can_temporary {
@@ -218,9 +221,14 @@ pub(crate) fn show(
             let (divider, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
             ui.painter().hline(divider.x_range(), divider.center().y, Stroke::new(1.0, theme::BORDER));
             ui.add_space(8.0);
-            let can_submit = valid && !dialog.busy && (!dialog.temporary_only || can_temporary);
+            let exceeds_list_limit = dialog.kind == RuleInputKind::List
+                && dialog.list.as_ref().and_then(|id| lists.iter().find(|list| &list.id == id))
+                    .is_some_and(|list| dialog.exceeds_list_limit(existing_list_rules, list.format.has_categories()));
+            let can_submit = valid && !exceeds_list_limit && !dialog.busy && (!dialog.temporary_only || can_temporary);
             let reason = if dialog.busy || dialog.error.is_some() || can_submit {
                 None
+            } else if exceeds_list_limit {
+                Some(tr!("list-rule-limit"))
             } else if dialog.temporary_only && !can_temporary {
                 Some(tr!("temporary-needs-connection"))
             } else {
@@ -253,6 +261,8 @@ pub(crate) fn show(
                                 dialog.subdomains,
                             );
                             crate::i18n::add_rules(domains.domains.len())
+                        } else if dialog.kind == RuleInputKind::List && dialog.selected_categories.len() > 1 {
+                            crate::i18n::add_rules(dialog.selected_categories.len())
                         } else {
                             tr!("add-rule").to_owned()
                         };
@@ -277,6 +287,21 @@ pub(crate) fn show(
     }
 }
 
+fn category_matches<'a>(categories: &'a [String], query: &'a str) -> Vec<&'a str> {
+    let query = query.trim();
+    let custom = query.contains('@');
+    let base = query.split_once('@').map_or(query, |(base, _)| base);
+    let filter = base.to_ascii_lowercase();
+    std::iter::once(query)
+        .filter(|_| custom)
+        .chain(categories.iter().filter_map(|category| {
+            (category.to_ascii_lowercase().contains(&filter)
+                && (!custom || !category.eq_ignore_ascii_case(query)))
+            .then_some(category.as_str())
+        }))
+        .collect()
+}
+
 fn list_input(
     ui: &mut egui::Ui,
     dialog: &mut AddRuleDialog,
@@ -297,15 +322,24 @@ fn list_input(
         .as_ref()
         .is_none_or(|id| !lists.iter().any(|list| &list.id == id))
     {
-        dialog.list = Some(lists[0].id.clone());
-        dialog.category.clear();
+        dialog.select_list(lists[0].id.clone());
     }
-    ui.label(tr!("rule-list-select"));
-    let before = dialog.list.clone();
+    let mut choice = dialog.list.clone();
     let selected = lists
         .iter()
         .find(|list| Some(&list.id) == dialog.list.as_ref())
         .unwrap_or(&lists[0]);
+    egui::Sides::new().show(ui, |ui| {
+        ui.label(RichText::new(tr!("rule-list-select")).small().color(theme::TEXT_DIM));
+    }, |ui| {
+        let format = super::lists::format_name(selected.format);
+        let detail = if selected.format.has_categories() {
+            tr!("list-added-categories", format = &format, count = selected.categories.len(), n = selected.categories.len().to_string())
+        } else {
+            format
+        };
+        ui.label(RichText::new(detail).small().color(theme::TEXT_DIM));
+    });
     ui.add_enabled_ui(!dialog.busy, |ui| {
         egui::ComboBox::from_id_salt("rule_list")
             .selected_text(display::safe_text(&selected.name))
@@ -313,17 +347,15 @@ fn list_input(
             .show_ui(ui, |ui| {
                 for list in lists {
                     ui.selectable_value(
-                        &mut dialog.list,
+                        &mut choice,
                         Some(list.id.clone()),
                         display::safe_text(&list.name),
                     );
                 }
             });
     });
-    if dialog.list != before {
-        dialog.category.clear();
-        dialog.category_filter.clear();
-        dialog.error = None;
+    if let Some(choice) = choice {
+        dialog.select_list(choice);
     }
     let selected = lists
         .iter()
@@ -331,67 +363,48 @@ fn list_input(
         .unwrap_or(&lists[0]);
     if selected.format.has_categories() {
         ui.add_space(8.0);
-        ui.label(tr!("rule-list-category-search"));
-        ui.add_enabled(
-            !dialog.busy,
-            egui::TextEdit::singleline(&mut dialog.category_filter)
-                .hint_text(tr!("rule-list-category-search-hint"))
-                .desired_width(f32::INFINITY),
-        );
-        let filter = dialog.category_filter.trim().to_ascii_lowercase();
-        let mut matches = Vec::with_capacity(200);
-        let mut count = 0;
-        for category in &selected.categories {
-            if category.to_ascii_lowercase().contains(&filter) {
-                count += 1;
-                if matches.len() < 200 {
-                    matches.push(category);
-                }
+        ui.label(RichText::new(tr!("rule-list-category-search")).small().color(theme::TEXT_DIM));
+        let input = dialog.category_filter.trim().to_owned();
+        let custom = input.contains('@');
+        let matches = category_matches(&selected.categories, &input);
+        ui.horizontal(|ui| {
+            let width = (ui.available_width() - 116.0).max(100.0);
+            ui.add_enabled_ui(!dialog.busy, |ui| {
+                widgets::search_field(ui, &mut dialog.category_filter, &tr!("rule-list-category-search-hint"), width)
+            });
+            ui.label(RichText::new(tr!("rule-list-match-count", shown = matches.len() - usize::from(custom), total = selected.categories.len())).small().color(theme::TEXT_DIM));
+        });
+        let selected_count = dialog.selected_categories.len();
+        egui::Sides::new().show(ui, |ui| {
+            ui.label(RichText::new(tr!("rule-list-selected", n = selected_count.to_string())).small().color(theme::TEXT_DIM));
+        }, |ui| {
+            if widgets::link(ui, &tr!("rule-list-clear"), !dialog.busy && !dialog.selected_categories.is_empty()).clicked() {
+                dialog.selected_categories.clear();
+                dialog.error = None;
             }
-        }
+        });
         egui::ScrollArea::vertical()
             .id_salt("rule_list_categories")
-            .max_height(64.0)
-            .show_rows(ui, 28.0, matches.len(), |ui, rows| {
+            .max_height(CATEGORY_VIEW_HEIGHT)
+            .auto_shrink([false, false])
+            .show_rows(ui, CATEGORY_ROW_HEIGHT, matches.len(), |ui, rows| {
                 for index in rows {
                     let category = matches[index];
-                    if ui
-                        .add_enabled(
-                            !dialog.busy,
-                            egui::Button::selectable(
-                                dialog.category == *category,
-                                display::safe_text(category),
-                            ),
-                        )
-                        .clicked()
-                    {
-                        dialog.category = category.clone();
-                        dialog.error = None;
-                    }
+                    let mut checked = dialog.selected_categories.iter().any(|item| item == category);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!dialog.busy, egui::Checkbox::new(&mut checked, display::safe_text(category))).changed() {
+                            dialog.toggle_category(category);
+                        }
+                        if custom && index == 0 {
+                            ui.label(RichText::new(tr!("rule-list-attribute")).small().color(theme::TEXT_DIM));
+                        }
+                    });
                 }
             });
-        if count > matches.len() {
-            ui.label(tr!(
-                "rule-list-more-categories",
-                n = (count - matches.len()).to_string()
-            ));
-        }
-        ui.label(tr!("rule-list-category"));
-        if ui
-            .add_enabled(
-                !dialog.busy,
-                egui::TextEdit::singleline(&mut dialog.category)
-                    .hint_text(tr!("rule-list-category-hint"))
-                    .desired_width(f32::INFINITY),
-            )
-            .changed()
-        {
-            dialog.error = None;
-        }
     } else {
-        dialog.category.clear();
+        dialog.selected_categories.clear();
     }
-    !selected.format.has_categories() || !dialog.category.trim().is_empty()
+    !selected.format.has_categories() || !dialog.selected_categories.is_empty()
 }
 
 fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
@@ -947,7 +960,7 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, &[], can_temporary, &mut Vec::new()),
+                |ctx| show(ctx, &mut dialog, &[], can_temporary, 0, &mut Vec::new()),
             );
             output.textures_delta.clear();
             assert_eq!(dialog.temporary_only, can_temporary && temporary);
@@ -968,6 +981,7 @@ mod tests {
         theme::apply(&ctx);
         let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
         dialog.kind = RuleInputKind::List;
+        dialog.advanced = true;
         let list = List {
             id: ListId::new("1"),
             name: "Example".into(),
@@ -994,6 +1008,7 @@ mod tests {
                     &mut dialog,
                     std::slice::from_ref(&list),
                     true,
+                    0,
                     &mut Vec::new(),
                 )
             },
@@ -1003,6 +1018,19 @@ mod tests {
             .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
             .unwrap();
         assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
+    }
+
+    #[test]
+    fn category_search_keeps_all_matches_and_places_attribute_first() {
+        use super::category_matches;
+
+        let mut categories: Vec<_> = (0..1_500).map(|index| format!("google{index}")).collect();
+        categories.push("google@cn".into());
+        assert_eq!(category_matches(&categories, "").len(), 1_501);
+        let matches = category_matches(&categories, "google@cn");
+        assert_eq!(matches[0], "google@cn");
+        assert_eq!(matches.len(), 1_501);
+        assert_eq!(matches.iter().filter(|item| **item == "google@cn").count(), 1);
     }
 
     #[test]

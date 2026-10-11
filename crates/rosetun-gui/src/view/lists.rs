@@ -11,7 +11,7 @@ use crate::{i18n, theme, widgets};
 
 const CARD_HEIGHT: f32 = 160.0;
 
-fn format_name(format: ListFormat) -> String {
+pub(crate) fn format_name(format: ListFormat) -> String {
     match format {
         ListFormat::SingBoxBinary | ListFormat::SingBoxSource => tr!("list-format-singbox"),
         ListFormat::GeoSite => tr!("list-format-geosite"),

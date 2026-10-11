@@ -18,6 +18,141 @@ fn list(id: &str, source: ListSource) -> List {
     }
 }
 
+fn geosite_state() -> State {
+    let mut state = state_with_rules();
+    let mut added = list(
+        "geo",
+        ListSource::Url("https://example.com/geosite.dat".into()),
+    );
+    added.format = ListFormat::GeoSite;
+    added.categories = ["alpha", "beta", "google"].map(str::to_owned).to_vec();
+    state.config.lists.push(added);
+    state.act(Action::OpenRules);
+    state.act(Action::OpenAddRule);
+    state.act(Action::SelectRuleInput(RuleInputKind::List));
+    state.rules.screen.add.as_mut().unwrap().select_list(ListId::new("geo"));
+    state
+}
+
+#[test]
+fn selected_list_categories_submit_one_ordered_batch() {
+    let mut state = geosite_state();
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    for category in ["beta", "google", "alpha", "beta"] {
+        dialog.toggle_category(category);
+    }
+    dialog.toggle_category("beta");
+    assert_eq!(dialog.selected_categories, ["google", "alpha", "beta"]);
+    let Some(Job::AddRules(_, matchers, RuleTarget::Proxy)) = state.act(Action::SubmitAddRule) else {
+        panic!("list categories must produce one batch job");
+    };
+    assert_eq!(matchers, ["google", "alpha", "beta"].map(|category| RuleMatcher::List {
+        list: ListId::new("geo"),
+        category: Some(category.into()),
+    }));
+}
+
+#[test]
+fn attribute_category_from_search_submits_and_invalid_batch_stays_open() {
+    let mut state = geosite_state();
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.category_filter = "google@cn".into();
+    dialog.toggle_category("google@cn");
+    assert!(matches!(state.act(Action::SubmitAddRule), Some(Job::AddRules(_, rules, _))
+        if matches!(&rules[0], RuleMatcher::List { category: Some(category), .. } if category == "google@cn")));
+
+    let mut state = geosite_state();
+    state.rules.screen.add.as_mut().unwrap().selected_categories = vec!["google".into(), "missing".into()];
+    assert!(state.act(Action::SubmitAddRule).is_none());
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    assert!(dialog.error.is_some());
+    assert!(!dialog.busy);
+}
+
+#[test]
+fn changing_lists_clears_category_selection_and_search() {
+    let mut dialog = AddRuleDialog::new(RuleSetId::new("2"));
+    dialog.select_list(ListId::new("geo"));
+    dialog.toggle_category("google");
+    dialog.category_filter = "google@cn".into();
+    dialog.select_list(ListId::new("other"));
+    assert!(dialog.selected_categories.is_empty());
+    assert!(dialog.category_filter.is_empty());
+}
+
+#[test]
+fn list_batch_limit_includes_existing_rules_in_the_selected_set() {
+    let mut state = geosite_state();
+    for index in 0..255 {
+        state.config.rule_sets[1].rules.push(Rule {
+            id: RuleId::new(format!("list-{index}")),
+            enabled: true,
+            matcher: RuleMatcher::List {
+                list: ListId::new("geo"),
+                category: Some("alpha".into()),
+            },
+            target: RuleTarget::Proxy,
+        });
+    }
+    let existing = state.selected_list_rule_count();
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.toggle_category("google");
+    assert!(!dialog.exceeds_list_limit(existing, true));
+    dialog.toggle_category("beta");
+    assert!(dialog.exceeds_list_limit(existing, true));
+    assert!(state.act(Action::SubmitAddRule).is_none());
+    assert!(!state.rules.screen.add.as_ref().unwrap().busy);
+    state.rules.screen.add.as_mut().unwrap().toggle_category("beta");
+    assert!(matches!(state.act(Action::SubmitAddRule), Some(Job::AddRules(_, _, _))));
+}
+
+#[test]
+fn editing_list_rule_keeps_one_category() {
+    let mut state = geosite_state();
+    state.act(Action::CancelAddRule);
+    let id = RuleId::new("list-edit");
+    state.config.rule_sets[1].rules.push(Rule {
+        id: id.clone(),
+        enabled: true,
+        matcher: RuleMatcher::List {
+            list: ListId::new("geo"),
+            category: Some("alpha".into()),
+        },
+        target: RuleTarget::Proxy,
+    });
+    state.act(Action::OpenEditRule(id));
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    assert_eq!(dialog.selected_categories, ["alpha"]);
+    dialog.toggle_category("beta");
+    assert_eq!(dialog.selected_categories, ["beta"]);
+    assert!(matches!(state.act(Action::SubmitAddRule), Some(Job::UpdateRule(_, _, RuleMatcher::List { category: Some(category), .. }, _)) if category == "beta"));
+}
+
+#[test]
+fn temporary_list_batch_applies_three_rules_together() {
+    let mut state = connected_state_for_apply();
+    let mut added = list("geo", ListSource::Url("https://example.com/geosite.dat".into()));
+    added.format = ListFormat::GeoSite;
+    added.categories = ["alpha", "beta", "google"].map(str::to_owned).to_vec();
+    state.config.lists.push(added);
+    let mut dialog = AddRuleDialog::new(RuleSetId::new("1"));
+    dialog.kind = RuleInputKind::List;
+    dialog.list = Some(ListId::new("geo"));
+    dialog.selected_categories = ["beta", "google", "alpha"].map(str::to_owned).to_vec();
+    dialog.temporary_only = true;
+    state.rules.screen.selected_set = Some(RuleSetId::new("1"));
+    state.rules.screen.add = Some(dialog);
+    let Some(Job::Apply(request)) = state.act(Action::SubmitAddRule) else {
+        panic!("a temporary list batch must produce one apply job");
+    };
+    let categories: Vec<_> = request.temporary_rules.iter().map(|rule| match &rule.matcher {
+        RuleMatcher::List { category: Some(category), .. } => category.as_str(),
+        other => panic!("unexpected temporary matcher: {other:?}"),
+    }).collect();
+    assert_eq!(categories, ["beta", "google", "alpha"]);
+    assert_eq!(state.session.temporary_rules.len(), 3);
+}
+
 #[test]
 fn adding_url_list_keeps_detection_result_in_dialog() {
     let mut state = State {
@@ -173,15 +308,14 @@ fn list_rule_requires_a_dat_category_and_submits_a_valid_matcher() {
     let dialog = state.rules.screen.add.as_mut().unwrap();
     dialog.list = Some(ListId::new("1"));
     assert!(state.act(Action::SubmitAddRule).is_none());
-    assert_eq!(
-        state.rules.screen.add.as_ref().unwrap().error.as_deref(),
-        Some("Select a category from this list")
-    );
-    state.rules.screen.add.as_mut().unwrap().category = "example@cn".into();
-    let Some(Job::AddRule(set, matcher, RuleTarget::Proxy)) = state.act(Action::SubmitAddRule)
+    assert!(state.rules.screen.add.as_ref().unwrap().error.is_none());
+    state.rules.screen.add.as_mut().unwrap().selected_categories.push("example@cn".into());
+    let Some(Job::AddRules(set, mut matchers, RuleTarget::Proxy)) = state.act(Action::SubmitAddRule)
     else {
         panic!("a valid category must produce a list rule job");
     };
+    assert_eq!(matchers.len(), 1);
+    let matcher = matchers.pop().unwrap();
     assert!(
         matches!(&matcher, RuleMatcher::List { category: Some(value), .. } if value == "example@cn")
     );

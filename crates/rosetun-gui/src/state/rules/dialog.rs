@@ -18,13 +18,15 @@ pub(crate) enum RuleInputKind {
     Process,
 }
 
+pub(crate) const MAX_LIST_RULES: usize = 256;
+
 pub(crate) struct AddRuleDialog {
     pub(crate) set: RuleSetId,
     pub(crate) kind: RuleInputKind,
     pub(crate) target: RuleTarget,
     pub(crate) domains: String,
     pub(crate) list: Option<ListId>,
-    pub(crate) category: String,
+    pub(crate) selected_categories: Vec<String>,
     pub(crate) category_filter: String,
     pub(crate) subdomains: bool,
     pub(crate) show_all: bool,
@@ -57,7 +59,7 @@ impl AddRuleDialog {
             target: RuleTarget::Proxy,
             domains: String::new(),
             list: None,
-            category: String::new(),
+            selected_categories: Vec::new(),
             category_filter: String::new(),
             subdomains: true,
             show_all: false,
@@ -99,7 +101,7 @@ impl AddRuleDialog {
             RuleMatcher::List { list, category } => {
                 dialog.kind = RuleInputKind::List;
                 dialog.list = Some(list.clone());
-                dialog.category = category.clone().unwrap_or_default();
+                dialog.selected_categories = category.iter().cloned().collect();
             }
             RuleMatcher::Process(process) => {
                 dialog.process = rosetun_core::rule_value_text(&rule.matcher);
@@ -132,6 +134,33 @@ impl AddRuleDialog {
         (self.domains.trim() == value
             && self.subdomains == matches!(original, DomainMatch::Suffix(_)))
         .then(|| original.clone())
+    }
+
+    pub(crate) fn select_list(&mut self, list: ListId) {
+        if self.list.as_ref() != Some(&list) {
+            self.list = Some(list);
+            self.selected_categories.clear();
+            self.category_filter.clear();
+            self.error = None;
+        }
+    }
+
+    pub(crate) fn toggle_category(&mut self, category: &str) {
+        if let Some(index) = self.selected_categories.iter().position(|item| item == category) {
+            self.selected_categories.remove(index);
+        } else {
+            if self.editing.is_some() {
+                self.selected_categories.clear();
+            }
+            self.selected_categories.push(category.to_owned());
+        }
+        self.error = None;
+    }
+
+    pub(crate) fn exceeds_list_limit(&self, existing: usize, has_categories: bool) -> bool {
+        self.editing.is_none()
+            && existing + if has_categories { self.selected_categories.len() } else { 1 }
+                > MAX_LIST_RULES
     }
 
     pub(crate) fn set_process_match_mode(&mut self, mode: ProcessMatchMode) {
@@ -181,6 +210,31 @@ fn browsed_process_value(path: &std::path::Path, mode: ProcessMatchMode) -> Stri
 }
 
 impl State {
+    pub(crate) fn selected_list_rule_count(&self) -> usize {
+        let selected = self.rules.screen.selected_set.as_ref();
+        let permanent = self
+            .config
+            .rule_sets
+            .iter()
+            .find(|set| Some(&set.id) == selected)
+            .map_or(0, |set| {
+                set.rules
+                    .iter()
+                    .filter(|rule| matches!(rule.matcher, RuleMatcher::List { .. }))
+                    .count()
+            });
+        let temporary = if self.config.active_rule_set.as_ref() == selected {
+            self.session
+                .temporary_rules
+                .iter()
+                .filter(|rule| matches!(rule.matcher, RuleMatcher::List { .. }))
+                .count()
+        } else {
+            0
+        };
+        permanent + temporary
+    }
+
     fn load_processes(&mut self) -> Option<Job> {
         let dialog = self.rules.screen.add.as_mut()?;
         if dialog.kind != RuleInputKind::Process || dialog.load_request.is_some() || dialog.busy {
@@ -335,24 +389,46 @@ impl State {
                                 .ok()
                                 .map(|process| vec![RuleMatcher::Process(process)])
                         }
-                        RuleInputKind::List => dialog.list.as_ref().map(|list| {
-                            vec![RuleMatcher::List {
-                                list: list.clone(),
-                                category: (!dialog.category.trim().is_empty())
-                                    .then(|| dialog.category.trim().to_owned()),
-                            }]
+                        RuleInputKind::List => dialog.list.as_ref().and_then(|list| {
+                            let entry = self.config.lists.iter().find(|entry| &entry.id == list)?;
+                            let categories = if entry.format.has_categories() {
+                                if dialog.selected_categories.is_empty() {
+                                    return None;
+                                }
+                                dialog.selected_categories.iter().cloned().map(Some).collect()
+                            } else {
+                                vec![None]
+                            };
+                            Some(
+                                categories
+                                    .into_iter()
+                                    .map(|category| RuleMatcher::List {
+                                        list: list.clone(),
+                                        category,
+                                    })
+                                    .collect(),
+                            )
                         }),
                     };
                     if let Some(mut matchers) = matchers {
-                        if dialog.kind == RuleInputKind::List
-                            && let Err(error) =
-                                rosetun_core::validate_list_matcher(&self.config, &matchers[0])
-                        {
-                            let message =
-                                self.text(&errors::rule_set(crate::i18n::language(), &error));
-                            if let Some(dialog) = &mut self.rules.screen.add {
-                                dialog.error = Some(message);
+                        if dialog.kind == RuleInputKind::List {
+                            let over_limit = dialog.editing.is_none()
+                                && self.selected_list_rule_count() + matchers.len() > MAX_LIST_RULES;
+                            if over_limit {
+                                return None;
                             }
+                            if let Some(error) = matchers.iter().find_map(|matcher| {
+                                rosetun_core::validate_list_matcher(&self.config, matcher).err()
+                            }) {
+                                let message =
+                                    self.text(&errors::rule_set(crate::i18n::language(), &error));
+                                if let Some(dialog) = &mut self.rules.screen.add {
+                                    dialog.error = Some(message);
+                                }
+                                return None;
+                            }
+                        }
+                        if dialog.editing.is_some() && matchers.len() != 1 {
                             return None;
                         }
                         if dialog.temporary_only && dialog.editing.is_none() {
@@ -360,9 +436,6 @@ impl State {
                             return self.act(Action::AddTemporary(matchers, target));
                         }
                         let job = if let Some(id) = &dialog.editing {
-                            if matchers.len() != 1 {
-                                return None;
-                            }
                             let current = self
                                 .selected_rules()
                                 .and_then(|set| set.rules.iter().find(|rule| &rule.id == id))?;
@@ -372,7 +445,7 @@ impl State {
                                 return None;
                             }
                             Job::UpdateRule(dialog.set.clone(), id.clone(), matcher, dialog.target)
-                        } else if dialog.kind == RuleInputKind::Domain {
+                        } else if matches!(dialog.kind, RuleInputKind::Domain | RuleInputKind::List) {
                             Job::AddRules(dialog.set.clone(), matchers, dialog.target)
                         } else {
                             Job::AddRule(dialog.set.clone(), matchers.pop().unwrap(), dialog.target)
