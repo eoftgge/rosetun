@@ -386,8 +386,9 @@ Write-Host 'Classify a dead server without waiting for the DNS deadline...'
 $watch = [Diagnostics.Stopwatch]::StartNew()
 $attempt = Connect-RosetunTunnel -RequestName 'request-dead-server.json' -Quiet
 $watch.Stop()
+$deadServerClassified = $attempt.Output -match 'ServerUnreachable'
 Test-Step 'dead server' 'failure is ServerUnreachable within 20 s' `
-    -Note "exit $($attempt.ExitCode) after $([int]$watch.Elapsed.TotalSeconds) s" {
+    -Note ("exit {0} after {1:N1} s, classified: {2}" -f $attempt.ExitCode, $watch.Elapsed.TotalSeconds, $deadServerClassified) {
     $attempt.ExitCode -ne 0 -and $attempt.Output -match 'ServerUnreachable' -and
         $watch.Elapsed.TotalSeconds -le 20
 }

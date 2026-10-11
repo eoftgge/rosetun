@@ -33,8 +33,8 @@ const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(60);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
-const SERVER_CHECK_INTERVAL: Duration = Duration::from_secs(5);
-const SERVER_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const SERVER_CHECK_INTERVAL: Duration = Duration::from_secs(4);
+const SERVER_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
 const SERVER_CHECK_FAILURES: u64 = 3;
 const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
     interval: Duration::from_secs(30),
