@@ -76,7 +76,7 @@ fn leaving_while_rule_or_dns_save_is_running_applies_after_publication() {
 }
 
 #[test]
-fn hiding_applies_pending_edits_only_while_connected() {
+fn leaving_or_quitting_applies_pending_edits_only_while_connected() {
     let mut state = connected_state_for_apply();
     assert!(state.apply_on_leave().is_none());
     state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;

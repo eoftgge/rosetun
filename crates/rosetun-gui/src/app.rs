@@ -1,5 +1,7 @@
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 use eframe::egui;
 use rosetun_core::Store;
@@ -59,6 +61,8 @@ pub(crate) struct App {
     window_minimized: bool,
     #[cfg(windows)]
     quitting: bool,
+    #[cfg(windows)]
+    quit_apply_deadline: Option<Instant>,
 }
 
 impl App {
@@ -111,6 +115,8 @@ impl App {
             window_minimized: false,
             #[cfg(windows)]
             quitting: false,
+            #[cfg(windows)]
+            quit_apply_deadline: None,
         }
     }
 
@@ -375,7 +381,7 @@ impl eframe::App for App {
         }
         #[cfg(windows)]
         {
-            if std::mem::take(&mut self.hide_on_start) {
+            if std::mem::take(&mut self.hide_on_start) && !self.quitting {
                 self.hide_window(ctx);
             }
             while let Some(event) = self
@@ -383,6 +389,9 @@ impl eframe::App for App {
                 .as_ref()
                 .and_then(|events| events.try_recv().ok())
             {
+                if self.quitting {
+                    continue;
+                }
                 match event {
                     ShellEvent::Show => self.show_window(ctx),
                     ShellEvent::Hide => self.hide_window(ctx),
@@ -393,8 +402,31 @@ impl eframe::App for App {
                     }
                     ShellEvent::Quit => {
                         self.quitting = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        if let Some(job) = self.state.apply_on_leave() {
+                            self.dispatch(job);
+                            if let Some(window) = &self.window {
+                                window.save();
+                            }
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            self.quit_apply_deadline =
+                                Some(Instant::now() + Duration::from_secs(10));
+                            ctx.request_repaint_after(Duration::from_millis(100));
+                        } else {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
                     }
+                }
+            }
+            if let Some(deadline) = self.quit_apply_deadline {
+                if !self.state.operations.helper || Instant::now() >= deadline {
+                    self.quit_apply_deadline = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                } else {
+                    ctx.request_repaint_after(
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .min(Duration::from_millis(100)),
+                    );
                 }
             }
             if let Some(tray) = &mut self.tray {
@@ -411,6 +443,11 @@ impl eframe::App for App {
             self.window_minimized = minimized;
         }
         if ctx.input(|input| input.viewport().close_requested()) {
+            #[cfg(windows)]
+            if self.quit_apply_deadline.is_some() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                return;
+            }
             if self.hides_on_close() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 #[cfg(windows)]
