@@ -209,41 +209,47 @@ fn list_card(
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.set_min_height(CARD_HEIGHT - 15.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                icons::icon_badge(ui, Icon::List, 32.0);
-                let width = (ui.available_width() - 170.0).max(100.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(width, 40.0),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.set_width(width);
-                        ui.add(egui::Label::new(RichText::new(&name).strong()).truncate())
-                            .on_hover_text(&name);
+            // A fixed-height row, so the badge and the menu centre on the
+            // two-line text instead of the first line (as in the rules table).
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), CARD_HEIGHT - 15.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    icons::icon_badge(ui, Icon::List, 32.0);
+                    let width = (ui.available_width() - 170.0).max(100.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(width, 40.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(width);
+                            ui.add(egui::Label::new(RichText::new(&name).strong()).truncate())
+                                .on_hover_text(&name);
+                            ui.add(
+                                egui::Label::new(RichText::new(&detail).small().color(
+                                    if has_warning {
+                                        theme::WARNING
+                                    } else if applies_later {
+                                        theme::ROSE_LIGHT
+                                    } else {
+                                        theme::TEXT_MUTED
+                                    },
+                                ))
+                                .truncate(),
+                            )
+                            .on_hover_text(&detail);
+                        },
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        list_menu(ui, state, list, &used, busy, actions);
                         ui.add(
-                            egui::Label::new(RichText::new(&detail).small().color(
-                                if has_warning {
-                                    theme::WARNING
-                                } else if applies_later {
-                                    theme::ROSE_LIGHT
-                                } else {
-                                    theme::TEXT_MUTED
-                                },
-                            ))
-                            .truncate(),
+                            egui::Label::new(RichText::new(&usage).small().color(theme::TEXT_DIM))
+                                .truncate(),
                         )
-                        .on_hover_text(&detail);
-                    },
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    list_menu(ui, state, list, &used, busy, actions);
-                    ui.add(
-                        egui::Label::new(RichText::new(&usage).small().color(theme::TEXT_DIM))
-                            .truncate(),
-                    )
-                    .on_hover_text(&usage);
-                });
-            });
+                        .on_hover_text(&usage);
+                    });
+                },
+            );
         })
         .response
 }
