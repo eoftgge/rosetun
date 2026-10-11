@@ -89,7 +89,7 @@ pub(crate) struct RemoveListDialog {
 }
 
 pub(crate) enum ListOutcome {
-    Updated { manual: bool },
+    Updated,
     Failed(ListError),
 }
 
@@ -271,7 +271,7 @@ impl State {
                 self.lists.outcomes.insert(
                     id,
                     match result {
-                        Ok(_) => ListOutcome::Updated { manual },
+                        Ok(_) => ListOutcome::Updated,
                         Err(error) => ListOutcome::Failed(error),
                     },
                 );

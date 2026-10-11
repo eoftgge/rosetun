@@ -20,6 +20,18 @@ fn drag_set() -> RuleSet {
 }
 
 #[test]
+fn rule_set_controls_only_appear_on_rules_tab() {
+    let mut state = State::default();
+    state.config_ready = true;
+    state.config.rule_sets.push(drag_set());
+    state.rules.screen.selected_set = Some(rosetun_config::RuleSetId::new("set"));
+    state.lists.tab = RulesTab::Rules;
+    assert!(set_controls_visible(&state));
+    state.lists.tab = RulesTab::Lists;
+    assert!(!set_controls_visible(&state));
+}
+
+#[test]
 fn selected_drag_targets_use_the_list_without_selected_rules() {
     let set = drag_set();
     let mut state = State::default();

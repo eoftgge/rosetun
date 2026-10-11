@@ -311,7 +311,7 @@ impl State {
                             self.lists.outcomes.insert(
                                 id,
                                 match result {
-                                    Ok(_) => super::lists::ListOutcome::Updated { manual: false },
+                                    Ok(_) => super::lists::ListOutcome::Updated,
                                     Err(error) => super::lists::ListOutcome::Failed(error),
                                 },
                             );

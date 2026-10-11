@@ -39,22 +39,36 @@ use table::{drag_scroll_delta, drag_target, drop_action, table_cell, target_butt
 use templates::template_card;
 use templates::template_section;
 
+fn set_controls_visible(state: &State) -> bool {
+    state.lists.tab == RulesTab::Rules && state.config_ready && state.selected_rules().is_some()
+}
+
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
-    if let Some(tab) = widgets::segmented(
-        ui,
-        "rules_lists_tab",
-        state.lists.tab,
-        &[
-            (RulesTab::Rules, tr!("rules")),
-            (RulesTab::Lists, tr!("lists-title")),
-        ],
-        false,
-        true,
-    ) {
-        actions.push(match tab {
-            RulesTab::Rules => Action::ShowRuleSets,
-            RulesTab::Lists => Action::ShowLists,
-        });
+    let mut selected_tab = None;
+    egui::Sides::new().shrink_left().show(ui, |ui| {
+        if let Some(tab) = widgets::segmented(
+            ui,
+            "rules_lists_tab",
+            state.lists.tab,
+            &[
+                (RulesTab::Rules, tr!("rules")),
+                (RulesTab::Lists, tr!("lists-title")),
+            ],
+            false,
+            true,
+        ) {
+            selected_tab = Some(match tab {
+                RulesTab::Rules => Action::ShowRuleSets,
+                RulesTab::Lists => Action::ShowLists,
+            });
+        }
+    }, |ui| {
+        if set_controls_visible(state) {
+            set_controls(ui, state, actions);
+        }
+    });
+    if let Some(action) = selected_tab {
+        actions.push(action);
     }
     ui.add_space(20.0);
     if state.lists.tab == RulesTab::Lists {
@@ -71,28 +85,15 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         && state.pending_reconnect(SessionPart::Rules);
     let can_apply = state.can_apply();
     let mut apply_clicked = false;
-    egui::Sides::new().shrink_left().wrap().show(
-        ui,
-        |ui| {
-            ui.vertical(|ui| {
-                ui.heading(tr!("rules-tab-title"));
-                ui.add(
-                    egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::TEXT_MUTED))
-                        .wrap(),
-                );
-                if pending_apply {
-                    ui.add_space(6.0);
-                    let (_, link) = apply_notice(ui, can_apply);
-                    apply_clicked = link.is_some_and(|link| link.clicked());
-                }
-            });
-        },
-        |ui| {
-            if state.config_ready && !state.config.rule_sets.is_empty() {
-                set_controls(ui, state, actions);
-            }
-        },
+    ui.heading(tr!("rules-tab-title"));
+    ui.add(
+        egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::TEXT_MUTED)).wrap(),
     );
+    if pending_apply {
+        ui.add_space(6.0);
+        let (_, link) = apply_notice(ui, can_apply);
+        apply_clicked = link.is_some_and(|link| link.clicked());
+    }
     if apply_clicked {
         actions.push(Action::Apply);
     }

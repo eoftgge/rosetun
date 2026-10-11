@@ -214,7 +214,7 @@ fn adding_file_list_uses_only_a_transient_path() {
     assert_eq!(dialog.url, "");
     assert!(matches!(
         state.act(Action::SubmitAddList),
-        Some(Job::AddListFile(path, name)) if path == PathBuf::from("C:/lists/example.srs") && name == "example"
+        Some(Job::AddListFile(path, name)) if path == std::path::Path::new("C:/lists/example.srs") && name == "example"
     ));
     let added = list(
         "1",

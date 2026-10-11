@@ -147,7 +147,9 @@ traffic = Traffic
 rules = Rules
 lists-title = Lists
 lists-empty = Site and address lists from a file or a link. Formats: sing-box, Xray geosite and geoip, text.
+lists-empty-prompt = Add a list from a link or a file, then create a rule for it on the Rules tab.
 add-list = Add list
+new-list-button = + Add list
 rename-list = Rename list
 list-url = List URL
 choose-list-file = Choose file…
@@ -158,13 +160,18 @@ list-format-singbox = sing-box
 list-format-geosite = Xray geosite
 list-format-geoip = Xray geoip
 list-format-text = Text
-list-format-source = { $format } · { $source }
+list-name-format = { $name } · { $format }
 list-size-unknown = size unknown
-list-detail = { $size } · { $updated }
-list-detail-categories = { $size } · { $updated } · { $count ->
+list-row-detail = { $source } · { $size } · { $updated }
+list-row-detail-categories = { $source } · { $size } · { $updated } · { $count ->
     [one] { $n } category
    *[other] { $n } categories
 }
+list-used-rules = { $count ->
+    [one] In { $n } rule
+   *[other] In { $n } rules
+}
+list-unused = Not used
 list-added-categories = { $format } · { $count ->
     [one] { $n } category
    *[other] { $n } categories
@@ -173,8 +180,6 @@ list-added-entries = { $format } · { $count ->
     [one] { $n } entry
    *[other] { $n } entries
 }
-list-updated = Updated
-list-updated-later = Updated · takes effect at next connection
 list-delete-in-use = Used in: { $sets }
 delete-list = Delete list?
 delete-list-detail = The list will be removed. Rules that use a list must be changed first.

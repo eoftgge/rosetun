@@ -147,7 +147,9 @@ traffic = Трафик
 rules = Правила
 lists-title = Списки
 lists-empty = Списки сайтов и адресов из файла или по ссылке. Форматы: sing-box, Xray geosite и geoip, текст.
+lists-empty-prompt = Добавьте список по ссылке или из файла, а потом создайте по нему правило на вкладке «Правила».
 add-list = Добавить список
+new-list-button = + Добавить список
 rename-list = Переименовать список
 list-url = Ссылка на список
 choose-list-file = Выбрать файл…
@@ -158,15 +160,22 @@ list-format-singbox = sing-box
 list-format-geosite = Xray geosite
 list-format-geoip = Xray geoip
 list-format-text = Текст
-list-format-source = { $format } · { $source }
+list-name-format = { $name } · { $format }
 list-size-unknown = размер неизвестен
-list-detail = { $size } · { $updated }
-list-detail-categories = { $size } · { $updated } · { $count ->
+list-row-detail = { $source } · { $size } · { $updated }
+list-row-detail-categories = { $source } · { $size } · { $updated } · { $count ->
     [one] { $n } категория
     [few] { $n } категории
     [many] { $n } категорий
    *[other] { $n } категории
 }
+list-used-rules = { $count ->
+    [one] В { $n } правиле
+    [few] В { $n } правилах
+    [many] В { $n } правилах
+   *[other] В { $n } правилах
+}
+list-unused = Не используется
 list-added-categories = { $format } · { $count ->
     [one] { $n } категория
     [few] { $n } категории
@@ -179,8 +188,6 @@ list-added-entries = { $format } · { $count ->
     [many] { $n } записей
    *[other] { $n } записи
 }
-list-updated = Обновлён
-list-updated-later = Обновлён · применится при следующем подключении
 list-delete-in-use = Используется в наборах: { $sets }
 delete-list = Удалить список?
 delete-list-detail = Список будет удалён. Сначала измените правила, которые его используют.
