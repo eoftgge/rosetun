@@ -10,8 +10,11 @@ impl WorkerDispatcher {
                 .map_err(HelperCommandError::Store)
                 .and_then(|config| {
                     let request = ConnectRequest::from_config(&config)?;
+                    let prepared = rosetun_core::prepare_lists(&publisher.store, request.clone())?;
                     let snapshot = AppliedSnapshot::from_config(&config);
-                    with_helper(|client| client.connect_tunnel(request.clone()))?;
+                    with_helper(|client| {
+                        rosetun_core::send_prepared(client, &prepared, ListOperation::Connect)
+                    })?;
                     Ok((request, snapshot))
                 });
             let result = match result {
@@ -36,7 +39,13 @@ impl WorkerDispatcher {
     pub(crate) fn apply(&self, request: Box<ConnectRequest>) {
         self.spawn_task("rosetun-apply", move |publisher| {
             tracing::info!("Apply command started");
-            let result = with_helper(|client| client.apply_tunnel(request.as_ref().clone()))
+            let result = rosetun_core::prepare_lists(&publisher.store, request.as_ref().clone())
+                .map_err(HelperCommandError::from)
+                .and_then(|prepared| {
+                    with_helper(|client| {
+                        rosetun_core::send_prepared(client, &prepared, ListOperation::Apply)
+                    })
+                })
                 .map(|()| *request);
             match &result {
                 Ok(_) => tracing::info!("Apply command succeeded"),

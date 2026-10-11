@@ -13,8 +13,8 @@ use rosetun_config::{
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitInfo, ExitInfoError,
-    ListError, ListUpdateResult, MissingListCategory, MoveSubscriptionError, PING_PARALLEL,
-    PING_TIMEOUT, Ping, Release,
+    ListError, ListOperation, ListPreparationError, ListUpdateResult, MissingListCategory,
+    MoveSubscriptionError, PING_PARALLEL, PING_TIMEOUT, Ping, Release,
     RemoveSubscriptionError, RenameSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingChange,
     SettingsError, Store, StoreError, SubscriptionUpdateResult, Timeouts, UpdateCheckError,
     UpdateReport, UpdateSubscriptionError, add_prepared_subscription, add_rule, add_rules,
@@ -41,6 +41,8 @@ pub(crate) enum HelperCommandError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Request(#[from] ConnectRequestError),
+    #[error(transparent)]
+    ListPreparation(#[from] ListPreparationError),
     #[error(transparent)]
     Client(#[from] ClientError),
 }

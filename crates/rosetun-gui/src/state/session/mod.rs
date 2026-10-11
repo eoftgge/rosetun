@@ -147,6 +147,7 @@ pub(crate) struct SessionState {
     #[cfg(test)]
     pub(in crate::state) request_builds: usize,
     pub(super) session_request: Option<ConnectRequest>,
+    pub(super) lists_changed_since_apply: bool,
     pub(super) applied_snapshot: Option<AppliedSnapshot>,
     pub(super) connect_snapshot: Option<AppliedSnapshot>,
     pub(super) deferred_snapshot: Option<AppliedSnapshot>,
@@ -174,6 +175,7 @@ impl Default for SessionState {
             #[cfg(test)]
             request_builds: 0,
             session_request: None,
+            lists_changed_since_apply: false,
             applied_snapshot: None,
             connect_snapshot: None,
             deferred_snapshot: None,
@@ -303,14 +305,15 @@ impl State {
             )
     }
 
-    fn has_pending_apply(&self) -> bool {
+    pub(in crate::state) fn has_pending_apply(&self) -> bool {
         let Some(session) = &self.session.session_request else {
             return false;
         };
         let Ok(current) = self.config_request() else {
             return false;
         };
-        session.selection != current.selection
+        self.session.lists_changed_since_apply
+            || session.selection != current.selection
             || session.rule_set != current.rule_set
             || session.settings.dns != current.settings.dns
     }
@@ -440,6 +443,7 @@ impl State {
     }
 
     pub(super) fn clear_applied_state(&mut self) {
+        self.session.lists_changed_since_apply = false;
         self.session.applied_snapshot = None;
         self.session.connect_snapshot = None;
         self.session.deferred_snapshot = None;
@@ -603,6 +607,7 @@ impl State {
                         self.session.temporary_rules = request.temporary_rules.clone();
                         self.refresh_cached_request();
                         self.session.session_request = Some(request);
+                        self.session.lists_changed_since_apply = false;
                         self.session.applied_snapshot = candidate;
                         self.session.recovery = ApplyRecovery::default();
                         self.operation_error = None;

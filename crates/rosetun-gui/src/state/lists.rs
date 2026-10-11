@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use rosetun_config::{AppConfig, ListFormat, ListId, ListSource, RuleMatcher};
+use rosetun_config::{AppConfig, ListFormat, ListId, ListSource, Rule, RuleMatcher};
 use rosetun_core::{ListError, MissingListCategory};
 
 use super::{Action, Job, State};
@@ -247,6 +247,17 @@ impl State {
             }
             WorkerEvent::UpdateList { id, result, manual } => {
                 self.operations.updating_lists.remove(&id);
+                if manual && result.is_ok() && self.session.session_request.is_some() {
+                    let uses_list = |rule: &Rule| {
+                        rule.enabled
+                            && matches!(&rule.matcher, RuleMatcher::List { list, .. } if list == &id)
+                    };
+                    if self.config.active_rules().is_some_and(|set| set.rules.iter().any(uses_list))
+                        || self.session.temporary_rules.iter().any(uses_list)
+                    {
+                        self.session.lists_changed_since_apply = true;
+                    }
+                }
                 self.lists.outcomes.insert(
                     id,
                     match result {

@@ -1,7 +1,7 @@
 use rosetun_config::{ConfigError, ListCategoryError};
 use rosetun_core::{
     AddFromUrlError, AddSubscriptionError, DnsInputError, FetchError, ListError, ListParseError,
-    MoveSubscriptionError, TextErrorKind,
+    ListPreparationError, MoveSubscriptionError, TextErrorKind,
     ParseError, RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
     SelectNodeError, SelectRuleSetError, SettingsError, SkipReason, StoreError,
     SubscriptionUrlError, UnsupportedTransport, UpdateSubscriptionError,
@@ -718,6 +718,13 @@ pub(crate) fn helper_command(language: Language, error: &HelperCommandError) -> 
     match error {
         HelperCommandError::Store(error) => store(language, error),
         HelperCommandError::Request(error) => connect_request(language, error),
+        HelperCommandError::ListPreparation(error) => match error {
+            ListPreparationError::Store(error) => store(language, error),
+            ListPreparationError::List(error) => list(language, error),
+            ListPreparationError::TooMany => {
+                tr_in(language, "error-list-storage-limit", &FluentArgs::new())
+            }
+        },
         HelperCommandError::Client(error) => client(language, error),
     }
 }

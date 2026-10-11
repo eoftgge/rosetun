@@ -114,6 +114,7 @@ error-list-wrong-source = This update does not match the list source
 error-list-changed = The list changed while updating · try again
 error-list-in-use = This list is used in: { $sets }
 error-list-too-large = The list exceeds the 32 MiB size limit
+error-list-storage-limit = The lists for this connection exceed the service's storage limits
 error-list-integrity = The saved list is damaged or does not match its checksum
 error-list-io = Could not read or save the list file
 error-list-category-required = Select a category from this list

@@ -315,6 +315,7 @@ impl State {
                         self.session.temporary_rules_loaded = true;
                         self.session.temporary_load = None;
                         self.session.session_request = Some(request);
+                        self.session.lists_changed_since_apply = false;
                         self.session.applied_snapshot = snapshot.or_else(|| {
                             self.config_ready
                                 .then(|| AppliedSnapshot::from_config(&self.config))
@@ -342,6 +343,7 @@ impl State {
                         self.refresh_cached_request();
                         self.session.temporary_rules_loaded = true;
                         self.session.session_request = Some(request);
+                        self.session.lists_changed_since_apply = false;
                         self.session.applied_snapshot =
                             self.session.deferred_snapshot.take().or_else(|| {
                                 self.config_ready

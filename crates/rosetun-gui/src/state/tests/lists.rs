@@ -238,6 +238,101 @@ fn missing_categories_expose_fallback_and_disabled_states_then_clear() {
     assert!(state.lists.missing.is_empty());
 }
 
+fn connected_state_with_list_rule() -> (State, ListId) {
+    let mut state = state_for_auto_connect();
+    let id = ListId::new("1");
+    state.config.lists.push(list("1", ListSource::Url("https://example.com/rules.txt".into())));
+    let mut set = rule_set("1");
+    set.rules[0].matcher = RuleMatcher::List {
+        list: id.clone(),
+        category: None,
+    };
+    state.config.rule_sets.push(set);
+    state.config.active_rule_set = Some(RuleSetId::new("1"));
+    let request = ConnectRequest::from_config(&state.config).unwrap();
+    state.reduce(WorkerEvent::Connect(Ok(request)));
+    state.reduce(WorkerEvent::Status(Status {
+        state: ConnectionState::Connected,
+        node: Some(NodeId::new("node")),
+        ..Status::default()
+    }));
+    (state, id)
+}
+
+#[test]
+fn manual_update_of_active_list_applies_on_leave_and_clears_after_apply() {
+    let (mut state, id) = connected_state_with_list_rule();
+    state.reduce(WorkerEvent::UpdateList {
+        id,
+        result: Ok(state.config.lists[0].clone()),
+        manual: true,
+    });
+    let Some(Job::Apply(request)) = state.apply_on_leave() else {
+        panic!("manual update of the active list must apply");
+    };
+    assert!(state.session.lists_changed_since_apply);
+    state.reduce(WorkerEvent::Apply(Ok(*request)));
+    assert!(!state.session.lists_changed_since_apply);
+    assert!(!state.has_pending_apply());
+    assert!(state.apply_on_leave().is_none());
+}
+
+#[test]
+fn background_update_of_active_list_does_not_apply_on_leave() {
+    let (mut state, id) = connected_state_with_list_rule();
+    state.reduce(WorkerEvent::UpdateList {
+        id,
+        result: Ok(state.config.lists[0].clone()),
+        manual: false,
+    });
+    assert!(!state.session.lists_changed_since_apply);
+    assert!(state.apply_on_leave().is_none());
+}
+
+#[test]
+fn manual_update_of_unused_list_does_not_apply_on_leave() {
+    let (mut state, _) = connected_state_with_list_rule();
+    let unused = list("2", ListSource::Url("https://example.com/unused.txt".into()));
+    state.config.lists.push(unused.clone());
+    state.reduce(WorkerEvent::UpdateList {
+        id: unused.id.clone(),
+        result: Ok(unused),
+        manual: true,
+    });
+    assert!(!state.session.lists_changed_since_apply);
+    assert!(state.apply_on_leave().is_none());
+}
+
+#[test]
+fn manual_update_of_temporary_list_applies_on_leave() {
+    let (mut state, _) = connected_state_with_list_rule();
+    let temporary = list("2", ListSource::Url("https://example.com/temporary.txt".into()));
+    state.config.lists.push(temporary.clone());
+    state.session.temporary_rules.push(Rule {
+        id: RuleId::new("temporary-list"),
+        enabled: true,
+        matcher: RuleMatcher::List {
+            list: temporary.id.clone(),
+            category: None,
+        },
+        target: RuleTarget::Block,
+    });
+    state.reduce(WorkerEvent::UpdateList {
+        id: temporary.id.clone(),
+        result: Ok(temporary),
+        manual: true,
+    });
+    assert!(matches!(state.apply_on_leave(), Some(Job::Apply(_))));
+}
+
+#[test]
+fn connecting_with_original_list_request_has_no_pending_apply() {
+    let (mut state, _) = connected_state_with_list_rule();
+    assert_eq!(state.session.session_request.as_ref().unwrap().lists.len(), 0);
+    assert!(!state.has_pending_apply());
+    assert!(state.apply_on_leave().is_none());
+}
+
 #[test]
 fn list_update_failures_stay_local_and_unrelated_success_does_not_clear_them() {
     let mut state = State::default();
