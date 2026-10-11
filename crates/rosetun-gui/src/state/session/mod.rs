@@ -566,6 +566,18 @@ impl State {
                         self.session.temporary_waiting_status = true;
                         self.session.temporary_last_load = None;
                     }
+                    Err(HelperCommandError::Client(ClientError::Helper(HelperError {
+                        code: ErrorCode::AccessDenied,
+                        ..
+                    }))) => {
+                        self.session.temporary_rules.clear();
+                        if let Some(session) = &mut self.session.session_request {
+                            session.temporary_rules.clear();
+                        }
+                        self.refresh_cached_request();
+                        self.session.temporary_rules_loaded = true;
+                        self.session.temporary_error_reported = false;
+                    }
                     Err(error) => {
                         self.session.temporary_retry = true;
                         if !self.session.temporary_error_reported {

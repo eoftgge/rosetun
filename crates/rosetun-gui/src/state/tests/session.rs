@@ -233,6 +233,50 @@ fn temporary_rules_retry_closed_after_ten_seconds_and_restore_apply() {
 }
 
 #[test]
+fn denied_temporary_rules_are_empty_without_an_error_or_retry() {
+    let mut state = state_for_auto_connect();
+    state.reduce(WorkerEvent::Status(Status {
+        state: ConnectionState::Connected,
+        node: Some(NodeId::new("node")),
+        ..Status::default()
+    }));
+    let Some(Job::LoadTemporaryRules(request)) = state.take_temporary_load(1_000) else {
+        panic!("connected status must load temporary rules");
+    };
+    state.session.temporary_rules = vec![temporary_rule("stale", "example.com")];
+    state.reduce(WorkerEvent::TemporaryRules {
+        request,
+        result: Err(HelperCommandError::Client(ClientError::Helper(
+            HelperError::new(ErrorCode::AccessDenied, "another account"),
+        ))),
+    });
+    assert!(state.session.temporary_rules_loaded);
+    assert!(state.session.temporary_rules.is_empty());
+    assert!(state.operation_error.is_none());
+    assert!(state.take_temporary_load(10_000).is_none());
+    state.reduce(WorkerEvent::Status(Status {
+        state: ConnectionState::Connected,
+        node: Some(NodeId::new("node")),
+        ..Status::default()
+    }));
+    assert!(state.take_temporary_load(20_000).is_none());
+}
+
+#[test]
+fn denied_leave_apply_finishes_without_queuing_another_apply() {
+    let mut state = connected_state_for_apply();
+    state.config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+    assert!(matches!(state.apply_on_leave(), Some(Job::Apply(_))));
+    state.reduce(WorkerEvent::Apply(Err(HelperCommandError::Client(
+        ClientError::Helper(HelperError::new(ErrorCode::AccessDenied, "another account")),
+    ))));
+    assert!(!state.operations.helper);
+    assert!(!state.session.apply_after_leave());
+    assert!(state.take_apply().is_none());
+    assert!(state.apply_on_leave().is_none());
+}
+
+#[test]
 fn temporary_rules_loaded_before_config_are_kept_in_the_session_snapshot() {
     let mut state = state_for_auto_connect();
     state.config_ready = false;

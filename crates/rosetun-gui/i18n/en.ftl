@@ -92,6 +92,7 @@ error-helper-closed = the Rosetun service closed the connection
 error-code-protocol-mismatch = the Rosetun service speaks a different protocol version; update Rosetun
 error-code-handshake-required = the service expected a handshake first
 error-code-not-privileged = the service is not running with administrator rights
+error-code-access-denied = The tunnel was connected from another Windows account. Only that account or an administrator can control it.
 error-code-engine-failed = the engine failed
 error-code-server-unreachable = The server is not responding
 error-code-server-rejected = The server rejected the connection

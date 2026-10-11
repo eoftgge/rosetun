@@ -92,6 +92,7 @@ error-helper-closed = служба закрыла соединение
 error-code-protocol-mismatch = служба использует другую версию протокола; обновите Rosetun
 error-code-handshake-required = нарушен порядок обмена со службой
 error-code-not-privileged = служба запущена без прав администратора
+error-code-access-denied = Туннель подключён из другой учётной записи Windows. Управлять им может только она или администратор.
 error-code-engine-failed = сбой ядра
 error-code-server-unreachable = Сервер не отвечает
 error-code-server-rejected = Сервер отклонил подключение

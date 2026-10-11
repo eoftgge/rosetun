@@ -115,7 +115,7 @@ fn connect(client: &mut HelperClient, request: PreparedCliRequest) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "failed to connect tunnel");
+            report_helper_error(&error, "failed to connect tunnel");
             ExitCode::FAILURE
         }
     }
@@ -146,7 +146,22 @@ fn apply_error_message(error: &ClientError) -> Option<&'static str> {
         {
             Some("protection settings changed; run `rosetun connect`")
         }
-        _ => None,
+        _ => access_denied_message(error),
+    }
+}
+
+fn access_denied_message(error: &ClientError) -> Option<&'static str> {
+    matches!(error, ClientError::Helper(helper) if helper.code == ErrorCode::AccessDenied)
+        .then_some(
+            "the tunnel is connected from another Windows account; only that account or an administrator can control it",
+        )
+}
+
+fn report_helper_error(error: &ClientError, context: &str) {
+    if let Some(message) = access_denied_message(error) {
+        eprintln!("{message}");
+    } else {
+        tracing::error!(%error, "{context}");
     }
 }
 
@@ -192,7 +207,7 @@ fn probe(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
             ExitCode::FAILURE
         }
         Err(error) => {
-            tracing::error!(%error, "failed to check server");
+            report_helper_error(&error, "failed to check server");
             ExitCode::FAILURE
         }
     }
@@ -209,7 +224,7 @@ fn delay(client: &mut HelperClient) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "failed to check tunnel delay");
+            report_helper_error(&error, "failed to check tunnel delay");
             ExitCode::FAILURE
         }
     }
@@ -249,7 +264,7 @@ fn status(client: &mut HelperClient) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "failed to get status");
+            report_helper_error(&error, "failed to get status");
             ExitCode::FAILURE
         }
     }
@@ -260,6 +275,9 @@ fn temporary_rules_status(result: Result<Vec<Rule>, ClientError>) -> Result<Stri
         Ok(rules) => Ok(rules.len().to_string()),
         Err(ClientError::Helper(helper)) if helper.code == ErrorCode::Busy => {
             Ok("unavailable while the service is busy".to_owned())
+        }
+        Err(ClientError::Helper(helper)) if helper.code == ErrorCode::AccessDenied => {
+            Ok("unavailable for another Windows account".to_owned())
         }
         Err(error) => Err(error),
     }
@@ -278,7 +296,7 @@ fn temporary(client: &mut HelperClient) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "failed to get temporary rules");
+            report_helper_error(&error, "failed to get temporary rules");
             ExitCode::FAILURE
         }
     }
@@ -315,7 +333,7 @@ fn disconnect(client: &mut HelperClient) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "failed to disconnect tunnel");
+            report_helper_error(&error, "failed to disconnect tunnel");
             ExitCode::FAILURE
         }
     }
@@ -328,7 +346,7 @@ fn shutdown(client: &mut HelperClient) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "failed to shut down helper");
+            report_helper_error(&error, "failed to shut down helper");
             ExitCode::FAILURE
         }
     }
@@ -343,7 +361,11 @@ fn with_helper(run: impl FnOnce(&mut HelperClient) -> ExitCode) -> ExitCode {
             run(&mut client)
         }
         Err(error) => {
-            tracing::error!(endpoint = %endpoint.display(), %error, "helper unavailable");
+            if let Some(message) = access_denied_message(&error) {
+                eprintln!("{message}");
+            } else {
+                tracing::error!(endpoint = %endpoint.display(), %error, "helper unavailable");
+            }
             ExitCode::FAILURE
         }
     }
@@ -381,9 +403,11 @@ fn prepare_list_request(request_path: Option<&str>) -> Result<PreparedCliRequest
 }
 
 fn prepare_apply_request(client: &mut HelperClient) -> Result<PreparedCliRequest, String> {
-    let temporary = client
-        .temporary_rules()
-        .map_err(|error| error.to_string())?;
+    let temporary = client.temporary_rules().map_err(|error| {
+        access_denied_message(&error)
+            .map(str::to_owned)
+            .unwrap_or_else(|| error.to_string())
+    })?;
     let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = store.load().map_err(|error| error.to_string())?;
     let request =
@@ -557,8 +581,8 @@ Options for sub add may appear in any order after the URL."
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, apply_error_message, parse_command_arguments, temporary_rule_line,
-        temporary_rules_status,
+        Command, access_denied_message, apply_error_message, parse_command_arguments,
+        temporary_rule_line, temporary_rules_status,
     };
     use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleTarget};
     use rosetun_ipc::{ClientError, ErrorCode, HelperError};
@@ -634,7 +658,19 @@ mod tests {
     }
 
     #[test]
-    fn status_shows_temporary_rules_as_unavailable_only_while_busy() {
+    fn denied_control_has_a_clear_message() {
+        let denied = ClientError::Helper(HelperError::new(
+            ErrorCode::AccessDenied,
+            "the tunnel belongs to another Windows account",
+        ));
+        let message = "the tunnel is connected from another Windows account; only that account or an administrator can control it";
+        assert_eq!(access_denied_message(&denied), Some(message));
+        assert_eq!(apply_error_message(&denied), Some(message));
+        assert_eq!(access_denied_message(&ClientError::Closed), None);
+    }
+
+    #[test]
+    fn status_hides_temporary_rules_when_busy_or_denied() {
         assert_eq!(temporary_rules_status(Ok(Vec::new())).unwrap(), "0");
         assert_eq!(
             temporary_rules_status(Err(ClientError::Helper(HelperError::new(
@@ -643,6 +679,14 @@ mod tests {
             ))))
             .unwrap(),
             "unavailable while the service is busy"
+        );
+        assert_eq!(
+            temporary_rules_status(Err(ClientError::Helper(HelperError::new(
+                ErrorCode::AccessDenied,
+                "another Windows account",
+            ))))
+            .unwrap(),
+            "unavailable for another Windows account"
         );
         assert!(matches!(
             temporary_rules_status(Err(ClientError::Helper(HelperError::new(
