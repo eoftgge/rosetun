@@ -285,13 +285,12 @@ impl State {
 
     pub(in crate::state) fn apply_request(&self) -> Option<ConnectRequest> {
         let session = self.session.session_request.as_ref()?;
-        let mut request = self.config_request().ok()?.into_owned();
-        request.settings.engine = session.settings.engine;
-        request.settings.tun = session.settings.tun.clone();
-        request.settings.kill_switch = session.settings.kill_switch;
-        request.settings.allow_lan = session.settings.allow_lan;
-        request.temporary_rules = self.session.temporary_rules.clone();
-        Some(request)
+        ConnectRequest::for_apply(
+            &self.config,
+            Some(&session.settings),
+            self.session.temporary_rules.clone(),
+        )
+        .ok()
     }
 
     pub(crate) fn can_change_temporary(&self) -> bool {

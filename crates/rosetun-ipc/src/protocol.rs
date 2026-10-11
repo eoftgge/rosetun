@@ -148,6 +148,22 @@ impl ConnectRequest {
         })
     }
 
+    pub fn for_apply(
+        config: &AppConfig,
+        running: Option<&Settings>,
+        temporary_rules: Vec<Rule>,
+    ) -> Result<Self, ConnectRequestError> {
+        let mut request = Self::from_config(config)?;
+        if let Some(running) = running {
+            request.settings.engine = running.engine;
+            request.settings.tun = running.tun.clone();
+            request.settings.kill_switch = running.kill_switch;
+            request.settings.allow_lan = running.allow_lan;
+        }
+        request.temporary_rules = temporary_rules;
+        Ok(request)
+    }
+
     pub fn effective_rule_set(&self) -> RuleSet {
         let mut rules = self.rule_set.clone();
         rules
@@ -293,9 +309,9 @@ mod tests {
         assert_eq!(super::PROTOCOL_VERSION, 7);
     }
     use rosetun_config::{
-        AppConfig, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
-        RuleTarget, RuleTemplate, Selection, StreamSettings, Subscription, SubscriptionId,
-        TrojanParams,
+        AppConfig, EngineKind, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
+        RuleSetId, RuleTarget, RuleTemplate, Selection, StreamSettings, Subscription,
+        SubscriptionId, TrojanParams,
     };
 
     use super::{ConnectRequest, ConnectRequestError, ListFormat, ListRef, ProbeRequest, Request};
@@ -421,6 +437,48 @@ mod tests {
         assert_eq!(&request.rule_set, config.active_rules().unwrap());
         assert_eq!(request.settings, config.settings);
         assert!(request.temporary_rules.is_empty());
+    }
+
+    #[test]
+    fn apply_request_uses_config_settings_without_running_session() {
+        let mut config = selected_config();
+        config.settings.kill_switch = true;
+        config.settings.dns.server_name = "dns.example.com".to_owned();
+        let temporary = Rule {
+            id: RuleId::new("temporary"),
+            enabled: true,
+            matcher: RuleMatcher::IpCidr("198.51.100.0/24".to_owned()),
+            target: RuleTarget::Direct,
+        };
+
+        let request = ConnectRequest::for_apply(&config, None, vec![temporary.clone()]).unwrap();
+
+        assert_eq!(request.settings, config.settings);
+        assert_eq!(request.temporary_rules, vec![temporary]);
+        assert!(request.lists.is_empty());
+    }
+
+    #[test]
+    fn apply_request_keeps_running_protection_but_new_other_settings() {
+        let mut config = selected_config();
+        config.settings.dns.server_name = "dns.example.com".to_owned();
+        config.settings.auto_reconnect = false;
+        let mut running = config.settings.clone();
+        running.engine = EngineKind::Xray;
+        running.tun.name = "old-tun".to_owned();
+        running.kill_switch = true;
+        running.allow_lan = true;
+        running.dns.server_name = "old.example.com".to_owned();
+        running.auto_reconnect = true;
+
+        let request = ConnectRequest::for_apply(&config, Some(&running), Vec::new()).unwrap();
+
+        assert_eq!(request.settings.engine, running.engine);
+        assert_eq!(request.settings.tun, running.tun);
+        assert_eq!(request.settings.kill_switch, running.kill_switch);
+        assert_eq!(request.settings.allow_lan, running.allow_lan);
+        assert_eq!(request.settings.dns, config.settings.dns);
+        assert_eq!(request.settings.auto_reconnect, config.settings.auto_reconnect);
     }
 
     #[test]

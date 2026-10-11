@@ -13,7 +13,7 @@ use rosetun_config::{
     DomainMatch, NodeId, ProcessMatch, Rule, RuleMatcher, RuleTarget, SubscriptionId,
 };
 use rosetun_core::{ListOperation, PreparedConnection, terminal_text};
-use rosetun_ipc::{ConnectRequest, HelperClient, ProbeOutcome, ProbeRequest};
+use rosetun_ipc::{ClientError, ConnectRequest, ErrorCode, HelperClient, ProbeOutcome, ProbeRequest};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -84,9 +84,15 @@ fn main() -> ExitCode {
             Ok(request) => with_helper(|client| connect(client, request)),
             Err(message) => local_result(Err(message)),
         },
-        Command::Apply { request_path } => match prepare_list_request(request_path.as_deref()) {
-            Ok(request) => with_helper(|client| apply(client, request)),
-            Err(message) => local_result(Err(message)),
+        Command::Apply { request_path } => match request_path {
+            Some(path) => match prepare_list_request(Some(&path)) {
+                Ok(request) => with_helper(|client| apply(client, request)),
+                Err(message) => local_result(Err(message)),
+            },
+            None => with_helper(|client| match prepare_apply_request(client) {
+                Ok(request) => apply(client, request),
+                Err(message) => local_result(Err(message)),
+            }),
         },
         Command::Probe { request_path } => match prepare_connect_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| probe(client, request)),
@@ -120,9 +126,25 @@ fn apply(client: &mut HelperClient, request: PreparedCliRequest) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "failed to apply session changes");
+            if let Some(message) = apply_error_message(&error) {
+                eprintln!("{message}");
+            } else {
+                tracing::error!(%error, "failed to apply session changes");
+            }
             ExitCode::FAILURE
         }
+    }
+}
+
+fn apply_error_message(error: &ClientError) -> Option<&'static str> {
+    match error {
+        ClientError::Helper(helper)
+            if helper.code == ErrorCode::InvalidState
+                && helper.message == "reconnect to change protection settings" =>
+        {
+            Some("protection settings changed; run `rosetun connect`")
+        }
+        _ => None,
     }
 }
 
@@ -331,13 +353,7 @@ fn prepare_connect_request(request_path: Option<&str>) -> Result<ConnectRequest,
 
     let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = current_store.load().map_err(|error| error.to_string())?;
-    ConnectRequest::from_config(&config).map_err(|error| match error {
-        rosetun_ipc::ConnectRequestError::NodeNotFound
-        | rosetun_ipc::ConnectRequestError::SelectionMissing => {
-            "select an existing node with rosetun select <subscription-id> <node-id>".to_owned()
-        }
-        rosetun_ipc::ConnectRequestError::RuleSetNotFound => error.to_string(),
-    })
+    ConnectRequest::from_config(&config).map_err(connect_request_error)
 }
 
 fn prepare_list_request(request_path: Option<&str>) -> Result<PreparedCliRequest, String> {
@@ -349,6 +365,27 @@ fn prepare_list_request(request_path: Option<&str>) -> Result<PreparedCliRequest
     rosetun_core::prepare_lists(&store, request)
         .map(PreparedCliRequest::Lists)
         .map_err(|error| error.to_string())
+}
+
+fn prepare_apply_request(client: &mut HelperClient) -> Result<PreparedCliRequest, String> {
+    let temporary = client.temporary_rules().map_err(|error| error.to_string())?;
+    let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
+    let config = store.load().map_err(|error| error.to_string())?;
+    let request =
+        ConnectRequest::for_apply(&config, None, temporary).map_err(connect_request_error)?;
+    rosetun_core::prepare_lists(&store, request)
+        .map(PreparedCliRequest::Lists)
+        .map_err(|error| error.to_string())
+}
+
+fn connect_request_error(error: rosetun_ipc::ConnectRequestError) -> String {
+    match error {
+        rosetun_ipc::ConnectRequestError::NodeNotFound
+        | rosetun_ipc::ConnectRequestError::SelectionMissing => {
+            "select an existing node with rosetun select <subscription-id> <node-id>".to_owned()
+        }
+        rosetun_ipc::ConnectRequestError::RuleSetNotFound => error.to_string(),
+    }
 }
 
 fn select_node(subscription_id: &str, node_id: &str) -> Result<(), String> {
@@ -504,8 +541,9 @@ Options for sub add may appear in any order after the URL."
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, parse_command_arguments, temporary_rule_line};
+    use super::{Command, apply_error_message, parse_command_arguments, temporary_rule_line};
     use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleTarget};
+    use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
     fn parse(arguments: &[&str]) -> Result<Command, String> {
         let arguments: Vec<String> = arguments
@@ -555,6 +593,26 @@ mod tests {
         assert_eq!(parse(&["config"]), Ok(Command::Config));
         assert_eq!(parse(&["disconnect"]), Ok(Command::Disconnect));
         assert_eq!(parse(&["shutdown"]), Ok(Command::Shutdown));
+    }
+
+    #[test]
+    fn apply_reconnect_error_has_an_actionable_message() {
+        let reconnect = ClientError::Helper(HelperError::new(
+            ErrorCode::InvalidState,
+            "reconnect to change protection settings",
+        ));
+        assert_eq!(
+            apply_error_message(&reconnect),
+            Some("protection settings changed; run `rosetun connect`")
+        );
+        assert_eq!(
+            apply_error_message(&ClientError::Helper(HelperError::new(
+                ErrorCode::InvalidState,
+                "another invalid state",
+            ))),
+            None
+        );
+        assert_eq!(apply_error_message(&ClientError::Closed), None);
     }
 
     #[test]
