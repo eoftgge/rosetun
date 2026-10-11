@@ -167,6 +167,12 @@ function Invoke-OtherAccountCommands {
                         Write-Host 'Start-Process did not return an exit code; using a scheduled task.'
                         $useTask = $true
                     }
+                    if (-not $useTask -and $exitCode -eq -1073741502) {
+                        # PowerShell Direct can launch the process but fail DLL initialization.
+                        # Do not retry ordinary CLI errors, especially a real access denial.
+                        Write-Host 'Credential launch failed DLL initialization; using a scheduled task.'
+                        $useTask = $true
+                    }
                 }
                 if ($useTask) {
                     Remove-Item -LiteralPath $stdout, $stderr, $exitFile -Force `
@@ -217,6 +223,7 @@ function Invoke-OtherAccountCommands {
                 [pscustomobject]@{
                     Command = $command
                     ExitCode = $exitCode
+                    Launch = if ($useTask) { 'scheduled task' } else { 'Start-Process' }
                     Output = ($output -join "`n")
                     StillConnected = ($adminExit -eq 0 -and
                         ($adminStatus -join "`n") -match '(?m)^state: Connected\r?$')
@@ -278,7 +285,10 @@ Test-Step 'baseline' 'direct egress works before connect' { Test-RosetunDirectEg
 Test-Step 'baseline' 'direct DNS works before connect' { Test-RosetunDirectDns }
 Test-Step 'baseline' 'direct TCP DNS works before connect' { Test-RosetunDirectDns -Tcp }
 Test-Step 'baseline' 'IPv6 to the host works before connect' { Test-RosetunIpv6Egress }
-Test-Step 'baseline' 'LAN listener is reachable before connect' { Test-RosetunLanListener $lanListener }
+# The new firewall rule can take a moment to accept guest connections.
+Test-Step 'baseline' 'LAN listener is reachable before connect' {
+    Wait-RosetunCondition { Test-RosetunLanListener $lanListener } -TimeoutSeconds 10
+}
 
 Write-Host 'Connect...'
 Connect-RosetunTunnel | Out-Null
@@ -327,7 +337,7 @@ if ($otherResults.Count -ne 4) {
 }
 foreach ($command in @('status', 'disconnect', 'temporary', 'apply')) {
     $result = $otherResults | Where-Object Command -eq $command | Select-Object -First 1
-    $note = "exit $($result.ExitCode)"
+    $note = "exit $($result.ExitCode) via $($result.Launch)"
     if ($command -eq 'status') {
         Test-Step 'other account' 'status reports Connected' -Note $note {
             $result.ExitCode -eq 0 -and $result.Output -match '(?m)^state: Connected\r?$'
