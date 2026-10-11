@@ -147,15 +147,18 @@ function Invoke-OtherAccountCommands {
                 $stdout = Join-Path $workDir "$command.out"
                 $stderr = Join-Path $workDir "$command.err"
                 $exitFile = Join-Path $workDir "$command.exit"
+                $startedFile = Join-Path $workDir "$command.started"
                 $cliArgs = if ($command -eq 'apply') {
                     @($command, (Join-Path $workDir 'request.json'))
                 } else { @($command) }
                 $exitCode = $null
                 if (-not $useTask) {
                     try {
+                        # PowerShell Direct has not loaded the new account's profile.
                         $process = Start-Process -FilePath $cli -ArgumentList $cliArgs `
-                            -Credential $credential -WorkingDirectory $dir -Wait -PassThru `
-                            -RedirectStandardOutput $stdout -RedirectStandardError $stderr `
+                            -Credential $credential -LoadUserProfile -WorkingDirectory $dir `
+                            -Wait -PassThru -RedirectStandardOutput $stdout `
+                            -RedirectStandardError $stderr `
                             -ErrorAction Stop
                         $exitCode = $process.ExitCode
                     }
@@ -175,14 +178,15 @@ function Invoke-OtherAccountCommands {
                     }
                 }
                 if ($useTask) {
-                    Remove-Item -LiteralPath $stdout, $stderr, $exitFile -Force `
-                        -ErrorAction SilentlyContinue
+                    Remove-Item -LiteralPath $stdout, $stderr, $exitFile, $startedFile `
+                        -Force -ErrorAction SilentlyContinue
                     $arguments = if ($command -eq 'apply') {
                         "apply `"$(Join-Path $workDir 'request.json')`""
                     } else { $command }
                     $batch = Join-Path $workDir 'run-other.cmd'
                     @(
                         '@echo off',
+                        "echo started > `"$startedFile`"",
                         "`"$cli`" $arguments 1>`"$stdout`" 2>`"$stderr`"",
                         "echo %errorlevel% > `"$exitFile`""
                     ) | Set-Content -LiteralPath $batch -Encoding Ascii
@@ -195,10 +199,19 @@ function Invoke-OtherAccountCommands {
                         -Force | Out-Null
                     try {
                         Start-ScheduledTask -TaskName $taskName
+                        $startedDeadline = (Get-Date).AddSeconds(30)
                         $deadline = (Get-Date).AddSeconds(90)
                         while (-not (Test-Path -LiteralPath $exitFile)) {
-                            if ((Get-Date) -gt $deadline) {
-                                throw "The other-account $command task did not finish within 90 seconds."
+                            $now = Get-Date
+                            $started = Test-Path -LiteralPath $startedFile
+                            if (($now -gt $startedDeadline -and -not $started) -or $now -gt $deadline) {
+                                $phase = if ($started) { 'did not finish' } else { 'did not start' }
+                                $state = (Get-ScheduledTask -TaskName $taskName).State
+                                $info = Get-ScheduledTaskInfo -TaskName $taskName
+                                $result = [BitConverter]::ToUInt32(
+                                    [BitConverter]::GetBytes([long]$info.LastTaskResult), 0)
+                                throw ('The other-account {0} task {1} (state {2}; scheduler result 0x{3:X8}).' -f
+                                    $command, $phase, $state, $result)
                             }
                             Start-Sleep -Milliseconds 100
                         }
@@ -206,8 +219,11 @@ function Invoke-OtherAccountCommands {
                     }
                     finally {
                         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-                        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false `
-                            -ErrorAction Stop
+                        try {
+                            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false `
+                                -ErrorAction Stop
+                        }
+                        catch { Write-Warning "Could not unregister the other-account task: $_" }
                     }
                 }
                 $output = @()
