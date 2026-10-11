@@ -1181,7 +1181,9 @@ impl FakeClashApi {
                         Err(error) => panic!("fake Clash API accept failed: {error}"),
                     };
                     socket.set_nonblocking(false).unwrap();
-                    socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
                     let mut reader = BufReader::new(socket);
                     let mut line = String::new();
                     reader.read_line(&mut line).unwrap();
@@ -1330,9 +1332,8 @@ impl EngineProcess for ServerCheckProcess {
 
     fn outbound_failures(&self) -> rosetun_engine::OutboundFailures {
         rosetun_engine::OutboundFailures {
-            unreachable: u64::from(
-                self.log_failures && self.api_calls.load(Ordering::Acquire) > 0,
-            ) * 2,
+            unreachable: u64::from(self.log_failures && self.api_calls.load(Ordering::Acquire) > 0)
+                * 2,
             ..Default::default()
         }
     }
@@ -1392,13 +1393,18 @@ fn three_server_checks_fail_before_the_dns_deadline() {
     let stopped = Arc::new(AtomicUsize::new(0));
     let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped));
     let started = Instant::now();
-    let error = helper.connect(&connect_request()).expect_err("server is unreachable");
+    let error = helper
+        .connect(&connect_request())
+        .expect_err("server is unreachable");
 
     assert_eq!(error.code, ErrorCode::ServerUnreachable);
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(api.calls.load(Ordering::Acquire) >= 3);
     assert_eq!(stopped.load(Ordering::Acquire), 1);
-    assert!(matches!(helper.status().state, ConnectionState::Failed { .. }));
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed { .. }
+    ));
 }
 
 #[test]
@@ -1410,7 +1416,9 @@ fn server_check_and_engine_log_failures_share_the_threshold() {
     let stopped = Arc::new(AtomicUsize::new(0));
     let helper = server_check_helper_with_logs(dns.address(), &api, Arc::clone(&stopped), true);
     helper.session().unwrap().server_check_interval = Duration::from_millis(400);
-    let error = helper.connect(&connect_request()).expect_err("failures combine");
+    let error = helper
+        .connect(&connect_request())
+        .expect_err("failures combine");
 
     assert_eq!(error.code, ErrorCode::ServerUnreachable);
     assert!(api.calls.load(Ordering::Acquire) < 3);
@@ -1426,7 +1434,9 @@ fn successful_server_checks_do_not_fail_slow_dns_early() {
     let stopped = Arc::new(AtomicUsize::new(0));
     let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped));
     helper.session().unwrap().dns_timeout = Duration::from_millis(150);
-    let error = helper.connect(&connect_request()).expect_err("DNS remains silent");
+    let error = helper
+        .connect(&connect_request())
+        .expect_err("DNS remains silent");
 
     assert_eq!(error.code, ErrorCode::DnsTimeout);
     assert!(api.calls.load(Ordering::Acquire) >= 3);
@@ -1459,7 +1469,11 @@ fn cancelling_a_server_check_stops_the_worker() {
     let dns = Server::new(Behavior::Silent);
     let api = FakeClashApi::start(ClashReply::Hangs);
     let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = Arc::new(server_check_helper(dns.address(), &api, Arc::clone(&stopped)));
+    let helper = Arc::new(server_check_helper(
+        dns.address(),
+        &api,
+        Arc::clone(&stopped),
+    ));
     let worker = {
         let helper = Arc::clone(&helper);
         thread::spawn(move || helper.connect(&connect_request()))
@@ -1490,7 +1504,11 @@ fn cancellation_after_dns_answer_aborts_an_inflight_server_check() {
     let dns = Server::new(Behavior::DelayedNoerror);
     let api = FakeClashApi::start(ClashReply::Hangs);
     let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = Arc::new(server_check_helper(dns.address(), &api, Arc::clone(&stopped)));
+    let helper = Arc::new(server_check_helper(
+        dns.address(),
+        &api,
+        Arc::clone(&stopped),
+    ));
     let worker = {
         let helper = Arc::clone(&helper);
         thread::spawn(move || helper.connect(&connect_request()))
