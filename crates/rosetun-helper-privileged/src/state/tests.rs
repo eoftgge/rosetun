@@ -3740,7 +3740,9 @@ impl EngineBackend for ProbeEngine {
             rosetun_engine::UrlTestTarget::Session => "proxy",
             rosetun_engine::UrlTestTarget::Probe(tag) => tag,
         };
-        let blocked = self.blocked.lock().unwrap().take();
+        let blocked = (tag == "probe-0")
+            .then(|| self.blocked.lock().unwrap().take())
+            .flatten();
         if let Some((entered, release)) = blocked {
             entered.send(()).unwrap();
             release.recv().unwrap();
@@ -3950,19 +3952,26 @@ fn probe_workers_advance_past_a_blocked_url_test() {
     let worker = std::thread::spawn(move || helper.probe_nodes(&request));
     entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while completed.load(Ordering::Acquire) < 19 && Instant::now() < deadline {
+    while completed.load(Ordering::Acquire) < 39 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
     let completed_while_blocked = completed.load(Ordering::Acquire);
+    while !worker.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(worker.is_finished(), "slow losing URL test held the probe worker");
     release_tx.send(()).unwrap();
     let results = worker.join().unwrap().unwrap();
-    assert_eq!(completed_while_blocked, 19);
+    assert_eq!(completed_while_blocked, 39);
     assert_eq!(results.len(), 20);
     assert!(results.iter().all(|result| matches!(
         result.outcome,
         ProbeOutcome::Works { .. } | ProbeOutcome::Fails
     )));
-    assert_eq!(completed.load(Ordering::Acquire), 20);
+    while completed.load(Ordering::Acquire) < 40 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(completed.load(Ordering::Acquire), 40);
     assert_eq!(stopped.load(Ordering::Acquire), 1);
     assert!(!dir.join("probe.json").exists());
     std::fs::remove_dir(dir).unwrap();
@@ -4008,7 +4017,7 @@ fn probe_cleans_up_after_spawn_error_and_worker_panic() {
 }
 
 #[test]
-fn probing_does_not_block_tunnel_operations_and_rejects_second_probe() {
+fn slow_losing_url_test_does_not_hold_probe_or_tunnel_operations() {
     let (entered, entered_rx) = channel();
     let (release_tx, release) = channel();
     let (helper, stopped, dir) = probe_fixture(true, Some((entered, release)));
@@ -4020,10 +4029,13 @@ fn probing_does_not_block_tunnel_operations_and_rejects_second_probe() {
         std::thread::spawn(move || helper.probe_nodes(&request))
     };
     entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-    assert_eq!(
-        helper.probe_nodes(&request).unwrap_err().code,
-        ErrorCode::Busy
-    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !worker.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(worker.is_finished(), "slow losing request held the probe");
+    worker.join().unwrap().unwrap();
+    assert_eq!(helper.probe_nodes(&request).unwrap().len(), 1);
     assert!(matches!(
         helper.status().state,
         ConnectionState::Disconnected
@@ -4032,8 +4044,7 @@ fn probing_does_not_block_tunnel_operations_and_rejects_second_probe() {
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     helper.disconnect().unwrap();
     release_tx.send(()).unwrap();
-    worker.join().unwrap().unwrap();
-    assert_eq!(stopped.load(Ordering::Acquire), 2);
+    assert_eq!(stopped.load(Ordering::Acquire), 3);
     assert!(!dir.join("probe.json").exists());
     drop(helper);
     std::fs::remove_file(dir.join("config.json")).unwrap();

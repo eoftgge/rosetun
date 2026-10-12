@@ -17,8 +17,8 @@ use rosetun_config::{
     ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic, list_tag,
 };
 use rosetun_engine::{
-    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, PROBE_URL, RenderRequest,
-    RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget,
+    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest,
+    RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget, url_test_any,
 };
 use rosetun_ipc::transport::PeerIdentity;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_TEMPORARY_RULES};
@@ -1365,7 +1365,7 @@ impl Session {
             self.stage(rosetun_config::ConnectStage::CheckingServer)?;
             let engines = Arc::clone(&self.engines);
             let backend = engines
-                .get(settings.engine)
+                .get_shared(settings.engine)
                 .expect("engine was registered before spawn");
             let control = self.control.clone();
             let interval = self.server_check_interval;
@@ -1622,7 +1622,7 @@ impl Drop for StopServerCheck<'_> {
 }
 
 fn check_server_outbound(
-    backend: &dyn EngineBackend,
+    backend: Arc<dyn EngineBackend>,
     control: &ControlEndpoint,
     interval: Duration,
     started: &AtomicBool,
@@ -1636,10 +1636,10 @@ fn check_server_outbound(
 
     let mut next = Instant::now();
     while !stopped.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
-        let result = backend.url_test(
+        let result = url_test_any(
+            Arc::clone(&backend),
             control,
             UrlTestTarget::Session,
-            PROBE_URL,
             SERVER_CHECK_TIMEOUT,
         );
         if stopped.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire) {

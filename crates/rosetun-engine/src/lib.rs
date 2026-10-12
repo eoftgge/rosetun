@@ -20,13 +20,16 @@ use errors::EngineError;
 use rosetun_config::{EngineKind, Node, RuleId, RuleSet, Settings};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::{Arc, atomic::AtomicU64, mpsc};
+use std::thread;
 use std::time::Duration;
 
-/// Fetched through each checked node. Cloudflare is already contacted for the
-/// exit lookup, so the check adds no new party. sing-box 1.14.1 discards HTTP
-/// URLs in its Clash delay API and substitutes its Google default instead.
-pub const PROBE_URL: &str = "https://cp.cloudflare.com/generate_204";
+/// sing-box 1.14.1 discards HTTP URLs in its Clash delay API and substitutes
+/// its Google default instead, so both test URLs use HTTPS.
+pub const PROBE_URLS: [&str; 2] = [
+    "https://cp.cloudflare.com/generate_204",
+    "https://www.gstatic.com/generate_204",
+];
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A local-only control API that the engine serves for one session.
@@ -250,6 +253,46 @@ pub enum UrlTestTarget<'a> {
     Probe(&'a str),
 }
 
+/// Tests independent providers without waiting for a slower request after success.
+/// The backend's URL test timeout bounds any worker left after the result returns.
+pub fn url_test_any(
+    backend: Arc<dyn EngineBackend>,
+    control: &ControlEndpoint,
+    target: UrlTestTarget<'_>,
+    timeout: Duration,
+) -> Result<Duration, EngineError> {
+    let (tx, rx) = mpsc::channel();
+    for url in PROBE_URLS {
+        let backend = Arc::clone(&backend);
+        let control = control.clone();
+        let target = match target {
+            UrlTestTarget::Session => None,
+            UrlTestTarget::Probe(tag) => Some(tag.to_owned()),
+        };
+        let tx = tx.clone();
+        thread::Builder::new()
+            .name("rosetun-url-test".to_owned())
+            .spawn(move || {
+                let target = match target.as_deref() {
+                    Some(tag) => UrlTestTarget::Probe(tag),
+                    None => UrlTestTarget::Session,
+                };
+                let _ = tx.send(backend.url_test(&control, target, url, timeout));
+            })?;
+    }
+    drop(tx);
+
+    let mut last_error = None;
+    for result in rx.into_iter().take(PROBE_URLS.len()) {
+        match result {
+            Ok(delay) => return Ok(delay),
+            Err(error @ EngineError::Unsupported(_)) => return Err(error),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| EngineError::Stats("URL test worker failed".to_owned())))
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct RenderedConfig {
     pub file_name: String,
@@ -344,7 +387,7 @@ pub trait EngineProcess: Send + std::fmt::Debug {
 
 #[derive(Debug, Default)]
 pub struct EngineRegistry {
-    backends: Vec<Box<dyn EngineBackend>>,
+    backends: Vec<Arc<dyn EngineBackend>>,
 }
 
 impl EngineRegistry {
@@ -353,7 +396,7 @@ impl EngineRegistry {
     }
 
     pub fn register(&mut self, backend: Box<dyn EngineBackend>) -> &mut Self {
-        self.backends.push(backend);
+        self.backends.push(Arc::from(backend));
         self
     }
 
@@ -364,6 +407,13 @@ impl EngineRegistry {
             .map(|backend| backend.as_ref())
     }
 
+    pub fn get_shared(&self, kind: EngineKind) -> Option<Arc<dyn EngineBackend>> {
+        self.backends
+            .iter()
+            .find(|backend| backend.kind() == kind)
+            .map(Arc::clone)
+    }
+
     pub fn kinds(&self) -> impl Iterator<Item = EngineKind> + '_ {
         self.backends.iter().map(|backend| backend.kind())
     }
@@ -371,8 +421,9 @@ impl EngineRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{ControlEndpoint, RuleCapabilities};
+    use super::*;
     use rosetun_config::{ListId, RuleMatcher};
+    use std::time::Instant;
 
     #[test]
     fn list_rules_require_an_explicit_backend_capability() {
@@ -399,5 +450,125 @@ mod tests {
         let debug = format!("{endpoint:?}");
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains(&endpoint.secret));
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum Reply {
+        Delay(u64),
+        Failure,
+        Unsupported,
+    }
+
+    #[derive(Debug)]
+    struct TestBackend {
+        cloudflare: (Duration, Reply),
+        google: (Duration, Reply),
+    }
+
+    impl EngineBackend for TestBackend {
+        fn kind(&self) -> EngineKind {
+            EngineKind::SingBox
+        }
+
+        fn integration(&self) -> EngineIntegration {
+            EngineIntegration::Unavailable
+        }
+
+        fn capabilities(&self) -> EngineCapabilities {
+            EngineCapabilities {
+                rules: RuleCapabilities::NONE,
+            }
+        }
+
+        fn tunnel_dns_server(&self, _: &rosetun_config::TunSettings) -> Option<SocketAddr> {
+            None
+        }
+
+        fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+            Err(EngineError::Unsupported("test".to_owned()))
+        }
+
+        fn render(&self, _: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+            Err(EngineError::Unsupported("test".to_owned()))
+        }
+
+        fn url_test(
+            &self,
+            _: &ControlEndpoint,
+            _: UrlTestTarget<'_>,
+            url: &str,
+            _: Duration,
+        ) -> Result<Duration, EngineError> {
+            let (wait, reply) = if url == PROBE_URLS[0] {
+                self.cloudflare
+            } else {
+                assert_eq!(url, PROBE_URLS[1]);
+                self.google
+            };
+            thread::sleep(wait);
+            match reply {
+                Reply::Delay(millis) => Ok(Duration::from_millis(millis)),
+                Reply::Failure => Err(EngineError::Stats("test failure".to_owned())),
+                Reply::Unsupported => Err(EngineError::Unsupported("test URL".to_owned())),
+            }
+        }
+
+        fn spawn(&self, _: &Path, _: &RenderedConfig) -> Result<Box<dyn EngineProcess>, EngineError> {
+            Err(EngineError::Unsupported("test".to_owned()))
+        }
+    }
+
+    fn test_any(cloudflare: (Duration, Reply), google: (Duration, Reply)) -> Result<Duration, EngineError> {
+        let backend = Arc::new(TestBackend { cloudflare, google });
+        let control = ControlEndpoint {
+            address: "127.0.0.1:12345".parse().unwrap(),
+            secret: "test-secret".to_owned(),
+        };
+        url_test_any(backend, &control, UrlTestTarget::Probe("probe-0"), PROBE_TIMEOUT)
+    }
+
+    #[test]
+    fn url_test_any_uses_the_second_provider_after_the_first_fails() {
+        assert_eq!(
+            test_any(
+                (Duration::ZERO, Reply::Failure),
+                (Duration::from_millis(20), Reply::Delay(73)),
+            )
+            .unwrap(),
+            Duration::from_millis(73)
+        );
+    }
+
+    #[test]
+    fn url_test_any_fails_only_after_both_providers_fail() {
+        assert!(matches!(
+            test_any((Duration::ZERO, Reply::Failure), (Duration::ZERO, Reply::Failure)),
+            Err(EngineError::Stats(_))
+        ));
+    }
+
+    #[test]
+    fn url_test_any_returns_without_waiting_for_a_slow_provider() {
+        let started = Instant::now();
+        assert_eq!(
+            test_any(
+                (Duration::from_millis(600), Reply::Failure),
+                (Duration::from_millis(20), Reply::Delay(42)),
+            )
+            .unwrap(),
+            Duration::from_millis(42)
+        );
+        assert!(started.elapsed() < Duration::from_millis(400));
+    }
+
+    #[test]
+    fn url_test_any_preserves_unsupported() {
+        assert!(matches!(
+            test_any(
+                (Duration::ZERO, Reply::Unsupported),
+                (Duration::from_millis(600), Reply::Delay(42)),
+            ),
+            Err(EngineError::Unsupported(_))
+        ));
     }
 }

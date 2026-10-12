@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use rosetun_config::{ConnectionState, Node};
 use rosetun_engine::{
-    ControlEndpoint, EngineBackend, EngineProcess, PROBE_TIMEOUT, PROBE_URL, ProbeRenderRequest,
-    UrlTestTarget,
+    ControlEndpoint, EngineBackend, EngineProcess, PROBE_TIMEOUT, ProbeRenderRequest,
+    UrlTestTarget, url_test_any,
 };
 use rosetun_ipc::{
     ErrorCode, HelperError, MAX_PROBE_NODES, ProbeOutcome, ProbeRequest, ProbeResult,
@@ -113,7 +113,7 @@ impl Helper {
             ));
         }
         validate_tun_name(&request.settings.tun.name)?;
-        let backend = self.engines.get(request.settings.engine).ok_or_else(|| {
+        let backend = self.engines.get_shared(request.settings.engine).ok_or_else(|| {
             HelperError::new(
                 ErrorCode::EngineFailed,
                 "server check engine is not registered",
@@ -145,7 +145,7 @@ impl Helper {
     fn check_nodes(
         &self,
         request: &ProbeRequest,
-        backend: &dyn EngineBackend,
+        backend: Arc<dyn EngineBackend>,
     ) -> Result<Vec<ProbeResult>, HelperError> {
         let mut results = request
             .nodes
@@ -256,15 +256,16 @@ impl Helper {
                     let next = &next;
                     let supported = &supported;
                     let control = &control;
+                    let backend = Arc::clone(&backend);
                     scope.spawn(move || {
                         let mut outcomes = Vec::new();
                         while let Some(&(index, tag)) =
                             supported.get(next.fetch_add(1, Ordering::Relaxed))
                         {
-                            let outcome = probe_outcome(backend.url_test(
+                            let outcome = probe_outcome(url_test_any(
+                                Arc::clone(&backend),
                                 control,
                                 UrlTestTarget::Probe(tag),
-                                PROBE_URL,
                                 PROBE_TIMEOUT,
                             ));
                             outcomes.push((index, outcome));
@@ -307,7 +308,7 @@ impl Helper {
         drop(session);
         let backend = self
             .engines
-            .get(engine.ok_or_else(|| {
+            .get_shared(engine.ok_or_else(|| {
                 HelperError::new(
                     ErrorCode::EngineFailed,
                     "the connected engine is unavailable",
@@ -319,10 +320,10 @@ impl Helper {
                     "the connected engine is unavailable",
                 )
             })?;
-        Ok(probe_outcome(backend.url_test(
+        Ok(probe_outcome(url_test_any(
+            backend,
             &control,
             UrlTestTarget::Session,
-            PROBE_URL,
             PROBE_TIMEOUT,
         )))
     }

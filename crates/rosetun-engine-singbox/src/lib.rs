@@ -481,7 +481,7 @@ mod tests {
         RuleMatcher, RuleSet, RuleSetId, RuleTarget, Settings, StreamSettings, TlsMode,
         VlessParams,
     };
-    use rosetun_engine::{PROBE_TIMEOUT, PROBE_URL, RuleCapabilities};
+    use rosetun_engine::{PROBE_TIMEOUT, PROBE_URLS, RuleCapabilities};
     use serde_json::Value;
 
     fn node() -> Node {
@@ -809,7 +809,7 @@ mod tests {
             )
             .unwrap();
         });
-        let result = SingBoxBackend::new("unused").url_test(&control, target, PROBE_URL, timeout);
+        let result = SingBoxBackend::new("unused").url_test(&control, target, PROBE_URLS[0], timeout);
         server.join().unwrap();
         result
     }
@@ -844,6 +844,60 @@ mod tests {
             .unwrap(),
             Duration::from_millis(42)
         );
+    }
+
+    #[test]
+    fn url_test_any_falls_back_through_the_clash_api() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control = ControlEndpoint {
+            address: listener.local_addr().unwrap(),
+            secret: "test-secret".to_owned(),
+        };
+        let server = thread::spawn(move || {
+            let mut seen = [false; 2];
+            for _ in PROBE_URLS {
+                let (socket, _) = listener.accept().unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(line.starts_with("GET /proxies/probe-0/delay?"));
+                assert!(line.contains("timeout=5000"));
+                let google = line.contains("url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204");
+                if !google {
+                    assert!(line.contains("url=https%3A%2F%2Fcp.cloudflare.com%2Fgenerate_204"));
+                }
+                seen[usize::from(google)] = true;
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let (status, body) = if google { (200, r#"{"delay":73}"#) } else { (503, "") };
+                write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            assert!(seen.into_iter().all(|seen| seen));
+        });
+        let delay = rosetun_engine::url_test_any(
+            Arc::new(SingBoxBackend::new("unused")),
+            &control,
+            UrlTestTarget::Probe("probe-0"),
+            PROBE_TIMEOUT,
+        )
+        .unwrap();
+        assert_eq!(delay, Duration::from_millis(73));
+        server.join().unwrap();
     }
 
     fn probe_against_server(status: u16, chunked: bool) -> Result<TrafficTotals, EngineError> {
