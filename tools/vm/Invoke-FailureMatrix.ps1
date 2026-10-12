@@ -688,6 +688,12 @@ Test-Step 'helper killed' 'engine died with the helper' {
 Test-Step 'helper killed' 'tunnel adapter is gone' {
     Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
 }
+Test-Step 'helper killed' 'direct egress works again' {
+    Wait-RosetunCondition { Test-RosetunDirectEgress }
+}
+Test-Step 'helper killed' 'direct DNS works again' {
+    Wait-RosetunCondition { Test-RosetunDirectDns }
+}
 
 Write-Host 'Restart after a killed helper...'
 Start-RosetunHelper
