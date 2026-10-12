@@ -561,9 +561,16 @@ Stop-RosetunEngine
 Test-Step 'temporary restart' 'state returns to Connected' {
     Wait-RosetunState 'Connected' -TimeoutSeconds 90
 }
-$status = Invoke-RosetunCli -Quiet 'status'
-Test-Step 'temporary restart' 'one rule is reported' {
-    $status.ExitCode -eq 0 -and $status.Output -match '(?m)^temporary rules: 1$'
+# Right after the restart the service may still hold the session for a moment
+# and answer "unavailable while the service is busy"; the GUI retries the same way.
+$status = $null
+$reported = Wait-RosetunCondition {
+    $script:status = Invoke-RosetunCli -Quiet 'status'
+    $script:status.ExitCode -eq 0 -and $script:status.Output -match '(?m)^temporary rules: 1$'
+}
+Test-Step 'temporary restart' 'one rule is reported' `
+    -Note ("exit {0}: {1}" -f $status.ExitCode, (@($status.Output -split '\r?\n' | Where-Object { $_ -match '^temporary rules' }) -join ' | ')) {
+    $reported
 }
 $egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 15 -SkipRevocationCheck
 Test-Step 'temporary restart' 'domain still goes direct' -Note (Format-Egress $egress) { $egress.Ok }
