@@ -541,16 +541,22 @@ try {
         [int]((Get-Content -Path "$env:TEMP\rosetun-egress-watch.txt") -split ' ')[0]
     }
     $guestBefore = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow }
+    $hostBefore = [DateTime]::UtcNow
     Disconnect-RosetunVm
     $vmName = Get-RosetunVmName
     $sleepWatch = [Diagnostics.Stopwatch]::StartNew()
     $resumeWatch = $null
     try {
         Save-VM -Name $vmName | Out-Null
-        Start-Sleep -Seconds 35
+        if ((Get-VM -Name $vmName).State -ne 'Saved') {
+            throw 'The VM did not enter the Saved state.'
+        }
+        $savedAt = [DateTime]::UtcNow
+        Start-Sleep -Seconds 40
     }
     finally {
         if ((Get-VM -Name $vmName).State -eq 'Saved') {
+            $resumeAt = [DateTime]::UtcNow
             $resumeWatch = [Diagnostics.Stopwatch]::StartNew()
             Start-VM -Name $vmName | Out-Null
         }
@@ -569,11 +575,14 @@ try {
         }
     }
     $guestAfter = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow }
-    $guestGap = ($guestAfter - $guestBefore).TotalSeconds
-    Test-Step 'sleep' 'guest clock jumped by more than 30 s' `
-        -Note ("guest {0:N1} s, host {1:N1} s; check Hyper-V time synchronization if it did not jump" -f `
-            $guestGap, $sleepWatch.Elapsed.TotalSeconds) {
-        $guestGap -gt 30
+    $hostAfter = [DateTime]::UtcNow
+    $savedSeconds = ($resumeAt - $savedAt).TotalSeconds
+    $runningSeconds = ($hostAfter - $hostBefore).TotalSeconds - $savedSeconds
+    $clockJump = ($guestAfter - $guestBefore).TotalSeconds - $runningSeconds
+    Test-Step 'sleep' 'guest clock jumped by more than 30 s while saved' `
+        -Note ("saved {0:N1} s, inferred jump {1:N1} s; check Hyper-V time synchronization if it did not jump" -f `
+            $savedSeconds, $clockJump) {
+        $savedSeconds -gt 30 -and $clockJump -gt 30
     }
     $connected = Wait-RosetunState 'Connected' -TimeoutSeconds 30
     $connectedAt = $resumeWatch.Elapsed.TotalSeconds
