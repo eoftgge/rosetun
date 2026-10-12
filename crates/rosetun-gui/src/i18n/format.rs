@@ -1,5 +1,5 @@
 use fluent_bundle::FluentArgs;
-use rosetun_config::{ConnectStage, FailureKind, RuleTemplate};
+use rosetun_config::{ConnectStage, FailureKind, Node, RuleTemplate, TlsMode};
 
 use super::{Language, tr_in};
 
@@ -266,7 +266,7 @@ pub(crate) fn connection_stage(stage: ConnectStage, seconds: u64) -> String {
     )
 }
 
-pub(crate) fn connection_failure(kind: FailureKind) -> (String, String) {
+pub(crate) fn connection_failure(kind: FailureKind, node: Option<&Node>) -> (String, String) {
     let (title, hint) = match kind {
         FailureKind::EngineNotReady => (
             tr!("error-code-engine-not-ready"),
@@ -286,11 +286,11 @@ pub(crate) fn connection_failure(kind: FailureKind) -> (String, String) {
         ),
         FailureKind::ServerRejected => (
             tr!("error-code-server-rejected"),
-            tr!(
-                "server-rejected-hint",
-                retry = tr!("retry"),
-                url_test = tr!("check-full")
-            ),
+            if node.is_some_and(|node| matches!(&node.stream.tls, TlsMode::Reality(_))) {
+                tr!("server-rejected-reality-hint")
+            } else {
+                tr!("server-rejected-hint")
+            },
         ),
         FailureKind::ServerClosed => (
             tr!("error-code-server-closed"),

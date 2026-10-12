@@ -110,7 +110,10 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             } = &status.state
                             {
                                 if let Some(kind) = failure_kind {
-                                    let (title, hint) = crate::i18n::connection_failure(*kind);
+                                    let (title, hint) = crate::i18n::connection_failure(
+                                        *kind,
+                                        state.config.active_node().map(|(_, node)| node),
+                                    );
                                     ui.colored_label(theme::ERROR, title)
                                         .on_hover_text(state.text(reason));
                                     ui.add(

@@ -288,6 +288,7 @@ stage-elapsed = { $stage } · { $seconds }s
 engine-not-ready-hint = Turn off other VPN clients and select “{ $retry }”.
 server-unreachable-hint = Check servers with “{ $url_test }” and choose one that works.
 server-rejected-hint = The connection may have been altered on the way (for example, by traffic-modifying software), or the server details are outdated. Update the subscription or choose another server.
+server-rejected-reality-hint = This server uses REALITY. Xray 26.9.8 and newer on the server currently reject connections from sing-box, which Rosetun uses. This is a known issue; a fix is pending. Try another server or contact your provider.
 server-closed-hint = Choose another server or try again later.
 dns-timeout-hint = The server may be slow or its DNS resolver may be unreachable. Choose another server or change DNS.
 other-vpn-hint = Another VPN seems to be enabled: { $name }. Turn it off and select “{ $retry }”.
