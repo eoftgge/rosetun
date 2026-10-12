@@ -1213,7 +1213,11 @@ mod tests {
             let mut line = String::new();
             loop {
                 line.clear();
-                assert_ne!(output.read_line(&mut line).unwrap(), 0, "child exited before ready");
+                assert_ne!(
+                    output.read_line(&mut line).unwrap(),
+                    0,
+                    "child exited before ready"
+                );
                 if line.contains(READY) {
                     break;
                 }

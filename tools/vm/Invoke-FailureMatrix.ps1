@@ -290,6 +290,7 @@ public static class RosetunOtherLogon {
 
 $nodeStartedByMatrix = $false
 $lanListener = $null
+$egressWatchActive = $false
 $otherAccountName = $null
 $serviceAttempted = $false
 $consoleStoppedForOther = $false
@@ -535,6 +536,7 @@ Test-Step 'temporary restart' 'physical egress stays blocked' { -not (Test-Roset
 
 Write-Host 'Sleep with the tunnel up (saved Hyper-V VM)...'
 Start-RosetunEgressWatch
+$egressWatchActive = $true
 $watch = $null
 try {
     $beforeProbes = Invoke-RosetunGuest -ScriptBlock {
@@ -604,7 +606,10 @@ try {
     Write-Host ("Saved-VM sleep scenario took {0:N1} s" -f $sleepWatch.Elapsed.TotalSeconds)
 }
 finally {
-    try { $watch = Stop-RosetunEgressWatch }
+    try {
+        $watch = Stop-RosetunEgressWatch
+        $egressWatchActive = $false
+    }
     catch {
         Test-Step 'sleep' 'egress watch stopped' -Note "$_" { $false }
     }
@@ -721,9 +726,11 @@ Test-Step 'settings apply' 'original request reconnects for the remaining matrix
 # and the helper notices nothing.
 Write-Host 'Network change with the tunnel up...'
 Start-RosetunEgressWatch
+$egressWatchActive = $true
 $adapter = Restart-RosetunEgressAdapter
 $egress = Wait-RosetunTunnelEgress -TimeoutSeconds 60
 $watch = Stop-RosetunEgressWatch
+$egressWatchActive = $false
 Test-Step 'network change' 'adapter gets its address from DHCP again' `
     -Note "after $($adapter.Seconds) s: $($adapter.Addresses)" { $adapter.Ok }
 Test-Step 'network change' 'tunnel carries traffic again within 15 s' -Note (Format-Egress $egress) {
@@ -750,9 +757,11 @@ Test-Step 'engine killed' 'direct egress is still blocked' { -not (Test-RosetunD
 
 Write-Host 'Reconnect inside protection...'
 Start-RosetunEgressWatch
+$egressWatchActive = $true
 Connect-RosetunTunnel | Out-Null
 $reconnected = Wait-RosetunState 'Connected'
 $watch = Stop-RosetunEgressWatch
+$egressWatchActive = $false
 Test-Step 'reconnect' 'state is Connected' { $reconnected }
 Test-Step 'reconnect' "no leak while reconnecting ($($watch.Probes) probes)" {
     $watch.Probes -gt 0 -and $watch.Leaks -eq 0
@@ -1052,6 +1061,10 @@ if ($ipv6NeighborCreated) {
 
 }
 finally {
+    if ($egressWatchActive) {
+        try { Stop-RosetunEgressWatch | Out-Null }
+        catch { Write-Warning "Could not remove the egress watch: $_" }
+    }
     if ($otherAccountName) {
         try {
             Remove-OtherAccount -Name $otherAccountName
