@@ -124,6 +124,21 @@ function Remove-OtherAccount {
     } -ArgumentList $Name
 }
 
+function New-OtherAccount {
+    param([string]$Name)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($name)
+        $bytes = New-Object byte[] 24
+        $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $random.GetBytes($bytes) }
+        finally { $random.Dispose() }
+        $password = 'Rt1!' + [Convert]::ToBase64String($bytes)
+        $secure = ConvertTo-SecureString -String $password -AsPlainText -Force
+        New-LocalUser -Name $name -Password $secure -PasswordNeverExpires | Out-Null
+        $password
+    } -ArgumentList $Name
+}
+
 # Sends requests to the service pipe as another, standard local account.
 # A process started with that account's credentials fails inside PowerShell
 # Direct (no window station: STATUS_DLL_INIT_FAILED), and a scheduled task as a
@@ -131,37 +146,30 @@ function Remove-OtherAccount {
 # own thread while it opens the pipe; the service sees that account's token.
 # This checks the service's decision; the CLI's wording is covered by unit tests.
 function Invoke-OtherAccountRequests {
-    param([string]$Name, [string]$GuestDir, [int]$ProtocolVersion)
-    try {
-        Invoke-RosetunGuest -ScriptBlock {
-            param($name, $dir, $protocolVersion)
+    param([string]$Name, [string]$Password, [string]$GuestDir, [int]$ProtocolVersion,
+        [string[]]$Commands)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($name, $password, $dir, $protocolVersion, [string[]]$commands)
 
-            function Read-Reply {
-                param($Reader, [int]$Id)
-                $deadline = (Get-Date).AddSeconds(15)
-                while ($true) {
-                    $remaining = [int]($deadline - (Get-Date)).TotalMilliseconds
-                    if ($remaining -le 0) { throw 'timed out waiting for the service' }
-                    $read = $Reader.ReadLineAsync()
-                    if (-not $read.Wait($remaining)) { throw 'timed out waiting for the service' }
-                    if ($null -eq $read.Result) { throw 'the service closed the connection' }
-                    $frame = $read.Result | ConvertFrom-Json
-                    if ($frame.response -and $frame.response.id -eq $Id) {
-                        return $frame.response.body
-                    }
+        function Read-Reply {
+            param($Reader, [int]$Id, [int]$TimeoutSeconds = 15)
+            $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+            while ($true) {
+                $remaining = [int]($deadline - (Get-Date)).TotalMilliseconds
+                if ($remaining -le 0) { throw 'timed out waiting for the service' }
+                $read = $Reader.ReadLineAsync()
+                if (-not $read.Wait($remaining)) { throw 'timed out waiting for the service' }
+                if ($null -eq $read.Result) { throw 'the service closed the connection' }
+                $frame = $read.Result | ConvertFrom-Json
+                if ($frame.PSObject.Properties.Name -contains 'response' -and
+                    $frame.response.id -eq $Id) {
+                    return $frame.response.body
                 }
             }
+        }
 
-            $bytes = New-Object byte[] 24
-            $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-            try { $random.GetBytes($bytes) }
-            finally { $random.Dispose() }
-            $password = 'Rt1!' + [Convert]::ToBase64String($bytes)
-            $secure = ConvertTo-SecureString -String $password -AsPlainText -Force
-            New-LocalUser -Name $name -Password $secure -PasswordNeverExpires | Out-Null
-
-            if (-not ('RosetunOtherLogon' -as [type])) {
-                Add-Type -TypeDefinition @'
+        if (-not ('RosetunOtherLogon' -as [type])) {
+            Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -185,87 +193,99 @@ public static class RosetunOtherLogon {
     }
 }
 '@
-            }
+        }
 
-            $requestJson = (Get-Content -LiteralPath (Join-Path $dir 'request.json') -Raw) -replace '[\r\n]+', ' '
-            $bodies = [ordered]@{
-                status = '"status"'
-                disconnect = '"disconnect"'
-                temporary = '"temporary_rules"'
-                apply = '{"apply":' + $requestJson + '}'
-            }
-            $cli = Join-Path $dir 'rosetun.exe'
-            $token = [IntPtr]::Zero
-            $identity = $null
-            $logonError = $null
-            try {
-                $token = [RosetunOtherLogon]::Logon($name, $password)
-                $identity = [System.Security.Principal.WindowsIdentity]::new($token)
-            }
-            catch { $logonError = "logon as the test account failed: $($_.Exception.Message)" }
-            try {
-                foreach ($command in $bodies.Keys) {
-                    $reply = $null
-                    $pipe = $null
-                    try {
-                        if ($logonError) { throw $logonError }
-                        $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', 'rosetun-helper',
-                            [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None,
-                            [System.Security.Principal.TokenImpersonationLevel]::Identification)
-                        $context = $identity.Impersonate()
-                        try { $pipe.Connect(5000) }
-                        finally { $context.Undo() }
-                        $writer = [System.IO.StreamWriter]::new($pipe, [System.Text.UTF8Encoding]::new($false))
-                        $writer.NewLine = "`n"
-                        $writer.AutoFlush = $true
-                        $reader = [System.IO.StreamReader]::new($pipe, [System.Text.UTF8Encoding]::new($false))
-                        $writer.WriteLine('{"request":{"id":1,"body":{"hello":{"client":"rosetun-matrix","protocol_version":' +
-                            $protocolVersion + '}}}}')
-                        $hello = Read-Reply -Reader $reader -Id 1
-                        if (-not $hello.hello) {
-                            throw "the handshake was refused: $($hello | ConvertTo-Json -Compress -Depth 8)"
-                        }
-                        $writer.WriteLine('{"request":{"id":2,"body":' + $bodies[$command] + '}}')
-                        $body = Read-Reply -Reader $reader -Id 2
-                        $reply = if ($body.error) {
-                            "error $($body.error.code): $($body.error.message)"
-                        }
-                        elseif ($body.status) { "status $($body.status.state)" }
-                        else { $body | ConvertTo-Json -Compress -Depth 8 }
-                        $code = if ($body.error) { [string]$body.error.code } else { '' }
-                        $state = if ($body.status) { [string]$body.status.state } else { '' }
+        $requestJson = (Get-Content -LiteralPath (Join-Path $dir 'request.json') -Raw) -replace '[\r\n]+', ' '
+        $bodies = [ordered]@{
+            status = '"status"'
+            disconnect = '"disconnect"'
+            temporary = '"temporary_rules"'
+            apply = '{"apply":' + $requestJson + '}'
+            connect = '{"connect":' + $requestJson + '}'
+        }
+        $cli = Join-Path $dir 'rosetun.exe'
+        $token = [IntPtr]::Zero
+        $identity = $null
+        $logonError = $null
+        try {
+            $token = [RosetunOtherLogon]::Logon($name, $password)
+            $identity = [System.Security.Principal.WindowsIdentity]::new($token)
+        }
+        catch { $logonError = "logon as the test account failed: $($_.Exception.Message)" }
+        try {
+            foreach ($command in $commands) {
+                $reply = $null
+                $pipe = $null
+                try {
+                    if ($logonError) { throw $logonError }
+                    $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', 'rosetun-helper',
+                        [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None,
+                        [System.Security.Principal.TokenImpersonationLevel]::Identification)
+                    $context = $identity.Impersonate()
+                    try { $pipe.Connect(5000) }
+                    finally { $context.Undo() }
+                    $writer = [System.IO.StreamWriter]::new($pipe, [System.Text.UTF8Encoding]::new($false))
+                    $writer.NewLine = "`n"
+                    $writer.AutoFlush = $true
+                    $reader = [System.IO.StreamReader]::new($pipe, [System.Text.UTF8Encoding]::new($false))
+                    $writer.WriteLine('{"request":{"id":1,"body":{"hello":{"client":"rosetun-matrix","protocol_version":' +
+                        $protocolVersion + '}}}}')
+                    $hello = Read-Reply -Reader $reader -Id 1
+                    if (-not $hello.hello) {
+                        throw "the handshake was refused: $($hello | ConvertTo-Json -Compress -Depth 8)"
                     }
-                    catch {
-                        $reply = "failed: $($_.Exception.Message)"
-                        $code = ''
-                        $state = ''
+                    $writer.WriteLine('{"request":{"id":2,"body":' + $bodies[$command] + '}}')
+                    $timeout = if ($command -eq 'connect') { 60 } else { 15 }
+                    $body = Read-Reply -Reader $reader -Id 2 -TimeoutSeconds $timeout
+                    $code = ''
+                    $state = ''
+                    $succeeded = $false
+                    if ($body -is [string]) {
+                        $reply = $body
+                        $succeeded = $body -eq 'ok'
                     }
-                    finally {
-                        if ($pipe) { $pipe.Dispose() }
+                    elseif ($body.PSObject.Properties.Name -contains 'error') {
+                        $code = [string]$body.error.code
+                        $reply = "error ${code}: $($body.error.message)"
                     }
-                    $adminStatus = & $cli status 2>&1 | ForEach-Object { "$_" }
-                    $adminExit = $LASTEXITCODE
-                    $global:LASTEXITCODE = 0
-                    [pscustomobject]@{
-                        Command = $command
-                        Reply = $reply
-                        Code = $code
-                        State = $state
-                        StillConnected = ($adminExit -eq 0 -and
-                            ($adminStatus -join "`n") -match '(?m)^state: Connected\r?$')
+                    elseif ($body.PSObject.Properties.Name -contains 'status') {
+                        $state = [string]$body.status.state
+                        $reply = "status $state"
+                        $succeeded = $true
+                    }
+                    else {
+                        $reply = $body | ConvertTo-Json -Compress -Depth 8
+                        $succeeded = $body.PSObject.Properties.Name -contains 'temporary_rules'
                     }
                 }
+                catch {
+                    $reply = "failed: $($_.Exception.Message)"
+                    $code = ''
+                    $state = ''
+                    $succeeded = $false
+                }
+                finally {
+                    if ($pipe) { $pipe.Dispose() }
+                }
+                $adminStatus = & $cli status 2>&1 | ForEach-Object { "$_" }
+                $adminExit = $LASTEXITCODE
+                $global:LASTEXITCODE = 0
+                [pscustomobject]@{
+                    Command = $command
+                    Reply = $reply
+                    Code = $code
+                    State = $state
+                    Succeeded = $succeeded
+                    StillConnected = ($adminExit -eq 0 -and
+                        ($adminStatus -join "`n") -match '(?m)^state: Connected\r?$')
+                }
             }
-            finally {
-                if ($identity) { $identity.Dispose() }
-                if ($token -ne [IntPtr]::Zero) { [RosetunOtherLogon]::CloseHandle($token) | Out-Null }
-            }
-        } -ArgumentList $Name, $GuestDir, $ProtocolVersion
-    }
-    finally {
-        try { Remove-OtherAccount -Name $Name }
-        catch { Write-Warning "Could not clean up the other-account test: $_" }
-    }
+        }
+        finally {
+            if ($identity) { $identity.Dispose() }
+            if ($token -ne [IntPtr]::Zero) { [RosetunOtherLogon]::CloseHandle($token) | Out-Null }
+        }
+    } -ArgumentList $Name, $Password, $GuestDir, $ProtocolVersion, $Commands
 }
 
 $nodeStartedByMatrix = $false
@@ -362,28 +382,68 @@ if (-not ($protocolSource -match 'pub const PROTOCOL_VERSION: u32 = (\d+);')) {
     throw 'Could not read PROTOCOL_VERSION from rosetun-ipc.'
 }
 $protocolVersion = [int]$Matches[1]
-$otherResults = @(Invoke-OtherAccountRequests -Name $otherAccountName `
-    -GuestDir (Get-RosetunGuestDir) -ProtocolVersion $protocolVersion)
-foreach ($command in @('status', 'disconnect', 'temporary', 'apply')) {
-    $result = $otherResults | Where-Object Command -eq $command | Select-Object -First 1
-    $note = if ($result) { $result.Reply } else { 'no result' }
-    if ($command -eq 'status') {
-        Test-Step 'other account' 'status reports Connected' -Note $note {
-            $result -and $result.State -eq 'connected'
+$otherPassword = New-OtherAccount -Name $otherAccountName
+try {
+    $otherResults = @(Invoke-OtherAccountRequests -Name $otherAccountName -Password $otherPassword `
+        -GuestDir (Get-RosetunGuestDir) -ProtocolVersion $protocolVersion `
+        -Commands @('status', 'disconnect', 'temporary', 'apply'))
+    foreach ($command in @('status', 'disconnect', 'temporary', 'apply')) {
+        $result = $otherResults | Where-Object Command -eq $command | Select-Object -First 1
+        $note = if ($result) { $result.Reply } else { 'no result' }
+        if ($command -eq 'status') {
+            Test-Step 'other account' 'status reports Connected' -Note $note {
+                $result -and $result.State -eq 'connected'
+            }
+        }
+        else {
+            Test-Step 'other account' "$command is denied" -Note $note {
+                $result -and $result.Code -eq 'access_denied'
+            }
+        }
+        Test-Step 'other account' "tunnel remains Connected after $command" {
+            $result -and $result.StillConnected
         }
     }
-    else {
-        Test-Step 'other account' "$command is denied" -Note $note {
-            $result -and $result.Code -eq 'access_denied'
-        }
+    $adminDisconnect = Disconnect-RosetunTunnel
+    Test-Step 'other account' 'administrator disconnects the tunnel' `
+        -Note "exit $($adminDisconnect.ExitCode)" {
+        $adminDisconnect.ExitCode -eq 0 -and (Wait-RosetunState 'Disconnected')
     }
-    Test-Step 'other account' "tunnel remains Connected after $command" {
-        $result -and $result.StillConnected
+
+    $otherResults = @(Invoke-OtherAccountRequests -Name $otherAccountName -Password $otherPassword `
+        -GuestDir (Get-RosetunGuestDir) -ProtocolVersion $protocolVersion `
+        -Commands @('connect', 'temporary'))
+    $ownerConnect = $otherResults | Where-Object Command -eq 'connect' | Select-Object -First 1
+    $note = if ($ownerConnect) { $ownerConnect.Reply } else { 'no result' }
+    Test-Step 'other account' 'standard account connects its own tunnel' -Note $note {
+        $ownerConnect -and $ownerConnect.Succeeded -and $ownerConnect.StillConnected
+    }
+    $ownerTemporary = $otherResults | Where-Object Command -eq 'temporary' | Select-Object -First 1
+    $note = if ($ownerTemporary) { $ownerTemporary.Reply } else { 'no result' }
+    Test-Step 'other account' 'standard account can read its temporary rules' -Note $note {
+        $ownerTemporary -and $ownerTemporary.Succeeded -and
+            $ownerTemporary.Code -ne 'access_denied' -and $ownerTemporary.StillConnected
+    }
+    $adminApply = Invoke-RosetunApply 'request.json' -Quiet
+    Test-Step 'other account' 'administrator applies the other account tunnel' `
+        -Note "exit $($adminApply.ExitCode)" {
+        $adminApply.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
+    }
+    $adminDisconnect = Disconnect-RosetunTunnel
+    Test-Step 'other account' 'administrator disconnects the other account tunnel' `
+        -Note "exit $($adminDisconnect.ExitCode)" {
+        $adminDisconnect.ExitCode -eq 0 -and (Wait-RosetunState 'Disconnected')
     }
 }
-Disconnect-RosetunTunnel | Out-Null
-Test-Step 'other account' 'administrator disconnects the tunnel' {
-    Wait-RosetunState 'Disconnected'
+finally {
+    try {
+        $cleanup = Invoke-RosetunCli -Quiet 'disconnect'
+        if ($cleanup.ExitCode -ne 0 -and (Get-RosetunState) -ne 'Disconnected') {
+            Write-Warning "Could not disconnect the other account tunnel: $($cleanup.Output)"
+        }
+    }
+    catch { Write-Warning "Could not disconnect the other account tunnel: $_" }
+    Remove-OtherAccount -Name $otherAccountName
 }
 Remove-OtherAccountService -GuestDir (Get-RosetunGuestDir)
 $serviceAttempted = $false
