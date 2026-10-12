@@ -89,166 +89,161 @@ function Remove-OtherAccountService {
 }
 
 function Remove-OtherAccount {
-    param([string]$Name, [string]$TaskName, [string]$WorkDir)
+    param([string]$Name)
     if (-not $Name) { return }
     Invoke-RosetunGuest -ScriptBlock {
-        param($name, $taskName, $workDir)
-        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-            try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
-            catch { Write-Warning "Could not stop the other-account task: $_" }
-            try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop }
-            catch { Write-Warning "Could not unregister the other-account task: $_" }
-        }
-        if (Test-Path -LiteralPath $workDir) {
-            try { Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction Stop }
-            catch { Write-Warning "Could not remove other-account output: $_" }
-        }
-        if (Get-LocalUser -Name $name -ErrorAction SilentlyContinue) {
+        param($name)
+        $user = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+        if ($user) {
+            $sid = $user.SID.Value
             try { Remove-LocalUser -Name $name -ErrorAction Stop }
             catch { Write-Warning "Could not remove the other-account test user: $_" }
+            Get-CimInstance -ClassName Win32_UserProfile -Filter "SID = '$sid'" -ErrorAction SilentlyContinue |
+                Remove-CimInstance -ErrorAction SilentlyContinue
         }
-    } -ArgumentList $Name, $TaskName, $WorkDir
+    } -ArgumentList $Name
 }
 
-function Invoke-OtherAccountCommands {
-    param([string]$Name, [string]$TaskName, [string]$WorkDir, [string]$GuestDir)
+# Sends requests to the service pipe as another, standard local account.
+# A process started with that account's credentials fails inside PowerShell
+# Direct (no window station: STATUS_DLL_INIT_FAILED), and a scheduled task as a
+# fresh account did not finish, so the guest impersonates the account on its
+# own thread while it opens the pipe; the service sees that account's token.
+# This checks the service's decision; the CLI's wording is covered by unit tests.
+function Invoke-OtherAccountRequests {
+    param([string]$Name, [string]$GuestDir, [int]$ProtocolVersion)
     try {
         Invoke-RosetunGuest -ScriptBlock {
-            param($name, $taskName, $workDir, $dir)
+            param($name, $dir, $protocolVersion)
+
+            function Read-Reply {
+                param($Reader, [int]$Id)
+                $deadline = (Get-Date).AddSeconds(15)
+                while ($true) {
+                    $remaining = [int]($deadline - (Get-Date)).TotalMilliseconds
+                    if ($remaining -le 0) { throw 'timed out waiting for the service' }
+                    $read = $Reader.ReadLineAsync()
+                    if (-not $read.Wait($remaining)) { throw 'timed out waiting for the service' }
+                    if ($null -eq $read.Result) { throw 'the service closed the connection' }
+                    $frame = $read.Result | ConvertFrom-Json
+                    if ($frame.response -and $frame.response.id -eq $Id) {
+                        return $frame.response.body
+                    }
+                }
+            }
+
             $bytes = New-Object byte[] 24
             $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
             try { $random.GetBytes($bytes) }
             finally { $random.Dispose() }
             $password = 'Rt1!' + [Convert]::ToBase64String($bytes)
             $secure = ConvertTo-SecureString -String $password -AsPlainText -Force
-            New-LocalUser -Name $name -Password $secure -PasswordNeverExpires |
-                Out-Null
-            $credential = [pscredential]::new("$env:COMPUTERNAME\$name", $secure)
-            New-Item -ItemType Directory -Path $workDir -ErrorAction Stop | Out-Null
-            $identity = [System.Security.Principal.NTAccount]::new($env:COMPUTERNAME, $name)
-            $acl = Get-Acl -LiteralPath $workDir
-            $acl.SetAccessRuleProtection($true, $false)
-            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
-                $principal = [System.Security.Principal.SecurityIdentifier]::new($sid)
-                $access = [System.Security.AccessControl.FileSystemAccessRule]::new(
-                    $principal, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-                $acl.AddAccessRule($access)
-            }
-            $access = [System.Security.AccessControl.FileSystemAccessRule]::new(
-                $identity, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-            $acl.AddAccessRule($access)
-            Set-Acl -LiteralPath $workDir -AclObject $acl
-            Copy-Item -LiteralPath (Join-Path $dir 'request.json') `
-                -Destination (Join-Path $workDir 'request.json')
+            New-LocalUser -Name $name -Password $secure -PasswordNeverExpires | Out-Null
 
+            if (-not ('RosetunOtherLogon' -as [type])) {
+                Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class RosetunOtherLogon {
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool LogonUserW(string user, string domain, string password,
+        int logonType, int provider, out IntPtr token);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool CloseHandle(IntPtr handle);
+
+    // LOGON32_LOGON_INTERACTIVE with the default provider: the account's own,
+    // non-elevated token. Users may log on locally by default.
+    public static IntPtr Logon(string user, string password) {
+        IntPtr token;
+        if (!LogonUserW(user, ".", password, 2, 0, out token)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        return token;
+    }
+}
+'@
+            }
+
+            $requestJson = (Get-Content -LiteralPath (Join-Path $dir 'request.json') -Raw) -replace '[\r\n]+', ' '
+            $bodies = [ordered]@{
+                status = '"status"'
+                disconnect = '"disconnect"'
+                temporary = '"temporary_rules"'
+                apply = '{"apply":' + $requestJson + '}'
+            }
             $cli = Join-Path $dir 'rosetun.exe'
-            $useTask = $false
-            foreach ($command in @('status', 'disconnect', 'temporary', 'apply')) {
-                $stdout = Join-Path $workDir "$command.out"
-                $stderr = Join-Path $workDir "$command.err"
-                $exitFile = Join-Path $workDir "$command.exit"
-                $startedFile = Join-Path $workDir "$command.started"
-                $cliArgs = if ($command -eq 'apply') {
-                    @($command, (Join-Path $workDir 'request.json'))
-                } else { @($command) }
-                $exitCode = $null
-                if (-not $useTask) {
+            $token = [IntPtr]::Zero
+            $identity = $null
+            $logonError = $null
+            try {
+                $token = [RosetunOtherLogon]::Logon($name, $password)
+                $identity = [System.Security.Principal.WindowsIdentity]::new($token)
+            }
+            catch { $logonError = "logon as the test account failed: $($_.Exception.Message)" }
+            try {
+                foreach ($command in $bodies.Keys) {
+                    $reply = $null
+                    $pipe = $null
                     try {
-                        # PowerShell Direct has not loaded the new account's profile.
-                        $process = Start-Process -FilePath $cli -ArgumentList $cliArgs `
-                            -Credential $credential -LoadUserProfile -WorkingDirectory $dir `
-                            -Wait -PassThru -RedirectStandardOutput $stdout `
-                            -RedirectStandardError $stderr `
-                            -ErrorAction Stop
-                        $exitCode = $process.ExitCode
+                        if ($logonError) { throw $logonError }
+                        $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', 'rosetun-helper',
+                            [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::None,
+                            [System.Security.Principal.TokenImpersonationLevel]::Identification)
+                        $context = $identity.Impersonate()
+                        try { $pipe.Connect(5000) }
+                        finally { $context.Undo() }
+                        $writer = [System.IO.StreamWriter]::new($pipe, [System.Text.UTF8Encoding]::new($false))
+                        $writer.NewLine = "`n"
+                        $writer.AutoFlush = $true
+                        $reader = [System.IO.StreamReader]::new($pipe, [System.Text.UTF8Encoding]::new($false))
+                        $writer.WriteLine('{"request":{"id":1,"body":{"hello":{"client":"rosetun-matrix","protocol_version":' +
+                            $protocolVersion + '}}}}')
+                        $hello = Read-Reply -Reader $reader -Id 1
+                        if (-not $hello.hello) {
+                            throw "the handshake was refused: $($hello | ConvertTo-Json -Compress -Depth 8)"
+                        }
+                        $writer.WriteLine('{"request":{"id":2,"body":' + $bodies[$command] + '}}')
+                        $body = Read-Reply -Reader $reader -Id 2
+                        $reply = if ($body.error) {
+                            "error $($body.error.code): $($body.error.message)"
+                        }
+                        elseif ($body.status) { "status $($body.status.state)" }
+                        else { $body | ConvertTo-Json -Compress -Depth 8 }
+                        $code = if ($body.error) { [string]$body.error.code } else { '' }
+                        $state = if ($body.status) { [string]$body.status.state } else { '' }
                     }
                     catch {
-                        Write-Host 'Start-Process -Credential is unavailable; using a scheduled task.'
-                        $useTask = $true
-                    }
-                    if (-not $useTask -and $null -eq $exitCode) {
-                        Write-Host 'Start-Process did not return an exit code; using a scheduled task.'
-                        $useTask = $true
-                    }
-                    if (-not $useTask -and $exitCode -eq -1073741502) {
-                        # PowerShell Direct can launch the process but fail DLL initialization.
-                        # Do not retry ordinary CLI errors, especially a real access denial.
-                        Write-Host 'Credential launch failed DLL initialization; using a scheduled task.'
-                        $useTask = $true
-                    }
-                }
-                if ($useTask) {
-                    Remove-Item -LiteralPath $stdout, $stderr, $exitFile, $startedFile `
-                        -Force -ErrorAction SilentlyContinue
-                    $arguments = if ($command -eq 'apply') {
-                        "apply `"$(Join-Path $workDir 'request.json')`""
-                    } else { $command }
-                    $batch = Join-Path $workDir 'run-other.cmd'
-                    @(
-                        '@echo off',
-                        "echo started > `"$startedFile`"",
-                        "`"$cli`" $arguments 1>`"$stdout`" 2>`"$stderr`"",
-                        "echo %errorlevel% > `"$exitFile`""
-                    ) | Set-Content -LiteralPath $batch -Encoding Ascii
-                    $action = New-ScheduledTaskAction -Execute 'cmd.exe' `
-                        -Argument "/d /c `"$batch`"" -WorkingDirectory $dir
-                    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
-                        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-                    Register-ScheduledTask -TaskName $taskName -Action $action -Settings $settings `
-                        -User "$env:COMPUTERNAME\$name" -Password $password -RunLevel Limited `
-                        -Force | Out-Null
-                    try {
-                        Start-ScheduledTask -TaskName $taskName
-                        $startedDeadline = (Get-Date).AddSeconds(30)
-                        $deadline = (Get-Date).AddSeconds(90)
-                        while (-not (Test-Path -LiteralPath $exitFile)) {
-                            $now = Get-Date
-                            $started = Test-Path -LiteralPath $startedFile
-                            if (($now -gt $startedDeadline -and -not $started) -or $now -gt $deadline) {
-                                $phase = if ($started) { 'did not finish' } else { 'did not start' }
-                                $state = (Get-ScheduledTask -TaskName $taskName).State
-                                $info = Get-ScheduledTaskInfo -TaskName $taskName
-                                $result = [BitConverter]::ToUInt32(
-                                    [BitConverter]::GetBytes([long]$info.LastTaskResult), 0)
-                                throw ('The other-account {0} task {1} (state {2}; scheduler result 0x{3:X8}).' -f
-                                    $command, $phase, $state, $result)
-                            }
-                            Start-Sleep -Milliseconds 100
-                        }
-                        $exitCode = [int]((Get-Content -LiteralPath $exitFile -Raw).Trim())
+                        $reply = "failed: $($_.Exception.Message)"
+                        $code = ''
+                        $state = ''
                     }
                     finally {
-                        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-                        try {
-                            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false `
-                                -ErrorAction Stop
-                        }
-                        catch { Write-Warning "Could not unregister the other-account task: $_" }
+                        if ($pipe) { $pipe.Dispose() }
+                    }
+                    $adminStatus = & $cli status 2>&1 | ForEach-Object { "$_" }
+                    $adminExit = $LASTEXITCODE
+                    $global:LASTEXITCODE = 0
+                    [pscustomobject]@{
+                        Command = $command
+                        Reply = $reply
+                        Code = $code
+                        State = $state
+                        StillConnected = ($adminExit -eq 0 -and
+                            ($adminStatus -join "`n") -match '(?m)^state: Connected\r?$')
                     }
                 }
-                $output = @()
-                if (Test-Path -LiteralPath $stdout) {
-                    $output += Get-Content -LiteralPath $stdout -Raw
-                }
-                if (Test-Path -LiteralPath $stderr) {
-                    $output += Get-Content -LiteralPath $stderr -Raw
-                }
-                $adminStatus = & $cli status 2>&1 | ForEach-Object { "$_" }
-                $adminExit = $LASTEXITCODE
-                $global:LASTEXITCODE = 0
-                [pscustomobject]@{
-                    Command = $command
-                    ExitCode = $exitCode
-                    Launch = if ($useTask) { 'scheduled task' } else { 'Start-Process' }
-                    Output = ($output -join "`n")
-                    StillConnected = ($adminExit -eq 0 -and
-                        ($adminStatus -join "`n") -match '(?m)^state: Connected\r?$')
-                }
             }
-        } -ArgumentList $Name, $TaskName, $WorkDir, $GuestDir
+            finally {
+                if ($identity) { $identity.Dispose() }
+                if ($token -ne [IntPtr]::Zero) { [RosetunOtherLogon]::CloseHandle($token) | Out-Null }
+            }
+        } -ArgumentList $Name, $GuestDir, $ProtocolVersion
     }
     finally {
-        try { Remove-OtherAccount -Name $Name -TaskName $TaskName -WorkDir $WorkDir }
+        try { Remove-OtherAccount -Name $Name }
         catch { Write-Warning "Could not clean up the other-account test: $_" }
     }
 }
@@ -256,8 +251,6 @@ function Invoke-OtherAccountCommands {
 $nodeStartedByMatrix = $false
 $lanListener = $null
 $otherAccountName = $null
-$otherTaskName = $null
-$otherWorkDir = $null
 $serviceAttempted = $false
 $consoleStoppedForOther = $false
 try {
@@ -344,28 +337,28 @@ Test-Step 'other account' 'administrator connects through the service' -Note "ex
 }
 $otherSuffix = [guid]::NewGuid().ToString('N').Substring(0, 10)
 $otherAccountName = "rt-$otherSuffix"
-$otherTaskName = "RosetunOther-$otherSuffix"
-$otherWorkDir = "C:\ProgramData\RosetunOther-$otherSuffix"
-$otherResults = @(Invoke-OtherAccountCommands -Name $otherAccountName `
-    -TaskName $otherTaskName -WorkDir $otherWorkDir -GuestDir (Get-RosetunGuestDir))
-if ($otherResults.Count -ne 4) {
-    throw 'The other-account commands did not return all four results.'
+$protocolSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\..\crates\rosetun-ipc\src\protocol.rs')
+if (-not ($protocolSource -match 'pub const PROTOCOL_VERSION: u32 = (\d+);')) {
+    throw 'Could not read PROTOCOL_VERSION from rosetun-ipc.'
 }
+$protocolVersion = [int]$Matches[1]
+$otherResults = @(Invoke-OtherAccountRequests -Name $otherAccountName `
+    -GuestDir (Get-RosetunGuestDir) -ProtocolVersion $protocolVersion)
 foreach ($command in @('status', 'disconnect', 'temporary', 'apply')) {
     $result = $otherResults | Where-Object Command -eq $command | Select-Object -First 1
-    $note = "exit $($result.ExitCode) via $($result.Launch)"
+    $note = if ($result) { $result.Reply } else { 'no result' }
     if ($command -eq 'status') {
         Test-Step 'other account' 'status reports Connected' -Note $note {
-            $result.ExitCode -eq 0 -and $result.Output -match '(?m)^state: Connected\r?$'
+            $result -and $result.State -eq 'connected'
         }
     }
     else {
-        Test-Step 'other account' "$command is denied with an account explanation" -Note $note {
-            $result.ExitCode -ne 0 -and $result.Output -match 'another Windows account'
+        Test-Step 'other account' "$command is denied" -Note $note {
+            $result -and $result.Code -eq 'access_denied'
         }
     }
     Test-Step 'other account' "tunnel remains Connected after $command" {
-        $result.StillConnected
+        $result -and $result.StillConnected
     }
 }
 Disconnect-RosetunTunnel | Out-Null
@@ -803,8 +796,7 @@ if ($ipv6NeighborCreated) {
 finally {
     if ($otherAccountName) {
         try {
-            Remove-OtherAccount -Name $otherAccountName -TaskName $otherTaskName `
-                -WorkDir $otherWorkDir
+            Remove-OtherAccount -Name $otherAccountName
         }
         catch { Write-Warning "Could not finish other-account cleanup: $_" }
     }
