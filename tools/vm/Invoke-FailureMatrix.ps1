@@ -348,6 +348,29 @@ Test-Step 'baseline' 'LAN listener is reachable before connect' {
     Wait-RosetunCondition { Test-RosetunLanListener $lanListener } -TimeoutSeconds 10
 }
 
+Write-Host 'Connect...'
+Connect-RosetunTunnel | Out-Null
+Test-Step 'connect' 'state is Connected' { Wait-RosetunState 'Connected' }
+$egress = Wait-RosetunTunnelEgress
+# Connected must mean usable: a tunnel that needs seconds before the first
+# request gets through looks broken to the user.
+Test-Step 'connect' 'tunnel carries traffic within 5 s, DNS included' -Note (Format-Egress $egress) {
+    $egress.Ok -and $egress.Seconds -le 5
+}
+Test-Step 'connect' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+Test-Step 'connect' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
+$probe = Invoke-RosetunProbe
+Test-Step 'connect' 'server check works while connected' -Note "exit $($probe.ExitCode)" {
+    $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
+}
+$delay = Invoke-RosetunCli -Quiet 'delay'
+Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
+    $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
+}
+
+# Not the first connect of the run: the first adapter creation in a fresh VM
+# can leave the tunnel silent for a while, which this scenario must not measure.
+Disconnect-RosetunTunnel | Out-Null
 if ($UseHostNode) {
     Write-Host 'Connect through the node whose exit cannot reach Cloudflare...'
     $blockedConnect = Connect-RosetunTunnel -RequestName 'request-cloudflare-blocked.json' -Quiet
@@ -370,26 +393,6 @@ if ($UseHostNode) {
     Test-Step 'Cloudflare blocked at exit' 'direct egress works after disconnect' {
         Test-RosetunDirectEgress
     }
-}
-
-Write-Host 'Connect...'
-Connect-RosetunTunnel | Out-Null
-Test-Step 'connect' 'state is Connected' { Wait-RosetunState 'Connected' }
-$egress = Wait-RosetunTunnelEgress
-# Connected must mean usable: a tunnel that needs seconds before the first
-# request gets through looks broken to the user.
-Test-Step 'connect' 'tunnel carries traffic within 5 s, DNS included' -Note (Format-Egress $egress) {
-    $egress.Ok -and $egress.Seconds -le 5
-}
-Test-Step 'connect' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
-Test-Step 'connect' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
-$probe = Invoke-RosetunProbe
-Test-Step 'connect' 'server check works while connected' -Note "exit $($probe.ExitCode)" {
-    $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
-}
-$delay = Invoke-RosetunCli -Quiet 'delay'
-Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
-    $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
 }
 
 Write-Host 'Another Windows account cannot control the tunnel...'
