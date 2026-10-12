@@ -968,6 +968,11 @@ Test-Step 'dns lock' 'state is Connected' { Wait-RosetunState 'Connected' }
 $egress = Wait-RosetunTunnelEgress
 Test-Step 'dns lock' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
 Test-Step 'dns lock' 'direct DNS is blocked' { -not (Test-RosetunDirectDns) }
+# Without the kill switch only sing-box's strict route blocks IPv6: the TUN
+# has no IPv6 address, so sing-tun blocks every IPv6 connect (rules/ENGINE.md).
+Test-Step 'dns lock' 'IPv6 outside the tunnel is blocked without the kill switch' {
+    -not (Test-RosetunIpv6Egress)
+}
 $apply = Invoke-RosetunApply 'request-dns-lock-apply.json' -Quiet
 Test-Step 'dns lock apply' 'apply succeeds' -Note "exit $($apply.ExitCode)" { $apply.ExitCode -eq 0 }
 Test-Step 'dns lock apply' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
@@ -1013,6 +1018,7 @@ Connect-RosetunTunnel -RequestName 'request-dns-lock.json' | Out-Null
 Disconnect-RosetunTunnel | Out-Null
 Test-Step 'dns lock disconnect' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
 Test-Step 'dns lock disconnect' 'direct DNS works again' { Test-RosetunDirectDns }
+Test-Step 'dns lock disconnect' 'IPv6 works again' { Test-RosetunIpv6Egress }
 
 Write-Host 'Helper killed with the DNS lock...'
 Connect-RosetunTunnel -RequestName 'request-dns-lock.json' | Out-Null
