@@ -18,7 +18,7 @@ pub(super) struct WatchdogTiming {
     pub dns_timeout: Duration,
     pub path_timeout: Duration,
     pub failures: u32,
-    pub path_server: SocketAddr,
+    pub path_servers: [SocketAddr; 2],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,15 +121,15 @@ impl DnsWatchdog {
             status,
             timing,
             move |stopped| dns::probe(server, timing.dns_timeout, stopped),
-            move |stopped| path::probe(timing.path_server, timing.path_timeout, stopped),
+            move |stopped| path::probe_any(timing.path_servers, timing.path_timeout, stopped),
         )
     }
 
     fn start_with_probes(
         status: Arc<Mutex<Status>>,
         timing: WatchdogTiming,
-        mut dns_probe: impl FnMut(&dyn Fn() -> bool) -> bool + Send + 'static,
-        mut path_probe: impl FnMut(&dyn Fn() -> bool) -> bool + Send + 'static,
+        mut dns_probe: impl FnMut(&(dyn Fn() -> bool + Sync)) -> bool + Send + 'static,
+        mut path_probe: impl FnMut(&(dyn Fn() -> bool + Sync)) -> bool + Send + 'static,
     ) -> io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let stalled = Arc::new(AtomicBool::new(false));
@@ -253,7 +253,10 @@ mod tests {
             dns_timeout: Duration::from_millis(10),
             path_timeout: Duration::from_millis(10),
             failures: 3,
-            path_server: "127.0.0.1:80".parse().expect("test address"),
+            path_servers: [
+                "127.0.0.1:80".parse().expect("test address"),
+                "127.0.0.1:81".parse().expect("test address"),
+            ],
         }
     }
 
@@ -316,6 +319,56 @@ mod tests {
         assert_eq!(health.pause(&timing), timing.interval);
         health.observe(true, None);
         assert_eq!(health.pause(&timing), timing.interval);
+    }
+
+    #[test]
+    fn healthy_dns_does_not_restart_when_the_http_path_is_unavailable() {
+        let dns_checks = Arc::new(AtomicUsize::new(0));
+        let path_checks = Arc::new(AtomicUsize::new(0));
+        let watchdog = DnsWatchdog::start_with_probes(
+            connected(),
+            timing(),
+            {
+                let dns_checks = Arc::clone(&dns_checks);
+                move |_| {
+                    dns_checks.fetch_add(1, Ordering::AcqRel);
+                    true
+                }
+            },
+            {
+                let path_checks = Arc::clone(&path_checks);
+                move |_| {
+                    path_checks.fetch_add(1, Ordering::AcqRel);
+                    false
+                }
+            },
+        )
+        .expect("start watchdog");
+        wait_for(|| dns_checks.load(Ordering::Acquire) >= 3);
+        assert_eq!(path_checks.load(Ordering::Acquire), 0);
+        assert!(!watchdog.take_stalled());
+        watchdog.stop();
+    }
+
+    #[test]
+    fn both_http_paths_down_do_not_signal_a_dns_only_stall() {
+        let path_checks = Arc::new(AtomicUsize::new(0));
+        let watchdog = DnsWatchdog::start_with_probes(
+            connected(),
+            timing(),
+            |_| false,
+            {
+                let path_checks = Arc::clone(&path_checks);
+                move |_| {
+                    path_checks.fetch_add(1, Ordering::AcqRel);
+                    false
+                }
+            },
+        )
+        .expect("start watchdog");
+        wait_for(|| path_checks.load(Ordering::Acquire) >= 1);
+        assert!(!watchdog.take_stalled());
+        watchdog.stop();
     }
 
     #[test]

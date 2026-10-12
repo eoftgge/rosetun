@@ -1,5 +1,7 @@
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::{atomic::{AtomicBool, Ordering}, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 const IO_SLICE: Duration = Duration::from_millis(250);
@@ -11,12 +13,53 @@ fn remaining(deadline: Instant) -> Option<Duration> {
     (!time.is_zero()).then_some(time.min(IO_SLICE))
 }
 
-/// A TCP handshake alone can succeed while the tunnel's HTTP path is stalled.
-pub(super) fn probe(server: SocketAddr, timeout: Duration, stopped: impl Fn() -> bool) -> bool {
+/// Both endpoints share one deadline; a successful HTTP response stops the loser.
+pub(super) fn probe_any(
+    servers: [SocketAddr; 2],
+    timeout: Duration,
+    stopped: impl Fn() -> bool + Sync,
+) -> bool {
     if timeout.is_zero() || stopped() {
         return false;
     }
     let deadline = Instant::now() + timeout;
+    let done = AtomicBool::new(false);
+    thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel();
+        for server in servers {
+            let tx = tx.clone();
+            let stopped = &stopped;
+            let done = &done;
+            scope.spawn(move || {
+                let result = probe_until(server, deadline, &|| {
+                    stopped() || done.load(Ordering::Acquire)
+                });
+                if result {
+                    done.store(true, Ordering::Release);
+                }
+                let _ = tx.send(result);
+            });
+        }
+        drop(tx);
+        for result in rx.into_iter().take(servers.len()) {
+            if result {
+                return true;
+            }
+        }
+        false
+    })
+}
+
+/// A TCP handshake alone can succeed while the tunnel's HTTP path is stalled.
+#[cfg(test)]
+pub(super) fn probe(server: SocketAddr, timeout: Duration, stopped: impl Fn() -> bool) -> bool {
+    if timeout.is_zero() || stopped() {
+        return false;
+    }
+    probe_until(server, Instant::now() + timeout, &stopped)
+}
+
+fn probe_until(server: SocketAddr, deadline: Instant, stopped: &impl Fn() -> bool) -> bool {
     for _ in 0..CONNECT_ATTEMPTS {
         if stopped() {
             return false;
@@ -113,6 +156,39 @@ mod tests {
             }
         });
         (address, worker)
+    }
+
+    fn silent_server() -> (SocketAddr, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind silent server");
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept silent connection");
+            thread::sleep(Duration::from_millis(400));
+            drop(stream);
+        });
+        (address, worker)
+    }
+
+    #[test]
+    fn second_http_path_succeeds_while_the_first_is_silent() {
+        let (silent, silent_worker) = silent_server();
+        let (working, working_worker) = server(b"HTTP/1.1 302 Found\r\n\r\n");
+        let started = Instant::now();
+        assert!(probe_any([silent, working], Duration::from_secs(1), || false));
+        assert!(started.elapsed() < Duration::from_millis(350));
+        silent_worker.join().unwrap();
+        working_worker.join().unwrap();
+    }
+
+    #[test]
+    fn two_silent_http_paths_fail_by_the_shared_deadline() {
+        let (first, first_worker) = silent_server();
+        let (second, second_worker) = silent_server();
+        let started = Instant::now();
+        assert!(!probe_any([first, second], Duration::from_millis(80), || false));
+        assert!(started.elapsed() < Duration::from_millis(300));
+        first_worker.join().unwrap();
+        second_worker.join().unwrap();
     }
 
     #[test]

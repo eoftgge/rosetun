@@ -43,7 +43,10 @@ const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
     dns_timeout: Duration::from_secs(5),
     path_timeout: Duration::from_secs(5),
     failures: 3,
-    path_server: SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1)), 80),
+    path_servers: [
+        SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1)), 80),
+        SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8)), 80),
+    ],
 };
 /// Failed automatic attempts before the helper gives up.
 const RECONNECT_ATTEMPTS: u32 = 5;
