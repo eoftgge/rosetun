@@ -694,7 +694,9 @@ try {
         $apply.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
     }
     $temporaryAfter = Invoke-RosetunCli -Quiet 'temporary'
-    Test-Step 'settings apply' 'temporary rule remains after apply' {
+    Test-Step 'settings apply' 'temporary rule remains after apply' `
+        -Note ("exit {0}; before: {1}; after: {2}" -f $temporaryAfter.ExitCode,
+            ($temporaryBefore.Output -replace '\r?\n', ' | '), ($temporaryAfter.Output -replace '\r?\n', ' | ')) {
         $temporaryAfter.ExitCode -eq 0 -and $temporaryAfter.Output -eq $temporaryBefore.Output -and
             $temporaryAfter.Output -match ('(?m)^{0}$' -f [regex]::Escape($temporaryLine))
     }
