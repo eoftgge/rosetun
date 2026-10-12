@@ -289,6 +289,7 @@ public static class RosetunOtherLogon {
 }
 
 $nodeStartedByMatrix = $false
+$blockedNodeStartedByMatrix = $false
 $lanListener = $null
 $egressWatchActive = $false
 $otherAccountName = $null
@@ -311,6 +312,13 @@ if ($UseHostNode) {
     }
     else {
         $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath
+    }
+    if ($NodeBindInterface) {
+        $blockedNodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath `
+            -BindInterface $NodeBindInterface -CloudflareBlocked
+    }
+    else {
+        $blockedNodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath -CloudflareBlocked
     }
 }
 
@@ -338,6 +346,30 @@ Test-Step 'baseline' 'IPv6 to the host works before connect' { Test-RosetunIpv6E
 # The new firewall rule can take a moment to accept guest connections.
 Test-Step 'baseline' 'LAN listener is reachable before connect' {
     Wait-RosetunCondition { Test-RosetunLanListener $lanListener } -TimeoutSeconds 10
+}
+
+if ($UseHostNode) {
+    Write-Host 'Connect through the node whose exit cannot reach Cloudflare...'
+    $blockedConnect = Connect-RosetunTunnel -RequestName 'request-cloudflare-blocked.json' -Quiet
+    Test-Step 'Cloudflare blocked at exit' 'connect succeeds' -Note "exit $($blockedConnect.ExitCode)" {
+        $blockedConnect.ExitCode -eq 0
+    }
+    Test-Step 'Cloudflare blocked at exit' 'state is Connected' { Wait-RosetunState 'Connected' }
+    $probe = Invoke-RosetunProbe 'request-cloudflare-blocked.json'
+    Test-Step 'Cloudflare blocked at exit' 'server check works' -Note "exit $($probe.ExitCode)" {
+        $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
+    }
+    $delay = Invoke-RosetunCli -Quiet 'delay'
+    Test-Step 'Cloudflare blocked at exit' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
+        $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
+    }
+    Test-Step 'Cloudflare blocked at exit' 'direct egress stays blocked' {
+        -not (Test-RosetunDirectEgress)
+    }
+    Disconnect-RosetunTunnel | Out-Null
+    Test-Step 'Cloudflare blocked at exit' 'direct egress works after disconnect' {
+        Test-RosetunDirectEgress
+    }
 }
 
 Write-Host 'Connect...'
@@ -1097,6 +1129,10 @@ finally {
     if ($null -ne $lanListener) {
         try { Stop-RosetunLanListener $lanListener }
         catch { Write-Warning "Could not remove the LAN listener or firewall rule: $_" }
+    }
+    if ($blockedNodeStartedByMatrix -and -not $KeepNode) {
+        try { Stop-RosetunTestNode -CloudflareBlocked }
+        catch { Write-Warning "Could not stop the Cloudflare-blocked test node: $_" }
     }
     if ($nodeStartedByMatrix -and -not $KeepNode) {
         try { Stop-RosetunTestNode }
