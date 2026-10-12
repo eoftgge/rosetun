@@ -1,28 +1,29 @@
 # Rosetun {{version}}
 
-This is an alpha release, the last one of 0.1: from here 0.1 only gets fixes, in betas, before 0.1.0. Bugs are expected. Report them in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+This is the first beta of 0.1. From here 0.1 only gets fixes, in further betas, until 0.1.0. Please use it every day and report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-## What's new
+## What's changed
 
-- **Your own lists of sites and addresses.** **Rules** has a new **Lists** tab. Add a list by link or from a file: sing-box rule sets (`.srs` and `.json`), Xray `geosite.dat` and `geoip.dat`, or plain text with one domain or address per line. Files up to 128 MiB are accepted. Lists from links update together with subscriptions.
-- **Rules by list.** In the new rule dialog, **List** routes a whole list, or for `geosite.dat` and `geoip.dat` the categories you tick, through the VPN, directly, or blocks them. Tick several categories to add a rule for each at once; a category with an attribute, such as `google@cn`, can be typed into the search.
-- **When a list loses a category.** If an updated `.dat` file no longer has a category a rule uses, the rule keeps working with the last version of that category, and Rosetun warns in the rule row, on the list and on the connection screen. If there is no earlier version, the rule is skipped and the warning says so.
-- **List updates while connected.** A list you update by hand applies when you leave the tab, like a rule edit. An automatic update does not restart the tunnel: the list shows "Updated · takes effect on the next connection".
-- **Rule dialog.** **Only until disconnect** moved into **Advanced**, which now opens below its heading; when it is on and **Advanced** is closed, the heading says so. When **Add rule** is unavailable, the dialog says why. Unavailable main buttons across the app are easier to see.
-- **Rules screen.** The rule set selector moved up, next to the **Rules · Lists** switch.
-- **Program rules ignore letter case.** A rule for `telegram.exe` now also matches `Telegram.exe`, as Windows does with file names.
-- **Edits are not lost on quit.** Quitting from the tray while connected applies pending rule and DNS edits first.
-- **A dead server is recognized sooner.** When the server does not answer at all, Rosetun now says so in about 15 seconds instead of waiting a full minute, even when no other program is using the network. The same applies when you switch to such a server while connected.
-- **`rosetun status` while connecting** now shows the state instead of failing while the service is busy.
-- **The command line and the app agree.** `rosetun apply` keeps temporary rules added in the app, and settings changed in the app and in `rosetun` at the same time are both kept.
 - **Security.**
-  - The app checks that it talks to the real Rosetun service, and other accounts on the computer can no longer pose as it.
-  - The service limits how many connections it accepts at once and checks every request more strictly.
-  - VLESS and VMess credentials no longer appear in debug output.
-  - Messages from the network library that may carry secrets are no longer logged.
-  - If the service fails unexpectedly, it no longer leaves the network blocked.
+  - Another Windows account on the same computer can no longer disconnect your tunnel, change it or read its temporary rules. Only the account that connected it, or an administrator, can.
+  - The service no longer lets programs that connect to it and then stay silent lock out the app and `rosetun`.
+- **First connection after installing.** When Windows takes long to set up the tunnel adapter, Rosetun no longer gives up with "server unreachable" too early.
+- **Server checks do not depend on one company.** The full check, the tunnel delay and the checks while connecting ask Cloudflare and Google at the same time, so a server whose exit cannot reach one of them still works. The DNS watchdog does the same.
+- **Servers near the time limit** are no longer shown as not working by "Check servers" and "Delay".
+- **The TCP ping** runs only when the tunnel is known to be down. Right after start it could show the same time for every server.
+- **Lists.** Connecting with large lists is faster: each list is verified once. A damaged saved copy of a category no longer stops the connection; the rule is skipped with a warning.
+- **Small windows and large scaling.** At 125 and 150 % the header shows tab icons, and the rules toolbar wraps to two rows instead of squeezing the action filter.
+- **Layout fixes** in the list card and the category picker.
 
-Settings, subscriptions and rules from 0.1.0-alpha.5 are kept: the settings move to format 3 on the first start, and the previous file is saved as `config.v2.json` next to `config.json` in `%APPDATA%\Rosetun`. To go back to 0.1.0-alpha.5, put that copy back as `config.json`; lists and list rules are then lost.
+## Known issue: REALITY servers on Xray 26.9.8 and newer
+
+VLESS + REALITY servers updated to Xray 26.9.8 or newer refuse connections from sing-box, the engine Rosetun uses ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)). Rosetun then says the server rejected the connection and explains why. Try another server or ask your provider. A fix is planned.
+
+## Help wanted: IPv6
+
+If your provider gives you IPv6, connect and open [test-ipv6.com](https://test-ipv6.com). It should show no IPv6 address. Please report what it shows in [Issues](https://github.com/eoftgge/rosetun/issues).
+
+Settings, subscriptions, lists and rules from 0.1.0-alpha.6 are kept as they are; older versions are upgraded on the first start as before. The app and the service are updated together by the installer.
 
 ## Install
 
@@ -40,29 +41,30 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-Это альфа-версия, последняя для 0.1: дальше 0.1 получает только исправления, в бета-версиях, до выхода 0.1.0. Ошибки возможны. Сообщайте о них в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях сообщайте приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Это первая бета-версия 0.1. Дальше 0.1 получает только исправления, в следующих бетах, до выхода 0.1.0. Пользуйтесь ей каждый день и сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях сообщайте приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-### Что нового
+### Что изменилось
 
-- **Свои списки сайтов и адресов.** На вкладке **Правила** появился раздел **Списки**. Список можно добавить по ссылке или из файла: наборы правил sing-box (`.srs` и `.json`), `geosite.dat` и `geoip.dat` от Xray или обычный текст, один домен или адрес на строку. Файлы до 128 МиБ. Списки по ссылке обновляются вместе с подписками.
-- **Правила по списку.** В окне нового правила вариант **Список** направляет весь список, а для `geosite.dat` и `geoip.dat` отмеченные категории, через VPN, напрямую или блокирует их. Можно отметить несколько категорий, и на каждую появится своё правило; категорию с атрибутом, например `google@cn`, можно ввести в поиск.
-- **Если из списка пропала категория.** Если в обновлённом `.dat` больше нет категории, которую использует правило, правило работает по прошлой версии этой категории, а Rosetun предупреждает об этом в строке правила, в карточке списка и на экране подключения. Если прошлой версии нет, правило не работает, и предупреждение говорит об этом.
-- **Обновление списков при подключении.** Список, обновлённый вручную, применяется, когда вы уходите с вкладки, как правка правил. Автоматическое обновление не перезапускает туннель: у списка видно «Обновлён · применится при следующем подключении».
-- **Окно правила.** **Только до отключения** переехало в раздел **Дополнительно**, который теперь раскрывается под своим заголовком; если оно включено, а раздел свёрнут, это видно у заголовка. Если **Добавить правило** недоступно, окно пишет почему. Недоступные основные кнопки во всей программе стали заметнее.
-- **Экран правил.** Выбор набора правил переехал наверх, к переключателю **Правила · Списки**.
-- **Правила для программ без учёта регистра.** Правило для `telegram.exe` теперь срабатывает и для `Telegram.exe`, как и принято в Windows для имён файлов.
-- **Правки не теряются при выходе.** Выход из трея при подключении сначала применяет непримененные правки правил и DNS.
-- **Неработающий сервер распознаётся быстрее.** Если сервер совсем не отвечает, Rosetun сообщает об этом примерно через 15 секунд, а не ждёт целую минуту, даже когда другие программы не пользуются сетью. То же при переключении на такой сервер во время подключения.
-- **`rosetun status` во время подключения** теперь показывает состояние, а не завершается с ошибкой, пока служба занята.
-- **Командная строка и программа заодно.** `rosetun apply` сохраняет временные правила, добавленные в программе, а настройки, измененные одновременно в программе и в `rosetun`, сохраняются обе.
 - **Безопасность.**
-  - Программа проверяет, что говорит с настоящей службой Rosetun, и другие учётные записи компьютера больше не могут выдать себя за неё.
-  - Служба ограничивает число одновременных подключений и строже проверяет каждый запрос.
-  - Учётные данные VLESS и VMess больше не попадают в отладочный вывод.
-  - Сообщения сетевой библиотеки, в которых могут быть секреты, больше не пишутся в журнал.
-  - Если служба неожиданно падает, она больше не оставляет сеть заблокированной.
+  - Другая учётная запись Windows на этом компьютере больше не может отключить ваш туннель, изменить его или прочитать его временные правила. Это может только учётная запись, которая его подключила, или администратор.
+  - Программы, которые подключаются к службе и молчат, больше не могут заблокировать доступ к ней для приложения и `rosetun`.
+- **Первое подключение после установки.** Если Windows долго настраивает адаптер туннеля, Rosetun больше не сдаётся раньше времени с ошибкой «сервер недоступен».
+- **Проверка серверов не зависит от одной компании.** Полная проверка, задержка туннеля и проверки при подключении обращаются одновременно к Cloudflare и Google, поэтому сервер, выход которого не достаёт до одного из них, всё равно работает. Сторож DNS делает так же.
+- **Серверы у предела времени ожидания** больше не показываются как неработающие в «Проверить серверы» и «Задержка».
+- **TCP-пинг** запускается, только когда известно, что туннель выключен. Сразу после запуска он мог показывать одинаковое время у всех серверов.
+- **Списки.** Подключение с большими списками быстрее: каждый список проверяется один раз. Повреждённая сохранённая копия категории больше не мешает подключиться; правило пропускается с предупреждением.
+- **Маленькое окно и крупный масштаб.** При 125 и 150 % в шапке остаются значки вкладок, а панель правил переносится на две строки вместо того, чтобы сжимать фильтр действий.
+- **Исправлена вёрстка** карточки списка и выбора категорий.
 
-Настройки, подписки и правила из 0.1.0-alpha.5 сохраняются: при первом запуске настройки переходят на формат 3, а прежний файл сохраняется как `config.v2.json` рядом с `config.json` в `%APPDATA%\Rosetun`. Чтобы вернуться на 0.1.0-alpha.5, верните эту копию под именем `config.json`; списки и правила по спискам при этом пропадут.
+### Известная проблема: серверы REALITY на Xray 26.9.8 и новее
+
+Серверы VLESS + REALITY, обновлённые до Xray 26.9.8 или новее, не принимают подключения от sing-box, на котором работает Rosetun ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)). Rosetun в этом случае пишет, что сервер отклонил подключение, и объясняет почему. Попробуйте другой сервер или напишите провайдеру. Исправление запланировано.
+
+### Нужна помощь: IPv6
+
+Если провайдер даёт вам IPv6, подключитесь и откройте [test-ipv6.com](https://test-ipv6.com). Адреса IPv6 там быть не должно. Пожалуйста, сообщите, что показала страница, в [Issues](https://github.com/eoftgge/rosetun/issues).
+
+Настройки, подписки, списки и правила из 0.1.0-alpha.6 сохраняются как есть; более старые версии, как и раньше, обновляются при первом запуске. Программу и службу установщик обновляет вместе.
 
 ### Установка
 
