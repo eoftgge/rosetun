@@ -36,6 +36,7 @@ const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(60);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
 const PATH_LOOKUP_TIMEOUT: Duration = Duration::from_secs(1);
 const SERVER_CHECK_INTERVAL: Duration = Duration::from_secs(4);
+const SERVER_CHECK_GRACE: Duration = Duration::from_secs(30);
 const SERVER_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
 const SERVER_CHECK_FAILURES: u64 = 3;
 const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
@@ -143,6 +144,7 @@ struct Session {
     dns_timeout: Duration,
     dns_attempt_timeout: Duration,
     server_check_interval: Duration,
+    server_check_grace: Duration,
     watchdog_timing: WatchdogTiming,
     adapter_lookup: fn(&str) -> std::io::Result<bool>,
     cancelled: Arc<AtomicBool>,
@@ -195,6 +197,7 @@ impl Helper {
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
                 server_check_interval: SERVER_CHECK_INTERVAL,
+                server_check_grace: SERVER_CHECK_GRACE,
                 watchdog_timing: WATCHDOG_TIMING,
                 cancelled,
                 lists: None,
@@ -1325,6 +1328,16 @@ impl Session {
             spawned_at,
             &self.cancelled,
         )?;
+        let ready_at = Instant::now();
+        let grace_deadline = server_check_grace_deadline(
+            self.process
+                .as_ref()
+                .expect("engine process was stored before readiness")
+                .startup_hints(),
+            spawned_at,
+            ready_at,
+            self.server_check_grace,
+        );
         tracing::info!("engine startup readiness confirmed");
 
         if let Some(tunnel) = tunnel.as_ref() {
@@ -1365,6 +1378,9 @@ impl Session {
         }
 
         if let Some(server) = dns_server {
+            if grace_deadline.is_some() {
+                tracing::info!("slow tunnel adapter: server check grace 30 s");
+            }
             self.stage(rosetun_config::ConnectStage::CheckingServer)?;
             let engines = Arc::clone(&self.engines);
             let backend = engines
@@ -1412,6 +1428,7 @@ impl Session {
                         server,
                         self.dns_timeout,
                         self.dns_attempt_timeout,
+                        grace_deadline,
                         || {
                             let running = process.is_running()?;
                             let mut counters = process.outbound_failures();
@@ -1817,6 +1834,17 @@ fn wait_for_previous_adapter_cancellable(
         }
         thread::sleep(interval.min(timeout.saturating_sub(elapsed)));
     }
+}
+
+fn server_check_grace_deadline(
+    hints: rosetun_engine::StartupHints,
+    spawned_at: Instant,
+    ready_at: Instant,
+    grace: Duration,
+) -> Option<Instant> {
+    (hints.slow_tunnel_creation
+        || ready_at.saturating_duration_since(spawned_at) > Duration::from_secs(5))
+    .then_some(ready_at + grace)
 }
 
 fn startup_timeout(hints: rosetun_engine::StartupHints) -> Duration {

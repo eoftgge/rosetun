@@ -370,13 +370,14 @@ pub(super) fn check_observed(
     attempt_timeout: Duration,
     observe: impl FnMut() -> Result<(bool, rosetun_engine::OutboundFailures), EngineError>,
 ) -> Result<(), HelperError> {
-    check_cancellable(server, timeout, attempt_timeout, observe, || false)
+    check_cancellable(server, timeout, attempt_timeout, None, observe, || false)
 }
 
 pub(super) fn check_cancellable(
     server: SocketAddr,
     timeout: Duration,
     attempt_timeout: Duration,
+    grace_deadline: Option<Instant>,
     mut observe: impl FnMut() -> Result<(bool, rosetun_engine::OutboundFailures), EngineError>,
     stopped: impl Fn() -> bool,
 ) -> Result<(), HelperError> {
@@ -470,7 +471,9 @@ pub(super) fn check_cancellable(
         ensure_running(&mut is_running)?;
 
         // A valid DNS reply above wins over diagnostics from concurrent traffic.
-        if let Some(category) = failure.get() {
+        if let Some(category) = failure.get()
+            && grace_deadline.is_none_or(|deadline| Instant::now() >= deadline)
+        {
             let code = match category {
                 rosetun_engine::OutboundFailure::Unreachable => ErrorCode::ServerUnreachable,
                 rosetun_engine::OutboundFailure::Rejected => ErrorCode::ServerRejected,
@@ -540,6 +543,7 @@ pub(crate) mod test_support {
     pub(crate) enum Behavior {
         Noerror,
         Addresses,
+        AnswerAfter(usize),
         DelayedNoerror,
         Nxdomain,
         Servfail,
@@ -565,6 +569,7 @@ pub(crate) mod test_support {
             let worker_stop = Arc::clone(&stop);
             let worker = thread::spawn(move || {
                 let mut buffer = [0u8; 512];
+                let mut requests = 0;
                 while !worker_stop.load(Ordering::Acquire) {
                     let (length, peer) = match socket.recv_from(&mut buffer) {
                         Ok(received) => received,
@@ -582,7 +587,10 @@ pub(crate) mod test_support {
                         Err(error) => panic!("test DNS receive failed: {error}"),
                     };
 
-                    if matches!(behavior, Behavior::Silent) {
+                    requests += 1;
+                    if matches!(behavior, Behavior::Silent)
+                        || matches!(behavior, Behavior::AnswerAfter(unanswered) if requests <= unanswered)
+                    {
                         continue;
                     }
                     if matches!(behavior, Behavior::DelayedNoerror) {

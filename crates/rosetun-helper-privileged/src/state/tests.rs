@@ -34,6 +34,29 @@ fn startup_hint_extends_only_slow_tunnel_deadline() {
 }
 
 #[test]
+fn server_check_grace_needs_a_slow_hint_or_late_readiness() {
+    let spawned_at = Instant::now();
+    let fast = spawned_at + Duration::from_secs(5);
+    let late = fast + Duration::from_millis(1);
+    let hints = rosetun_engine::StartupHints::default();
+    assert_eq!(
+        server_check_grace_deadline(hints, spawned_at, fast, SERVER_CHECK_GRACE),
+        None
+    );
+    assert_eq!(
+        server_check_grace_deadline(hints, spawned_at, late, SERVER_CHECK_GRACE),
+        Some(late + SERVER_CHECK_GRACE)
+    );
+    let slow = rosetun_engine::StartupHints {
+        slow_tunnel_creation: true,
+    };
+    assert_eq!(
+        server_check_grace_deadline(slow, spawned_at, spawned_at, SERVER_CHECK_GRACE),
+        Some(spawned_at + SERVER_CHECK_GRACE)
+    );
+}
+
+#[test]
 fn previous_adapter_waits_until_it_disappears() {
     let mut calls = 0;
     wait_for_previous_adapter(
@@ -1269,6 +1292,7 @@ struct ServerCheckEngine {
     api_stop: Arc<AtomicBool>,
     api_calls: Arc<AtomicUsize>,
     log_failures: bool,
+    slow_adapter: bool,
 }
 
 impl EngineBackend for ServerCheckEngine {
@@ -1324,6 +1348,7 @@ impl EngineBackend for ServerCheckEngine {
             api_stop: Arc::clone(&self.api_stop),
             api_calls: Arc::clone(&self.api_calls),
             log_failures: self.log_failures,
+            slow_adapter: self.slow_adapter,
         }))
     }
 }
@@ -1334,11 +1359,18 @@ struct ServerCheckProcess {
     api_stop: Arc<AtomicBool>,
     api_calls: Arc<AtomicUsize>,
     log_failures: bool,
+    slow_adapter: bool,
 }
 
 impl EngineProcess for ServerCheckProcess {
     fn is_running(&mut self) -> Result<bool, EngineError> {
         Ok(true)
+    }
+
+    fn startup_hints(&self) -> rosetun_engine::StartupHints {
+        rosetun_engine::StartupHints {
+            slow_tunnel_creation: self.slow_adapter,
+        }
     }
 
     fn outbound_failures(&self) -> rosetun_engine::OutboundFailures {
@@ -1370,6 +1402,16 @@ fn server_check_helper_with_logs(
     stopped: Arc<AtomicUsize>,
     log_failures: bool,
 ) -> Helper {
+    server_check_helper_with_startup(server, api, stopped, log_failures, false)
+}
+
+fn server_check_helper_with_startup(
+    server: SocketAddr,
+    api: &FakeClashApi,
+    stopped: Arc<AtomicUsize>,
+    log_failures: bool,
+    slow_adapter: bool,
+) -> Helper {
     let mut engines = EngineRegistry::new();
     engines.register(Box::new(ServerCheckEngine {
         server,
@@ -1378,6 +1420,7 @@ fn server_check_helper_with_logs(
         api_stop: Arc::clone(&api.stop),
         api_calls: Arc::clone(&api.calls),
         log_failures,
+        slow_adapter,
     }));
     let helper = Helper::new(
         engines,
@@ -1393,6 +1436,56 @@ fn server_check_helper_with_logs(
         session.server_check_interval = Duration::from_millis(20);
     }
     helper
+}
+
+#[test]
+fn slow_adapter_connects_when_dns_recovers_after_early_server_failures() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::AnswerAfter(8));
+    let api = FakeClashApi::start(ClashReply::Fails);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let helper = server_check_helper_with_startup(
+        dns.address(),
+        &api,
+        Arc::clone(&stopped),
+        true,
+        true,
+    );
+    helper.session().unwrap().server_check_grace = Duration::from_millis(450);
+
+    helper.connect(&connect_request()).expect("late DNS answer wins");
+    assert!(api.calls.load(Ordering::Acquire) >= 3);
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    helper.disconnect().unwrap();
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn dead_server_is_not_rejected_until_slow_adapter_grace_expires() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let dns = Server::new(Behavior::Silent);
+    let api = FakeClashApi::start(ClashReply::Fails);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let helper = server_check_helper_with_startup(
+        dns.address(),
+        &api,
+        Arc::clone(&stopped),
+        true,
+        true,
+    );
+    helper.session().unwrap().server_check_grace = Duration::from_millis(300);
+    let started = Instant::now();
+    let error = helper
+        .connect(&connect_request())
+        .expect_err("dead server is rejected after grace");
+
+    assert_eq!(error.code, ErrorCode::ServerUnreachable);
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(api.calls.load(Ordering::Acquire) >= 3);
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
 }
 
 #[test]
