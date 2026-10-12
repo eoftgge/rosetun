@@ -1,12 +1,16 @@
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 pub const ENDPOINT_ENV: &str = "ROSETUN_HELPER_ENDPOINT";
 
 // Generic write includes FILE_CREATE_PIPE_INSTANCE (0x4). Authenticated
-// clients may exchange frames, but only the helper may create pipe instances.
+// clients may exchange frames, but only SYSTEM, Administrators and the pipe
+// owner may create instances. Owner rights also allow an unprivileged console
+// helper to accept successive connections without granting this right to AU.
 #[cfg(any(windows, test))]
-const SECURITY_DESCRIPTOR_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x0012019B;;;AU)";
+const SECURITY_DESCRIPTOR_SDDL: &str =
+    "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00000004;;;OW)(A;;0x0012019B;;;AU)";
 
 #[cfg(any(windows, test))]
 fn server_trusted(
@@ -43,6 +47,10 @@ pub struct Connection {
     writer: Box<dyn Write + Send>,
     #[cfg(windows)]
     peer_pipe: Option<std::fs::File>,
+    #[cfg(windows)]
+    read_watch: Option<platform::ReadWatch>,
+    #[cfg(unix)]
+    read_socket: Option<std::os::unix::net::UnixStream>,
 }
 
 pub struct PeerIdentity {
@@ -81,6 +89,10 @@ impl Connection {
             writer,
             #[cfg(windows)]
             peer_pipe: None,
+            #[cfg(windows)]
+            read_watch: None,
+            #[cfg(unix)]
+            read_socket: None,
         }
     }
 
@@ -107,9 +119,101 @@ impl Connection {
         crate::read_frame(&mut self.reader)
     }
 
+    pub fn read_bounded(
+        &mut self,
+        first_byte_deadline: Instant,
+        frame_timeout: Duration,
+        hard_deadline: Option<Instant>,
+    ) -> Result<Option<crate::Frame>, crate::CodecError> {
+        let mut line = Vec::new();
+        let mut first_byte = None;
+        loop {
+            let deadline =
+                first_byte.map_or(first_byte_deadline, |start: Instant| start + frame_timeout);
+            let deadline = hard_deadline.map_or(deadline, |hard| deadline.min(hard));
+            if Instant::now() >= deadline {
+                return Err(read_timed_out().into());
+            }
+
+            #[cfg(unix)]
+            self.read_socket
+                .as_ref()
+                .ok_or_else(|| io::Error::other("not a server socket connection"))?
+                .set_read_timeout(Some(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .max(Duration::from_millis(1)),
+                ))?;
+            #[cfg(windows)]
+            {
+                if self.peer_pipe.is_none() {
+                    return Err(io::Error::other("not a server pipe connection").into());
+                }
+                if self.read_watch.is_none() {
+                    self.read_watch = Some(platform::ReadWatch::new()?);
+                }
+                self.read_watch.as_ref().unwrap().arm(deadline);
+            }
+
+            let chunk = self.reader.fill_buf();
+            #[cfg(windows)]
+            let expired = self.read_watch.as_ref().unwrap().disarm();
+            #[cfg(unix)]
+            let expired = false;
+            if expired || Instant::now() >= deadline {
+                return Err(read_timed_out().into());
+            }
+            let chunk = chunk.map_err(|error| {
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) {
+                    read_timed_out()
+                } else {
+                    error
+                }
+            })?;
+            if chunk.is_empty() {
+                if line.is_empty() {
+                    return Ok(None);
+                }
+                let text = String::from_utf8(line)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                return if text.trim().is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(serde_json::from_str(text.trim())?))
+                };
+            }
+            first_byte.get_or_insert_with(Instant::now);
+
+            let count = chunk
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(chunk.len(), |i| i + 1);
+            if line.len() + count > crate::MAX_FRAME_BYTES as usize {
+                return Err(crate::CodecError::TooLarge);
+            }
+            line.extend_from_slice(&chunk[..count]);
+            self.reader.consume(count);
+            if line.last() == Some(&b'\n') {
+                let text = String::from_utf8(std::mem::take(&mut line))
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Ok(Some(serde_json::from_str(trimmed)?));
+                }
+            }
+        }
+    }
+
     pub fn write(&mut self, frame: &crate::Frame) -> Result<(), crate::CodecError> {
         crate::write_frame(&mut self.writer, frame)
     }
+}
+
+fn read_timed_out() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "helper pipe read deadline elapsed")
 }
 
 #[cfg(unix)]
@@ -150,7 +254,10 @@ mod platform {
         pub fn accept(&self) -> io::Result<Connection> {
             let (stream, _addr) = self.inner.accept()?;
             let writer = stream.try_clone()?;
-            Ok(Connection::new(Box::new(stream), Box::new(writer)))
+            let read_socket = stream.try_clone()?;
+            let mut connection = Connection::new(Box::new(stream), Box::new(writer));
+            connection.read_socket = Some(read_socket);
+            Ok(connection)
         }
 
         pub fn path(&self) -> &Path {
@@ -171,11 +278,13 @@ mod platform {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::thread::{self, JoinHandle};
 
     use windows_sys::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_SERVICE_DOES_NOT_EXIST,
-        GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+        DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY,
+        ERROR_PIPE_CONNECTED, ERROR_SERVICE_DOES_NOT_EXIST, GetLastError, HANDLE,
+        INVALID_HANDLE_VALUE, LocalFree,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
@@ -201,7 +310,7 @@ mod platform {
         SERVICE_STOPPED,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
+        GetCurrentProcess, GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
@@ -211,9 +320,122 @@ mod platform {
     const CONNECT_ATTEMPTS: u32 = 3;
     const CONNECT_WAIT_MS: u32 = 2_000;
 
+    struct WatchState {
+        deadline: Option<Instant>,
+        timed_out: bool,
+        stopped: bool,
+    }
+
+    pub(super) struct ReadWatch {
+        state: Arc<(Mutex<WatchState>, Condvar)>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl ReadWatch {
+        pub(super) fn new() -> io::Result<Self> {
+            let process = unsafe { GetCurrentProcess() };
+            let mut thread_handle = std::ptr::null_mut();
+            // SAFETY: GetCurrentThread is a pseudo-handle for this handler thread;
+            // DuplicateHandle creates a real handle owned by the watchdog thread.
+            if unsafe {
+                DuplicateHandle(
+                    process,
+                    GetCurrentThread(),
+                    process,
+                    &mut thread_handle,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            } == 0
+            {
+                return Err(last_error());
+            }
+            // SAFETY: DuplicateHandle returned an owned thread handle, transferred once.
+            let thread_handle = unsafe { OwnedHandle::from_raw_handle(thread_handle as RawHandle) };
+            let state = Arc::new((
+                Mutex::new(WatchState {
+                    deadline: None,
+                    timed_out: false,
+                    stopped: false,
+                }),
+                Condvar::new(),
+            ));
+            let watcher_state = Arc::clone(&state);
+            let thread = thread::Builder::new()
+                .name("rosetun-ipc-read-watch".to_owned())
+                .spawn(move || {
+                    let (lock, wake) = &*watcher_state;
+                    let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+                    while !state.stopped {
+                        if let Some(deadline) = state.deadline {
+                            let remaining = deadline.saturating_duration_since(Instant::now());
+                            if remaining.is_zero() {
+                                state.timed_out = true;
+                                // The read may not have entered the kernel yet; retry until
+                                // disarmed so cancellation cannot miss a late-starting read.
+                                // SAFETY: The owned handle names the handler thread. Holding
+                                // the lock prevents arming another read until cancellation ends.
+                                unsafe {
+                                    CancelSynchronousIo(thread_handle.as_raw_handle() as HANDLE)
+                                };
+                                state = wake
+                                    .wait_timeout(state, Duration::from_millis(1))
+                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .0;
+                            } else {
+                                state = wake
+                                    .wait_timeout(state, remaining)
+                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .0;
+                            }
+                        } else {
+                            state = wake
+                                .wait(state)
+                                .unwrap_or_else(|poison| poison.into_inner());
+                        }
+                    }
+                })?;
+            Ok(Self {
+                state,
+                thread: Some(thread),
+            })
+        }
+
+        pub(super) fn arm(&self, deadline: Instant) {
+            let (lock, wake) = &*self.state;
+            let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            state.deadline = Some(deadline);
+            state.timed_out = false;
+            wake.notify_one();
+        }
+
+        pub(super) fn disarm(&self) -> bool {
+            let (lock, wake) = &*self.state;
+            let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            state.deadline = None;
+            wake.notify_one();
+            state.timed_out
+        }
+    }
+
+    impl Drop for ReadWatch {
+        fn drop(&mut self) {
+            let (lock, wake) = &*self.state;
+            let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            state.stopped = true;
+            wake.notify_one();
+            drop(state);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn ConnectNamedPipe(named_pipe: HANDLE, overlapped: *mut c_void) -> i32;
+        fn CancelSynchronousIo(thread: HANDLE) -> i32;
     }
 
     fn wide_path(path: &Path) -> Vec<u16> {
@@ -799,6 +1021,12 @@ mod security_descriptor_tests {
             .expect("valid hexadecimal mask");
         assert_eq!(mask, 0x0012_019B);
         assert_eq!(mask & 0x4, 0);
+        let owner = SECURITY_DESCRIPTOR_SDDL
+            .split('(')
+            .filter_map(|entry| entry.strip_suffix(')'))
+            .find(|entry| entry.ends_with(";;;OW"))
+            .expect("pipe owner ACE exists");
+        assert_eq!(owner.split(';').nth(2), Some("0x00000004"));
     }
 }
 

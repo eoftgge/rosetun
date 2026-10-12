@@ -1,11 +1,12 @@
 use std::io;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rosetun_ipc::{
-    Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request, Response,
+    CodecError, Connection, ErrorCode, Frame, HelperError, Listener, PROTOCOL_VERSION, Request,
+    Response,
 };
 
 use crate::state::Caller;
@@ -15,9 +16,35 @@ const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_ACTIVE_CONNECTIONS: usize = 32;
 static NEXT_CONNECTION: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Clone, Copy)]
+struct ReadTimeouts {
+    hello: Duration,
+    frame: Duration,
+    idle: Duration,
+}
+
+impl Default for ReadTimeouts {
+    fn default() -> Self {
+        Self {
+            hello: Duration::from_secs(5),
+            frame: Duration::from_secs(10),
+            idle: Duration::from_secs(120),
+        }
+    }
+}
+
 enum ServerEvent {
-    Accepted(Connection, ConnectionPermit),
+    Accepted(Connection, ConnectionPermit, Instant),
     Shutdown,
+}
+
+struct HandleConfig {
+    ipc_shutdown: bool,
+    accepted_at: Instant,
+    timeouts: ReadTimeouts,
+    last_timeout_warning: Arc<Mutex<Option<Instant>>>,
+    #[cfg(test)]
+    status_delay: Duration,
 }
 
 struct ConnectionPermit(Arc<AtomicUsize>);
@@ -54,6 +81,10 @@ pub(crate) struct Server {
     tx: Sender<ServerEvent>,
     rx: Receiver<ServerEvent>,
     ipc_shutdown: bool,
+    read_timeouts: ReadTimeouts,
+    active: Arc<AtomicUsize>,
+    #[cfg(test)]
+    status_delay: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +97,10 @@ impl Server {
             tx,
             rx,
             ipc_shutdown,
+            read_timeouts: ReadTimeouts::default(),
+            active: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            status_delay: Duration::ZERO,
         }
     }
 
@@ -77,7 +112,8 @@ impl Server {
         tracing::info!(endpoint = %listener.path().display(), "helper listener started");
 
         let accept_tx = self.tx.clone();
-        let active = Arc::new(AtomicUsize::new(0));
+        let active = Arc::clone(&self.active);
+        let last_timeout_warning = Arc::new(Mutex::new(None));
         std::thread::Builder::new()
             .name("rosetun-ipc-accept".to_owned())
             .spawn(move || {
@@ -85,6 +121,7 @@ impl Server {
                 loop {
                     match listener.accept() {
                         Ok(connection) => {
+                            let accepted_at = Instant::now();
                             let Some(permit) = ConnectionPermit::acquire(&active) else {
                                 let now = Instant::now();
                                 if last_limit_warning.is_none_or(|last| {
@@ -99,7 +136,7 @@ impl Server {
                                 continue;
                             };
                             if accept_tx
-                                .send(ServerEvent::Accepted(connection, permit))
+                                .send(ServerEvent::Accepted(connection, permit, accepted_at))
                                 .is_err()
                             {
                                 break;
@@ -115,16 +152,28 @@ impl Server {
 
         while let Ok(event) = self.rx.recv() {
             match event {
-                ServerEvent::Accepted(connection, permit) => {
+                ServerEvent::Accepted(connection, permit, accepted_at) => {
                     let helper = Arc::clone(&helper);
                     let event_tx = self.tx.clone();
-                    let ipc_shutdown = self.ipc_shutdown;
-                    std::thread::spawn(move || {
-                        let _permit = permit;
-                        if let Err(error) = handle(connection, helper, event_tx, ipc_shutdown) {
-                            tracing::warn!(%error, "the connection was closed with an error");
-                        }
-                    });
+                    let config = HandleConfig {
+                        ipc_shutdown: self.ipc_shutdown,
+                        accepted_at,
+                        timeouts: self.read_timeouts,
+                        last_timeout_warning: Arc::clone(&last_timeout_warning),
+                        #[cfg(test)]
+                        status_delay: self.status_delay,
+                    };
+                    if let Err(error) = std::thread::Builder::new()
+                        .name("rosetun-ipc-client".to_owned())
+                        .spawn(move || {
+                            let _permit = permit;
+                            if let Err(error) = handle(connection, helper, event_tx, config) {
+                                tracing::warn!(%error, "the connection was closed with an error");
+                            }
+                        })
+                    {
+                        tracing::warn!(%error, "failed to start helper pipe client thread");
+                    }
                 }
                 ServerEvent::Shutdown => {
                     helper.shutdown();
@@ -145,11 +194,22 @@ impl ShutdownHandle {
     }
 }
 
+fn warn_read_timeout(last_warning: &Mutex<Option<Instant>>) {
+    let mut last = last_warning
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let now = Instant::now();
+    if last.is_none_or(|previous| now.duration_since(previous) >= Duration::from_secs(60)) {
+        tracing::warn!("helper pipe client read timed out");
+        *last = Some(now);
+    }
+}
+
 fn handle(
     mut connection: Connection,
     helper: Arc<Helper>,
     event_tx: Sender<ServerEvent>,
-    ipc_shutdown: bool,
+    config: HandleConfig,
 ) -> Result<(), String> {
     let mut greeted = false;
     let mut caller = None;
@@ -157,11 +217,27 @@ fn handle(
         helper: Arc::clone(&helper),
         id: NEXT_CONNECTION.fetch_add(1, Ordering::Relaxed),
     };
+    let mut idle_since = config.accepted_at;
 
     loop {
-        let frame = match connection.read() {
+        let first_byte_deadline = idle_since
+            + if greeted {
+                config.timeouts.idle
+            } else {
+                config.timeouts.hello
+            };
+        let hard_deadline = (!greeted).then_some(config.accepted_at + config.timeouts.hello);
+        let frame = match connection.read_bounded(
+            first_byte_deadline,
+            config.timeouts.frame,
+            hard_deadline,
+        ) {
             Ok(Some(frame)) => frame,
             Ok(None) => return Ok(()),
+            Err(CodecError::Io(error)) if error.kind() == io::ErrorKind::TimedOut => {
+                warn_read_timeout(&config.last_timeout_warning);
+                return Ok(());
+            }
             Err(error) => return Err(error.to_string()),
         };
 
@@ -194,7 +270,7 @@ fn handle(
             &helper,
             &mut greeted,
             caller.as_ref(),
-            ipc_shutdown,
+            config.ipc_shutdown,
             owner.id,
         );
         let fatal = matches!(
@@ -206,7 +282,12 @@ fn handle(
         );
         let shutdown = matches!(body, Request::Shutdown) && matches!(response, Response::Ok);
 
+        #[cfg(test)]
+        if matches!(body, Request::Status) {
+            std::thread::sleep(config.status_delay);
+        }
         reply(&mut connection, id, response)?;
+        idle_since = Instant::now();
 
         if fatal {
             return Err("protocol version mismatch".to_owned());
@@ -315,6 +396,10 @@ fn reply(connection: &mut Connection, id: u64, body: Response) -> Result<(), Str
         .write(&Frame::Response { id, body })
         .map_err(|error| error.to_string())
 }
+
+#[cfg(test)]
+#[path = "server/read_tests.rs"]
+mod read_tests;
 
 #[cfg(test)]
 mod tests {
