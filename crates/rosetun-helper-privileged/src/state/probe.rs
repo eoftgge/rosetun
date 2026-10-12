@@ -113,12 +113,15 @@ impl Helper {
             ));
         }
         validate_tun_name(&request.settings.tun.name)?;
-        let backend = self.engines.get_shared(request.settings.engine).ok_or_else(|| {
-            HelperError::new(
-                ErrorCode::EngineFailed,
-                "server check engine is not registered",
-            )
-        })?;
+        let backend = self
+            .engines
+            .get_shared(request.settings.engine)
+            .ok_or_else(|| {
+                HelperError::new(
+                    ErrorCode::EngineFailed,
+                    "server check engine is not registered",
+                )
+            })?;
         let started = Instant::now();
         let results = self.check_nodes(request, backend)?;
         let count = |outcome| {

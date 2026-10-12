@@ -1,5 +1,5 @@
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -18,7 +18,7 @@ pub(super) struct WatchdogTiming {
     pub dns_timeout: Duration,
     pub path_timeout: Duration,
     pub failures: u32,
-    pub path_servers: [SocketAddr; 2],
+    pub path_server: SocketAddr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,13 +115,22 @@ impl DnsWatchdog {
     pub(super) fn start(
         status: Arc<Mutex<Status>>,
         server: SocketAddr,
+        path_addresses: Arc<Mutex<Vec<Ipv4Addr>>>,
         timing: WatchdogTiming,
     ) -> io::Result<Self> {
         Self::start_with_probes(
             status,
             timing,
             move |stopped| dns::probe(server, timing.dns_timeout, stopped),
-            move |stopped| path::probe_any(timing.path_servers, timing.path_timeout, stopped),
+            move |stopped| {
+                let targets = path_addresses
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .iter()
+                    .map(|address| SocketAddr::from((*address, 80)))
+                    .collect::<Vec<_>>();
+                path::probe_any(timing.path_server, &targets, timing.path_timeout, stopped)
+            },
         )
     }
 
@@ -253,10 +262,7 @@ mod tests {
             dns_timeout: Duration::from_millis(10),
             path_timeout: Duration::from_millis(10),
             failures: 3,
-            path_servers: [
-                "127.0.0.1:80".parse().expect("test address"),
-                "127.0.0.1:81".parse().expect("test address"),
-            ],
+            path_server: "127.0.0.1:80".parse().expect("test address"),
         }
     }
 
@@ -353,18 +359,13 @@ mod tests {
     #[test]
     fn both_http_paths_down_do_not_signal_a_dns_only_stall() {
         let path_checks = Arc::new(AtomicUsize::new(0));
-        let watchdog = DnsWatchdog::start_with_probes(
-            connected(),
-            timing(),
-            |_| false,
-            {
-                let path_checks = Arc::clone(&path_checks);
-                move |_| {
-                    path_checks.fetch_add(1, Ordering::AcqRel);
-                    false
-                }
-            },
-        )
+        let watchdog = DnsWatchdog::start_with_probes(connected(), timing(), |_| false, {
+            let path_checks = Arc::clone(&path_checks);
+            move |_| {
+                path_checks.fetch_add(1, Ordering::AcqRel);
+                false
+            }
+        })
         .expect("start watchdog");
         wait_for(|| path_checks.load(Ordering::Acquire) >= 1);
         assert!(!watchdog.take_stalled());

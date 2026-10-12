@@ -6,7 +6,7 @@ mod probe;
 mod tests;
 mod watchdog;
 
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
@@ -17,8 +17,8 @@ use rosetun_config::{
     ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic, list_tag,
 };
 use rosetun_engine::{
-    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest,
-    RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget, url_test_any,
+    ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
+    TrafficProbe, TrafficTotals, UrlTestTarget, url_test_any,
 };
 use rosetun_ipc::transport::PeerIdentity;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_TEMPORARY_RULES};
@@ -34,6 +34,7 @@ const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(60);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
+const PATH_LOOKUP_TIMEOUT: Duration = Duration::from_secs(1);
 const SERVER_CHECK_INTERVAL: Duration = Duration::from_secs(4);
 const SERVER_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
 const SERVER_CHECK_FAILURES: u64 = 3;
@@ -43,10 +44,7 @@ const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
     dns_timeout: Duration::from_secs(5),
     path_timeout: Duration::from_secs(5),
     failures: 3,
-    path_servers: [
-        SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1)), 80),
-        SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8)), 80),
-    ],
+    path_server: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 80),
 };
 /// Failed automatic attempts before the helper gives up.
 const RECONNECT_ATTEMPTS: u32 = 5;
@@ -135,6 +133,7 @@ struct Session {
     monitor: Option<TrafficMonitor>,
     watchdog: Option<DnsWatchdog>,
     tunnel_dns: Option<SocketAddr>,
+    path_addresses: Arc<Mutex<Vec<Ipv4Addr>>>,
     guard: Option<Guard>,
     last_endpoint: Option<SuccessfulEndpoint>,
     request: Option<ConnectRequest>,
@@ -186,6 +185,7 @@ impl Helper {
                 monitor: None,
                 watchdog: None,
                 tunnel_dns: None,
+                path_addresses: Arc::new(Mutex::new(Vec::new())),
                 guard: None,
                 last_endpoint: None,
                 request: None,
@@ -1460,6 +1460,7 @@ impl Session {
                 result
             })?;
             self.tunnel_dns = Some(server);
+            self.refresh_path_addresses();
         } else {
             tracing::info!(
                 engine = %settings.engine.as_str(),
@@ -1490,11 +1491,32 @@ impl Session {
         }
     }
 
+    fn refresh_path_addresses(&mut self) {
+        let Some(server) = self.tunnel_dns else {
+            return;
+        };
+        let addresses = dns::resolve_path_addresses(server, PATH_LOOKUP_TIMEOUT, || {
+            self.cancelled.load(Ordering::Acquire)
+        });
+        if addresses.is_empty() {
+            tracing::info!("path check: second target unavailable");
+        }
+        *self
+            .path_addresses
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = addresses;
+    }
+
     fn start_watchdog(&mut self) {
         let Some(server) = self.tunnel_dns else {
             return;
         };
-        match DnsWatchdog::start(Arc::clone(&self.status), server, self.watchdog_timing) {
+        match DnsWatchdog::start(
+            Arc::clone(&self.status),
+            server,
+            Arc::clone(&self.path_addresses),
+            self.watchdog_timing,
+        ) {
             Ok(watchdog) => self.watchdog = Some(watchdog),
             Err(error) => tracing::warn!(%error, "DNS watchdog is unavailable"),
         }
@@ -1578,6 +1600,10 @@ impl Session {
         if let Some(watchdog) = self.watchdog.take() {
             watchdog.stop();
         }
+        self.path_addresses
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
         if let Some(monitor) = self.monitor.take() {
             monitor.stop();
         } else {

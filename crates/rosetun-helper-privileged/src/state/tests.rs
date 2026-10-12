@@ -1082,6 +1082,15 @@ fn fresh_connect_waits_for_dns_with_and_without_kill_switch() {
             Some(server.address())
         );
         assert!(helper.session().expect("session").watchdog.is_some());
+        assert!(
+            helper
+                .session()
+                .expect("session")
+                .path_addresses
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             helper
                 .session()
@@ -3061,6 +3070,47 @@ fn apply_metadata_only_updates_supervisor_without_restarting() {
 }
 
 #[test]
+fn path_addresses_refresh_on_connect_and_every_successful_apply() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Addresses);
+    let (helper, controls, _, _) = supervised_helper_with_dns(false, Some(server.address()));
+    shorten_dns_timeouts(&helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper
+        .connect(&request)
+        .expect("connect with path addresses");
+    let addresses = Arc::clone(&helper.session().unwrap().path_addresses);
+    let expected = [
+        std::net::Ipv4Addr::new(192, 0, 2, 1),
+        std::net::Ipv4Addr::new(192, 0, 2, 2),
+    ];
+    assert_eq!(*addresses.lock().unwrap(), expected);
+
+    addresses.lock().unwrap().clear();
+    helper.apply(&request).expect("refresh on unchanged apply");
+    assert_eq!(*addresses.lock().unwrap(), expected);
+    assert_eq!(controls.spawns(), 1);
+
+    addresses.lock().unwrap().clear();
+    let mut metadata = request.clone();
+    metadata.settings.autostart = !request.settings.autostart;
+    helper.apply(&metadata).expect("refresh on metadata apply");
+    assert_eq!(*addresses.lock().unwrap(), expected);
+    assert_eq!(controls.spawns(), 1);
+
+    let changed = request_with_new_rules(&metadata);
+    helper.apply(&changed).expect("refresh on restarting apply");
+    assert_eq!(*addresses.lock().unwrap(), expected);
+    assert_eq!(controls.spawns(), 2);
+    helper
+        .disconnect()
+        .expect("disconnect clears path addresses");
+    assert!(addresses.lock().unwrap().is_empty());
+}
+
+#[test]
 fn apply_rules_restarts_under_the_guard_and_supervisor_uses_new_rules() {
     let (helper, controls, prepared, reverted) = supervised_helper(true);
     let mut request = connect_request();
@@ -3959,7 +4009,10 @@ fn probe_workers_advance_past_a_blocked_url_test() {
     while !worker.is_finished() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(worker.is_finished(), "slow losing URL test held the probe worker");
+    assert!(
+        worker.is_finished(),
+        "slow losing URL test held the probe worker"
+    );
     release_tx.send(()).unwrap();
     let results = worker.join().unwrap().unwrap();
     assert_eq!(completed_while_blocked, 39);

@@ -513,18 +513,30 @@ mod tests {
             }
         }
 
-        fn spawn(&self, _: &Path, _: &RenderedConfig) -> Result<Box<dyn EngineProcess>, EngineError> {
+        fn spawn(
+            &self,
+            _: &Path,
+            _: &RenderedConfig,
+        ) -> Result<Box<dyn EngineProcess>, EngineError> {
             Err(EngineError::Unsupported("test".to_owned()))
         }
     }
 
-    fn test_any(cloudflare: (Duration, Reply), google: (Duration, Reply)) -> Result<Duration, EngineError> {
+    fn test_any(
+        cloudflare: (Duration, Reply),
+        google: (Duration, Reply),
+    ) -> Result<Duration, EngineError> {
         let backend = Arc::new(TestBackend { cloudflare, google });
         let control = ControlEndpoint {
             address: "127.0.0.1:12345".parse().unwrap(),
             secret: "test-secret".to_owned(),
         };
-        url_test_any(backend, &control, UrlTestTarget::Probe("probe-0"), PROBE_TIMEOUT)
+        url_test_any(
+            backend,
+            &control,
+            UrlTestTarget::Probe("probe-0"),
+            PROBE_TIMEOUT,
+        )
     }
 
     #[test]
@@ -542,7 +554,10 @@ mod tests {
     #[test]
     fn url_test_any_fails_only_after_both_providers_fail() {
         assert!(matches!(
-            test_any((Duration::ZERO, Reply::Failure), (Duration::ZERO, Reply::Failure)),
+            test_any(
+                (Duration::ZERO, Reply::Failure),
+                (Duration::ZERO, Reply::Failure)
+            ),
             Err(EngineError::Stats(_))
         ));
     }

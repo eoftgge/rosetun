@@ -809,7 +809,8 @@ mod tests {
             )
             .unwrap();
         });
-        let result = SingBoxBackend::new("unused").url_test(&control, target, PROBE_URLS[0], timeout);
+        let result =
+            SingBoxBackend::new("unused").url_test(&control, target, PROBE_URLS[0], timeout);
         server.join().unwrap();
         result
     }
@@ -861,7 +862,9 @@ mod tests {
             let mut seen = [false; 2];
             for _ in PROBE_URLS {
                 let (socket, _) = listener.accept().unwrap();
-                socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
                 let mut reader = BufReader::new(socket);
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
@@ -879,7 +882,11 @@ mod tests {
                         break;
                     }
                 }
-                let (status, body) = if google { (200, r#"{"delay":73}"#) } else { (503, "") };
+                let (status, body) = if google {
+                    (200, r#"{"delay":73}"#)
+                } else {
+                    (503, "")
+                };
                 write!(
                     reader.get_mut(),
                     "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\n\r\n{body}",

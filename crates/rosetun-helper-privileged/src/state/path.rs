@@ -1,6 +1,9 @@
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::sync::{atomic::{AtomicBool, Ordering}, mpsc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,9 +16,21 @@ fn remaining(deadline: Instant) -> Option<Duration> {
     (!time.is_zero()).then_some(time.min(IO_SLICE))
 }
 
-/// Both endpoints share one deadline; a successful HTTP response stops the loser.
+const SECONDARY_REQUEST: &[u8] =
+    b"HEAD /generate_204 HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\nConnection: close\r\n\r\n";
+
+fn primary_request(server: SocketAddr) -> String {
+    let host = match server.ip() {
+        std::net::IpAddr::V4(ip) => ip.to_string(),
+        std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+    };
+    format!("HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
+}
+
+/// Both paths share one deadline; a successful HTTP response stops the loser.
 pub(super) fn probe_any(
-    servers: [SocketAddr; 2],
+    primary: SocketAddr,
+    secondary: &[SocketAddr],
     timeout: Duration,
     stopped: impl Fn() -> bool + Sync,
 ) -> bool {
@@ -23,25 +38,37 @@ pub(super) fn probe_any(
         return false;
     }
     let deadline = Instant::now() + timeout;
+    let request = primary_request(primary);
+    if secondary.is_empty() {
+        return probe_until(primary, request.as_bytes(), deadline, &stopped);
+    }
+
     let done = AtomicBool::new(false);
+    let cancel = || stopped() || done.load(Ordering::Acquire);
     thread::scope(|scope| {
         let (tx, rx) = mpsc::channel();
-        for server in servers {
-            let tx = tx.clone();
-            let stopped = &stopped;
-            let done = &done;
-            scope.spawn(move || {
-                let result = probe_until(server, deadline, &|| {
-                    stopped() || done.load(Ordering::Acquire)
-                });
-                if result {
-                    done.store(true, Ordering::Release);
-                }
-                let _ = tx.send(result);
+        let done = &done;
+        let primary_tx = tx.clone();
+        let primary_cancel = &cancel;
+        scope.spawn(move || {
+            let result = probe_until(primary, request.as_bytes(), deadline, primary_cancel);
+            if result {
+                done.store(true, Ordering::Release);
+            }
+            let _ = primary_tx.send(result);
+        });
+        let secondary_cancel = &cancel;
+        scope.spawn(move || {
+            let result = secondary.iter().copied().any(|server| {
+                !secondary_cancel()
+                    && probe_until(server, SECONDARY_REQUEST, deadline, secondary_cancel)
             });
-        }
-        drop(tx);
-        for result in rx.into_iter().take(servers.len()) {
+            if result {
+                done.store(true, Ordering::Release);
+            }
+            let _ = tx.send(result);
+        });
+        for result in rx.into_iter().take(2) {
             if result {
                 return true;
             }
@@ -56,10 +83,20 @@ pub(super) fn probe(server: SocketAddr, timeout: Duration, stopped: impl Fn() ->
     if timeout.is_zero() || stopped() {
         return false;
     }
-    probe_until(server, Instant::now() + timeout, &stopped)
+    probe_until(
+        server,
+        primary_request(server).as_bytes(),
+        Instant::now() + timeout,
+        &stopped,
+    )
 }
 
-fn probe_until(server: SocketAddr, deadline: Instant, stopped: &impl Fn() -> bool) -> bool {
+fn probe_until(
+    server: SocketAddr,
+    request: &[u8],
+    deadline: Instant,
+    stopped: &impl Fn() -> bool,
+) -> bool {
     for _ in 0..CONNECT_ATTEMPTS {
         if stopped() {
             return false;
@@ -68,7 +105,7 @@ fn probe_until(server: SocketAddr, deadline: Instant, stopped: &impl Fn() -> boo
             return false;
         };
         match TcpStream::connect_timeout(&server, slice) {
-            Ok(mut stream) => return check_http(&mut stream, server, deadline, &stopped),
+            Ok(mut stream) => return check_http(&mut stream, request, deadline, stopped),
             Err(_) => continue,
         }
     }
@@ -77,16 +114,11 @@ fn probe_until(server: SocketAddr, deadline: Instant, stopped: &impl Fn() -> boo
 
 fn check_http(
     stream: &mut TcpStream,
-    server: SocketAddr,
+    request: &[u8],
     deadline: Instant,
     stopped: &impl Fn() -> bool,
 ) -> bool {
-    let host = match server.ip() {
-        std::net::IpAddr::V4(ip) => ip.to_string(),
-        std::net::IpAddr::V6(ip) => format!("[{ip}]"),
-    };
-    let request = format!("HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-    let mut pending = request.as_bytes();
+    let mut pending = request;
     while !pending.is_empty() {
         if stopped() {
             return false;
@@ -138,19 +170,39 @@ fn retry(error: &io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
     use std::thread;
 
     fn server(response: &'static [u8]) -> (SocketAddr, thread::JoinHandle<()>) {
+        server_with_request(response, b"HEAD / HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+    }
+
+    fn server_with_request(
+        response: &'static [u8],
+        expected: &'static [u8],
+    ) -> (SocketAddr, thread::JoinHandle<()>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind HTTP test server");
         let address = listener.local_addr().expect("HTTP test address");
         let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept HTTP test connection");
+            let (stream, _) = listener.accept().expect("accept HTTP test connection");
             if !response.is_empty() {
-                let mut buffer = [0u8; 256];
-                let length = stream.read(&mut buffer).expect("read HTTP test request");
-                assert!(buffer[..length].starts_with(b"HEAD / HTTP/1.1\r\nHost: 127.0.0.1\r\n"));
-                stream
+                let mut reader = BufReader::new(stream);
+                let mut buffer = vec![0u8; expected.len()];
+                reader
+                    .read_exact(&mut buffer)
+                    .expect("read HTTP test request");
+                assert_eq!(buffer, expected);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).expect("read HTTP test header");
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                reader
+                    .get_mut()
                     .write_all(response)
                     .expect("write HTTP test response");
             }
@@ -172,11 +224,38 @@ mod tests {
     #[test]
     fn second_http_path_succeeds_while_the_first_is_silent() {
         let (silent, silent_worker) = silent_server();
-        let (working, working_worker) = server(b"HTTP/1.1 302 Found\r\n\r\n");
+        let (working, working_worker) = server_with_request(
+            b"HTTP/1.1 204 No Content\r\n\r\n",
+            b"HEAD /generate_204 HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\n",
+        );
         let started = Instant::now();
-        assert!(probe_any([silent, working], Duration::from_secs(1), || false));
+        assert!(probe_any(
+            silent,
+            &[working],
+            Duration::from_secs(1),
+            || { false }
+        ));
         assert!(started.elapsed() < Duration::from_millis(350));
         silent_worker.join().unwrap();
+        working_worker.join().unwrap();
+    }
+
+    #[test]
+    fn another_cached_address_is_tried_after_a_failed_http_path() {
+        let (primary, primary_worker) = server(b"");
+        let (failed, failed_worker) = server(b"");
+        let (working, working_worker) = server_with_request(
+            b"HTTP/1.1 302 Found\r\n\r\n",
+            b"HEAD /generate_204 HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\n",
+        );
+        assert!(probe_any(
+            primary,
+            &[failed, working],
+            Duration::from_secs(1),
+            || false
+        ));
+        primary_worker.join().unwrap();
+        failed_worker.join().unwrap();
         working_worker.join().unwrap();
     }
 
@@ -185,10 +264,27 @@ mod tests {
         let (first, first_worker) = silent_server();
         let (second, second_worker) = silent_server();
         let started = Instant::now();
-        assert!(!probe_any([first, second], Duration::from_millis(80), || false));
+        assert!(!probe_any(
+            first,
+            &[second],
+            Duration::from_millis(80),
+            || false
+        ));
         assert!(started.elapsed() < Duration::from_millis(300));
         first_worker.join().unwrap();
         second_worker.join().unwrap();
+    }
+
+    #[test]
+    fn missing_second_target_uses_only_the_original_http_path() {
+        let (primary, worker) = server(b"HTTP/1.1 404 Not Found\r\n\r\n");
+        assert!(probe_any(primary, &[], Duration::from_secs(1), || false));
+        worker.join().unwrap();
+        let (primary, worker) = server(b"");
+        assert!(!probe_any(primary, &[], Duration::from_millis(80), || {
+            false
+        }));
+        worker.join().unwrap();
     }
 
     #[test]

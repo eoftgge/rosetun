@@ -33,6 +33,7 @@ impl Helper {
             HelperError::new(ErrorCode::InvalidState, "the tunnel is not connected")
         })?;
         if current == *request {
+            session.refresh_path_addresses();
             return Ok(());
         }
         if needs_reconnect(&current.settings, &request.settings) {
@@ -47,6 +48,7 @@ impl Helper {
         metadata_only.settings.autostart = request.settings.autostart;
         if metadata_only == *request {
             session.request = Some(request.clone());
+            session.refresh_path_addresses();
             return Ok(());
         }
 

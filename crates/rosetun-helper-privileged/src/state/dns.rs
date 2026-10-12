@@ -1,7 +1,7 @@
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use rosetun_engine::errors::EngineError;
@@ -152,6 +152,111 @@ fn parse_reply(packet: &[u8], id: u16) -> Option<Reply> {
         0 | 3 => Reply::Success,
         code => Reply::Rcode(code),
     })
+}
+
+const MAX_PATH_ADDRESSES: usize = 8;
+
+fn parse_a_addresses(packet: &[u8], id: u16, question: &[u8]) -> Option<Vec<Ipv4Addr>> {
+    if packet.len() < 12 || word(packet, 0)? != id || word(packet, 4)? != 1 {
+        return None;
+    }
+    let flags = word(packet, 2)?;
+    if flags & 0x8000 == 0 || flags & 0x7800 != 0 || flags & 0x0200 != 0 {
+        return None;
+    }
+
+    let mut offset = 12;
+    skip_name(packet, &mut offset)?;
+    offset = offset.checked_add(4)?;
+    if packet.get(12..offset)? != question.get(12..)? {
+        return None;
+    }
+
+    let mut addresses = Vec::new();
+    for index in 0..usize::from(word(packet, 6)?)
+        + usize::from(word(packet, 8)?)
+        + usize::from(word(packet, 10)?)
+    {
+        skip_name(packet, &mut offset)?;
+        let kind = word(packet, offset)?;
+        let class = word(packet, offset + 2)?;
+        let data_length = usize::from(word(packet, offset + 8)?);
+        offset = offset.checked_add(10)?;
+        let data = packet.get(offset..offset.checked_add(data_length)?)?;
+        if index < usize::from(word(packet, 6)?)
+            && kind == 1
+            && class == 1
+            && let [a, b, c, d] = data
+            && addresses.len() < MAX_PATH_ADDRESSES
+        {
+            let address = Ipv4Addr::new(*a, *b, *c, *d);
+            if !addresses.contains(&address) {
+                addresses.push(address);
+            }
+        }
+        offset += data_length;
+    }
+    (offset == packet.len()).then_some(if flags & 0x000f == 0 {
+        addresses
+    } else {
+        Vec::new()
+    })
+}
+
+/// Resolves the optional HTTP path through the tunnel's DNS server, never the OS resolver.
+pub(super) fn resolve_path_addresses(
+    server: SocketAddr,
+    timeout: Duration,
+    stopped: impl Fn() -> bool,
+) -> Vec<Ipv4Addr> {
+    if timeout.is_zero() || stopped() {
+        return Vec::new();
+    }
+    let Ok(socket) = UdpSocket::bind(local_address(server)) else {
+        return Vec::new();
+    };
+    let id = random_word() as u16;
+    let packet = query(id, &[b"connectivitycheck", b"gstatic", b"com"]);
+    let deadline = Instant::now() + timeout;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if socket
+        .set_write_timeout(Some(remaining.min(Duration::from_millis(250))))
+        .is_err()
+        || socket.send_to(&packet, server).is_err()
+    {
+        return Vec::new();
+    }
+
+    let mut buffer = [0u8; 4096];
+    loop {
+        if stopped() {
+            return Vec::new();
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero()
+            || socket
+                .set_read_timeout(Some(remaining.min(Duration::from_millis(250))))
+                .is_err()
+        {
+            return Vec::new();
+        }
+        match socket.recv_from(&mut buffer) {
+            Ok((length, source)) if source == server => {
+                if let Some(addresses) = parse_a_addresses(&buffer[..length], id, &packet) {
+                    return addresses;
+                }
+            }
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut
+                        | io::ErrorKind::WouldBlock
+                        | io::ErrorKind::Interrupted
+                ) => {}
+            Err(_) => return Vec::new(),
+        }
+    }
 }
 
 fn failed(message: impl Into<String>) -> HelperError {
@@ -434,6 +539,7 @@ pub(crate) mod test_support {
     #[derive(Debug, Clone, Copy)]
     pub(crate) enum Behavior {
         Noerror,
+        Addresses,
         DelayedNoerror,
         Nxdomain,
         Servfail,
@@ -495,6 +601,14 @@ pub(crate) mod test_support {
                         let mut wrong = response.clone();
                         wrong[0] ^= 0xff;
                         socket.send_to(&wrong, peer).expect("send wrong ID");
+                    }
+                    if matches!(behavior, Behavior::Addresses) {
+                        response[7] = 2;
+                        for address in [[192, 0, 2, 1], [192, 0, 2, 2]] {
+                            response
+                                .extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 30, 0, 4]);
+                            response.extend_from_slice(&address);
+                        }
                     }
 
                     socket.send_to(&response, peer).expect("send DNS reply");
@@ -589,6 +703,47 @@ mod tests {
         packet[2] = 0x81;
         packet[3] = 0x80 | rcode;
         packet
+    }
+
+    #[test]
+    fn path_addresses_are_read_from_the_tunnel_resolver() {
+        let server = Server::new(Behavior::Addresses);
+        assert_eq!(
+            resolve_path_addresses(server.address(), Duration::from_millis(200), || false),
+            [Ipv4Addr::new(192, 0, 2, 1), Ipv4Addr::new(192, 0, 2, 2)]
+        );
+        let server = Server::new(Behavior::Noerror);
+        assert!(
+            resolve_path_addresses(server.address(), Duration::from_millis(200), || false)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn malformed_address_answers_are_not_cached() {
+        let question = query(0x1234, &[b"connectivitycheck", b"gstatic", b"com"]);
+        let mut reply = question.clone();
+        reply[2] = 0x81;
+        reply[3] = 0x80;
+        reply[7] = 1;
+        reply.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 30, 0, 4, 192, 0, 2, 1]);
+        assert_eq!(
+            parse_a_addresses(&reply, 0x1234, &question),
+            Some(vec![Ipv4Addr::new(192, 0, 2, 1)])
+        );
+        assert_eq!(parse_a_addresses(&reply, 0x4321, &question), None);
+        assert_eq!(
+            parse_a_addresses(&reply[..reply.len() - 1], 0x1234, &question),
+            None
+        );
+        let mut other_question = question.clone();
+        other_question[13] ^= 1;
+        assert_eq!(parse_a_addresses(&reply, 0x1234, &other_question), None);
+        reply[3] = 0x83;
+        assert_eq!(
+            parse_a_addresses(&reply, 0x1234, &question),
+            Some(Vec::new())
+        );
     }
 
     #[test]
