@@ -726,10 +726,11 @@ try {
         $apply.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
     }
     $temporaryAfter = Invoke-RosetunCli -Quiet 'temporary'
-    # The CLI also prints timestamped log lines; compare only the rule lines.
+    # The CLI also prints log lines, possibly with ANSI colour codes before the
+    # timestamp; keep only the rule lines ("direct: domain exact ...") and "none".
     $ruleLines = {
         param([string]$Text)
-        @($Text -split '\r?\n' | Where-Object { $_ -and $_ -notmatch '^\d{4}-\d{2}-\d{2}T' }) -join ' | '
+        @($Text -split '\r?\n' | Where-Object { $_ -match '^((proxy|direct|block): |none$)' }) -join ' | '
     }
     $rulesBefore = & $ruleLines $temporaryBefore.Output
     $rulesAfter = & $ruleLines $temporaryAfter.Output

@@ -202,9 +202,10 @@ function Stop-RosetunTestNode {
         return
     }
     $tcpOwners = @($tcpListening | Select-Object -ExpandProperty OwningProcess -Unique)
-    $udpOwners = if ($CloudflareBlocked) { $tcpOwners } else {
-        @($udpListening | Select-Object -ExpandProperty OwningProcess -Unique)
-    }
+    # @() keeps a single owner an array; Set-StrictMode has no .Count on a bare integer.
+    $udpOwners = @(if ($CloudflareBlocked) { $tcpOwners } else {
+        $udpListening | Select-Object -ExpandProperty OwningProcess -Unique
+    })
     if ($tcpOwners.Count -ne 1 -or $udpOwners.Count -ne 1 -or $tcpOwners[0] -ne $udpOwners[0]) {
         Write-Warning "$ports do not have one common owner; nothing stopped."
         return
