@@ -526,16 +526,17 @@ fn save(path: &Path, config: &AppConfig) -> Result<(), StoreError> {
 mod tests {
     use std::ffi::OsString;
     use std::fs;
-    use std::io;
+    use std::io::{self, BufRead, BufReader, Read, Write};
     use std::path::PathBuf;
+    use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{StoreError, backup_with_link, config_path_with, load, save};
     use crate::Store;
     use rosetun_config::{
-        AppConfig, CONFIG_VERSION, ConfigError, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher,
-        RuleSet, RuleSetId, RuleTarget, Selection, StreamSettings, Subscription, SubscriptionId,
-        TrojanParams, from_json,
+        AppConfig, CONFIG_VERSION, ConfigError, DomainMatch, Node, NodeId, Outbound, Rule, RuleId,
+        RuleMatcher, RuleSet, RuleSetId, RuleTarget, Selection, StreamSettings, Subscription,
+        SubscriptionId, TrojanParams, from_json,
     };
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -1152,6 +1153,95 @@ mod tests {
                 .len(),
             101
         );
+    }
+
+    #[test]
+    fn two_processes_preserve_concurrent_rules() {
+        const CHILD: &str = "ROSETUN_STORE_TEST_CHILD";
+        const PATH: &str = "ROSETUN_STORE_TEST_PATH";
+        const TEST: &str = "store::tests::two_processes_preserve_concurrent_rules";
+        const READY: &str = "ROSETUN_STORE_READY";
+
+        if let Some(worker) = std::env::var_os(CHILD) {
+            let store = Store::at(std::env::var_os(PATH).expect("child config path"));
+            println!("\n{READY}");
+            io::stdout().flush().unwrap();
+            let mut signal = String::new();
+            io::stdin().read_line(&mut signal).unwrap();
+            assert_eq!(signal.trim(), "go");
+
+            for index in 0..50 {
+                let id = format!("{worker}-{index}", worker = worker.to_string_lossy());
+                store
+                    .modify(|config| {
+                        config.rule_sets[0].rules.push(Rule {
+                            id: RuleId::new(id.clone()),
+                            enabled: true,
+                            matcher: RuleMatcher::Domain(DomainMatch::Exact(format!(
+                                "{id}.example.com"
+                            ))),
+                            target: RuleTarget::Direct,
+                        });
+                        Ok::<_, StoreError>(())
+                    })
+                    .unwrap();
+            }
+            return;
+        }
+
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        save(store.path(), &selected_config()).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let mut children: Vec<_> = (0..2)
+            .map(|worker| {
+                Command::new(&executable)
+                    .args(["--exact", TEST, "--nocapture"])
+                    .env(CHILD, worker.to_string())
+                    .env(PATH, store.path())
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        let mut outputs: Vec<_> = children
+            .iter_mut()
+            .map(|child| BufReader::new(child.stdout.take().unwrap()))
+            .collect();
+        for output in &mut outputs {
+            let mut line = String::new();
+            loop {
+                line.clear();
+                assert_ne!(output.read_line(&mut line).unwrap(), 0, "child exited before ready");
+                if line.contains(READY) {
+                    break;
+                }
+            }
+        }
+        for child in &mut children {
+            writeln!(child.stdin.take().unwrap(), "go").unwrap();
+        }
+        for (child, output) in children.iter_mut().zip(&mut outputs) {
+            let status = child.wait().unwrap();
+            let mut remainder = String::new();
+            output.read_to_string(&mut remainder).unwrap();
+            assert!(status.success(), "child failed: {remainder}");
+        }
+
+        let persisted = store.load().unwrap();
+        assert_eq!(persisted.rule_sets[0].rules.len(), 101);
+        let ids: std::collections::HashSet<_> = persisted.rule_sets[0]
+            .rules
+            .iter()
+            .map(|rule| rule.id.as_str())
+            .collect();
+        assert_eq!(ids.len(), 101);
+        for worker in 0..2 {
+            for index in 0..50 {
+                assert!(ids.contains(format!("{worker}-{index}").as_str()));
+            }
+        }
     }
 
     #[test]
