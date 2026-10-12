@@ -607,6 +607,10 @@ function Get-RosetunGuestDir {
     return $script:Config.GuestDir
 }
 
+function Get-RosetunVmName {
+    return $script:Config.VmName
+}
+
 function Get-RosetunState {
     $result = Invoke-RosetunCli -Quiet 'status'
     if ($result.Output -match '(?m)^state: (\w+)') {
@@ -915,46 +919,89 @@ function Measure-RosetunTunnelWarmup {
 }
 
 function Start-RosetunEgressWatch {
-    # Probes direct egress every 200 ms in the background, to catch leaks that
-    # last only a fraction of a second, such as during a reconnect.
+    # A scheduled task outlives the PowerShell Direct session that must close
+    # before Save-VM. It uses the same 200 ms physical-egress probe throughout.
     $address = Get-RosetunEgressAddress
     Invoke-RosetunGuest -ScriptBlock {
         param($address, $url)
-        Remove-Item -Path "$env:TEMP\rosetun-egress-watch.txt" -ErrorAction SilentlyContinue
-        Start-Job -Name 'rosetun-egress-watch' -ArgumentList $address, $url -ScriptBlock {
-            param($address, $url)
+        $task = 'RosetunEgressWatch'
+        $path = Join-Path $env:TEMP 'rosetun-egress-watch.txt'
+        $scriptPath = Join-Path $env:TEMP 'rosetun-egress-watch.ps1'
+        if (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue) {
+            Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-ScheduledTask -TaskName $task).State -eq 'Running') {
+                if ((Get-Date) -gt $deadline) { throw 'A previous egress watch did not stop.' }
+                Start-Sleep -Milliseconds 200
+            }
+            Unregister-ScheduledTask -TaskName $task -Confirm:$false
+        }
+        Remove-Item -Path $path -ErrorAction SilentlyContinue
+        $probe = {
+            param($address, $url, $path)
             $probes = 0
             $leaks = 0
             while ($true) {
                 & curl.exe --interface $address --max-time 2 --silent --output NUL $url 2>$null
                 $probes++
                 if ($LASTEXITCODE -eq 0) { $leaks++ }
-                Set-Content -Path "$env:TEMP\rosetun-egress-watch.txt" -Value "$probes $leaks"
+                Set-Content -Path $path -Value "$probes $leaks"
                 Start-Sleep -Milliseconds 200
             }
-        } | Out-Null
+        }
+        [IO.File]::WriteAllText($scriptPath, $probe.ToString())
+        $arguments = '-NoProfile -NonInteractive -File "{0}" "{1}" "{2}" "{3}"' -f `
+            $scriptPath, $address, $url, $path
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)
+        try {
+            Register-ScheduledTask -TaskName $task -Action $action -Principal $principal `
+                -Settings $settings -Force | Out-Null
+            Start-ScheduledTask -TaskName $task
 
-        # A job takes seconds to start, longer than a reconnect now lasts.
-        # Without this wait the watch can miss the whole reconnect.
-        $deadline = (Get-Date).AddSeconds(30)
-        while (-not (Test-Path -Path "$env:TEMP\rosetun-egress-watch.txt")) {
-            if ((Get-Date) -gt $deadline) {
-                throw 'The egress watch did not record a probe within 30 seconds.'
+            # Starting a task can take longer than a reconnect; wait for its first probe.
+            $deadline = (Get-Date).AddSeconds(30)
+            while (-not (Test-Path -Path $path)) {
+                if ((Get-Date) -gt $deadline) {
+                    throw 'The egress watch did not record a probe within 30 seconds.'
+                }
+                Start-Sleep -Milliseconds 200
             }
-            Start-Sleep -Milliseconds 200
+        }
+        catch {
+            Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+            Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+            Remove-Item -Path $path, $scriptPath -ErrorAction SilentlyContinue
+            throw
         }
     } -ArgumentList $address, $script:Config.ProbeUrl
 }
 
 function Stop-RosetunEgressWatch {
     Invoke-RosetunGuest -ScriptBlock {
-        Stop-Job -Name 'rosetun-egress-watch'
-        Remove-Job -Name 'rosetun-egress-watch'
-        $counts = (Get-Content -Path "$env:TEMP\rosetun-egress-watch.txt" -ErrorAction SilentlyContinue) -split ' '
-        if ($counts.Count -lt 2) {
-            return [pscustomobject]@{ Probes = 0; Leaks = 0 }
+        $task = 'RosetunEgressWatch'
+        $path = Join-Path $env:TEMP 'rosetun-egress-watch.txt'
+        try {
+            Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-ScheduledTask -TaskName $task).State -eq 'Running') {
+                if ((Get-Date) -gt $deadline) {
+                    throw 'The egress watch did not stop within 10 seconds.'
+                }
+                Start-Sleep -Milliseconds 200
+            }
+            $counts = (Get-Content -Path $path -ErrorAction SilentlyContinue) -split ' '
+            if ($counts.Count -lt 2) {
+                return [pscustomobject]@{ Probes = 0; Leaks = 0 }
+            }
+            [pscustomobject]@{ Probes = [int]$counts[0]; Leaks = [int]$counts[1] }
         }
-        [pscustomobject]@{ Probes = [int]$counts[0]; Leaks = [int]$counts[1] }
+        finally {
+            Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+            Remove-Item -Path $path, (Join-Path $env:TEMP 'rosetun-egress-watch.ps1') `
+                -ErrorAction SilentlyContinue
+        }
     }
 }
 

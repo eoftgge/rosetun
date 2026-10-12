@@ -420,6 +420,7 @@ Test-Step 'apply protection' 'state is Connected' { (Get-RosetunState) -eq 'Conn
 Test-Step 'apply protection' 'direct egress stays blocked' { -not (Test-RosetunDirectEgress) }
 
 Write-Host 'Temporary rule under the kill switch...'
+$temporaryDomainUrl = 'https://2ip.io'
 $apply = Invoke-RosetunApply 'request-temporary.json' -Quiet
 Test-Step 'temporary' 'apply succeeds' -Note "exit $($apply.ExitCode)" { $apply.ExitCode -eq 0 }
 Test-Step 'temporary' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
@@ -431,7 +432,7 @@ $rules = Invoke-RosetunCli -Quiet 'temporary'
 Test-Step 'temporary' 'rule is returned' {
     $rules.ExitCode -eq 0 -and $rules.Output -match '(?m)^direct: domain exact 2ip\.io$'
 }
-$egress = Wait-RosetunTunnelEgress -Url 'https://2ip.io' -TimeoutSeconds 15 -SkipRevocationCheck
+$egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 15 -SkipRevocationCheck
 # The base default is block, so this domain can pass only through the temporary direct rule.
 Test-Step 'temporary' 'domain goes direct' -Note (Format-Egress $egress) { $egress.Ok }
 Test-Step 'temporary' 'unmatched domain is blocked' {
@@ -447,9 +448,83 @@ $status = Invoke-RosetunCli -Quiet 'status'
 Test-Step 'temporary restart' 'one rule is reported' {
     $status.ExitCode -eq 0 -and $status.Output -match '(?m)^temporary rules: 1$'
 }
-$egress = Wait-RosetunTunnelEgress -Url 'https://2ip.io' -TimeoutSeconds 15 -SkipRevocationCheck
+$egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 15 -SkipRevocationCheck
 Test-Step 'temporary restart' 'domain still goes direct' -Note (Format-Egress $egress) { $egress.Ok }
 Test-Step 'temporary restart' 'physical egress stays blocked' { -not (Test-RosetunDirectEgress) }
+
+Write-Host 'Sleep with the tunnel up (saved Hyper-V VM)...'
+Start-RosetunEgressWatch
+$watch = $null
+try {
+    $beforeProbes = Invoke-RosetunGuest -ScriptBlock {
+        [int]((Get-Content -Path "$env:TEMP\rosetun-egress-watch.txt") -split ' ')[0]
+    }
+    $guestBefore = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow }
+    Disconnect-RosetunVm
+    $vmName = Get-RosetunVmName
+    $sleepWatch = [Diagnostics.Stopwatch]::StartNew()
+    $resumeWatch = $null
+    try {
+        Save-VM -Name $vmName | Out-Null
+        Start-Sleep -Seconds 35
+    }
+    finally {
+        if ((Get-VM -Name $vmName).State -eq 'Saved') {
+            $resumeWatch = [Diagnostics.Stopwatch]::StartNew()
+            Start-VM -Name $vmName | Out-Null
+        }
+    }
+    $deadline = (Get-Date).AddSeconds(45)
+    while ($true) {
+        try {
+            Connect-RosetunVm | Out-Null
+            break
+        }
+        catch {
+            if ((Get-Date) -gt $deadline) {
+                throw "The saved guest did not accept PowerShell Direct within 45 seconds: $_"
+            }
+            Start-Sleep -Seconds 2
+        }
+    }
+    $guestAfter = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow }
+    $guestGap = ($guestAfter - $guestBefore).TotalSeconds
+    Test-Step 'sleep' 'guest clock jumped by more than 30 s' `
+        -Note ("guest {0:N1} s, host {1:N1} s; check Hyper-V time synchronization if it did not jump" -f `
+            $guestGap, $sleepWatch.Elapsed.TotalSeconds) {
+        $guestGap -gt 30
+    }
+    $connected = Wait-RosetunState 'Connected' -TimeoutSeconds 30
+    $connectedAt = $resumeWatch.Elapsed.TotalSeconds
+    Test-Step 'sleep' 'state is Connected within 30 s of Start-VM' `
+        -Note ("{0} after {1:N1} s" -f (Get-RosetunState), $connectedAt) {
+        $connected -and $connectedAt -le 30
+    }
+    $egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 30 -SkipRevocationCheck
+    $resumeWatch.Stop()
+    Test-Step 'sleep' 'tunnel carries traffic within 30 s of Start-VM' `
+        -Note ("{0}; after {1:N1} s" -f (Format-Egress $egress), $resumeWatch.Elapsed.TotalSeconds) {
+        $egress.Ok -and $resumeWatch.Elapsed.TotalSeconds -le 30
+    }
+    Test-Step 'sleep' 'helper logged the resume reconnect' {
+        Wait-RosetunCondition {
+            @(Get-RosetunHelperLog -Tail 200 | Where-Object { $_ -match 'resumed from sleep; reconnecting tunnel' }).Count -gt 0
+        }
+    }
+    Write-Host ("Saved-VM sleep scenario took {0:N1} s" -f $sleepWatch.Elapsed.TotalSeconds)
+}
+finally {
+    try { $watch = Stop-RosetunEgressWatch }
+    catch {
+        Test-Step 'sleep' 'egress watch stopped' -Note "$_" { $false }
+    }
+}
+$probeCount = if ($watch) { $watch.Probes } else { 0 }
+$leakCount = if ($watch) { $watch.Leaks } else { 'unknown' }
+Test-Step 'sleep' "no direct leak after Start-VM ($probeCount probes)" `
+    -Note "before save: $beforeProbes probes; leaks: $leakCount" {
+    $watch -and $probeCount -gt $beforeProbes -and $leakCount -eq 0
+}
 
 Disconnect-RosetunTunnel | Out-Null
 $connect = Connect-RosetunTunnel -Quiet
