@@ -540,8 +540,9 @@ $egressWatchActive = $true
 $watch = $null
 try {
     $beforeProbes = Invoke-RosetunGuest -ScriptBlock {
-        [int]((Get-Content -Path "$env:TEMP\rosetun-egress-watch.txt") -split ' ')[0]
-    }
+        param($dir)
+        [int]((Get-Content -Path (Join-Path $dir 'rosetun-egress-watch.txt')) -split ' ')[0]
+    } -ArgumentList (Get-RosetunGuestDir)
     $guestBefore = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow }
     $hostBefore = [DateTime]::UtcNow
     Disconnect-RosetunVm

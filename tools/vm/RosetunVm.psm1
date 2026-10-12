@@ -927,10 +927,10 @@ function Start-RosetunEgressWatch {
     # before Save-VM. It uses the same 200 ms physical-egress probe throughout.
     $address = Get-RosetunEgressAddress
     Invoke-RosetunGuest -ScriptBlock {
-        param($address, $url)
+        param($address, $url, $dir)
         $task = 'RosetunEgressWatch'
-        $path = Join-Path $env:TEMP 'rosetun-egress-watch.txt'
-        $scriptPath = Join-Path $env:TEMP 'rosetun-egress-watch.ps1'
+        $path = Join-Path $dir 'rosetun-egress-watch.txt'
+        $scriptPath = Join-Path $dir 'rosetun-egress-watch.ps1'
         if (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue) {
             Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
             $deadline = (Get-Date).AddSeconds(10)
@@ -940,25 +940,35 @@ function Start-RosetunEgressWatch {
             }
             Unregister-ScheduledTask -TaskName $task -Confirm:$false
         }
-        Remove-Item -Path $path -ErrorAction SilentlyContinue
+        Remove-Item -Path $path, "$path.error" -ErrorAction SilentlyContinue
         $probe = {
             param($address, $url, $path)
+            $ErrorActionPreference = 'Stop'
             $probes = 0
             $leaks = 0
-            while ($true) {
-                & curl.exe --interface $address --max-time 2 --silent --output NUL $url 2>$null
-                $probes++
-                if ($LASTEXITCODE -eq 0) { $leaks++ }
-                Set-Content -Path $path -Value "$probes $leaks"
-                Start-Sleep -Milliseconds 200
+            try {
+                while ($true) {
+                    & curl.exe --interface $address --max-time 2 --silent --output NUL $url 2>$null
+                    $probes++
+                    if ($LASTEXITCODE -eq 0) { $leaks++ }
+                    Set-Content -Path $path -Value "$probes $leaks"
+                    Start-Sleep -Milliseconds 200
+                }
+            }
+            catch {
+                [IO.File]::WriteAllText("$path.error", "$_")
+                exit 1
             }
         }
         [IO.File]::WriteAllText($scriptPath, $probe.ToString())
-        $arguments = '-NoProfile -NonInteractive -File "{0}" "{1}" "{2}" "{3}"' -f `
+        # SYSTEM does not inherit the PowerShell Direct session's execution policy.
+        $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" "{1}" "{2}" "{3}"' -f `
             $scriptPath, $address, $url, $path
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
+        $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+            -Argument $arguments -WorkingDirectory $dir
         $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
         try {
             Register-ScheduledTask -TaskName $task -Action $action -Principal $principal `
                 -Settings $settings -Force | Out-Null
@@ -968,7 +978,10 @@ function Start-RosetunEgressWatch {
             $deadline = (Get-Date).AddSeconds(30)
             while (-not (Test-Path -Path $path)) {
                 if ((Get-Date) -gt $deadline) {
-                    throw 'The egress watch did not record a probe within 30 seconds.'
+                    $state = (Get-ScheduledTask -TaskName $task).State
+                    $result = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
+                    $errorText = Get-Content -Path "$path.error" -Raw -ErrorAction SilentlyContinue
+                    throw "The egress watch did not record a probe within 30 seconds: task $state, result $result, script error '$errorText'."
                 }
                 Start-Sleep -Milliseconds 200
             }
@@ -976,16 +989,17 @@ function Start-RosetunEgressWatch {
         catch {
             Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
             Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
-            Remove-Item -Path $path, $scriptPath -ErrorAction SilentlyContinue
+            Remove-Item -Path $path, "$path.error", $scriptPath -ErrorAction SilentlyContinue
             throw
         }
-    } -ArgumentList $address, $script:Config.ProbeUrl
+    } -ArgumentList $address, $script:Config.ProbeUrl, $script:Config.GuestDir
 }
 
 function Stop-RosetunEgressWatch {
     Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
         $task = 'RosetunEgressWatch'
-        $path = Join-Path $env:TEMP 'rosetun-egress-watch.txt'
+        $path = Join-Path $dir 'rosetun-egress-watch.txt'
         try {
             Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
             $deadline = (Get-Date).AddSeconds(10)
@@ -1003,10 +1017,10 @@ function Stop-RosetunEgressWatch {
         }
         finally {
             Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
-            Remove-Item -Path $path, (Join-Path $env:TEMP 'rosetun-egress-watch.ps1') `
+            Remove-Item -Path $path, "$path.error", (Join-Path $dir 'rosetun-egress-watch.ps1') `
                 -ErrorAction SilentlyContinue
         }
-    }
+    } -ArgumentList $script:Config.GuestDir
 }
 
 function Restart-RosetunEgressAdapter {
