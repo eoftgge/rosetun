@@ -694,10 +694,16 @@ try {
         $apply.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
     }
     $temporaryAfter = Invoke-RosetunCli -Quiet 'temporary'
+    # The CLI also prints timestamped log lines; compare only the rule lines.
+    $ruleLines = {
+        param([string]$Text)
+        @($Text -split '\r?\n' | Where-Object { $_ -and $_ -notmatch '^\d{4}-\d{2}-\d{2}T' }) -join ' | '
+    }
+    $rulesBefore = & $ruleLines $temporaryBefore.Output
+    $rulesAfter = & $ruleLines $temporaryAfter.Output
     Test-Step 'settings apply' 'temporary rule remains after apply' `
-        -Note ("exit {0}; before: {1}; after: {2}" -f $temporaryAfter.ExitCode,
-            ($temporaryBefore.Output -replace '\r?\n', ' | '), ($temporaryAfter.Output -replace '\r?\n', ' | ')) {
-        $temporaryAfter.ExitCode -eq 0 -and $temporaryAfter.Output -eq $temporaryBefore.Output -and
+        -Note ("exit {0}; before: {1}; after: {2}" -f $temporaryAfter.ExitCode, $rulesBefore, $rulesAfter) {
+        $temporaryAfter.ExitCode -eq 0 -and $rulesAfter -eq $rulesBefore -and
             $temporaryAfter.Output -match ('(?m)^{0}$' -f [regex]::Escape($temporaryLine))
     }
     $egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 15 -SkipRevocationCheck
