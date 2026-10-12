@@ -56,6 +56,26 @@ function Format-Egress {
     "curl $($Egress.CurlExit), local '$($Egress.LocalIp)', tun '$($Egress.TunAddresses)': $($Egress.Error)"
 }
 
+function Invoke-SettingsCli {
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][ValidateSet('connect', 'apply')][string]$Action
+    )
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $configPath, $action)
+        $env:ROSETUN_CONFIG = $configPath
+        try {
+            $output = & "$dir\rosetun.exe" $action 2>&1 | ForEach-Object { "$_" }
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
+        }
+        finally {
+            Remove-Item Env:ROSETUN_CONFIG -ErrorAction SilentlyContinue
+        }
+    } -ArgumentList (Get-RosetunGuestDir), $ConfigPath, $Action
+}
+
 function Install-OtherAccountService {
     param([string]$GuestDir)
     Invoke-RosetunGuest -ScriptBlock {
@@ -421,6 +441,7 @@ Test-Step 'apply protection' 'direct egress stays blocked' { -not (Test-RosetunD
 
 Write-Host 'Temporary rule under the kill switch...'
 $temporaryDomainUrl = 'https://2ip.io'
+$permanentDomainUrl = Get-RosetunTunnelProbeUrl
 $apply = Invoke-RosetunApply 'request-temporary.json' -Quiet
 Test-Step 'temporary' 'apply succeeds' -Note "exit $($apply.ExitCode)" { $apply.ExitCode -eq 0 }
 Test-Step 'temporary' 'state is Connected' { (Get-RosetunState) -eq 'Connected' }
@@ -436,7 +457,7 @@ $egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 15 -
 # The base default is block, so this domain can pass only through the temporary direct rule.
 Test-Step 'temporary' 'domain goes direct' -Note (Format-Egress $egress) { $egress.Ok }
 Test-Step 'temporary' 'unmatched domain is blocked' {
-    -not (Test-RosetunTunnelEgress -Url 'https://ya.ru')
+    -not (Test-RosetunTunnelEgress -Url $permanentDomainUrl)
 }
 Test-Step 'temporary' 'physical egress stays blocked' { -not (Test-RosetunDirectEgress) }
 
@@ -538,6 +559,93 @@ Test-Step 'temporary disconnect' 'no temporary rules remain' {
 $rules = Invoke-RosetunCli -Quiet 'temporary'
 Test-Step 'temporary disconnect' 'rule list is empty' {
     $rules.ExitCode -eq 0 -and $rules.Output -match '(?m)^none$'
+}
+
+Write-Host 'Temporary rules across a CLI apply from settings...'
+$configPath = Join-Path (Get-RosetunGuestDir) 'settings-matrix\config.json'
+try {
+    Disconnect-RosetunTunnel | Out-Null
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $configPath)
+        New-Item -Path (Split-Path -Parent $configPath) -ItemType Directory -Force | Out-Null
+        $request = Get-Content -Path (Join-Path $dir 'request-temporary.json') -Raw | ConvertFrom-Json
+        $config = @{
+            version = 3
+            settings = $request.settings
+            subscriptions = @(@{
+                id = $request.selection.subscription
+                name = 'Test node'
+                url = 'https://example.invalid/subscription'
+                nodes = @($request.node)
+            })
+            active = $request.selection
+            active_rule_set = $request.rule_set.id
+            rule_sets = @($request.rule_set)
+        }
+        [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 30))
+    } -ArgumentList (Get-RosetunGuestDir), $configPath
+
+    $connect = Invoke-SettingsCli -ConfigPath $configPath -Action connect
+    Test-Step 'settings apply' 'connect uses the isolated config' -Note "exit $($connect.ExitCode)" {
+        $connect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
+    }
+    $apply = Invoke-RosetunApply 'request-temporary.json' -Quiet
+    Test-Step 'settings apply' 'temporary rule is added' -Note "exit $($apply.ExitCode)" {
+        $apply.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+    }
+    $temporaryBefore = Invoke-RosetunCli -Quiet 'temporary'
+    $temporaryLine = 'direct: domain exact ' + ([Uri]$temporaryDomainUrl).Host
+    Test-Step 'settings apply' 'temporary rule is returned before apply' {
+        $temporaryBefore.ExitCode -eq 0 -and
+            $temporaryBefore.Output -match ('(?m)^{0}$' -f [regex]::Escape($temporaryLine))
+    }
+    Test-Step 'settings apply' 'permanent domain is blocked before apply' {
+        -not (Test-RosetunTunnelEgress -Url $permanentDomainUrl)
+    }
+
+    Invoke-RosetunGuest -ScriptBlock {
+        param($configPath, $domain)
+        $config = Get-Content -Path $configPath -Raw | ConvertFrom-Json
+        $config.rule_sets[0].rules = @($config.rule_sets[0].rules) + @([pscustomobject]@{
+            id = 'settings-direct'
+            enabled = $true
+            matcher = @{ domain = @{ exact = $domain } }
+            target = 'direct'
+        })
+        [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 30))
+    } -ArgumentList $configPath, ([Uri]$permanentDomainUrl).Host
+    $apply = Invoke-SettingsCli -ConfigPath $configPath -Action apply
+    Test-Step 'settings apply' 'CLI apply without a request succeeds' -Note "exit $($apply.ExitCode)" {
+        $apply.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
+    }
+    $temporaryAfter = Invoke-RosetunCli -Quiet 'temporary'
+    Test-Step 'settings apply' 'temporary rule remains after apply' {
+        $temporaryAfter.ExitCode -eq 0 -and $temporaryAfter.Output -eq $temporaryBefore.Output -and
+            $temporaryAfter.Output -match ('(?m)^{0}$' -f [regex]::Escape($temporaryLine))
+    }
+    $egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 15 -SkipRevocationCheck
+    Test-Step 'settings apply' 'temporary domain still goes direct' -Note (Format-Egress $egress) {
+        $egress.Ok
+    }
+    $egress = Wait-RosetunTunnelEgress -Url $permanentDomainUrl -TimeoutSeconds 15 -SkipRevocationCheck
+    Test-Step 'settings apply' 'new permanent domain goes direct' -Note (Format-Egress $egress) {
+        $egress.Ok
+    }
+    Test-Step 'settings apply' 'physical egress stays blocked' { -not (Test-RosetunDirectEgress) }
+}
+finally {
+    try { Disconnect-RosetunTunnel | Out-Null }
+    finally {
+        Invoke-RosetunGuest -ScriptBlock {
+            param($configPath)
+            Remove-Item -Path (Split-Path -Parent $configPath) -Recurse -Force -ErrorAction SilentlyContinue
+        } -ArgumentList $configPath
+    }
+}
+$connect = Connect-RosetunTunnel -Quiet
+Test-Step 'settings apply' 'original request reconnects for the remaining matrix' `
+    -Note "exit $($connect.ExitCode)" {
+    $connect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
 }
 
 # Like a Wi-Fi reconnect: the engine has to follow the network on its own,

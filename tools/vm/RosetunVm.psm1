@@ -611,6 +611,10 @@ function Get-RosetunVmName {
     return $script:Config.VmName
 }
 
+function Get-RosetunTunnelProbeUrl {
+    return $script:Config.TunnelProbeUrl
+}
+
 function Get-RosetunState {
     $result = Invoke-RosetunCli -Quiet 'status'
     if ($result.Output -match '(?m)^state: (\w+)') {
