@@ -1445,16 +1445,13 @@ fn slow_adapter_connects_when_dns_recovers_after_early_server_failures() {
     let dns = Server::new(Behavior::AnswerAfter(8));
     let api = FakeClashApi::start(ClashReply::Fails);
     let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = server_check_helper_with_startup(
-        dns.address(),
-        &api,
-        Arc::clone(&stopped),
-        true,
-        true,
-    );
+    let helper =
+        server_check_helper_with_startup(dns.address(), &api, Arc::clone(&stopped), true, true);
     helper.session().unwrap().server_check_grace = Duration::from_millis(450);
 
-    helper.connect(&connect_request()).expect("late DNS answer wins");
+    helper
+        .connect(&connect_request())
+        .expect("late DNS answer wins");
     assert!(api.calls.load(Ordering::Acquire) >= 3);
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     helper.disconnect().unwrap();
@@ -1468,13 +1465,8 @@ fn dead_server_is_not_rejected_until_slow_adapter_grace_expires() {
     let dns = Server::new(Behavior::Silent);
     let api = FakeClashApi::start(ClashReply::Fails);
     let stopped = Arc::new(AtomicUsize::new(0));
-    let helper = server_check_helper_with_startup(
-        dns.address(),
-        &api,
-        Arc::clone(&stopped),
-        true,
-        true,
-    );
+    let helper =
+        server_check_helper_with_startup(dns.address(), &api, Arc::clone(&stopped), true, true);
     helper.session().unwrap().server_check_grace = Duration::from_millis(300);
     let started = Instant::now();
     let error = helper
