@@ -35,6 +35,9 @@ use serde_json::{Map, Value};
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
 pub const CONFIG_VERSION: u32 = 3;
 
+pub const EXIT_TRACE_IP: &str = "1.1.1.1";
+pub const EXIT_TRACE_PORT: u16 = 443;
+
 pub fn is_sensitive_log_target(target: &str) -> bool {
     ["ureq", "ureq_proto", "rustls", "rustls_platform_verifier"]
         .iter()

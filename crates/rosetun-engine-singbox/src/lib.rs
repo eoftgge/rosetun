@@ -1159,8 +1159,8 @@ mod tests {
         let rules = config["route"]["rules"].as_array().expect("rules array");
         assert_eq!(
             rules.len(),
-            5,
-            "sniff, DNS hijack, two enabled user rules, and LAN"
+            6,
+            "sniff, DNS hijack, exit lookup, two enabled user rules, and LAN"
         );
         assert!(
             rules.iter().all(|rule| rule.get("domain").is_none()),
@@ -1188,17 +1188,20 @@ mod tests {
         let rules = rendered.0["rules"].as_array().expect("rules array");
         assert_eq!(
             rules.len(),
-            4,
-            "sniff, DNS hijack, one supported user rule, and LAN"
+            5,
+            "sniff, DNS hijack, exit lookup, one supported user rule, and LAN"
         );
         assert_eq!(rules[0]["action"], "sniff");
         assert_eq!(rules[1]["action"], "hijack-dns");
-        assert_eq!(rules[2]["domain_suffix"][0], "google.com");
-        assert_eq!(rules[3]["ip_is_private"], true);
-        assert!(
+        assert_eq!(rules[2]["outbound"], "proxy");
+        assert_eq!(rules[3]["domain_suffix"][0], "google.com");
+        assert_eq!(rules[4]["ip_is_private"], true);
+        assert_eq!(
             rules
                 .iter()
-                .all(|rule| rule.get("process_path_regex").is_none())
+                .filter(|rule| rule.get("process_path_regex").is_some())
+                .count(),
+            1
         );
     }
 
@@ -1207,18 +1210,19 @@ mod tests {
         let config = rendered();
         let rules = config["route"]["rules"].as_array().expect("rules array");
 
-        assert_eq!(rules.len(), 5);
+        assert_eq!(rules.len(), 6);
         assert_eq!(rules[0]["action"], "sniff");
         assert_eq!(rules[1]["action"], "hijack-dns");
-        assert_eq!(rules[2]["domain_suffix"][0], "google.com");
         assert_eq!(rules[2]["outbound"], "proxy");
+        assert_eq!(rules[3]["domain_suffix"][0], "google.com");
+        assert_eq!(rules[3]["outbound"], "proxy");
         assert_eq!(
-            rules[3]["process_path_regex"][0],
+            rules[4]["process_path_regex"][0],
             r"(?i)(?:^|[\\/])steam\.exe$"
         );
-        assert_eq!(rules[3]["outbound"], "direct");
-        assert_eq!(rules[4]["ip_is_private"], true);
         assert_eq!(rules[4]["outbound"], "direct");
+        assert_eq!(rules[5]["ip_is_private"], true);
+        assert_eq!(rules[5]["outbound"], "direct");
     }
 
     #[test]
@@ -1289,15 +1293,16 @@ mod tests {
         assert!(config.unsupported.is_empty());
         let config: Value = serde_json::from_slice(&config.body).expect("json");
         let route = config["route"]["rules"].as_array().expect("rules");
-        assert_eq!(route.len(), cases.len() + 3);
+        assert_eq!(route.len(), cases.len() + 4);
         assert_eq!(route[0]["action"], "sniff");
         assert_eq!(route[1]["action"], "hijack-dns");
+        assert_eq!(route[2]["outbound"], "proxy");
 
         for (index, (matcher, field, expected)) in cases.iter().enumerate() {
             assert!(backend.capabilities().rules.supports(matcher));
-            assert_eq!(route[index + 2][*field][0], *expected);
-            assert_eq!(route[index + 2]["action"], "route");
-            assert_eq!(route[index + 2]["outbound"], "direct");
+            assert_eq!(route[index + 3][*field][0], *expected);
+            assert_eq!(route[index + 3]["action"], "route");
+            assert_eq!(route[index + 3]["outbound"], "direct");
         }
 
         let lan = route.last().expect("LAN rule");
@@ -1317,27 +1322,66 @@ mod tests {
 
         assert!(unsupported.is_empty());
         let rules = route["rules"].as_array().expect("rules");
-        assert_eq!(rules.len(), 6);
+        assert_eq!(rules.len(), 7);
 
         assert_eq!(rules[0]["action"], "sniff");
         assert_eq!(rules[1]["action"], "hijack-dns");
+        assert_eq!(rules[2]["outbound"], "proxy");
 
-        assert_eq!(rules[2]["domain_suffix"][0], "google.com");
-        assert_eq!(rules[2]["action"], "reject");
-        assert!(rules[2].get("outbound").is_none());
+        assert_eq!(rules[3]["domain_suffix"][0], "google.com");
+        assert_eq!(rules[3]["action"], "reject");
+        assert!(rules[3].get("outbound").is_none());
 
         assert_eq!(
-            rules[3]["process_path_regex"][0],
+            rules[4]["process_path_regex"][0],
             r"(?i)(?:^|[\\/])steam\.exe$"
         );
-        assert_eq!(rules[3]["outbound"], "direct");
-
-        assert_eq!(rules[4]["ip_is_private"], true);
         assert_eq!(rules[4]["outbound"], "direct");
+
+        assert_eq!(rules[5]["ip_is_private"], true);
+        assert_eq!(rules[5]["outbound"], "direct");
 
         let fallback = rules.last().expect("fallback");
         assert_eq!(fallback["action"], "reject");
         assert!(fallback.get("outbound").is_none());
+    }
+
+    #[test]
+    fn exit_lookup_precedes_user_rules_and_all_default_targets() {
+        let mut rule_set = rules();
+        rule_set.rules.push(Rule {
+            id: RuleId::new("gui-direct"),
+            enabled: true,
+            matcher: RuleMatcher::Process(ProcessMatch::Name("rosetun-gui.exe".into())),
+            target: RuleTarget::Direct,
+        });
+
+        for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
+            rule_set.default_target = target;
+            let (route, unsupported) =
+                render::route_section(&rule_set, render::RULE_CAPABILITIES, false);
+            assert!(unsupported.is_empty());
+            let rules = route["rules"].as_array().expect("rules");
+            assert_eq!(rules[0]["action"], "sniff");
+            assert_eq!(rules[1]["action"], "hijack-dns");
+            assert_eq!(
+                rules[2],
+                serde_json::json!({
+                    "process_path_regex": [r"(?i)(?:^|[\\/])rosetun-gui\.exe$"],
+                    "ip_cidr": ["1.1.1.1/32"],
+                    "port": [443],
+                    "action": "route",
+                    "outbound": "proxy",
+                })
+            );
+            assert_eq!(rules[3]["domain_suffix"][0], "google.com");
+            assert_eq!(rules[5]["outbound"], "direct");
+            assert_eq!(rules[5]["process_path_regex"], rules[2]["process_path_regex"]);
+            assert_eq!(
+                rules.last().unwrap()["action"] == "reject",
+                target == RuleTarget::Block
+            );
+        }
     }
 
     #[test]
@@ -1387,25 +1431,26 @@ mod tests {
             .as_array()
             .expect("route rules array");
 
-        assert_eq!(route_rules.len(), 6);
+        assert_eq!(route_rules.len(), 7);
         assert_eq!(route_rules[0]["action"], "sniff");
         assert_eq!(route_rules[1]["action"], "hijack-dns");
+        assert_eq!(route_rules[2]["outbound"], "proxy");
 
-        // User rules retain their order after sniff and DNS hijack.
-        assert_eq!(route_rules[2]["domain"][0], "direct.example");
-        assert_eq!(route_rules[2]["action"], "route");
-        assert_eq!(route_rules[2]["outbound"], "direct");
-
-        assert_eq!(route_rules[3]["domain_suffix"][0], "proxy.example");
+        // User rules retain their order after the service rules.
+        assert_eq!(route_rules[3]["domain"][0], "direct.example");
         assert_eq!(route_rules[3]["action"], "route");
-        assert_eq!(route_rules[3]["outbound"], "proxy");
+        assert_eq!(route_rules[3]["outbound"], "direct");
 
-        assert_eq!(route_rules[4]["domain_keyword"][0], "blocked");
-        assert_eq!(route_rules[4]["action"], "reject");
+        assert_eq!(route_rules[4]["domain_suffix"][0], "proxy.example");
+        assert_eq!(route_rules[4]["action"], "route");
+        assert_eq!(route_rules[4]["outbound"], "proxy");
 
-        assert_eq!(route_rules[5]["ip_is_private"], true);
-        assert_eq!(route_rules[5]["action"], "route");
-        assert_eq!(route_rules[5]["outbound"], "direct");
+        assert_eq!(route_rules[5]["domain_keyword"][0], "blocked");
+        assert_eq!(route_rules[5]["action"], "reject");
+
+        assert_eq!(route_rules[6]["ip_is_private"], true);
+        assert_eq!(route_rules[6]["action"], "route");
+        assert_eq!(route_rules[6]["outbound"], "direct");
 
         let domain_fields = ["domain", "domain_suffix", "domain_keyword"];
         let domain_indices: Vec<usize> = route_rules
@@ -1419,7 +1464,7 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(domain_indices, vec![2, 3, 4]);
+        assert_eq!(domain_indices, vec![3, 4, 5]);
         assert!(domain_indices.iter().all(|&index| index > 1));
         assert_eq!(config["route"]["final"], "proxy");
     }
@@ -1497,6 +1542,13 @@ mod tests {
                 serde_json::json!({
                     "protocol": "dns",
                     "action": "hijack-dns",
+                }),
+                serde_json::json!({
+                    "process_path_regex": [r"(?i)(?:^|[\\/])rosetun-gui\.exe$"],
+                    "ip_cidr": ["1.1.1.1/32"],
+                    "port": [443],
+                    "action": "route",
+                    "outbound": "proxy",
                 }),
                 serde_json::json!({
                     "domain_suffix": ["google.com"],

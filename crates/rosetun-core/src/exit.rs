@@ -2,11 +2,10 @@ use std::io::Read;
 use std::net::IpAddr;
 use std::time::Duration;
 
+use rosetun_config::{EXIT_TRACE_IP, EXIT_TRACE_PORT};
 use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::fetch::DEFAULT_USER_AGENT;
-
-const TRACE_URL: &str = "https://1.1.1.1/cdn-cgi/trace";
 const MAX_BODY_BYTES: u64 = 16 * 1024;
 
 /// Where traffic leaves for the internet: the address the world sees and its country.
@@ -42,8 +41,9 @@ pub fn exit_info(timeout: Duration) -> Result<ExitInfo, ExitInfoError> {
         .into();
 
     // ureq errors can contain the request URI; never forward them to the GUI or log.
+    let trace_url = format!("https://{EXIT_TRACE_IP}:{EXIT_TRACE_PORT}/cdn-cgi/trace");
     let mut response = agent
-        .get(TRACE_URL)
+        .get(&trace_url)
         .header("User-Agent", DEFAULT_USER_AGENT)
         .call()
         .map_err(|_| ExitInfoError::Request("connection failed".into()))?;
