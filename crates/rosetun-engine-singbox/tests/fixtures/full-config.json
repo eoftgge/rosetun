@@ -79,6 +79,19 @@
       },
       {
         "action": "route",
+        "ip_cidr": [
+          "1.1.1.1/32"
+        ],
+        "outbound": "proxy",
+        "port": [
+          443
+        ],
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])rosetun-gui\\.exe$"
+        ]
+      },
+      {
+        "action": "route",
         "domain": [
           "example.com"
         ],

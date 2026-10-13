@@ -1,6 +1,7 @@
 use rosetun_config::{
-    DnsSettings, DomainMatch, ListRef, LogLevel, Node, Outbound, ProcessMatch, RuleId, RuleMatcher,
-    RuleSet, RuleTarget, Settings, TlsMode, Transport, UploadedListFormat, list_tag,
+    DnsSettings, DomainMatch, EXIT_TRACE_IP, EXIT_TRACE_PORT, ListRef, LogLevel, Node, Outbound,
+    ProcessMatch, RuleId, RuleMatcher, RuleSet, RuleTarget, Settings, TlsMode, Transport,
+    UploadedListFormat, list_tag,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities};
@@ -347,6 +348,13 @@ fn route_section_with_lists(
             "protocol": "dns",
             "action": "hijack-dns",
         }),
+        json!({
+            "process_path_regex": [process_name_regex("rosetun-gui.exe")],
+            "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
+            "port": [EXIT_TRACE_PORT],
+            "action": "route",
+            "outbound": TAG_PROXY,
+        }),
     ];
     let mut unsupported = Vec::new();
     let mut used_lists = Vec::<&ListRef>::new();
@@ -440,7 +448,7 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
         RuleMatcher::Process(ProcessMatch::Name(name)) => {
             value.insert(
                 "process_path_regex".into(),
-                json!([format!(r"(?i)(?:^|[\\/]){}$", quote_process_name(name))]),
+                json!([process_name_regex(name)]),
             );
         }
         RuleMatcher::Process(ProcessMatch::Path(path)) => {
@@ -455,6 +463,10 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
     route_action(&mut value, rule.target);
 
     Some(Value::Object(value))
+}
+
+fn process_name_regex(name: &str) -> String {
+    format!(r"(?i)(?:^|[\\/]){}$", quote_process_name(name))
 }
 
 fn quote_process_name(name: &str) -> String {
@@ -747,7 +759,7 @@ mod tests {
         set.rules.push(list.clone());
         let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
         assert_eq!(unsupported, vec![list.id]);
-        assert_eq!(route["rules"].as_array().unwrap().len(), 2);
+        assert_eq!(route["rules"].as_array().unwrap().len(), 3);
     }
 
     #[test]
@@ -781,13 +793,13 @@ mod tests {
             }])
         );
         assert_eq!(
-            route["rules"][2],
+            route["rules"][3],
             json!({
                 "rule_set": [tag], "action": "route", "outbound": "direct"
             })
         );
         assert_eq!(
-            route["rules"][3],
+            route["rules"][4],
             json!({"rule_set": [tag], "action": "reject"})
         );
         assert!(
@@ -830,9 +842,9 @@ mod tests {
         let (route, unsupported) =
             route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference]);
         assert_eq!(unsupported, [vanished]);
-        assert_eq!(route["rules"].as_array().unwrap().len(), 3);
+        assert_eq!(route["rules"].as_array().unwrap().len(), 4);
         assert_eq!(
-            route["rules"][2],
+            route["rules"][3],
             json!({
                 "rule_set": [tag], "action": "route", "outbound": "direct"
             })
@@ -854,6 +866,6 @@ mod tests {
         set.rules.push(template.clone());
         let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
         assert_eq!(unsupported, vec![template.id]);
-        assert_eq!(route["rules"].as_array().unwrap().len(), 2);
+        assert_eq!(route["rules"].as_array().unwrap().len(), 3);
     }
 }
