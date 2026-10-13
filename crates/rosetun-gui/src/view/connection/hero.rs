@@ -525,10 +525,9 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.set_width(text_width);
-                                if let Some((subscription, node)) = state.config.active_node() {
-                                    let subscription = state.text(&subscription.name);
-                                    let address = state.text(&rosetun_core::node_address(node));
-                                    let detail = format!("{subscription} · {address}");
+                                // No node address here: this screen ends up in screenshots.
+                                if let Some((subscription, _)) = state.config.active_node() {
+                                    let detail = state.text(&subscription.name);
                                     ui.add(
                                         egui::Label::new(
                                             RichText::new(detail).small().color(theme::TEXT_DIM),
