@@ -1376,7 +1376,10 @@ mod tests {
             );
             assert_eq!(rules[3]["domain_suffix"][0], "google.com");
             assert_eq!(rules[5]["outbound"], "direct");
-            assert_eq!(rules[5]["process_path_regex"], rules[2]["process_path_regex"]);
+            assert_eq!(
+                rules[5]["process_path_regex"],
+                rules[2]["process_path_regex"]
+            );
             assert_eq!(
                 rules.last().unwrap()["action"] == "reject",
                 target == RuleTarget::Block
