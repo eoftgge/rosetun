@@ -170,8 +170,7 @@ fn emblem_texture(
         return texture;
     }
     let pixels = rasterize(size);
-    let image =
-        egui::ColorImage::from_rgba_unmultiplied([size as usize, size as usize], &pixels);
+    let image = egui::ColorImage::from_rgba_unmultiplied([size as usize, size as usize], &pixels);
     let texture = ctx.load_texture(
         format!("brand_emblem_{size}"),
         image,
@@ -184,7 +183,9 @@ fn emblem_texture(
 pub(crate) fn paint_emblem(painter: &egui::Painter, rect: Rect) {
     let ctx = painter.ctx();
     let size = emblem_pixel_size(rect.width(), ctx.pixels_per_point());
-    let texture = emblem_texture(ctx, size, |size| rose_icon::rose_icon_rgba(size, RoseIcon::Large));
+    let texture = emblem_texture(ctx, size, |size| {
+        rose_icon::rose_icon_rgba(size, RoseIcon::Large)
+    });
     painter.image(
         texture.id(),
         rect,

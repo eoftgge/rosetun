@@ -674,7 +674,11 @@ fn list_input(
 }
 
 fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) -> bool {
-    ui.label(RichText::new(tr!("ip-label")).small().color(theme::TEXT_DIM));
+    ui.label(
+        RichText::new(tr!("ip-label"))
+            .small()
+            .color(theme::TEXT_DIM),
+    );
     let input = if dialog.editing.is_some() {
         ui.add_enabled(
             !dialog.busy,
@@ -723,20 +727,25 @@ fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Act
                             .color(theme::ERROR),
                     );
                 }
-                if parsed.errors.iter().any(|error| {
-                    matches!(error.error, rosetun_core::IpCidrError::HostBits { .. })
-                }) && widgets::link(ui, &tr!("ip-fix"), !dialog.busy).clicked()
+                if parsed
+                    .errors
+                    .iter()
+                    .any(|error| matches!(error.error, rosetun_core::IpCidrError::HostBits { .. }))
+                    && widgets::link(ui, &tr!("ip-fix"), !dialog.busy).clicked()
                 {
                     actions.push(Action::CorrectRuleIps);
                 }
             });
     }
     if dialog.local_ip_warning() {
-        ui.add(egui::Label::new(
-            RichText::new(tr!("ip-local-warning"))
-                .small()
-                .color(theme::ROSE_LIGHT),
-        ).wrap());
+        ui.add(
+            egui::Label::new(
+                RichText::new(tr!("ip-local-warning"))
+                    .small()
+                    .color(theme::ROSE_LIGHT),
+            )
+            .wrap(),
+        );
         if widgets::link(ui, &tr!("allow-lan"), !dialog.busy).clicked() {
             actions.push(Action::OpenLanSettings);
         }

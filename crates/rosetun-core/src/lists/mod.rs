@@ -15,6 +15,7 @@ use rosetun_config::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::fetch::{ListFetch, ListValidators};
 use crate::{FetchError, Store, StoreError, Timeouts};
 
 pub use availability::{MissingListCategory, inspect_missing_categories};
@@ -87,6 +88,12 @@ fn list_path(directory: &Path, list: &List) -> PathBuf {
     directory.join(format!("{}.{}", list.id, list.format.extension()))
 }
 
+fn http_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".http.json");
+    PathBuf::from(name)
+}
+
 fn previous_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(".previous");
@@ -119,6 +126,75 @@ fn read_verified(directory: &Path, list: &List) -> Result<Vec<u8>, ListError> {
         return Err(ListError::Integrity);
     }
     Ok(bytes)
+}
+
+fn file_matches(directory: &Path, list: &List) -> bool {
+    let (Some(expected_size), Some(expected_sha)) = (list.size, list.sha256.as_deref()) else {
+        return false;
+    };
+    let Ok(mut file) = fs::File::open(list_path(directory, list)) else {
+        return false;
+    };
+    let mut hash = Sha256::new();
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; 32 * 1024];
+    loop {
+        let Ok(count) = file.read(&mut buffer) else {
+            return false;
+        };
+        if count == 0 {
+            break;
+        }
+        size += count as u64;
+        if size > MAX_LIST_BYTES as u64 {
+            return false;
+        }
+        hash.update(&buffer[..count]);
+    }
+    size == expected_size && digest_hex(&hash.finalize()) == expected_sha
+}
+
+fn header_value_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 1024
+        && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+}
+
+fn read_http_metadata(path: &Path, sha256: &str) -> Option<ListValidators> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(8193)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > 8192 {
+        return None;
+    }
+    let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let fields = json.as_object()?;
+    if fields.get("sha256")?.as_str()? != sha256 {
+        return None;
+    }
+    let header = |name| -> Option<Option<String>> {
+        match fields.get(name) {
+            Some(serde_json::Value::String(value)) if header_value_is_safe(value) => {
+                Some(Some(value.clone()))
+            }
+            Some(serde_json::Value::Null) | None => Some(None),
+            _ => None,
+        }
+    };
+    let validators = ListValidators {
+        etag: header("etag")?,
+        last_modified: header("last_modified")?,
+    };
+    (!validators.is_empty()).then_some(validators)
+}
+
+fn cached_validators(directory: &Path, list: &List) -> Option<ListValidators> {
+    let sha256 = list.sha256.as_deref()?;
+    let validators = read_http_metadata(&http_path(&list_path(directory, list)), sha256)?;
+    file_matches(directory, list).then_some(validators)
 }
 
 fn current_time() -> Result<u64, ListError> {
@@ -198,6 +274,112 @@ fn publish_file(directory: &Path, change: &CommittedList, bytes: &[u8]) -> Resul
     result
 }
 
+fn remove_if_exists(path: &Path) -> Result<(), ListError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn write_http_metadata(
+    path: &Path,
+    validators: &ListValidators,
+    sha256: &str,
+) -> Result<(), ListError> {
+    let contents = serde_json::to_vec(&serde_json::json!({
+        "etag": validators.etag,
+        "last_modified": validators.last_modified,
+        "sha256": sha256,
+    }))
+    .expect("HTTP metadata is serializable");
+    let temp = temporary_path(path);
+    let result = (|| -> Result<(), ListError> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(&contents)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
+}
+
+fn old_http_path(directory: &Path, change: &CommittedList) -> Option<PathBuf> {
+    change
+        .previous
+        .as_ref()
+        .map(|previous| http_path(&list_path(directory, previous)))
+}
+
+fn restore_http_metadata(directory: &Path, change: &CommittedList) -> Result<(), ListError> {
+    let current = http_path(&list_path(directory, &change.current));
+    remove_if_exists(&current)?;
+    if let Some(old) = old_http_path(directory, change) {
+        let backup = previous_path(&old);
+        if backup.exists() {
+            fs::rename(backup, old)?;
+        }
+    }
+    Ok(())
+}
+
+fn publish_list(
+    directory: &Path,
+    change: &CommittedList,
+    bytes: &[u8],
+    validators: Option<&ListValidators>,
+) -> Result<(), ListError> {
+    let old = old_http_path(directory, change);
+    if let Some(old) = old.as_ref().filter(|path| path.exists()) {
+        let backup = previous_path(old);
+        if backup.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "HTTP metadata backup already exists",
+            )
+            .into());
+        }
+        fs::rename(old, backup)?;
+    }
+    let mut published = false;
+    let result = (|| -> Result<(), ListError> {
+        publish_file(directory, change, bytes)?;
+        published = true;
+        let current = http_path(&list_path(directory, &change.current));
+        match validators.filter(|value| !value.is_empty()) {
+            Some(validators) => write_http_metadata(
+                &current,
+                validators,
+                change
+                    .current
+                    .sha256
+                    .as_deref()
+                    .expect("committed list has checksum"),
+            ),
+            None => remove_if_exists(&current),
+        }
+    })();
+    if result.is_err() {
+        if published {
+            rollback_file(directory, change)?;
+        }
+        restore_http_metadata(directory, change)?;
+    }
+    result
+}
+
+fn rollback_list(directory: &Path, change: &CommittedList) -> Result<(), ListError> {
+    rollback_file(directory, change)?;
+    restore_http_metadata(directory, change)
+}
+
 fn rollback_file(directory: &Path, change: &CommittedList) -> Result<(), ListError> {
     let current = list_path(directory, &change.current);
     fs::remove_file(current)?;
@@ -213,11 +395,13 @@ fn rollback_file(directory: &Path, change: &CommittedList) -> Result<(), ListErr
 
 fn cleanup_previous(directory: &Path, previous: Option<&List>) {
     if let Some(previous) = previous {
-        let path = previous_path(&list_path(directory, previous));
-        if let Err(error) = fs::remove_file(path)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            tracing::warn!(%error, "could not remove previous list data");
+        let path = list_path(directory, previous);
+        for backup in [previous_path(&path), previous_path(&http_path(&path))] {
+            if let Err(error) = fs::remove_file(backup)
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                tracing::warn!(%error, "could not remove previous list data");
+            }
         }
     }
 }
@@ -228,6 +412,7 @@ fn commit_list(
     name: String,
     source: ListSource,
     inspected: formats::InspectedList,
+    validators: Option<ListValidators>,
     updated_at: u64,
 ) -> Result<List, ListError> {
     let directory = list_dir(store)?;
@@ -290,8 +475,8 @@ fn commit_list(
             }
             Ok::<_, ListError>(CommittedList { current, previous })
         },
-        |change| publish_file(&directory, change, &bytes),
-        |change| rollback_file(&directory, change),
+        |change| publish_list(&directory, change, &bytes, validators.as_ref()),
+        |change| rollback_list(&directory, change),
         |change| cleanup_previous(&directory, change.previous.as_ref()),
     )?;
     Ok(change.current)
@@ -312,7 +497,11 @@ pub fn add_list_from_url(
     } else {
         name.trim().to_owned()
     };
-    let bytes = crate::fetch::fetch_list_bytes(parsed.as_str(), timeouts)?;
+    let ListFetch::Modified { bytes, validators } =
+        crate::fetch::fetch_list_bytes(parsed.as_str(), timeouts, None)?
+    else {
+        return Err(ListError::Fetch(FetchError::HttpStatus(304)));
+    };
     let inspected = formats::inspect(&bytes, Some(parsed.path()))?;
     commit_list(
         store,
@@ -320,6 +509,7 @@ pub fn add_list_from_url(
         name,
         ListSource::Url(parsed.to_string()),
         inspected,
+        Some(validators),
         current_time()?,
     )
 }
@@ -345,6 +535,7 @@ pub fn add_list_from_bytes(
         name.to_owned(),
         ListSource::File { original_name },
         inspected,
+        None,
         current_time()?,
     )
 }
@@ -369,7 +560,7 @@ fn update_list_with(
     id: &ListId,
     replacement: Option<(&str, &[u8])>,
     timeouts: Timeouts,
-    fetch: &mut impl FnMut(&str, Timeouts) -> Result<Vec<u8>, FetchError>,
+    fetch: &mut impl FnMut(&str, Timeouts, Option<&ListValidators>) -> Result<ListFetch, FetchError>,
 ) -> Result<List, UpdateListError> {
     let requested = store
         .load()?
@@ -377,22 +568,30 @@ fn update_list_with(
         .into_iter()
         .find(|item| &item.id == id)
         .ok_or(ListError::NotFound)?;
-    let (bytes, name, source) = match (&requested.source, replacement) {
-        (ListSource::Url(url), None) => (
-            fetch(url, timeouts)?,
-            url::Url::parse(url)
-                .map_err(|_| ListError::InvalidUrl)?
-                .path()
-                .to_owned(),
-            requested.source.clone(),
-        ),
+    let directory = list_dir(store)?;
+    let (response, name, source) = match (&requested.source, replacement) {
+        (ListSource::Url(url), None) => {
+            let validators = cached_validators(&directory, &requested);
+            let response = fetch(url, timeouts, validators.as_ref())?;
+            (
+                response,
+                url::Url::parse(url)
+                    .map_err(|_| ListError::InvalidUrl)?
+                    .path()
+                    .to_owned(),
+                requested.source.clone(),
+            )
+        }
         (ListSource::File { .. }, Some((original_name, bytes))) => {
             if bytes.len() > MAX_LIST_BYTES {
                 return Err(ListError::TooLarge);
             }
             let original_name = file_name(original_name)?;
             (
-                bytes.to_vec(),
+                ListFetch::Modified {
+                    bytes: bytes.to_vec(),
+                    validators: ListValidators::default(),
+                },
                 original_name.clone(),
                 ListSource::File { original_name },
             )
@@ -400,15 +599,55 @@ fn update_list_with(
         (ListSource::File { .. }, None) => return Err(ListError::FileRequired),
         (ListSource::Url(_), Some(_)) => return Err(ListError::WrongSource),
     };
-    let inspected = formats::inspect(&bytes, Some(&name))?;
-    commit_list(
-        store,
-        Some(&requested),
-        requested.name.clone(),
-        source,
-        inspected,
-        current_time()?,
-    )
+    let response = if matches!(response, ListFetch::NotModified)
+        && cached_validators(&directory, &requested).is_none()
+    {
+        let ListSource::Url(url) = &requested.source else {
+            unreachable!("only URL lists are fetched")
+        };
+        match fetch(url, timeouts, None)? {
+            ListFetch::NotModified => return Err(ListError::Fetch(FetchError::HttpStatus(304))),
+            modified => modified,
+        }
+    } else {
+        response
+    };
+    match response {
+        ListFetch::NotModified => {
+            let updated_at = current_time()?;
+            store.modify(|config| {
+                let current = config
+                    .lists
+                    .iter_mut()
+                    .find(|item| item.id == requested.id)
+                    .ok_or(ListError::NotFound)?;
+                if current.source != requested.source
+                    || current.sha256 != requested.sha256
+                    || current.size != requested.size
+                {
+                    return Err(ListError::ChangedDuringUpdate);
+                }
+                if !file_matches(&directory, current) {
+                    return Err(ListError::Integrity);
+                }
+                current.updated_at = Some(updated_at);
+                Ok(current.clone())
+            })
+        }
+        ListFetch::Modified { bytes, validators } => {
+            let inspected = formats::inspect(&bytes, Some(&name))?;
+            let validators = matches!(&source, ListSource::Url(_)).then_some(validators);
+            commit_list(
+                store,
+                Some(&requested),
+                requested.name.clone(),
+                source,
+                inspected,
+                validators,
+                current_time()?,
+            )
+        }
+    }
 }
 
 pub fn update_all_lists(
@@ -421,7 +660,7 @@ pub fn update_all_lists(
 fn update_all_lists_with(
     store: &Store,
     timeouts: Timeouts,
-    fetch: &mut impl FnMut(&str, Timeouts) -> Result<Vec<u8>, FetchError>,
+    fetch: &mut impl FnMut(&str, Timeouts, Option<&ListValidators>) -> Result<ListFetch, FetchError>,
 ) -> Result<Vec<ListUpdateResult>, StoreError> {
     let ids: Vec<_> = store
         .load()?
@@ -455,6 +694,30 @@ pub fn rename_list(store: &Store, id: &ListId, name: &str) -> Result<List, ListE
     })
 }
 
+fn publish_removal(directory: &Path, list: &List) -> Result<(), ListError> {
+    let path = list_path(directory, list);
+    let metadata = http_path(&path);
+    fs::rename(&path, previous_path(&path))?;
+    if metadata.exists()
+        && let Err(error) = fs::rename(&metadata, previous_path(&metadata))
+    {
+        fs::rename(previous_path(&path), path)?;
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn rollback_removal(directory: &Path, list: &List) -> Result<(), ListError> {
+    let path = list_path(directory, list);
+    fs::rename(previous_path(&path), &path)?;
+    let metadata = http_path(&path);
+    let backup = previous_path(&metadata);
+    if backup.exists() {
+        fs::rename(backup, metadata)?;
+    }
+    Ok(())
+}
+
 pub fn remove_list(store: &Store, id: &ListId) -> Result<(), ListError> {
     let directory = list_dir(store)?;
     store.modify_with_sidecar(
@@ -471,14 +734,8 @@ pub fn remove_list(store: &Store, id: &ListId) -> Result<(), ListError> {
             let index = config.lists.iter().position(|item| &item.id == id).ok_or(ListError::NotFound)?;
             Ok::<_, ListError>(config.lists.remove(index))
         },
-        |list| {
-            let path = list_path(&directory, list);
-            fs::rename(&path, previous_path(&path)).map_err(ListError::from)
-        },
-        |list| {
-            let path = list_path(&directory, list);
-            fs::rename(previous_path(&path), path).map_err(ListError::from)
-        },
+        |list| publish_removal(&directory, list),
+        |list| rollback_removal(&directory, list),
         |list| cleanup_previous(&directory, Some(list)),
     )?;
     Ok(())
@@ -549,9 +806,29 @@ pub fn reconcile_lists(store: &Store) -> Result<(), ListError> {
                 }
             }
             read_verified(&directory, list)?;
+            let metadata = http_path(&path);
+            let metadata_backup = previous_path(&metadata);
+            if metadata_backup.exists() {
+                let current_valid = list
+                    .sha256
+                    .as_deref()
+                    .is_some_and(|sha256| read_http_metadata(&metadata, sha256).is_some());
+                if current_valid {
+                    fs::remove_file(&metadata_backup)?;
+                } else {
+                    remove_if_exists(&metadata)?;
+                    fs::rename(&metadata_backup, &metadata)?;
+                }
+            }
             active.insert(
                 path.file_name()
                     .expect("list path has a name")
+                    .to_os_string(),
+            );
+            active.insert(
+                metadata
+                    .file_name()
+                    .expect("HTTP metadata path has a name")
                     .to_os_string(),
             );
         }
@@ -566,6 +843,7 @@ pub fn reconcile_lists(store: &Store) -> Result<(), ListError> {
                 continue;
             }
             let final_name = text.strip_suffix(".previous").unwrap_or(text);
+            let final_name = final_name.strip_suffix(".http.json").unwrap_or(final_name);
             let Some((id, extension)) = final_name.split_once('.') else {
                 continue;
             };

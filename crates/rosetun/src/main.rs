@@ -476,7 +476,11 @@ fn print_config() -> Result<(), String> {
     println!("validation: passed");
     println!(
         "local network: {}",
-        if config.settings.allow_lan { "on" } else { "off" }
+        if config.settings.allow_lan {
+            "on"
+        } else {
+            "off"
+        }
     );
 
     match config.active_node() {

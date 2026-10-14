@@ -887,9 +887,8 @@ fn domain_lines_handle_www_explicit_suffix_and_single_label() {
 
 #[test]
 fn ip_lines_normalize_addresses_and_deduplicate_subnets() {
-    let parsed = parse_ip_lines(
-        "192.0.2.1\n192.0.2.1/32\n198.51.100.0/24\n2001:DB8::1\n2001:db8::/32\n",
-    );
+    let parsed =
+        parse_ip_lines("192.0.2.1\n192.0.2.1/32\n198.51.100.0/24\n2001:DB8::1\n2001:db8::/32\n");
     assert_eq!(
         parsed.addresses,
         [

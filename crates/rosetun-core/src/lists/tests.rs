@@ -264,6 +264,18 @@ fn url_list(store: &Store) -> List {
         .unwrap()
 }
 
+fn url_list_with_http(store: &Store, validators: &ListValidators) -> (List, PathBuf) {
+    let list = url_list(store);
+    let path = list_path(&list_dir(store).unwrap(), &list);
+    write_http_metadata(
+        &http_path(&path),
+        validators,
+        list.sha256.as_deref().unwrap(),
+    )
+    .unwrap();
+    (list, path)
+}
+
 #[test]
 fn updating_a_url_list_repairs_a_missing_file() {
     let directory = TestDirectory::new();
@@ -272,9 +284,18 @@ fn updating_a_url_list_repairs_a_missing_file() {
     let path = list_path(&directory.0.join("lists"), &list);
     fs::remove_file(&path).unwrap();
 
-    let updated = update_list_with(&store, &list.id, None, Timeouts::default(), &mut |_, _| {
-        Ok(b"example.invalid\n".to_vec())
-    })
+    let updated = update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, _| {
+            Ok(ListFetch::Modified {
+                bytes: b"example.invalid\n".to_vec(),
+                validators: ListValidators::default(),
+            })
+        },
+    )
     .unwrap();
 
     assert_eq!(fs::read(&path).unwrap(), b"example.invalid\n");
@@ -294,14 +315,223 @@ fn updating_a_url_list_repairs_a_damaged_file() {
     let path = list_path(&directory.0.join("lists"), &list);
     fs::write(&path, b"damaged\n").unwrap();
 
-    let updated = update_list_with(&store, &list.id, None, Timeouts::default(), &mut |_, _| {
-        Ok(b"example.invalid\n".to_vec())
-    })
+    let updated = update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, _| {
+            Ok(ListFetch::Modified {
+                bytes: b"example.invalid\n".to_vec(),
+                validators: ListValidators::default(),
+            })
+        },
+    )
     .unwrap();
 
     assert_eq!(fs::read(&path).unwrap(), b"example.invalid\n");
     assert_eq!(store.load().unwrap().lists, vec![updated]);
     assert!(!previous_path(&path).exists());
+}
+
+#[test]
+fn unchanged_url_list_updates_only_its_check_time() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let validators = ListValidators {
+        etag: Some("W/\"first\"".into()),
+        last_modified: None,
+    };
+    let (list, path) = url_list_with_http(&store, &validators);
+    let before = fs::metadata(&path).unwrap().modified().unwrap();
+    store
+        .modify(|config| {
+            config.lists[0].updated_at = None;
+            Ok::<_, StoreError>(())
+        })
+        .unwrap();
+    let original = store.load().unwrap().lists[0].clone();
+
+    let updated = update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, sent| {
+            assert_eq!(sent, Some(&validators));
+            Ok(ListFetch::NotModified)
+        },
+    )
+    .unwrap();
+
+    assert!(updated.updated_at.is_some());
+    let mut expected = original;
+    expected.updated_at = updated.updated_at;
+    assert_eq!(updated, expected);
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+    assert_eq!(fs::read(&path).unwrap(), b"example.com\n");
+    assert_eq!(
+        read_http_metadata(&http_path(&path), updated.sha256.as_deref().unwrap()),
+        Some(validators)
+    );
+}
+
+#[test]
+fn a_new_etag_replaces_the_list_and_its_http_metadata() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let old = ListValidators {
+        etag: Some("\"first\"".into()),
+        last_modified: None,
+    };
+    let (list, path) = url_list_with_http(&store, &old);
+    let new = ListValidators {
+        etag: Some("\"second\"".into()),
+        last_modified: None,
+    };
+    let updated = update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, sent| {
+            assert_eq!(sent, Some(&old));
+            Ok(ListFetch::Modified {
+                bytes: b"example.invalid\n".to_vec(),
+                validators: new.clone(),
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"example.invalid\n");
+    assert_eq!(
+        read_http_metadata(&http_path(&path), updated.sha256.as_deref().unwrap()),
+        Some(new)
+    );
+    assert!(!previous_path(&http_path(&path)).exists());
+}
+
+#[test]
+fn a_damaged_list_forces_an_unconditional_fetch() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let old = ListValidators {
+        etag: Some("\"old\"".into()),
+        last_modified: None,
+    };
+    let (list, path) = url_list_with_http(&store, &old);
+    fs::write(&path, b"damaged\n").unwrap();
+    let updated = update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, sent| {
+            assert!(sent.is_none());
+            Ok(ListFetch::Modified {
+                bytes: b"example.invalid\n".to_vec(),
+                validators: ListValidators {
+                    etag: Some("\"new\"".into()),
+                    last_modified: None,
+                },
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"example.invalid\n");
+    assert_eq!(
+        read_http_metadata(&http_path(&path), updated.sha256.as_deref().unwrap())
+            .unwrap()
+            .etag
+            .as_deref(),
+        Some("\"new\"")
+    );
+}
+
+#[test]
+fn last_modified_alone_can_validate_a_list() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let validators = ListValidators {
+        etag: None,
+        last_modified: Some("Wed, 21 Oct 2015 07:28:00 GMT".into()),
+    };
+    let (list, path) = url_list_with_http(&store, &validators);
+    update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, sent| {
+            assert_eq!(sent, Some(&validators));
+            Ok(ListFetch::NotModified)
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"example.com\n");
+}
+
+#[test]
+fn invalid_http_metadata_or_no_response_headers_forces_full_fetch() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let validators = ListValidators {
+        etag: Some("\"stale\"".into()),
+        last_modified: None,
+    };
+    let (list, path) = url_list_with_http(&store, &validators);
+    fs::write(http_path(&path), b"invalid json").unwrap();
+    update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, sent| {
+            assert!(sent.is_none());
+            Ok(ListFetch::Modified {
+                bytes: b"example.com\n".to_vec(),
+                validators: ListValidators::default(),
+            })
+        },
+    )
+    .unwrap();
+    assert!(!http_path(&path).exists());
+    write_http_metadata(
+        &http_path(&path),
+        &validators,
+        &checksum(b"example.invalid\n"),
+    )
+    .unwrap();
+    update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, sent| {
+            assert!(sent.is_none());
+            Ok(ListFetch::Modified {
+                bytes: b"example.com\n".to_vec(),
+                validators: ListValidators::default(),
+            })
+        },
+    )
+    .unwrap();
+    assert!(!http_path(&path).exists());
+}
+
+#[test]
+fn removing_a_list_also_removes_http_metadata() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let validators = ListValidators {
+        etag: Some("\"first\"".into()),
+        last_modified: None,
+    };
+    let (list, path) = url_list_with_http(&store, &validators);
+    remove_list(&store, &list.id).unwrap();
+    assert!(!path.exists());
+    assert!(!http_path(&path).exists());
+    assert!(!previous_path(&http_path(&path)).exists());
 }
 
 #[test]
@@ -313,9 +543,13 @@ fn failed_download_preserves_the_old_url_list() {
     let original_config = fs::read(store.path()).unwrap();
 
     assert!(matches!(
-        update_list_with(&store, &list.id, None, Timeouts::default(), &mut |_, _| {
-            Err(FetchError::Timeout)
-        }),
+        update_list_with(
+            &store,
+            &list.id,
+            None,
+            Timeouts::default(),
+            &mut |_, _, _| { Err(FetchError::Timeout) }
+        ),
         Err(ListError::Fetch(FetchError::Timeout))
     ));
     assert_eq!(fs::read(&path).unwrap(), b"example.com\n");
@@ -474,19 +708,119 @@ fn stale_download_cannot_replace_a_changed_list_source() {
     let path = list_path(&directory.0.join("lists"), &list);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, bytes).unwrap();
-    let result = update_list_with(&store, &list.id, None, Timeouts::default(), &mut |_, _| {
-        store
-            .modify(|config| {
-                config.lists[0].source =
-                    ListSource::Url("https://lists.example.com/two.txt".to_owned());
-                Ok::<_, StoreError>(())
+    let result = update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, _| {
+            store
+                .modify(|config| {
+                    config.lists[0].source =
+                        ListSource::Url("https://lists.example.com/two.txt".to_owned());
+                    Ok::<_, StoreError>(())
+                })
+                .unwrap();
+            Ok(ListFetch::Modified {
+                bytes: b"example.invalid\n".to_vec(),
+                validators: ListValidators::default(),
             })
-            .unwrap();
-        Ok(b"example.invalid\n".to_vec())
-    });
+        },
+    );
     assert!(matches!(result, Err(ListError::ChangedDuringUpdate)));
     assert_eq!(fs::read(&path).unwrap(), bytes);
     assert_eq!(store.load().unwrap().lists[0].sha256, list.sha256);
+}
+
+#[test]
+fn unchanged_response_still_rejects_a_list_changed_during_fetch() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let validators = ListValidators {
+        etag: Some("\"first\"".into()),
+        last_modified: None,
+    };
+    let (list, path) = url_list_with_http(&store, &validators);
+    let result = update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, sent| {
+            assert_eq!(sent, Some(&validators));
+            store
+                .modify(|config| {
+                    config.lists[0].source =
+                        ListSource::Url("https://lists.example.com/new.txt".into());
+                    Ok::<_, StoreError>(())
+                })
+                .unwrap();
+            Ok(ListFetch::NotModified)
+        },
+    );
+    assert!(matches!(result, Err(ListError::ChangedDuringUpdate)));
+    assert_eq!(fs::read(&path).unwrap(), b"example.com\n");
+    assert_eq!(store.load().unwrap().lists[0].updated_at, list.updated_at);
+}
+
+#[test]
+fn http_metadata_rolls_back_when_config_save_fails() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let original = ListValidators {
+        etag: Some("\"first\"".into()),
+        last_modified: None,
+    };
+    let (list, path) = url_list_with_http(&store, &original);
+    store.fail_next_save_for_test();
+    let result = update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, sent| {
+            assert_eq!(sent, Some(&original));
+            Ok(ListFetch::Modified {
+                bytes: b"example.invalid\n".to_vec(),
+                validators: ListValidators {
+                    etag: Some("\"second\"".into()),
+                    last_modified: None,
+                },
+            })
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(ListError::Store(StoreError::Io { .. }))
+    ));
+    assert_eq!(fs::read(&path).unwrap(), b"example.com\n");
+    assert_eq!(
+        read_http_metadata(&http_path(&path), list.sha256.as_deref().unwrap()),
+        Some(original)
+    );
+    assert!(!previous_path(&http_path(&path)).exists());
+}
+
+#[test]
+fn http_metadata_is_restored_when_removal_rolls_back() {
+    let directory = TestDirectory::new();
+    let store = directory.store();
+    let validators = ListValidators {
+        etag: Some("\"first\"".into()),
+        last_modified: None,
+    };
+    let (list, path) = url_list_with_http(&store, &validators);
+    store.fail_next_save_for_test();
+    assert!(matches!(
+        remove_list(&store, &list.id),
+        Err(ListError::Store(StoreError::Io { .. }))
+    ));
+    assert_eq!(fs::read(&path).unwrap(), b"example.com\n");
+    assert_eq!(
+        read_http_metadata(&http_path(&path), list.sha256.as_deref().unwrap()),
+        Some(validators)
+    );
+    assert!(!previous_path(&http_path(&path)).exists());
 }
 
 #[test]
@@ -513,10 +847,19 @@ fn refresh_keeps_a_name_changed_during_download() {
     let path = list_path(&directory.0.join("lists"), &list);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, bytes).unwrap();
-    let result = update_list_with(&store, &list.id, None, Timeouts::default(), &mut |_, _| {
-        rename_list(&store, &list.id, "New").unwrap();
-        Ok(b"example.invalid\n".to_vec())
-    })
+    let result = update_list_with(
+        &store,
+        &list.id,
+        None,
+        Timeouts::default(),
+        &mut |_, _, _| {
+            rename_list(&store, &list.id, "New").unwrap();
+            Ok(ListFetch::Modified {
+                bytes: b"example.invalid\n".to_vec(),
+                validators: ListValidators::default(),
+            })
+        },
+    )
     .unwrap();
     assert_eq!(result.name, "New");
     assert_eq!(store.load().unwrap().lists[0].name, "New");
@@ -549,12 +892,15 @@ fn updating_all_skips_files_and_continues_after_a_url_failure() {
         fs::write(list_path(&directory.0.join("lists"), list), original).unwrap();
     }
     let mut requested = Vec::new();
-    let result = update_all_lists_with(&store, Timeouts::default(), &mut |url, _| {
+    let result = update_all_lists_with(&store, Timeouts::default(), &mut |url, _, _| {
         requested.push(url.to_owned());
         if url.ends_with("/2.txt") {
             Err(FetchError::Timeout)
         } else {
-            Ok(b"example.invalid\n".to_vec())
+            Ok(ListFetch::Modified {
+                bytes: b"example.invalid\n".to_vec(),
+                validators: ListValidators::default(),
+            })
         }
     })
     .unwrap();

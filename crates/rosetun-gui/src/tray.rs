@@ -35,21 +35,26 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
             let icon = match status.state {
                 ConnectionState::Connected => TrayState::Connected,
                 ConnectionState::Disconnected => TrayState::Disconnected,
-                ConnectionState::Connecting | ConnectionState::Reconnecting => TrayState::Connecting,
+                ConnectionState::Connecting | ConnectionState::Reconnecting => {
+                    TrayState::Connecting
+                }
                 ConnectionState::FailedProtected { .. } => TrayState::Blocked,
                 ConnectionState::Failed { .. } => TrayState::Failed,
             };
             (label, icon)
         },
     );
-    let server = state.visible_status().and_then(|_| state.config.active_node()).map(|(_, node)| {
-        state
-            .text(&node.name)
-            .split(|character: char| character.is_whitespace() || character.is_control())
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ")
-    });
+    let server = state
+        .visible_status()
+        .and_then(|_| state.config.active_node())
+        .map(|(_, node)| {
+            state
+                .text(&node.name)
+                .split(|character: char| character.is_whitespace() || character.is_control())
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
     TrayView {
         icon,
         tooltip: fit_tooltip(&i18n::tray_tooltip(&status, server.as_deref())),
@@ -233,9 +238,9 @@ impl Tray {
 #[cfg(test)]
 mod tests {
     use super::{fit_tooltip, tray_view};
+    use crate::i18n;
     use crate::rose_icon::TrayState;
     use crate::state::State;
-    use crate::i18n;
     use rosetun_config::{ConnectionState, Status};
     use rosetun_core::Store;
     use std::fs;
@@ -293,7 +298,10 @@ mod tests {
         state.helper_available = false;
         let unavailable = tray_view(&state);
         assert_eq!(unavailable.icon, TrayState::ServiceUnavailable);
-        assert_eq!(unavailable.tooltip, i18n::tray_tooltip(&tr!("helper-unavailable"), None));
+        assert_eq!(
+            unavailable.tooltip,
+            i18n::tray_tooltip(&tr!("helper-unavailable"), None)
+        );
     }
 
     #[test]
@@ -305,14 +313,20 @@ mod tests {
             (ConnectionState::Connecting, TrayState::Connecting),
             (ConnectionState::Reconnecting, TrayState::Connecting),
             (ConnectionState::Connected, TrayState::Connected),
-            (ConnectionState::FailedProtected {
-                reason: String::new(),
-                failure_kind: None,
-            }, TrayState::Blocked),
-            (ConnectionState::Failed {
-                reason: String::new(),
-                failure_kind: None,
-            }, TrayState::Failed),
+            (
+                ConnectionState::FailedProtected {
+                    reason: String::new(),
+                    failure_kind: None,
+                },
+                TrayState::Blocked,
+            ),
+            (
+                ConnectionState::Failed {
+                    reason: String::new(),
+                    failure_kind: None,
+                },
+                TrayState::Failed,
+            ),
         ] {
             state.status.state = connection.clone();
             let tray = tray_view(&state);

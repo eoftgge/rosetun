@@ -81,10 +81,10 @@ impl State {
         self.visible_status()
             .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
             && self
-            .session
-            .session_request
-            .as_ref()
-            .is_some_and(|request| request.settings.allow_lan != self.config.settings.allow_lan)
+                .session
+                .session_request
+                .as_ref()
+                .is_some_and(|request| request.settings.allow_lan != self.config.settings.allow_lan)
     }
 
     pub(crate) fn xray_reality_count(&self) -> usize {
@@ -229,7 +229,13 @@ impl State {
                 self.settings.screen.section = section;
             }
             Action::OpenLanSettings => {
-                if self.rules.screen.add.as_ref().is_some_and(|dialog| !dialog.busy) {
+                if self
+                    .rules
+                    .screen
+                    .add
+                    .as_ref()
+                    .is_some_and(|dialog| !dialog.busy)
+                {
                     self.rules.screen.add = None;
                     self.settings.screen.section = SettingsSection::Connection;
                     return self.act_settings(Action::OpenSettings);

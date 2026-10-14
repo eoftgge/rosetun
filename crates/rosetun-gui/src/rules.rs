@@ -290,18 +290,18 @@ mod tests {
     }
 
     #[test]
-    fn edit_dialog_supports_only_exact_suffix_and_process_matchers() {
+    fn edit_dialog_supports_exact_suffix_process_and_ip_matchers() {
         for matcher in [
             RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
             RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
             RuleMatcher::Process(ProcessMatch::Name("App.exe".into())),
             RuleMatcher::Process(ProcessMatch::Path(PathBuf::from("C:\\Apps\\App.exe"))),
+            RuleMatcher::IpCidr("192.0.2.0/24".into()),
         ] {
             assert!(editable(&matcher));
         }
         for matcher in [
             RuleMatcher::Domain(DomainMatch::Keyword("news".into())),
-            RuleMatcher::IpCidr("10.0.0.0/8".into()),
             RuleMatcher::Template(rosetun_config::RuleTemplate::Youtube),
         ] {
             assert!(!editable(&matcher));

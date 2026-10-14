@@ -248,8 +248,8 @@ fn badge_mark(point: Pt, state: TrayState) -> bool {
         TrayState::Connecting => {
             let dx = x - 35.0;
             let dy = y - 35.0;
-            let angle = (dy.atan2(dx) + std::f32::consts::FRAC_PI_2)
-                .rem_euclid(std::f32::consts::TAU);
+            let angle =
+                (dy.atan2(dx) + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
             ((dx * dx + dy * dy).sqrt() - 7.5).abs() <= 1.7
                 && angle <= 3.0 * std::f32::consts::FRAC_PI_2
         }
@@ -425,7 +425,10 @@ mod tests {
         for size in [16, 32, 48] {
             let images = states.map(|state| rose_icon_rgba(size, RoseIcon::Tray(state)));
             assert_eq!(
-                images.iter().collect::<std::collections::HashSet<_>>().len(),
+                images
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
                 6,
                 "{size} px"
             );
@@ -455,8 +458,16 @@ mod tests {
             if state == TrayState::Connected {
                 assert_eq!(pixel(rgba, 48, 26, 12), theme::ROSE_DARK.to_array());
             } else {
-                assert!(!rgba.chunks_exact(4).any(|pixel| pixel == theme::ROSE.to_array()));
-                assert!(!rgba.chunks_exact(4).any(|pixel| pixel == theme::ROSE_DARK.to_array()));
+                assert!(
+                    !rgba
+                        .chunks_exact(4)
+                        .any(|pixel| pixel == theme::ROSE.to_array())
+                );
+                assert!(
+                    !rgba
+                        .chunks_exact(4)
+                        .any(|pixel| pixel == theme::ROSE_DARK.to_array())
+                );
             }
         }
     }
@@ -471,7 +482,11 @@ mod tests {
         ] {
             let rgba = rose_icon_rgba(48, RoseIcon::Tray(state));
             assert_eq!(pixel(&rgba, 48, 35, 45), color.to_array(), "{state:?} disc");
-            assert_eq!(pixel(&rgba, 48, mark.0, mark.1), Color32::WHITE.to_array(), "{state:?} mark");
+            assert_eq!(
+                pixel(&rgba, 48, mark.0, mark.1),
+                Color32::WHITE.to_array(),
+                "{state:?} mark"
+            );
             assert_eq!(pixel(&rgba, 48, 34, 21), [0; 4], "{state:?} cutout");
         }
     }

@@ -27,11 +27,11 @@ pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
 pub use rosetun_subscription::{ParseError, SkipReason, Skipped, UnsupportedTransport};
 pub use rules::{
     AddedRules, AppliedSnapshot, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,
-    RuleInputError, RuleSetError, add_rule, add_rules, create_rule_set, delete_rule_set, move_rule,
-    move_rules, parse_domain_input, parse_domain_lines, parse_ip_cidr, parse_ip_lines,
-    ip_lines_have_local_address, parse_process_input, remove_rule, remove_rules,
-    rename_rule_set, restore_rules_and_dns, rule_value_ascii, rule_value_text, set_default_target,
-    set_rule_enabled, set_rule_target, temporary_rules, update_rule, validate_list_matcher,
+    RuleInputError, RuleSetError, add_rule, add_rules, create_rule_set, delete_rule_set,
+    ip_lines_have_local_address, move_rule, move_rules, parse_domain_input, parse_domain_lines,
+    parse_ip_cidr, parse_ip_lines, parse_process_input, remove_rule, remove_rules, rename_rule_set,
+    restore_rules_and_dns, rule_value_ascii, rule_value_text, set_default_target, set_rule_enabled,
+    set_rule_target, temporary_rules, update_rule, validate_list_matcher,
 };
 pub use selection::{
     SelectNodeError, SelectRuleSetError, select_node, select_rule_set, set_kill_switch,

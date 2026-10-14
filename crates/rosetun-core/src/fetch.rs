@@ -91,22 +91,73 @@ impl fmt::Display for FetchError {
 
 impl std::error::Error for FetchError {}
 
-pub(crate) fn fetch_list_bytes(url: &str, timeouts: Timeouts) -> Result<Vec<u8>, FetchError> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ListValidators {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+impl ListValidators {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.etag.is_none() && self.last_modified.is_none()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ListFetch {
+    NotModified,
+    Modified {
+        bytes: Vec<u8>,
+        validators: ListValidators,
+    },
+}
+
+pub(crate) fn fetch_list_bytes(
+    url: &str,
+    timeouts: Timeouts,
+    validators: Option<&ListValidators>,
+) -> Result<ListFetch, FetchError> {
     let url = parse_url(url)?;
     let agent = agent_for(&url, timeouts);
-    let mut response = agent
+    let mut request = agent
         .get(url.as_str())
         .header("User-Agent", DEFAULT_USER_AGENT)
-        .header("Accept", "*/*")
-        .call()
-        .map_err(classify_request_error)?;
+        .header("Accept", "*/*");
+    if let Some(validators) = validators {
+        if let Some(etag) = &validators.etag {
+            request = request.header("If-None-Match", etag);
+        }
+        if let Some(last_modified) = &validators.last_modified {
+            request = request.header("If-Modified-Since", last_modified);
+        }
+    }
+    let mut response = request.call().map_err(classify_request_error)?;
 
     let status = response.status().as_u16();
+    if status == 304 {
+        return if validators.is_some() {
+            Ok(ListFetch::NotModified)
+        } else {
+            Err(FetchError::HttpStatus(304))
+        };
+    }
     if !(200..=299).contains(&status) {
         return Err(FetchError::HttpStatus(status));
     }
-
-    read_bounded_body(&mut response, MAX_LIST_BYTES)
+    let validators = ListValidators {
+        etag: response
+            .headers()
+            .get("ETag")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned),
+        last_modified: response
+            .headers()
+            .get("Last-Modified")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned),
+    };
+    let bytes = read_bounded_body(&mut response, MAX_LIST_BYTES)?;
+    Ok(ListFetch::Modified { bytes, validators })
 }
 
 pub fn fetch(subscription: &Subscription, timeouts: Timeouts) -> Result<Parsed, FetchError> {
@@ -587,13 +638,63 @@ mod tests {
     fn list_fetch_returns_bytes_and_default_headers() {
         let server = Server::start(vec![Reply::ok(b"example.com\n".to_vec())]);
 
-        let body = fetch_list_bytes(&server.url, timeouts()).unwrap();
+        let response = fetch_list_bytes(&server.url, timeouts(), None).unwrap();
 
-        assert_eq!(body, b"example.com\n");
+        assert_eq!(
+            response,
+            ListFetch::Modified {
+                bytes: b"example.com\n".to_vec(),
+                validators: ListValidators::default(),
+            }
+        );
         let requests = server.requests.lock().unwrap();
         assert_eq!(requests[0].target, SECRET_SUFFIX);
         assert_eq!(requests[0].headers["user-agent"], DEFAULT_USER_AGENT);
         assert_eq!(requests[0].headers["accept"], "*/*");
+    }
+
+    #[test]
+    fn list_fetch_keeps_response_validators() {
+        let server = Server::start(vec![
+            Reply::ok(b"example.com\n".to_vec())
+                .header("ETag", "W/\"first\"")
+                .header("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT"),
+        ]);
+
+        assert_eq!(
+            fetch_list_bytes(&server.url, timeouts(), None).unwrap(),
+            ListFetch::Modified {
+                bytes: b"example.com\n".to_vec(),
+                validators: ListValidators {
+                    etag: Some("W/\"first\"".into()),
+                    last_modified: Some("Wed, 21 Oct 2015 07:28:00 GMT".into()),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn conditional_list_headers_survive_redirect_and_304() {
+        let server = Server::start(vec![
+            Reply::status(302).header("Location", "/redirected"),
+            Reply::status(304),
+        ]);
+        let validators = ListValidators {
+            etag: Some("W/\"example\"".into()),
+            last_modified: Some("Wed, 21 Oct 2015 07:28:00 GMT".into()),
+        };
+
+        let response = fetch_list_bytes(&server.url, timeouts(), Some(&validators)).unwrap();
+
+        assert_eq!(response, ListFetch::NotModified);
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].target, "/redirected");
+        assert_eq!(requests[1].headers["if-none-match"], "W/\"example\"");
+        assert_eq!(
+            requests[1].headers["if-modified-since"],
+            "Wed, 21 Oct 2015 07:28:00 GMT"
+        );
     }
 
     #[test]
@@ -603,7 +704,7 @@ mod tests {
                 .header("Content-Encoding", "gzip"),
         ]);
 
-        let error = fetch_list_bytes(&server.url, timeouts()).unwrap_err();
+        let error = fetch_list_bytes(&server.url, timeouts(), None).unwrap_err();
 
         assert!(matches!(error, FetchError::ResponseTooLarge));
         assert_eq!(error.to_string(), "response too large");

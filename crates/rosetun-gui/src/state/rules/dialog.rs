@@ -154,7 +154,9 @@ impl AddRuleDialog {
                     .iter()
                     .find(|error| error.line == index + 1)
                     .and_then(|error| match &error.error {
-                        rosetun_core::IpCidrError::HostBits { corrected } => Some(corrected.as_str()),
+                        rosetun_core::IpCidrError::HostBits { corrected } => {
+                            Some(corrected.as_str())
+                        }
                         rosetun_core::IpCidrError::Invalid => None,
                     })
                     .unwrap_or(line)
@@ -441,7 +443,11 @@ impl State {
                         RuleInputKind::Ip => {
                             let parsed = rosetun_core::parse_ip_lines(&dialog.ips);
                             (parsed.errors.is_empty() && !parsed.addresses.is_empty()).then(|| {
-                                parsed.addresses.into_iter().map(RuleMatcher::IpCidr).collect()
+                                parsed
+                                    .addresses
+                                    .into_iter()
+                                    .map(RuleMatcher::IpCidr)
+                                    .collect()
                             })
                         }
                         RuleInputKind::List => dialog.list.as_ref().and_then(|list| {

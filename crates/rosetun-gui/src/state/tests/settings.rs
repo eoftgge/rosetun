@@ -395,10 +395,12 @@ fn local_network_setting_applies_on_the_next_connection() {
     assert!(state.act(Action::SetAllowLan(true)).is_none());
     state.reduce(WorkerEvent::Setting(SettingChange::AllowLan(true), Ok(())));
     state.config.settings.allow_lan = true;
-    assert!(rosetun_ipc::ConnectRequest::from_config(&state.config)
-        .unwrap()
-        .settings
-        .allow_lan);
+    assert!(
+        rosetun_ipc::ConnectRequest::from_config(&state.config)
+            .unwrap()
+            .settings
+            .allow_lan
+    );
     assert!(state.act(Action::SetAllowLan(true)).is_none());
 }
 
