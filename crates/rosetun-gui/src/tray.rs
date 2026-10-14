@@ -1,14 +1,15 @@
 use std::sync::mpsc::Sender;
 
 use eframe::egui;
+use rosetun_config::ConnectionState;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 use crate::actions::PrimaryAction;
 use crate::app::ShellEvent;
-use crate::rose_icon::{self, RoseIcon};
+use crate::rose_icon::{self, RoseIcon, TrayState};
 use crate::state::{State, primary_label};
-use crate::{constants, i18n, theme, view};
+use crate::{constants, i18n, view};
 
 const OPEN_ID: &str = "rosetun.tray.open";
 const HIDE_ID: &str = "rosetun.tray.hide";
@@ -17,7 +18,7 @@ const QUIT_ID: &str = "rosetun.tray.quit";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TrayView {
-    pub(crate) color: egui::Color32,
+    pub(crate) icon: TrayState,
     pub(crate) tooltip: String,
     pub(crate) primary_label: String,
     pub(crate) primary_enabled: bool,
@@ -27,12 +28,21 @@ pub(crate) struct TrayView {
 }
 
 pub(crate) fn tray_view(state: &State) -> TrayView {
-    let (status, color) = state
-        .visible_status()
-        .map_or((tr!("status-unknown"), theme::DISCONNECTED), |status| {
-            view::connection::state_style(&status.state)
-        });
-    let server = state.config.active_node().map(|(_, node)| {
+    let (status, icon) = state.visible_status().map_or_else(
+        || (tr!("helper-unavailable"), TrayState::ServiceUnavailable),
+        |status| {
+            let (label, _) = view::connection::state_style(&status.state);
+            let icon = match status.state {
+                ConnectionState::Connected => TrayState::Connected,
+                ConnectionState::Disconnected => TrayState::Disconnected,
+                ConnectionState::Connecting | ConnectionState::Reconnecting => TrayState::Connecting,
+                ConnectionState::FailedProtected { .. } => TrayState::Blocked,
+                ConnectionState::Failed { .. } => TrayState::Failed,
+            };
+            (label, icon)
+        },
+    );
+    let server = state.visible_status().and_then(|_| state.config.active_node()).map(|(_, node)| {
         state
             .text(&node.name)
             .split(|character: char| character.is_whitespace() || character.is_control())
@@ -41,7 +51,7 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
             .join(" ")
     });
     TrayView {
-        color,
+        icon,
         tooltip: fit_tooltip(&i18n::tray_tooltip(&status, server.as_deref())),
         primary_label: primary_label(state),
         primary_enabled: state.primary_action() != PrimaryAction::Disabled,
@@ -102,7 +112,7 @@ impl Tray {
             &quit,
         ])?;
         let initial_icon = Icon::from_rgba(
-            rose_icon::rose_icon_rgba(32, RoseIcon::Tray(theme::DISCONNECTED)),
+            rose_icon::rose_icon_rgba(32, RoseIcon::Tray(TrayState::Disconnected)),
             32,
             32,
         )?;
@@ -158,10 +168,10 @@ impl Tray {
         if self
             .shown
             .as_ref()
-            .is_none_or(|shown| shown.color != view.color)
+            .is_none_or(|shown| shown.icon != view.icon)
         {
             match Icon::from_rgba(
-                rose_icon::rose_icon_rgba(32, RoseIcon::Tray(view.color)),
+                rose_icon::rose_icon_rgba(32, RoseIcon::Tray(view.icon)),
                 32,
                 32,
             ) {
@@ -223,8 +233,9 @@ impl Tray {
 #[cfg(test)]
 mod tests {
     use super::{fit_tooltip, tray_view};
+    use crate::rose_icon::TrayState;
     use crate::state::State;
-    use crate::{i18n, theme};
+    use crate::i18n;
     use rosetun_config::{ConnectionState, Status};
     use rosetun_core::Store;
     use std::fs;
@@ -249,10 +260,10 @@ mod tests {
     fn status_and_primary_action_follow_visible_state() {
         let mut state = State::default();
         let unknown = tray_view(&state);
-        assert_eq!(unknown.color, theme::DISCONNECTED);
+        assert_eq!(unknown.icon, TrayState::ServiceUnavailable);
         assert_eq!(
             unknown.tooltip,
-            i18n::tray_tooltip(&tr!("status-unknown"), None)
+            i18n::tray_tooltip(&tr!("helper-unavailable"), None)
         );
         assert!(!unknown.primary_enabled);
         assert_eq!(unknown.hide_label, tr!("tray-hide"));
@@ -271,12 +282,45 @@ mod tests {
         state.config = Store::at(&path).load().unwrap();
         fs::remove_file(path).unwrap();
         let connected = tray_view(&state);
-        assert_eq!(connected.color, theme::CONNECTED);
+        assert_eq!(connected.icon, TrayState::Connected);
         assert_eq!(connected.primary_label, tr!("disconnect"));
         assert!(connected.primary_enabled);
         assert!(connected.tooltip.contains("Server Blue"));
         assert_eq!(connected.tooltip.matches('\n').count(), 1);
         assert!(!connected.tooltip.contains('\r'));
         assert!(!connected.tooltip.contains('\t'));
+
+        state.helper_available = false;
+        let unavailable = tray_view(&state);
+        assert_eq!(unavailable.icon, TrayState::ServiceUnavailable);
+        assert_eq!(unavailable.tooltip, i18n::tray_tooltip(&tr!("helper-unavailable"), None));
+    }
+
+    #[test]
+    fn each_connection_state_has_the_expected_tray_shape() {
+        let mut state = State::default();
+        state.helper_available = true;
+        for (connection, expected) in [
+            (ConnectionState::Disconnected, TrayState::Disconnected),
+            (ConnectionState::Connecting, TrayState::Connecting),
+            (ConnectionState::Reconnecting, TrayState::Connecting),
+            (ConnectionState::Connected, TrayState::Connected),
+            (ConnectionState::FailedProtected {
+                reason: String::new(),
+                failure_kind: None,
+            }, TrayState::Blocked),
+            (ConnectionState::Failed {
+                reason: String::new(),
+                failure_kind: None,
+            }, TrayState::Failed),
+        ] {
+            state.status.state = connection.clone();
+            let tray = tray_view(&state);
+            assert_eq!(tray.icon, expected, "{connection:?}");
+            assert_eq!(
+                tray.tooltip,
+                i18n::tray_tooltip(&crate::view::connection::state_style(&connection).0, None)
+            );
+        }
     }
 }
