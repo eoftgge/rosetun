@@ -228,6 +228,13 @@ impl State {
             Action::OpenSettingsSection(section) => {
                 self.settings.screen.section = section;
             }
+            Action::OpenLanSettings => {
+                if self.rules.screen.add.as_ref().is_some_and(|dialog| !dialog.busy) {
+                    self.rules.screen.add = None;
+                    self.settings.screen.section = SettingsSection::Connection;
+                    return self.act_settings(Action::OpenSettings);
+                }
+            }
             Action::SetInterfaceScale(percent) => {
                 if self.can_edit_settings()
                     && self.config.interface.scale_percent != percent

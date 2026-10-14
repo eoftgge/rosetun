@@ -537,6 +537,16 @@ temporary-only = Only until disconnect
 rule-kind-app = App
 rule-kind-site = Website
 rule-kind-list = List
+rule-kind-ip = IP address
+ip-label = IP addresses or subnets, one per line
+ip-example = 192.0.2.1
+    198.51.100.0/24
+    2001:db8::1
+ip-invalid = Enter an IPv4 or IPv6 address or subnet with a valid prefix
+ip-host-bits = Subnet starts at { $corrected }
+ip-fix = Fix
+ip-local-warning = Local network addresses usually bypass the tunnel, so a rule for them may not work. To reach devices at home, use this setting:
+enter-ip = Enter an IP address
 rule-list-empty = No lists added yet. Add a list to make a rule for it.
 rule-list-select = List
 rule-list-categories = Categories

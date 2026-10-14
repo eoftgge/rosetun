@@ -33,7 +33,7 @@ rosetun_message_problems() {
 # Prints the problems in the staged changes; silent when clean.
 rosetun_staged_problems() {
     git diff --cached --name-only --diff-filter=ACMR | LC_ALL=C awk '
-        /(^|\/)rules\// || /(^|\/)rosetun-archive(\/|$)/ {
+        /^rules\// || /(^|\/)rosetun-archive(\/|$)/ {
             print $0 ": must not be committed"
             next
         }

@@ -7,7 +7,7 @@ use rosetun_config::{DomainMatch, ListCategoryError, ListFormat, ListValidationE
 use serde_json::Value;
 use serde_json::json;
 
-use crate::rules::parse_domain_input;
+use crate::rules::{parse_domain_input, parse_ip_cidr};
 
 const MAX_INPUT_BYTES: usize = crate::MAX_LIST_BYTES;
 const MAX_PAYLOAD_BYTES: usize = rosetun_config::MAX_UPLOADED_LIST_BYTES;
@@ -377,7 +377,7 @@ fn parse_text_line(line: &str) -> Result<Record, TextErrorKind> {
         }),
         _ => {
             if kind.is_empty() && (value.parse::<IpAddr>().is_ok() || value.contains('/')) {
-                return parse_ip_cidr(value);
+                return parse_text_ip_cidr(value);
             }
             if value.contains(['/', '?', '#']) || value.contains("://") {
                 return Err(TextErrorKind::InvalidDomain);
@@ -402,31 +402,11 @@ fn parse_text_line(line: &str) -> Result<Record, TextErrorKind> {
     }
 }
 
-fn parse_ip_cidr(value: &str) -> Result<Record, TextErrorKind> {
-    let (ip, prefix) = match value.split_once('/') {
-        Some((ip, prefix)) => {
-            let ip = ip
-                .parse::<IpAddr>()
-                .map_err(|_| TextErrorKind::InvalidIpCidr)?;
-            let prefix = prefix
-                .parse::<u8>()
-                .map_err(|_| TextErrorKind::InvalidIpCidr)?;
-            (ip, prefix)
-        }
-        None => {
-            let ip = value
-                .parse::<IpAddr>()
-                .map_err(|_| TextErrorKind::InvalidIpCidr)?;
-            let prefix = if ip.is_ipv4() { 32 } else { 128 };
-            (ip, prefix)
-        }
-    };
-    if prefix > if ip.is_ipv4() { 32 } else { 128 } {
-        return Err(TextErrorKind::InvalidIpCidr);
-    }
+fn parse_text_ip_cidr(value: &str) -> Result<Record, TextErrorKind> {
+    let value = parse_ip_cidr(value).map_err(|_| TextErrorKind::InvalidIpCidr)?;
     Ok(Record {
         key: "ip_cidr",
-        value: format!("{ip}/{prefix}"),
+        value,
     })
 }
 
@@ -1129,6 +1109,16 @@ mod tests {
             rule["ip_cidr"],
             json!(["192.0.2.0/24", "198.51.100.1/32", "2001:db8::/32"])
         );
+    }
+
+    #[test]
+    fn text_rejects_subnets_with_host_bits() {
+        let error = inspect(b"192.0.2.5/24\n", Some("example.txt")).unwrap_err();
+        assert!(matches!(
+            error,
+            ListParseError::TextLines { errors, remaining: 0 }
+                if errors == [TextLineError { line: 1, kind: TextErrorKind::InvalidIpCidr }]
+        ));
     }
 
     #[test]

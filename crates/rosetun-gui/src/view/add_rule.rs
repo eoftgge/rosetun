@@ -132,6 +132,7 @@ pub(crate) fn show(
                     (RuleInputKind::Process, tr!("rule-kind-app")),
                     (RuleInputKind::Domain, tr!("rule-kind-site")),
                     (RuleInputKind::List, tr!("rule-kind-list")),
+                    (RuleInputKind::Ip, tr!("rule-kind-ip")),
                 ],
                 true,
                 !dialog.busy && dialog.editing.is_none(),
@@ -167,6 +168,7 @@ pub(crate) fn show(
                 }
                 RuleInputKind::Domain => domain_input(ui, dialog),
                 RuleInputKind::List => list_input(ui, dialog, lists, actions),
+                RuleInputKind::Ip => ip_input(ui, dialog, actions),
             };
             ui.add_space(0.0);
             ui.label(
@@ -274,6 +276,7 @@ pub(crate) fn show(
                     RuleInputKind::Process => tr!("choose-program"),
                     RuleInputKind::Domain => tr!("enter-site"),
                     RuleInputKind::List => tr!("choose-list-category"),
+                    RuleInputKind::Ip => tr!("enter-ip"),
                 })
             };
             egui::Sides::new().show(
@@ -296,6 +299,9 @@ pub(crate) fn show(
                         let domains =
                             rosetun_core::parse_domain_lines(&dialog.domains, dialog.subdomains);
                         crate::i18n::add_rules(domains.domains.len())
+                    } else if dialog.kind == RuleInputKind::Ip {
+                        let ips = rosetun_core::parse_ip_lines(&dialog.ips);
+                        crate::i18n::add_rules(ips.addresses.len())
                     } else if dialog.kind == RuleInputKind::List
                         && dialog.selected_categories.len() > 1
                     {
@@ -665,6 +671,79 @@ fn list_input(
         dialog.selected_categories.clear();
     }
     !selected.format.has_categories() || !dialog.selected_categories.is_empty()
+}
+
+fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) -> bool {
+    ui.label(RichText::new(tr!("ip-label")).small().color(theme::TEXT_DIM));
+    let input = if dialog.editing.is_some() {
+        ui.add_enabled(
+            !dialog.busy,
+            egui::TextEdit::singleline(&mut dialog.ips).desired_width(ui.available_width()),
+        )
+    } else {
+        ui.add_enabled(
+            !dialog.busy,
+            egui::TextEdit::multiline(&mut dialog.ips)
+                .desired_width(ui.available_width())
+                .desired_rows(4)
+                .font(FontId::monospace(14.0))
+                .hint_text(tr!("ip-example")),
+        )
+    };
+    if dialog.focus_input {
+        input.request_focus();
+        dialog.focus_input = false;
+    }
+    if input.changed() {
+        dialog.error = None;
+    }
+    let parsed = rosetun_core::parse_ip_lines(&dialog.ips);
+    if !parsed.errors.is_empty() {
+        egui::ScrollArea::vertical()
+            .id_salt("ip_line_errors")
+            .max_height(92.0)
+            .show(ui, |ui| {
+                for error in parsed.errors.iter().take(3) {
+                    let message = match &error.error {
+                        rosetun_core::IpCidrError::Invalid => tr!("ip-invalid"),
+                        rosetun_core::IpCidrError::HostBits { corrected } => {
+                            tr!("ip-host-bits", corrected = corrected)
+                        }
+                    };
+                    ui.label(
+                        RichText::new(crate::i18n::line_error(error.line, &message))
+                            .small()
+                            .color(theme::ERROR),
+                    );
+                }
+                if parsed.errors.len() > 3 {
+                    ui.label(
+                        RichText::new(crate::i18n::more_errors(parsed.errors.len() - 3))
+                            .small()
+                            .color(theme::ERROR),
+                    );
+                }
+                if parsed.errors.iter().any(|error| {
+                    matches!(error.error, rosetun_core::IpCidrError::HostBits { .. })
+                }) && widgets::link(ui, &tr!("ip-fix"), !dialog.busy).clicked()
+                {
+                    actions.push(Action::CorrectRuleIps);
+                }
+            });
+    }
+    if dialog.local_ip_warning() {
+        ui.add(egui::Label::new(
+            RichText::new(tr!("ip-local-warning"))
+                .small()
+                .color(theme::ROSE_LIGHT),
+        ).wrap());
+        if widgets::link(ui, &tr!("allow-lan"), !dialog.busy).clicked() {
+            actions.push(Action::OpenLanSettings);
+        }
+    }
+    !parsed.addresses.is_empty()
+        && parsed.errors.is_empty()
+        && (dialog.editing.is_none() || parsed.addresses.len() == 1)
 }
 
 fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
@@ -1282,6 +1361,36 @@ mod tests {
             .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
             .unwrap();
         assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
+    }
+
+    #[test]
+    fn ip_modal_fits_compact_window_with_errors() {
+        use super::*;
+        use rosetun_config::RuleSetId;
+
+        for advanced in [false, true] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            dialog.kind = RuleInputKind::Ip;
+            dialog.advanced = advanced;
+            dialog.ips = "192.0.2.5/24\nexample.com\n2001:db8::1/32\n198.51.100.0/33".into();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(960.0, 640.0),
+                    )),
+                    ..egui::RawInput::default()
+                },
+                |ctx| show(ctx, &mut dialog, &[], true, 0, &mut Vec::new()),
+            );
+            output.textures_delta.clear();
+            let rect = ctx
+                .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+                .unwrap();
+            assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
+        }
     }
 
     #[test]

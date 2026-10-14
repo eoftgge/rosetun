@@ -54,6 +54,7 @@ pub(crate) fn editable(matcher: &RuleMatcher) -> bool {
             rosetun_config::DomainMatch::Exact(_) | rosetun_config::DomainMatch::Suffix(_)
         ) | RuleMatcher::Process(_)
             | RuleMatcher::List { .. }
+            | RuleMatcher::IpCidr(_)
     )
 }
 

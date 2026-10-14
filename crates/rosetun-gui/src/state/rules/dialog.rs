@@ -14,6 +14,7 @@ use crate::worker::WorkerEvent;
 pub(crate) enum RuleInputKind {
     Domain,
     List,
+    Ip,
     #[default]
     Process,
 }
@@ -25,6 +26,7 @@ pub(crate) struct AddRuleDialog {
     pub(crate) kind: RuleInputKind,
     pub(crate) target: RuleTarget,
     pub(crate) domains: String,
+    pub(crate) ips: String,
     pub(crate) list: Option<ListId>,
     pub(crate) selected_categories: Vec<String>,
     pub(crate) category_filter: String,
@@ -58,6 +60,7 @@ impl AddRuleDialog {
             kind: RuleInputKind::Process,
             target: RuleTarget::Proxy,
             domains: String::new(),
+            ips: String::new(),
             list: None,
             selected_categories: Vec::new(),
             category_filter: String::new(),
@@ -103,6 +106,10 @@ impl AddRuleDialog {
                 dialog.list = Some(list.clone());
                 dialog.selected_categories = category.iter().cloned().collect();
             }
+            RuleMatcher::IpCidr(cidr) => {
+                dialog.kind = RuleInputKind::Ip;
+                dialog.ips = cidr.clone();
+            }
             RuleMatcher::Process(process) => {
                 dialog.process = rosetun_core::rule_value_text(&rule.matcher);
                 match process {
@@ -134,6 +141,31 @@ impl AddRuleDialog {
         (self.domains.trim() == value
             && self.subdomains == matches!(original, DomainMatch::Suffix(_)))
         .then(|| original.clone())
+    }
+
+    pub(crate) fn correct_ip_host_bits(&mut self) {
+        let corrections = rosetun_core::parse_ip_lines(&self.ips).errors;
+        self.ips = self
+            .ips
+            .split('\n')
+            .enumerate()
+            .map(|(index, line)| {
+                corrections
+                    .iter()
+                    .find(|error| error.line == index + 1)
+                    .and_then(|error| match &error.error {
+                        rosetun_core::IpCidrError::HostBits { corrected } => Some(corrected.as_str()),
+                        rosetun_core::IpCidrError::Invalid => None,
+                    })
+                    .unwrap_or(line)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.error = None;
+    }
+
+    pub(crate) fn local_ip_warning(&self) -> bool {
+        rosetun_core::ip_lines_have_local_address(&rosetun_core::parse_ip_lines(&self.ips))
     }
 
     pub(crate) fn select_list(&mut self, list: ListId) {
@@ -355,6 +387,14 @@ impl State {
                     }
                 }
             }
+            Action::CorrectRuleIps => {
+                if let Some(dialog) = &mut self.rules.screen.add
+                    && dialog.kind == RuleInputKind::Ip
+                    && !dialog.busy
+                {
+                    dialog.correct_ip_host_bits();
+                }
+            }
             Action::RefreshProcesses => return self.load_processes(),
             #[cfg(windows)]
             Action::BrowseExecutable => {
@@ -397,6 +437,12 @@ impl State {
                             rosetun_core::parse_process_input(&dialog.process)
                                 .ok()
                                 .map(|process| vec![RuleMatcher::Process(process)])
+                        }
+                        RuleInputKind::Ip => {
+                            let parsed = rosetun_core::parse_ip_lines(&dialog.ips);
+                            (parsed.errors.is_empty() && !parsed.addresses.is_empty()).then(|| {
+                                parsed.addresses.into_iter().map(RuleMatcher::IpCidr).collect()
+                            })
                         }
                         RuleInputKind::List => dialog.list.as_ref().and_then(|list| {
                             let entry = self.config.lists.iter().find(|entry| &entry.id == list)?;
@@ -460,8 +506,10 @@ impl State {
                                 return None;
                             }
                             Job::UpdateRule(dialog.set.clone(), id.clone(), matcher, dialog.target)
-                        } else if matches!(dialog.kind, RuleInputKind::Domain | RuleInputKind::List)
-                        {
+                        } else if matches!(
+                            dialog.kind,
+                            RuleInputKind::Domain | RuleInputKind::List | RuleInputKind::Ip
+                        ) {
                             Job::AddRules(dialog.set.clone(), matchers, dialog.target)
                         } else {
                             Job::AddRule(dialog.set.clone(), matchers.pop().unwrap(), dialog.target)

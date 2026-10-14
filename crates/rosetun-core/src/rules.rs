@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 use rosetun_config::{
@@ -505,6 +506,116 @@ pub fn parse_domain_lines(input: &str, subdomains: bool) -> DomainLines {
         }
     }
     result
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum IpCidrError {
+    #[error("enter an IP address or subnet")]
+    Invalid,
+    #[error("subnet starts at {corrected}")]
+    HostBits { corrected: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IpLineError {
+    pub line: usize,
+    pub error: IpCidrError,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IpLines {
+    pub addresses: Vec<String>,
+    pub errors: Vec<IpLineError>,
+}
+
+pub fn parse_ip_cidr(value: &str) -> Result<String, IpCidrError> {
+    let (ip, prefix) = match value.split_once('/') {
+        Some((ip, prefix)) => {
+            let ip = ip.parse::<IpAddr>().map_err(|_| IpCidrError::Invalid)?;
+            let prefix = prefix.parse::<u8>().map_err(|_| IpCidrError::Invalid)?;
+            (ip, prefix)
+        }
+        None => {
+            let ip = value.parse::<IpAddr>().map_err(|_| IpCidrError::Invalid)?;
+            (ip, if ip.is_ipv4() { 32 } else { 128 })
+        }
+    };
+    let network = match ip {
+        IpAddr::V4(ip) if prefix <= 32 => {
+            let mask = u32::MAX.checked_shl(u32::from(32 - prefix)).unwrap_or(0);
+            IpAddr::V4(Ipv4Addr::from(u32::from(ip) & mask))
+        }
+        IpAddr::V6(ip) if prefix <= 128 => {
+            let mask = u128::MAX.checked_shl(u32::from(128 - prefix)).unwrap_or(0);
+            IpAddr::V6(Ipv6Addr::from(u128::from(ip) & mask))
+        }
+        _ => return Err(IpCidrError::Invalid),
+    };
+    let canonical = format!("{network}/{prefix}");
+    if network != ip {
+        Err(IpCidrError::HostBits {
+            corrected: canonical,
+        })
+    } else {
+        Ok(canonical)
+    }
+}
+
+pub fn parse_ip_lines(input: &str) -> IpLines {
+    let mut result = IpLines::default();
+    for (index, line) in input.split('\n').enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match parse_ip_cidr(line) {
+            Ok(address) if !result.addresses.contains(&address) => result.addresses.push(address),
+            Ok(_) => {}
+            Err(error) => result.errors.push(IpLineError {
+                line: index + 1,
+                error,
+            }),
+        }
+    }
+    result
+}
+
+pub fn ip_lines_have_local_address(lines: &IpLines) -> bool {
+    lines
+        .addresses
+        .iter()
+        .map(String::as_str)
+        .chain(lines.errors.iter().filter_map(|error| match &error.error {
+            IpCidrError::HostBits { corrected } => Some(corrected.as_str()),
+            IpCidrError::Invalid => None,
+        }))
+        .any(|cidr| {
+            let Some((ip, _)) = cidr.split_once('/') else {
+                return false;
+            };
+            match ip.parse::<IpAddr>() {
+                Ok(IpAddr::V4(ip)) => {
+                    let [first, second, ..] = ip.octets();
+                    local_v4_prefix(first, second)
+                }
+                Ok(IpAddr::V6(ip)) => {
+                    let bytes = ip.octets();
+                    local_v6_prefix(bytes[0], bytes[1])
+                }
+                Err(_) => false,
+            }
+        })
+}
+
+fn local_v4_prefix(first: u8, second: u8) -> bool {
+    first == 10
+        || (first == 172 && (16..=31).contains(&second))
+        || (first == 192 && second == 168)
+        || (first == 169 && second == 254)
+}
+
+fn local_v6_prefix(first: u8, second: u8) -> bool {
+    first & 0xfe == 0xfc || (first == 0xfe && second & 0xc0 == 0x80)
 }
 
 pub fn parse_domain_input(input: &str) -> Result<DomainMatch, RuleInputError> {

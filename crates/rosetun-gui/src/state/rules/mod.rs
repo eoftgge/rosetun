@@ -470,7 +470,8 @@ impl State {
                 }
             }
             action @ (Action::OpenAddRule | Action::OpenEditRule(_) | Action::CancelAddRule
-            | Action::SelectRuleInput(_) | Action::RefreshProcesses | Action::SubmitAddRule) => {
+            | Action::SelectRuleInput(_) | Action::CorrectRuleIps | Action::RefreshProcesses
+            | Action::SubmitAddRule) => {
                 return self.act_rule_dialog(action);
             }
             #[cfg(windows)]

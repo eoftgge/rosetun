@@ -886,6 +886,76 @@ fn domain_lines_handle_www_explicit_suffix_and_single_label() {
 }
 
 #[test]
+fn ip_lines_normalize_addresses_and_deduplicate_subnets() {
+    let parsed = parse_ip_lines(
+        "192.0.2.1\n192.0.2.1/32\n198.51.100.0/24\n2001:DB8::1\n2001:db8::/32\n",
+    );
+    assert_eq!(
+        parsed.addresses,
+        [
+            "192.0.2.1/32",
+            "198.51.100.0/24",
+            "2001:db8::1/128",
+            "2001:db8::/32",
+        ]
+    );
+    assert!(parsed.errors.is_empty());
+    assert!(!ip_lines_have_local_address(&parsed));
+}
+
+#[test]
+fn ip_lines_report_host_bits_with_correction_and_invalid_lines() {
+    let parsed = parse_ip_lines(
+        "\n192.0.2.5/24\n2001:db8::1/32\nexample.com\n192.0.2.0/33\n2001:db8::/129\n",
+    );
+    assert!(parsed.addresses.is_empty());
+    assert_eq!(
+        parsed.errors,
+        [
+            IpLineError {
+                line: 2,
+                error: IpCidrError::HostBits {
+                    corrected: "192.0.2.0/24".into(),
+                },
+            },
+            IpLineError {
+                line: 3,
+                error: IpCidrError::HostBits {
+                    corrected: "2001:db8::/32".into(),
+                },
+            },
+            IpLineError {
+                line: 4,
+                error: IpCidrError::Invalid,
+            },
+            IpLineError {
+                line: 5,
+                error: IpCidrError::Invalid,
+            },
+            IpLineError {
+                line: 6,
+                error: IpCidrError::Invalid,
+            },
+        ]
+    );
+}
+
+#[test]
+fn local_network_warning_covers_only_the_requested_prefixes() {
+    assert!(local_v4_prefix(10, 0));
+    assert!(local_v4_prefix(172, 16));
+    assert!(local_v4_prefix(172, 31));
+    assert!(!local_v4_prefix(172, 32));
+    assert!(local_v4_prefix(192, 168));
+    assert!(local_v4_prefix(169, 254));
+    assert!(local_v6_prefix(0xfc, 0));
+    assert!(local_v6_prefix(0xfd, 0));
+    assert!(local_v6_prefix(0xfe, 0x80));
+    assert!(local_v6_prefix(0xfe, 0xbf));
+    assert!(!local_v6_prefix(0xfe, 0xc0));
+}
+
+#[test]
 fn process_input_accepts_names_and_absolute_paths() {
     for (input, expected) in [
         (

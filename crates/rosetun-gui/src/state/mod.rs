@@ -156,6 +156,7 @@ pub(crate) enum Action {
     #[cfg(windows)]
     WindowMinimized,
     OpenSettingsSection(SettingsSection),
+    OpenLanSettings,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
     SetReduceMotion(bool),
@@ -224,6 +225,7 @@ pub(crate) enum Action {
     OpenEditRule(RuleId),
     CancelAddRule,
     SelectRuleInput(RuleInputKind),
+    CorrectRuleIps,
     RefreshProcesses,
     #[cfg(windows)]
     BrowseExecutable,
@@ -461,6 +463,7 @@ impl State {
             action @ Action::WindowMinimized => return self.act_session(action),
             action @ (Action::OpenSettings
             | Action::OpenSettingsSection(_)
+            | Action::OpenLanSettings
             | Action::SetInterfaceScale(_)
             | Action::SetLanguage(_)
             | Action::SetReduceMotion(_)
@@ -526,6 +529,7 @@ impl State {
             | Action::OpenEditRule(_)
             | Action::CancelAddRule
             | Action::SelectRuleInput(_)
+            | Action::CorrectRuleIps
             | Action::RefreshProcesses
             | Action::SubmitAddRule) => return self.act_rules(action),
             #[cfg(windows)]

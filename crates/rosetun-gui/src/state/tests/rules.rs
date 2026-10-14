@@ -502,6 +502,70 @@ fn site_batch_requires_every_line_to_be_valid_and_obeys_subdomain_toggle() {
 }
 
 #[test]
+fn ip_rule_dialog_adds_multiple_addresses_and_corrects_host_bits() {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    state.act(Action::OpenAddRule);
+    state.act(Action::SelectRuleInput(RuleInputKind::Ip));
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.ips = "192.0.2.5/24\nexample.com\n2001:db8::1\n198.51.100.0/24".into();
+    assert!(state.act(Action::SubmitAddRule).is_none());
+    state.act(Action::CorrectRuleIps);
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    assert_eq!(
+        dialog.ips,
+        "192.0.2.0/24\nexample.com\n2001:db8::1\n198.51.100.0/24"
+    );
+    assert!(state.act(Action::SubmitAddRule).is_none());
+    state.rules.screen.add.as_mut().unwrap().ips =
+        "192.0.2.0/24\n2001:db8::1\n198.51.100.0/24\n192.0.2.0/24".into();
+    assert!(matches!(
+        state.act(Action::SubmitAddRule),
+        Some(Job::AddRules(_, matchers, RuleTarget::Proxy))
+            if matchers == [
+                RuleMatcher::IpCidr("192.0.2.0/24".into()),
+                RuleMatcher::IpCidr("2001:db8::1/128".into()),
+                RuleMatcher::IpCidr("198.51.100.0/24".into()),
+            ]
+    ));
+}
+
+#[test]
+fn editing_ip_rule_opens_ip_tab_and_updates_one_rule() {
+    let mut state = state_with_rules();
+    let id = state.config.rule_sets[1].rules[0].id.clone();
+    state.config.rule_sets[1].rules[0].matcher = RuleMatcher::IpCidr("192.0.2.0/24".into());
+    state.act(Action::OpenRules);
+    state.act(Action::OpenEditRule(id.clone()));
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    assert_eq!(dialog.kind, RuleInputKind::Ip);
+    assert_eq!(dialog.ips, "192.0.2.0/24");
+    assert!(state.act(Action::SubmitAddRule).is_none());
+    assert!(state.rules.screen.add.is_none());
+    state.act(Action::OpenEditRule(id.clone()));
+    state.rules.screen.add.as_mut().unwrap().ips = "203.0.113.1".into();
+    assert!(matches!(
+        state.act(Action::SubmitAddRule),
+        Some(Job::UpdateRule(_, rule, RuleMatcher::IpCidr(cidr), RuleTarget::Proxy))
+            if rule == id && cidr == "203.0.113.1/32"
+    ));
+}
+
+#[test]
+fn ip_local_setting_link_closes_dialog_and_opens_connection_settings() {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    state.act(Action::OpenAddRule);
+    state.act(Action::SelectRuleInput(RuleInputKind::Ip));
+    state.rules.screen.add.as_mut().unwrap().ips = "192.0.2.1".into();
+    assert!(!state.rules.screen.add.as_ref().unwrap().local_ip_warning());
+    state.act(Action::OpenLanSettings);
+    assert!(state.rules.screen.add.is_none());
+    assert_eq!(state.screen, Screen::Settings);
+    assert_eq!(state.settings.screen.section, SettingsSection::Connection);
+}
+
+#[test]
 fn editing_a_suffix_rule_populates_the_site_form_and_saves_only_changes() {
     let mut state = state_with_rules();
     let id = state.config.rule_sets[1].rules[0].id.clone();
