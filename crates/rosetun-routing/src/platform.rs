@@ -69,7 +69,7 @@ impl RoutingBackend for Stub {
     fn begin_protection(
         &mut self,
         _plan: &RoutingPlan,
-        _engine_binary: &std::path::Path,
+        _engine_binaries: &[&std::path::Path],
     ) -> Result<RoutingGuard, RoutingError> {
         Err(RoutingError::Unsupported)
     }

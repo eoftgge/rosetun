@@ -102,19 +102,20 @@ impl XrayHelper {
         self.work_dir.join("probe.json")
     }
 
+    pub fn binary_path(&self) -> Result<PathBuf, EngineError> {
+        if let Some(path) = &self.binary {
+            return Ok(path.clone());
+        }
+        let executable = std::env::current_exe()?;
+        Ok(executable.parent().ok_or_else(|| EngineError::BinaryNotFound(BINARY.into()))?.join(BINARY))
+    }
+
     pub fn locate_binary(&self) -> Result<PathBuf, EngineError> {
-        let binary = match &self.binary {
-            Some(path) if path.is_file() => path.clone(),
-            Some(path) => return Err(EngineError::BinaryNotFound(path.display().to_string())),
-            None => {
-                let executable = std::env::current_exe()?;
-                let candidate = executable.parent().map(|dir| dir.join(BINARY));
-                candidate.filter(|path| path.is_file()).ok_or_else(|| {
-                    EngineError::BinaryNotFound(BINARY.into())
-                })?
-            }
-        };
-        let binary = std::fs::canonicalize(binary)?;
+        let path = self.binary_path()?;
+        if !path.is_file() {
+            return Err(EngineError::BinaryNotFound(BINARY.into()));
+        }
+        let binary = std::fs::canonicalize(path)?;
         version::check(&binary)?;
         Ok(binary)
     }

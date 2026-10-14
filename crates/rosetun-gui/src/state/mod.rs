@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
     AppConfig, DnsSettings, LanguageSetting, ListId, ListSource, NodeId, RuleId, RuleMatcher,
-    RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId,
+    RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset, SettingChange};
 use rosetun_ipc::{ClientError, ConnectRequest};
@@ -165,6 +165,8 @@ pub(crate) enum Action {
     SetCloseToTray(bool),
     SetConnectOnStart(bool),
     SetAutoReconnect(bool),
+    SetXray(XrayUse),
+    EnableXrayAutoAndConnect,
     SetAutoUpdateSubscriptions(bool),
     SetCheckUpdates(bool),
     CheckUpdatesNow,
@@ -463,6 +465,8 @@ impl State {
             | Action::SetReduceMotion(_)
             | Action::SetConnectOnStart(_)
             | Action::SetAutoReconnect(_)
+            | Action::SetXray(_)
+            | Action::EnableXrayAutoAndConnect
             | Action::SetAutoUpdateSubscriptions(_)
             | Action::SetCheckUpdates(_)
             | Action::SaveDns

@@ -343,6 +343,9 @@ impl eframe::App for App {
         if let Some(job) = self.state.take_auto_connect() {
             self.dispatch(job);
         }
+        if let Some(job) = self.state.take_xray_connect() {
+            self.dispatch(job);
+        }
         if let Some(job) = self.state.take_temporary_load(display::now_unix()) {
             self.dispatch(job);
         }

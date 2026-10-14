@@ -477,7 +477,7 @@ mod tests {
                 0,
             ),
             Response::Hello {
-                protocol_version: 8,
+                protocol_version: PROTOCOL_VERSION,
                 ..
             }
         ));

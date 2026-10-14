@@ -99,15 +99,15 @@ impl BootstrapPolicy {
     ///
     /// The engine enforces routing policy and may reach any destination.
     /// WFP identifies the exemption by executable path, not by process ID.
-    pub(super) fn from_plan(plan: &RoutingPlan, engine_binary: &Path) -> Self {
+    pub(super) fn from_plan(plan: &RoutingPlan, engine_binaries: &[&Path]) -> Self {
         match plan.scope {
-            ProtectionScope::AllTraffic => Self::all_traffic(plan.allow_lan, engine_binary),
-            ProtectionScope::DnsOnly => Self::dns_only(engine_binary),
+            ProtectionScope::AllTraffic => Self::all_traffic(plan.allow_lan, engine_binaries),
+            ProtectionScope::DnsOnly => Self::dns_only(engine_binaries),
         }
     }
 
-    fn all_traffic(allow_lan: bool, engine_binary: &Path) -> Self {
-        let mut rules = common_rules(engine_binary);
+    fn all_traffic(allow_lan: bool, engine_binaries: &[&Path]) -> Self {
+        let mut rules = common_rules(engine_binaries);
         rules.push(Rule {
             family: AddressFamily::Ipv4,
             action: Action::Allow,
@@ -148,8 +148,8 @@ impl BootstrapPolicy {
         Self { rules }
     }
 
-    fn dns_only(engine_binary: &Path) -> Self {
-        let mut rules = common_rules(engine_binary);
+    fn dns_only(engine_binaries: &[&Path]) -> Self {
+        let mut rules = common_rules(engine_binaries);
         for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
             for protocol in [17, 6] {
                 rules.push(Rule {
@@ -164,16 +164,18 @@ impl BootstrapPolicy {
     }
 }
 
-fn common_rules(engine_binary: &Path) -> Vec<Rule> {
-    // The engine's own requests follow its routing rules, as with the kill switch.
-    let mut rules = Vec::with_capacity(4);
+fn common_rules(engine_binaries: &[&Path]) -> Vec<Rule> {
+    // Each process in the selected chain dials under its own app ID.
+    let mut rules = Vec::with_capacity(engine_binaries.len() * 2 + 2);
     for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
-        rules.push(Rule {
-            family,
-            action: Action::Allow,
-            conditions: vec![Condition::Application(engine_binary.to_owned())],
-            weight: BOOTSTRAP_ALLOW_WEIGHT,
-        });
+        for binary in engine_binaries {
+            rules.push(Rule {
+                family,
+                action: Action::Allow,
+                conditions: vec![Condition::Application((*binary).to_owned())],
+                weight: BOOTSTRAP_ALLOW_WEIGHT,
+            });
+        }
     }
 
     // A local resolver is not a leak; its outbound requests face the same filter.
@@ -192,6 +194,15 @@ fn common_rules(engine_binary: &Path) -> Vec<Rule> {
         },
     ]);
     rules
+}
+
+pub(super) fn probe_authorization(binary: &Path) -> [Rule; 2] {
+    [AddressFamily::Ipv4, AddressFamily::Ipv6].map(|family| Rule {
+        family,
+        action: Action::Allow,
+        conditions: vec![Condition::Application(binary.to_owned())],
+        weight: BOOTSTRAP_ALLOW_WEIGHT,
+    })
 }
 
 /// Builds the phase-2 authorization added after the TUN adapter has been
@@ -263,9 +274,45 @@ mod tests {
     }
 
     #[test]
+    fn xray_is_authorized_only_for_the_chain_and_loopback_stays_available() {
+        let singbox = Path::new(r"C:\Program Files\Rosetun\sing-box.exe");
+        let xray = Path::new(r"C:\Program Files\Rosetun\xray.exe");
+        let plain = BootstrapPolicy::from_plan(&plan(), &[singbox]);
+        let chained = BootstrapPolicy::from_plan(&plan(), &[singbox, xray]);
+        assert!(!plain.rules.iter().any(|rule| {
+            rule.conditions.contains(&Condition::Application(xray.to_owned()))
+        }));
+        for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
+            assert!(chained.rules.iter().any(|rule| {
+                rule.family == family
+                    && rule.action == Action::Allow
+                    && rule.conditions == [Condition::Application(xray.to_owned())]
+            }));
+            assert!(chained.rules.iter().any(|rule| {
+                rule.family == family
+                    && rule.action == Action::Allow
+                    && rule.conditions == [Condition::Loopback]
+            }));
+        }
+    }
+
+    #[test]
+    fn temporary_probe_permit_uses_only_xray_app_id() {
+        let xray = Path::new(r"C:\Program Files\Rosetun\xray.exe");
+        let [ipv4, ipv6] = super::probe_authorization(xray);
+        assert_eq!(ipv4.family, AddressFamily::Ipv4);
+        assert_eq!(ipv6.family, AddressFamily::Ipv6);
+        for rule in [ipv4, ipv6] {
+            assert_eq!(rule.action, Action::Allow);
+            assert_eq!(rule.conditions, [Condition::Application(xray.to_owned())]);
+            assert!(rule.weight > super::BLOCK_WEIGHT);
+        }
+    }
+
+    #[test]
     fn endpoint_access_is_restricted_to_the_engine_binary() {
         let engine = Path::new(r"C:\Program Files\Rosetun\sing-box.exe");
-        let policy = BootstrapPolicy::from_plan(&plan(), engine);
+        let policy = BootstrapPolicy::from_plan(&plan(), &[engine]);
 
         assert_eq!(
             policy.rules[0].conditions,
@@ -279,7 +326,7 @@ mod tests {
 
     #[test]
     fn bootstrap_policy_allows_required_local_network_traffic_then_blocks_both_families() {
-        let policy = BootstrapPolicy::from_plan(&plan(), Path::new(r"C:\sing-box.exe"));
+        let policy = BootstrapPolicy::from_plan(&plan(), &[Path::new(r"C:\sing-box.exe")]);
 
         assert_eq!(policy.rules.len(), 7);
 
@@ -303,7 +350,7 @@ mod tests {
 
     #[test]
     fn phase_two_tunnel_rules_have_higher_priority_than_bootstrap_rules() {
-        let bootstrap = BootstrapPolicy::from_plan(&plan(), Path::new(r"C:\sing-box.exe"));
+        let bootstrap = BootstrapPolicy::from_plan(&plan(), &[Path::new(r"C:\sing-box.exe")]);
         let authorization = tunnel_authorization(0x1234_5678);
 
         assert_eq!(authorization[0].family, AddressFamily::Ipv4);
@@ -328,7 +375,7 @@ mod tests {
                 scope: ProtectionScope::AllTraffic,
                 allow_lan: true,
             },
-            Path::new(r"C:\sing-box.exe"),
+            &[Path::new(r"C:\sing-box.exe")],
         );
         let authorization = tunnel_authorization(123);
         let rules: Vec<_> = bootstrap.rules.iter().chain(&authorization).collect();
@@ -378,7 +425,7 @@ mod tests {
     #[test]
     fn lan_subnets_are_exact_and_opt_in() {
         let engine = Path::new(r"C:\sing-box.exe");
-        let disabled = BootstrapPolicy::from_plan(&plan(), engine);
+        let disabled = BootstrapPolicy::from_plan(&plan(), &[engine]);
         assert!(disabled.rules.iter().all(|rule| {
             rule.conditions
                 .iter()
@@ -390,7 +437,7 @@ mod tests {
                 scope: ProtectionScope::AllTraffic,
                 allow_lan: true,
             },
-            engine,
+            &[engine],
         );
         let permits: Vec<_> = enabled
             .rules
@@ -413,7 +460,7 @@ mod tests {
                 scope: ProtectionScope::DnsOnly,
                 allow_lan: false,
             },
-            engine,
+            &[engine],
         );
         assert_eq!(policy.rules.len(), 8);
         assert!(policy.rules.iter().all(|rule| !rule.conditions.is_empty()));
@@ -468,13 +515,13 @@ mod tests {
             allow_lan: false,
         };
         let engine = Path::new(r"C:\sing-box.exe");
-        let disabled = BootstrapPolicy::from_plan(&plan, engine);
+        let disabled = BootstrapPolicy::from_plan(&plan, &[engine]);
         let enabled = BootstrapPolicy::from_plan(
             &RoutingPlan {
                 allow_lan: true,
                 ..plan
             },
-            engine,
+            &[engine],
         );
         assert_eq!(disabled, enabled);
     }

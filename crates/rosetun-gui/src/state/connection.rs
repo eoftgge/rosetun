@@ -63,6 +63,8 @@ fn reported_by_status(error: &HelperCommandError) -> bool {
         error,
         HelperCommandError::Client(ClientError::Helper(HelperError {
             code: ErrorCode::EngineFailed
+                | ErrorCode::XrayStartFailed
+                | ErrorCode::XrayStopped
                 | ErrorCode::RoutingFailed
                 | ErrorCode::UnsupportedRules
                 | ErrorCode::Cancelled,

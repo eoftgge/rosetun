@@ -1,5 +1,5 @@
 use eframe::egui::{self, Color32, RichText};
-use rosetun_config::{ConnectionState, RuleMatcher};
+use rosetun_config::{ConnectionState, FailureKind, Outbound, RuleMatcher, TlsMode, XrayUse};
 use rosetun_ipc::ProbeOutcome;
 
 use crate::actions::{PrimaryAction, ProtectionAction, protection_action};

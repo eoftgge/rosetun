@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use rosetun_engine::{EngineBackend, EngineRegistry};
 use rosetun_engine_singbox::SingBoxBackend;
+use rosetun_engine_xray::XrayHelper;
 use rosetun_ipc::Listener;
 use tracing_subscriber::prelude::*;
 
@@ -265,12 +266,20 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
 
     let mut engines = EngineRegistry::new();
     let singbox = SingBoxBackend::new(run_dir.join("sing-box"));
+    let xray = XrayHelper::new(run_dir.join("xray"));
     let warmup = singbox.clone();
+    let xray_warmup = xray.clone();
     std::thread::Builder::new()
         .name("engine-warmup".to_owned())
-        .spawn(move || match warmup.locate_binary() {
-            Ok(binary) => tracing::info!(binary = %binary.display(), "sing-box is ready"),
-            Err(error) => tracing::warn!(%error, "sing-box check at start failed"),
+        .spawn(move || {
+            match warmup.locate_binary() {
+                Ok(binary) => tracing::info!(binary = %binary.display(), "sing-box is ready"),
+                Err(error) => tracing::warn!(%error, "sing-box check at start failed"),
+            }
+            match xray_warmup.locate_binary() {
+                Ok(binary) => tracing::info!(binary = %binary.display(), "Xray is ready"),
+                Err(error) => tracing::warn!(%error, "Xray check at start failed"),
+            }
         })
         .map_err(|error| StartError(format!("failed to start engine warmup thread: {error}")))?;
     engines.register(Box::new(singbox));
@@ -282,6 +291,7 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
         .map_err(|error| StartError(format!("failed to initialize list storage: {error}")))?;
     let helper = Arc::new(
         Helper::new(engines, rosetun_routing::backend(), gate)
+            .with_xray(xray)
             .with_list_store(lists, run_dir.join("sing-box")),
     );
     state::spawn_list_reaper(Arc::clone(&helper))

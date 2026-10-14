@@ -2,7 +2,9 @@ use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use rosetun_config::{ConnectionState, Settings};
+use rosetun_config::{ConnectionState, uses_xray};
+use rosetun_engine::SocksProxy;
+use rosetun_engine_xray::SocksEndpoint;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
@@ -36,7 +38,7 @@ impl Helper {
             session.refresh_path_addresses();
             return Ok(());
         }
-        if needs_reconnect(&current.settings, &request.settings) {
+        if needs_reconnect(&current, request) {
             return Err(HelperError::new(
                 ErrorCode::InvalidState,
                 "reconnect to change protection settings",
@@ -81,15 +83,34 @@ impl Helper {
                 ),
             )
         })?;
+        let prepared_node = node_with_endpoint(&request.node, endpoint);
+        let socks = if uses_xray(&request.node, request.settings.xray) {
+            Some(SocksEndpoint::local().map_err(|_| {
+                HelperError::new(ErrorCode::XrayStartFailed, "Xray SOCKS endpoint is unavailable")
+            })?)
+        } else {
+            None
+        };
         render_config(
             backend,
-            &node_with_endpoint(&request.node, endpoint),
+            &prepared_node,
+            socks.as_ref().map(|socks| SocksProxy {
+                address: socks.address(),
+                username: socks.username(),
+                password: socks.password(),
+            }),
             &request.effective_rule_set(),
             &request.lists,
             &request.settings,
             None,
             false,
         )?;
+        if let Some(socks) = socks.as_ref() {
+            let interface = (session.physical_interface)(&request.settings.tun.name)
+                .ok_or_else(|| HelperError::new(ErrorCode::XrayStartFailed, "physical interface is unavailable for Xray"))?;
+            rosetun_engine_xray::render(&prepared_node, socks, &interface, false, request.settings.log_level)
+                .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?;
+        }
 
         let previous_endpoint = current
             .node
@@ -137,6 +158,9 @@ impl Helper {
                 self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
                     status.node = Some(request.node.id.clone());
+                    status.xray = uses_xray(&request.node, request.settings.xray);
+                    status.xray_use = Some(request.settings.xray);
+                    status.xray_stopped = false;
                 })
             }) {
             Ok(()) => {
@@ -167,6 +191,9 @@ impl Helper {
                         self.publish_terminal(|status| {
                             status.state = ConnectionState::Connected;
                             status.node = Some(current.node.id.clone());
+                            status.xray = uses_xray(&current.node, current.settings.xray);
+                            status.xray_use = Some(current.settings.xray);
+                            status.xray_stopped = false;
                         })
                     });
                 match rollback {
@@ -239,9 +266,9 @@ impl Helper {
     }
 }
 
-pub(super) fn needs_reconnect(current: &Settings, next: &Settings) -> bool {
-    current.engine != next.engine
-        || current.tun != next.tun
-        || current.kill_switch != next.kill_switch
-        || current.allow_lan != next.allow_lan
+pub(super) fn needs_reconnect(current: &ConnectRequest, next: &ConnectRequest) -> bool {
+    current.settings.engine != next.settings.engine
+        || current.settings.tun != next.settings.tun
+        || current.settings.kill_switch != next.settings.kill_switch
+        || current.settings.allow_lan != next.settings.allow_lan
 }

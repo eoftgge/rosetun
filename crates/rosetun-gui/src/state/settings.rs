@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rosetun_config::{ConnectionState, DnsSettings};
+use rosetun_config::{ConnectionState, DnsSettings, Node, Outbound, TlsMode, XrayUse};
 use rosetun_core::{DnsPreset, SettingChange};
 
 use super::{Action, Job, Screen, State, now_unix};
@@ -13,6 +13,7 @@ pub(crate) enum SettingsSection {
     General,
     Connection,
     Network,
+    Advanced,
     Service,
     About,
 }
@@ -27,6 +28,8 @@ pub(crate) struct SettingsScreen {
     pub(crate) port: String,
     pub(crate) path: String,
     pub(crate) dirty: bool,
+    pub(crate) connect_after_xray_change: bool,
+    pub(crate) xray_connect_ready: bool,
     pub(crate) config_folder: Option<PathBuf>,
     pub(crate) licenses_folder: Option<PathBuf>,
     #[cfg(windows)]
@@ -60,6 +63,33 @@ pub(crate) struct SettingsState {
 }
 
 impl State {
+    pub(crate) fn running_node(&self) -> Option<&Node> {
+        self.session.session_request.as_ref().map(|request| &request.node)
+            .or_else(|| self.config.subscriptions.iter()
+                .flat_map(|subscription| &subscription.nodes)
+                .find(|node| self.status.node.as_ref() == Some(&node.id)))
+    }
+
+    pub(crate) fn xray_reality_count(&self) -> usize {
+        self.config.subscriptions.iter()
+            .flat_map(|subscription| &subscription.nodes)
+            .filter(|node| matches!(&node.outbound, Outbound::Vless(_))
+                && matches!(&node.stream.tls, TlsMode::Reality(_)))
+            .count()
+    }
+
+    pub(crate) fn take_xray_connect(&mut self) -> Option<Job> {
+        if !self.settings.screen.xray_connect_ready
+            || self.config.settings.xray != XrayUse::Auto
+            || !self.helper_available
+            || !matches!(self.status.state, ConnectionState::Failed { .. } | ConnectionState::FailedProtected { .. })
+        {
+            return None;
+        }
+        self.settings.screen.xray_connect_ready = false;
+        self.act_connection(Action::Primary)
+    }
+
     /// Reset is allowed only when the running tunnel cannot disagree with the
     /// kill switch value that will be written to the configuration.
     pub(crate) fn can_reset_settings(&self) -> bool {
@@ -113,7 +143,12 @@ impl State {
                 });
             }
             WorkerEvent::Setting(change, result) => {
-                let _ = change;
+                if change == SettingChange::Xray(XrayUse::Auto)
+                    && self.settings.screen.connect_after_xray_change
+                {
+                    self.settings.screen.xray_connect_ready = result.is_ok();
+                    self.settings.screen.connect_after_xray_change = false;
+                }
                 self.finish_settings(result);
             }
             WorkerEvent::SkipVersion(result) => self.finish_settings(result),
@@ -212,6 +247,25 @@ impl State {
                 if self.can_edit_settings() && self.config.settings.auto_reconnect != enabled {
                     return self
                         .start_settings(Job::Setting(SettingChange::AutoReconnect(enabled)));
+                }
+            }
+            Action::SetXray(setting) => {
+                if self.can_edit_settings() && self.config.settings.xray != setting {
+                    return self.start_settings(Job::Setting(SettingChange::Xray(setting)));
+                }
+            }
+            Action::EnableXrayAutoAndConnect => {
+                let rejected = matches!(self.status.state,
+                    ConnectionState::Failed { failure_kind: Some(rosetun_config::FailureKind::ServerRejected), .. }
+                    | ConnectionState::FailedProtected { failure_kind: Some(rosetun_config::FailureKind::ServerRejected), .. });
+                let reality = self.config.active_node().is_some_and(|(_, node)|
+                    matches!(&node.outbound, Outbound::Vless(_))
+                        && matches!(&node.stream.tls, TlsMode::Reality(_)));
+                if self.can_edit_settings() && self.helper_available && !self.operations.helper
+                    && rejected && reality && self.config.settings.xray == XrayUse::Off
+                {
+                    self.settings.screen.connect_after_xray_change = true;
+                    return self.start_settings(Job::Setting(SettingChange::Xray(XrayUse::Auto)));
                 }
             }
             Action::SetAutoUpdateSubscriptions(enabled) => {

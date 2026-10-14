@@ -2,7 +2,7 @@ use super::*;
 use fluent_bundle::{FluentArgs, FluentResource};
 use rosetun_config::{
     ConnectStage, FailureKind, LanguageSetting, Node, NodeId, Outbound, RealityParams,
-    StreamSettings, TlsMode, TlsParams, VlessParams,
+    StreamSettings, TlsMode, TlsParams, VlessParams, XrayUse,
 };
 
 fn in_language<T>(language: Language, run: impl FnOnce() -> T) -> T {
@@ -365,13 +365,13 @@ fn russian_age_uses_lowercase_updated_summary() {
 fn localized_failures_use_the_existing_action_labels() {
     for language in [Language::English, Language::Russian] {
         in_language(language, || {
-            let (title, hint) = connection_failure(FailureKind::EngineNotReady, None);
+            let (title, hint) = connection_failure(FailureKind::EngineNotReady, None, XrayUse::Auto);
             let retry = tr_in(language, "retry", &FluentArgs::new());
             let check_full = tr_in(language, "check-full", &FluentArgs::new());
             assert!(!title.is_empty());
             assert!(hint.contains(&retry));
             assert!(!hint.contains("{retry}"));
-            let (_, hint) = connection_failure(FailureKind::ServerUnreachable, None);
+            let (_, hint) = connection_failure(FailureKind::ServerUnreachable, None, XrayUse::Auto);
             assert!(hint.contains(&check_full));
             assert!(!hint.contains("{url_test}"));
             assert!(connection_stage(ConnectStage::CheckingServer, 5).contains('5'));
@@ -380,7 +380,7 @@ fn localized_failures_use_the_existing_action_labels() {
                 FailureKind::ServerClosed,
                 FailureKind::DnsTimeout,
             ] {
-                let (title, hint) = connection_failure(kind, None);
+                let (title, hint) = connection_failure(kind, None, XrayUse::Auto);
                 assert!(!title.is_empty() && !hint.is_empty());
             }
         });
@@ -389,10 +389,28 @@ fn localized_failures_use_the_existing_action_labels() {
         in_language(Language::Russian, || connection_failure(
             FailureKind::ServerUnreachable,
             None,
+            XrayUse::Auto,
         )
         .0),
         "Сервер не отвечает"
     );
+}
+
+#[test]
+fn xray_warning_and_status_texts_are_localized() {
+    assert_eq!(
+        in_language(Language::Russian, || tr!("xray-off-warning", count = 3, n = "3")),
+        "В подписках 3 сервера REALITY. Если на сервере Xray 26.9.8 или новее, без Xray подключиться к нему не получится."
+    );
+    for language in [Language::English, Language::Russian] {
+        in_language(language, || {
+            let start = connection_failure(FailureKind::XrayStartFailed, None, XrayUse::Auto);
+            let stopped = connection_failure(FailureKind::XrayStopped, None, XrayUse::Auto);
+            assert_ne!(start, stopped);
+            assert!(!tr!("xray-engine").is_empty());
+            assert!(!tr!("xray-badge").is_empty());
+        });
+    }
 }
 
 #[test]
@@ -422,8 +440,8 @@ fn rejected_reality_node_uses_its_own_hint_and_tls_keeps_the_existing_one() {
 
     for language in [Language::English, Language::Russian] {
         in_language(language, || {
-            let (_, reality_hint) = connection_failure(FailureKind::ServerRejected, Some(&reality));
-            let (_, tls_hint) = connection_failure(FailureKind::ServerRejected, Some(&tls));
+            let (_, reality_hint) = connection_failure(FailureKind::ServerRejected, Some(&reality), XrayUse::Off);
+            let (_, tls_hint) = connection_failure(FailureKind::ServerRejected, Some(&tls), XrayUse::Off);
             assert_eq!(
                 reality_hint,
                 tr_in(language, "server-rejected-reality-hint", &FluentArgs::new())
@@ -433,8 +451,13 @@ fn rejected_reality_node_uses_its_own_hint_and_tls_keeps_the_existing_one() {
                 tr_in(language, "server-rejected-hint", &FluentArgs::new())
             );
             assert_ne!(reality_hint, tls_hint);
+            assert_eq!(connection_failure(FailureKind::ServerRejected, Some(&reality), XrayUse::Auto).1, tls_hint);
+            assert_eq!(connection_failure(FailureKind::XrayStartFailed, Some(&reality), XrayUse::Auto).0,
+                tr_in(language, "error-code-xray-start-failed", &FluentArgs::new()));
+            assert_ne!(connection_failure(FailureKind::XrayStopped, Some(&reality), XrayUse::Auto).0,
+                tr_in(language, "error-code-xray-start-failed", &FluentArgs::new()));
             assert_eq!(
-                connection_failure(FailureKind::ServerRejected, None).1,
+                connection_failure(FailureKind::ServerRejected, None, XrayUse::Auto).1,
                 tls_hint
             );
         });

@@ -435,6 +435,16 @@ pub(super) fn subscription_card(
                         });
                     }
                 });
+                let xray_count = subscription.nodes.iter()
+                    .filter(|node| rosetun_core::uses_xray(node, state.config.settings.xray))
+                    .count();
+                if xray_count > 0 {
+                    ui.add(egui::Label::new(
+                        RichText::new(tr!("xray-server-count",
+                            used = xray_count.to_string(), total = subscription.nodes.len().to_string()))
+                            .small().color(theme::TEXT_DIM)
+                    ));
+                }
             });
             if reorder
                 && ui

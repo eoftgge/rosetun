@@ -4,7 +4,7 @@ use rosetun_config::{
     UploadedListFormat, list_tag,
 };
 use rosetun_engine::errors::EngineError;
-use rosetun_engine::{ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities};
+use rosetun_engine::{ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities, SocksProxy};
 use serde_json::{Map, Value, json};
 
 pub(crate) const TAG_PROXY: &str = "proxy";
@@ -34,7 +34,10 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         "dns": dns_section(&request.settings.dns)?,
         "inbounds": [tun_inbound(request.settings)],
         "outbounds": [
-            proxy_outbound(request.node, TAG_PROXY)?,
+            match request.socks {
+                Some(socks) => socks_outbound(socks, TAG_PROXY),
+                None => proxy_outbound(request.node, TAG_PROXY)?,
+            },
             json!({ "type": "direct", "tag": TAG_DIRECT }),
         ],
         "route": route,
@@ -64,7 +67,12 @@ pub(crate) fn render_probe(
     let mut outbounds = Vec::with_capacity(request.nodes.len() + 1);
     let mut unsupported_probes = Vec::new();
     for (tag, node) in request.nodes {
-        match proxy_outbound(node, tag) {
+        let socks = request.socks.iter().find(|(name, _)| name == tag);
+        let rendered = match socks {
+            Some((_, endpoint)) => Ok(socks_outbound(*endpoint, tag)),
+            None => proxy_outbound(node, tag),
+        };
+        match rendered {
             Ok(outbound) => outbounds.push(outbound),
             Err(EngineError::Unsupported(_)) => unsupported_probes.push(tag.clone()),
             Err(error) => return Err(error),
@@ -159,6 +167,21 @@ fn tun_inbound(settings: &Settings) -> Value {
         "stack": "gvisor",
         "auto_route": tun.auto_route,
         "strict_route": tun.auto_route,
+    })
+}
+
+fn socks_outbound(socks: SocksProxy<'_>, tag: &str) -> Value {
+    json!({
+        "type": "socks",
+        "tag": tag,
+        "version": "5",
+        "server": "127.0.0.1",
+        "server_port": socks.address.port(),
+        "username": socks.username,
+        "password": socks.password,
+        // In 1.14.1 this disables auto_detect_interface for this outbound:
+        // the local connection must not bind to the physical adapter.
+        "inet4_bind_address": "127.0.0.1",
     })
 }
 
@@ -626,19 +649,34 @@ mod tests {
             sha256: "a".repeat(64),
             format: UploadedListFormat::Source,
         }];
-        let rendered = render(&RenderRequest {
+        let request = RenderRequest {
             node: &node,
+            socks: None,
             rules: &rules,
             lists: &lists,
             settings: &settings,
             control: Some(&control),
             verbose_log: false,
-        })
-        .unwrap();
+        };
+        let rendered = render(&request).unwrap();
         assert!(rendered.unsupported.is_empty());
         assert_eq!(
             rendered.body,
             include_bytes!("../tests/fixtures/full-config.json")
+        );
+
+        let chained = render(&RenderRequest {
+            socks: Some(SocksProxy {
+                address: "127.0.0.1:10801".parse().unwrap(),
+                username: "fixture-user",
+                password: "fixture-password",
+            }),
+            ..request
+        }).unwrap();
+        assert!(chained.unsupported.is_empty());
+        assert_eq!(
+            chained.body,
+            include_bytes!("../tests/fixtures/xray-chain-config.json")
         );
     }
 

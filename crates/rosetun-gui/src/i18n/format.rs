@@ -1,5 +1,5 @@
 use fluent_bundle::FluentArgs;
-use rosetun_config::{ConnectStage, FailureKind, Node, RuleTemplate, TlsMode};
+use rosetun_config::{ConnectStage, FailureKind, Node, Outbound, RuleTemplate, TlsMode, XrayUse};
 
 use super::{Language, tr_in};
 
@@ -266,7 +266,9 @@ pub(crate) fn connection_stage(stage: ConnectStage, seconds: u64) -> String {
     )
 }
 
-pub(crate) fn connection_failure(kind: FailureKind, node: Option<&Node>) -> (String, String) {
+pub(crate) fn connection_failure(kind: FailureKind, node: Option<&Node>, xray: XrayUse) -> (String, String) {
+    let reality_without_xray = xray == XrayUse::Off && node.is_some_and(|node|
+        matches!(&node.outbound, Outbound::Vless(_)) && matches!(&node.stream.tls, TlsMode::Reality(_)));
     let (title, hint) = match kind {
         FailureKind::EngineNotReady => (
             tr!("error-code-engine-not-ready"),
@@ -275,6 +277,14 @@ pub(crate) fn connection_failure(kind: FailureKind, node: Option<&Node>) -> (Str
                 retry = tr!("retry"),
                 url_test = tr!("check-full")
             ),
+        ),
+        FailureKind::XrayStartFailed => (
+            tr!("error-code-xray-start-failed"),
+            tr!("xray-start-hint"),
+        ),
+        FailureKind::XrayStopped => (
+            tr!("error-code-xray-stopped"),
+            tr!("xray-stopped-hint"),
         ),
         FailureKind::ServerUnreachable => (
             tr!("error-code-server-unreachable"),
@@ -285,8 +295,12 @@ pub(crate) fn connection_failure(kind: FailureKind, node: Option<&Node>) -> (Str
             ),
         ),
         FailureKind::ServerRejected => (
-            tr!("error-code-server-rejected"),
-            if node.is_some_and(|node| matches!(&node.stream.tls, TlsMode::Reality(_))) {
+            if reality_without_xray {
+                tr!("server-rejected-reality-title")
+            } else {
+                tr!("error-code-server-rejected")
+            },
+            if reality_without_xray {
                 tr!("server-rejected-reality-hint")
             } else {
                 tr!("server-rejected-hint")

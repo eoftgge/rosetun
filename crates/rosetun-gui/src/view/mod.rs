@@ -172,6 +172,7 @@ fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         (SettingsSection::General, tr!("section-general")),
         (SettingsSection::Connection, tr!("connection")),
         (SettingsSection::Network, tr!("section-network")),
+        (SettingsSection::Advanced, tr!("section-advanced")),
         (SettingsSection::Service, tr!("section-service")),
         (SettingsSection::About, tr!("about")),
     ] {

@@ -7,7 +7,7 @@ use rosetun_config::{
     RuleSetId, RuleTarget, Settings, ShadowsocksParams, StreamSettings, UploadedListFormat,
     list_tag,
 };
-use rosetun_engine::{EngineBackend, RenderRequest};
+use rosetun_engine::{EngineBackend, RenderRequest, SocksProxy};
 use rosetun_engine_singbox::SingBoxBackend;
 
 static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
@@ -101,6 +101,7 @@ fn sing_box_check_validates_local_rule_set_config() {
     let config = SingBoxBackend::new(&directory.0)
         .render(&RenderRequest {
             node: &node,
+            socks: None,
             rules: &rules,
             lists: &lists,
             settings: &settings,
@@ -111,16 +112,40 @@ fn sing_box_check_validates_local_rule_set_config() {
     assert!(config.unsupported.is_empty());
     let config_path = directory.0.join("config.json");
     std::fs::write(&config_path, config.body).unwrap();
-    let status = Command::new(binary)
-        .arg("check")
-        .arg("-c")
-        .arg(config_path)
-        .current_dir(&directory.0)
-        .status()
-        .unwrap();
-    assert!(
-        status.success(),
-        "sing-box check failed with exit code {:?}",
-        status.code()
-    );
+    for (path, body) in [
+        (config_path, None),
+        (directory.0.join("xray-chain.json"), Some(SocksProxy {
+            address: "127.0.0.1:10801".parse().unwrap(),
+            username: "fixture-user",
+            password: "fixture-password",
+        })),
+    ] {
+        if let Some(socks) = body {
+            let chain = SingBoxBackend::new(&directory.0)
+                .render(&RenderRequest {
+                    node: &node,
+                    socks: Some(socks),
+                    rules: &rules,
+                    lists: &lists,
+                    settings: &settings,
+                    control: None,
+                    verbose_log: false,
+                })
+                .unwrap();
+            std::fs::write(&path, chain.body).unwrap();
+        }
+        let status = Command::new(&binary)
+            .arg("check")
+            .arg("-c")
+            .arg(&path)
+            .current_dir(&directory.0)
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "sing-box check failed for {} with exit code {:?}",
+            path.display(),
+            status.code()
+        );
+    }
 }

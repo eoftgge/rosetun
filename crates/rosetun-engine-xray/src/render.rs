@@ -26,10 +26,19 @@ pub fn render_probe(
     let mut inbounds = Vec::with_capacity(nodes.len());
     let mut outbounds = Vec::with_capacity(nodes.len());
     let mut rules = Vec::with_capacity(nodes.len());
+    let mut unsupported_probes = Vec::new();
     for (tag, node, socks) in nodes {
+        let outbound = match proxy_outbound(node, tag, interface) {
+            Ok(outbound) => outbound,
+            Err(EngineError::Unsupported(_)) => {
+                unsupported_probes.push(tag.clone());
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let inbound_tag = format!("{tag}-in");
         inbounds.push(socks_inbound(socks, &inbound_tag));
-        outbounds.push(proxy_outbound(node, tag, interface)?);
+        outbounds.push(outbound);
         rules.push(json!({
             "type": "field",
             "inboundTag": [inbound_tag],
@@ -42,7 +51,9 @@ pub fn render_probe(
         "outbounds": outbounds,
         "routing": { "rules": rules },
     });
-    rendered("probe.json", config)
+    let mut rendered = rendered("probe.json", config)?;
+    rendered.unsupported_probes = unsupported_probes;
+    Ok(rendered)
 }
 
 fn rendered(file_name: &str, config: Value) -> Result<RenderedConfig, EngineError> {

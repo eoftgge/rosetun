@@ -541,6 +541,7 @@ mod tests {
         };
         let request = RenderRequest {
             node: &node,
+            socks: None,
             rules: &rules,
             lists: &[],
             settings: &settings,
@@ -551,6 +552,7 @@ mod tests {
         let nodes = vec![("probe-0".to_owned(), node.clone())];
         let probe = ProbeRenderRequest {
             nodes: &nodes,
+            socks: &[],
             control: &control,
             interface: None,
         };
@@ -612,6 +614,7 @@ mod tests {
         };
         let request = RenderRequest {
             node: &node,
+            socks: None,
             rules: &rules,
             lists: &[],
             settings: &settings,
@@ -631,6 +634,7 @@ mod tests {
         };
         let config = render::render(&RenderRequest {
             node: &node,
+            socks: None,
             rules: &rules,
             lists: &[],
             settings: &settings,
@@ -656,6 +660,7 @@ mod tests {
             settings.log_level = log_level;
             let config = render::render(&RenderRequest {
                 node: &node,
+            socks: None,
                 rules: &rules,
                 lists: &[],
                 settings: &settings,
@@ -681,6 +686,7 @@ mod tests {
         };
         let config = render::render(&RenderRequest {
             node: &node,
+            socks: None,
             rules: &rules,
             lists: &[],
             settings: &settings,
@@ -719,6 +725,7 @@ mod tests {
         for interface in [Some("Ethernet 2"), None] {
             let config = render::render_probe(&ProbeRenderRequest {
                 nodes: &nodes,
+                socks: &[],
                 control: &control,
                 interface,
             })
@@ -1282,6 +1289,7 @@ mod tests {
         };
         let config = render::render(&RenderRequest {
             node: &node,
+            socks: None,
             rules: &rule_set,
             lists: &[],
             settings: &settings,
@@ -1419,6 +1427,7 @@ mod tests {
         };
         let rendered = render::render(&RenderRequest {
             node: &node,
+            socks: None,
             rules: &rule_set,
             lists: &[],
             settings: &settings,
@@ -1499,6 +1508,7 @@ mod tests {
         let settings = Settings::default();
         let request = RenderRequest {
             node: &node,
+            socks: None,
             rules: &rules,
             lists: &[],
             settings: &settings,
@@ -1523,6 +1533,7 @@ mod tests {
 
         let rendered = render::render(&RenderRequest {
             node: &node,
+            socks: None,
             rules: &rule_set,
             lists: &[],
             settings: &settings,
@@ -1586,6 +1597,7 @@ mod tests {
             let rules = rules();
             let rendered = render::render(&RenderRequest {
                 node: &node,
+            socks: None,
                 rules: &rules,
                 lists: &[],
                 settings: &settings,

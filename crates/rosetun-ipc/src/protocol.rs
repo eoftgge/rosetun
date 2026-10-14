@@ -156,6 +156,7 @@ impl ConnectRequest {
         let mut request = Self::from_config(config)?;
         if let Some(running) = running {
             request.settings.engine = running.engine;
+            request.settings.xray = running.xray;
             request.settings.tun = running.tun.clone();
             request.settings.kill_switch = running.kill_switch;
             request.settings.allow_lan = running.allow_lan;
@@ -475,6 +476,7 @@ mod tests {
         config.settings.auto_reconnect = false;
         let mut running = config.settings.clone();
         running.engine = EngineKind::Xray;
+        running.xray = rosetun_config::XrayUse::Off;
         running.tun.name = "old-tun".to_owned();
         running.kill_switch = true;
         running.allow_lan = true;
@@ -484,6 +486,7 @@ mod tests {
         let request = ConnectRequest::for_apply(&config, Some(&running), Vec::new()).unwrap();
 
         assert_eq!(request.settings.engine, running.engine);
+        assert_eq!(request.settings.xray, running.xray);
         assert_eq!(request.settings.tun, running.tun);
         assert_eq!(request.settings.kill_switch, running.kill_switch);
         assert_eq!(request.settings.allow_lan, running.allow_lan);

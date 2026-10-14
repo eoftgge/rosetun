@@ -146,17 +146,19 @@ pub(super) struct WfpProtectionSession {
     bootstrap_policy: BootstrapPolicy,
     bootstrap_filter_ids: Vec<u64>,
     tunnel_filter_ids: Vec<u64>,
+    probe_filter_ids: Vec<u64>,
+    probe_binary: Option<std::path::PathBuf>,
     tunnel_authorized: bool,
 }
 
 impl WfpProtectionSession {
-    pub(super) fn begin(plan: &RoutingPlan, engine_binary: &Path) -> Result<Self, RoutingError> {
+    pub(super) fn begin(plan: &RoutingPlan, engine_binaries: &[&Path]) -> Result<Self, RoutingError> {
         let session = DynamicSession::open()?;
         let transaction = session.transaction()?;
 
         session.add_provider_and_sublayer()?;
 
-        let bootstrap_policy = BootstrapPolicy::from_plan(plan, engine_binary);
+        let bootstrap_policy = BootstrapPolicy::from_plan(plan, engine_binaries);
         let mut bootstrap_filter_ids = Vec::with_capacity(bootstrap_policy.rules.len());
         for rule in &bootstrap_policy.rules {
             bootstrap_filter_ids.push(filters::add_rule(&session, rule)?);
@@ -169,6 +171,8 @@ impl WfpProtectionSession {
             bootstrap_policy,
             bootstrap_filter_ids,
             tunnel_filter_ids: Vec::new(),
+            probe_filter_ids: Vec::new(),
+            probe_binary: None,
             tunnel_authorized: false,
         })
     }
@@ -188,9 +192,9 @@ impl ProtectionSession for WfpProtectionSession {
     fn prepare_reconnect(
         &mut self,
         plan: &RoutingPlan,
-        engine_binary: &Path,
+        engine_binaries: &[&Path],
     ) -> Result<(), RoutingError> {
-        let policy = BootstrapPolicy::from_plan(plan, engine_binary);
+        let policy = BootstrapPolicy::from_plan(plan, engine_binaries);
         let replace_bootstrap = policy != self.bootstrap_policy;
         let session = self.active_session()?;
         let transaction = session.transaction()?;
@@ -242,8 +246,48 @@ impl ProtectionSession for WfpProtectionSession {
         Ok(())
     }
 
+    fn permit_probe_binary(&mut self, binary: &Path) -> Result<(), RoutingError> {
+        if self.probe_binary.as_deref() == Some(binary)
+            || self.bootstrap_policy.rules.iter().any(|rule| {
+                rule.conditions == [policy::Condition::Application(binary.to_owned())]
+            })
+        {
+            return Ok(());
+        }
+        if self.probe_binary.is_some() {
+            return Err(RoutingError::Route("another probe application is authorized".into()));
+        }
+        let session = self.active_session()?;
+        let transaction = session.transaction()?;
+        let mut ids = Vec::with_capacity(2);
+        for rule in policy::probe_authorization(binary) {
+            ids.push(filters::add_rule(session, &rule)?);
+        }
+        transaction.commit()?;
+        self.probe_filter_ids = ids;
+        self.probe_binary = Some(binary.to_owned());
+        Ok(())
+    }
+
+    fn remove_probe_binary(&mut self, binary: &Path) -> Result<(), RoutingError> {
+        if self.probe_binary.as_deref() != Some(binary) {
+            return Ok(());
+        }
+        let session = self.active_session()?;
+        let transaction = session.transaction()?;
+        for &id in &self.probe_filter_ids {
+            filters::delete_rule(session, id)?;
+        }
+        transaction.commit()?;
+        self.probe_filter_ids.clear();
+        self.probe_binary = None;
+        Ok(())
+    }
+
     fn teardown(&mut self) -> Result<(), RoutingError> {
         self.session.take();
+        self.probe_filter_ids.clear();
+        self.probe_binary = None;
         self.bootstrap_filter_ids.clear();
         self.tunnel_filter_ids.clear();
         self.tunnel_authorized = false;

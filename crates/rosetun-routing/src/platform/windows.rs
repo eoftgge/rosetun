@@ -41,11 +41,11 @@ impl RoutingBackend for WfpBackend {
     fn begin_protection(
         &mut self,
         plan: &RoutingPlan,
-        engine_binary: &std::path::Path,
+        engine_binaries: &[&std::path::Path],
     ) -> Result<RoutingGuard, RoutingError> {
         Ok(RoutingGuard::from_session(WfpProtectionSession::begin(
             plan,
-            engine_binary,
+            engine_binaries,
         )?))
     }
 }

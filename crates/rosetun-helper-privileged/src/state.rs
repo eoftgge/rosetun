@@ -7,7 +7,7 @@ mod tests;
 mod watchdog;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle};
@@ -15,11 +15,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
     ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic, list_tag,
+    uses_xray,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
-    TrafficProbe, TrafficTotals, UrlTestTarget, url_test_any,
+    SocksProxy, TrafficProbe, TrafficTotals, UrlTestTarget, errors::EngineError, url_test_any,
 };
+use rosetun_engine_xray::{SocksEndpoint, XrayHelper};
 use rosetun_ipc::transport::PeerIdentity;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_TEMPORARY_RULES};
 use rosetun_routing::{
@@ -91,6 +93,8 @@ pub struct Helper {
     session: Mutex<Session>,
     owner: Arc<Mutex<Option<Vec<u8>>>>,
     engines: Arc<EngineRegistry>,
+    xray: Option<Arc<dyn XrayRunner>>,
+    physical_interface: fn(&str) -> Option<String>,
     probe: Mutex<()>,
     lists: Option<Arc<Mutex<ListStore>>>,
     shutting_down: AtomicBool,
@@ -118,9 +122,46 @@ struct Reconnect {
     cause: &'static str,
 }
 
+trait XrayRunner: Send + Sync + std::fmt::Debug {
+    fn binary_path(&self) -> Result<PathBuf, EngineError>;
+    fn locate_binary(&self) -> Result<PathBuf, EngineError>;
+    fn probe_config_path(&self) -> PathBuf;
+    fn spawn(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+        endpoints: &[&SocksEndpoint],
+        verbose_until_unix: Arc<AtomicU64>,
+    ) -> Result<Box<dyn EngineProcess>, EngineError>;
+}
+
+impl XrayRunner for XrayHelper {
+    fn binary_path(&self) -> Result<PathBuf, EngineError> {
+        XrayHelper::binary_path(self)
+    }
+
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        XrayHelper::locate_binary(self)
+    }
+
+    fn probe_config_path(&self) -> PathBuf {
+        XrayHelper::probe_config_path(self)
+    }
+
+    fn spawn(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+        endpoints: &[&SocksEndpoint],
+        verbose_until_unix: Arc<AtomicU64>,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        XrayHelper::spawn(self, binary, config, endpoints, verbose_until_unix)
+    }
+}
+
 /// Routing protection that outlives one engine process.
 struct Guard {
-    routing: RoutingGuard,
+    routing: Arc<Mutex<RoutingGuard>>,
     scope: ProtectionScope,
 }
 
@@ -130,6 +171,9 @@ struct Session {
     gate: VerboseGate,
     status: Arc<Mutex<Status>>,
     process: Option<Box<dyn EngineProcess>>,
+    xray_process: Option<Box<dyn EngineProcess>>,
+    xray: Option<Arc<dyn XrayRunner>>,
+    physical_interface: fn(&str) -> Option<String>,
     control: Option<ControlEndpoint>,
     monitor: Option<TrafficMonitor>,
     watchdog: Option<DnsWatchdog>,
@@ -172,6 +216,8 @@ impl Helper {
             status: Arc::clone(&status),
             owner: Arc::clone(&owner),
             engines: Arc::clone(&engines),
+            xray: None,
+            physical_interface: rosetun_routing::physical_default_interface,
             probe: Mutex::new(()),
             lists: None,
             shutting_down: AtomicBool::new(false),
@@ -183,6 +229,9 @@ impl Helper {
                 gate,
                 status,
                 process: None,
+                xray_process: None,
+                xray: None,
+                physical_interface: rosetun_routing::physical_default_interface,
                 control: None,
                 monitor: None,
                 watchdog: None,
@@ -208,6 +257,23 @@ impl Helper {
                 adapter_lookup: |_| Ok(false),
             }),
         }
+    }
+
+    pub(crate) fn with_xray(self, xray: XrayHelper) -> Self {
+        self.with_xray_runner(Arc::new(xray))
+    }
+
+    fn with_xray_runner(mut self, xray: Arc<dyn XrayRunner>) -> Self {
+        self.session.get_mut().expect("new session is not poisoned").xray = Some(Arc::clone(&xray));
+        self.xray = Some(xray);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_test_physical_interface(mut self, lookup: fn(&str) -> Option<String>) -> Self {
+        self.physical_interface = lookup;
+        self.session.get_mut().expect("new session is not poisoned").physical_interface = lookup;
+        self
     }
 
     pub(crate) fn with_list_store(mut self, store: ListStore, run_dir: PathBuf) -> Self {
@@ -316,31 +382,53 @@ impl Helper {
                 return;
             }
         } else {
-            let exited = match session.process.as_mut() {
-                Some(process) => match process.is_running() {
-                    Ok(true) => None,
-                    Ok(false) => Some("the engine process exited".to_owned()),
-                    Err(error) => Some(error.to_string()),
-                },
-                None => Some("the engine process is missing".to_owned()),
+            let xray_exited = if session.request.as_ref().is_some_and(|request| {
+                uses_xray(&request.node, request.settings.xray)
+            }) {
+                match session.xray_process.as_mut() {
+                    Some(process) => !matches!(process.is_running(), Ok(true)),
+                    None => true,
+                }
+            } else {
+                false
+            };
+            let exited = if xray_exited {
+                Some("Xray stopped".to_owned())
+            } else {
+                match session.process.as_mut() {
+                    Some(process) => match process.is_running() {
+                        Ok(true) => None,
+                        Ok(false) => Some("the engine process exited".to_owned()),
+                        Err(error) => Some(error.to_string()),
+                    },
+                    None => Some("the engine process is missing".to_owned()),
+                }
             };
             if let Some(reason) = exited {
+                if xray_exited {
+                    self.with_status(|status| status.xray_stopped = true);
+                }
                 let protected = session.keeps_protection();
                 if !auto_reconnect {
                     tracing::warn!(%reason, protected, "the engine terminated itself");
                     if !protected {
                         session.teardown();
+                    } else if xray_exited {
+                        if let Err(error) = session.stop_engine() {
+                            tracing::error!(%error, "failed to stop the engine after Xray stopped");
+                        }
                     }
                     self.with_status(|status| {
+                        let failure_kind = xray_exited.then_some(rosetun_config::FailureKind::XrayStopped);
                         status.state = if protected {
                             ConnectionState::FailedProtected {
                                 reason,
-                                failure_kind: None,
+                                failure_kind,
                             }
                         } else {
                             ConnectionState::Failed {
                                 reason,
-                                failure_kind: None,
+                                failure_kind,
                             }
                         };
                         status.since_unix = None;
@@ -356,7 +444,7 @@ impl Helper {
                 session.reconnect = Some(Reconnect {
                     failures: 0,
                     next_at: now,
-                    cause: "engine exited",
+                    cause: if xray_exited { "xray stopped" } else { "engine exited" },
                 });
             } else if self.resumed.swap(false, Ordering::AcqRel) {
                 if !auto_reconnect {
@@ -412,6 +500,9 @@ impl Helper {
             .and_then(|()| {
                 self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
+                    status.xray = uses_xray(&request.node, request.settings.xray);
+                    status.xray_use = Some(request.settings.xray);
+                    status.xray_stopped = false;
                     status.since_unix.get_or_insert_with(now_unix);
                 })
             }) {
@@ -455,12 +546,20 @@ impl Helper {
                         status.state = if protected {
                             ConnectionState::FailedProtected {
                                 reason,
-                                failure_kind: failure_kind(error.code),
+                                failure_kind: if reconnect.cause == "xray stopped" {
+                                    Some(rosetun_config::FailureKind::XrayStopped)
+                                } else {
+                                    failure_kind(error.code)
+                                },
                             }
                         } else {
                             ConnectionState::Failed {
                                 reason,
-                                failure_kind: failure_kind(error.code),
+                                failure_kind: if reconnect.cause == "xray stopped" {
+                                    Some(rosetun_config::FailureKind::XrayStopped)
+                                } else {
+                                    failure_kind(error.code)
+                                },
                             }
                         };
                         status.since_unix = None;
@@ -530,6 +629,9 @@ impl Helper {
                     status.state = ConnectionState::Connected;
                     status.node = Some(request.node.id.clone());
                     status.engine = Some(request.settings.engine);
+                    status.xray = uses_xray(&request.node, request.settings.xray);
+                    status.xray_use = Some(request.settings.xray);
+                    status.xray_stopped = false;
                     status.since_unix = Some(now_unix());
                 })
             }) {
@@ -552,7 +654,9 @@ impl Helper {
                     self.finish_cancelled(&mut session);
                     return Err(error);
                 }
-                let protected = mode == StartMode::ProtectedReconnect && session.keeps_protection();
+                let protected = session.keeps_protection()
+                    && (mode == StartMode::ProtectedReconnect
+                        || error.code == ErrorCode::XrayStartFailed);
                 if protected {
                     if let Err(cleanup_error) = session.stop_engine() {
                         tracing::error!(
@@ -1165,7 +1269,7 @@ impl Session {
 
         if mode == StartMode::Fresh
             && let Some(guard) = self.guard.take()
-            && let Err(error) = guard.routing.revert()
+            && let Err(error) = guard.routing.lock().unwrap_or_else(|poison| poison.into_inner()).revert_in_place()
         {
             tracing::error!(%error, "failed to roll back stale routing protection");
         }
@@ -1196,6 +1300,20 @@ impl Session {
         };
 
         let resolved_node = endpoint.map(|address| node_with_endpoint(node, address));
+        let chain = settings.engine == rosetun_config::EngineKind::SingBox
+            && uses_xray(node, settings.xray);
+        let socks = if chain {
+            Some(SocksEndpoint::local().map_err(|_| {
+                HelperError::new(ErrorCode::XrayStartFailed, "Xray SOCKS endpoint is unavailable")
+            })?)
+        } else {
+            None
+        };
+        let socks_proxy = socks.as_ref().map(|socks| SocksProxy {
+            address: socks.address(),
+            username: socks.username(),
+            password: socks.password(),
+        });
         let backend = self.engines.get(settings.engine).ok_or_else(|| {
             HelperError::new(
                 ErrorCode::EngineFailed,
@@ -1223,6 +1341,7 @@ impl Session {
         let config = render_config(
             backend,
             resolved_node.as_ref().unwrap_or(node),
+            socks_proxy,
             rules,
             lists,
             settings,
@@ -1241,6 +1360,16 @@ impl Session {
             binary = %binary.display(),
             "engine binary located"
         );
+        let xray_path = if chain {
+            self.xray.as_ref().and_then(|xray| xray.binary_path().ok())
+        } else {
+            None
+        };
+        let xray_path = xray_path.and_then(|path| std::fs::canonicalize(path).ok());
+        let mut binaries = vec![binary.as_path()];
+        if let Some(path) = xray_path.as_ref() {
+            binaries.push(path.as_path());
+        }
 
         let scope = match mode {
             StartMode::Fresh => {
@@ -1275,10 +1404,10 @@ impl Session {
                     let result = self
                         .routing
                         .preflight()
-                        .and_then(|()| self.routing.begin_protection(&plan, &binary));
+                        .and_then(|()| self.routing.begin_protection(&plan, &binaries));
                     match result {
                         Ok(routing) => {
-                            self.guard = Some(Guard { routing, scope });
+                            self.guard = Some(Guard { routing: Arc::new(Mutex::new(routing)), scope });
                             tracing::info!(?scope, "routing protection installed");
                         }
                         Err(error) if scope == ProtectionScope::DnsOnly => {
@@ -1299,7 +1428,9 @@ impl Session {
                         .expect("protected reconnect validated the guard");
                     guard
                         .routing
-                        .prepare_reconnect(&plan, &binary)
+                        .lock()
+                        .map_err(|_| HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned"))?
+                        .prepare_reconnect(&plan, &binaries)
                         .map_err(|error| {
                             HelperError::new(ErrorCode::RoutingFailed, error.to_string())
                         })?;
@@ -1309,6 +1440,46 @@ impl Session {
         }
         // Without a guard there is no filter to authorize on the tunnel.
         let tunnel = tunnel.filter(|_| self.guard.is_some());
+
+        if let Some(socks) = socks.as_ref() {
+            let xray = self.xray.as_ref().ok_or_else(|| {
+                HelperError::new(ErrorCode::XrayStartFailed, "Xray helper is unavailable")
+            })?;
+            let xray_binary = xray.locate_binary().map_err(|error| {
+                HelperError::new(ErrorCode::XrayStartFailed, error.to_string())
+            })?;
+            let interface = (self.physical_interface)(&settings.tun.name)
+                .ok_or_else(|| {
+                    HelperError::new(ErrorCode::XrayStartFailed, "physical interface is unavailable for Xray")
+                })?;
+            let xray_config = rosetun_engine_xray::render(
+                resolved_node.as_ref().unwrap_or(node),
+                socks,
+                &interface,
+                verbose_until.is_some(),
+                settings.log_level,
+            )
+            .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?;
+            tracing::info!("engine chain: sing-box + xray");
+            check_cancelled(&self.cancelled)?;
+            let spawned_at = Instant::now();
+            self.xray_process = Some(
+                xray.spawn(&xray_binary, &xray_config, &[socks], self.gate.deadline())
+                    .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?,
+            );
+            wait_for_engine_ready_from(
+                self.xray_process.as_mut().expect("Xray process stored before readiness").as_mut(),
+                spawned_at,
+                &self.cancelled,
+            )
+            .map_err(|error| if error.code == ErrorCode::Cancelled {
+                error
+            } else {
+                HelperError::new(ErrorCode::XrayStartFailed, error.message)
+            })?;
+        } else {
+            tracing::info!("engine chain: sing-box");
+        }
 
         tracing::info!(engine = %backend.kind().as_str(), "spawning tunnel engine");
         let spawned_at = Instant::now();
@@ -1339,6 +1510,7 @@ impl Session {
             self.server_check_grace,
         );
         tracing::info!("engine startup readiness confirmed");
+        self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
 
         if let Some(tunnel) = tunnel.as_ref() {
             match self.wait_for_tunnel(tunnel) {
@@ -1354,7 +1526,7 @@ impl Session {
                 {
                     tracing::warn!(reason = %error.message, "DNS lock cannot authorize the tunnel; connecting without it");
                     if let Some(guard) = self.guard.take()
-                        && let Err(error) = guard.routing.revert()
+                        && let Err(error) = guard.routing.lock().unwrap_or_else(|poison| poison.into_inner()).revert_in_place()
                     {
                         tracing::error!(%error, "failed to roll back DNS lock");
                     }
@@ -1392,7 +1564,7 @@ impl Session {
             let stopped = AtomicBool::new(false);
             let failures = AtomicU64::new(0);
             let cancelled = Arc::clone(&self.cancelled);
-            thread::scope(|scope| {
+            let dns_result = thread::scope(|scope| {
                 let _stop = StopServerCheck(&stopped);
                 let worker = control.and_then(|control| {
                     let worker_started = &started;
@@ -1424,6 +1596,7 @@ impl Session {
                         .process
                         .as_mut()
                         .expect("engine process was stored before DNS check");
+                    let mut xray_process = self.xray_process.as_mut();
                     dns::check_cancellable(
                         server,
                         self.dns_timeout,
@@ -1432,12 +1605,23 @@ impl Session {
                         || {
                             let running = process.is_running()?;
                             let mut counters = process.outbound_failures();
+                            let xray_running = match xray_process.as_mut() {
+                                Some(xray) => {
+                                    let running = xray.is_running()?;
+                                    let xray_failures = xray.outbound_failures();
+                                    counters.unreachable = counters.unreachable.saturating_add(xray_failures.unreachable);
+                                    counters.rejected = counters.rejected.saturating_add(xray_failures.rejected);
+                                    counters.closed = counters.closed.saturating_add(xray_failures.closed);
+                                    running
+                                }
+                                None => true,
+                            };
                             counters.unreachable = counters
                                 .unreachable
                                 .saturating_add(failures.load(Ordering::Acquire));
                             // DNS must capture its baseline before the first check can fail.
                             started.store(true, Ordering::Release);
-                            Ok((running, counters))
+                            Ok((running && xray_running, counters))
                         },
                         || cancelled.load(Ordering::Acquire),
                     )
@@ -1475,7 +1659,9 @@ impl Session {
                     );
                 }
                 result
-            })?;
+            });
+            self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
+            dns_result?;
             self.tunnel_dns = Some(server);
             self.refresh_path_addresses();
         } else {
@@ -1485,6 +1671,7 @@ impl Session {
             );
         }
 
+        self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
         // Do not poison the successful endpoint cache with a failed attempt.
         self.last_endpoint = endpoint.map(|address| SuccessfulEndpoint {
             server: normalize_server(&node.server),
@@ -1544,6 +1731,7 @@ impl Session {
 
         loop {
             check_cancelled(&self.cancelled)?;
+            self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
             let running = self
                 .process
                 .as_mut()
@@ -1563,16 +1751,18 @@ impl Session {
                 ));
             }
 
-            let guard = self
+            let routing = self
                 .guard
-                .as_mut()
-                .map(|guard| &mut guard.routing)
+                .as_ref()
                 .ok_or_else(|| {
                     HelperError::new(
                         ErrorCode::RoutingFailed,
                         "routing protection disappeared before tunnel authorization",
                     )
                 })?;
+            let mut guard = routing.routing.lock().map_err(|_| {
+                HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned")
+            })?;
 
             match guard.authorize_tunnel(tunnel) {
                 Ok(()) => {
@@ -1611,6 +1801,17 @@ impl Session {
         }
     }
 
+    fn ensure_xray_running(&mut self, code: ErrorCode) -> Result<(), HelperError> {
+        if let Some(process) = self.xray_process.as_mut() {
+            match process.is_running() {
+                Ok(true) => {}
+                Ok(false) => return Err(HelperError::new(code, "Xray stopped")),
+                Err(_) => return Err(HelperError::new(code, "Xray stopped")),
+            }
+        }
+        Ok(())
+    }
+
     fn stop_engine(&mut self) -> Result<(), HelperError> {
         self.gate.close();
         self.tunnel_dns = None;
@@ -1636,6 +1837,12 @@ impl Session {
         }
         self.process.take();
         self.control.take();
+        if let Some(process) = self.xray_process.as_mut() {
+            process
+                .stop()
+                .map_err(|error| HelperError::new(ErrorCode::XrayStopped, error.to_string()))?;
+        }
+        self.xray_process.take();
         Ok(())
     }
 
@@ -1650,7 +1857,7 @@ impl Session {
         }
         self.pin_lists(&[]);
         if let Some(guard) = self.guard.take()
-            && let Err(error) = guard.routing.revert()
+            && let Err(error) = guard.routing.lock().unwrap_or_else(|poison| poison.into_inner()).revert_in_place()
         {
             tracing::error!(%error, "failed to roll back routes");
         }
@@ -1715,6 +1922,7 @@ fn check_server_outbound(
 fn render_config(
     backend: &dyn EngineBackend,
     node: &Node,
+    socks: Option<SocksProxy<'_>>,
     rules: &RuleSet,
     lists: &[ListRef],
     settings: &Settings,
@@ -1724,6 +1932,7 @@ fn render_config(
     let config = backend
         .render(&RenderRequest {
             node,
+            socks,
             rules,
             lists,
             settings,
@@ -1764,6 +1973,8 @@ fn failure_kind(code: ErrorCode) -> Option<rosetun_config::FailureKind> {
     use rosetun_config::FailureKind;
     match code {
         ErrorCode::EngineNotReady => Some(FailureKind::EngineNotReady),
+        ErrorCode::XrayStartFailed => Some(FailureKind::XrayStartFailed),
+        ErrorCode::XrayStopped => Some(FailureKind::XrayStopped),
         ErrorCode::ServerUnreachable => Some(FailureKind::ServerUnreachable),
         ErrorCode::ServerRejected => Some(FailureKind::ServerRejected),
         ErrorCode::ServerClosed => Some(FailureKind::ServerClosed),

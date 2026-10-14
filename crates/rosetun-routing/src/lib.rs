@@ -12,7 +12,7 @@ pub fn physical_default_interface(exclude_alias: &str) -> Option<String> {
 }
 
 pub type PrepareClosure =
-    Box<dyn FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send>;
+    Box<dyn FnMut(&RoutingPlan, &[&std::path::Path]) -> Result<(), RoutingError> + Send>;
 pub type AuthorizeClosure = Box<dyn FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
     fn begin_protection(
         &mut self,
         plan: &RoutingPlan,
-        engine_binary: &std::path::Path,
+        engine_binaries: &[&std::path::Path],
     ) -> Result<RoutingGuard, RoutingError>;
 }
 
@@ -83,9 +83,11 @@ pub(crate) trait ProtectionSession: std::fmt::Debug + Send {
     fn prepare_reconnect(
         &mut self,
         plan: &RoutingPlan,
-        engine_binary: &std::path::Path,
+        engine_binaries: &[&std::path::Path],
     ) -> Result<(), RoutingError>;
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError>;
+    fn permit_probe_binary(&mut self, binary: &std::path::Path) -> Result<(), RoutingError>;
+    fn remove_probe_binary(&mut self, binary: &std::path::Path) -> Result<(), RoutingError>;
     fn teardown(&mut self) -> Result<(), RoutingError>;
 }
 
@@ -119,7 +121,7 @@ impl RoutingGuard {
 
     /// Creates a guard with explicit protected-reconnect support.
     pub fn new_with_reconnector(
-        prepare: impl FnMut(&RoutingPlan, &std::path::Path) -> Result<(), RoutingError> + Send + 'static,
+        prepare: impl FnMut(&RoutingPlan, &[&std::path::Path]) -> Result<(), RoutingError> + Send + 'static,
         authorize: impl FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send + 'static,
         revert: impl FnOnce() -> Result<(), RoutingError> + Send + 'static,
     ) -> Self {
@@ -145,12 +147,12 @@ impl RoutingGuard {
     pub fn prepare_reconnect(
         &mut self,
         plan: &RoutingPlan,
-        engine_binary: &std::path::Path,
+        engine_binaries: &[&std::path::Path],
     ) -> Result<(), RoutingError> {
         self.session
             .as_mut()
             .ok_or_else(|| RoutingError::Route("routing protection is not active".to_owned()))?
-            .prepare_reconnect(plan, engine_binary)
+            .prepare_reconnect(plan, engine_binaries)
     }
 
     /// Adds phase-2 authorization after the engine has created its TUN adapter.
@@ -163,7 +165,25 @@ impl RoutingGuard {
         }
     }
 
+    pub fn permit_probe_binary(&mut self, binary: &std::path::Path) -> Result<(), RoutingError> {
+        self.session
+            .as_mut()
+            .ok_or_else(|| RoutingError::Route("routing protection is not active".to_owned()))?
+            .permit_probe_binary(binary)
+    }
+
+    pub fn remove_probe_binary(&mut self, binary: &std::path::Path) -> Result<(), RoutingError> {
+        match self.session.as_mut() {
+            Some(session) => session.remove_probe_binary(binary),
+            None => Ok(()),
+        }
+    }
+
     pub fn revert(mut self) -> Result<(), RoutingError> {
+        self.revert_in_place()
+    }
+
+    pub fn revert_in_place(&mut self) -> Result<(), RoutingError> {
         match self.session.take() {
             Some(mut session) => session.teardown(),
             None => Ok(()),
@@ -199,13 +219,21 @@ impl ProtectionSession for ClosureSession {
     fn prepare_reconnect(
         &mut self,
         plan: &RoutingPlan,
-        engine_binary: &std::path::Path,
+        engine_binaries: &[&std::path::Path],
     ) -> Result<(), RoutingError> {
-        (self.prepare)(plan, engine_binary)
+        (self.prepare)(plan, engine_binaries)
     }
 
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError> {
         (self.authorize)(tunnel)
+    }
+
+    fn permit_probe_binary(&mut self, _binary: &std::path::Path) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn remove_probe_binary(&mut self, _binary: &std::path::Path) -> Result<(), RoutingError> {
+        Ok(())
     }
 
     fn teardown(&mut self) -> Result<(), RoutingError> {

@@ -1,16 +1,18 @@
 use std::net::IpAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rosetun_config::{ConnectionState, Node};
+use rosetun_config::{ConnectionState, Node, uses_xray};
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, PROBE_TIMEOUT, ProbeRenderRequest,
-    UrlTestTarget, url_test_any,
+    SocksProxy, UrlTestTarget, url_test_any,
 };
+use rosetun_engine_xray::SocksEndpoint;
+use rosetun_routing::RoutingGuard;
 use rosetun_ipc::{
     ErrorCode, HelperError, MAX_PROBE_NODES, ProbeOutcome, ProbeRequest, ProbeResult,
 };
@@ -60,6 +62,30 @@ impl ApplyDnsWorkerSlot {
 impl Drop for ApplyDnsWorkerSlot {
     fn drop(&mut self) {
         APPLY_DNS_WORKER.store(false, Ordering::Release);
+    }
+}
+
+struct ProbeBinaryPermit {
+    routing: Arc<std::sync::Mutex<RoutingGuard>>,
+    binary: PathBuf,
+}
+
+impl ProbeBinaryPermit {
+    fn new(routing: Arc<std::sync::Mutex<RoutingGuard>>, binary: &Path) -> Result<Self, HelperError> {
+        routing.lock()
+            .map_err(|_| HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned"))?
+            .permit_probe_binary(binary)
+            .map_err(|error| HelperError::new(ErrorCode::RoutingFailed, error.to_string()))?;
+        Ok(Self { routing, binary: binary.to_owned() })
+    }
+}
+
+impl Drop for ProbeBinaryPermit {
+    fn drop(&mut self) {
+        let mut guard = self.routing.lock().unwrap_or_else(|poison| poison.into_inner());
+        if let Err(error) = guard.remove_probe_binary(&self.binary) {
+            tracing::error!(%error, "failed to remove temporary Xray probe authorization");
+        }
     }
 }
 
@@ -178,7 +204,7 @@ impl Helper {
                 "server check control API is unavailable",
             )
         })?;
-        let interface = rosetun_routing::physical_default_interface(&request.settings.tun.name);
+        let interface = (self.physical_interface)(&request.settings.tun.name);
         // A concurrent connect could raise its TUN after this lookup, so on Windows
         // never fall back to auto-detect without a known physical interface.
         if cfg!(windows) && interface.is_none() {
@@ -187,21 +213,54 @@ impl Helper {
                 "physical interface is unavailable for server checks",
             ));
         }
-        let config = backend
+        let xray_nodes = nodes
+            .iter()
+            .filter(|(_, node)| uses_xray(node, request.settings.xray))
+            .map(|(tag, node)| {
+                SocksEndpoint::local()
+                    .map(|socks| (tag.clone(), node.clone(), socks))
+                    .map_err(|_| HelperError::new(ErrorCode::XrayStartFailed, "Xray SOCKS endpoint is unavailable"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let xray_config = if xray_nodes.is_empty() {
+            None
+        } else {
+            let physical = interface.as_deref().ok_or_else(|| {
+                HelperError::new(ErrorCode::XrayStartFailed, "physical interface is unavailable for Xray checks")
+            })?;
+            Some(rosetun_engine_xray::render_probe(&xray_nodes, physical).map_err(|_| {
+                HelperError::new(ErrorCode::XrayStartFailed, "failed to render Xray server check")
+            })?)
+        };
+        let socks = xray_nodes.iter()
+            .filter(|(tag, _, _)| xray_config.as_ref().is_some_and(|config| !config.unsupported_probes.contains(tag)))
+            .map(|(tag, _, endpoint)| (tag.clone(), SocksProxy {
+                address: endpoint.address(),
+                username: endpoint.username(),
+                password: endpoint.password(),
+            }))
+            .collect::<Vec<_>>();
+        let mut config = backend
             .render_probe(&ProbeRenderRequest {
                 nodes: &nodes,
+                socks: &socks,
                 control: &control,
                 interface: interface.as_deref(),
             })
             .map_err(|_| {
                 HelperError::new(ErrorCode::EngineFailed, "failed to render server check")
             })?;
+        if let Some(xray_config) = &xray_config {
+            config.unsupported_probes.extend(xray_config.unsupported_probes.iter().cloned());
+        }
         let config_path = backend.probe_config_path(&config).ok_or_else(|| {
             HelperError::new(
                 ErrorCode::EngineFailed,
                 "server check configuration cleanup is unavailable",
             )
         })?;
+        let mut _permit: Option<ProbeBinaryPermit> = None;
+        let mut _xray_process: Option<ProbeProcess> = None;
         let mut process = ProbeProcess {
             process: None,
             config_path,
@@ -229,6 +288,38 @@ impl Helper {
             .collect::<Vec<_>>();
         if supported.is_empty() {
             return Ok(results);
+        }
+        if !socks.is_empty() {
+            let xray = self.xray.as_ref().ok_or_else(|| {
+                HelperError::new(ErrorCode::XrayStartFailed, "Xray helper is unavailable for server checks")
+            })?;
+            let xray_config = xray_config.as_ref().expect("SOCKS endpoints require Xray config");
+            let mut probe = ProbeProcess {
+                process: None,
+                config_path: xray.probe_config_path(),
+            };
+            let binary = xray.locate_binary().map_err(|_| {
+                HelperError::new(ErrorCode::XrayStartFailed, "Xray is unavailable for server checks")
+            })?;
+            let endpoints = xray_nodes.iter()
+                .filter(|(tag, _, _)| !xray_config.unsupported_probes.contains(tag))
+                .map(|(_, _, socks)| socks)
+                .collect::<Vec<_>>();
+            let routing = match self.session.try_lock() {
+                Ok(session) => session.guard.as_ref().map(|guard| Arc::clone(&guard.routing)),
+                Err(TryLockError::WouldBlock) => return Err(HelperError::new(
+                    ErrorCode::Busy, "tunnel changes are in progress during server checks")),
+                Err(TryLockError::Poisoned(_)) => return Err(HelperError::new(
+                    ErrorCode::Internal, "helper state is unavailable during server checks")),
+            };
+            _permit = routing.map(|routing| ProbeBinaryPermit::new(routing, &binary)).transpose()?;
+            probe.process = Some(xray.spawn(
+                &binary, xray_config, &endpoints, Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            ).map_err(|_| HelperError::new(ErrorCode::XrayStartFailed, "failed to start Xray server check"))?);
+            wait_for_engine_ready(probe.process.as_mut().unwrap().as_mut()).map_err(|_| {
+                HelperError::new(ErrorCode::XrayStartFailed, "Xray server check did not become ready")
+            })?;
+            _xray_process = Some(probe);
         }
         let binary = backend.locate_binary().map_err(|_| {
             HelperError::new(

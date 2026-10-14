@@ -201,9 +201,27 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SocksProxy<'a> {
+    pub address: SocketAddr,
+    pub username: &'a str,
+    pub password: &'a str,
+}
+
+impl std::fmt::Debug for SocksProxy<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SocksProxy")
+            .field("address", &self.address)
+            .field("username", &"<redacted>")
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct RenderRequest<'a> {
     pub node: &'a Node,
+    pub socks: Option<SocksProxy<'a>>,
     pub rules: &'a RuleSet,
     pub lists: &'a [rosetun_config::ListRef],
     pub settings: &'a Settings,
@@ -215,6 +233,7 @@ impl std::fmt::Debug for RenderRequest<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderRequest")
             .field("node_id", &self.node.id)
+            .field("socks", &self.socks)
             .field("engine", &self.settings.engine)
             .field("kill_switch", &self.settings.kill_switch)
             .field("rule_set_id", &self.rules.id)
@@ -230,6 +249,8 @@ impl std::fmt::Debug for RenderRequest<'_> {
 pub struct ProbeRenderRequest<'a> {
     /// Nodes with their outbound tags. Server addresses are IP literals.
     pub nodes: &'a [(String, Node)],
+    /// SOCKS endpoints for the tagged nodes handled by Xray.
+    pub socks: &'a [(String, SocksProxy<'a>)],
     pub control: &'a ControlEndpoint,
     /// The physical interface to dial through; `None` lets the engine pick.
     pub interface: Option<&'a str>,
@@ -239,6 +260,7 @@ impl std::fmt::Debug for ProbeRenderRequest<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProbeRenderRequest")
             .field("node_count", &self.nodes.len())
+            .field("socks_count", &self.socks.len())
             .field("control", &self.control)
             .field("interface", &self.interface)
             .finish()

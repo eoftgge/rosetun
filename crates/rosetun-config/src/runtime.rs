@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{EngineKind, NodeId};
+use crate::{EngineKind, NodeId, XrayUse};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -73,6 +73,10 @@ pub struct Status {
     pub engine: Option<EngineKind>,
     #[serde(default)]
     pub xray: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xray_use: Option<XrayUse>,
+    #[serde(default)]
+    pub xray_stopped: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_unix: Option<u64>,
     #[serde(default)]

@@ -668,6 +668,12 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                 ErrorCode::EngineFailed => {
                     tr_in(language, "error-code-engine-failed", &FluentArgs::new())
                 }
+                ErrorCode::XrayStartFailed => {
+                    tr_in(language, "error-code-xray-start-failed", &FluentArgs::new())
+                }
+                ErrorCode::XrayStopped => {
+                    tr_in(language, "error-code-xray-stopped", &FluentArgs::new())
+                }
                 ErrorCode::ServerUnreachable => tr_in(
                     language,
                     "error-code-server-unreachable",
