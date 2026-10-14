@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use rosetun_config::{ConnectionState, uses_xray};
-use rosetun_engine::SocksProxy;
+use rosetun_engine::{RenderRequest, SocksProxy};
 use rosetun_engine_xray::SocksEndpoint;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
@@ -96,17 +96,19 @@ impl Helper {
         };
         render_config(
             backend,
-            &prepared_node,
-            socks.as_ref().map(|socks| SocksProxy {
-                address: socks.address(),
-                username: socks.username(),
-                password: socks.password(),
-            }),
-            &request.effective_rule_set(),
-            &request.lists,
-            &request.settings,
-            None,
-            false,
+            &RenderRequest {
+                node: &prepared_node,
+                socks: socks.as_ref().map(|socks| SocksProxy {
+                    address: socks.address(),
+                    username: socks.username(),
+                    password: socks.password(),
+                }),
+                rules: &request.effective_rule_set(),
+                lists: &request.lists,
+                settings: &request.settings,
+                control: None,
+                verbose_log: false,
+            },
         )?;
         if let Some(socks) = socks.as_ref() {
             let interface =

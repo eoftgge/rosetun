@@ -3141,14 +3141,18 @@ impl XrayRunner for FakeXrayRunner {
     }
 }
 
-fn xray_chain_helper() -> (
+/// Helper, engine controls, Xray runner, binaries passed to routing, and the
+/// prepare and revert counters of the routing guard.
+type XrayChainHelper = (
     Helper,
     Arc<EngineControls>,
     Arc<FakeXrayRunner>,
     Arc<Mutex<Vec<Vec<PathBuf>>>>,
     Arc<AtomicUsize>,
     Arc<AtomicUsize>,
-) {
+);
+
+fn xray_chain_helper() -> XrayChainHelper {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let controls = Arc::new(EngineControls::default());
     let binaries = Arc::new(Mutex::new(Vec::new()));

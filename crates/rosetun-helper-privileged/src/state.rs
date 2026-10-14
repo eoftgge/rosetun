@@ -421,10 +421,8 @@ impl Helper {
                     tracing::warn!(%reason, protected, "the engine terminated itself");
                     if !protected {
                         session.teardown();
-                    } else if xray_exited {
-                        if let Err(error) = session.stop_engine() {
-                            tracing::error!(%error, "failed to stop the engine after Xray stopped");
-                        }
+                    } else if xray_exited && let Err(error) = session.stop_engine() {
+                        tracing::error!(%error, "failed to stop the engine after Xray stopped");
                     }
                     self.with_status(|status| {
                         let failure_kind =
@@ -1360,13 +1358,15 @@ impl Session {
         }
         let config = render_config(
             backend,
-            resolved_node.as_ref().unwrap_or(node),
-            socks_proxy,
-            rules,
-            lists,
-            settings,
-            control.as_ref(),
-            verbose_until.is_some(),
+            &RenderRequest {
+                node: resolved_node.as_ref().unwrap_or(node),
+                socks: socks_proxy,
+                rules,
+                lists,
+                settings,
+                control: control.as_ref(),
+                verbose_log: verbose_until.is_some(),
+            },
         )?;
 
         self.stage_lists(lists)?;
@@ -1964,24 +1964,10 @@ fn check_server_outbound(
 
 fn render_config(
     backend: &dyn EngineBackend,
-    node: &Node,
-    socks: Option<SocksProxy<'_>>,
-    rules: &RuleSet,
-    lists: &[ListRef],
-    settings: &Settings,
-    control: Option<&ControlEndpoint>,
-    verbose_log: bool,
+    request: &RenderRequest<'_>,
 ) -> Result<RenderedConfig, HelperError> {
     let config = backend
-        .render(&RenderRequest {
-            node,
-            socks,
-            rules,
-            lists,
-            settings,
-            control,
-            verbose_log,
-        })
+        .render(request)
         .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
 
     if !config.unsupported.is_empty() {
