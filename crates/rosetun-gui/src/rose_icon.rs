@@ -294,10 +294,10 @@ fn sample(
     face_bounds: &[Bounds; 5],
     fold_bounds: &[Bounds; 5],
 ) -> Option<(Color32, u8)> {
-    if let RoseIcon::Tray(state) = icon {
-        if let Some(badge) = sample_badge(point, state) {
-            return badge.map(|color| (color, 255));
-        }
+    if let RoseIcon::Tray(state) = icon
+        && let Some(badge) = sample_badge(point, state)
+    {
+        return badge.map(|color| (color, 255));
     }
     let opacity = if matches!(icon, RoseIcon::Tray(TrayState::ServiceUnavailable)) {
         140
