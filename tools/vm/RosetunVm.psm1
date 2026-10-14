@@ -1248,7 +1248,7 @@ function Start-RosetunEgressWatch {
             }
             Unregister-ScheduledTask -TaskName $task -Confirm:$false
         }
-        Remove-Item -Path $path, "$path.error" -ErrorAction SilentlyContinue
+        Remove-Item -Path $path, "$path.tmp", "$path.error" -ErrorAction SilentlyContinue
         $probe = {
             param($address, $url, $path)
             $ErrorActionPreference = 'Stop'
@@ -1259,7 +1259,12 @@ function Start-RosetunEgressWatch {
                     & curl.exe --interface $address --max-time 2 --silent --output NUL $url 2>$null
                     $probes++
                     if ($LASTEXITCODE -eq 0) { $leaks++ }
-                    Set-Content -Path $path -Value "$probes $leaks"
+                    # Stop-ScheduledTask kills this process at any moment: write a
+                    # temporary file and swap it in, so the counts are never empty.
+                    # A reader holding the file blocks the swap; the next round retries.
+                    [IO.File]::WriteAllText("$path.tmp", "$probes $leaks")
+                    try { Move-Item -LiteralPath "$path.tmp" -Destination $path -Force }
+                    catch { }
                     Start-Sleep -Milliseconds 200
                 }
             }
@@ -1319,13 +1324,15 @@ function Stop-RosetunEgressWatch {
             }
             $counts = (Get-Content -Path $path -ErrorAction SilentlyContinue) -split ' '
             if ($counts.Count -lt 2) {
+                $failure = Get-Content -Path "$path.error" -Raw -ErrorAction SilentlyContinue
+                if ($failure) { Write-Warning "The egress watch failed: $failure" }
                 return [pscustomobject]@{ Probes = 0; Leaks = 0 }
             }
             [pscustomobject]@{ Probes = [int]$counts[0]; Leaks = [int]$counts[1] }
         }
         finally {
             Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
-            Remove-Item -Path $path, "$path.error", (Join-Path $dir 'rosetun-egress-watch.ps1') `
+            Remove-Item -Path $path, "$path.tmp", "$path.error", (Join-Path $dir 'rosetun-egress-watch.ps1') `
                 -ErrorAction SilentlyContinue
         }
     } -ArgumentList $script:Config.GuestDir
