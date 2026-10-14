@@ -15,9 +15,6 @@ mod brand;
 mod constants;
 mod display;
 mod errors;
-#[cfg(test)]
-#[path = "../build/icon_res.rs"]
-mod icon_res;
 mod icons;
 mod reorder;
 mod rose_icon;
@@ -30,6 +27,9 @@ mod view;
 mod widgets;
 #[cfg(windows)]
 mod window_memory;
+#[cfg(test)]
+#[path = "../../windows_resources.rs"]
+mod windows_resources;
 mod worker;
 
 use std::fs::{self, OpenOptions};
