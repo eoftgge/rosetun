@@ -1,21 +1,17 @@
 # Rosetun {{version}}
 
-The first alpha of 0.2. Its goal: connect everywhere. It is for people who are ready to test; if you want the steady version, stay on the 0.1 beta, which keeps getting fixes (0.1.0-beta.2 and later do not offer this alpha; 0.1.0-beta.1 still does). Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+The second alpha of 0.2: small visible improvements on top of the Xray support from 0.2.0-alpha.1. It is for people who are ready to test; if you want the steady version, stay on the 0.1 beta, which keeps getting fixes (0.1.0-beta.2 and later do not offer it; 0.1.0-beta.1 and 0.2.0-alpha.1 do). Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
 **Going back to 0.1 takes a manual step.** 0.2 upgrades the settings file to a new format, and 0.1 refuses a file from a newer version instead of overwriting it. Rosetun keeps your previous settings next to it as `%APPDATA%\Rosetun\config.v3.json`: to return to the beta, install it and rename that file to `config.json`. Changes made in 0.2 are not carried back.
 
 ## What's changed
 
-- **REALITY servers on Xray 26.9.8 and newer connect again.** sing-box cannot talk to them ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)), so Rosetun now connects VLESS + REALITY servers through Xray. sing-box still runs the tunnel, the rules, DNS and the kill switch; Xray only carries the connection to the server.
-- **Settings › Advanced › Connection through Xray:**
-  - **Automatically** (default): Xray for VLESS servers with REALITY, sing-box for the rest.
-  - **Without Xray**: sing-box for everything, as in 0.1. If a REALITY server rejects sing-box, Rosetun says so and offers to switch to Automatically and connect.
-  - **Xray for all servers**: every supported server except Hysteria2 goes through Xray.
-- **You can see what is going on.** The server list marks servers that go through Xray, and the main screen shows "sing-box + Xray" while connected through it.
-- **Switching servers while connected** works between ordinary and REALITY servers; the kill switch stays on during the switch.
-- **Server checks and delay** go through the same chain as the connection.
-- **If Xray stops** while connected, the kill switch keeps the internet closed and Rosetun reconnects. If `xray.exe` is missing or damaged, Rosetun says so and links to the release page.
-- **All fixes from 0.1.0-beta.2** are included.
+- **The tray icon shows the state by shape, not only by colour.** The rose is in colour only while connected; otherwise it is grey with a corner badge: an arc while connecting, a lock when the kill switch keeps the internet closed, "!" when connecting failed, "×" when the Rosetun service is not running. The tooltip for the last one says "Service unavailable".
+- **One rose everywhere.** The header and Settings › About show the same rose as the app icon and the tray.
+- **Settings › Connection › Local network.** Your router, printer and other devices on your network are reached directly, past the tunnel; DNS on the local network stays closed. Off by default; turn it off on public networks. A change while connected applies at the next connection. From the command line: `rosetun lan on` or `rosetun lan off`.
+- **Rules by IP address.** The rule dialog has an "IP address" tab: IPv4 and IPv6 addresses or subnets, one per line. A subnet written with host bits (such as `192.0.2.5/24`) gets a **Fix** button, and addresses of the local network get a hint that points to the new Local network setting.
+- **Lists are not downloaded again when they have not changed.** Rosetun asks the server first (`ETag` / `Last-Modified`), so updating subscriptions no longer fetches large lists such as `geosite.dat` every time.
+- **Names in Task Manager.** The app shows as "Rosetun" and the service as "Rosetun Service"; the files also carry their version. sing-box and Xray keep their own names.
 
 ## Known issues
 
@@ -39,22 +35,18 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-Первая альфа-версия 0.2. Её цель: подключаться везде. Она для тех, кто готов тестировать; если нужна спокойная версия, оставайтесь на бете 0.1: она продолжает получать исправления (0.1.0-beta.2 и новее эту альфу не предлагают; 0.1.0-beta.1 ещё предлагает). Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Вторая альфа-версия 0.2: небольшие заметные улучшения поверх поддержки Xray из 0.2.0-alpha.1. Она для тех, кто готов тестировать; если нужна спокойная версия, оставайтесь на бете 0.1: она продолжает получать исправления (0.1.0-beta.2 и новее её не предлагают; 0.1.0-beta.1 и 0.2.0-alpha.1 предлагают). Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
 **Вернуться на 0.1 можно только вручную.** 0.2 переводит файл настроек на новый формат, а 0.1 отказывается читать файл более новой версии и не перезаписывает его. Прежние настройки Rosetun сохраняет рядом, в `%APPDATA%\Rosetun\config.v3.json`: чтобы вернуться на бету, установите её и переименуйте этот файл в `config.json`. Изменения, сделанные в 0.2, при этом не переносятся.
 
 ### Что изменилось
 
-- **Серверы REALITY на Xray 26.9.8 и новее снова подключаются.** sing-box с ними работать не может ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)), поэтому серверы VLESS + REALITY Rosetun теперь подключает через Xray. Туннель, правила, DNS и kill switch по-прежнему работают на sing-box; Xray только ведёт соединение с сервером.
-- **Настройки › Дополнительно › Подключение через Xray:**
-  - **Автоматически** (по умолчанию): Xray для серверов VLESS с REALITY, sing-box для остальных.
-  - **Без Xray**: всё через sing-box, как в 0.1. Если сервер REALITY не примет sing-box, Rosetun скажет об этом и предложит включить «Автоматически» и подключиться.
-  - **Xray для всех серверов**: все поддерживаемые серверы, кроме Hysteria2, идут через Xray.
-- **Видно, что происходит.** В списке серверов отмечены те, что пойдут через Xray, а на главном экране во время подключения через него написано «sing-box + Xray».
-- **Смена сервера во время подключения** работает между обычными серверами и серверами REALITY; kill switch при этом не выключается.
-- **Проверка серверов и задержка** идут через ту же цепочку, что и подключение.
-- **Если Xray остановится** во время подключения, kill switch держит интернет закрытым, а Rosetun переподключается. Если `xray.exe` пропал или повреждён, Rosetun скажет об этом и даст ссылку на страницу выпуска.
-- **Все исправления из 0.1.0-beta.2** входят в эту версию.
+- **Значок в трее показывает состояние формой, а не только цветом.** Роза цветная только при подключении; в остальных состояниях она серая, а в углу значок: дуга при подключении, замок, когда kill switch держит интернет закрытым, «!», когда подключиться не удалось, «×», когда служба Rosetun не запущена. Подсказка в последнем случае: «Служба недоступна».
+- **Одна роза везде.** В шапке и в «Настройки › О программе» та же роза, что на значке программы и в трее.
+- **Настройки › Подключение › Локальная сеть.** Роутер, принтер и другие устройства в вашей сети доступны напрямую, мимо туннеля; DNS в локальной сети остаётся закрытым. По умолчанию выключено; в общественных сетях лучше выключить. Если изменить во время подключения, применится при следующем подключении. Из командной строки: `rosetun lan on` или `rosetun lan off`.
+- **Правила по IP-адресам.** В окне правила появилась вкладка «IP-адрес»: адреса или подсети IPv4 и IPv6, по одному на строку. Для подсети с битами хоста (например, `192.0.2.5/24`) есть кнопка **Исправить**, а для адресов локальной сети подсказка со ссылкой на новую настройку «Локальная сеть».
+- **Неизменившиеся списки больше не скачиваются заново.** Rosetun сначала спрашивает сервер (`ETag` / `Last-Modified`), поэтому обновление подписок не качает каждый раз большие списки вроде `geosite.dat`.
+- **Названия в диспетчере задач.** Программа видна как «Rosetun», служба как «Rosetun Service»; у файлов также указана версия. sing-box и Xray остаются под своими именами.
 
 ### Известные проблемы
 
