@@ -1,4 +1,4 @@
-﻿; Compiled by installer\build.ps1, which passes AppVersion, BuildDir, SingBoxDir and LicensesDir.
+﻿; Compiled by installer\build.ps1, which passes AppVersion, BuildDir, SingBoxDir, XrayDir and LicensesDir.
 #ifndef AppVersion
   #error Run installer\build.ps1 instead of compiling this script directly
 #endif
@@ -98,6 +98,7 @@ Source: "{#BuildDir}\{#HelperExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\{#HelperExe}"; DestName: "{#TempHelperExe}"; Flags: dontcopy
 Source: "{#BuildDir}\rosetun.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SingBoxDir}\sing-box.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#XrayDir}\xray.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#LicensesDir}\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs
 
 [Icons]
@@ -284,6 +285,7 @@ begin
     // Defender scans a new executable on its first launch, which can outlast
     // the helper's timeouts. Doing it here keeps the scan out of the first connect.
     RunHidden(ExpandConstant('{app}\sing-box.exe'), 'version', ResultCode);
+    RunHidden(ExpandConstant('{app}\xray.exe'), 'version', ResultCode);
     RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--install-service', ResultCode);
     if ResultCode <> 0 then
       SuppressibleMsgBox(FmtMessage(CustomMessage('ServiceFailed'), [IntToStr(ResultCode)]),

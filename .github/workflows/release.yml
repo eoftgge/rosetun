@@ -110,10 +110,13 @@ jobs:
         run: |
           $sources = @(Get-ChildItem -LiteralPath 'target/installer' -Filter 'sing-box-*-source.tar.gz' -File)
           if ($sources.Count -ne 1) { throw 'Expected exactly one sing-box source archive.' }
+          $xraySources = @(Get-ChildItem -LiteralPath 'target/installer' -Filter 'xray-*-source.tar.gz' -File)
+          if ($xraySources.Count -ne 1) { throw 'Expected exactly one Xray source archive.' }
           $releaseArgs = @(
             $env:TAG
             $env:SETUP
             $sources[0].FullName
+            $xraySources[0].FullName
             'target/installer/SHA256SUMS.txt'
             '--title'
             "Rosetun $env:VERSION"

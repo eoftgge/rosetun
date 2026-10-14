@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod version;
+
+pub use version::SUPPORTED_XRAY_VERSION;
+
 use std::path::{Path, PathBuf};
 
 use rosetun_config::EngineKind;

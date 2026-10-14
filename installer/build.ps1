@@ -28,6 +28,8 @@ if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "carg
 # Update these together with Install-RosetunSingBox and SUPPORTED_SING_BOX_VERSION.
 $singBoxVersion = '1.14.1'
 $expectedHash = 'B838DE45BD0B2E6DDBED1977E4745622F7DFFAB3B293807FF4C6B1B640FED909'
+$xrayVersion = '26.10.10'
+$xrayArchiveHash = 'BFEFCE8E9804E53B7D75B7C49D958B34E89890D9D5E672329089D1B3111647AF'
 $wintunVersion = '0.14.1'
 $wintunDllLength = 427552
 $wintunDllHash = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
@@ -39,6 +41,11 @@ if (-not $supportedVersion.Success) {
 if ($singBoxVersion -ne $supportedVersion.Groups[1].Value) {
     throw "Installer sing-box $singBoxVersion differs from SUPPORTED_SING_BOX_VERSION $($supportedVersion.Groups[1].Value)."
 }
+$xrayVersionFile = Get-Content -LiteralPath (Join-Path $root 'crates/rosetun-engine-xray/src/version.rs') -Raw
+$supportedXrayVersion = [regex]::Match($xrayVersionFile, '(?m)^pub const SUPPORTED_XRAY_VERSION:\s*&str\s*=\s*"([^"]+)"\s*;')
+if (-not $supportedXrayVersion.Success -or $xrayVersion -ne $supportedXrayVersion.Groups[1].Value) {
+    throw "Installer Xray $xrayVersion differs from SUPPORTED_XRAY_VERSION in version.rs."
+}
 
 $buildDir = Join-Path $root 'target/release'
 $outputDir = Join-Path $root 'target/installer'
@@ -46,6 +53,8 @@ $licensesDir = Join-Path $outputDir 'licenses'
 $singBoxDir = Join-Path $outputDir 'sing-box'
 $binary = Join-Path $singBoxDir 'sing-box.exe'
 $license = Join-Path $singBoxDir 'LICENSE'
+$xrayDir = Join-Path $outputDir 'xray'
+$xrayBinary = Join-Path $xrayDir 'xray.exe'
 
 if (Test-Path -LiteralPath $licensesDir) {
     Remove-Item -LiteralPath $licensesDir -Recurse -Force
@@ -100,6 +109,31 @@ if (-not ((Test-Path -LiteralPath $binary -PathType Leaf) -and
     }
 }
 
+$xrayUrl = "https://github.com/XTLS/Xray-core/releases/download/v$xrayVersion/Xray-windows-64.zip"
+$xrayTemp = Join-Path ([IO.Path]::GetTempPath()) ("rosetun-xray-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $xrayTemp | Out-Null
+try {
+    $archive = Join-Path $xrayTemp 'Xray-windows-64.zip'
+    & curl.exe --fail --silent --show-error --location --output $archive $xrayUrl
+    if ($LASTEXITCODE -ne 0) {
+        throw "Downloading $xrayUrl failed with curl exit code $LASTEXITCODE."
+    }
+    $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+    if ($hash -ne $xrayArchiveHash) {
+        throw "Xray archive from $xrayUrl has SHA-256 $hash, expected $xrayArchiveHash."
+    }
+    Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $xrayTemp 'unpacked')
+    $downloadedXray = Join-Path $xrayTemp 'unpacked/xray.exe'
+    if (-not (Test-Path -LiteralPath $downloadedXray -PathType Leaf)) {
+        throw "Xray archive $xrayUrl does not contain xray.exe."
+    }
+    New-Item -ItemType Directory -Path $xrayDir -Force | Out-Null
+    Copy-Item -LiteralPath $downloadedXray -Destination $xrayBinary -Force
+}
+finally {
+    Remove-Item -LiteralPath $xrayTemp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # Verify the embedded DLL without extracting or modifying the official executable.
 $singBoxBytes = [IO.File]::ReadAllBytes($binary)
 $wintunFound = $false
@@ -126,6 +160,19 @@ if (-not $wintunFound) {
 
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $licensesDir 'rosetun.txt')
 Copy-Item -LiteralPath $license -Destination (Join-Path $licensesDir 'sing-box.txt')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'third-party/xray-mpl-2.0.txt') -Destination $licensesDir
+$xrayNotice = @"
+Rosetun ships the unmodified official Xray-core $xrayVersion executable,
+Xray-windows-64.zip SHA-256 $xrayArchiveHash, under the Mozilla Public License 2.0
+(see xray-mpl-2.0.txt). No Xray geoip.dat or geosite.dat files are installed.
+
+Corresponding source:
+https://github.com/XTLS/Xray-core/tree/v$xrayVersion
+https://github.com/XTLS/Xray-core/archive/refs/tags/v$xrayVersion.tar.gz
+
+Every Rosetun release on GitHub also carries a copy of that source archive.
+"@
+Set-Content -LiteralPath (Join-Path $licensesDir 'xray-source.txt') -Value $xrayNotice -Encoding utf8
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'third-party/wintun-prebuilt-binaries-license.txt') -Destination $licensesDir
 $wintunNotice = @"
 The unmodified official sing-box $singBoxVersion executable embeds Wintun $wintunVersion.
@@ -174,7 +221,7 @@ if (-not $iscc -or -not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
 
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 $issPath = Join-Path $PSScriptRoot 'rosetun.iss'
-& $iscc /Qp "/DAppVersion=$version" "/DFileVersion=$fileVersion" "/DBuildDir=$buildDir" "/DSingBoxDir=$singBoxDir" "/DLicensesDir=$licensesDir" "/O$outputDir" $issPath
+& $iscc /Qp "/DAppVersion=$version" "/DFileVersion=$fileVersion" "/DBuildDir=$buildDir" "/DSingBoxDir=$singBoxDir" "/DXrayDir=$xrayDir" "/DLicensesDir=$licensesDir" "/O$outputDir" $issPath
 if ($LASTEXITCODE -ne 0) {
     throw "Compiling $issPath failed with ISCC exit code $LASTEXITCODE."
 }
@@ -202,11 +249,29 @@ if ($Release) {
         }
     }
 
+    $xraySourceArchive = Join-Path $outputDir "xray-$xrayVersion-source.tar.gz"
+    $xrayPartial = "$xraySourceArchive.download"
+    $xraySourceUrl = "https://github.com/XTLS/Xray-core/archive/refs/tags/v$xrayVersion.tar.gz"
+    try {
+        & curl.exe --fail --location --silent --show-error --output $xrayPartial $xraySourceUrl
+        if ($LASTEXITCODE -ne 0) {
+            throw "Downloading $xraySourceUrl failed with curl exit code $LASTEXITCODE."
+        }
+        Move-Item -LiteralPath $xrayPartial -Destination $xraySourceArchive -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $xrayPartial) {
+            Remove-Item -LiteralPath $xrayPartial -Force
+        }
+    }
+
     $setupHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
     $sourceHash = (Get-FileHash -LiteralPath $sourceArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $xraySourceHash = (Get-FileHash -LiteralPath $xraySourceArchive -Algorithm SHA256).Hash.ToLowerInvariant()
     $checksums = @(
         "$setupHash  $([IO.Path]::GetFileName($setup))"
         "$sourceHash  $([IO.Path]::GetFileName($sourceArchive))"
+        "$xraySourceHash  $([IO.Path]::GetFileName($xraySourceArchive))"
     )
     $utf8 = [Text.UTF8Encoding]::new($false)
     [IO.File]::WriteAllText((Join-Path $outputDir 'SHA256SUMS.txt'), ($checksums -join "`n") + "`n", $utf8)
@@ -216,6 +281,7 @@ if ($Release) {
     $notes = $notes.Replace('{{setup}}', [IO.Path]::GetFileName($setup))
     $notes = $notes.Replace('{{sha256}}', $setupHash)
     $notes = $notes.Replace('{{sing_box_version}}', $singBoxVersion)
+    $notes = $notes.Replace('{{xray_version}}', $xrayVersion)
     $notes = $notes.Replace('{{wintun_version}}', $wintunVersion)
     [IO.File]::WriteAllText((Join-Path $outputDir 'release-notes.md'), $notes, $utf8)
 
@@ -224,4 +290,5 @@ if ($Release) {
         [IO.File]::AppendAllText($env:GITHUB_OUTPUT, $outputs, $utf8)
     }
     Write-Host "Source archive: $sourceArchive"
+    Write-Host "Xray source archive: $xraySourceArchive"
 }
