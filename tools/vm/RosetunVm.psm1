@@ -134,8 +134,8 @@ function Start-RosetunXrayTestNode {
         $exitCode = $LASTEXITCODE
         $global:LASTEXITCODE = 0
         if ($exitCode -ne 0) { throw "Xray could not generate an X25519 key pair (exit $exitCode)." }
-        $private = [regex]::Match($pair, '(?m)^Private key:\s*(\S+)').Groups[1].Value
-        $public = [regex]::Match($pair, '(?m)^Public key:\s*(\S+)').Groups[1].Value
+        $private = [regex]::Match($pair, '(?m)^PrivateKey:[ \t]*([A-Za-z0-9_-]{43})\r?$').Groups[1].Value
+        $public = [regex]::Match($pair, '(?m)^Password \(PublicKey\):[ \t]*([A-Za-z0-9_-]{43})\r?$').Groups[1].Value
         if (-not $private -or -not $public) { throw 'Xray x25519 returned an unexpected key format.' }
         [byte[]]$shortIdBytes = New-Object byte[] 8
         $random = [Security.Cryptography.RandomNumberGenerator]::Create()
