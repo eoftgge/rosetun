@@ -381,14 +381,16 @@ pub(super) fn check_cancellable(
     mut observe: impl FnMut() -> Result<(bool, rosetun_engine::OutboundFailures), EngineError>,
     stopped: impl Fn() -> bool,
 ) -> Result<(), HelperError> {
-    let mut initial = None;
+    let initial = std::cell::Cell::new(None);
     let failure = std::cell::Cell::new(None);
     let mut is_running = || {
         let (running, counters) = observe()?;
-        let baseline = *initial.get_or_insert(counters);
+        let baseline = initial.get().unwrap_or(counters);
+        initial.set(Some(baseline));
         failure.set(counters.delta(baseline).threshold(3));
         Ok(running)
     };
+    let mut grace_pending = grace_deadline.is_some();
     if timeout.is_zero() || attempt_timeout.is_zero() {
         return Err(failed("DNS check timeouts must be nonzero"));
     }
@@ -469,6 +471,15 @@ pub(super) fn check_cancellable(
         );
 
         ensure_running(&mut is_running)?;
+
+        // Failures seen while a slow adapter was still settling must not count
+        // towards the verdict after the grace ends: start counting afresh.
+        if grace_pending && grace_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            grace_pending = false;
+            initial.set(None);
+            failure.set(None);
+            ensure_running(&mut is_running)?;
+        }
 
         // A valid DNS reply above wins over diagnostics from concurrent traffic.
         if let Some(category) = failure.get()
@@ -661,6 +672,55 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::DnsTimeout);
+    }
+
+    fn unreachable(count: u64) -> rosetun_engine::OutboundFailures {
+        rosetun_engine::OutboundFailures {
+            unreachable: count,
+            ..Default::default()
+        }
+    }
+
+    /// Three failures during a 100 ms grace; after it either nothing new
+    /// happens or a failure is added on every observation.
+    fn check_with_grace(failing_after_grace: bool) -> Result<(), HelperError> {
+        let server = Server::new(Behavior::Silent);
+        let grace = Instant::now() + Duration::from_millis(100);
+        let mut calls = 0;
+        let mut after = 0;
+        check_cancellable(
+            server.address(),
+            Duration::from_millis(400),
+            ATTEMPT_TIMEOUT,
+            Some(grace),
+            || {
+                calls += 1;
+                let count = if calls == 1 {
+                    0
+                } else if Instant::now() < grace {
+                    3
+                } else if failing_after_grace {
+                    after += 1;
+                    3 + after
+                } else {
+                    3
+                };
+                Ok((true, unreachable(count)))
+            },
+            || false,
+        )
+    }
+
+    #[test]
+    fn failures_during_the_grace_do_not_count_after_it() {
+        let error = check_with_grace(false).unwrap_err();
+        assert_eq!(error.code, ErrorCode::DnsTimeout);
+    }
+
+    #[test]
+    fn three_new_failures_after_the_grace_still_fail() {
+        let error = check_with_grace(true).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ServerUnreachable);
     }
 
     #[test]
