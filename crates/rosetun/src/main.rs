@@ -111,7 +111,7 @@ fn main() -> ExitCode {
 fn connect(client: &mut HelperClient, request: PreparedCliRequest) -> ExitCode {
     match send_connection(client, request, ListOperation::Connect) {
         Ok(()) => {
-            println!("tunnel connection started");
+            println!("connected");
             ExitCode::SUCCESS
         }
         Err(error) => {
