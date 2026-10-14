@@ -7,7 +7,7 @@ use rosetun_config::{DomainMatch, ListCategoryError, ListFormat, ListValidationE
 use serde_json::Value;
 use serde_json::json;
 
-use crate::rules::{parse_domain_input, parse_ip_cidr};
+use crate::rules::{IpCidrError, parse_domain_input, parse_ip_cidr};
 
 const MAX_INPUT_BYTES: usize = crate::MAX_LIST_BYTES;
 const MAX_PAYLOAD_BYTES: usize = rosetun_config::MAX_UPLOADED_LIST_BYTES;
@@ -403,7 +403,12 @@ fn parse_text_line(line: &str) -> Result<Record, TextErrorKind> {
 }
 
 fn parse_text_ip_cidr(value: &str) -> Result<Record, TextErrorKind> {
-    let value = parse_ip_cidr(value).map_err(|_| TextErrorKind::InvalidIpCidr)?;
+    // Published lists do carry entries such as 192.0.2.5/24; earlier releases
+    // accepted them, so mask them instead of failing the whole list.
+    let value = match parse_ip_cidr(value) {
+        Ok(value) | Err(IpCidrError::HostBits { corrected: value }) => value,
+        Err(IpCidrError::Invalid) => return Err(TextErrorKind::InvalidIpCidr),
+    };
     Ok(Record {
         key: "ip_cidr",
         value,
@@ -1112,13 +1117,13 @@ mod tests {
     }
 
     #[test]
-    fn text_rejects_subnets_with_host_bits() {
-        let error = inspect(b"192.0.2.5/24\n", Some("example.txt")).unwrap_err();
-        assert!(matches!(
-            error,
-            ListParseError::TextLines { errors, remaining: 0 }
-                if errors == [TextLineError { line: 1, kind: TextErrorKind::InvalidIpCidr }]
-        ));
+    fn text_masks_subnets_with_host_bits() {
+        let bytes = b"192.0.2.5/24\n2001:db8::1/32\n";
+        let inspected = inspect(bytes, Some("example.txt")).unwrap();
+        assert_eq!(
+            source(bytes, inspected.format, None)["rules"][0]["ip_cidr"],
+            json!(["192.0.2.0/24", "2001:db8::/32"])
+        );
     }
 
     #[test]
