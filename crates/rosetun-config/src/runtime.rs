@@ -125,8 +125,10 @@ mod failure_tests {
             ..Status::default()
         };
         assert_eq!(serde_json::to_value(&status).unwrap()["xray"], true);
-        assert!(!serde_json::from_str::<Status>(r#"{"state":"disconnected"}"#)
-            .unwrap()
-            .xray);
+        assert!(
+            !serde_json::from_str::<Status>(r#"{"state":"disconnected"}"#)
+                .unwrap()
+                .xray
+        );
     }
 }

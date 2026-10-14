@@ -64,17 +64,28 @@ pub(crate) struct SettingsState {
 
 impl State {
     pub(crate) fn running_node(&self) -> Option<&Node> {
-        self.session.session_request.as_ref().map(|request| &request.node)
-            .or_else(|| self.config.subscriptions.iter()
-                .flat_map(|subscription| &subscription.nodes)
-                .find(|node| self.status.node.as_ref() == Some(&node.id)))
+        self.session
+            .session_request
+            .as_ref()
+            .map(|request| &request.node)
+            .or_else(|| {
+                self.config
+                    .subscriptions
+                    .iter()
+                    .flat_map(|subscription| &subscription.nodes)
+                    .find(|node| self.status.node.as_ref() == Some(&node.id))
+            })
     }
 
     pub(crate) fn xray_reality_count(&self) -> usize {
-        self.config.subscriptions.iter()
+        self.config
+            .subscriptions
+            .iter()
             .flat_map(|subscription| &subscription.nodes)
-            .filter(|node| matches!(&node.outbound, Outbound::Vless(_))
-                && matches!(&node.stream.tls, TlsMode::Reality(_)))
+            .filter(|node| {
+                matches!(&node.outbound, Outbound::Vless(_))
+                    && matches!(&node.stream.tls, TlsMode::Reality(_))
+            })
             .count()
     }
 
@@ -82,7 +93,10 @@ impl State {
         if !self.settings.screen.xray_connect_ready
             || self.config.settings.xray != XrayUse::Auto
             || !self.helper_available
-            || !matches!(self.status.state, ConnectionState::Failed { .. } | ConnectionState::FailedProtected { .. })
+            || !matches!(
+                self.status.state,
+                ConnectionState::Failed { .. } | ConnectionState::FailedProtected { .. }
+            )
         {
             return None;
         }
@@ -255,14 +269,26 @@ impl State {
                 }
             }
             Action::EnableXrayAutoAndConnect => {
-                let rejected = matches!(self.status.state,
-                    ConnectionState::Failed { failure_kind: Some(rosetun_config::FailureKind::ServerRejected), .. }
-                    | ConnectionState::FailedProtected { failure_kind: Some(rosetun_config::FailureKind::ServerRejected), .. });
-                let reality = self.config.active_node().is_some_and(|(_, node)|
+                let rejected = matches!(
+                    self.status.state,
+                    ConnectionState::Failed {
+                        failure_kind: Some(rosetun_config::FailureKind::ServerRejected),
+                        ..
+                    } | ConnectionState::FailedProtected {
+                        failure_kind: Some(rosetun_config::FailureKind::ServerRejected),
+                        ..
+                    }
+                );
+                let reality = self.config.active_node().is_some_and(|(_, node)| {
                     matches!(&node.outbound, Outbound::Vless(_))
-                        && matches!(&node.stream.tls, TlsMode::Reality(_)));
-                if self.can_edit_settings() && self.helper_available && !self.operations.helper
-                    && rejected && reality && self.config.settings.xray == XrayUse::Off
+                        && matches!(&node.stream.tls, TlsMode::Reality(_))
+                });
+                if self.can_edit_settings()
+                    && self.helper_available
+                    && !self.operations.helper
+                    && rejected
+                    && reality
+                    && self.config.settings.xray == XrayUse::Off
                 {
                     self.settings.screen.connect_after_xray_change = true;
                     return self.start_settings(Job::Setting(SettingChange::Xray(XrayUse::Auto)));

@@ -378,7 +378,12 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             for (index, setting, title, detail) in [
                 (0, XrayUse::Auto, tr!("xray-auto"), tr!("xray-auto-detail")),
                 (1, XrayUse::Off, tr!("xray-off"), tr!("xray-off-detail")),
-                (2, XrayUse::Always, tr!("xray-always"), tr!("xray-always-detail")),
+                (
+                    2,
+                    XrayUse::Always,
+                    tr!("xray-always"),
+                    tr!("xray-always-detail"),
+                ),
             ] {
                 let width = ui.available_width();
                 let response = widgets::choice_card(
@@ -390,22 +395,40 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     &title,
                     |ui| {
                         ui.horizontal(|ui| {
-                            let (radio, _) = ui.allocate_exact_size(
-                                egui::vec2(18.0, 18.0), egui::Sense::hover()
+                            let (radio, _) = ui
+                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                            ui.painter().circle_stroke(
+                                radio.center(),
+                                7.0,
+                                egui::Stroke::new(
+                                    1.5,
+                                    if selected == setting {
+                                        theme::ROSE_LIGHT
+                                    } else {
+                                        theme::TEXT_DIM
+                                    },
+                                ),
                             );
-                            ui.painter().circle_stroke(radio.center(), 7.0,
-                                egui::Stroke::new(1.5, if selected == setting { theme::ROSE_LIGHT } else { theme::TEXT_DIM }));
                             if selected == setting {
-                                ui.painter().circle_filled(radio.center(), 3.5, theme::ROSE_LIGHT);
+                                ui.painter()
+                                    .circle_filled(radio.center(), 3.5, theme::ROSE_LIGHT);
                             }
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(&title).strong());
                                     if setting == XrayUse::Auto {
-                                        ui.colored_label(theme::ROSE_LIGHT, tr!("xray-recommended"));
+                                        ui.colored_label(
+                                            theme::ROSE_LIGHT,
+                                            tr!("xray-recommended"),
+                                        );
                                     }
                                 });
-                                ui.add(egui::Label::new(RichText::new(&detail).small().color(theme::TEXT_DIM)).wrap());
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&detail).small().color(theme::TEXT_DIM),
+                                    )
+                                    .wrap(),
+                                );
                             });
                         });
                     },
@@ -418,28 +441,38 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             if selected == XrayUse::Off {
                 let count = state.xray_reality_count();
                 if count > 0 {
-                    ui.add(egui::Label::new(
-                        RichText::new(tr!("xray-off-warning", count = count.to_string()))
-                            .small().color(theme::ERROR)
-                    ).wrap());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(tr!("xray-off-warning", count = count.to_string()))
+                                .small()
+                                .color(theme::ERROR),
+                        )
+                        .wrap(),
+                    );
                     ui.add_space(8.0);
                 }
             }
             if let Some(status) = state.visible_status().filter(|status| {
-                matches!(status.state, ConnectionState::Connected | ConnectionState::Reconnecting)
+                matches!(
+                    status.state,
+                    ConnectionState::Connected | ConnectionState::Reconnecting
+                )
             }) {
                 let node = state.running_node();
                 let current = if status.xray {
                     match node {
-                        Some(node) if matches!(&node.stream.tls, TlsMode::Reality(_)) =>
-                            tr!("xray-current-reality", name = state.text(&node.name)),
+                        Some(node) if matches!(&node.stream.tls, TlsMode::Reality(_)) => {
+                            tr!("xray-current-reality", name = state.text(&node.name))
+                        }
                         Some(node) => tr!("xray-current-node", name = state.text(&node.name)),
                         None => tr!("xray-current-chained"),
                     }
                 } else {
                     tr!("xray-current-singbox")
                 };
-                ui.add(egui::Label::new(RichText::new(current).small().color(theme::TEXT_DIM)).wrap());
+                ui.add(
+                    egui::Label::new(RichText::new(current).small().color(theme::TEXT_DIM)).wrap(),
+                );
                 if status.xray_use.is_some_and(|running| running != selected) {
                     ui.colored_label(theme::ROSE_LIGHT, tr!("xray-next-connect"));
                 }

@@ -592,49 +592,64 @@ fn folder_launch_uses_the_worker_and_reports_failures() {
 #[test]
 fn xray_settings_count_reality_nodes_and_keep_running_chain() {
     let mut state = state_for_auto_connect();
-    state.config.subscriptions[0].nodes[0].stream.tls = rosetun_config::TlsMode::Reality(
-        rosetun_config::RealityParams {
+    state.config.subscriptions[0].nodes[0].stream.tls =
+        rosetun_config::TlsMode::Reality(rosetun_config::RealityParams {
             sni: Some("example.com".into()),
             public_key: "test-public-key".into(),
             short_id: None,
             fingerprint: None,
-        },
-    );
+        });
     state.config.settings.xray = XrayUse::Off;
     assert_eq!(state.xray_reality_count(), 1);
-    assert!(!rosetun_core::uses_xray(&state.config.subscriptions[0].nodes[0], XrayUse::Off));
-    assert!(rosetun_core::uses_xray(&state.config.subscriptions[0].nodes[0], XrayUse::Auto));
+    assert!(!rosetun_core::uses_xray(
+        &state.config.subscriptions[0].nodes[0],
+        XrayUse::Off
+    ));
+    assert!(rosetun_core::uses_xray(
+        &state.config.subscriptions[0].nodes[0],
+        XrayUse::Auto
+    ));
     state.status.state = ConnectionState::Connected;
     state.status.node = Some(NodeId::new("node"));
     state.status.xray = true;
     state.status.xray_use = Some(XrayUse::Auto);
-    assert_eq!(state.running_node().map(|node| node.name.as_str()), Some("Test"));
+    assert_eq!(
+        state.running_node().map(|node| node.name.as_str()),
+        Some("Test")
+    );
     assert_ne!(state.status.xray_use, Some(state.config.settings.xray));
 }
 
 #[test]
 fn reality_rejection_button_persists_auto_before_connect() {
     let mut state = state_for_auto_connect();
-    state.config.subscriptions[0].nodes[0].stream.tls = rosetun_config::TlsMode::Reality(
-        rosetun_config::RealityParams {
+    state.config.subscriptions[0].nodes[0].stream.tls =
+        rosetun_config::TlsMode::Reality(rosetun_config::RealityParams {
             sni: Some("example.com".into()),
             public_key: "test-public-key".into(),
             short_id: None,
             fingerprint: None,
-        },
-    );
+        });
     state.config.settings.xray = XrayUse::Off;
     state.status.state = ConnectionState::Failed {
         reason: "reality verification failed".into(),
         failure_kind: Some(FailureKind::ServerRejected),
     };
-    assert!(matches!(state.act(Action::EnableXrayAutoAndConnect),
-        Some(Job::Setting(SettingChange::Xray(XrayUse::Auto)))));
+    assert!(matches!(
+        state.act(Action::EnableXrayAutoAndConnect),
+        Some(Job::Setting(SettingChange::Xray(XrayUse::Auto)))
+    ));
     assert!(state.take_xray_connect().is_none());
     let mut saved = state.config.clone();
     saved.settings.xray = XrayUse::Auto;
-    state.reduce(WorkerEvent::Config { generation: 1, config: saved });
-    state.reduce(WorkerEvent::Setting(SettingChange::Xray(XrayUse::Auto), Ok(())));
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config: saved,
+    });
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::Xray(XrayUse::Auto),
+        Ok(()),
+    ));
     assert!(matches!(state.take_xray_connect(), Some(Job::Connect)));
     assert!(state.take_xray_connect().is_none());
 }

@@ -275,17 +275,33 @@ pub(super) fn server_row(
     }
     if rosetun_core::uses_xray(node, state.config.settings.xray) {
         let label = tr!("xray-badge");
-        let width = ui.painter().layout_no_wrap(
-            label.clone(), egui::TextStyle::Small.resolve(ui.style()), theme::ROSE_LIGHT,
-        ).size().x + 14.0;
+        let width = ui
+            .painter()
+            .layout_no_wrap(
+                label.clone(),
+                egui::TextStyle::Small.resolve(ui.style()),
+                theme::ROSE_LIGHT,
+            )
+            .size()
+            .x
+            + 14.0;
         let badge = egui::Rect::from_center_size(
             egui::pos2(name_right - width / 2.0, rect.center().y),
             egui::vec2(width, 20.0),
         );
-        painter.rect_stroke(badge, theme::RADIUS_INNER,
-            Stroke::new(1.0, theme::ROSE_LIGHT), egui::StrokeKind::Inside);
-        painter.text(badge.center(), egui::Align2::CENTER_CENTER, label,
-            egui::TextStyle::Small.resolve(ui.style()), theme::ROSE_LIGHT);
+        painter.rect_stroke(
+            badge,
+            theme::RADIUS_INNER,
+            Stroke::new(1.0, theme::ROSE_LIGHT),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::TextStyle::Small.resolve(ui.style()),
+            theme::ROSE_LIGHT,
+        );
         name_right -= width + 8.0;
     }
     let name_color = if selected {

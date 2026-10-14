@@ -80,7 +80,10 @@ pub(crate) fn check(binary: &Path) -> Result<(), EngineError> {
         thread::sleep(Duration::from_millis(10));
     };
     if !status.success() {
-        return Err(failure(binary, format!("Xray version exited with {status}")));
+        return Err(failure(
+            binary,
+            format!("Xray version exited with {status}"),
+        ));
     }
     let output = receiver
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -91,7 +94,9 @@ pub(crate) fn check(binary: &Path) -> Result<(), EngineError> {
     if actual != SUPPORTED_XRAY_VERSION {
         return Err(failure(
             binary,
-            format!("expected {SUPPORTED_XRAY_VERSION}, found {actual}; install the supported version"),
+            format!(
+                "expected {SUPPORTED_XRAY_VERSION}, found {actual}; install the supported version"
+            ),
         ));
     }
     Ok(())
@@ -103,7 +108,12 @@ mod tests {
 
     #[test]
     fn only_the_pinned_version_header_matches() {
-        assert_eq!(parse_version("Xray 26.10.10 (Xray, Penetrates Everything.) Custom (go1.26 windows/amd64)\n"), Some(SUPPORTED_XRAY_VERSION));
+        assert_eq!(
+            parse_version(
+                "Xray 26.10.10 (Xray, Penetrates Everything.) Custom (go1.26 windows/amd64)\n"
+            ),
+            Some(SUPPORTED_XRAY_VERSION)
+        );
         assert_eq!(parse_version("Xray 26.9.8 (Xray)\n"), Some("26.9.8"));
         assert_eq!(parse_version("Xray 26.10.10\n"), None);
         assert_eq!(parse_version("prefix Xray 26.10.10 (Xray)\n"), None);

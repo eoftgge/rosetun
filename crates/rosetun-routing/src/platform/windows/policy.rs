@@ -280,7 +280,8 @@ mod tests {
         let plain = BootstrapPolicy::from_plan(&plan(), &[singbox]);
         let chained = BootstrapPolicy::from_plan(&plan(), &[singbox, xray]);
         assert!(!plain.rules.iter().any(|rule| {
-            rule.conditions.contains(&Condition::Application(xray.to_owned()))
+            rule.conditions
+                .contains(&Condition::Application(xray.to_owned()))
         }));
         for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
             assert!(chained.rules.iter().any(|rule| {

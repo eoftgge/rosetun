@@ -114,11 +114,14 @@ fn sing_box_check_validates_local_rule_set_config() {
     std::fs::write(&config_path, config.body).unwrap();
     for (path, body) in [
         (config_path, None),
-        (directory.0.join("xray-chain.json"), Some(SocksProxy {
-            address: "127.0.0.1:10801".parse().unwrap(),
-            username: "fixture-user",
-            password: "fixture-password",
-        })),
+        (
+            directory.0.join("xray-chain.json"),
+            Some(SocksProxy {
+                address: "127.0.0.1:10801".parse().unwrap(),
+                username: "fixture-user",
+                password: "fixture-password",
+            }),
+        ),
     ] {
         if let Some(socks) = body {
             let chain = SingBoxBackend::new(&directory.0)

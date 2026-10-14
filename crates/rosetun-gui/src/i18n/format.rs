@@ -266,9 +266,16 @@ pub(crate) fn connection_stage(stage: ConnectStage, seconds: u64) -> String {
     )
 }
 
-pub(crate) fn connection_failure(kind: FailureKind, node: Option<&Node>, xray: XrayUse) -> (String, String) {
-    let reality_without_xray = xray == XrayUse::Off && node.is_some_and(|node|
-        matches!(&node.outbound, Outbound::Vless(_)) && matches!(&node.stream.tls, TlsMode::Reality(_)));
+pub(crate) fn connection_failure(
+    kind: FailureKind,
+    node: Option<&Node>,
+    xray: XrayUse,
+) -> (String, String) {
+    let reality_without_xray = xray == XrayUse::Off
+        && node.is_some_and(|node| {
+            matches!(&node.outbound, Outbound::Vless(_))
+                && matches!(&node.stream.tls, TlsMode::Reality(_))
+        });
     let (title, hint) = match kind {
         FailureKind::EngineNotReady => (
             tr!("error-code-engine-not-ready"),
@@ -278,14 +285,10 @@ pub(crate) fn connection_failure(kind: FailureKind, node: Option<&Node>, xray: X
                 url_test = tr!("check-full")
             ),
         ),
-        FailureKind::XrayStartFailed => (
-            tr!("error-code-xray-start-failed"),
-            tr!("xray-start-hint"),
-        ),
-        FailureKind::XrayStopped => (
-            tr!("error-code-xray-stopped"),
-            tr!("xray-stopped-hint"),
-        ),
+        FailureKind::XrayStartFailed => {
+            (tr!("error-code-xray-start-failed"), tr!("xray-start-hint"))
+        }
+        FailureKind::XrayStopped => (tr!("error-code-xray-stopped"), tr!("xray-stopped-hint")),
         FailureKind::ServerUnreachable => (
             tr!("error-code-server-unreachable"),
             tr!(

@@ -86,7 +86,10 @@ impl Helper {
         let prepared_node = node_with_endpoint(&request.node, endpoint);
         let socks = if uses_xray(&request.node, request.settings.xray) {
             Some(SocksEndpoint::local().map_err(|_| {
-                HelperError::new(ErrorCode::XrayStartFailed, "Xray SOCKS endpoint is unavailable")
+                HelperError::new(
+                    ErrorCode::XrayStartFailed,
+                    "Xray SOCKS endpoint is unavailable",
+                )
             })?)
         } else {
             None
@@ -106,10 +109,21 @@ impl Helper {
             false,
         )?;
         if let Some(socks) = socks.as_ref() {
-            let interface = (session.physical_interface)(&request.settings.tun.name)
-                .ok_or_else(|| HelperError::new(ErrorCode::XrayStartFailed, "physical interface is unavailable for Xray"))?;
-            rosetun_engine_xray::render(&prepared_node, socks, &interface, false, request.settings.log_level)
-                .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?;
+            let interface =
+                (session.physical_interface)(&request.settings.tun.name).ok_or_else(|| {
+                    HelperError::new(
+                        ErrorCode::XrayStartFailed,
+                        "physical interface is unavailable for Xray",
+                    )
+                })?;
+            rosetun_engine_xray::render(
+                &prepared_node,
+                socks,
+                &interface,
+                false,
+                request.settings.log_level,
+            )
+            .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?;
         }
 
         let previous_endpoint = current

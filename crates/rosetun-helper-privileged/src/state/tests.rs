@@ -3024,16 +3024,23 @@ struct RecordingRouting {
 }
 
 impl RoutingBackend for RecordingRouting {
-    fn name(&self) -> &'static str { "test-chain" }
+    fn name(&self) -> &'static str {
+        "test-chain"
+    }
 
-    fn preflight(&self) -> Result<(), RoutingError> { Ok(()) }
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
 
     fn begin_protection(
         &mut self,
         _plan: &RoutingPlan,
         binaries: &[&Path],
     ) -> Result<RoutingGuard, RoutingError> {
-        self.binaries.lock().unwrap().push(binaries.iter().map(|path| (*path).to_owned()).collect());
+        self.binaries
+            .lock()
+            .unwrap()
+            .push(binaries.iter().map(|path| (*path).to_owned()).collect());
         self.controls.events.lock().unwrap().push("protect");
         let controls = Arc::clone(&self.controls);
         let binaries = Arc::clone(&self.binaries);
@@ -3041,7 +3048,10 @@ impl RoutingBackend for RecordingRouting {
         let reverted = Arc::clone(&self.reverted);
         Ok(RoutingGuard::new_with_reconnector(
             move |_, paths| {
-                binaries.lock().unwrap().push(paths.iter().map(|path| (*path).to_owned()).collect());
+                binaries
+                    .lock()
+                    .unwrap()
+                    .push(paths.iter().map(|path| (*path).to_owned()).collect());
                 prepared.fetch_add(1, Ordering::AcqRel);
                 Ok(())
             },
@@ -3070,7 +3080,12 @@ struct FakeXrayRunner {
 
 impl FakeXrayRunner {
     fn kill(&self) {
-        self.running.lock().unwrap().as_ref().unwrap().store(false, Ordering::Release);
+        self.running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .store(false, Ordering::Release);
     }
 }
 
@@ -3085,7 +3100,9 @@ impl Drop for FakeXrayRunner {
 
 impl XrayRunner for FakeXrayRunner {
     fn binary_path(&self) -> Result<PathBuf, EngineError> {
-        self.binary.clone().map_or_else(|| std::env::current_exe().map_err(Into::into), Ok)
+        self.binary
+            .clone()
+            .map_or_else(|| std::env::current_exe().map_err(Into::into), Ok)
     }
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
@@ -3109,30 +3126,47 @@ impl XrayRunner for FakeXrayRunner {
             std::fs::write(&self.probe_path, &config.body)?;
         }
         self.controls.events.lock().unwrap().push("xray");
-        self.endpoint_count.store(endpoints.len(), Ordering::Release);
+        self.endpoint_count
+            .store(endpoints.len(), Ordering::Release);
         self.starts.fetch_add(1, Ordering::AcqRel);
         if self.fail_next.swap(false, Ordering::AcqRel) {
             return Err(EngineError::BinaryNotFound("test Xray".into()));
         }
         let running = Arc::new(AtomicBool::new(true));
         *self.running.lock().unwrap() = Some(Arc::clone(&running));
-        Ok(Box::new(ControlledProcess { running, ready: true }))
+        Ok(Box::new(ControlledProcess {
+            running,
+            ready: true,
+        }))
     }
 }
 
-fn xray_chain_helper() -> (Helper, Arc<EngineControls>, Arc<FakeXrayRunner>, Arc<Mutex<Vec<Vec<PathBuf>>>>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+fn xray_chain_helper() -> (
+    Helper,
+    Arc<EngineControls>,
+    Arc<FakeXrayRunner>,
+    Arc<Mutex<Vec<Vec<PathBuf>>>>,
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+) {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let controls = Arc::new(EngineControls::default());
     let binaries = Arc::new(Mutex::new(Vec::new()));
     let prepared = Arc::new(AtomicUsize::new(0));
     let reverted = Arc::new(AtomicUsize::new(0));
-    let dir = std::env::temp_dir().join(format!("rosetun-xray-chain-test-{}-{}",
-        std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let dir = std::env::temp_dir().join(format!(
+        "rosetun-xray-chain-test-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir(&dir).unwrap();
     let binary = dir.join("xray.exe");
     std::fs::write(&binary, []).unwrap();
     let mut engines = EngineRegistry::new();
-    engines.register(Box::new(ControlledEngine { controls: Arc::clone(&controls), dns_server: None }));
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(&controls),
+        dns_server: None,
+    }));
     let runner = Arc::new(FakeXrayRunner {
         controls: Arc::clone(&controls),
         running: Mutex::new(None),
@@ -3142,14 +3176,18 @@ fn xray_chain_helper() -> (Helper, Arc<EngineControls>, Arc<FakeXrayRunner>, Arc
         probe_path: dir.join("probe.json"),
         binary: Some(binary),
     });
-    let helper = Helper::new(engines, Box::new(RecordingRouting {
-        controls: Arc::clone(&controls),
-        binaries: Arc::clone(&binaries),
-        prepared: Arc::clone(&prepared),
-        reverted: Arc::clone(&reverted),
-    }), VerboseGate::default())
-        .with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
-        .with_test_physical_interface(|_| Some("Ethernet".into()));
+    let helper = Helper::new(
+        engines,
+        Box::new(RecordingRouting {
+            controls: Arc::clone(&controls),
+            binaries: Arc::clone(&binaries),
+            prepared: Arc::clone(&prepared),
+            reverted: Arc::clone(&reverted),
+        }),
+        VerboseGate::default(),
+    )
+    .with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
+    .with_test_physical_interface(|_| Some("Ethernet".into()));
     (helper, controls, runner, binaries, prepared, reverted)
 }
 
@@ -3178,12 +3216,26 @@ fn xray_chain_protects_then_starts_xray_then_singbox() {
     controls.events.lock().unwrap().clear();
     helper.connect(&reality_request()).unwrap();
     assert_eq!(binaries.lock().unwrap()[1].len(), 2);
-    assert_eq!(*controls.events.lock().unwrap(), ["protect", "xray", "sing-box", "tunnel"]);
+    assert_eq!(
+        *controls.events.lock().unwrap(),
+        ["protect", "xray", "sing-box", "tunnel"]
+    );
     assert_eq!(runner.starts.load(Ordering::Acquire), 1);
     assert!(helper.status().xray);
-    assert_eq!(helper.status().xray_use, Some(rosetun_config::XrayUse::Auto));
+    assert_eq!(
+        helper.status().xray_use,
+        Some(rosetun_config::XrayUse::Auto)
+    );
     helper.disconnect().unwrap();
-    assert!(!runner.running.lock().unwrap().as_ref().unwrap().load(Ordering::Acquire));
+    assert!(
+        !runner
+            .running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .load(Ordering::Acquire)
+    );
 }
 
 #[test]
@@ -3206,9 +3258,13 @@ fn xray_crash_keeps_protection_and_distinguishes_stopped_from_not_started() {
     runner.fail_next.store(true, Ordering::Release);
     let error = helper.connect(&request).unwrap_err();
     assert_eq!(error.code, ErrorCode::XrayStartFailed);
-    assert!(matches!(helper.status().state, ConnectionState::FailedProtected {
-        failure_kind: Some(rosetun_config::FailureKind::XrayStartFailed), ..
-    }));
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected {
+            failure_kind: Some(rosetun_config::FailureKind::XrayStartFailed),
+            ..
+        }
+    ));
     assert!(helper.session().unwrap().guard.is_some());
     helper.disconnect().unwrap();
 }
@@ -3221,10 +3277,22 @@ fn xray_stop_without_auto_reconnect_is_a_protected_failure() {
     helper.connect(&request).unwrap();
     runner.kill();
     helper.supervise(Instant::now());
-    assert!(matches!(helper.status().state, ConnectionState::FailedProtected {
-        failure_kind: Some(rosetun_config::FailureKind::XrayStopped), ..
-    }));
-    assert!(!controls.running.lock().unwrap().as_ref().unwrap().load(Ordering::Acquire));
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected {
+            failure_kind: Some(rosetun_config::FailureKind::XrayStopped),
+            ..
+        }
+    ));
+    assert!(
+        !controls
+            .running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .load(Ordering::Acquire)
+    );
     assert!(helper.session().unwrap().guard.is_some());
     helper.disconnect().unwrap();
 }
@@ -3271,7 +3339,11 @@ fn apply_another_xray_node_restarts_under_the_guard() {
     assert_eq!(reverted.load(Ordering::Acquire), 0);
     let binaries = binaries.lock().unwrap();
     assert_eq!(binaries.len(), 2);
-    assert!(binaries.iter().all(|paths| paths.len() == 2 && paths[1].file_name().unwrap() == "xray.exe"));
+    assert!(
+        binaries
+            .iter()
+            .all(|paths| paths.len() == 2 && paths[1].file_name().unwrap() == "xray.exe")
+    );
     assert_eq!(helper.status().node, Some(next.node.id));
 }
 
@@ -3288,7 +3360,15 @@ fn apply_xray_to_plain_restarts_under_the_guard() {
 
     assert_eq!(controls.spawns(), 2);
     assert_eq!(runner.starts.load(Ordering::Acquire), 1);
-    assert!(!runner.running.lock().unwrap().as_ref().unwrap().load(Ordering::Acquire));
+    assert!(
+        !runner
+            .running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .load(Ordering::Acquire)
+    );
     assert_eq!(prepared.load(Ordering::Acquire), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
     let binaries = binaries.lock().unwrap();
@@ -4278,7 +4358,9 @@ fn probe_fixture_with_counter(
 
 #[test]
 fn probe_mixes_plain_and_reality_nodes_in_one_xray_process() {
-    let _dns_slots = DNS_SLOTS.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _dns_slots = DNS_SLOTS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let (helper, stopped, dir) = probe_fixture(true, None);
     let runner = Arc::new(FakeXrayRunner {
         controls: Arc::new(EngineControls::default()),
@@ -4289,7 +4371,8 @@ fn probe_mixes_plain_and_reality_nodes_in_one_xray_process() {
         probe_path: dir.join("xray-probe.json"),
         binary: None,
     });
-    let helper = helper.with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
+    let helper = helper
+        .with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
         .with_test_physical_interface(|_| Some("Ethernet".into()));
     let mut request = probe_request();
     request.nodes[0].stream.tls = reality_request().node.stream.tls;

@@ -319,12 +319,52 @@ mod tests {
         });
         let outbounds = [
             (node.outbound.clone(), true),
-            (Outbound::Vmess(VmessParams { uuid: "test".into(), alter_id: 0, security: None }), true),
-            (Outbound::Vmess(VmessParams { uuid: "test".into(), alter_id: 1, security: None }), false),
-            (Outbound::Trojan(TrojanParams { password: "test".into() }), true),
-            (Outbound::Shadowsocks(ShadowsocksParams { method: "aes-128-gcm".into(), password: "test".into() }), true),
-            (Outbound::Hysteria2(Hysteria2Params { password: "test".into(), obfs_password: None, port_ranges: Vec::new(), up_mbps: None, down_mbps: None }), false),
-            (Outbound::Unknown { scheme: "example".into(), params: BTreeMap::new() }, false),
+            (
+                Outbound::Vmess(VmessParams {
+                    uuid: "test".into(),
+                    alter_id: 0,
+                    security: None,
+                }),
+                true,
+            ),
+            (
+                Outbound::Vmess(VmessParams {
+                    uuid: "test".into(),
+                    alter_id: 1,
+                    security: None,
+                }),
+                false,
+            ),
+            (
+                Outbound::Trojan(TrojanParams {
+                    password: "test".into(),
+                }),
+                true,
+            ),
+            (
+                Outbound::Shadowsocks(ShadowsocksParams {
+                    method: "aes-128-gcm".into(),
+                    password: "test".into(),
+                }),
+                true,
+            ),
+            (
+                Outbound::Hysteria2(Hysteria2Params {
+                    password: "test".into(),
+                    obfs_password: None,
+                    port_ranges: Vec::new(),
+                    up_mbps: None,
+                    down_mbps: None,
+                }),
+                false,
+            ),
+            (
+                Outbound::Unknown {
+                    scheme: "example".into(),
+                    params: BTreeMap::new(),
+                },
+                false,
+            ),
         ];
         for (outbound, supported) in outbounds {
             node.outbound = outbound;

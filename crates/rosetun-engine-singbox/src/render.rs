@@ -4,7 +4,9 @@ use rosetun_config::{
     UploadedListFormat, list_tag,
 };
 use rosetun_engine::errors::EngineError;
-use rosetun_engine::{ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities, SocksProxy};
+use rosetun_engine::{
+    ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities, SocksProxy,
+};
 use serde_json::{Map, Value, json};
 
 pub(crate) const TAG_PROXY: &str = "proxy";
@@ -672,7 +674,8 @@ mod tests {
                 password: "fixture-password",
             }),
             ..request
-        }).unwrap();
+        })
+        .unwrap();
         assert!(chained.unsupported.is_empty());
         assert_eq!(
             chained.body,

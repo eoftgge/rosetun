@@ -152,7 +152,10 @@ pub(super) struct WfpProtectionSession {
 }
 
 impl WfpProtectionSession {
-    pub(super) fn begin(plan: &RoutingPlan, engine_binaries: &[&Path]) -> Result<Self, RoutingError> {
+    pub(super) fn begin(
+        plan: &RoutingPlan,
+        engine_binaries: &[&Path],
+    ) -> Result<Self, RoutingError> {
         let session = DynamicSession::open()?;
         let transaction = session.transaction()?;
 
@@ -248,14 +251,18 @@ impl ProtectionSession for WfpProtectionSession {
 
     fn permit_probe_binary(&mut self, binary: &Path) -> Result<(), RoutingError> {
         if self.probe_binary.as_deref() == Some(binary)
-            || self.bootstrap_policy.rules.iter().any(|rule| {
-                rule.conditions == [policy::Condition::Application(binary.to_owned())]
-            })
+            || self
+                .bootstrap_policy
+                .rules
+                .iter()
+                .any(|rule| rule.conditions == [policy::Condition::Application(binary.to_owned())])
         {
             return Ok(());
         }
         if self.probe_binary.is_some() {
-            return Err(RoutingError::Route("another probe application is authorized".into()));
+            return Err(RoutingError::Route(
+                "another probe application is authorized".into(),
+            ));
         }
         let session = self.active_session()?;
         let transaction = session.transaction()?;

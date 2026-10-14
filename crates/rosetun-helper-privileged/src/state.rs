@@ -14,8 +14,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
-    ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic, list_tag,
-    uses_xray,
+    ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic,
+    list_tag, uses_xray,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
@@ -264,7 +264,10 @@ impl Helper {
     }
 
     fn with_xray_runner(mut self, xray: Arc<dyn XrayRunner>) -> Self {
-        self.session.get_mut().expect("new session is not poisoned").xray = Some(Arc::clone(&xray));
+        self.session
+            .get_mut()
+            .expect("new session is not poisoned")
+            .xray = Some(Arc::clone(&xray));
         self.xray = Some(xray);
         self
     }
@@ -272,7 +275,10 @@ impl Helper {
     #[cfg(test)]
     fn with_test_physical_interface(mut self, lookup: fn(&str) -> Option<String>) -> Self {
         self.physical_interface = lookup;
-        self.session.get_mut().expect("new session is not poisoned").physical_interface = lookup;
+        self.session
+            .get_mut()
+            .expect("new session is not poisoned")
+            .physical_interface = lookup;
         self
     }
 
@@ -382,9 +388,11 @@ impl Helper {
                 return;
             }
         } else {
-            let xray_exited = if session.request.as_ref().is_some_and(|request| {
-                uses_xray(&request.node, request.settings.xray)
-            }) {
+            let xray_exited = if session
+                .request
+                .as_ref()
+                .is_some_and(|request| uses_xray(&request.node, request.settings.xray))
+            {
                 match session.xray_process.as_mut() {
                     Some(process) => !matches!(process.is_running(), Ok(true)),
                     None => true,
@@ -419,7 +427,8 @@ impl Helper {
                         }
                     }
                     self.with_status(|status| {
-                        let failure_kind = xray_exited.then_some(rosetun_config::FailureKind::XrayStopped);
+                        let failure_kind =
+                            xray_exited.then_some(rosetun_config::FailureKind::XrayStopped);
                         status.state = if protected {
                             ConnectionState::FailedProtected {
                                 reason,
@@ -444,7 +453,11 @@ impl Helper {
                 session.reconnect = Some(Reconnect {
                     failures: 0,
                     next_at: now,
-                    cause: if xray_exited { "xray stopped" } else { "engine exited" },
+                    cause: if xray_exited {
+                        "xray stopped"
+                    } else {
+                        "engine exited"
+                    },
                 });
             } else if self.resumed.swap(false, Ordering::AcqRel) {
                 if !auto_reconnect {
@@ -1269,7 +1282,11 @@ impl Session {
 
         if mode == StartMode::Fresh
             && let Some(guard) = self.guard.take()
-            && let Err(error) = guard.routing.lock().unwrap_or_else(|poison| poison.into_inner()).revert_in_place()
+            && let Err(error) = guard
+                .routing
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .revert_in_place()
         {
             tracing::error!(%error, "failed to roll back stale routing protection");
         }
@@ -1304,7 +1321,10 @@ impl Session {
             && uses_xray(node, settings.xray);
         let socks = if chain {
             Some(SocksEndpoint::local().map_err(|_| {
-                HelperError::new(ErrorCode::XrayStartFailed, "Xray SOCKS endpoint is unavailable")
+                HelperError::new(
+                    ErrorCode::XrayStartFailed,
+                    "Xray SOCKS endpoint is unavailable",
+                )
             })?)
         } else {
             None
@@ -1407,7 +1427,10 @@ impl Session {
                         .and_then(|()| self.routing.begin_protection(&plan, &binaries));
                     match result {
                         Ok(routing) => {
-                            self.guard = Some(Guard { routing: Arc::new(Mutex::new(routing)), scope });
+                            self.guard = Some(Guard {
+                                routing: Arc::new(Mutex::new(routing)),
+                                scope,
+                            });
                             tracing::info!(?scope, "routing protection installed");
                         }
                         Err(error) if scope == ProtectionScope::DnsOnly => {
@@ -1429,7 +1452,9 @@ impl Session {
                     guard
                         .routing
                         .lock()
-                        .map_err(|_| HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned"))?
+                        .map_err(|_| {
+                            HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned")
+                        })?
                         .prepare_reconnect(&plan, &binaries)
                         .map_err(|error| {
                             HelperError::new(ErrorCode::RoutingFailed, error.to_string())
@@ -1445,13 +1470,15 @@ impl Session {
             let xray = self.xray.as_ref().ok_or_else(|| {
                 HelperError::new(ErrorCode::XrayStartFailed, "Xray helper is unavailable")
             })?;
-            let xray_binary = xray.locate_binary().map_err(|error| {
-                HelperError::new(ErrorCode::XrayStartFailed, error.to_string())
+            let xray_binary = xray
+                .locate_binary()
+                .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?;
+            let interface = (self.physical_interface)(&settings.tun.name).ok_or_else(|| {
+                HelperError::new(
+                    ErrorCode::XrayStartFailed,
+                    "physical interface is unavailable for Xray",
+                )
             })?;
-            let interface = (self.physical_interface)(&settings.tun.name)
-                .ok_or_else(|| {
-                    HelperError::new(ErrorCode::XrayStartFailed, "physical interface is unavailable for Xray")
-                })?;
             let xray_config = rosetun_engine_xray::render(
                 resolved_node.as_ref().unwrap_or(node),
                 socks,
@@ -1465,17 +1492,24 @@ impl Session {
             let spawned_at = Instant::now();
             self.xray_process = Some(
                 xray.spawn(&xray_binary, &xray_config, &[socks], self.gate.deadline())
-                    .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?,
+                    .map_err(|error| {
+                        HelperError::new(ErrorCode::XrayStartFailed, error.to_string())
+                    })?,
             );
             wait_for_engine_ready_from(
-                self.xray_process.as_mut().expect("Xray process stored before readiness").as_mut(),
+                self.xray_process
+                    .as_mut()
+                    .expect("Xray process stored before readiness")
+                    .as_mut(),
                 spawned_at,
                 &self.cancelled,
             )
-            .map_err(|error| if error.code == ErrorCode::Cancelled {
-                error
-            } else {
-                HelperError::new(ErrorCode::XrayStartFailed, error.message)
+            .map_err(|error| {
+                if error.code == ErrorCode::Cancelled {
+                    error
+                } else {
+                    HelperError::new(ErrorCode::XrayStartFailed, error.message)
+                }
             })?;
         } else {
             tracing::info!("engine chain: sing-box");
@@ -1526,7 +1560,11 @@ impl Session {
                 {
                     tracing::warn!(reason = %error.message, "DNS lock cannot authorize the tunnel; connecting without it");
                     if let Some(guard) = self.guard.take()
-                        && let Err(error) = guard.routing.lock().unwrap_or_else(|poison| poison.into_inner()).revert_in_place()
+                        && let Err(error) = guard
+                            .routing
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .revert_in_place()
                     {
                         tracing::error!(%error, "failed to roll back DNS lock");
                     }
@@ -1609,9 +1647,13 @@ impl Session {
                                 Some(xray) => {
                                     let running = xray.is_running()?;
                                     let xray_failures = xray.outbound_failures();
-                                    counters.unreachable = counters.unreachable.saturating_add(xray_failures.unreachable);
-                                    counters.rejected = counters.rejected.saturating_add(xray_failures.rejected);
-                                    counters.closed = counters.closed.saturating_add(xray_failures.closed);
+                                    counters.unreachable = counters
+                                        .unreachable
+                                        .saturating_add(xray_failures.unreachable);
+                                    counters.rejected =
+                                        counters.rejected.saturating_add(xray_failures.rejected);
+                                    counters.closed =
+                                        counters.closed.saturating_add(xray_failures.closed);
                                     running
                                 }
                                 None => true,
@@ -1751,15 +1793,12 @@ impl Session {
                 ));
             }
 
-            let routing = self
-                .guard
-                .as_ref()
-                .ok_or_else(|| {
-                    HelperError::new(
-                        ErrorCode::RoutingFailed,
-                        "routing protection disappeared before tunnel authorization",
-                    )
-                })?;
+            let routing = self.guard.as_ref().ok_or_else(|| {
+                HelperError::new(
+                    ErrorCode::RoutingFailed,
+                    "routing protection disappeared before tunnel authorization",
+                )
+            })?;
             let mut guard = routing.routing.lock().map_err(|_| {
                 HelperError::new(ErrorCode::RoutingFailed, "routing guard is poisoned")
             })?;
@@ -1857,7 +1896,11 @@ impl Session {
         }
         self.pin_lists(&[]);
         if let Some(guard) = self.guard.take()
-            && let Err(error) = guard.routing.lock().unwrap_or_else(|poison| poison.into_inner()).revert_in_place()
+            && let Err(error) = guard
+                .routing
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .revert_in_place()
         {
             tracing::error!(%error, "failed to roll back routes");
         }

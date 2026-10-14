@@ -118,17 +118,21 @@ mod tests {
     fn classifies_documentation_only_xray_errors() {
         let lines = include_str!("../tests/fixtures/output-errors.txt");
         let kinds = lines.lines().map(classify_failure).collect::<Vec<_>>();
-        assert_eq!(kinds, vec![
-            Some(OutboundFailure::Unreachable),
-            Some(OutboundFailure::Unreachable),
-            Some(OutboundFailure::Rejected),
-            Some(OutboundFailure::Closed),
-        ]);
+        assert_eq!(
+            kinds,
+            vec![
+                Some(OutboundFailure::Unreachable),
+                Some(OutboundFailure::Unreachable),
+                Some(OutboundFailure::Rejected),
+                Some(OutboundFailure::Closed),
+            ]
+        );
     }
 
     #[test]
     fn hides_visited_destination_from_access_like_error() {
-        let line = "2026/10/14 12:00:00 [Warning] accepted tcp:example.com:443 to tcp:198.51.100.1:443";
+        let line =
+            "2026/10/14 12:00:00 [Warning] accepted tcp:example.com:443 to tcp:198.51.100.1:443";
         let hidden = hide_destinations(line);
         assert!(!hidden.contains("example.com"));
         assert!(!hidden.contains("198.51.100.1"));

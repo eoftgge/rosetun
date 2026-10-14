@@ -660,7 +660,7 @@ mod tests {
             settings.log_level = log_level;
             let config = render::render(&RenderRequest {
                 node: &node,
-            socks: None,
+                socks: None,
                 rules: &rules,
                 lists: &[],
                 settings: &settings,
@@ -1597,7 +1597,7 @@ mod tests {
             let rules = rules();
             let rendered = render::render(&RenderRequest {
                 node: &node,
-            socks: None,
+                socks: None,
                 rules: &rules,
                 lists: &[],
                 settings: &settings,

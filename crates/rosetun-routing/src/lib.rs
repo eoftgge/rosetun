@@ -121,7 +121,9 @@ impl RoutingGuard {
 
     /// Creates a guard with explicit protected-reconnect support.
     pub fn new_with_reconnector(
-        prepare: impl FnMut(&RoutingPlan, &[&std::path::Path]) -> Result<(), RoutingError> + Send + 'static,
+        prepare: impl FnMut(&RoutingPlan, &[&std::path::Path]) -> Result<(), RoutingError>
+        + Send
+        + 'static,
         authorize: impl FnMut(&TunnelInterface) -> Result<(), RoutingError> + Send + 'static,
         revert: impl FnOnce() -> Result<(), RoutingError> + Send + 'static,
     ) -> Self {

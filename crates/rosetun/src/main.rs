@@ -597,7 +597,9 @@ mod tests {
         Command, access_denied_message, apply_error_message, parse_command_arguments,
         temporary_rule_line, temporary_rules_status,
     };
-    use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleTarget, XrayUse};
+    use rosetun_config::{
+        DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleTarget, XrayUse,
+    };
     use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
     fn parse(arguments: &[&str]) -> Result<Command, String> {
@@ -648,7 +650,10 @@ mod tests {
         assert_eq!(parse(&["config"]), Ok(Command::Config));
         assert_eq!(parse(&["xray", "auto"]), Ok(Command::Xray(XrayUse::Auto)));
         assert_eq!(parse(&["xray", "off"]), Ok(Command::Xray(XrayUse::Off)));
-        assert_eq!(parse(&["xray", "always"]), Ok(Command::Xray(XrayUse::Always)));
+        assert_eq!(
+            parse(&["xray", "always"]),
+            Ok(Command::Xray(XrayUse::Always))
+        );
         assert!(parse(&["xray", "unknown"]).is_err());
         assert_eq!(parse(&["disconnect"]), Ok(Command::Disconnect));
         assert_eq!(parse(&["shutdown"]), Ok(Command::Shutdown));

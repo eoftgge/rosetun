@@ -107,7 +107,10 @@ impl XrayHelper {
             return Ok(path.clone());
         }
         let executable = std::env::current_exe()?;
-        Ok(executable.parent().ok_or_else(|| EngineError::BinaryNotFound(BINARY.into()))?.join(BINARY))
+        Ok(executable
+            .parent()
+            .ok_or_else(|| EngineError::BinaryNotFound(BINARY.into()))?
+            .join(BINARY))
     }
 
     pub fn locate_binary(&self) -> Result<PathBuf, EngineError> {
@@ -147,8 +150,20 @@ impl XrayHelper {
             .collect::<Vec<_>>();
         let probe = config.file_name == "probe.json";
         for (stream, pipe) in [
-            ("stdout", child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>)),
-            ("stderr", child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>)),
+            (
+                "stdout",
+                child
+                    .stdout
+                    .take()
+                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+            ),
+            (
+                "stderr",
+                child
+                    .stderr
+                    .take()
+                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+            ),
         ] {
             let Some(pipe) = pipe else {
                 stop_failed_spawn(&mut child);
@@ -259,7 +274,9 @@ struct XrayProcess {
 impl EngineProcess for XrayProcess {
     fn is_running(&mut self) -> Result<bool, EngineError> {
         match self.child.try_wait()? {
-            Some(status) => Err(EngineError::Exited { code: status.code() }),
+            Some(status) => Err(EngineError::Exited {
+                code: status.code(),
+            }),
             None => Ok(true),
         }
     }
@@ -277,7 +294,8 @@ impl EngineProcess for XrayProcess {
             Err(TryRecvError::Disconnected) => Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "Xray output closed before startup readiness",
-            ).into()),
+            )
+            .into()),
         }
     }
 

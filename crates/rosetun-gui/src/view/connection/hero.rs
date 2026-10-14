@@ -7,9 +7,10 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             let visible_status = state.visible_status();
-            let (label, color) = visible_status
-                .map_or((tr!("status-unknown"), theme::DISCONNECTED), |status| {
-                    if status.xray_stopped && matches!(status.state, ConnectionState::Reconnecting) {
+            let (label, color) =
+                visible_status.map_or((tr!("status-unknown"), theme::DISCONNECTED), |status| {
+                    if status.xray_stopped && matches!(status.state, ConnectionState::Reconnecting)
+                    {
                         (tr!("xray-reconnecting-title"), theme::ERROR)
                     } else {
                         state_style(&status.state)
@@ -75,10 +76,17 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             );
                         });
                         if let Some(status) = visible_status {
-                            if status.xray_stopped && matches!(status.state, ConnectionState::Reconnecting) {
-                                ui.add(egui::Label::new(
-                                    RichText::new(tr!("xray-reconnecting-detail")).small().color(theme::TEXT_MUTED)
-                                ).wrap());
+                            if status.xray_stopped
+                                && matches!(status.state, ConnectionState::Reconnecting)
+                            {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(tr!("xray-reconnecting-detail"))
+                                            .small()
+                                            .color(theme::TEXT_MUTED),
+                                    )
+                                    .wrap(),
+                                );
                             }
                             if status.state.is_transitional() {
                                 if let Some(stage) = status.connect_stage {
@@ -133,28 +141,47 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         .wrap(),
                                     );
                                     let reality_off = *kind == FailureKind::ServerRejected
-                                        && status.xray_use.unwrap_or(state.config.settings.xray) == XrayUse::Off
-                                        && state.config.active_node().is_some_and(|(_, node)|
+                                        && status.xray_use.unwrap_or(state.config.settings.xray)
+                                            == XrayUse::Off
+                                        && state.config.active_node().is_some_and(|(_, node)| {
                                             matches!(&node.outbound, Outbound::Vless(_))
-                                                && matches!(&node.stream.tls, TlsMode::Reality(_)));
+                                                && matches!(&node.stream.tls, TlsMode::Reality(_))
+                                        });
                                     if reality_off {
                                         ui.horizontal_wrapped(|ui| {
-                                            if widgets::button_fill(ui, tr!("xray-auto-connect"),
-                                                state.can_edit_settings() && !state.operations.helper).clicked()
+                                            if widgets::button_fill(
+                                                ui,
+                                                tr!("xray-auto-connect"),
+                                                state.can_edit_settings()
+                                                    && !state.operations.helper,
+                                            )
+                                            .clicked()
                                             {
                                                 actions.push(Action::EnableXrayAutoAndConnect);
                                             }
-                                            if widgets::outline_button(ui, tr!("xray-other-server"),
-                                                !state.operations.helper).clicked()
+                                            if widgets::outline_button(
+                                                ui,
+                                                tr!("xray-other-server"),
+                                                !state.operations.helper,
+                                            )
+                                            .clicked()
                                             {
                                                 actions.push(Action::RevealServer);
                                             }
                                         });
                                     }
                                     if *kind == FailureKind::XrayStartFailed
-                                        && widgets::outline_button(ui, tr!("xray-open-release"), true).clicked()
+                                        && widgets::outline_button(
+                                            ui,
+                                            tr!("xray-open-release"),
+                                            true,
+                                        )
+                                        .clicked()
                                     {
-                                        display::open_web_link(ui.ctx(), "https://github.com/eoftgge/rosetun/releases");
+                                        display::open_web_link(
+                                            ui.ctx(),
+                                            "https://github.com/eoftgge/rosetun/releases",
+                                        );
                                     }
                                     if let Some(conflicts) = &state.failure_interference {
                                         if !conflicts.other_vpns.is_empty() {
@@ -389,9 +416,14 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                 if visible_status.is_some_and(|status| status.xray) {
                                     ui.vertical(|ui| {
                                         ui.label(tr!("xray-engine"));
-                                        ui.add(egui::Label::new(
-                                            RichText::new(tr!("xray-engine-detail")).small().color(theme::TEXT_DIM)
-                                        ).wrap());
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(tr!("xray-engine-detail"))
+                                                    .small()
+                                                    .color(theme::TEXT_DIM),
+                                            )
+                                            .wrap(),
+                                        );
                                     });
                                 } else {
                                     ui.add(egui::Label::new(engine.as_str()).truncate())

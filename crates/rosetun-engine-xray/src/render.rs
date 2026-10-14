@@ -88,10 +88,14 @@ fn socks_inbound(socks: &SocksEndpoint, tag: &str) -> Value {
 
 fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, EngineError> {
     if node.server.parse::<std::net::IpAddr>().is_err() {
-        return Err(EngineError::Render("Xray server address must be an IP literal".into()));
+        return Err(EngineError::Render(
+            "Xray server address must be an IP literal".into(),
+        ));
     }
     if interface.is_empty() {
-        return Err(EngineError::Render("physical interface is required for Xray".into()));
+        return Err(EngineError::Render(
+            "physical interface is required for Xray".into(),
+        ));
     }
     let (protocol, settings) = match &node.outbound {
         Outbound::Vless(params) => {
@@ -106,26 +110,37 @@ fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, Engi
             }
             ("vless", settings)
         }
-        Outbound::Vmess(params) if params.alter_id == 0 => {
-            ("vmess", json!({
+        Outbound::Vmess(params) if params.alter_id == 0 => (
+            "vmess",
+            json!({
                 "address": node.server,
                 "port": node.port,
                 "id": params.uuid,
                 "security": params.security.as_deref().unwrap_or("auto"),
-            }))
+            }),
+        ),
+        Outbound::Trojan(params) => (
+            "trojan",
+            json!({
+                "address": node.server,
+                "port": node.port,
+                "password": params.password,
+            }),
+        ),
+        Outbound::Shadowsocks(params) => (
+            "shadowsocks",
+            json!({
+                "address": node.server,
+                "port": node.port,
+                "method": params.method,
+                "password": params.password,
+            }),
+        ),
+        _ => {
+            return Err(EngineError::Unsupported(
+                "Xray does not support this node".into(),
+            ));
         }
-        Outbound::Trojan(params) => ("trojan", json!({
-            "address": node.server,
-            "port": node.port,
-            "password": params.password,
-        })),
-        Outbound::Shadowsocks(params) => ("shadowsocks", json!({
-            "address": node.server,
-            "port": node.port,
-            "method": params.method,
-            "password": params.password,
-        })),
-        _ => return Err(EngineError::Unsupported("Xray does not support this node".into())),
     };
 
     let mut stream = json!({ "network": "tcp", "sockopt": { "interface": interface } });
@@ -169,7 +184,10 @@ fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, Engi
             stream["tlsSettings"] = tls;
         }
         TlsMode::Reality(params) => {
-            if !matches!(node.stream.transport, Transport::Tcp | Transport::Grpc { .. }) {
+            if !matches!(
+                node.stream.transport,
+                Transport::Tcp | Transport::Grpc { .. }
+            ) {
                 return Err(EngineError::Unsupported(
                     "Xray REALITY requires TCP or gRPC transport".into(),
                 ));
@@ -235,12 +253,27 @@ mod tests {
         assert_eq!(value["inbounds"][0]["settings"]["udp"], true);
         assert_eq!(value["inbounds"][0]["settings"]["ip"], "127.0.0.1");
         assert_eq!(value["inbounds"][0]["listen"], "127.0.0.1");
-        assert_eq!(value["inbounds"][0]["settings"]["accounts"][0]["pass"], socks.password());
+        assert_eq!(
+            value["inbounds"][0]["settings"]["accounts"][0]["pass"],
+            socks.password()
+        );
         assert_eq!(value["outbounds"][0]["settings"]["address"], "192.0.2.10");
-        assert_eq!(value["outbounds"][0]["settings"]["flow"], "xtls-rprx-vision");
-        assert_eq!(value["outbounds"][0]["streamSettings"]["sockopt"]["interface"], "Ethernet");
-        assert_eq!(value["outbounds"][0]["streamSettings"]["realitySettings"]["serverName"], "example.com");
-        assert_eq!(value["outbounds"][0]["streamSettings"]["realitySettings"]["fingerprint"], "firefox");
+        assert_eq!(
+            value["outbounds"][0]["settings"]["flow"],
+            "xtls-rprx-vision"
+        );
+        assert_eq!(
+            value["outbounds"][0]["streamSettings"]["sockopt"]["interface"],
+            "Ethernet"
+        );
+        assert_eq!(
+            value["outbounds"][0]["streamSettings"]["realitySettings"]["serverName"],
+            "example.com"
+        );
+        assert_eq!(
+            value["outbounds"][0]["streamSettings"]["realitySettings"]["fingerprint"],
+            "firefox"
+        );
         assert!(value.get("routing").is_none());
         assert!(value.get("dns").is_none());
     }
@@ -248,11 +281,21 @@ mod tests {
     #[test]
     fn probes_route_each_authenticated_inbound_to_its_server() {
         let nodes = (0..2)
-            .map(|index| (format!("probe-{index}"), reality_node(), SocksEndpoint::local().unwrap()))
+            .map(|index| {
+                (
+                    format!("probe-{index}"),
+                    reality_node(),
+                    SocksEndpoint::local().unwrap(),
+                )
+            })
             .collect::<Vec<_>>();
-        let value: Value = serde_json::from_slice(&render_probe(&nodes, "Ethernet").unwrap().body).unwrap();
+        let value: Value =
+            serde_json::from_slice(&render_probe(&nodes, "Ethernet").unwrap().body).unwrap();
         assert_eq!(value["inbounds"].as_array().unwrap().len(), 2);
-        assert_eq!(value["routing"]["rules"][1]["inboundTag"], json!(["probe-1-in"]));
+        assert_eq!(
+            value["routing"]["rules"][1]["inboundTag"],
+            json!(["probe-1-in"])
+        );
         assert_eq!(value["routing"]["rules"][1]["outboundTag"], "probe-1");
     }
 }
