@@ -20,11 +20,11 @@ pub use list_validation::{
 };
 pub use node::{
     Hysteria2Params, Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
-    TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
+    TlsParams, Transport, TrojanParams, VlessParams, VmessParams, uses_xray,
 };
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{ConnectStage, ConnectionState, FailureKind, Status, Traffic};
-pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings};
+pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings, XrayUse};
 pub use subscription::{Selection, Subscription, SubscriptionInfo};
 pub use uploaded_list::{ListRef, UploadedListFormat, list_tag};
 
@@ -33,7 +33,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 3;
+pub const CONFIG_VERSION: u32 = 4;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -225,6 +225,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
         match version {
             1 => migrate_1_to_2(config),
             2 => migrate_2_to_3(config),
+            3 => migrate_3_to_4(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -246,6 +247,15 @@ fn migrate_1_to_2(_config: &mut Map<String, Value>) {
 
 fn migrate_2_to_3(config: &mut Map<String, Value>) {
     config.insert("lists".to_owned(), Value::Array(Vec::new()));
+}
+
+fn migrate_3_to_4(config: &mut Map<String, Value>) {
+    if let Some(settings) = config.get_mut("settings").and_then(Value::as_object_mut) {
+        if settings.get("engine").and_then(Value::as_str) == Some("xray") {
+            settings.insert("engine".to_owned(), Value::from("sing-box"));
+        }
+        settings.insert("xray".to_owned(), Value::from("auto"));
+    }
 }
 
 impl AppConfig {

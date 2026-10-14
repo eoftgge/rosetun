@@ -3,7 +3,28 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::NodeId;
+use crate::{NodeId, XrayUse};
+
+// sing-box#4520: REALITY servers on Xray 26.9.8+ reject sing-box's handshake.
+const XRAY_FOR_REALITY: bool = true;
+
+pub fn uses_xray(node: &Node, setting: XrayUse) -> bool {
+    match setting {
+        XrayUse::Off => false,
+        XrayUse::Auto => {
+            XRAY_FOR_REALITY
+                && matches!(&node.outbound, Outbound::Vless(_))
+                && matches!(&node.stream.tls, TlsMode::Reality(_))
+        }
+        XrayUse::Always => matches!(
+            &node.outbound,
+            Outbound::Vless(_)
+                | Outbound::Vmess(_)
+                | Outbound::Trojan(_)
+                | Outbound::Shadowsocks(_)
+        ),
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Node {
@@ -276,5 +297,47 @@ mod tests {
         assert!(debug.contains("params_count: 1"));
         assert!(!debug.contains("secret-key"));
         assert!(!debug.contains("secret-value"));
+    }
+
+    #[test]
+    fn xray_selection_covers_modes_and_protocols() {
+        let mut node = Node {
+            id: NodeId::new("test"),
+            name: "Test".into(),
+            server: "192.0.2.1".into(),
+            port: 443,
+            outbound: Outbound::Vless(VlessParams {
+                uuid: "00000000-0000-4000-8000-000000000001".into(),
+                flow: None,
+            }),
+            stream: StreamSettings::default(),
+            raw: None,
+        };
+        let reality = TlsMode::Reality(RealityParams {
+            sni: Some("example.com".into()),
+            public_key: "test-public-key".into(),
+            short_id: None,
+            fingerprint: None,
+        });
+        let outbounds = [
+            (node.outbound.clone(), true),
+            (Outbound::Vmess(VmessParams { uuid: "test".into(), alter_id: 0, security: None }), true),
+            (Outbound::Trojan(TrojanParams { password: "test".into() }), true),
+            (Outbound::Shadowsocks(ShadowsocksParams { method: "aes-128-gcm".into(), password: "test".into() }), true),
+            (Outbound::Hysteria2(Hysteria2Params { password: "test".into(), obfs_password: None, port_ranges: Vec::new(), up_mbps: None, down_mbps: None }), false),
+            (Outbound::Unknown { scheme: "example".into(), params: BTreeMap::new() }, false),
+        ];
+        for (outbound, supported) in outbounds {
+            node.outbound = outbound;
+            for tls in [TlsMode::Plain, reality.clone()] {
+                node.stream.tls = tls;
+                let auto = supported
+                    && matches!(node.outbound, Outbound::Vless(_))
+                    && matches!(node.stream.tls, TlsMode::Reality(_));
+                assert_eq!(uses_xray(&node, XrayUse::Auto), auto);
+                assert!(!uses_xray(&node, XrayUse::Off));
+                assert_eq!(uses_xray(&node, XrayUse::Always), supported);
+            }
+        }
     }
 }

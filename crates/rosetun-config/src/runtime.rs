@@ -14,6 +14,8 @@ pub enum ConnectStage {
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
     EngineNotReady,
+    XrayStartFailed,
+    XrayStopped,
     ServerUnreachable,
     ServerRejected,
     ServerClosed,
@@ -69,6 +71,8 @@ pub struct Status {
     pub node: Option<NodeId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<EngineKind>,
+    #[serde(default)]
+    pub xray: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_unix: Option<u64>,
     #[serde(default)]
@@ -108,5 +112,17 @@ mod failure_tests {
             "server_unreachable"
         );
         assert_eq!(serde_json::from_value::<Status>(encoded).unwrap(), typed);
+    }
+
+    #[test]
+    fn status_reports_the_actual_engine_chain() {
+        let status = Status {
+            xray: true,
+            ..Status::default()
+        };
+        assert_eq!(serde_json::to_value(&status).unwrap()["xray"], true);
+        assert!(!serde_json::from_str::<Status>(r#"{"state":"disconnected"}"#)
+            .unwrap()
+            .xray);
     }
 }

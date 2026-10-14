@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum EngineKind {
     #[default]
+    #[serde(rename = "sing-box", alias = "sing_box")]
     SingBox,
     Xray,
 }
@@ -17,6 +18,15 @@ impl EngineKind {
             Self::Xray => "xray",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum XrayUse {
+    #[default]
+    Auto,
+    Off,
+    Always,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
@@ -81,6 +91,8 @@ pub struct Settings {
     #[serde(default)]
     pub engine: EngineKind,
     #[serde(default)]
+    pub xray: XrayUse,
+    #[serde(default)]
     pub kill_switch: bool,
     /// The helper restarts the engine by itself after it exits or after a resume from sleep.
     #[serde(default = "crate::default_true")]
@@ -105,6 +117,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             engine: EngineKind::default(),
+            xray: XrayUse::default(),
             kill_switch: false,
             auto_reconnect: true,
             allow_lan: false,

@@ -60,7 +60,7 @@ pub use text::{
 pub use update::{UpdateReport, group_skipped};
 pub use updates::{Release, UpdateCheckError, is_newer, latest_release};
 
-pub use rosetun_config::is_sensitive_log_target;
+pub use rosetun_config::{is_sensitive_log_target, uses_xray};
 
 #[cfg(test)]
 mod tests {

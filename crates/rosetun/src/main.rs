@@ -10,7 +10,7 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
 use rosetun_config::{
-    DomainMatch, NodeId, ProcessMatch, Rule, RuleMatcher, RuleTarget, SubscriptionId,
+    DomainMatch, NodeId, ProcessMatch, Rule, RuleMatcher, RuleTarget, SubscriptionId, XrayUse,
 };
 use rosetun_core::{ListOperation, PreparedConnection, terminal_text};
 use rosetun_ipc::{
@@ -40,6 +40,7 @@ enum Command {
         subscription_id: Option<String>,
     },
     Config,
+    Xray(XrayUse),
     Disconnect,
     Shutdown,
 }
@@ -82,6 +83,7 @@ fn main() -> ExitCode {
             local_result(subscriptions::nodes(subscription_id.as_deref()))
         }
         Command::Config => local_result(print_config()),
+        Command::Xray(setting) => local_result(set_xray(setting)),
         Command::Connect { request_path } => match prepare_list_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| connect(client, request)),
             Err(message) => local_result(Err(message)),
@@ -497,6 +499,12 @@ fn print_config() -> Result<(), String> {
     Ok(())
 }
 
+fn set_xray(setting: XrayUse) -> Result<(), String> {
+    let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
+    rosetun_core::change_setting(&store, rosetun_core::SettingChange::Xray(setting))
+        .map_err(|error| error.to_string())
+}
+
 fn parse_command() -> Result<Command, String> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     parse_command_arguments(&arguments)
@@ -529,6 +537,9 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["nodes", arguments @ ..] => subcommands::parse_nodes(arguments)
             .map(|subscription_id| Command::Nodes { subscription_id }),
         ["config"] => Ok(Command::Config),
+        ["xray", "auto"] => Ok(Command::Xray(XrayUse::Auto)),
+        ["xray", "off"] => Ok(Command::Xray(XrayUse::Off)),
+        ["xray", "always"] => Ok(Command::Xray(XrayUse::Always)),
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
         ["connect", ..] => Err("connect accepts zero or one request JSON path".to_owned()),
@@ -537,6 +548,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["delay", ..] => Err("delay does not accept arguments".to_owned()),
         ["select", ..] => Err("select requires exactly a subscription ID and a node ID".to_owned()),
         ["config", ..] => Err("config does not accept arguments".to_owned()),
+        ["xray", ..] => Err("xray requires auto, off or always".to_owned()),
         ["status", ..] => Err("status does not accept arguments".to_owned()),
         ["temporary", ..] => Err("temporary does not accept arguments".to_owned()),
         ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),
@@ -570,6 +582,7 @@ Usage:
   rosetun sub remove <id>
   rosetun nodes [<sub-id>]
   rosetun config
+  rosetun xray <auto|off|always>
   rosetun disconnect
   rosetun shutdown
 
@@ -584,7 +597,7 @@ mod tests {
         Command, access_denied_message, apply_error_message, parse_command_arguments,
         temporary_rule_line, temporary_rules_status,
     };
-    use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleTarget};
+    use rosetun_config::{DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleTarget, XrayUse};
     use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
     fn parse(arguments: &[&str]) -> Result<Command, String> {
@@ -633,6 +646,10 @@ mod tests {
             })
         );
         assert_eq!(parse(&["config"]), Ok(Command::Config));
+        assert_eq!(parse(&["xray", "auto"]), Ok(Command::Xray(XrayUse::Auto)));
+        assert_eq!(parse(&["xray", "off"]), Ok(Command::Xray(XrayUse::Off)));
+        assert_eq!(parse(&["xray", "always"]), Ok(Command::Xray(XrayUse::Always)));
+        assert!(parse(&["xray", "unknown"]).is_err());
         assert_eq!(parse(&["disconnect"]), Ok(Command::Disconnect));
         assert_eq!(parse(&["shutdown"]), Ok(Command::Shutdown));
     }

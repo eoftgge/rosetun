@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 
-use rosetun_config::{DnsSettings, InterfaceSettings, LanguageSetting, Settings};
+use rosetun_config::{DnsSettings, InterfaceSettings, LanguageSetting, Settings, XrayUse};
 use url::Host;
 
 use crate::{Store, StoreError};
@@ -49,6 +49,7 @@ pub enum SettingsError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingChange {
+    Xray(XrayUse),
     CloseToTray(bool),
     ReduceMotion(bool),
     ConnectOnStart(bool),
@@ -60,6 +61,7 @@ pub enum SettingChange {
 pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), SettingsError> {
     store.modify(|config| {
         match change {
+            SettingChange::Xray(setting) => config.settings.xray = setting,
             SettingChange::CloseToTray(enabled) => config.interface.close_to_tray = enabled,
             SettingChange::ReduceMotion(enabled) => config.interface.reduce_motion = enabled,
             SettingChange::ConnectOnStart(enabled) => config.interface.connect_on_start = enabled,

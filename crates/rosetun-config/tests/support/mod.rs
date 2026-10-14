@@ -118,6 +118,7 @@ pub(crate) fn legacy_config() -> AppConfig {
         version: 1,
         settings: Settings {
             engine: EngineKind::Xray,
+            xray: rosetun_config::XrayUse::Auto,
             kill_switch: true,
             auto_reconnect: false,
             allow_lan: true,

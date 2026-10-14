@@ -1,7 +1,7 @@
 mod support;
 
 use rosetun_config::{
-    AppConfig, CONFIG_VERSION, ConfigError, FormatError, Hysteria2Params, List, ListFormat, ListId,
+    AppConfig, CONFIG_VERSION, ConfigError, FormatError, Hysteria2Params, EngineKind, List, ListFormat, ListId,
     ListSource, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleTarget, StreamSettings,
     TlsMode, TlsParams, Transport, from_json,
 };
@@ -12,10 +12,12 @@ const ALPHA_2: &[u8] = include_bytes!("fixtures/v0.1.0-alpha.2.json");
 const ALPHA_3: &[u8] = include_bytes!("fixtures/v0.1.0-alpha.3.json");
 const V2: &[u8] = include_bytes!("fixtures/v2.json");
 const V3: &[u8] = include_bytes!("fixtures/v3.json");
+const V4: &[u8] = include_bytes!("fixtures/v4.json");
 
 fn current_config() -> AppConfig {
     let mut config = support::legacy_config();
     config.version = CONFIG_VERSION;
+    config.settings.engine = EngineKind::SingBox;
     config.interface.check_updates = false;
     config.interface.skipped_version = Some("v9.9.9-test".to_owned());
     config.interface.last_update_check = Some(1_700_000_003);
@@ -83,6 +85,7 @@ fn current_config() -> AppConfig {
 fn expected_migrated_legacy_config() -> AppConfig {
     let mut config = support::legacy_config();
     config.version = CONFIG_VERSION;
+    config.settings.engine = EngineKind::SingBox;
     config
 }
 
@@ -93,8 +96,8 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 3,
-        "released fixtures require format version three"
+        CONFIG_VERSION, 4,
+        "released fixtures require format version four"
     );
     let expected = expected_migrated_legacy_config();
 
@@ -118,15 +121,23 @@ fn released_configurations_migrate_to_the_expected_configuration() {
 #[test]
 fn current_configuration_fixture_guards_the_serialized_format() {
     let expected = current_config();
-    let (loaded, migrated_from) = from_json(V3).expect("current fixture should load");
+    let (loaded, migrated_from) = from_json(V4).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V3),
-        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v3.json"
+        value(V4),
+        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v4.json"
     );
+}
+
+#[test]
+fn version_three_migrates_the_unavailable_xray_engine() {
+    let (config, migrated_from) = from_json(V3).expect("version three should migrate");
+    assert_eq!(migrated_from, Some(3));
+    assert_eq!(config, current_config());
+    assert_eq!(config.settings.engine, EngineKind::SingBox);
 }
 
 #[test]
