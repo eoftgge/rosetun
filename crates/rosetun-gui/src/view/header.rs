@@ -169,7 +169,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     let selected_rect = ui
         .with_layout(Layout::left_to_right(Align::Center), |ui| {
             ui.add_space(left_margin);
-            brand_rect = paint_brand(ui, bloom, compact_brand, &name, &tagline);
+            brand_rect = paint_brand(ui, compact_brand, &name, &tagline);
             ui.add_space(brand_gap);
 
             let mut selected_rect = None;
@@ -344,7 +344,6 @@ fn brand_galleys(ui: &egui::Ui) -> (Arc<egui::Galley>, Arc<egui::Galley>) {
 
 fn paint_brand(
     ui: &mut egui::Ui,
-    bloom: f32,
     compact: bool,
     name: &Arc<egui::Galley>,
     tagline: &Arc<egui::Galley>,
@@ -360,7 +359,7 @@ fn paint_brand(
         egui::pos2(rect.left() + 20.0, rect.center().y),
         egui::vec2(40.0, 40.0),
     );
-    brand::paint_emblem(ui.painter(), emblem, bloom);
+    brand::paint_emblem(ui.painter(), emblem);
     if !compact {
         let top = rect.center().y - (name.size().y + 1.0 + tagline.size().y) / 2.0;
         let x = rect.left() + 52.0;

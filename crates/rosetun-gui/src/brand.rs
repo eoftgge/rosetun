@@ -1,21 +1,11 @@
 use eframe::egui::{self, Pos2, Rect, Shape, Stroke};
 
+use crate::rose_icon::{self, RoseIcon};
 use crate::theme;
 
 const PETAL: [(f32, f32); 4] = [(0.0, -20.0), (12.0, 0.0), (0.0, 22.0), (-12.0, 0.0)];
 /// Keeps the header petals behind the navigation instead of competing with it.
 const HEADER_PETAL_FADE: f32 = 0.65;
-const SPIRAL: [(f32, f32); 9] = [
-    (24.0, 31.0),
-    (18.0, 27.0),
-    (18.0, 21.0),
-    (24.0, 17.0),
-    (30.0, 21.0),
-    (30.0, 25.0),
-    (26.0, 28.0),
-    (22.0, 25.0),
-    (23.0, 22.0),
-];
 
 pub(crate) struct Petal {
     x: f32,
@@ -166,29 +156,41 @@ pub(crate) fn paint_petals(painter: &egui::Painter, rect: Rect, bloom: f32, intr
     }
 }
 
-pub(crate) fn emblem_petal(index: usize) -> [Pos2; 4] {
-    let (sin, cos) = (index as f32 * 72.0).to_radians().sin_cos();
-    [(24.0, 3.0), (34.0, 15.0), (24.0, 24.0), (14.0, 15.0)].map(|(x, y)| {
-        let x = x - 24.0;
-        let y = y - 24.0;
-        egui::pos2(24.0 + x * cos - y * sin, 24.0 + x * sin + y * cos)
-    })
+fn emblem_pixel_size(side: f32, pixels_per_point: f32) -> u32 {
+    (side * pixels_per_point).ceil() as u32
 }
 
-pub(crate) fn paint_emblem(painter: &egui::Painter, rect: Rect, bloom: f32) {
-    let scale = rect.width() / 48.0;
-    let place = |point: Pos2| rect.min + egui::vec2(point.x * scale, point.y * scale);
-    for index in 0..5 {
-        painter.add(Shape::convex_polygon(
-            emblem_petal(index).map(place).to_vec(),
-            theme::ROSE.gamma_multiply(0.18 + 0.14 * bloom),
-            Stroke::new(1.4 * scale, theme::ROSE.gamma_multiply(0.6 + 0.3 * bloom)),
-        ));
+fn emblem_texture(
+    ctx: &egui::Context,
+    size: u32,
+    rasterize: impl FnOnce(u32) -> Vec<u8>,
+) -> egui::TextureHandle {
+    let id = egui::Id::new(("brand_emblem", size));
+    if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
+        return texture;
     }
-    painter.add(Shape::line(
-        SPIRAL.map(|(x, y)| place(egui::pos2(x, y))).to_vec(),
-        Stroke::new(1.6 * scale, theme::ROSE_LIGHT),
-    ));
+    let pixels = rasterize(size);
+    let image =
+        egui::ColorImage::from_rgba_unmultiplied([size as usize, size as usize], &pixels);
+    let texture = ctx.load_texture(
+        format!("brand_emblem_{size}"),
+        image,
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    texture
+}
+
+pub(crate) fn paint_emblem(painter: &egui::Painter, rect: Rect) {
+    let ctx = painter.ctx();
+    let size = emblem_pixel_size(rect.width(), ctx.pixels_per_point());
+    let texture = emblem_texture(ctx, size, |size| rose_icon::rose_icon_rgba(size, RoseIcon::Large));
+    painter.image(
+        texture.id(),
+        rect,
+        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
 }
 
 /// 0 when idle, 1 when connected; pulses between 0 and 0.35 while connecting.
@@ -243,10 +245,25 @@ mod tests {
     }
 
     #[test]
-    fn emblem_rotates_around_center() {
-        let point = emblem_petal(1)[0];
-        near(point.x, 43.97);
-        near(point.y, 17.51);
+    fn emblem_uses_physical_pixels_and_reuses_its_texture() {
+        let ctx = egui::Context::default();
+        let rasterizations = std::cell::Cell::new(0);
+        let make_texture = |size| {
+            emblem_texture(&ctx, size, |size| {
+                rasterizations.set(rasterizations.get() + 1);
+                rose_icon::rose_icon_rgba(size, RoseIcon::Large)
+            })
+        };
+        let size = emblem_pixel_size(40.0, 1.0);
+        let first = make_texture(size);
+        assert_eq!(first.size(), [40, 40]);
+        let repeated = make_texture(size);
+        assert_eq!(repeated.id(), first.id());
+        assert_eq!(rasterizations.get(), 1);
+
+        let scaled = make_texture(emblem_pixel_size(40.0, 1.5));
+        assert_eq!(scaled.size(), [60, 60]);
+        assert_eq!(rasterizations.get(), 2);
     }
 
     #[test]

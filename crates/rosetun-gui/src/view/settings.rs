@@ -606,7 +606,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             ui.horizontal(|ui| {
                 let (emblem, _) =
                     ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
-                brand::paint_emblem(ui.painter(), emblem, 1.0);
+                brand::paint_emblem(ui.painter(), emblem);
                 ui.add_space(16.0);
                 ui.vertical(|ui| {
                     ui.label(
