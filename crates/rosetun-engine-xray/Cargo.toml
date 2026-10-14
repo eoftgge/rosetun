@@ -10,6 +10,9 @@ publish.workspace = true
 [dependencies]
 rosetun-config.workspace = true
 rosetun-engine.workspace = true
+getrandom.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

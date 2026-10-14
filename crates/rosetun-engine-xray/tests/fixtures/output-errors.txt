@@ -1,0 +1,4 @@
+2026/10/14 12:00:00 [Warning] proxy/vless/outbound: failed to process outbound traffic > dial tcp 192.0.2.10:443: i/o timeout
+2026/10/14 12:00:01 [Error] proxy/trojan/outbound: failed to dial 198.51.100.2:443: connectex: connection refused
+2026/10/14 12:00:02 [Warning] proxy/vless/outbound: reality verification failed for 203.0.113.3:443
+2026/10/14 12:00:03 [Warning] proxy/vmess/outbound: failed to process outbound traffic > connection reset by peer

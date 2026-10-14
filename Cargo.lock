@@ -2778,8 +2778,11 @@ dependencies = [
 name = "rosetun-engine-xray"
 version = "0.1.0-beta.1"
 dependencies = [
+ "getrandom 0.4.3",
  "rosetun-config",
  "rosetun-engine",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

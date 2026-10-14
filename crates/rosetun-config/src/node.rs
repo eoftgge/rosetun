@@ -16,13 +16,11 @@ pub fn uses_xray(node: &Node, setting: XrayUse) -> bool {
                 && matches!(&node.outbound, Outbound::Vless(_))
                 && matches!(&node.stream.tls, TlsMode::Reality(_))
         }
-        XrayUse::Always => matches!(
-            &node.outbound,
-            Outbound::Vless(_)
-                | Outbound::Vmess(_)
-                | Outbound::Trojan(_)
-                | Outbound::Shadowsocks(_)
-        ),
+        XrayUse::Always => match &node.outbound {
+            Outbound::Vmess(params) => params.alter_id == 0,
+            Outbound::Vless(_) | Outbound::Trojan(_) | Outbound::Shadowsocks(_) => true,
+            Outbound::Hysteria2(_) | Outbound::Unknown { .. } => false,
+        },
     }
 }
 
@@ -322,6 +320,7 @@ mod tests {
         let outbounds = [
             (node.outbound.clone(), true),
             (Outbound::Vmess(VmessParams { uuid: "test".into(), alter_id: 0, security: None }), true),
+            (Outbound::Vmess(VmessParams { uuid: "test".into(), alter_id: 1, security: None }), false),
             (Outbound::Trojan(TrojanParams { password: "test".into() }), true),
             (Outbound::Shadowsocks(ShadowsocksParams { method: "aes-128-gcm".into(), password: "test".into() }), true),
             (Outbound::Hysteria2(Hysteria2Params { password: "test".into(), obfs_password: None, port_ranges: Vec::new(), up_mbps: None, down_mbps: None }), false),
