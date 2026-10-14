@@ -207,8 +207,7 @@ xray-off-warning = Subscriptions include { $count ->
     [one] { $n } REALITY server.
    *[other] { $n } REALITY servers.
     } If the server runs Xray 26.9.8 or newer, you cannot connect without Xray.
-xray-current-reality = Now: sing-box + Xray · server { $name } uses REALITY
-xray-current-node = Now: sing-box + Xray · server { $name }
+xray-current-reality = Now: sing-box + Xray · the server uses REALITY
 xray-current-chained = Now: sing-box + Xray
 xray-current-singbox = Now: sing-box
 xray-next-connect = Applies on the next connection.

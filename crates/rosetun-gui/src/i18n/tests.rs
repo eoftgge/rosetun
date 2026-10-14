@@ -400,13 +400,21 @@ fn localized_failures_use_the_existing_action_labels() {
 #[test]
 fn xray_warning_and_status_texts_are_localized() {
     assert_eq!(
-        in_language(Language::Russian, || tr!(
-            "xray-off-warning",
-            count = 3,
-            n = "3"
-        )),
+        in_language(Language::Russian, || xray_off_warning(3)),
         "В подписках 3 сервера REALITY. Если на сервере Xray 26.9.8 или новее, без Xray подключиться к нему не получится."
     );
+    assert_eq!(
+        in_language(Language::Russian, || xray_off_warning(5)),
+        "В подписках 5 серверов REALITY. Если на сервере Xray 26.9.8 или новее, без Xray подключиться к нему не получится."
+    );
+    assert!(
+        in_language(Language::English, || xray_off_warning(1))
+            .starts_with("Subscriptions include 1 REALITY server.")
+    );
+    for language in [Language::English, Language::Russian] {
+        let current = in_language(language, || tr!("xray-current-reality"));
+        assert!(!current.contains('{') && !current.contains("xray-"));
+    }
     for language in [Language::English, Language::Russian] {
         in_language(language, || {
             let start = connection_failure(FailureKind::XrayStartFailed, None, XrayUse::Auto);

@@ -443,7 +443,7 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 if count > 0 {
                     ui.add(
                         egui::Label::new(
-                            RichText::new(tr!("xray-off-warning", count = count.to_string()))
+                            RichText::new(crate::i18n::xray_off_warning(count))
                                 .small()
                                 .color(theme::ERROR),
                         )
@@ -459,13 +459,14 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 )
             }) {
                 let node = state.running_node();
+                // No server name here: providers often name nodes by their address,
+                // and this screen ends up in screenshots.
                 let current = if status.xray {
                     match node {
                         Some(node) if matches!(&node.stream.tls, TlsMode::Reality(_)) => {
-                            tr!("xray-current-reality", name = state.text(&node.name))
+                            tr!("xray-current-reality")
                         }
-                        Some(node) => tr!("xray-current-node", name = state.text(&node.name)),
-                        None => tr!("xray-current-chained"),
+                        _ => tr!("xray-current-chained"),
                     }
                 } else {
                     tr!("xray-current-singbox")

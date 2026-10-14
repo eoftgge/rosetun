@@ -121,6 +121,10 @@ pub(crate) fn servers(count: usize) -> String {
     tr!("servers", count = count, n = count.to_string())
 }
 
+pub(crate) fn xray_off_warning(count: usize) -> String {
+    tr!("xray-off-warning", count = count, n = count.to_string())
+}
+
 pub(crate) fn last_updated(age: &str) -> String {
     tr!("last-updated-template", age = age)
 }

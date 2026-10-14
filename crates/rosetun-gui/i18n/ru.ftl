@@ -216,8 +216,7 @@ xray-off-warning = В подписках { $count ->
     [few] { $n } сервера REALITY.
    *[other] { $n } серверов REALITY.
     } Если на сервере Xray 26.9.8 или новее, без Xray подключиться к нему не получится.
-xray-current-reality = Сейчас: sing-box + Xray · сервер { $name } использует REALITY
-xray-current-node = Сейчас: sing-box + Xray · сервер { $name }
+xray-current-reality = Сейчас: sing-box + Xray · сервер использует REALITY
 xray-current-chained = Сейчас: sing-box + Xray
 xray-current-singbox = Сейчас: sing-box
 xray-next-connect = Применится при следующем подключении.
