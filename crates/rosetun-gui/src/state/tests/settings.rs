@@ -385,6 +385,49 @@ fn connection_settings_jobs_respect_busy_state_and_saved_values() {
 }
 
 #[test]
+fn local_network_setting_applies_on_the_next_connection() {
+    let mut state = state_for_auto_connect();
+    assert!(!state.config.settings.allow_lan);
+    assert!(matches!(
+        state.act(Action::SetAllowLan(true)),
+        Some(Job::Setting(SettingChange::AllowLan(true)))
+    ));
+    assert!(state.act(Action::SetAllowLan(true)).is_none());
+    state.reduce(WorkerEvent::Setting(SettingChange::AllowLan(true), Ok(())));
+    state.config.settings.allow_lan = true;
+    assert!(rosetun_ipc::ConnectRequest::from_config(&state.config)
+        .unwrap()
+        .settings
+        .allow_lan);
+    assert!(state.act(Action::SetAllowLan(true)).is_none());
+}
+
+#[test]
+fn local_network_hint_requires_a_known_active_request_with_a_different_value() {
+    let mut state = connected_state_for_apply();
+    assert!(!state.allow_lan_next_connect());
+    state.config.settings.allow_lan = !state
+        .session
+        .session_request
+        .as_ref()
+        .unwrap()
+        .settings
+        .allow_lan;
+    assert!(state.allow_lan_next_connect());
+    state.session.session_request = None;
+    assert!(!state.allow_lan_next_connect());
+    state.session.session_request =
+        Some(rosetun_ipc::ConnectRequest::from_config(&state.config).unwrap());
+    state.config.settings.allow_lan = !state.config.settings.allow_lan;
+    assert!(state.allow_lan_next_connect());
+    state.status.state = ConnectionState::Disconnected;
+    assert!(!state.allow_lan_next_connect());
+    state.status.state = ConnectionState::Connected;
+    state.helper_available = false;
+    assert!(!state.allow_lan_next_connect());
+}
+
+#[test]
 fn auto_update_setting_uses_settings_job_and_respects_busy_state() {
     let mut state = State {
         config_ready: true,

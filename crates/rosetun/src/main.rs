@@ -41,6 +41,7 @@ enum Command {
     },
     Config,
     Xray(XrayUse),
+    Lan(bool),
     Disconnect,
     Shutdown,
 }
@@ -84,6 +85,7 @@ fn main() -> ExitCode {
         }
         Command::Config => local_result(print_config()),
         Command::Xray(setting) => local_result(set_xray(setting)),
+        Command::Lan(enabled) => local_result(set_lan(enabled)),
         Command::Connect { request_path } => match prepare_list_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| connect(client, request)),
             Err(message) => local_result(Err(message)),
@@ -472,6 +474,10 @@ fn print_config() -> Result<(), String> {
     };
 
     println!("validation: passed");
+    println!(
+        "local network: {}",
+        if config.settings.allow_lan { "on" } else { "off" }
+    );
 
     match config.active_node() {
         Some((subscription, node)) => {
@@ -502,6 +508,12 @@ fn print_config() -> Result<(), String> {
 fn set_xray(setting: XrayUse) -> Result<(), String> {
     let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     rosetun_core::change_setting(&store, rosetun_core::SettingChange::Xray(setting))
+        .map_err(|error| error.to_string())
+}
+
+fn set_lan(enabled: bool) -> Result<(), String> {
+    let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
+    rosetun_core::change_setting(&store, rosetun_core::SettingChange::AllowLan(enabled))
         .map_err(|error| error.to_string())
 }
 
@@ -540,6 +552,8 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["xray", "auto"] => Ok(Command::Xray(XrayUse::Auto)),
         ["xray", "off"] => Ok(Command::Xray(XrayUse::Off)),
         ["xray", "always"] => Ok(Command::Xray(XrayUse::Always)),
+        ["lan", "on"] => Ok(Command::Lan(true)),
+        ["lan", "off"] => Ok(Command::Lan(false)),
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
         ["connect", ..] => Err("connect accepts zero or one request JSON path".to_owned()),
@@ -549,6 +563,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["select", ..] => Err("select requires exactly a subscription ID and a node ID".to_owned()),
         ["config", ..] => Err("config does not accept arguments".to_owned()),
         ["xray", ..] => Err("xray requires auto, off or always".to_owned()),
+        ["lan", ..] => Err("lan requires on or off".to_owned()),
         ["status", ..] => Err("status does not accept arguments".to_owned()),
         ["temporary", ..] => Err("temporary does not accept arguments".to_owned()),
         ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),
@@ -583,6 +598,7 @@ Usage:
   rosetun nodes [<sub-id>]
   rosetun config
   rosetun xray <auto|off|always>
+  rosetun lan <on|off>
   rosetun disconnect
   rosetun shutdown
 
@@ -655,6 +671,9 @@ mod tests {
             Ok(Command::Xray(XrayUse::Always))
         );
         assert!(parse(&["xray", "unknown"]).is_err());
+        assert_eq!(parse(&["lan", "on"]), Ok(Command::Lan(true)));
+        assert_eq!(parse(&["lan", "off"]), Ok(Command::Lan(false)));
+        assert!(parse(&["lan", "unknown"]).is_err());
         assert_eq!(parse(&["disconnect"]), Ok(Command::Disconnect));
         assert_eq!(parse(&["shutdown"]), Ok(Command::Shutdown));
     }

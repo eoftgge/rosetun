@@ -77,6 +77,16 @@ impl State {
             })
     }
 
+    pub(crate) fn allow_lan_next_connect(&self) -> bool {
+        self.visible_status()
+            .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
+            && self
+            .session
+            .session_request
+            .as_ref()
+            .is_some_and(|request| request.settings.allow_lan != self.config.settings.allow_lan)
+    }
+
     pub(crate) fn xray_reality_count(&self) -> usize {
         self.config
             .subscriptions
@@ -261,6 +271,11 @@ impl State {
                 if self.can_edit_settings() && self.config.settings.auto_reconnect != enabled {
                     return self
                         .start_settings(Job::Setting(SettingChange::AutoReconnect(enabled)));
+                }
+            }
+            Action::SetAllowLan(enabled) => {
+                if self.can_edit_settings() && self.config.settings.allow_lan != enabled {
+                    return self.start_settings(Job::Setting(SettingChange::AllowLan(enabled)));
                 }
             }
             Action::SetXray(setting) => {

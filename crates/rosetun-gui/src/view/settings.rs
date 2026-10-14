@@ -152,6 +152,27 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         {
             actions.push(Action::SetKillSwitch(kill_switch));
         }
+        let mut allow_lan = state.config.settings.allow_lan;
+        if card
+            .toggle(
+                tr!("allow-lan"),
+                tr!("allow-lan-detail"),
+                &mut allow_lan,
+                editable,
+            )
+            .changed()
+        {
+            actions.push(Action::SetAllowLan(allow_lan));
+        }
+        if state.allow_lan_next_connect() {
+            card.body(|ui| {
+                ui.label(
+                    RichText::new(tr!("next-connect"))
+                        .small()
+                        .color(theme::ROSE_LIGHT),
+                );
+            });
+        }
         let mut auto_reconnect = state.config.settings.auto_reconnect;
         if card
             .toggle(

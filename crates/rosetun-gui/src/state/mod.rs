@@ -165,6 +165,7 @@ pub(crate) enum Action {
     SetCloseToTray(bool),
     SetConnectOnStart(bool),
     SetAutoReconnect(bool),
+    SetAllowLan(bool),
     SetXray(XrayUse),
     EnableXrayAutoAndConnect,
     SetAutoUpdateSubscriptions(bool),
@@ -465,6 +466,7 @@ impl State {
             | Action::SetReduceMotion(_)
             | Action::SetConnectOnStart(_)
             | Action::SetAutoReconnect(_)
+            | Action::SetAllowLan(_)
             | Action::SetXray(_)
             | Action::EnableXrayAutoAndConnect
             | Action::SetAutoUpdateSubscriptions(_)

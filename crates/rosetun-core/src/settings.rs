@@ -54,6 +54,7 @@ pub enum SettingChange {
     ReduceMotion(bool),
     ConnectOnStart(bool),
     AutoReconnect(bool),
+    AllowLan(bool),
     AutoUpdateSubscriptions(bool),
     CheckUpdates(bool),
 }
@@ -66,6 +67,7 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
             SettingChange::ReduceMotion(enabled) => config.interface.reduce_motion = enabled,
             SettingChange::ConnectOnStart(enabled) => config.interface.connect_on_start = enabled,
             SettingChange::AutoReconnect(enabled) => config.settings.auto_reconnect = enabled,
+            SettingChange::AllowLan(enabled) => config.settings.allow_lan = enabled,
             SettingChange::AutoUpdateSubscriptions(enabled) => {
                 config.interface.auto_update_subscriptions = enabled;
             }
@@ -377,6 +379,10 @@ mod tests {
 
         change_setting(&store, SettingChange::AutoReconnect(false)).unwrap();
         expected.settings.auto_reconnect = false;
+        assert_eq!(store.load().unwrap(), expected);
+
+        change_setting(&store, SettingChange::AllowLan(true)).unwrap();
+        expected.settings.allow_lan = true;
         assert_eq!(store.load().unwrap(), expected);
 
         set_language(&store, LanguageSetting::Russian).unwrap();
