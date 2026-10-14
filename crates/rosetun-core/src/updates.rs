@@ -6,7 +6,7 @@ use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::fetch::{DEFAULT_USER_AGENT, MAX_BODY_BYTES};
 
-const RELEASES_URL: &str = "https://api.github.com/repos/eoftgge/rosetun/releases?per_page=10";
+const RELEASES_URL: &str = "https://api.github.com/repos/eoftgge/rosetun/releases?per_page=30";
 const RELEASE_PAGE_PREFIX: &str = "https://github.com/eoftgge/rosetun/releases/";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,7 +129,25 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     }
 }
 
-fn parse_releases(body: &str) -> Result<Option<Release>, UpdateCheckError> {
+/// alpha < beta < rc < release. Unknown pre-release labels count as alpha.
+fn stability(version: &Version<'_>) -> u8 {
+    match version.prerelease.as_deref() {
+        None => 3,
+        Some([Identifier::Text("rc"), ..]) => 2,
+        Some([Identifier::Text("beta"), ..]) => 1,
+        Some(_) => 0,
+    }
+}
+
+/// A newer release that is at least as stable as the running one: a beta
+/// user is offered later betas and the release, not the next version's
+/// alphas; a release user is offered releases only.
+fn is_offered(candidate: &Version<'_>, current: &Version<'_>) -> bool {
+    candidate > current && stability(candidate) >= stability(current)
+}
+
+fn parse_releases(body: &str, current: &str) -> Result<Option<Release>, UpdateCheckError> {
+    let current = version(current);
     let entries: serde_json::Value =
         serde_json::from_str(body).map_err(|_| UpdateCheckError::Parse)?;
     let entries = entries.as_array().ok_or(UpdateCheckError::Parse)?;
@@ -151,6 +169,12 @@ fn parse_releases(body: &str) -> Result<Option<Release>, UpdateCheckError> {
         let Some(candidate) = version(normalized) else {
             continue;
         };
+        if current
+            .as_ref()
+            .is_some_and(|current| !is_offered(&candidate, current))
+        {
+            continue;
+        }
         if newest.as_ref().is_none_or(|previous| {
             candidate > version(&previous.version).expect("validated release version")
         }) {
@@ -167,7 +191,11 @@ fn parse_releases(body: &str) -> Result<Option<Release>, UpdateCheckError> {
     Ok(newest)
 }
 
-pub fn latest_release(timeout: Duration) -> Result<Option<Release>, UpdateCheckError> {
+/// The newest release offered to `current` (see `is_offered`).
+pub fn latest_release(
+    current: &str,
+    timeout: Duration,
+) -> Result<Option<Release>, UpdateCheckError> {
     let tls = TlsConfig::builder()
         .root_certs(RootCerts::PlatformVerifier)
         .build();
@@ -201,12 +229,15 @@ pub fn latest_release(timeout: Duration) -> Result<Option<Release>, UpdateCheckE
     if body.len() as u64 > MAX_BODY_BYTES {
         return Err(UpdateCheckError::Parse);
     }
-    parse_releases(std::str::from_utf8(&body).map_err(|_| UpdateCheckError::Parse)?)
+    parse_releases(
+        std::str::from_utf8(&body).map_err(|_| UpdateCheckError::Parse)?,
+        current,
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Release, UpdateCheckError, is_newer, parse_releases};
+    use super::{Release, UpdateCheckError, is_newer, parse_releases, stability, version};
 
     #[test]
     fn version_order_includes_numeric_prerelease_parts() {
@@ -237,7 +268,7 @@ mod tests {
             {"tag_name":"not-a-version","html_url":"https://github.com/eoftgge/rosetun/releases/tag/not-a-version","draft":false}
         ]"#;
         assert_eq!(
-            parse_releases(body).unwrap(),
+            parse_releases(body, "0.0.1-alpha.1").unwrap(),
             Some(Release {
                 version: "0.1.0-alpha.10".into(),
                 url: "https://github.com/eoftgge/rosetun/releases/tag/v0.1.0-alpha.10".into(),
@@ -252,17 +283,66 @@ mod tests {
             let body = format!(
                 "[{{\"tag_name\":\"1.0.0\",\"html_url\":\"https://github.com/eoftgge/rosetun/releases/tag/v1.0.0\",\"draft\":false{suffix}}}]"
             );
-            assert!(!parse_releases(&body).unwrap().unwrap().prerelease);
+            assert!(
+                !parse_releases(&body, "0.0.1-alpha.1")
+                    .unwrap()
+                    .unwrap()
+                    .prerelease
+            );
         }
+    }
+
+    fn offered(current: &str) -> Option<String> {
+        let body = r#"[
+            {"tag_name":"v0.2.0-alpha.1","html_url":"https://github.com/eoftgge/rosetun/releases/tag/v0.2.0-alpha.1","draft":false,"prerelease":true},
+            {"tag_name":"v0.1.0-beta.3","html_url":"https://github.com/eoftgge/rosetun/releases/tag/v0.1.0-beta.3","draft":false,"prerelease":true},
+            {"tag_name":"v0.1.0-beta.2","html_url":"https://github.com/eoftgge/rosetun/releases/tag/v0.1.0-beta.2","draft":false,"prerelease":true}
+        ]"#;
+        parse_releases(body, current)
+            .unwrap()
+            .map(|release| release.version)
+    }
+
+    #[test]
+    fn beta_users_get_betas_not_the_next_alphas() {
+        assert_eq!(offered("0.1.0-beta.1").as_deref(), Some("0.1.0-beta.3"));
+        assert_eq!(offered("0.1.0-beta.3"), None);
+        assert_eq!(offered("0.1.0-alpha.6").as_deref(), Some("0.2.0-alpha.1"));
+        assert_eq!(offered("0.2.0-alpha.1"), None);
+    }
+
+    #[test]
+    fn release_users_get_releases_only() {
+        assert_eq!(offered("0.0.9"), None);
+        let body = r#"[
+            {"tag_name":"v0.2.0-beta.1","html_url":"https://github.com/eoftgge/rosetun/releases/tag/v0.2.0-beta.1","draft":false,"prerelease":true},
+            {"tag_name":"v0.1.1","html_url":"https://github.com/eoftgge/rosetun/releases/tag/v0.1.1","draft":false}
+        ]"#;
+        assert_eq!(
+            parse_releases(body, "0.1.0").unwrap().unwrap().version,
+            "0.1.1"
+        );
+    }
+
+    #[test]
+    fn stability_order() {
+        let order = ["1.0.0-alpha.2", "1.0.0-beta.1", "1.0.0-rc.1", "1.0.0"];
+        for pair in order.windows(2) {
+            assert!(stability(&version(pair[0]).unwrap()) < stability(&version(pair[1]).unwrap()));
+        }
+        assert_eq!(stability(&version("1.0.0-dev.1").unwrap()), 0);
     }
 
     #[test]
     fn empty_and_malformed_responses() {
-        assert_eq!(parse_releases("[]").unwrap(), None);
+        assert_eq!(parse_releases("[]", "0.1.0").unwrap(), None);
         assert!(matches!(
-            parse_releases("not JSON"),
+            parse_releases("not JSON", "0.1.0"),
             Err(UpdateCheckError::Parse)
         ));
-        assert!(matches!(parse_releases("{}"), Err(UpdateCheckError::Parse)));
+        assert!(matches!(
+            parse_releases("{}", "0.1.0"),
+            Err(UpdateCheckError::Parse)
+        ));
     }
 }
