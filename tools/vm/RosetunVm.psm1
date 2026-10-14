@@ -70,6 +70,152 @@ function Install-RosetunSingBox {
     Write-Host "sing-box $version installed to $Destination"
 }
 
+function Install-RosetunXray {
+    $version = '26.10.10'
+    $expectedHash = 'BFEFCE8E9804E53B7D75B7C49D958B34E89890D9D5E672329089D1B3111647AF'
+    $installer = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\installer\build.ps1') -Raw
+    if ($installer -notmatch ('(?m)^\$xrayVersion = ''{0}''$' -f $version) -or
+        $installer -notmatch ('(?m)^\$xrayArchiveHash = ''{0}''$' -f $expectedHash)) {
+        throw 'The VM Xray archive pin differs from installer/build.ps1.'
+    }
+
+    $logDir = Join-Path $PSScriptRoot 'logs'
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $archive = Join-Path $logDir "Xray-windows-64-$version.zip"
+    if (-not (Test-Path -LiteralPath $archive)) {
+        $download = "$archive.download"
+        $url = "https://github.com/XTLS/Xray-core/releases/download/v$version/Xray-windows-64.zip"
+        try {
+            & curl.exe --fail --silent --show-error --location --output $download $url
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            if ($exitCode -ne 0) { throw "Downloading $url failed with curl exit code $exitCode." }
+            $hash = (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash
+            if ($hash -ne $expectedHash) { throw "Xray archive has SHA-256 $hash, expected $expectedHash." }
+            Move-Item -LiteralPath $download -Destination $archive
+        }
+        finally { Remove-Item -LiteralPath $download -Force -ErrorAction SilentlyContinue }
+    }
+    $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+    if ($hash -ne $expectedHash) { throw "Xray archive has SHA-256 $hash, expected $expectedHash." }
+
+    $unpacked = Join-Path $logDir "xray-$([guid]::NewGuid().ToString('N'))"
+    try {
+        Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+        $binary = Join-Path $unpacked 'xray.exe'
+        if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+            throw 'The pinned Xray archive does not contain xray.exe.'
+        }
+        return [pscustomobject]@{ Binary = $binary; Directory = $unpacked }
+    }
+    catch {
+        Remove-Item -LiteralPath $unpacked -Recurse -Force -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
+function Start-RosetunXrayTestNode {
+    param([Parameter(Mandatory)][string]$CoverSite, [string]$BindInterface)
+
+    if ($CoverSite -notmatch '^(?=.{1,253}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)+$') {
+        throw 'The REALITY cover site must be a DNS name without a scheme or port.'
+    }
+    $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
+    $port = [int](($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' }).listen_port) + 2
+    if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
+        throw "TCP $port is already in use; refusing to start the REALITY test node."
+    }
+    $hostIp = (Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4).IPAddress
+    $installation = Install-RosetunXray
+    $configPath = Join-Path $installation.Directory 'server.json'
+    $node = $null
+    try {
+        $pair = (& $installation.Binary x25519 2>&1) -join "`n"
+        $exitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        if ($exitCode -ne 0) { throw "Xray could not generate an X25519 key pair (exit $exitCode)." }
+        $private = [regex]::Match($pair, '(?m)^Private key:\s*(\S+)').Groups[1].Value
+        $public = [regex]::Match($pair, '(?m)^Public key:\s*(\S+)').Groups[1].Value
+        if (-not $private -or -not $public) { throw 'Xray x25519 returned an unexpected key format.' }
+        [byte[]]$shortIdBytes = New-Object byte[] 8
+        $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $random.GetBytes($shortIdBytes) }
+        finally { $random.Dispose() }
+        $shortId = [BitConverter]::ToString($shortIdBytes).Replace('-', '').ToLowerInvariant()
+        $server = @{
+            log = @{ loglevel = 'warning' }
+            inbounds = @(@{
+                listen = $hostIp
+                port = $port
+                protocol = 'vless'
+                settings = @{ clients = @(@{ id = 'dd963d73-4229-4d4b-86af-c21d38dc3c25'; flow = 'xtls-rprx-vision' }); decryption = 'none' }
+                streamSettings = @{
+                    network = 'tcp'
+                    security = 'reality'
+                    realitySettings = @{
+                        dest = "${CoverSite}:443"
+                        serverNames = @($CoverSite)
+                        privateKey = $private
+                        shortIds = @($shortId)
+                    }
+                }
+            })
+            outbounds = @(@{ protocol = 'freedom' })
+        }
+        if ($BindInterface) {
+            $server.outbounds[0].streamSettings = @{ sockopt = @{ interface = $BindInterface } }
+        }
+        [IO.File]::WriteAllText($configPath, ($server | ConvertTo-Json -Depth 12))
+        $node = Start-Process -FilePath $installation.Binary -ArgumentList 'run', '-config', $configPath `
+            -WindowStyle Hidden -PassThru
+        $deadline = (Get-Date).AddSeconds(15)
+        do {
+            $listeners = @(Get-NetTCPConnection -LocalAddress $hostIp -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+            if (-not $node.HasExited -and $listeners.Count -gt 0 -and
+                -not ($listeners | Where-Object { $_.OwningProcess -ne $node.Id })) { break }
+            if ($node.HasExited -or (Get-Date) -gt $deadline) {
+                throw "The REALITY test node did not start on TCP $port."
+            }
+            Start-Sleep -Milliseconds 200
+        } while ($true)
+        Remove-Item -LiteralPath $configPath -Force
+        Write-Host "REALITY test node listening on TCP $port"
+        return [pscustomobject]@{
+            Process = $node
+            Binary = $installation.Binary
+            Directory = $installation.Directory
+            Port = $port
+            PublicKey = $public
+            ShortId = $shortId
+            CoverSite = $CoverSite
+        }
+    }
+    catch {
+        if ($node -and -not $node.HasExited) {
+            Stop-Process -InputObject $node -Force -ErrorAction SilentlyContinue
+            Wait-Process -InputObject $node -Timeout 5 -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $installation.Directory -Recurse -Force -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
+function Stop-RosetunXrayTestNode {
+    param([Parameter(Mandatory)]$Node)
+
+    try {
+        if (-not $Node.Process.HasExited) {
+            Stop-Process -InputObject $Node.Process -Force
+            Wait-Process -InputObject $Node.Process -Timeout 5 -ErrorAction SilentlyContinue
+        }
+    }
+    finally {
+        if ($Node.Process.HasExited) {
+            Remove-Item -LiteralPath $Node.Directory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Start-RosetunTestNode {
     # Runs the TCP and UDP test nodes on the host with a log kept under vm\logs.
     param(
@@ -305,7 +451,8 @@ function Publish-Rosetun {
         [Parameter(Mandatory)][string]$RequestPath,
         # Points the node at the test node on the host. The Default Switch
         # subnet changes with every host reboot, and the address with it.
-        [switch]$UseHostNode
+        [switch]$UseHostNode,
+        $XrayNode
     )
 
     $session = Connect-RosetunVm
@@ -369,6 +516,47 @@ function Publish-Rosetun {
         server_name = 'dns.google'
     }
     $derived['request-cloudflare-blocked.json'] = $cloudflareBlocked
+
+    if ($XrayNode) {
+        $reality = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $reality.node.id = 'home-reality'
+        $reality.node.name = 'REALITY test node'
+        $reality.node.server = (Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4).IPAddress
+        $reality.node.port = $XrayNode.Port
+        $reality.node.outbound = [pscustomobject]@{
+            vless = [pscustomobject]@{
+                uuid = 'dd963d73-4229-4d4b-86af-c21d38dc3c25'
+                flow = 'xtls-rprx-vision'
+            }
+        }
+        $reality.node.stream = [pscustomobject]@{
+            transport = 'tcp'
+            tls = [pscustomobject]@{
+                reality = [pscustomobject]@{
+                    sni = $XrayNode.CoverSite
+                    public_key = $XrayNode.PublicKey
+                    short_id = $XrayNode.ShortId
+                    fingerprint = 'chrome'
+                }
+            }
+        }
+        $reality.selection.node = $reality.node.id
+        $reality.settings.kill_switch = $true
+        $reality.settings.auto_reconnect = $true
+        $reality.settings | Add-Member -NotePropertyName xray -NotePropertyValue 'auto' -Force
+        $derived['request-reality.json'] = $reality
+
+        $realityOff = $reality | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $realityOff.settings.xray = 'off'
+        $realityOff.settings.auto_reconnect = $false
+        $derived['request-reality-xray-off.json'] = $realityOff
+
+        $applyFromReality = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $applyFromReality.settings.kill_switch = $true
+        $applyFromReality.settings.auto_reconnect = $true
+        $applyFromReality.settings | Add-Member -NotePropertyName xray -NotePropertyValue 'auto' -Force
+        $derived['request-reality-apply-back.json'] = $applyFromReality
+    }
 
     # The same request with a node that never answers: 192.0.2.1 is TEST-NET-1,
     # reserved and unroutable. The engine starts, but DNS through the tunnel
@@ -469,6 +657,9 @@ function Publish-Rosetun {
         (Join-Path $BuildDir 'rosetun.exe')                   = 'rosetun.exe'
         $SingBoxPath                                          = 'sing-box.exe'
         $RequestPath                                          = 'request.json'
+    }
+    if ($XrayNode) {
+        $copies[$XrayNode.Binary] = 'xray.exe'
     }
     foreach ($name in $derived.Keys) {
         $path = Join-Path $derivedDir $name
@@ -669,6 +860,41 @@ function Get-RosetunTunnelProbeUrl {
     return $script:Config.TunnelProbeUrl
 }
 
+function Get-RosetunStatus {
+    param([Parameter(Mandatory)][int]$ProtocolVersion)
+
+    Invoke-RosetunGuest -ScriptBlock {
+        param($protocolVersion)
+        $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', 'rosetun-helper', [IO.Pipes.PipeDirection]::InOut)
+        try {
+            $pipe.Connect(5000)
+            $writer = [IO.StreamWriter]::new($pipe, [Text.UTF8Encoding]::new($false))
+            $writer.NewLine = "`n"
+            $writer.AutoFlush = $true
+            $reader = [IO.StreamReader]::new($pipe, [Text.UTF8Encoding]::new($false))
+            foreach ($request in @(
+                ('{"request":{"id":1,"body":{"hello":{"client":"rosetun-matrix","protocol_version":' + $protocolVersion + '}}}}'),
+                '{"request":{"id":2,"body":"status"}}'
+            )) {
+                $writer.WriteLine($request)
+                $id = if ($request -match '"id":1') { 1 } else { 2 }
+                do {
+                    $read = $reader.ReadLineAsync()
+                    if (-not $read.Wait(5000)) { throw 'Timed out waiting for helper status.' }
+                    if ($null -eq $read.Result) { throw 'Helper closed the status pipe.' }
+                    $frame = $read.Result | ConvertFrom-Json
+                } while ($frame.PSObject.Properties.Name -notcontains 'response' -or $frame.response.id -ne $id)
+                if ($id -eq 1 -and -not $frame.response.body.hello) {
+                    throw 'Helper rejected the status handshake.'
+                }
+            }
+            if (-not $frame.response.body.status) { throw 'Helper did not return a status.' }
+            $frame.response.body.status
+        }
+        finally { $pipe.Dispose() }
+    } -ArgumentList $ProtocolVersion
+}
+
 function Get-RosetunState {
     $result = Invoke-RosetunCli -Quiet 'status'
     if ($result.Output -match '(?m)^state: (\w+)') {
@@ -760,6 +986,57 @@ function Stop-RosetunLanListener {
     param([Parameter(Mandatory)]$Lan)
     try { Remove-NetFirewallRule -Name $Lan.RuleName -ErrorAction Stop }
     finally { $Lan.Listener.Stop() }
+}
+
+function Start-RosetunUdpListener {
+    $address = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4 -AddressState Preferred -ErrorAction Stop |
+        Where-Object { $_.IPAddress -notlike '169.254.*' } |
+        Select-Object -First 1 -ExpandProperty IPAddress
+    if (-not $address) { throw 'The Default Switch has no usable IPv4 address.' }
+    $socket = [Net.Sockets.UdpClient]::new([Net.IPEndPoint]::new([Net.IPAddress]::Parse($address), 0))
+    $port = ([Net.IPEndPoint]$socket.Client.LocalEndPoint).Port
+    $name = "Rosetun-UDP-matrix-$([guid]::NewGuid().ToString('N'))"
+    try {
+        New-NetFirewallRule -Name $name -DisplayName 'Rosetun UDP matrix listener' -Direction Inbound `
+            -Action Allow -Protocol UDP -LocalAddress $address -LocalPort $port `
+            -InterfaceAlias 'vEthernet (Default Switch)' -Profile Any -ErrorAction Stop | Out-Null
+        return [pscustomobject]@{ Address = $address; Port = $port; Socket = $socket; RuleName = $name }
+    }
+    catch {
+        Remove-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
+        $socket.Dispose()
+        throw
+    }
+}
+
+function Stop-RosetunUdpListener {
+    param([Parameter(Mandatory)]$Udp)
+    try { Remove-NetFirewallRule -Name $Udp.RuleName -ErrorAction Stop }
+    finally { $Udp.Socket.Dispose() }
+}
+
+function Test-RosetunUdpPath {
+    param([Parameter(Mandatory)]$Udp)
+
+    $guestIp = Get-RosetunEgressAddress
+    $token = [guid]::NewGuid().ToString('N')
+    $reply = $Udp.Socket.ReceiveAsync()
+    Invoke-RosetunGuest -ScriptBlock {
+        param($address, $port, $token)
+        $client = [Net.Sockets.UdpClient]::new()
+        try {
+            $message = [Text.Encoding]::ASCII.GetBytes($token)
+            for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                [void]$client.Send($message, $message.Length, $address, $port)
+                Start-Sleep -Milliseconds 500
+            }
+        }
+        finally { $client.Dispose() }
+    } -ArgumentList $Udp.Address, $Udp.Port, $token
+    if (-not $reply.Wait(5000)) { return $false }
+    $packet = $reply.Result
+    [Text.Encoding]::ASCII.GetString($packet.Buffer) -eq $token -and
+        $packet.RemoteEndPoint.Address.ToString() -ne $guestIp
 }
 
 function Test-RosetunLanListener {
@@ -1137,6 +1414,18 @@ function Set-RosetunEngineAvailable {
 function Test-RosetunEngineRunning {
     Invoke-RosetunGuest -ScriptBlock {
         [bool](Get-Process -Name 'sing-box' -ErrorAction SilentlyContinue)
+    }
+}
+
+function Test-RosetunXrayRunning {
+    Invoke-RosetunGuest -ScriptBlock {
+        [bool](Get-Process -Name 'xray' -ErrorAction SilentlyContinue)
+    }
+}
+
+function Stop-RosetunXrayEngine {
+    Invoke-RosetunGuest -ScriptBlock {
+        Stop-Process -Name 'xray' -Force -ErrorAction SilentlyContinue
     }
 }
 

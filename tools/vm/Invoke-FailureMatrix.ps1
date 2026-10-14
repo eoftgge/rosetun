@@ -11,6 +11,7 @@ param(
     [switch]$RestoreCheckpoint,
     [switch]$UseHostNode,
     [string]$NodeBindInterface,
+    [string]$RealityCoverSite,
     [switch]$KeepNode,
     # Builds the workspace first, so a forgotten build cannot deploy stale binaries.
     [switch]$Build
@@ -74,6 +75,34 @@ function Invoke-SettingsCli {
             Remove-Item Env:ROSETUN_CONFIG -ErrorAction SilentlyContinue
         }
     } -ArgumentList (Get-RosetunGuestDir), $ConfigPath, $Action
+}
+
+function Invoke-XraySetting {
+    param([Parameter(Mandatory)][ValidateSet('auto', 'off')][string]$Setting)
+
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $setting)
+        $env:ROSETUN_CONFIG = Join-Path $dir 'matrix-xray-settings.json'
+        try {
+            $output = & "$dir\rosetun.exe" xray $setting 2>&1 | ForEach-Object { "$_" }
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
+        }
+        finally {
+            Remove-Item Env:ROSETUN_CONFIG -ErrorAction SilentlyContinue
+        }
+    } -ArgumentList (Get-RosetunGuestDir), $Setting
+}
+
+function Test-RealityTunnelDns {
+    Invoke-RosetunGuest -ScriptBlock {
+        $dns = (Get-DnsClientServerAddress -InterfaceAlias 'rosetun0' -AddressFamily IPv4).ServerAddresses |
+            Select-Object -First 1
+        if (-not $dns) { return $false }
+        [bool](Resolve-DnsName 'example.com' -Type A -Server $dns -DnsOnly -QuickTimeout `
+            -ErrorAction SilentlyContinue | Where-Object { $_.Type -eq 'A' })
+    }
 }
 
 function Install-OtherAccountService {
@@ -290,6 +319,7 @@ public static class RosetunOtherLogon {
 
 $nodeStartedByMatrix = $false
 $blockedNodeStartedByMatrix = $false
+$xrayNode = $null
 $lanListener = $null
 $egressWatchActive = $false
 $otherAccountName = $null
@@ -307,6 +337,9 @@ if ($Build) {
 }
 
 if ($UseHostNode) {
+    if (-not $RealityCoverSite) {
+        throw '-RealityCoverSite is required with -UseHostNode.'
+    }
     if ($NodeBindInterface) {
         $nodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface
     }
@@ -320,6 +353,7 @@ if ($UseHostNode) {
     else {
         $blockedNodeStartedByMatrix = Start-RosetunTestNode -SingBoxPath $SingBoxPath -CloudflareBlocked
     }
+    $xrayNode = Start-RosetunXrayTestNode -CoverSite $RealityCoverSite -BindInterface $NodeBindInterface
 }
 
 if ($RestoreCheckpoint) {
@@ -330,12 +364,18 @@ if ($RestoreCheckpoint) {
 Write-Host 'Deploying binaries...'
 # A helper left running by a previous run keeps its executable locked.
 Stop-RosetunHelper
-Publish-Rosetun -BuildDir $BuildDir -SingBoxPath $SingBoxPath -RequestPath $RequestPath -UseHostNode:$UseHostNode
+Publish-Rosetun -BuildDir $BuildDir -SingBoxPath $SingBoxPath -RequestPath $RequestPath `
+    -UseHostNode:$UseHostNode -XrayNode $xrayNode
 Register-RosetunHelper
 Start-RosetunHelper
 $lanListener = Start-RosetunLanListener
 
 $ipv6NeighborCreated = Initialize-RosetunIpv6Neighbor
+$protocolSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\..\crates\rosetun-ipc\src\protocol.rs')
+if (-not ($protocolSource -match 'pub const PROTOCOL_VERSION: u32 = (\d+);')) {
+    throw 'Could not read PROTOCOL_VERSION from rosetun-ipc.'
+}
+$protocolVersion = [int]$Matches[1]
 
 # Proves the probe itself works. Without it, every "blocked" check below would
 # pass even if the probe were broken or the probe URL unreachable.
@@ -393,6 +433,145 @@ if ($UseHostNode) {
     Test-Step 'Cloudflare blocked at exit' 'direct egress works after disconnect' {
         Test-RosetunDirectEgress
     }
+
+    Write-Host 'Connect to a new Xray REALITY server in automatic mode...'
+    $realityConnect = Connect-RosetunTunnel -RequestName 'request-reality.json' -Quiet
+    Test-Step 'REALITY auto' 'connect succeeds' -Note "exit $($realityConnect.ExitCode)" {
+        $realityConnect.ExitCode -eq 0
+    }
+    Test-Step 'REALITY auto' 'state is Connected' { Wait-RosetunState 'Connected' }
+    $realityStatus = Get-RosetunStatus -ProtocolVersion $protocolVersion
+    Test-Step 'REALITY auto' 'Xray is active in automatic mode' {
+        $realityStatus.xray -and $realityStatus.xray_use -eq 'auto'
+    }
+    $egress = Wait-RosetunTunnelEgress
+    Test-Step 'REALITY auto' 'tunnel carries traffic and resolves DNS' -Note (Format-Egress $egress) {
+        $egress.Ok
+    }
+    Test-Step 'REALITY auto' 'UDP DNS resolves inside the tunnel' { Test-RealityTunnelDns }
+    $udpListener = Start-RosetunUdpListener
+    try {
+        Test-Step 'REALITY auto' 'UDP datagrams reach the exit through Xray' {
+            Test-RosetunUdpPath -Udp $udpListener
+        }
+    }
+    finally { Stop-RosetunUdpListener -Udp $udpListener }
+    Test-Step 'REALITY auto' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+    Test-Step 'REALITY auto' 'direct UDP DNS is blocked' { -not (Test-RosetunDirectDns) }
+    $probe = Invoke-RosetunProbe 'request-reality.json'
+    Test-Step 'REALITY auto' 'server check works' -Note "exit $($probe.ExitCode)" {
+        $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
+    }
+    $delay = Invoke-RosetunCli -Quiet 'delay'
+    Test-Step 'REALITY auto' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
+        $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
+    }
+    Disconnect-RosetunTunnel | Out-Null
+
+    Write-Host 'The same REALITY server without Xray...'
+    try {
+        $setting = Invoke-XraySetting -Setting off
+        Test-Step 'REALITY off' 'rosetun xray off succeeds' -Note "exit $($setting.ExitCode)" {
+            $setting.ExitCode -eq 0
+        }
+        # Explicit request files bypass the CLI store, so mirror the off setting in the request.
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        $rejected = Connect-RosetunTunnel -RequestName 'request-reality-xray-off.json' -Quiet
+        $timer.Stop()
+        Test-Step 'REALITY off' 'connect is rejected by REALITY within 60 s' `
+            -Note "exit $($rejected.ExitCode) after $([int]$timer.Elapsed.TotalSeconds) s" {
+            $rejected.ExitCode -ne 0 -and $timer.Elapsed.TotalSeconds -le 60 -and
+                $rejected.Output -match 'ServerRejected'
+        }
+        Test-Step 'REALITY off' 'state is FailedProtected' {
+            Wait-RosetunState 'FailedProtected' -TimeoutSeconds 10
+        }
+        Test-Step 'REALITY off' 'direct egress stays blocked' { -not (Test-RosetunDirectEgress) }
+    }
+    finally {
+        $setting = Invoke-XraySetting -Setting auto
+        Test-Step 'REALITY off' 'rosetun xray auto restores the setting' -Note "exit $($setting.ExitCode)" {
+            $setting.ExitCode -eq 0
+        }
+        Invoke-RosetunGuest -ScriptBlock {
+            param($dir)
+            Remove-Item -LiteralPath (Join-Path $dir 'matrix-xray-settings.json') -Force -ErrorAction SilentlyContinue
+        } -ArgumentList (Get-RosetunGuestDir)
+    }
+    Disconnect-RosetunTunnel | Out-Null
+
+    Write-Host 'Kill the Xray child during a protected session...'
+    Connect-RosetunTunnel -RequestName 'request-reality.json' | Out-Null
+    Test-Step 'REALITY child killed' 'state is Connected before the kill' { Wait-RosetunState 'Connected' }
+    Start-RosetunEgressWatch
+    $egressWatchActive = $true
+    try {
+        Stop-RosetunXrayEngine
+        $xrayStopped = Wait-RosetunCondition {
+            (Get-RosetunStatus -ProtocolVersion $protocolVersion).xray_stopped
+        } -TimeoutSeconds 20
+        $xrayReconnected = Wait-RosetunState 'Connected' -TimeoutSeconds 90
+    }
+    finally {
+        $watch = Stop-RosetunEgressWatch
+        $egressWatchActive = $false
+    }
+    Test-Step 'REALITY child killed' 'status reports Xray stopped' { $xrayStopped }
+    Test-Step 'REALITY child killed' 'helper reconnects with Xray' {
+        $xrayReconnected -and (Test-RosetunXrayRunning) -and
+            (Get-RosetunStatus -ProtocolVersion $protocolVersion).xray
+    }
+    Test-Step 'REALITY child killed' "no direct leak ($($watch.Probes) probes)" {
+        $watch.Probes -gt 0 -and $watch.Leaks -eq 0
+    }
+    Test-Step 'REALITY child killed' 'direct egress remains blocked' { -not (Test-RosetunDirectEgress) }
+    Disconnect-RosetunTunnel | Out-Null
+
+    Write-Host 'Apply Shadowsocks to REALITY and back under protection...'
+    Connect-RosetunTunnel -RequestName 'request-reality-apply-back.json' | Out-Null
+    Start-RosetunEgressWatch
+    $egressWatchActive = $true
+    try {
+        $apply = Invoke-RosetunApply 'request-reality.json' -Quiet
+        Test-Step 'REALITY apply' 'Shadowsocks to REALITY succeeds' -Note "exit $($apply.ExitCode)" {
+            $apply.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+        }
+        $egress = Wait-RosetunTunnelEgress
+        Test-Step 'REALITY apply' 'REALITY carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
+        Test-Step 'REALITY apply' 'direct egress is blocked on REALITY' { -not (Test-RosetunDirectEgress) }
+        $apply = Invoke-RosetunApply 'request-reality-apply-back.json' -Quiet
+        Test-Step 'REALITY apply' 'REALITY to Shadowsocks succeeds' -Note "exit $($apply.ExitCode)" {
+            $apply.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+        }
+        $egress = Wait-RosetunTunnelEgress
+        Test-Step 'REALITY apply' 'Shadowsocks carries traffic again' -Note (Format-Egress $egress) {
+            $egress.Ok
+        }
+        Test-Step 'REALITY apply' 'direct egress stays blocked' { -not (Test-RosetunDirectEgress) }
+    }
+    finally {
+        $watch = Stop-RosetunEgressWatch
+        $egressWatchActive = $false
+    }
+    Test-Step 'REALITY apply' "no direct leak ($($watch.Probes) probes)" {
+        $watch.Probes -gt 0 -and $watch.Leaks -eq 0
+    }
+    Disconnect-RosetunTunnel | Out-Null
+
+    Write-Host 'Kill the helper during a REALITY session...'
+    Connect-RosetunTunnel -RequestName 'request-reality.json' | Out-Null
+    Test-Step 'REALITY helper killed' 'both children run before the kill' {
+        (Test-RosetunEngineRunning) -and (Test-RosetunXrayRunning)
+    }
+    Stop-RosetunHelper
+    Test-Step 'REALITY helper killed' 'sing-box and Xray stop with the helper' {
+        Wait-RosetunCondition { -not (Test-RosetunEngineRunning) -and -not (Test-RosetunXrayRunning) } `
+            -TimeoutSeconds 20
+    }
+    Test-Step 'REALITY helper killed' 'tunnel adapter is removed' {
+        Wait-RosetunCondition { -not (Test-RosetunTunAdapter) } -TimeoutSeconds 20
+    }
+    Start-RosetunHelper
 }
 
 Write-Host 'Another Windows account cannot control the tunnel...'
@@ -413,11 +592,6 @@ Test-Step 'other account' 'administrator connects through the service' -Note "ex
 }
 $otherSuffix = [guid]::NewGuid().ToString('N').Substring(0, 10)
 $otherAccountName = "rt-$otherSuffix"
-$protocolSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\..\crates\rosetun-ipc\src\protocol.rs')
-if (-not ($protocolSource -match 'pub const PROTOCOL_VERSION: u32 = (\d+);')) {
-    throw 'Could not read PROTOCOL_VERSION from rosetun-ipc.'
-}
-$protocolVersion = [int]$Matches[1]
 $otherPassword = New-OtherAccount -Name $otherAccountName
 try {
     $otherResults = @(Invoke-OtherAccountRequests -Name $otherAccountName -Password $otherPassword `
@@ -1140,6 +1314,10 @@ finally {
     if ($null -ne $lanListener) {
         try { Stop-RosetunLanListener $lanListener }
         catch { Write-Warning "Could not remove the LAN listener or firewall rule: $_" }
+    }
+    if ($xrayNode) {
+        try { Stop-RosetunXrayTestNode -Node $xrayNode }
+        catch { Write-Warning "Could not stop the REALITY test node: $_" }
     }
     if ($blockedNodeStartedByMatrix -and -not $KeepNode) {
         try { Stop-RosetunTestNode -CloudflareBlocked }
