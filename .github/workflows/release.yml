@@ -36,15 +36,29 @@ jobs:
           TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          git merge-base --is-ancestor $env:GITHUB_SHA origin/master
-          $onMaster = $LASTEXITCODE -eq 0
-          # git exits with 1 when the commit is not an ancestor; do not fail the step on it.
-          $global:LASTEXITCODE = 0
-          if (-not $onMaster) { throw "Tag $env:TAG must point to a commit on master." }
           . ./installer/version.ps1
           $releaseVersion = Get-RosetunVersion
           if ($env:TAG -ne "v$($releaseVersion.Version)") {
             throw "Tag $env:TAG does not match Cargo.toml version $($releaseVersion.Version)."
+          }
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/master
+          $onMaster = $LASTEXITCODE -eq 0
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/dev
+          $onDev = $LASTEXITCODE -eq 0
+          # git exits with 1 when the commit is not an ancestor; do not fail the step on it.
+          $global:LASTEXITCODE = 0
+          # master carries the current version and its betas. Alphas and betas of the
+          # next minor version are tagged on dev until that version reaches master.
+          $masterManifest = git show origin/master:Cargo.toml | Out-String
+          $global:LASTEXITCODE = 0
+          $masterVersion = [regex]::Match($masterManifest, '(?ms)^\[workspace\.package\].*?^version\s*=\s*"(?<v>\d+)\.(?<m>\d+)\.')
+          $tagVersion = [regex]::Match($releaseVersion.Version, '^(?<v>\d+)\.(?<m>\d+)\.\d+-(alpha|beta)\.')
+          $nextMinor = $masterVersion.Success -and $tagVersion.Success -and (
+            [int]$tagVersion.Groups['v'].Value -gt [int]$masterVersion.Groups['v'].Value -or (
+              [int]$tagVersion.Groups['v'].Value -eq [int]$masterVersion.Groups['v'].Value -and
+              [int]$tagVersion.Groups['m'].Value -gt [int]$masterVersion.Groups['m'].Value))
+          if (-not ($onMaster -or ($onDev -and $nextMinor))) {
+            throw "Tag $env:TAG must point to a commit on master, or on dev for an alpha or beta of the next version."
           }
           gh release view $env:TAG --json id 2>$null | Out-Null
           $exists = $LASTEXITCODE -eq 0
