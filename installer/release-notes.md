@@ -1,41 +1,77 @@
 # Rosetun {{version}}
 
-This 0.2 alpha adds Xray as a server-facing helper behind sing-box. Please report issues in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+The first alpha of 0.2. Its goal: connect everywhere. It is for people who are ready to test; if you want the steady version, stay on the 0.1 beta, which keeps getting fixes (0.1.0-beta.2 and later do not offer this alpha; 0.1.0-beta.1 still does). Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+
+**Going back to 0.1 takes a manual step.** 0.2 upgrades the settings file to a new format, and 0.1 refuses a file from a newer version instead of overwriting it. Rosetun keeps your previous settings next to it as `%APPDATA%\Rosetun\config.v3.json`: to return to the beta, install it and rename that file to `config.json`. Changes made in 0.2 are not carried back.
 
 ## What's changed
 
-- VLESS + REALITY nodes use Xray automatically while [sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520) is unresolved. sing-box still owns the TUN, rules, DNS and kill switch.
-- Advanced settings let you disable Xray or use it for all supported nodes. Hysteria2 stays on sing-box.
-- The server list shows which nodes use Xray; the connection screen shows the running chain. Server checks and delay tests use the same chain as the connection.
-- Settings from earlier versions migrate to format 4. The former, unavailable `engine: "xray"` setting is replaced with `engine: "sing-box"` and the new Xray choice.
+- **REALITY servers on Xray 26.9.8 and newer connect again.** sing-box cannot talk to them ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)), so Rosetun now connects VLESS + REALITY servers through Xray. sing-box still runs the tunnel, the rules, DNS and the kill switch; Xray only carries the connection to the server.
+- **Settings › Advanced › Connection through Xray:**
+  - **Automatically** (default): Xray for VLESS servers with REALITY, sing-box for the rest.
+  - **Without Xray**: sing-box for everything, as in 0.1. If a REALITY server rejects sing-box, Rosetun says so and offers to switch to Automatically and connect.
+  - **Xray for all servers**: every supported server except Hysteria2 goes through Xray.
+- **You can see what is going on.** The server list marks servers that go through Xray, and the main screen shows "sing-box + Xray" while connected through it.
+- **Switching servers while connected** works between ordinary and REALITY servers; the kill switch stays on during the switch.
+- **Server checks and delay** go through the same chain as the connection.
+- **If Xray stops** while connected, the kill switch keeps the internet closed and Rosetun reconnects. If `xray.exe` is missing or damaged, Rosetun says so and links to the release page.
+- **All fixes from 0.1.0-beta.2** are included.
 
-## Install and verify
+## Known issues
 
-Windows 10 or 11, x64. Download `{{setup}}`. Run `Get-FileHash .\{{setup}} -Algorithm SHA256` and compare with `{{sha256}}` (also in `SHA256SUMS.txt`). Verify provenance with `gh attestation verify .\{{setup}} --repo eoftgge/rosetun`.
+- If you switch between networks (for example Wi-Fi and cable) while connected through Xray, the connection may stop until Rosetun reconnects.
 
-## Included components
+## Install
 
-Rosetun includes the unmodified official sing-box {{sing_box_version}} build, licensed under GPL-3.0-or-later; its corresponding source is attached as `sing-box-{{sing_box_version}}-source.tar.gz`. The executable embeds Wintun {{wintun_version}} under the Wintun Prebuilt Binaries License; notices are installed in `licenses/`.
+Windows 10 or 11, x64. Download `{{setup}}` from this release. The installer is not code-signed yet: if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
 
-Rosetun also includes the unmodified official Xray-core {{xray_version}} build, licensed under MPL-2.0; its corresponding source is attached as `xray-{{xray_version}}-source.tar.gz`. The MPL text and source notice are installed in `licenses/`. Xray `geoip.dat` and `geosite.dat` are not installed.
+## Verify
+
+Run `Get-FileHash .\{{setup}} -Algorithm SHA256` and compare the result with `{{sha256}}` (also in `SHA256SUMS.txt`). Verify its provenance with `gh attestation verify .\{{setup}} --repo eoftgge/rosetun`.
+
+## Included
+
+Rosetun includes the unmodified official sing-box {{sing_box_version}} build, licensed under GPL-3.0-or-later. The corresponding source is attached as `sing-box-{{sing_box_version}}-source.tar.gz`.
+
+Rosetun includes the unmodified official Xray-core {{xray_version}} build, licensed under MPL-2.0. The corresponding source is attached as `xray-{{xray_version}}-source.tar.gz`; the license is installed in `licenses/`. Xray's `geoip.dat` and `geosite.dat` are not installed.
+
+The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Prebuilt Binaries License; the license and notice are installed in `licenses/wintun-prebuilt-binaries-license.txt` and `licenses/wintun.txt`.
 
 ## Русский
 
-В этой альфа-версии 0.2 Xray подключает сервер за sing-box. О проблемах сообщайте в [Issues](https://github.com/eoftgge/rosetun/issues), об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Первая альфа-версия 0.2. Её цель: подключаться везде. Она для тех, кто готов тестировать; если нужна спокойная версия, оставайтесь на бете 0.1: она продолжает получать исправления (0.1.0-beta.2 и новее эту альфу не предлагают; 0.1.0-beta.1 ещё предлагает). Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+
+**Вернуться на 0.1 можно только вручную.** 0.2 переводит файл настроек на новый формат, а 0.1 отказывается читать файл более новой версии и не перезаписывает его. Прежние настройки Rosetun сохраняет рядом, в `%APPDATA%\Rosetun\config.v3.json`: чтобы вернуться на бету, установите её и переименуйте этот файл в `config.json`. Изменения, сделанные в 0.2, при этом не переносятся.
 
 ### Что изменилось
 
-- Узлы VLESS + REALITY автоматически подключаются через Xray, пока не исправлена [sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520). Туннель, правила, DNS и kill switch по-прежнему работают на sing-box.
-- В дополнительных настройках можно выключить Xray или включить его для всех поддерживаемых узлов. Hysteria2 остаётся на sing-box.
-- В списке серверов отмечено, какие узлы пойдут через Xray, а на главном экране показана активная цепочка. Проверка серверов и задержки работает через неё же.
-- Старые настройки переходят на формат 4. Заглушка `engine: "xray"` заменяется на `engine: "sing-box"` и новый выбор Xray.
+- **Серверы REALITY на Xray 26.9.8 и новее снова подключаются.** sing-box с ними работать не может ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)), поэтому серверы VLESS + REALITY Rosetun теперь подключает через Xray. Туннель, правила, DNS и kill switch по-прежнему работают на sing-box; Xray только ведёт соединение с сервером.
+- **Настройки › Дополнительно › Подключение через Xray:**
+  - **Автоматически** (по умолчанию): Xray для серверов VLESS с REALITY, sing-box для остальных.
+  - **Без Xray**: всё через sing-box, как в 0.1. Если сервер REALITY не примет sing-box, Rosetun скажет об этом и предложит включить «Автоматически» и подключиться.
+  - **Xray для всех серверов**: все поддерживаемые серверы, кроме Hysteria2, идут через Xray.
+- **Видно, что происходит.** В списке серверов отмечены те, что пойдут через Xray, а на главном экране во время подключения через него написано «sing-box + Xray».
+- **Смена сервера во время подключения** работает между обычными серверами и серверами REALITY; kill switch при этом не выключается.
+- **Проверка серверов и задержка** идут через ту же цепочку, что и подключение.
+- **Если Xray остановится** во время подключения, kill switch держит интернет закрытым, а Rosetun переподключается. Если `xray.exe` пропал или повреждён, Rosetun скажет об этом и даст ссылку на страницу выпуска.
+- **Все исправления из 0.1.0-beta.2** входят в эту версию.
 
-### Установка и проверка
+### Известные проблемы
 
-Windows 10 или 11, x64. Скачайте `{{setup}}`. Выполните `Get-FileHash .\{{setup}} -Algorithm SHA256` и сравните результат с `{{sha256}}` (также в `SHA256SUMS.txt`). Проверьте происхождение командой `gh attestation verify .\{{setup}} --repo eoftgge/rosetun`.
+- Если во время подключения через Xray сменить сеть (например, Wi-Fi на кабель), соединение может прерваться, пока Rosetun не переподключится.
+
+### Установка
+
+Windows 10 или 11, x64. Скачайте `{{setup}}` из этого релиза. Установщик пока не подписан: если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
+
+### Проверка
+
+Выполните `Get-FileHash .\{{setup}} -Algorithm SHA256` и сравните результат с `{{sha256}}` (он также указан в `SHA256SUMS.txt`). Проверьте происхождение командой `gh attestation verify .\{{setup}} --repo eoftgge/rosetun`.
 
 ### Состав
 
-Rosetun включает официальную сборку sing-box {{sing_box_version}} без изменений под лицензией GPL-3.0-or-later. Исходники приложены как `sing-box-{{sing_box_version}}-source.tar.gz`. В исполняемом файле содержится Wintun {{wintun_version}}; лицензии и уведомления установлены в `licenses/`.
+Rosetun включает официальную сборку sing-box {{sing_box_version}} без изменений, лицензия GPL-3.0-or-later. Соответствующие исходники приложены в архиве `sing-box-{{sing_box_version}}-source.tar.gz`.
 
-Также включена официальная сборка Xray-core {{xray_version}} без изменений под лицензией MPL-2.0. Исходники приложены как `xray-{{xray_version}}-source.tar.gz`, текст MPL и уведомление установлены в `licenses/`. Файлы Xray `geoip.dat` и `geosite.dat` не устанавливаются.
+Rosetun включает официальную сборку Xray-core {{xray_version}} без изменений, лицензия MPL-2.0. Соответствующие исходники приложены в архиве `xray-{{xray_version}}-source.tar.gz`; текст лицензии устанавливается в `licenses/`. Файлы Xray `geoip.dat` и `geosite.dat` не устанавливаются.
+
+Исполняемый файл содержит Wintun {{wintun_version}}, который распространяется по лицензии Wintun Prebuilt Binaries License; текст лицензии и уведомление устанавливаются в `licenses/wintun-prebuilt-binaries-license.txt` и `licenses/wintun.txt`.
