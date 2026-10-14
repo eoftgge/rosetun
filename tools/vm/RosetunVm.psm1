@@ -988,55 +988,32 @@ function Stop-RosetunLanListener {
     finally { $Lan.Listener.Stop() }
 }
 
-function Start-RosetunUdpListener {
-    $address = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4 -AddressState Preferred -ErrorAction Stop |
-        Where-Object { $_.IPAddress -notlike '169.254.*' } |
-        Select-Object -First 1 -ExpandProperty IPAddress
-    if (-not $address) { throw 'The Default Switch has no usable IPv4 address.' }
-    $socket = [Net.Sockets.UdpClient]::new([Net.IPEndPoint]::new([Net.IPAddress]::Parse($address), 0))
-    $port = ([Net.IPEndPoint]$socket.Client.LocalEndPoint).Port
-    $name = "Rosetun-UDP-matrix-$([guid]::NewGuid().ToString('N'))"
-    try {
-        New-NetFirewallRule -Name $name -DisplayName 'Rosetun UDP matrix listener' -Direction Inbound `
-            -Action Allow -Protocol UDP -LocalAddress $address -LocalPort $port `
-            -InterfaceAlias 'vEthernet (Default Switch)' -Profile Any -ErrorAction Stop | Out-Null
-        return [pscustomobject]@{ Address = $address; Port = $port; Socket = $socket; RuleName = $name }
-    }
-    catch {
-        Remove-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
-        $socket.Dispose()
-        throw
-    }
-}
-
-function Stop-RosetunUdpListener {
-    param([Parameter(Mandatory)]$Udp)
-    try { Remove-NetFirewallRule -Name $Udp.RuleName -ErrorAction Stop }
-    finally { $Udp.Socket.Dispose() }
-}
-
-function Test-RosetunUdpPath {
-    param([Parameter(Mandatory)]$Udp)
-
-    $guestIp = Get-RosetunEgressAddress
-    $token = [guid]::NewGuid().ToString('N')
-    $reply = $Udp.Socket.ReceiveAsync()
+function Test-RosetunUdpInternet {
+    # True when an NTP reply comes back to the guest. A public server is used on
+    # purpose: the host's LAN address is on-link for the guest, so datagrams to it
+    # bypass the TUN and say nothing about the tunnel. NTP is not hijacked by the
+    # engine and port 123 is not filtered by VLESS Vision.
+    param([string]$Server = '162.159.200.1')
     Invoke-RosetunGuest -ScriptBlock {
-        param($address, $port, $token)
+        param($server)
         $client = [Net.Sockets.UdpClient]::new()
         try {
-            $message = [Text.Encoding]::ASCII.GetBytes($token)
+            $client.Client.ReceiveTimeout = 3000
+            $request = [byte[]]::new(48)
+            $request[0] = 0x1B
+            $remote = [Net.IPEndPoint]::new([Net.IPAddress]::Any, 0)
             for ($attempt = 0; $attempt -lt 3; $attempt++) {
-                [void]$client.Send($message, $message.Length, $address, $port)
-                Start-Sleep -Milliseconds 500
+                [void]$client.Send($request, $request.Length, $server, 123)
+                try {
+                    $reply = $client.Receive([ref]$remote)
+                    if ($reply.Length -ge 48) { return $true }
+                }
+                catch [Net.Sockets.SocketException] { }
             }
+            return $false
         }
         finally { $client.Dispose() }
-    } -ArgumentList $Udp.Address, $Udp.Port, $token
-    if (-not $reply.Wait(5000)) { return $false }
-    $packet = $reply.Result
-    [Text.Encoding]::ASCII.GetString($packet.Buffer) -eq $token -and
-        $packet.RemoteEndPoint.Address.ToString() -ne $guestIp
+    } -ArgumentList $Server
 }
 
 function Test-RosetunLanListener {

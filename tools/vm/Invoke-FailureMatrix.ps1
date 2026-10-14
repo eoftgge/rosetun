@@ -407,6 +407,8 @@ $delay = Invoke-RosetunCli -Quiet 'delay'
 Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
     $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
 }
+# The same check as through Xray: if it fails here too, the test or the lab is at fault.
+Test-Step 'connect' 'UDP reaches the internet through the node (NTP)' { Test-RosetunUdpInternet }
 
 # Not the first connect of the run: the first adapter creation in a fresh VM
 # can leave the tunnel silent for a while, which this scenario must not measure.
@@ -449,13 +451,7 @@ if ($UseHostNode) {
         $egress.Ok
     }
     Test-Step 'REALITY auto' 'UDP DNS resolves inside the tunnel' { Test-RealityTunnelDns }
-    $udpListener = Start-RosetunUdpListener
-    try {
-        Test-Step 'REALITY auto' 'UDP datagrams reach the exit through Xray' {
-            Test-RosetunUdpPath -Udp $udpListener
-        }
-    }
-    finally { Stop-RosetunUdpListener -Udp $udpListener }
+    Test-Step 'REALITY auto' 'UDP reaches the internet through Xray (NTP)' { Test-RosetunUdpInternet }
     Test-Step 'REALITY auto' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
     Test-Step 'REALITY auto' 'direct UDP DNS is blocked' { -not (Test-RosetunDirectDns) }
     $probe = Invoke-RosetunProbe 'request-reality.json'
@@ -483,10 +479,12 @@ if ($UseHostNode) {
             $rejected.ExitCode -ne 0 -and $timer.Elapsed.TotalSeconds -le 60 -and
                 $rejected.Output -match 'ServerRejected'
         }
-        Test-Step 'REALITY off' 'state is FailedProtected' {
-            Wait-RosetunState 'FailedProtected' -TimeoutSeconds 10
+        # A failed first connect releases protection, as in 'unreachable connect'.
+        Test-Step 'REALITY off' 'state is Failed' { Wait-RosetunState 'Failed' -TimeoutSeconds 10 }
+        Test-Step 'REALITY off' 'direct egress works again' { Test-RosetunDirectEgress }
+        Test-Step 'REALITY off' 'tunnel adapter is gone' {
+            Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
         }
-        Test-Step 'REALITY off' 'direct egress stays blocked' { -not (Test-RosetunDirectEgress) }
     }
     finally {
         $setting = Invoke-XraySetting -Setting auto
