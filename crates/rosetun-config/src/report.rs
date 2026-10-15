@@ -13,6 +13,10 @@ const SECRET_KEYS: &[&str] = &[
     "x-hwid",
 ];
 const PUBLIC_HOSTS: &[&str] = &["api.github.com", "github.com", "cp.cloudflare.com"];
+const FILE_EXTENSIONS: &[&str] = &[
+    "exe", "dll", "sys", "log", "json", "txt", "toml", "yaml", "yml", "ps1", "msi", "zip", "dat",
+    "db",
+];
 
 pub fn redact_report_text(text: &str) -> String {
     let text = redact_profiles(text);
@@ -229,7 +233,11 @@ fn redact_addresses(text: &str) -> String {
                             .all(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '_'))
                 })
                 && host.rsplit('.').next().is_some_and(|tld| {
-                    tld.chars().count() >= 2 && tld.chars().all(char::is_alphabetic)
+                    tld.chars().count() >= 2
+                        && tld.chars().all(char::is_alphabetic)
+                        && !FILE_EXTENSIONS
+                            .iter()
+                            .any(|extension| tld.eq_ignore_ascii_case(extension))
                 });
             if let Some((_, end)) = ip.filter(|_| !safe_ip) {
                 result.push_str("<ip>");
@@ -275,6 +283,21 @@ mod tests {
             redact_report_text(input),
             "<url> <host>:443 api.github.com github.com cp.cloudflare.com <ip>"
         );
+    }
+
+    #[test]
+    fn keeps_file_names_without_exempting_real_hosts() {
+        assert_eq!(
+            redact_report_text("xray.exe wintun.dll helper.log config.v3.json node.example.com"),
+            "xray.exe wintun.dll helper.log config.v3.json <host>"
+        );
+        for extension in super::FILE_EXTENSIONS {
+            for suffix in [extension.to_string(), extension.to_ascii_uppercase()] {
+                let filename = format!("support.{suffix}");
+                assert_eq!(redact_report_text(&filename), filename);
+            }
+        }
+        assert_eq!(redact_report_text("NODE.EXAMPLE.COM:443"), "<host>:443");
     }
 
     #[test]

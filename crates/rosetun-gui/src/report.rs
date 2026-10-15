@@ -391,7 +391,10 @@ mod tests {
     #[test]
     fn replaces_only_whole_names() {
         assert_eq!(
-            redact_whole_name("Amsterdam Amsterdamer _Amsterdam Amsterdam_\nAmsterdam", "Amsterdam"),
+            redact_whole_name(
+                "Amsterdam Amsterdamer _Amsterdam Amsterdam_\nAmsterdam",
+                "Amsterdam"
+            ),
             "<redacted> Amsterdamer _Amsterdam Amsterdam_\n<redacted>"
         );
     }
