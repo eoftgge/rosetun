@@ -56,6 +56,7 @@ fn request() -> ConnectRequest {
             raw: None,
         },
         rule_set: RuleSet::new(RuleSetId::new("example"), "Example", RuleTarget::Proxy),
+        extra_nodes: Vec::new(),
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: Settings::default(),

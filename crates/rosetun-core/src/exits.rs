@@ -1,9 +1,8 @@
-use std::time::Duration;
-
 use rosetun_config::{
-    AppConfig, CountryCode, Exit, ExitId, ExitTarget, Node, RuleTarget, Selection, Subscription,
-    node_country,
+    AppConfig, CountryCode, Exit, ExitId, ExitTarget, RuleTarget, Selection, node_country,
 };
+
+pub use rosetun_config::resolve_exits;
 
 use crate::{Store, StoreError, rules::next_id};
 
@@ -128,87 +127,6 @@ pub fn exit_rule_count(config: &AppConfig, id: &ExitId) -> usize {
         .flat_map(|set| &set.rules)
         .filter(|rule| rule.target == RuleTarget::Exit && rule.exit.as_ref() == Some(id))
         .count()
-}
-
-fn selected_node<'a>(subscriptions: &'a [Subscription], selection: &Selection) -> Option<&'a Node> {
-    subscriptions
-        .iter()
-        .find(|subscription| subscription.id == selection.subscription)
-        .and_then(|subscription| subscription.node(&selection.node))
-}
-
-fn country_node(
-    code: &CountryCode,
-    subscriptions: &[Subscription],
-    delays: &[(Selection, Duration)],
-    selected: Option<&Selection>,
-) -> Option<Selection> {
-    if let Some(selection) = selected
-        && selected_node(subscriptions, selection)
-            .and_then(|node| node_country(&node.name))
-            .as_ref()
-            == Some(code)
-    {
-        return Some(selection.clone());
-    }
-
-    let mut first = None;
-    let mut best: Option<(Duration, Selection)> = None;
-    for subscription in subscriptions {
-        for node in &subscription.nodes {
-            if node_country(&node.name).as_ref() != Some(code) {
-                continue;
-            }
-            let selection = Selection {
-                subscription: subscription.id.clone(),
-                node: node.id.clone(),
-            };
-            if first.is_none() {
-                first = Some(selection.clone());
-            }
-            if let Some((_, delay)) = delays.iter().find(|(node, _)| node == &selection)
-                && best.as_ref().is_none_or(|(fastest, _)| delay < fastest)
-            {
-                best = Some((*delay, selection));
-            }
-        }
-    }
-    best.map(|(_, selection)| selection).or(first)
-}
-
-/// Retains a country's selected node while it still belongs to that country.
-/// The caller passes the previous selections back on Apply to avoid changing exit IPs mid-session.
-pub fn resolve_exits(
-    exits: &[Exit],
-    subscriptions: &[Subscription],
-    delays: &[(Selection, Duration)],
-    selected: &[(ExitId, Selection)],
-) -> Vec<(ExitId, Option<Selection>)> {
-    exits
-        .iter()
-        .map(|exit| {
-            let previous = selected
-                .iter()
-                .find(|(id, _)| id == &exit.id)
-                .map(|(_, selection)| selection);
-            let node = match &exit.target {
-                ExitTarget::Node {
-                    selection,
-                    fallback,
-                } => {
-                    if selected_node(subscriptions, selection).is_some() {
-                        Some(selection.clone())
-                    } else {
-                        fallback.as_ref().and_then(|country| {
-                            country_node(country, subscriptions, delays, previous)
-                        })
-                    }
-                }
-                ExitTarget::Country(code) => country_node(code, subscriptions, delays, previous),
-            };
-            (exit.id.clone(), node)
-        })
-        .collect()
 }
 
 #[cfg(test)]

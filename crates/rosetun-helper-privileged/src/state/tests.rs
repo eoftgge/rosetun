@@ -1,8 +1,9 @@
 use rosetun_config::{
-    DomainMatch, EngineKind, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget,
+    DomainMatch, EngineKind, ExitId, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget,
     RuleTemplate, Selection, SubscriptionId, Traffic, VlessParams,
 };
 use rosetun_engine::errors::EngineError;
+use rosetun_ipc::ExtraNode;
 use rosetun_engine::{
     EngineBackend, EngineCapabilities, EngineIntegration, RenderedConfig, RuleCapabilities,
 };
@@ -3902,6 +3903,7 @@ fn connect_request() -> ConnectRequest {
             raw: None,
         },
         rule_set: RuleSet::new(RuleSetId::new("base"), "base", RuleTarget::Proxy),
+        extra_nodes: Vec::new(),
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: Settings::default(),
@@ -4438,6 +4440,63 @@ fn invalid_temporary_rules_leave_connect_and_apply_untouched() {
         assert_eq!(controls.spawns(), 1);
         assert_eq!(prepared.load(Ordering::Acquire), 0);
     }
+}
+
+#[test]
+fn invalid_extra_nodes_are_rejected_before_connect_and_apply() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    let request = connect_request();
+    let extra = ExtraNode {
+        exit: ExitId::new("other"),
+        selection: request.selection.clone(),
+        node: request.node.clone(),
+    };
+    let mut too_many = request.clone();
+    too_many.extra_nodes = vec![extra.clone(); MAX_EXTRA_NODES + 1];
+    let mut duplicate = request.clone();
+    duplicate.extra_nodes = vec![extra.clone(), extra.clone()];
+    let mut missing = request.clone();
+    missing.rule_set.rules.push(Rule {
+        id: RuleId::new("exit"),
+        enabled: true,
+        matcher: RuleMatcher::IpCidr("192.0.2.0/24".into()),
+        target: RuleTarget::Exit,
+        exit: Some(extra.exit.clone()),
+    });
+    let invalid = [&too_many, &duplicate, &missing];
+    for candidate in invalid {
+        let error = helper.connect(candidate).expect_err("invalid connect");
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert_eq!(controls.spawns(), 0);
+    }
+
+    helper.connect(&request).expect("connect");
+    for candidate in invalid {
+        let error = helper.apply(candidate).expect_err("invalid apply");
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+        assert_eq!(controls.spawns(), 1);
+        assert_eq!(prepared.load(Ordering::Acquire), 0);
+    }
+
+    missing.extra_nodes.push(extra);
+    assert!(validate_request(&missing).is_ok());
+    let safe = renderable_rule_set(&missing);
+    assert_eq!(safe.rules[0].target, RuleTarget::Block);
+    assert_eq!(missing.rule_set.rules[0].target, RuleTarget::Exit);
+    let rendered = rosetun_engine_singbox::render(&RenderRequest {
+        node: &missing.node,
+        socks: None,
+        rules: &safe,
+        lists: &[],
+        settings: &missing.settings,
+        control: None,
+        verbose_log: false,
+    })
+    .expect("render blocked exit rule");
+    assert!(rendered.unsupported.is_empty());
+    let body = String::from_utf8(rendered.body).unwrap();
+    assert!(body.contains("\"action\": \"reject\""));
 }
 
 #[test]

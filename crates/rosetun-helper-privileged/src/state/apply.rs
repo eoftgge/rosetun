@@ -9,7 +9,7 @@ use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
     Caller, Helper, RECONNECT_BACKOFF, Reconnect, StartMode, node_with_endpoint, normalize_server,
-    probe::resolve_for_apply, render_config, validate_request,
+    probe::resolve_for_apply, render_config, renderable_rule_set, validate_request,
 };
 
 impl Helper {
@@ -103,7 +103,7 @@ impl Helper {
                     username: socks.username(),
                     password: socks.password(),
                 }),
-                rules: &request.effective_rule_set(),
+                rules: &renderable_rule_set(request),
                 lists: &request.lists,
                 settings: &request.settings,
                 control: None,
@@ -149,7 +149,7 @@ impl Helper {
         session.reserve_lists(request, Some(&current))?;
         tracing::info!(
             server = current.node != request.node || current.selection != request.selection,
-            rules = current.rule_set != request.rule_set,
+            rules = current.rule_set != request.rule_set || current.extra_nodes != request.extra_nodes,
             temporary = current.temporary_rules != request.temporary_rules,
             temporary_rules = request.temporary_rules.len(),
             dns = current.settings.dns != request.settings.dns,
@@ -164,7 +164,7 @@ impl Helper {
         match session
             .start(
                 &request.node,
-                &request.effective_rule_set(),
+                &renderable_rule_set(request),
                 &request.lists,
                 &request.settings,
                 mode,
@@ -197,7 +197,7 @@ impl Helper {
                 let rollback = session
                     .start(
                         &current.node,
-                        &current.effective_rule_set(),
+                        &renderable_rule_set(&current),
                         &current.lists,
                         &current.settings,
                         mode,

@@ -13,7 +13,7 @@ mod settings;
 mod subscription;
 mod uploaded_list;
 
-pub use exit::{CountryCode, Exit, ExitTarget};
+pub use exit::{CountryCode, Exit, ExitTarget, resolve_exits};
 pub use hash::digest_hex;
 pub use ids::{ExitId, ListId, NodeId, RuleId, RuleSetId, SubscriptionId};
 pub use list::{List, ListCategoryError, ListFormat, ListSource};

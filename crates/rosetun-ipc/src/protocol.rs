@@ -1,13 +1,15 @@
 use rosetun_config::{
-    AppConfig, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId, RuleTarget, Selection, Settings,
-    Status, Traffic,
+    AppConfig, ExitId, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId, RuleTarget, Selection,
+    Settings, Status, Traffic, resolve_exits,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
+use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
+pub const MAX_EXTRA_NODES: usize = 16;
 pub const MAX_LIST_CHUNK_BYTES: usize = 1024 * 1024;
 pub const MAX_LIST_PAYLOAD_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -94,10 +96,34 @@ pub enum ConnectRequestError {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtraNode {
+    pub exit: ExitId,
+    pub selection: Selection,
+    pub node: Node,
+}
+
+impl std::fmt::Debug for ExtraNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtraNode")
+            .field("exit", &self.exit)
+            .field("selection", &self.selection)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ExitContext<'a> {
+    pub delays: &'a [(Selection, Duration)],
+    pub selected: &'a [(ExitId, Selection)],
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectRequest {
     pub selection: Selection,
     pub node: Node,
     pub rule_set: RuleSet,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_nodes: Vec<ExtraNode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub temporary_rules: Vec<Rule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -116,6 +142,7 @@ impl std::fmt::Debug for ConnectRequest {
             .field("auto_route", &self.settings.tun.auto_route)
             .field("rule_set_id", &self.rule_set.id)
             .field("rule_count", &self.rule_set.rules.len())
+            .field("extra_node_count", &self.extra_nodes.len())
             .field("temporary_rule_count", &self.temporary_rules.len())
             .field("list_count", &self.lists.len())
             .finish_non_exhaustive()
@@ -124,12 +151,23 @@ impl std::fmt::Debug for ConnectRequest {
 
 impl ConnectRequest {
     pub fn from_config(config: &AppConfig) -> Result<Self, ConnectRequestError> {
-        let (request, blocked) = Self::from_config_unlogged(config)?;
+        Self::from_config_with_exits(config, ExitContext::default())
+    }
+
+    pub fn from_config_with_exits(
+        config: &AppConfig,
+        exits: ExitContext<'_>,
+    ) -> Result<Self, ConnectRequestError> {
+        let (request, blocked) = Self::build(config, Vec::new(), exits)?;
         warn_blocked_exits(blocked);
         Ok(request)
     }
 
-    fn from_config_unlogged(config: &AppConfig) -> Result<(Self, usize), ConnectRequestError> {
+    fn build(
+        config: &AppConfig,
+        temporary_rules: Vec<Rule>,
+        exits: ExitContext<'_>,
+    ) -> Result<(Self, usize), ConnectRequestError> {
         let selection = config
             .active
             .as_ref()
@@ -138,26 +176,70 @@ impl ConnectRequest {
             .active_node()
             .ok_or(ConnectRequestError::NodeNotFound)?;
 
-        let mut rule_set = match &config.active_rule_set {
+        let rule_set = match &config.active_rule_set {
             Some(_) => config
                 .active_rules()
                 .map(RuleSet::with_templates_expanded)
                 .ok_or(ConnectRequestError::RuleSetNotFound)?,
             None => RuleSet::new(RuleSetId::new("default"), "Default", RuleTarget::Proxy),
         };
-        let blocked = block_exit_rules(&mut rule_set.rules);
-
-        Ok((
-            Self {
-                selection: selection.clone(),
-                node: node.clone(),
-                rule_set,
-                temporary_rules: Vec::new(),
-                lists: Vec::new(),
-                settings: config.settings.clone(),
-            },
-            blocked,
-        ))
+        let mut request = Self {
+            selection: selection.clone(),
+            node: node.clone(),
+            rule_set,
+            extra_nodes: Vec::new(),
+            temporary_rules,
+            lists: Vec::new(),
+            settings: config.settings.clone(),
+        };
+        let referenced = |id: &ExitId| {
+            request
+                .rule_set
+                .enabled()
+                .chain(request.temporary_rules.iter().filter(|rule| rule.enabled))
+                .any(|rule| rule.target == RuleTarget::Exit && rule.exit.as_ref() == Some(id))
+        };
+        let used: Vec<_> = config.exits.iter().filter(|exit| referenced(&exit.id)).cloned().collect();
+        let resolved = resolve_exits(&used, &config.subscriptions, exits.delays, exits.selected);
+        let mut blocked = 0;
+        for rule in request
+            .rule_set
+            .rules
+            .iter_mut()
+            .chain(&mut request.temporary_rules)
+            .filter(|rule| rule.enabled && rule.target == RuleTarget::Exit)
+        {
+            let Some((id, Some(selected))) = rule.exit.as_ref().and_then(|id| {
+                resolved.iter().find(|(exit, _)| exit == id)
+            }) else {
+                rule.target = RuleTarget::Block;
+                rule.exit = None;
+                blocked += 1;
+                continue;
+            };
+            if selected == selection {
+                rule.target = RuleTarget::Proxy;
+                rule.exit = None;
+            } else if !request.extra_nodes.iter().any(|extra| extra.exit == *id) {
+                if let Some(node) = config
+                    .subscriptions
+                    .iter()
+                    .find(|sub| sub.id == selected.subscription)
+                    .and_then(|sub| sub.node(&selected.node))
+                {
+                    request.extra_nodes.push(ExtraNode {
+                        exit: id.clone(),
+                        selection: selected.clone(),
+                        node: node.clone(),
+                    });
+                } else {
+                    rule.target = RuleTarget::Block;
+                    rule.exit = None;
+                    blocked += 1;
+                }
+            }
+        }
+        Ok((request, blocked))
     }
 
     pub fn for_apply(
@@ -165,7 +247,16 @@ impl ConnectRequest {
         running: Option<&Settings>,
         temporary_rules: Vec<Rule>,
     ) -> Result<Self, ConnectRequestError> {
-        let (mut request, blocked) = Self::from_config_unlogged(config)?;
+        Self::for_apply_with_exits(config, running, temporary_rules, ExitContext::default())
+    }
+
+    pub fn for_apply_with_exits(
+        config: &AppConfig,
+        running: Option<&Settings>,
+        temporary_rules: Vec<Rule>,
+        exits: ExitContext<'_>,
+    ) -> Result<Self, ConnectRequestError> {
+        let (mut request, blocked) = Self::build(config, temporary_rules, exits)?;
         if let Some(running) = running {
             request.settings.engine = running.engine;
             request.settings.xray = running.xray;
@@ -173,8 +264,6 @@ impl ConnectRequest {
             request.settings.kill_switch = running.kill_switch;
             request.settings.allow_lan = running.allow_lan;
         }
-        request.temporary_rules = temporary_rules;
-        let blocked = blocked + block_exit_rules(&mut request.temporary_rules);
         warn_blocked_exits(blocked);
         Ok(request)
     }
@@ -190,20 +279,8 @@ impl ConnectRequest {
 
 fn warn_blocked_exits(count: usize) {
     if count > 0 {
-        tracing::warn!(count, "exit rules blocked until exit routing is available");
+        tracing::warn!(count, "exit rules blocked because their exits could not be resolved");
     }
-}
-
-fn block_exit_rules(rules: &mut [Rule]) -> usize {
-    let mut blocked = 0;
-    for rule in rules {
-        if rule.target == RuleTarget::Exit {
-            rule.target = RuleTarget::Block;
-            rule.exit = None;
-            blocked += 1;
-        }
-    }
-    blocked
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -328,6 +405,7 @@ pub enum ErrorCode {
     RoutingFailed,
     Busy,
     InvalidState,
+    InvalidRequest,
     UnsupportedRules,
     ListMissing,
     NotImplemented,
@@ -336,6 +414,8 @@ pub enum ErrorCode {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     #[test]
     fn classified_errors_round_trip() {
         for code in [
@@ -358,7 +438,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 10);
+        assert_eq!(super::PROTOCOL_VERSION, 11);
     }
     use rosetun_config::{
         AppConfig, CountryCode, EngineKind, Exit, ExitId, ExitTarget, Node, NodeId, Outbound, Rule,
@@ -366,7 +446,9 @@ mod tests {
         StreamSettings, Subscription, SubscriptionId, TrojanParams,
     };
 
-    use super::{ConnectRequest, ConnectRequestError, ListFormat, ListRef, ProbeRequest, Request};
+    use super::{
+        ConnectRequest, ConnectRequestError, ExitContext, ListFormat, ListRef, ProbeRequest, Request,
+    };
 
     #[test]
     fn list_requests_round_trip_without_exposing_chunks_in_debug() {
@@ -480,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn exit_rules_are_blocked_in_requests_until_routing_exists() {
+    fn unresolved_exit_rules_are_blocked_in_requests() {
         let mut config = selected_config();
         let exit_id = ExitId::new("1");
         config.exits.push(Exit {
@@ -523,6 +605,136 @@ mod tests {
         let applied = ConnectRequest::for_apply(&config, None, vec![temporary]).unwrap();
         assert_eq!(applied.temporary_rules[0].target, RuleTarget::Block);
         assert!(applied.temporary_rules[0].exit.is_none());
+        assert!(applied.extra_nodes.is_empty());
+    }
+
+    #[test]
+    fn exit_rules_share_one_extra_node_and_disabled_rules_add_none() {
+        let mut config = selected_config();
+        let exit = ExitId::new("gb");
+        let mut other = config.subscriptions[0].nodes[0].clone();
+        other.id = NodeId::new("gb-node");
+        other.name = "GB example node".into();
+        other.server = "192.0.2.10".into();
+        config.subscriptions[0].nodes.push(other.clone());
+        config.exits.push(Exit {
+            id: exit.clone(),
+            name: "GB exit".into(),
+            target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
+        });
+        let rule = Rule {
+            id: RuleId::new("exit"),
+            enabled: true,
+            matcher: RuleMatcher::IpCidr("198.51.100.0/24".into()),
+            target: RuleTarget::Exit,
+            exit: Some(exit.clone()),
+        };
+        config.rule_sets[0].rules.push(rule.clone());
+        config.rule_sets[0].rules.push(Rule {
+            id: RuleId::new("disabled"),
+            enabled: false,
+            ..rule.clone()
+        });
+        let request = ConnectRequest::for_apply(&config, None, vec![rule.clone()]).unwrap();
+        assert_eq!(request.rule_set.rules[1].target, RuleTarget::Exit);
+        assert_eq!(request.temporary_rules[0].target, RuleTarget::Exit);
+        assert_eq!(request.extra_nodes.len(), 1);
+        assert_eq!(request.extra_nodes[0].exit, exit);
+        assert_eq!(request.extra_nodes[0].node, other);
+        assert_eq!(serde_json::from_str::<ConnectRequest>(&serde_json::to_string(&request).unwrap()).unwrap(), request);
+        let debug = format!("{request:?}");
+        assert!(debug.contains("extra_node_count: 1"));
+        assert!(!debug.contains("192.0.2.10"));
+        assert!(!debug.contains("test-secret"));
+
+        config.rule_sets[0].rules[1].enabled = false;
+        let request = ConnectRequest::from_config(&config).unwrap();
+        assert!(request.extra_nodes.is_empty());
+        assert_eq!(request.rule_set.rules[1].target, RuleTarget::Exit);
+    }
+
+    #[test]
+    fn selected_country_node_stays_fixed_when_another_node_gets_faster() {
+        let mut config = selected_config();
+        let exit = ExitId::new("gb");
+        config.exits.push(Exit {
+            id: exit.clone(),
+            name: "GB exit".into(),
+            target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
+        });
+        config.rule_sets[0].rules.push(Rule {
+            id: RuleId::new("country"),
+            enabled: true,
+            matcher: RuleMatcher::IpCidr("203.0.113.0/24".into()),
+            target: RuleTarget::Exit,
+            exit: Some(exit.clone()),
+        });
+        let mut first = config.subscriptions[0].nodes[0].clone();
+        first.id = NodeId::new("gb-first");
+        first.name = "GB first".into();
+        let mut second = first.clone();
+        second.id = NodeId::new("gb-second");
+        second.name = "GB second".into();
+        config.subscriptions[0].nodes.extend([first, second]);
+        let first = Selection {
+            subscription: config.subscriptions[0].id.clone(),
+            node: NodeId::new("gb-first"),
+        };
+        let second = Selection {
+            subscription: config.subscriptions[0].id.clone(),
+            node: NodeId::new("gb-second"),
+        };
+        let delays = [
+            (first.clone(), Duration::from_millis(80)),
+            (second.clone(), Duration::from_millis(10)),
+        ];
+        let request = ConnectRequest::from_config_with_exits(
+            &config,
+            ExitContext {
+                delays: &delays,
+                selected: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(request.extra_nodes[0].selection, second);
+        let pinned = [(exit, first.clone())];
+        let request = ConnectRequest::from_config_with_exits(
+            &config,
+            ExitContext {
+                delays: &delays,
+                selected: &pinned,
+            },
+        )
+        .unwrap();
+        assert_eq!(request.extra_nodes[0].selection, first);
+    }
+
+    #[test]
+    fn exit_on_main_node_becomes_proxy_in_base_and_temporary_rules() {
+        let mut config = selected_config();
+        let exit = ExitId::new("main");
+        config.exits.push(Exit {
+            id: exit.clone(),
+            name: "Main exit".into(),
+            target: ExitTarget::Node {
+                selection: config.active.clone().unwrap(),
+                fallback: None,
+            },
+        });
+        let rule = Rule {
+            id: RuleId::new("exit"),
+            enabled: true,
+            matcher: RuleMatcher::IpCidr("203.0.113.0/24".into()),
+            target: RuleTarget::Exit,
+            exit: Some(exit),
+        };
+        config.rule_sets[0].rules.push(rule.clone());
+        let request = ConnectRequest::for_apply(&config, None, vec![rule]).unwrap();
+        assert!(request.extra_nodes.is_empty());
+        for rule in [&request.rule_set.rules[1], &request.temporary_rules[0]] {
+            assert_eq!(rule.target, RuleTarget::Proxy);
+            assert!(rule.exit.is_none());
+        }
     }
 
     #[test]

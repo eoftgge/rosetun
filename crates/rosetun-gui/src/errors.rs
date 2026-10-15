@@ -701,7 +701,7 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                     tr_in(language, "error-code-routing-failed", &FluentArgs::new())
                 }
                 ErrorCode::Busy => tr_in(language, "error-code-busy", &FluentArgs::new()),
-                ErrorCode::InvalidState => {
+                ErrorCode::InvalidState | ErrorCode::InvalidRequest => {
                     tr_in(language, "error-code-invalid-state", &FluentArgs::new())
                 }
                 ErrorCode::UnsupportedRules => {

@@ -110,6 +110,7 @@ mod tests {
                     raw: None,
                 },
                 rule_set: RuleSet::new(RuleSetId::new("rules"), "Rules", RuleTarget::Proxy),
+                extra_nodes: Vec::new(),
                 temporary_rules: vec![Rule {
                     id: RuleId::new("temporary"),
                     enabled: true,

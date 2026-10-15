@@ -14,8 +14,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
-    ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, Settings, Status, Traffic,
-    list_tag, uses_xray,
+    ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, RuleTarget, Settings, Status,
+    Traffic, list_tag, uses_xray,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
@@ -23,7 +23,9 @@ use rosetun_engine::{
 };
 use rosetun_engine_xray::{SocksEndpoint, XrayHelper};
 use rosetun_ipc::transport::PeerIdentity;
-use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_TEMPORARY_RULES};
+use rosetun_ipc::{
+    ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_EXTRA_NODES, MAX_TEMPORARY_RULES,
+};
 use rosetun_routing::{
     ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
 };
@@ -710,7 +712,7 @@ impl Helper {
         match session
             .start_with_options(
                 &request.node,
-                &request.effective_rule_set(),
+                &renderable_rule_set(&request),
                 &request.lists,
                 &request.settings,
                 StartOptions {
@@ -860,7 +862,7 @@ impl Helper {
         match session
             .start(
                 &request.node,
-                &request.effective_rule_set(),
+                &renderable_rule_set(&request),
                 &request.lists,
                 &request.settings,
                 mode,
@@ -1147,6 +1149,24 @@ fn validate_tun_name(name: &str) -> Result<(), HelperError> {
     Ok(())
 }
 
+fn renderable_rule_set(request: &ConnectRequest) -> RuleSet {
+    let mut rules = request.effective_rule_set();
+    let mut blocked = 0;
+    for rule in &mut rules.rules {
+        if rule.target == RuleTarget::Exit {
+            rule.target = RuleTarget::Block;
+            rule.exit = None;
+            if rule.enabled {
+                blocked += 1;
+            }
+        }
+    }
+    if blocked > 0 {
+        tracing::warn!(count = blocked, "exit rules rendered as reject until exit routing is available");
+    }
+    rules
+}
+
 fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
     validate_tun_name(&request.settings.tun.name)?;
     if request
@@ -1177,7 +1197,32 @@ fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
             "too many list references",
         ));
     }
+    if request.extra_nodes.len() > MAX_EXTRA_NODES {
+        return Err(HelperError::new(
+            ErrorCode::InvalidRequest,
+            "too many extra nodes",
+        ));
+    }
+    let mut exits = std::collections::HashSet::new();
+    if request
+        .extra_nodes
+        .iter()
+        .any(|extra| !exits.insert(&extra.exit))
+    {
+        return Err(HelperError::new(
+            ErrorCode::InvalidRequest,
+            "duplicate extra node for an exit",
+        ));
+    }
     let rules = request.effective_rule_set();
+    if rules.enabled().any(|rule| {
+        rule.target == RuleTarget::Exit && rule.exit.as_ref().is_none_or(|id| !exits.contains(id))
+    }) {
+        return Err(HelperError::new(
+            ErrorCode::InvalidRequest,
+            "exit rule has no matching extra node",
+        ));
+    }
     if request.settings.engine != rosetun_config::EngineKind::SingBox
         && rules
             .enabled()
