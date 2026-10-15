@@ -2458,6 +2458,12 @@ fn supervisor_waits_for_route_and_recovers_without_releasing_protection() {
     NETWORK_PRESENT.store(false, Ordering::Release);
     let now = Instant::now();
     helper.supervise(now);
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert!(helper.session().unwrap().reconnect.is_none());
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+
+    helper.supervise(now + SUPERVISOR_TICK);
     let status = helper.status();
     assert_eq!(status.state, ConnectionState::Reconnecting);
     assert_eq!(
@@ -2495,6 +2501,36 @@ fn supervisor_waits_for_route_and_recovers_without_releasing_protection() {
 }
 
 #[test]
+fn supervisor_resets_missing_route_ticks_after_network_returns() {
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    NETWORK_PRESENT.store(true, Ordering::Release);
+    let (helper, controls, _, reverted) = supervised_helper(true);
+    let helper = helper.with_test_physical_interface(changing_route);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("first protected connect");
+
+    let now = Instant::now();
+    NETWORK_PRESENT.store(false, Ordering::Release);
+    helper.supervise(now);
+    NETWORK_PRESENT.store(true, Ordering::Release);
+    helper.supervise(now + SUPERVISOR_TICK);
+    NETWORK_PRESENT.store(false, Ordering::Release);
+    helper.supervise(now + 2 * SUPERVISOR_TICK);
+
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert!(helper.session().unwrap().reconnect.is_none());
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+
+    helper.supervise(now + 3 * SUPERVISOR_TICK);
+    assert_eq!(helper.status().state, ConnectionState::Reconnecting);
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    NETWORK_PRESENT.store(true, Ordering::Release);
+}
+
+#[test]
 fn supervisor_keeps_protection_on_network_loss_without_auto_reconnect() {
     let _lock = ROUTE_TEST_LOCK.lock().unwrap();
     let (helper, _, _, reverted) = supervised_helper(true);
@@ -2505,7 +2541,10 @@ fn supervisor_keeps_protection_on_network_loss_without_auto_reconnect() {
     request.settings.auto_reconnect = false;
     helper.connect(&request).expect("first protected connect");
     NETWORK_PRESENT.store(false, Ordering::Release);
-    helper.supervise(Instant::now());
+    let now = Instant::now();
+    helper.supervise(now);
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    helper.supervise(now + SUPERVISOR_TICK);
     assert!(matches!(
         helper.status().state,
         ConnectionState::FailedProtected {

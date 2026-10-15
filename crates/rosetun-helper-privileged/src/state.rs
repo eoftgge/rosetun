@@ -189,6 +189,7 @@ struct Session {
     request: Option<ConnectRequest>,
     owner: Arc<Mutex<Option<Vec<u8>>>>,
     reconnect: Option<Reconnect>,
+    missing_route_ticks: u8,
     stopping: bool,
     dns_timeout: Duration,
     dns_attempt_timeout: Duration,
@@ -253,6 +254,7 @@ impl Helper {
                 request: None,
                 owner,
                 reconnect: None,
+                missing_route_ticks: 0,
                 stopping: false,
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
@@ -390,6 +392,7 @@ impl Helper {
             .as_ref()
             .map(|request| request.settings.auto_reconnect)
         else {
+            session.missing_route_ticks = 0;
             self.resumed.store(false, Ordering::Release);
             return;
         };
@@ -404,6 +407,14 @@ impl Helper {
                 .name,
         )
         .is_some();
+        if network_available {
+            session.missing_route_ticks = 0;
+        } else {
+            session.missing_route_ticks = (session.missing_route_ticks + 1).min(2);
+            if session.missing_route_ticks < 2 {
+                return;
+            }
+        }
         if !network_available && !auto_reconnect {
             let protected = session.keeps_protection();
             if protected {
@@ -719,6 +730,7 @@ impl Helper {
         let previous_owner = self.begin_connect(caller)?;
         session.request = None;
         session.reconnect = None;
+        session.missing_route_ticks = 0;
 
         match session
             .start(
