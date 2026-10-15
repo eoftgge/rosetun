@@ -3,7 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{NodeId, XrayUse};
+use crate::{CountryCode, NodeId, XrayUse};
 
 // sing-box#4520: REALITY servers on Xray 26.9.8+ reject sing-box's handshake.
 const XRAY_FOR_REALITY: bool = true;
@@ -35,6 +35,30 @@ pub struct Node {
     pub stream: StreamSettings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
+}
+
+pub fn node_country(name: &str) -> Option<CountryCode> {
+    let indicator = |character: char| {
+        let value = character as u32;
+        (0x1f1e6..=0x1f1ff)
+            .contains(&value)
+            .then(|| (value - 0x1f1e6) as u8 + b'A')
+    };
+    let characters: Vec<_> = name.chars().collect();
+    for pair in characters.windows(2) {
+        if let (Some(first), Some(second)) = (indicator(pair[0]), indicator(pair[1])) {
+            let code = String::from_utf8(vec![first, second]).expect("regional indicators are ASCII");
+            if let Some(country) = CountryCode::parse(&code) {
+                return Some(country);
+            }
+        }
+    }
+
+    name.split(|character: char| !character.is_alphanumeric() && character != '_')
+        .find_map(|word| {
+            let code = if word == "UK" { "GB" } else { word };
+            CountryCode::parse(code)
+        })
 }
 
 impl fmt::Debug for Node {
@@ -234,6 +258,23 @@ pub struct RealityParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn country_from_flag_or_standalone_code() {
+        for (name, expected) in [
+            ("Germany 🇩🇪 server", Some("DE")),
+            ("US server 🇬🇧", Some("GB")),
+            ("Node UK #2", Some("GB")),
+            ("Node DE #2", Some("DE")),
+            ("VPN server", None),
+            ("someUSnode", None),
+            ("VPN_DE", None),
+            ("🇩 test 🇪", None),
+            ("ZZ server", None),
+        ] {
+            assert_eq!(node_country(name).as_ref().map(CountryCode::as_str), expected, "{name}");
+        }
+    }
 
     #[test]
     fn hysteria2_debug_redacts_credentials_and_serde_omits_defaults() {

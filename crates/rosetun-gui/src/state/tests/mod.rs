@@ -59,6 +59,7 @@ fn rule_set(id: &str) -> RuleSet {
             enabled: true,
             matcher: RuleMatcher::Domain(DomainMatch::Exact(domain.into())),
             target: RuleTarget::Proxy,
+            exit: None,
         });
     }
     set
@@ -144,6 +145,7 @@ fn temporary_rule(id: &str, domain: &str) -> Rule {
         enabled: true,
         matcher: RuleMatcher::Domain(DomainMatch::Exact(domain.into())),
         target: RuleTarget::Direct,
+        exit: None,
     }
 }
 

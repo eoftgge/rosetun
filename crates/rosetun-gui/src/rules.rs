@@ -268,6 +268,7 @@ mod tests {
                 } else {
                     RuleTarget::Block
                 },
+                exit: None,
             })
             .collect();
         set
@@ -421,6 +422,7 @@ mod tests {
                 enabled: true,
                 matcher: RuleMatcher::Template(template),
                 target: template.default_target(),
+                exit: None,
             })
             .collect();
         assert_eq!(rule_counts(&set).domains, 2);
@@ -483,6 +485,7 @@ mod tests {
             enabled: true,
             matcher: RuleMatcher::Domain(DomainMatch::Exact("session.example".into())),
             target: RuleTarget::Direct,
+            exit: None,
         }];
         assert_eq!(rule_counts_slice(&rules).domains, 1);
         let filter = RuleFilter {

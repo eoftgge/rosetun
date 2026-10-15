@@ -587,18 +587,21 @@ mod tests {
                     enabled: true,
                     matcher: RuleMatcher::Domain(DomainMatch::Suffix("google.com".to_owned())),
                     target: RuleTarget::Proxy,
+                    exit: None,
                 },
                 Rule {
                     id: RuleId::new("r2"),
                     enabled: true,
                     matcher: RuleMatcher::Process(ProcessMatch::Name("steam.exe".to_owned())),
                     target: RuleTarget::Direct,
+                    exit: None,
                 },
                 Rule {
                     id: RuleId::new("r3"),
                     enabled: false,
                     matcher: RuleMatcher::Domain(DomainMatch::Exact("blocked.test".to_owned())),
                     target: RuleTarget::Block,
+                    exit: None,
                 },
             ],
             default_target: RuleTarget::Proxy,
@@ -1276,6 +1279,7 @@ mod tests {
                 enabled: true,
                 matcher: matcher.clone(),
                 target: RuleTarget::Direct,
+                exit: None,
             })
             .collect();
 
@@ -1362,6 +1366,7 @@ mod tests {
             enabled: true,
             matcher: RuleMatcher::Process(ProcessMatch::Name("rosetun-gui.exe".into())),
             target: RuleTarget::Direct,
+            exit: None,
         });
 
         for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
@@ -1404,18 +1409,21 @@ mod tests {
                 enabled: true,
                 matcher: RuleMatcher::Domain(DomainMatch::Exact("direct.example".to_owned())),
                 target: RuleTarget::Direct,
+                exit: None,
             },
             Rule {
                 id: RuleId::new("suffix"),
                 enabled: true,
                 matcher: RuleMatcher::Domain(DomainMatch::Suffix("proxy.example".to_owned())),
                 target: RuleTarget::Proxy,
+                exit: None,
             },
             Rule {
                 id: RuleId::new("keyword"),
                 enabled: true,
                 matcher: RuleMatcher::Domain(DomainMatch::Keyword("blocked".to_owned())),
                 target: RuleTarget::Block,
+                exit: None,
             },
         ];
         rule_set.default_target = RuleTarget::Proxy;

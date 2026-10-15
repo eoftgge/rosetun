@@ -118,6 +118,10 @@ impl RuleCapabilities {
         lists: true,
     };
 
+    pub fn supports_target(self, target: rosetun_config::RuleTarget) -> bool {
+        target != rosetun_config::RuleTarget::Exit
+    }
+
     pub fn supports(self, matcher: &rosetun_config::RuleMatcher) -> bool {
         match matcher {
             rosetun_config::RuleMatcher::Domain(rosetun_config::DomainMatch::Exact(_)) => {

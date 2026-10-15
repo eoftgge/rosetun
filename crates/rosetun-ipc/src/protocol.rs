@@ -124,6 +124,12 @@ impl std::fmt::Debug for ConnectRequest {
 
 impl ConnectRequest {
     pub fn from_config(config: &AppConfig) -> Result<Self, ConnectRequestError> {
+        let (request, blocked) = Self::from_config_unlogged(config)?;
+        warn_blocked_exits(blocked);
+        Ok(request)
+    }
+
+    fn from_config_unlogged(config: &AppConfig) -> Result<(Self, usize), ConnectRequestError> {
         let selection = config
             .active
             .as_ref()
@@ -132,22 +138,26 @@ impl ConnectRequest {
             .active_node()
             .ok_or(ConnectRequestError::NodeNotFound)?;
 
-        let rule_set = match &config.active_rule_set {
+        let mut rule_set = match &config.active_rule_set {
             Some(_) => config
                 .active_rules()
                 .map(RuleSet::with_templates_expanded)
                 .ok_or(ConnectRequestError::RuleSetNotFound)?,
             None => RuleSet::new(RuleSetId::new("default"), "Default", RuleTarget::Proxy),
         };
+        let blocked = block_exit_rules(&mut rule_set.rules);
 
-        Ok(Self {
-            selection: selection.clone(),
-            node: node.clone(),
-            rule_set,
-            temporary_rules: Vec::new(),
-            lists: Vec::new(),
-            settings: config.settings.clone(),
-        })
+        Ok((
+            Self {
+                selection: selection.clone(),
+                node: node.clone(),
+                rule_set,
+                temporary_rules: Vec::new(),
+                lists: Vec::new(),
+                settings: config.settings.clone(),
+            },
+            blocked,
+        ))
     }
 
     pub fn for_apply(
@@ -155,7 +165,7 @@ impl ConnectRequest {
         running: Option<&Settings>,
         temporary_rules: Vec<Rule>,
     ) -> Result<Self, ConnectRequestError> {
-        let mut request = Self::from_config(config)?;
+        let (mut request, blocked) = Self::from_config_unlogged(config)?;
         if let Some(running) = running {
             request.settings.engine = running.engine;
             request.settings.xray = running.xray;
@@ -164,6 +174,8 @@ impl ConnectRequest {
             request.settings.allow_lan = running.allow_lan;
         }
         request.temporary_rules = temporary_rules;
+        let blocked = blocked + block_exit_rules(&mut request.temporary_rules);
+        warn_blocked_exits(blocked);
         Ok(request)
     }
 
@@ -174,6 +186,24 @@ impl ConnectRequest {
             .splice(0..0, self.temporary_rules.iter().cloned());
         rules
     }
+}
+
+fn warn_blocked_exits(count: usize) {
+    if count > 0 {
+        tracing::warn!(count, "exit rules blocked until exit routing is available");
+    }
+}
+
+fn block_exit_rules(rules: &mut [Rule]) -> usize {
+    let mut blocked = 0;
+    for rule in rules {
+        if rule.target == RuleTarget::Exit {
+            rule.target = RuleTarget::Block;
+            rule.exit = None;
+            blocked += 1;
+        }
+    }
+    blocked
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -331,9 +361,9 @@ mod tests {
         assert_eq!(super::PROTOCOL_VERSION, 10);
     }
     use rosetun_config::{
-        AppConfig, EngineKind, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
-        RuleSetId, RuleTarget, RuleTemplate, Selection, StreamSettings, Subscription,
-        SubscriptionId, TrojanParams,
+        AppConfig, CountryCode, EngineKind, Exit, ExitId, ExitTarget, Node, NodeId, Outbound,
+        Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection,
+        StreamSettings, Subscription, SubscriptionId, TrojanParams,
     };
 
     use super::{ConnectRequest, ConnectRequestError, ListFormat, ListRef, ProbeRequest, Request};
@@ -409,6 +439,7 @@ mod tests {
             enabled: true,
             matcher: RuleMatcher::IpCidr("192.0.2.0/24".to_owned()),
             target: RuleTarget::Block,
+            exit: None,
         });
 
         AppConfig {
@@ -449,6 +480,48 @@ mod tests {
     }
 
     #[test]
+    fn exit_rules_are_blocked_in_requests_until_routing_exists() {
+        let mut config = selected_config();
+        let exit_id = ExitId::new("1");
+        config.exits.push(Exit {
+            id: exit_id.clone(),
+            name: "Example exit".into(),
+            target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
+        });
+        config.rule_sets[0].rules.push(Rule {
+            id: RuleId::new("exit"),
+            enabled: true,
+            matcher: RuleMatcher::Template(RuleTemplate::Youtube),
+            target: RuleTarget::Exit,
+            exit: Some(exit_id.clone()),
+        });
+        assert!(config.validate().is_ok());
+
+        let request = ConnectRequest::from_config(&config).unwrap();
+        let exit_rules: Vec<_> = request
+            .rule_set
+            .rules
+            .iter()
+            .filter(|rule| rule.id.as_str() == "exit")
+            .collect();
+        assert_eq!(exit_rules.len(), RuleTemplate::Youtube.matchers().len());
+        assert!(exit_rules.iter().all(|rule| rule.target == RuleTarget::Block && rule.exit.is_none()));
+        assert_eq!(request.rule_set.rules[0].target, RuleTarget::Block);
+        assert_eq!(config.rule_sets[0].rules[1].target, RuleTarget::Exit);
+
+        let temporary = Rule {
+            id: RuleId::new("temporary"),
+            enabled: true,
+            matcher: RuleMatcher::IpCidr("198.51.100.0/24".into()),
+            target: RuleTarget::Exit,
+            exit: Some(exit_id),
+        };
+        let applied = ConnectRequest::for_apply(&config, None, vec![temporary]).unwrap();
+        assert_eq!(applied.temporary_rules[0].target, RuleTarget::Block);
+        assert!(applied.temporary_rules[0].exit.is_none());
+    }
+
+    #[test]
     fn request_contains_selected_node_rules_and_settings() {
         let config = selected_config();
 
@@ -471,6 +544,7 @@ mod tests {
             enabled: true,
             matcher: RuleMatcher::IpCidr("198.51.100.0/24".to_owned()),
             target: RuleTarget::Direct,
+            exit: None,
         };
 
         let request = ConnectRequest::for_apply(&config, None, vec![temporary.clone()]).unwrap();
@@ -539,6 +613,7 @@ mod tests {
             enabled: false,
             matcher: RuleMatcher::Template(RuleTemplate::Torrents),
             target: RuleTarget::Block,
+            exit: None,
         };
         config.rule_sets[0].rules.insert(0, template.clone());
         let request = ConnectRequest::from_config(&config).unwrap();
@@ -614,12 +689,14 @@ mod tests {
                 enabled: true,
                 matcher: RuleMatcher::IpCidr("198.51.100.0/24".into()),
                 target: RuleTarget::Direct,
+                exit: None,
             },
             Rule {
                 id: RuleId::new("second"),
                 enabled: false,
                 matcher: RuleMatcher::IpCidr("203.0.113.0/24".into()),
                 target: RuleTarget::Block,
+                exit: None,
             },
         ];
         let base = request.rule_set.clone();
@@ -643,6 +720,7 @@ mod tests {
                 "private.example.com".into(),
             )),
             target: RuleTarget::Direct,
+            exit: None,
         });
         for debug in [
             format!("{request:?}"),

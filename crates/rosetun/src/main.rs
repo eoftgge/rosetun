@@ -327,7 +327,7 @@ fn temporary_rule_line(rule: &Rule) -> String {
     let target = match rule.target {
         RuleTarget::Proxy => "proxy",
         RuleTarget::Direct => "direct",
-        RuleTarget::Block => "block",
+        RuleTarget::Block | RuleTarget::Exit => "block",
     };
     let value = match &rule.matcher {
         RuleMatcher::Domain(DomainMatch::Exact(value)) => format!("domain exact {value}"),
@@ -802,6 +802,7 @@ mod tests {
             enabled: true,
             matcher: RuleMatcher::Domain(DomainMatch::Exact("example.com\nspoofed".into())),
             target: RuleTarget::Direct,
+            exit: None,
         };
         assert_eq!(
             temporary_rule_line(&rule),

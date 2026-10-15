@@ -605,6 +605,7 @@ mod tests {
             enabled: true,
             matcher: RuleMatcher::IpCidr("192.0.2.0/24".to_owned()),
             target: RuleTarget::Block,
+            exit: None,
         });
 
         AppConfig {
@@ -1181,6 +1182,7 @@ mod tests {
                                 "{id}.example.com"
                             ))),
                             target: RuleTarget::Direct,
+                            exit: None,
                         });
                         Ok::<_, StoreError>(())
                     })

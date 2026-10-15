@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod exit;
 mod hash;
 mod ids;
 mod list;
@@ -12,8 +13,9 @@ mod settings;
 mod subscription;
 mod uploaded_list;
 
+pub use exit::{CountryCode, Exit, ExitTarget};
 pub use hash::digest_hex;
-pub use ids::{ListId, NodeId, RuleId, RuleSetId, SubscriptionId};
+pub use ids::{ExitId, ListId, NodeId, RuleId, RuleSetId, SubscriptionId};
 pub use list::{List, ListCategoryError, ListFormat, ListSource};
 pub use list_validation::{
     ListValidationError, MAX_UPLOADED_LIST_BYTES, MAX_UPLOADED_LIST_ENTRIES, normalize_source,
@@ -21,7 +23,7 @@ pub use list_validation::{
 };
 pub use node::{
     Hysteria2Params, Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
-    TlsParams, Transport, TrojanParams, VlessParams, VmessParams, uses_xray,
+    TlsParams, Transport, TrojanParams, VlessParams, VmessParams, node_country, uses_xray,
 };
 pub use report::redact_report_text;
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
@@ -35,7 +37,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 4;
+pub const CONFIG_VERSION: u32 = 5;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -127,6 +129,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub lists: Vec<List>,
     #[serde(default)]
+    pub exits: Vec<Exit>,
+    #[serde(default)]
     pub rule_sets: Vec<RuleSet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<Selection>,
@@ -146,6 +150,7 @@ impl Default for AppConfig {
             interface: InterfaceSettings::default(),
             subscriptions: Vec::new(),
             lists: Vec::new(),
+            exits: Vec::new(),
             rule_sets: Vec::new(),
             active: None,
             active_rule_set: None,
@@ -191,6 +196,10 @@ pub enum ConfigError {
     MissingList,
     #[error("a rule has an invalid list category")]
     InvalidListCategory,
+    #[error("an exit ID is empty or duplicated")]
+    InvalidExitId,
+    #[error("a rule has an invalid exit reference")]
+    InvalidRuleExit,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -228,6 +237,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             1 => migrate_1_to_2(config),
             2 => migrate_2_to_3(config),
             3 => migrate_3_to_4(config),
+            4 => migrate_4_to_5(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -258,6 +268,10 @@ fn migrate_3_to_4(config: &mut Map<String, Value>) {
         }
         settings.insert("xray".to_owned(), Value::from("auto"));
     }
+}
+
+fn migrate_4_to_5(config: &mut Map<String, Value>) {
+    config.insert("exits".to_owned(), Value::Array(Vec::new()));
 }
 
 impl AppConfig {
@@ -317,7 +331,25 @@ impl AppConfig {
                 }
             }
         }
+        let mut exit_ids = std::collections::HashSet::new();
+        for exit in &self.exits {
+            if exit.id.as_str().is_empty() || !exit_ids.insert(&exit.id) {
+                return Err(ConfigError::InvalidExitId);
+            }
+        }
+        if self
+            .rule_sets
+            .iter()
+            .any(|set| set.default_target == RuleTarget::Exit)
+        {
+            return Err(ConfigError::InvalidRuleExit);
+        }
         for rule in self.rule_sets.iter().flat_map(|set| &set.rules) {
+            match (rule.target, &rule.exit) {
+                (RuleTarget::Exit, Some(id)) if exit_ids.contains(id) => {}
+                (RuleTarget::Proxy | RuleTarget::Direct | RuleTarget::Block, None) => {}
+                _ => return Err(ConfigError::InvalidRuleExit),
+            }
             if let RuleMatcher::List { list, category } = &rule.matcher {
                 let entry = self
                     .lists

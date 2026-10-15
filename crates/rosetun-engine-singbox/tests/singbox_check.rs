@@ -69,6 +69,7 @@ fn sing_box_check_validates_local_rule_set_config() {
             category: None,
         },
         target: RuleTarget::Block,
+        exit: None,
     });
     let node = Node {
         id: NodeId::new("example-node"),

@@ -409,7 +409,7 @@ pub(crate) fn target_label(target: RuleTarget) -> String {
     match target {
         RuleTarget::Proxy => tr!("proxy"),
         RuleTarget::Direct => tr!("direct"),
-        RuleTarget::Block => tr!("block"),
+        RuleTarget::Block | RuleTarget::Exit => tr!("block"),
     }
 }
 
@@ -417,7 +417,7 @@ pub(crate) fn target_color(target: RuleTarget) -> Color32 {
     match target {
         RuleTarget::Proxy => theme::ROSE_LIGHT,
         RuleTarget::Direct => theme::TEXT_MUTED,
-        RuleTarget::Block => theme::ERROR,
+        RuleTarget::Block | RuleTarget::Exit => theme::ERROR,
     }
 }
 

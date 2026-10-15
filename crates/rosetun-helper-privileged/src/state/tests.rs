@@ -3915,6 +3915,7 @@ fn request_with_new_rules(request: &ConnectRequest) -> ConnectRequest {
         enabled: true,
         matcher: RuleMatcher::IpCidr("192.0.2.0/24".to_owned()),
         target: RuleTarget::Block,
+        exit: None,
     });
     updated
 }
@@ -3925,6 +3926,7 @@ fn temporary_rule() -> Rule {
         enabled: true,
         matcher: RuleMatcher::Domain(DomainMatch::Exact("example.com".to_owned())),
         target: RuleTarget::Direct,
+        exit: None,
     }
 }
 
@@ -4097,6 +4099,7 @@ fn apply_temporary_rule_precedes_base_and_survives_supervisor_restart() {
         enabled: true,
         matcher: RuleMatcher::Domain(DomainMatch::Exact("example.com".to_owned())),
         target: RuleTarget::Block,
+        exit: None,
     };
     request.rule_set.rules.push(base.clone());
     helper.connect(&request).expect("connect");
@@ -5416,6 +5419,7 @@ fn with_list_rule(
             category: None,
         },
         target: RuleTarget::Direct,
+        exit: None,
     });
     request.lists = vec![reference];
     request
@@ -5503,6 +5507,7 @@ fn enabled_temporary_list_rule_without_reference_is_list_missing() {
             category: None,
         },
         target: RuleTarget::Block,
+        exit: None,
     });
     assert_eq!(
         helper.connect(&request).unwrap_err().code,
@@ -5524,6 +5529,7 @@ fn skipped_category_rule_does_not_require_a_stored_list() {
             category: Some("removed".into()),
         },
         target: RuleTarget::Block,
+        exit: None,
     });
     helper
         .connect(&request)

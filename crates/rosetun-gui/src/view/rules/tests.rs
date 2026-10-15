@@ -14,6 +14,7 @@ fn drag_set() -> RuleSet {
                 "{index}.example"
             ))),
             target: RuleTarget::Proxy,
+            exit: None,
         })
         .collect();
     set
@@ -541,6 +542,7 @@ fn template_cards_keep_a_row_of_equal_sized_non_overlapping_cards() {
                     enabled: true,
                     matcher: RuleMatcher::Template(template),
                     target: template.default_target(),
+                    exit: None,
                 })
                 .collect();
         }

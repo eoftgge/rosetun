@@ -385,7 +385,7 @@ fn route_section_with_lists(
     let mut used_lists = Vec::<&ListRef>::new();
 
     for rule in rules.enabled() {
-        if !capabilities.supports(&rule.matcher) {
+        if !capabilities.supports(&rule.matcher) || !capabilities.supports_target(rule.target) {
             unsupported.push(rule.id.clone());
             continue;
         }
@@ -426,7 +426,7 @@ fn route_section_with_lists(
     let final_outbound = match rules.default_target {
         RuleTarget::Proxy => TAG_PROXY,
         RuleTarget::Direct => TAG_DIRECT,
-        RuleTarget::Block => {
+        RuleTarget::Block | RuleTarget::Exit => {
             route_rules.push(json!({ "action": "reject" }));
             TAG_DIRECT
         }
@@ -518,7 +518,7 @@ fn route_action(value: &mut Map<String, Value>, target: RuleTarget) {
                 .into(),
             );
         }
-        RuleTarget::Block => {
+        RuleTarget::Block | RuleTarget::Exit => {
             value.insert("action".into(), "reject".into());
         }
     }
@@ -539,6 +539,7 @@ mod tests {
             enabled: true,
             matcher: RuleMatcher::Process(ProcessMatch::Name("Telegram.exe".into())),
             target: RuleTarget::Direct,
+            exit: None,
         };
         assert_eq!(
             route_rule(&rule).unwrap()["process_path_regex"],
@@ -627,6 +628,7 @@ mod tests {
                 enabled: true,
                 matcher,
                 target,
+                exit: None,
             });
         }
         let rules = rules.with_templates_expanded();
@@ -795,6 +797,7 @@ mod tests {
                 category: None,
             },
             target: RuleTarget::Direct,
+            exit: None,
         };
         assert_eq!(route_rule(&list), None);
         set.rules.push(list.clone());
@@ -822,6 +825,7 @@ mod tests {
                     category: None,
                 },
                 target,
+                exit: None,
             });
         }
         let (route, unsupported) =
@@ -852,6 +856,23 @@ mod tests {
     }
 
     #[test]
+    fn exit_target_is_unsupported_until_renderer_can_route_it() {
+        let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
+        set.rules.push(Rule {
+            id: RuleId::new("exit"),
+            enabled: true,
+            matcher: RuleMatcher::IpCidr("192.0.2.0/24".into()),
+            target: RuleTarget::Exit,
+            exit: Some(rosetun_config::ExitId::new("1")),
+        });
+        let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
+        assert_eq!(unsupported, vec![RuleId::new("exit")]);
+        assert!(!route["rules"].as_array().unwrap().iter().any(|rule| {
+            rule["ip_cidr"] == serde_json::json!(["192.0.2.0/24"])
+        }));
+    }
+
+    #[test]
     fn missing_list_reference_is_unsupported_without_affecting_other_list_rules() {
         let mut set = RuleSet::new(RuleSetId::new("set"), "Test", RuleTarget::Proxy);
         let vanished = RuleId::new("vanished");
@@ -863,6 +884,7 @@ mod tests {
                 category: Some("missing@ads".into()),
             },
             target: RuleTarget::Block,
+            exit: None,
         });
         let remaining = ListId::new("still-present");
         let tag = list_tag(&remaining, None);
@@ -874,6 +896,7 @@ mod tests {
                 category: None,
             },
             target: RuleTarget::Direct,
+            exit: None,
         });
         let reference = ListRef {
             tag: tag.clone(),
@@ -902,6 +925,7 @@ mod tests {
             enabled: true,
             matcher: RuleMatcher::Template(RuleTemplate::RussianSites),
             target: RuleTarget::Direct,
+            exit: None,
         };
         assert_eq!(route_rule(&template), None);
         set.rules.push(template.clone());

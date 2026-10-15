@@ -205,6 +205,7 @@ pub fn add_rule(
             enabled: true,
             matcher,
             target,
+            exit: None,
         };
         set.rules.insert(0, rule.clone());
         Ok(rule)
@@ -258,6 +259,7 @@ pub fn add_rules(
                 enabled: true,
                 matcher,
                 target,
+                exit: None,
             });
         }
         if added.is_empty() {
@@ -302,6 +304,7 @@ pub fn temporary_rules(
             enabled: true,
             matcher,
             target,
+            exit: None,
         });
     }
     AddedRules { added, skipped }

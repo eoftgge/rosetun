@@ -755,6 +755,7 @@ fn add_template_requires_a_selected_set_and_no_existing_template_or_edit() {
         enabled: false,
         matcher: RuleMatcher::Template(template),
         target: RuleTarget::Block,
+        exit: None,
     });
     assert!(state.act(Action::AddTemplate(template)).is_none());
 }
@@ -770,6 +771,7 @@ fn remove_template_uses_the_rule_id_and_requires_presence() {
         enabled: true,
         matcher: RuleMatcher::Template(template),
         target: RuleTarget::Proxy,
+        exit: None,
     });
     assert!(matches!(
         state.act(Action::RemoveTemplate(template)),

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ListId, RuleId, RuleSetId};
+use crate::{ExitId, ListId, RuleId, RuleSetId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rule {
@@ -11,6 +11,8 @@ pub struct Rule {
     pub enabled: bool,
     pub matcher: RuleMatcher,
     pub target: RuleTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<ExitId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +173,7 @@ pub enum RuleTarget {
     Proxy,
     Direct,
     Block,
+    Exit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,18 +236,21 @@ mod tests {
             enabled: true,
             matcher: RuleMatcher::Domain(DomainMatch::Exact("a.example".into())),
             target: RuleTarget::Block,
+            exit: None,
         };
         let template = Rule {
             id: RuleId::new("template"),
             enabled: false,
             matcher: RuleMatcher::Template(RuleTemplate::Torrents),
-            target: RuleTarget::Block,
+            target: RuleTarget::Exit,
+            exit: Some(ExitId::new("selected")),
         };
         let after = Rule {
             id: RuleId::new("b"),
             enabled: true,
             matcher: RuleMatcher::Process(ProcessMatch::Name("b.exe".into())),
             target: RuleTarget::Direct,
+            exit: None,
         };
         set.rules = vec![before.clone(), template.clone(), after.clone()];
         let expanded = set.with_templates_expanded();
@@ -260,7 +266,8 @@ mod tests {
         {
             assert_eq!(rule.id, template.id);
             assert!(!rule.enabled);
-            assert_eq!(rule.target, RuleTarget::Block);
+            assert_eq!(rule.target, RuleTarget::Exit);
+            assert_eq!(rule.exit, template.exit);
             assert_eq!(rule.matcher, matcher);
         }
         assert_eq!(set.rules[1], template);
@@ -274,6 +281,7 @@ mod tests {
             enabled: false,
             matcher: RuleMatcher::IpCidr("10.0.0.0/8".into()),
             target: RuleTarget::Block,
+            exit: None,
         });
         assert_eq!(set.with_templates_expanded(), set);
     }

@@ -1,9 +1,9 @@
 mod support;
 
 use rosetun_config::{
-    AppConfig, CONFIG_VERSION, ConfigError, EngineKind, FormatError, Hysteria2Params, List,
-    ListFormat, ListId, ListSource, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleTarget,
-    StreamSettings, TlsMode, TlsParams, Transport, from_json,
+    AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId, ExitTarget,
+    FormatError, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId, Outbound,
+    Rule, RuleId, RuleMatcher, RuleTarget, StreamSettings, TlsMode, TlsParams, Transport, from_json,
 };
 use serde_json::{Value, json};
 
@@ -13,6 +13,7 @@ const ALPHA_3: &[u8] = include_bytes!("fixtures/v0.1.0-alpha.3.json");
 const V2: &[u8] = include_bytes!("fixtures/v2.json");
 const V3: &[u8] = include_bytes!("fixtures/v3.json");
 const V4: &[u8] = include_bytes!("fixtures/v4.json");
+const V5: &[u8] = include_bytes!("fixtures/v5.json");
 
 fn current_config() -> AppConfig {
     let mut config = support::legacy_config();
@@ -78,6 +79,7 @@ fn current_config() -> AppConfig {
             category: Some("example@cn".to_owned()),
         },
         target: RuleTarget::Direct,
+        exit: None,
     });
     config
 }
@@ -96,8 +98,8 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 4,
-        "released fixtures require format version four"
+        CONFIG_VERSION, 5,
+        "released fixtures require format version five"
     );
     let expected = expected_migrated_legacy_config();
 
@@ -121,15 +123,24 @@ fn released_configurations_migrate_to_the_expected_configuration() {
 #[test]
 fn current_configuration_fixture_guards_the_serialized_format() {
     let expected = current_config();
-    let (loaded, migrated_from) = from_json(V4).expect("current fixture should load");
+    let (loaded, migrated_from) = from_json(V5).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V4),
-        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v4.json"
+        value(V5),
+        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v5.json"
     );
+}
+
+#[test]
+fn version_four_adds_empty_exits() {
+    let (config, migrated_from) = from_json(V4).expect("version four should migrate");
+    assert_eq!(migrated_from, Some(4));
+    assert_eq!(config, current_config());
+    assert!(config.exits.is_empty());
+    assert_eq!(value(V5)["exits"], json!([]));
 }
 
 #[test]
@@ -224,6 +235,47 @@ fn invalid_and_future_versions_are_rejected_without_echoing_sensitive_values() {
     assert!(matches!(error, FormatError::UnexpectedValue));
     assert!(!error.to_string().contains(secret));
     assert!(!error.to_string().contains("test-secret"));
+}
+
+#[test]
+fn exit_references_and_country_codes_are_validated() {
+    let mut config = current_config();
+    let id = ExitId::new("1");
+    config.exits.push(Exit {
+        id: id.clone(),
+        name: "Example exit".into(),
+        target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
+    });
+    let rule = &mut config.rule_sets[0].rules[0];
+    rule.target = RuleTarget::Exit;
+    rule.exit = Some(id.clone());
+    assert!(config.validate().is_ok());
+    let encoded = serde_json::to_vec(&config).unwrap();
+    assert_eq!(from_json(&encoded).unwrap().0, config);
+
+    config.exits.clear();
+    assert!(matches!(config.validate(), Err(ConfigError::InvalidRuleExit)));
+    config.exits.push(Exit {
+        id: id.clone(),
+        name: "Example exit".into(),
+        target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
+    });
+    config.rule_sets[0].rules[0].exit = None;
+    assert!(matches!(config.validate(), Err(ConfigError::InvalidRuleExit)));
+    config.rule_sets[0].rules[0].target = RuleTarget::Direct;
+    config.rule_sets[0].rules[0].exit = Some(id.clone());
+    assert!(matches!(config.validate(), Err(ConfigError::InvalidRuleExit)));
+    config.exits.push(config.exits[0].clone());
+    assert!(matches!(config.validate(), Err(ConfigError::InvalidExitId)));
+
+    for code in ["uk", "UK", "ZZ", "U1"] {
+        let mut input = value(V5);
+        input["exits"] = json!([{"id":"1","name":"Example exit","target":{"country":code}}]);
+        assert!(matches!(
+            from_json(&serde_json::to_vec(&input).unwrap()),
+            Err(FormatError::UnexpectedValue)
+        ));
+    }
 }
 
 #[test]

@@ -115,6 +115,7 @@ mod tests {
                     enabled: true,
                     matcher: RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
                     target: RuleTarget::Direct,
+                    exit: None,
                 }],
                 lists: Vec::new(),
                 settings: Settings::default(),
@@ -137,6 +138,7 @@ mod tests {
                 enabled: true,
                 matcher: RuleMatcher::IpCidr("192.0.2.0/24".into()),
                 target: RuleTarget::Block,
+                exit: None,
             }]),
         };
         assert_eq!(roundtrip(&response), response);

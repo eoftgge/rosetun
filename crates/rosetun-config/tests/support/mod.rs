@@ -31,6 +31,7 @@ fn rule(id: &str, enabled: bool, matcher: RuleMatcher, target: RuleTarget) -> Ru
         enabled,
         matcher,
         target,
+        exit: None,
     }
 }
 
@@ -196,6 +197,7 @@ pub(crate) fn legacy_config() -> AppConfig {
             },
         ],
         lists: Vec::new(),
+        exits: Vec::new(),
         rule_sets: vec![
             RuleSet {
                 id: rule_set.clone(),

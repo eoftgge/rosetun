@@ -96,7 +96,9 @@ fn config(language: Language, error: &ConfigError) -> String {
         ConfigError::InvalidListId
         | ConfigError::InvalidListMetadata
         | ConfigError::MissingList
-        | ConfigError::InvalidListCategory => error.to_string(),
+        | ConfigError::InvalidListCategory
+        | ConfigError::InvalidExitId
+        | ConfigError::InvalidRuleExit => error.to_string(),
     }
 }
 

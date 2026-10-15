@@ -105,6 +105,7 @@ fn list_batch_limit_includes_existing_rules_in_the_selected_set() {
                 category: Some("alpha".into()),
             },
             target: RuleTarget::Proxy,
+            exit: None,
         });
     }
     let existing = state.selected_list_rule_count();
@@ -141,6 +142,7 @@ fn editing_list_rule_keeps_one_category() {
             category: Some("alpha".into()),
         },
         target: RuleTarget::Proxy,
+        exit: None,
     });
     state.act(Action::OpenEditRule(id));
     let dialog = state.rules.screen.add.as_mut().unwrap();
@@ -373,6 +375,7 @@ fn list_rule_requires_a_dat_category_and_submits_a_valid_matcher() {
             enabled: true,
             matcher,
             target: RuleTarget::Proxy,
+            exit: None,
         });
     state.reduce(WorkerEvent::Config {
         generation: 1,
@@ -608,6 +611,7 @@ fn background_update_of_temporary_list_needs_an_enabled_rule() {
             category: None,
         },
         target: RuleTarget::Block,
+        exit: None,
     });
     background_update_list(&mut state, temporary.clone());
     assert!(matches!(
@@ -659,6 +663,7 @@ fn manual_update_of_temporary_list_applies_on_leave() {
             category: None,
         },
         target: RuleTarget::Block,
+        exit: None,
     });
     state.reduce(WorkerEvent::UpdateList {
         id: temporary.id.clone(),

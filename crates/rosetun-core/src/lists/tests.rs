@@ -125,6 +125,7 @@ fn missing_category_inspection_covers_every_set_and_temporary_rule_without_writi
             category: Some("example@cn".into()),
         },
         target: RuleTarget::Direct,
+        exit: None,
     };
     let mut config = store.load().unwrap();
     config.rule_sets = ["first", "second"]

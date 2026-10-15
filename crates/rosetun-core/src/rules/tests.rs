@@ -53,6 +53,8 @@ fn rule(id: &str, value: &str) -> Rule {
         enabled: true,
         matcher: domain(value),
         target: RuleTarget::Proxy,
+        exit: None,
+    exit: None,
     }
 }
 

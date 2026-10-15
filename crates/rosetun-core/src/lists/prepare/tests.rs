@@ -71,6 +71,8 @@ fn list_rule(id: &str, list: ListId, category: Option<&str>) -> Rule {
             category: category.map(str::to_owned),
         },
         target: RuleTarget::Direct,
+        exit: None,
+    exit: None,
     }
 }
 
