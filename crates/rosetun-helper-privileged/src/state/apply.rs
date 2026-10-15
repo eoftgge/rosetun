@@ -94,6 +94,7 @@ impl Helper {
         } else {
             None
         };
+        let rules = renderable_rule_set(request);
         render_config(
             backend,
             &RenderRequest {
@@ -103,7 +104,7 @@ impl Helper {
                     username: socks.username(),
                     password: socks.password(),
                 }),
-                rules: &renderable_rule_set(request),
+                rules: &rules,
                 lists: &request.lists,
                 settings: &request.settings,
                 control: None,
@@ -164,7 +165,7 @@ impl Helper {
         match session
             .start(
                 &request.node,
-                &renderable_rule_set(request),
+                &rules,
                 &request.lists,
                 &request.settings,
                 mode,

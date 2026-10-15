@@ -219,7 +219,7 @@ impl App {
 
     fn dispatch(&self, job: Job) {
         match job {
-            Job::Connect => self.workers.connect(),
+            Job::Connect(inputs) => self.workers.connect(inputs),
             Job::CheckSystem { request, own_alias } => {
                 self.workers.check_system(request, own_alias)
             }

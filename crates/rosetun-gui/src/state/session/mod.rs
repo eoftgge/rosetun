@@ -1,7 +1,12 @@
-use rosetun_config::{ConnectionState, Rule, RuleId, Status};
-use rosetun_core::AppliedSnapshot;
-use rosetun_ipc::{ClientError, ConnectRequest, ConnectRequestError, ErrorCode, HelperError};
+use std::time::Duration;
 
+use rosetun_config::{ConnectionState, ExitId, Rule, RuleId, Selection, Status};
+use rosetun_core::AppliedSnapshot;
+use rosetun_ipc::{
+    ClientError, ConnectRequest, ConnectRequestError, ErrorCode, ExitContext, HelperError,
+};
+
+use super::subscriptions::PingResult;
 use super::{Action, Job, Screen, State, TunnelDelay};
 use crate::errors;
 use crate::rules::RuleFilter;
@@ -142,8 +147,25 @@ impl AutoApplyIntent {
     }
 }
 
+#[derive(Default, PartialEq, Eq)]
+pub(crate) struct ExitInputs {
+    delays: Vec<(Selection, Duration)>,
+    selected: Vec<(ExitId, Selection)>,
+}
+
+impl ExitInputs {
+    pub(crate) fn context(&self) -> ExitContext<'_> {
+        ExitContext {
+            delays: &self.delays,
+            selected: &self.selected,
+        }
+    }
+}
+
 pub(crate) struct SessionState {
     cached_request: Option<Result<ConnectRequest, ConnectRequestError>>,
+    cached_temporary_rules: Vec<Rule>,
+    cached_exit_inputs: ExitInputs,
     #[cfg(test)]
     pub(in crate::state) request_builds: usize,
     pub(super) session_request: Option<ConnectRequest>,
@@ -172,6 +194,8 @@ impl Default for SessionState {
     fn default() -> Self {
         Self {
             cached_request: None,
+            cached_temporary_rules: Vec::new(),
+            cached_exit_inputs: ExitInputs::default(),
             #[cfg(test)]
             request_builds: 0,
             session_request: None,
@@ -234,13 +258,50 @@ impl SessionState {
 }
 
 impl State {
-    pub(super) fn refresh_cached_request(&mut self) {
-        if self
+    pub(super) fn exit_inputs(&self) -> ExitInputs {
+        let delays = self
+            .config
+            .subscriptions
+            .iter()
+            .flat_map(|sub| {
+                sub.nodes.iter().filter_map(|node| {
+                    let delay = match self
+                        .subscriptions
+                        .pings
+                        .get(&(sub.id.clone(), node.id.clone()))
+                    {
+                        Some(PingResult::Works(delay) | PingResult::Answered(delay)) => *delay,
+                        _ => return None,
+                    };
+                    Some((
+                        Selection {
+                            subscription: sub.id.clone(),
+                            node: node.id.clone(),
+                        },
+                        delay,
+                    ))
+                })
+            })
+            .collect();
+        let selected = self
             .session
-            .cached_request
+            .session_request
             .as_ref()
-            .and_then(|request| request.as_ref().ok())
-            .is_some_and(|request| request.temporary_rules != self.session.temporary_rules)
+            .map(|request| {
+                request
+                    .extra_nodes
+                    .iter()
+                    .map(|extra| (extra.exit.clone(), extra.selection.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        ExitInputs { delays, selected }
+    }
+
+    pub(super) fn refresh_cached_request(&mut self) {
+        if self.session.cached_request.is_some()
+            && (self.session.cached_temporary_rules != self.session.temporary_rules
+                || self.session.cached_exit_inputs != self.exit_inputs())
         {
             self.cache_config_request();
             self.request_list_inspection();
@@ -248,12 +309,15 @@ impl State {
     }
 
     pub(super) fn cache_config_request(&mut self) {
-        self.session.cached_request = Some(ConnectRequest::from_config(&self.config).map(
-            |mut request| {
-                request.temporary_rules = self.session.temporary_rules.clone();
-                request
-            },
+        let inputs = self.exit_inputs();
+        self.session.cached_request = Some(ConnectRequest::for_apply_with_exits(
+            &self.config,
+            None,
+            self.session.temporary_rules.clone(),
+            inputs.context(),
         ));
+        self.session.cached_temporary_rules = self.session.temporary_rules.clone();
+        self.session.cached_exit_inputs = inputs;
         #[cfg(test)]
         {
             self.session.request_builds += 1;
@@ -264,7 +328,13 @@ impl State {
         match self.session.cached_request.as_ref() {
             Some(Ok(request)) => Ok(std::borrow::Cow::Borrowed(request)),
             Some(Err(error)) => Err(*error),
-            None => ConnectRequest::from_config(&self.config).map(std::borrow::Cow::Owned),
+            None => ConnectRequest::for_apply_with_exits(
+                &self.config,
+                None,
+                self.session.temporary_rules.clone(),
+                self.exit_inputs().context(),
+            )
+            .map(std::borrow::Cow::Owned),
         }
     }
 
@@ -277,7 +347,9 @@ impl State {
         };
         match part {
             SessionPart::Server => session.selection != current.selection,
-            SessionPart::Rules => session.rule_set != current.rule_set,
+            SessionPart::Rules => {
+                session.rule_set != current.rule_set || session.extra_nodes != current.extra_nodes
+            },
             SessionPart::Dns => session.settings.dns != current.settings.dns,
             SessionPart::Protection => session.settings.kill_switch != current.settings.kill_switch,
         }
@@ -285,10 +357,11 @@ impl State {
 
     pub(in crate::state) fn apply_request(&self) -> Option<ConnectRequest> {
         let session = self.session.session_request.as_ref()?;
-        ConnectRequest::for_apply(
+        ConnectRequest::for_apply_with_exits(
             &self.config,
             Some(&session.settings),
             self.session.temporary_rules.clone(),
+            self.exit_inputs().context(),
         )
         .ok()
     }
@@ -316,6 +389,7 @@ impl State {
         self.session.lists_changed_since_apply
             || session.selection != current.selection
             || session.rule_set != current.rule_set
+            || session.extra_nodes != current.extra_nodes
             || session.settings.dns != current.settings.dns
     }
 
@@ -497,6 +571,7 @@ impl State {
                 | ConnectionState::Failed { .. }
                 | ConnectionState::FailedProtected { .. } => {
                     self.session.session_request = None;
+                    self.refresh_cached_request();
                     self.session.session_snapshot_checked = false;
                     self.session.intent.set_choice(false);
                     if matches!(status.state, ConnectionState::Disconnected) {
@@ -524,6 +599,7 @@ impl State {
                             request.temporary_rules = self.session.temporary_rules.clone();
                         }
                         self.session.session_request = Some(request);
+                        self.refresh_cached_request();
                         self.session.applied_snapshot =
                             Some(AppliedSnapshot::from_config(&self.config));
                     }
@@ -623,6 +699,7 @@ impl State {
                         self.session.temporary_rules = request.temporary_rules.clone();
                         self.refresh_cached_request();
                         self.session.session_request = Some(request);
+                        self.refresh_cached_request();
                         self.session.lists_changed_since_apply = false;
                         self.clear_delayed_list_updates();
                         self.session.applied_snapshot = candidate;

@@ -1162,7 +1162,10 @@ fn renderable_rule_set(request: &ConnectRequest) -> RuleSet {
         }
     }
     if blocked > 0 {
-        tracing::warn!(count = blocked, "exit rules rendered as reject until exit routing is available");
+        tracing::warn!(
+            count = blocked,
+            "exit rules rendered as reject until exit routing is available"
+        );
     }
     rules
 }

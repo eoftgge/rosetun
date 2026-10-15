@@ -112,7 +112,7 @@ impl State {
             self.cancelled_connect = false;
             self.deferred_connect = None;
             self.operation_error = None;
-            return Some(Job::Connect);
+            return Some(Job::Connect(self.exit_inputs()));
         }
         None
     }
@@ -222,6 +222,7 @@ impl State {
                 self.tunnel_delay = TunnelDelay::Idle;
                 self.delay_last_auto = None;
                 self.session.session_request = None;
+                self.refresh_cached_request();
                 self.clear_applied_state();
                 self.session.session_snapshot_checked = false;
                 self.session.helper_lost();
@@ -323,6 +324,7 @@ impl State {
                         self.session.temporary_rules_loaded = true;
                         self.session.temporary_load = None;
                         self.session.session_request = Some(request);
+                        self.refresh_cached_request();
                         self.session.lists_changed_since_apply = false;
                         self.clear_delayed_list_updates();
                         self.session.applied_snapshot = snapshot.or_else(|| {
@@ -343,6 +345,7 @@ impl State {
                     self.protection_confirmation = false;
                     self.deferred_connect = None;
                     self.session.session_request = None;
+                    self.refresh_cached_request();
                     self.clear_temporary();
                     self.clear_applied_state();
                 } else if cancelling {
@@ -352,6 +355,7 @@ impl State {
                         self.refresh_cached_request();
                         self.session.temporary_rules_loaded = true;
                         self.session.session_request = Some(request);
+                        self.refresh_cached_request();
                         self.session.lists_changed_since_apply = false;
                         self.session.applied_snapshot =
                             self.session.deferred_snapshot.take().or_else(|| {
@@ -424,12 +428,12 @@ impl State {
             Action::Primary => {
                 let job = match self.primary_action() {
                     PrimaryAction::Connect | PrimaryAction::Retry | PrimaryAction::Reconnect => {
-                        Job::Connect
+                        Job::Connect(self.exit_inputs())
                     }
                     PrimaryAction::Disconnect => Job::Disconnect,
                     PrimaryAction::Disabled => return None,
                 };
-                self.connect_in_flight = matches!(job, Job::Connect);
+                self.connect_in_flight = matches!(job, Job::Connect(_));
                 if self.connect_in_flight {
                     self.reset_failure_interference();
                     self.reset_system_failure();

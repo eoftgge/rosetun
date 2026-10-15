@@ -13,7 +13,7 @@ fn auto_connect_waits_for_config_helper_and_first_status_then_runs_once() {
     assert!(state.take_auto_connect().is_none());
     state.helper_available = true;
     state.operation_error = Some("previous error".into());
-    assert!(matches!(state.take_auto_connect(), Some(Job::Connect)));
+    assert!(matches!(state.take_auto_connect(), Some(Job::Connect(_))));
     assert!(!state.auto_connect_pending);
     assert!(state.operations.helper);
     assert!(state.operation_error.is_none());

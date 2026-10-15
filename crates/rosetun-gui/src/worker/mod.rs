@@ -31,7 +31,7 @@ use rosetun_ipc::{
 };
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
-use crate::state::ExitRoute;
+use crate::state::{ExitInputs, ExitRoute};
 
 const CLIENT_NAME: &str = concat!("rosetun-gui/", env!("CARGO_PKG_VERSION"));
 

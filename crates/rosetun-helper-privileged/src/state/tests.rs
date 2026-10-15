@@ -4445,11 +4445,18 @@ fn invalid_temporary_rules_leave_connect_and_apply_untouched() {
 #[test]
 fn invalid_extra_nodes_are_rejected_before_connect_and_apply() {
     let (helper, controls, prepared, _) = supervised_helper(true);
-    let request = connect_request();
+    let mut request = connect_request();
+    request.node.server = "203.0.113.10".into();
+    let mut other = request.node.clone();
+    other.id = NodeId::new("other");
+    other.server = "192.0.2.10".into();
     let extra = ExtraNode {
         exit: ExitId::new("other"),
-        selection: request.selection.clone(),
-        node: request.node.clone(),
+        selection: Selection {
+            subscription: SubscriptionId::new("sub"),
+            node: other.id.clone(),
+        },
+        node: other,
     };
     let mut too_many = request.clone();
     too_many.extra_nodes = vec![extra.clone(); MAX_EXTRA_NODES + 1];

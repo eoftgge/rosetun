@@ -199,7 +199,12 @@ impl ConnectRequest {
                 .chain(request.temporary_rules.iter().filter(|rule| rule.enabled))
                 .any(|rule| rule.target == RuleTarget::Exit && rule.exit.as_ref() == Some(id))
         };
-        let used: Vec<_> = config.exits.iter().filter(|exit| referenced(&exit.id)).cloned().collect();
+        let used: Vec<_> = config
+            .exits
+            .iter()
+            .filter(|exit| referenced(&exit.id))
+            .cloned()
+            .collect();
         let resolved = resolve_exits(&used, &config.subscriptions, exits.delays, exits.selected);
         let mut blocked = 0;
         for rule in request
@@ -209,9 +214,11 @@ impl ConnectRequest {
             .chain(&mut request.temporary_rules)
             .filter(|rule| rule.enabled && rule.target == RuleTarget::Exit)
         {
-            let Some((id, Some(selected))) = rule.exit.as_ref().and_then(|id| {
-                resolved.iter().find(|(exit, _)| exit == id)
-            }) else {
+            let Some((id, Some(selected))) = rule
+                .exit
+                .as_ref()
+                .and_then(|id| resolved.iter().find(|(exit, _)| exit == id))
+            else {
                 rule.target = RuleTarget::Block;
                 rule.exit = None;
                 blocked += 1;
@@ -481,8 +488,10 @@ mod tests {
         let mut request = ConnectRequest::from_config(&selected_config()).unwrap();
         let old = serde_json::to_value(&request).unwrap();
         assert!(old.get("lists").is_none());
+        assert!(old.get("extra_nodes").is_none());
         let decoded: ConnectRequest = serde_json::from_value(old).unwrap();
         assert!(decoded.lists.is_empty());
+        assert!(decoded.extra_nodes.is_empty());
 
         request.lists.push(ListRef {
             tag: "list-test".into(),
@@ -641,7 +650,11 @@ mod tests {
         assert_eq!(request.extra_nodes.len(), 1);
         assert_eq!(request.extra_nodes[0].exit, exit);
         assert_eq!(request.extra_nodes[0].node, other);
-        assert_eq!(serde_json::from_str::<ConnectRequest>(&serde_json::to_string(&request).unwrap()).unwrap(), request);
+        assert_eq!(
+            serde_json::from_str::<ConnectRequest>(&serde_json::to_string(&request).unwrap())
+                .unwrap(),
+            request
+        );
         let debug = format!("{request:?}");
         assert!(debug.contains("extra_node_count: 1"));
         assert!(!debug.contains("192.0.2.10"));

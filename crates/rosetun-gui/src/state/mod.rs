@@ -28,7 +28,7 @@ use lists::ListsState;
 pub(crate) use lists::{AddListDialog, ListOutcome, RulesTab, source_file_name, used_by};
 use rules::RulesState;
 pub(crate) use rules::{AddRuleDialog, DeleteDialog, NameDialogKind, RuleInputKind};
-pub(crate) use session::SessionPart;
+pub(crate) use session::{ExitInputs, SessionPart};
 use session::SessionState;
 use settings::SettingsState;
 pub(crate) use settings::{AboutFolder, SettingsSection};
@@ -288,7 +288,7 @@ pub(crate) enum Action {
 }
 
 pub(crate) enum Job {
-    Connect,
+    Connect(ExitInputs),
     CheckSystem {
         request: u64,
         own_alias: String,

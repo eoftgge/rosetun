@@ -376,7 +376,7 @@ fn failure_conflicts_are_checked_once_and_stale_results_are_ignored() {
     );
     state.reduce(WorkerEvent::Status(failure));
     assert!(state.take_failure_interference().is_none());
-    assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+    assert!(matches!(state.act(Action::Primary), Some(Job::Connect(_))));
     assert!(state.failure_interference.is_none());
     state.reduce(WorkerEvent::FailureInterference {
         request,
@@ -415,7 +415,7 @@ fn no_network_keeps_retry_and_protection_controls() {
         failure_kind: Some(FailureKind::NoNetwork),
     };
     assert_eq!(state.primary_action(), PrimaryAction::Retry);
-    assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+    assert!(matches!(state.act(Action::Primary), Some(Job::Connect(_))));
     state.operations.helper = false;
 
     state.status.state = ConnectionState::FailedProtected {
@@ -423,7 +423,7 @@ fn no_network_keeps_retry_and_protection_controls() {
         failure_kind: Some(FailureKind::NoNetwork),
     };
     assert_eq!(state.primary_action(), PrimaryAction::Reconnect);
-    assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+    assert!(matches!(state.act(Action::Primary), Some(Job::Connect(_))));
     state.operations.helper = false;
     state.act(Action::RequestProtectionOff);
     assert!(state.protection_confirmation);
@@ -434,7 +434,7 @@ fn cancelling_a_connect_ignores_a_late_success_in_either_order() {
     for connect_first in [false, true] {
         let mut state = state_for_auto_connect();
         let request = ConnectRequest::from_config(&state.config).unwrap();
-        assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+        assert!(matches!(state.act(Action::Primary), Some(Job::Connect(_))));
         state.reduce(WorkerEvent::Status(Status {
             state: ConnectionState::Connecting,
             ..Status::default()
@@ -458,7 +458,7 @@ fn cancelling_a_connect_ignores_a_late_success_in_either_order() {
         assert!(state.session.session_request.is_none());
         assert!(!state.operations.helper);
         assert!(!state.cancel_in_flight);
-        assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+        assert!(matches!(state.act(Action::Primary), Some(Job::Connect(_))));
         assert!(!state.cancelled_connect);
     }
 }
@@ -467,7 +467,7 @@ fn cancelling_a_connect_ignores_a_late_success_in_either_order() {
 fn failed_cancellation_restores_a_completed_connect() {
     let mut state = state_for_auto_connect();
     let request = ConnectRequest::from_config(&state.config).unwrap();
-    assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+    assert!(matches!(state.act(Action::Primary), Some(Job::Connect(_))));
     state.reduce(WorkerEvent::Status(Status {
         state: ConnectionState::Connecting,
         ..Status::default()
@@ -598,7 +598,7 @@ fn protected_disconnect_requires_explicit_confirmation() {
         ..State::default()
     };
     assert!(state.act(Action::ConfirmProtectionOff).is_none());
-    assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+    assert!(matches!(state.act(Action::Primary), Some(Job::Connect(_))));
     let request = ConnectRequest::from_config(&state_for_auto_connect().config).unwrap();
     state.reduce(WorkerEvent::Connect(Ok(request)));
     state.act(Action::RequestProtectionOff);

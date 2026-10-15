@@ -652,6 +652,117 @@ fn repeated_checks_reuse_the_request_until_config_or_temporary_rules_change() {
 }
 
 #[test]
+fn country_exit_uses_check_results_but_keeps_its_session_node() {
+    use rosetun_config::{CountryCode, Exit, ExitId, ExitTarget};
+
+    let mut state = state_for_auto_connect();
+    state.config.subscriptions[0].nodes[0].server = "203.0.113.10".into();
+    let mut first = state.config.subscriptions[0].nodes[0].clone();
+    first.id = NodeId::new("gb-first");
+    first.name = "GB first".into();
+    first.server = "192.0.2.10".into();
+    let mut second = first.clone();
+    second.id = NodeId::new("gb-second");
+    second.name = "GB second".into();
+    second.server = "198.51.100.10".into();
+    state.config.subscriptions[0].nodes.extend([first, second]);
+    let exit = ExitId::new("gb");
+    state.config.exits.push(Exit {
+        id: exit.clone(),
+        name: "GB exit".into(),
+        target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
+    });
+    let mut set = RuleSet::new(RuleSetId::new("exits"), "Exits", RuleTarget::Proxy);
+    set.rules.push(Rule {
+        id: RuleId::new("country"),
+        enabled: true,
+        matcher: RuleMatcher::IpCidr("203.0.113.0/24".into()),
+        target: RuleTarget::Exit,
+        exit: Some(exit),
+    });
+    state.config.rule_sets.push(set);
+    state.config.active_rule_set = Some(RuleSetId::new("exits"));
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config: state.config.clone(),
+    });
+    let subscription = SubscriptionId::new("1");
+    state.subscriptions.pings.insert(
+        (subscription.clone(), NodeId::new("gb-first")),
+        PingResult::Answered(Duration::from_millis(20)),
+    );
+    state.subscriptions.pings.insert(
+        (subscription.clone(), NodeId::new("gb-second")),
+        PingResult::Fails,
+    );
+    state.refresh_cached_request();
+    let Some(Job::Connect(inputs)) = state.act(Action::Primary) else {
+        panic!("expected connect job");
+    };
+    let request = ConnectRequest::from_config_with_exits(&state.config, inputs.context()).unwrap();
+    assert_eq!(request.extra_nodes[0].selection.node, NodeId::new("gb-first"));
+    state.reduce(WorkerEvent::Connect(Ok(request)));
+    state.status.state = ConnectionState::Connected;
+    assert!(matches!(
+        state.act(Action::FullCheck(subscription.clone())),
+        Some(Job::FullCheck(_))
+    ));
+    let builds = state.session.request_builds;
+    state.reduce(WorkerEvent::FullCheck {
+        subscription,
+        result: Ok(vec![
+            ProbeResult {
+                node: NodeId::new("gb-first"),
+                outcome: ProbeOutcome::Works { millis: 90 },
+            },
+            ProbeResult {
+                node: NodeId::new("gb-second"),
+                outcome: ProbeOutcome::Works { millis: 10 },
+            },
+        ]),
+    });
+    assert!(state.session.request_builds > builds);
+    assert!(!state.pending_reconnect(SessionPart::Rules));
+    assert!(!state.has_pending_apply());
+    assert_eq!(
+        state.apply_request().unwrap().extra_nodes[0].selection.node,
+        NodeId::new("gb-first")
+    );
+
+    let country_config = state.config.clone();
+    let mut retargeted = country_config.clone();
+    retargeted.exits[0].target = ExitTarget::Node {
+        selection: Selection {
+            subscription: SubscriptionId::new("1"),
+            node: NodeId::new("gb-second"),
+        },
+        fallback: None,
+    };
+    state.reduce(WorkerEvent::Config {
+        generation: 2,
+        config: retargeted,
+    });
+    assert!(state.pending_reconnect(SessionPart::Rules));
+    assert!(state.has_pending_apply());
+    assert_eq!(
+        state.apply_request().unwrap().extra_nodes[0].selection.node,
+        NodeId::new("gb-second")
+    );
+    state.reduce(WorkerEvent::Config {
+        generation: 3,
+        config: country_config,
+    });
+    assert!(!state.pending_reconnect(SessionPart::Rules));
+
+    state.reduce(WorkerEvent::Status(Status::default()));
+    let Some(Job::Connect(inputs)) = state.act(Action::Primary) else {
+        panic!("expected a new connect job");
+    };
+    let request = ConnectRequest::from_config_with_exits(&state.config, inputs.context()).unwrap();
+    assert_eq!(request.extra_nodes[0].selection.node, NodeId::new("gb-second"));
+}
+
+#[test]
 fn successful_connect_has_no_pending_changes_until_dns_or_protection_changes() {
     let mut state = state_for_auto_connect();
     let request = ConnectRequest::from_config(&state.config).unwrap();

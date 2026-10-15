@@ -248,6 +248,7 @@ impl State {
                 .iter()
                 .any(|sub| &sub.id == id && sub.node(node).is_some())
         });
+        self.refresh_cached_request();
         self.operations
             .pinging
             .retain(|id| self.config.subscriptions.iter().any(|sub| &sub.id == id));

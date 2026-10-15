@@ -97,6 +97,7 @@ impl State {
             }
         }
         self.operations.pinging.insert(id.clone());
+        self.refresh_cached_request();
         Some(match (full, node) {
             (false, None) => Job::Ping(id),
             (false, Some(node)) => Job::PingNode(id, node),
@@ -193,5 +194,6 @@ impl State {
             }
             _ => unreachable!("only server checks are dispatched here"),
         }
+        self.refresh_cached_request();
     }
 }

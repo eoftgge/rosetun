@@ -409,7 +409,8 @@ fn prepare_connect_request(request_path: Option<&str>) -> Result<ConnectRequest,
 
     let current_store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = current_store.load().map_err(|error| error.to_string())?;
-    ConnectRequest::from_config(&config).map_err(connect_request_error)
+    ConnectRequest::from_config_with_exits(&config, rosetun_ipc::ExitContext::default())
+        .map_err(connect_request_error)
 }
 
 fn prepare_list_request(request_path: Option<&str>) -> Result<PreparedCliRequest, String> {
@@ -431,8 +432,13 @@ fn prepare_apply_request(client: &mut HelperClient) -> Result<PreparedCliRequest
     })?;
     let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = store.load().map_err(|error| error.to_string())?;
-    let request =
-        ConnectRequest::for_apply(&config, None, temporary).map_err(connect_request_error)?;
+    let request = ConnectRequest::for_apply_with_exits(
+        &config,
+        None,
+        temporary,
+        rosetun_ipc::ExitContext::default(),
+    )
+    .map_err(connect_request_error)?;
     rosetun_core::prepare_lists(&store, request)
         .map(PreparedCliRequest::Lists)
         .map_err(|error| error.to_string())

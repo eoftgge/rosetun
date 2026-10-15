@@ -755,6 +755,6 @@ fn reality_rejection_button_persists_auto_before_connect() {
         SettingChange::Xray(XrayUse::Auto),
         Ok(()),
     ));
-    assert!(matches!(state.take_xray_connect(), Some(Job::Connect)));
+    assert!(matches!(state.take_xray_connect(), Some(Job::Connect(_))));
     assert!(state.take_xray_connect().is_none());
 }
