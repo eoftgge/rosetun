@@ -498,7 +498,7 @@ impl State {
         self.act(Action::Apply)
     }
 
-    pub(crate) fn take_temporary_load(&mut self, now: u64) -> Option<Job> {
+    pub(super) fn temporary_load_due(&self) -> Option<u64> {
         if !self.helper_available
             || !self.status_received
             || !matches!(self.status.state, ConnectionState::Connected)
@@ -506,11 +506,18 @@ impl State {
             || self.session.temporary_load.is_some()
             || !self.session.temporary_retry
             || self.operations.helper
-            || self
-                .session
-                .temporary_last_load
-                .is_some_and(|last| now.saturating_sub(last) < 10)
         {
+            return None;
+        }
+        Some(
+            self.session
+                .temporary_last_load
+                .map_or(0, |last| last.saturating_add(10)),
+        )
+    }
+
+    pub(crate) fn take_temporary_load(&mut self, now: u64) -> Option<Job> {
+        if now < self.temporary_load_due()? {
             return None;
         }
         self.session.next_temporary_load += 1;

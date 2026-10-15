@@ -39,7 +39,7 @@ impl State {
         })
     }
 
-    pub(crate) fn take_update_check(&mut self, now: u64) -> Option<Job> {
+    pub(super) fn update_check_due(&self, now: u64) -> Option<u64> {
         if !self.config_ready
             || !self.config.interface.check_updates
             || self.updates.update_check_pending
@@ -50,7 +50,11 @@ impl State {
             Some(last) if last <= now => last.saturating_add(UPDATE_CHECK_INTERVAL),
             _ => now,
         };
-        if now < due.max(self.updates.next_update_check.unwrap_or(0)) {
+        Some(due.max(self.updates.next_update_check.unwrap_or(0)))
+    }
+
+    pub(crate) fn take_update_check(&mut self, now: u64) -> Option<Job> {
+        if now < self.update_check_due(now)? {
             return None;
         }
         if !self.can_check_updates() {

@@ -12,6 +12,7 @@ pub(crate) mod traffic;
 mod window_frame;
 
 use eframe::egui::{self, Align, RichText, Stroke};
+use rosetun_config::ConnectionState;
 
 use crate::errors;
 use crate::state::{Action, Screen, SettingsSection, State};
@@ -198,6 +199,18 @@ fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 .color(theme::TEXT_DIM),
         ));
     });
+}
+
+/// Whether the screen shows something that changes every second without an event.
+pub(crate) fn shows_clock(state: &State) -> bool {
+    let Some(status) = state.visible_status() else {
+        return false;
+    };
+    match state.screen {
+        Screen::Connection => status.since_unix.is_some() || status.state.is_transitional(),
+        Screen::Traffic => matches!(status.state, ConnectionState::Connected),
+        Screen::Rules | Screen::Settings => false,
+    }
 }
 
 fn service_warning(state: &State) -> bool {

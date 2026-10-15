@@ -394,6 +394,10 @@ impl eframe::App for App {
         if let Some(job) = self.state.take_tunnel_delay(display::now_unix()) {
             self.dispatch(job);
         }
+        // A hidden window runs `logic` only, so the schedule must be requested here, not in `ui`.
+        if let Some(delay) = repaint_delay(false, self.state.next_wake(display::now_unix())) {
+            ctx.request_repaint_after(delay);
+        }
         let language =
             i18n::resolve_language(self.state.config.interface.language, self.system_russian);
         if self.state.config_ready && language != i18n::language() {
@@ -413,6 +417,8 @@ impl eframe::App for App {
                 if self.quitting {
                     continue;
                 }
+                // The event may make a `take_*` due on the next pass.
+                ctx.request_repaint();
                 match event {
                     ShellEvent::Show => self.show_window(ctx),
                     ShellEvent::Hide => self.hide_window(ctx),
@@ -505,7 +511,20 @@ impl eframe::App for App {
                 self.dispatch(job);
             }
         }
-        ui.ctx().request_repaint_after(Duration::from_secs(1));
+        if let Some(delay) = repaint_delay(
+            view::shows_clock(&self.state),
+            self.state.next_wake(display::now_unix()),
+        ) {
+            ui.ctx().request_repaint_after(delay);
+        }
+    }
+}
+
+fn repaint_delay(clock_shown: bool, next_wake: Option<Duration>) -> Option<Duration> {
+    let clock = clock_shown.then_some(Duration::from_secs(1));
+    match (clock, next_wake) {
+        (Some(clock), Some(wake)) => Some(clock.min(wake)),
+        (clock, wake) => clock.or(wake),
     }
 }
 
@@ -518,6 +537,7 @@ mod tests {
     use eframe::egui;
     use rosetun_core::Store;
     use std::fs;
+    use std::time::Duration;
 
     #[cfg(windows)]
     #[test]
@@ -587,5 +607,43 @@ mod tests {
         fs::write(&path, "{invalid").unwrap();
         assert_eq!(initial_scale(&store), 100);
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn hidden_window_without_deadlines_asks_for_no_frame() {
+        let state = crate::state::State::default();
+        assert_eq!(super::repaint_delay(false, state.next_wake(1_000)), None);
+    }
+
+    #[test]
+    fn visible_window_ticks_only_with_a_clock_on_screen() {
+        use rosetun_config::{ConnectionState, Status};
+
+        let mut state = crate::state::State::default();
+        state.reduce(crate::worker::WorkerEvent::HelperAvailable {
+            version: "0.9.0".into(),
+        });
+        state.reduce(crate::worker::WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            since_unix: Some(1_000),
+            ..Status::default()
+        }));
+        assert!(state.take_temporary_load(1_000).is_some());
+        assert!(state.take_tunnel_delay(1_003).is_some());
+        state.screen = crate::state::Screen::Rules;
+        let rules = super::repaint_delay(crate::view::shows_clock(&state), state.next_wake(1_003));
+        assert_eq!(rules, None);
+        state.screen = crate::state::Screen::Connection;
+        let session =
+            super::repaint_delay(crate::view::shows_clock(&state), state.next_wake(1_003));
+        assert_eq!(session, Some(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn earlier_deadline_beats_the_clock() {
+        assert_eq!(
+            super::repaint_delay(true, Some(Duration::ZERO)),
+            Some(Duration::ZERO)
+        );
     }
 }

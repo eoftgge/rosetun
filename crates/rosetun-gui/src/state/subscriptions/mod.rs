@@ -118,6 +118,11 @@ pub(crate) struct SubscriptionsState {
 }
 
 impl State {
+    pub(in crate::state) fn auto_update_due(&self) -> Option<u64> {
+        (self.config_ready && self.config.interface.auto_update_subscriptions)
+            .then_some(self.subscriptions.next_auto_update_check)
+    }
+
     /// Starts at most one due subscription on each schedule check.
     pub(crate) fn take_auto_update(&mut self, now: u64) -> Option<Job> {
         if now < self.subscriptions.next_auto_update_check {

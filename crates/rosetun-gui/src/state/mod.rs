@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
     AppConfig, DnsSettings, ExitId, ExitTarget, LanguageSetting, ListId, ListSource, NodeId,
@@ -403,6 +403,20 @@ pub(crate) enum Job {
 impl State {
     pub(crate) fn text(&self, value: &str) -> String {
         redact(&self.config, value)
+    }
+
+    /// How long until the earliest scheduled `take_*` becomes due; `None` when nothing is scheduled.
+    pub(crate) fn next_wake(&self, now: u64) -> Option<Duration> {
+        [
+            self.temporary_load_due(),
+            self.auto_update_due(),
+            self.update_check_due(now),
+            self.tunnel_delay_due(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .map(|due| Duration::from_secs(due.saturating_sub(now)))
     }
 
     pub(crate) fn reduce(&mut self, event: WorkerEvent) {

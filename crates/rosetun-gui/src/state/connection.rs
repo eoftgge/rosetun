@@ -229,22 +229,25 @@ impl State {
         self.session.session_request = Some(request);
     }
 
-    pub(crate) fn take_tunnel_delay(&mut self, now: u64) -> Option<Job> {
+    pub(super) fn tunnel_delay_due(&self) -> Option<u64> {
         if !self.status_received
             || !matches!(
                 self.visible_status().map(|status| &status.state),
                 Some(ConnectionState::Connected)
             )
+            || !matches!(self.tunnel_delay, TunnelDelay::Idle)
         {
             return None;
         }
         let since = self.status.since_unix?;
-        if now.saturating_sub(since) < 3
-            || !matches!(self.tunnel_delay, TunnelDelay::Idle)
-            || self
-                .delay_last_auto
-                .is_some_and(|last| now.saturating_sub(last) < 10)
-        {
+        let retry = self
+            .delay_last_auto
+            .map_or(0, |last| last.saturating_add(10));
+        Some(since.saturating_add(3).max(retry))
+    }
+
+    pub(crate) fn take_tunnel_delay(&mut self, now: u64) -> Option<Job> {
+        if now < self.tunnel_delay_due()? {
             return None;
         }
         self.delay_last_auto = Some(now);

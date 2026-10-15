@@ -197,6 +197,7 @@ mod connection;
 mod exits;
 mod lists;
 mod rules;
+mod schedule;
 mod session;
 mod settings;
 mod startup;
