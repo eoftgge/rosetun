@@ -52,7 +52,7 @@ use table::{
     TargetChoice, drag_scroll_delta, drag_target, drop_action, table_cell, target_button,
     value_cell,
 };
-use table::{default_rule, rule_row, scroll_rules_while_dragging};
+use table::{RowContext, default_rule, rule_row, scroll_rules_while_dragging};
 #[cfg(test)]
 use templates::template_card;
 use templates::template_section;
@@ -190,16 +190,21 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     {
         ui.colored_label(theme::TEXT_MUTED, tr!("no-rules-match"));
     }
+    let unresolved = crate::destinations::unresolved_exits(&state.config);
+    let rows = RowContext {
+        set,
+        unresolved: &unresolved,
+    };
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
         for (_, rule) in visible_temporary {
             ui.push_id(("temporary", rule.id.as_str()), |ui| {
-                rule_row(ui, state, set, rule, None, value_width, actions);
+                rule_row(ui, state, &rows, rule, None, value_width, actions);
             });
         }
         for (index, rule) in visible {
             let row = ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
-                rule_row(ui, state, set, rule, Some(index), value_width, actions);
+                rule_row(ui, state, &rows, rule, Some(index), value_width, actions);
             });
             if state.rules.screen.selected_rules.contains(&rule.id) {
                 let rect = row.response.rect;

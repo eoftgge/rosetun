@@ -1,3 +1,7 @@
+use std::collections::BTreeSet;
+
+use rosetun_config::ExitId;
+
 use super::templates::template_icon;
 use super::*;
 
@@ -295,15 +299,23 @@ fn rule_icon(matcher: &RuleMatcher) -> Icon {
     }
 }
 
+/// What every row of one table shares, computed once per frame.
+pub(super) struct RowContext<'a> {
+    pub(super) set: &'a RuleSet,
+    /// `destinations::unresolved_exits`, which resolves every exit.
+    pub(super) unresolved: &'a BTreeSet<ExitId>,
+}
+
 pub(super) fn rule_row(
     ui: &mut egui::Ui,
     state: &State,
-    set: &RuleSet,
+    rows: &RowContext<'_>,
     rule: &Rule,
     index: Option<usize>,
     value_width: f32,
     actions: &mut Vec<Action>,
 ) {
+    let set = rows.set;
     let temporary = index.is_none();
     let selected = !temporary && state.rules.screen.selected_rules.contains(&rule.id);
     let reorder = !temporary && state.can_edit_rules() && !state.rules.screen.filter.is_active();
@@ -358,7 +370,7 @@ pub(super) fn rule_row(
                 let value_height = ui.text_style_height(&egui::TextStyle::Body)
                     + ui.text_style_height(&egui::TextStyle::Small);
                 value_cell(ui, value_width, value_height, |ui| {
-                    rule_value(ui, state, rule, index.map(|_| &set.id));
+                    rule_value(ui, state, rule, index.map(|_| &set.id), rows.unresolved);
                 });
                 table_cell(ui, TARGET_WIDTH, theme::RULE_ROW, |ui| {
                     let exits = &state.config.exits;
@@ -606,6 +618,7 @@ fn rule_value(
     state: &State,
     rule: &Rule,
     set: Option<&rosetun_config::RuleSetId>,
+    unresolved: &BTreeSet<ExitId>,
 ) {
     let (value, caption) = match &rule.matcher {
         RuleMatcher::List { list, category } => (
@@ -632,7 +645,7 @@ fn rule_value(
         && rule
             .exit
             .as_ref()
-            .is_none_or(|id| crate::destinations::unresolved_exits(&state.config).contains(id));
+            .is_none_or(|id| unresolved.contains(id));
     let tooltip = if let RuleMatcher::Template(template) = &rule.matcher {
         let list = template
             .matchers()

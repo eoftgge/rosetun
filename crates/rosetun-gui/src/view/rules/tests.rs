@@ -137,7 +137,10 @@ fn row_input_actions(
                     rule_row(
                         ui,
                         state,
-                        set,
+                        &RowContext {
+                            set,
+                            unresolved: &crate::destinations::unresolved_exits(&state.config),
+                        },
                         &set.rules[0],
                         Some(0),
                         (ui.available_width() - 350.0).max(0.0),

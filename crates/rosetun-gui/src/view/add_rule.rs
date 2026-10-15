@@ -1734,6 +1734,79 @@ mod tests {
     }
 
     #[test]
+    fn destination_items_span_the_open_menu() {
+        use super::*;
+        use crate::destinations::tests::{config, exit};
+        use rosetun_config::{CountryCode, RuleSetId};
+
+        let nodes = [("nl", "NL One"), ("de", "DE Two"), ("plain", "Plain")];
+        let exits = vec![exit(
+            "1",
+            ExitTarget::Country(CountryCode::parse("NL").unwrap()),
+        )];
+        let config = config(&nodes, exits);
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.kind = RuleInputKind::Domain;
+        let run = |dialog: &mut AddRuleDialog| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 900.0),
+                )),
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                show(ctx, dialog, &config, false, 0, &mut Vec::new())
+            });
+            output.textures_delta.clear();
+            output.shapes
+        };
+        run(&mut dialog);
+        egui::Popup::open_id(&ctx, destination_popup_id());
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = run(&mut dialog);
+        }
+        let menu = ctx
+            .memory(|memory| memory.area_rect(destination_popup_id()))
+            .expect("the destination list is open");
+        // The frame takes a 4-point margin and a 1-point stroke on each side.
+        let content = menu.shrink(5.0);
+        let mut selected = Vec::new();
+        let mut texts = Vec::new();
+        for shape in &shapes {
+            match &shape.shape {
+                // Only the selected item fills its rect while nothing is hovered.
+                egui::Shape::Rect(rect)
+                    if rect.rect.height() == 30.0 && menu.contains_rect(rect.rect) =>
+                {
+                    selected.push(rect.rect);
+                }
+                egui::Shape::Text(text) if menu.contains(text.pos) => {
+                    texts.push(text.galley.text().to_owned());
+                }
+                _ => {}
+            }
+        }
+        // The selected item paints its whole rect; a zero-width item painted nothing visible.
+        assert_eq!(selected.len(), 1, "{selected:?}");
+        assert_eq!(selected[0].x_range(), content.x_range(), "{menu:?}");
+        assert!(!texts.iter().any(|text| text.contains('…')), "{texts:?}");
+        for label in [
+            target_label(RuleTarget::Proxy),
+            target_label(RuleTarget::Direct),
+            target_label(RuleTarget::Block),
+            "Example exit · NL".to_owned(),
+            format!("{} · DE", i18n::country_name(&CountryCode::parse("DE").unwrap())),
+            "NL One".to_owned(),
+        ] {
+            assert!(texts.contains(&label), "{label} in {texts:?}");
+        }
+    }
+
+    #[test]
     fn modal_fits_width_at_minimum_window_scales() {
         use super::*;
         use rosetun_config::RuleSetId;
