@@ -583,10 +583,8 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     |ui| {
                         ui.horizontal(|ui| {
                             let size = ui.text_style_height(&egui::TextStyle::Body);
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::vec2(size, size),
-                                egui::Sense::hover(),
-                            );
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
                             if ui.is_rect_visible(rect) {
                                 icons::paint(ui.painter(), rect.center(), icon, color);
                             }

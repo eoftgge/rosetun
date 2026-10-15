@@ -107,7 +107,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     )
                                     .wrap(),
                                 );
-                                if state.config.settings.kill_switch {
+                                if state.running_session_protected() {
                                     ui.colored_label(theme::ERROR, tr!("no-network-protected"));
                                 }
                             } else if status.xray_stopped

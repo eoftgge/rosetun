@@ -87,6 +87,13 @@ impl State {
                 .is_some_and(|request| request.settings.allow_lan != self.config.settings.allow_lan)
     }
 
+    pub(crate) fn running_session_protected(&self) -> bool {
+        self.session
+            .session_request
+            .as_ref()
+            .is_some_and(|request| request.settings.kill_switch)
+    }
+
     pub(crate) fn xray_reality_count(&self) -> usize {
         self.config
             .subscriptions

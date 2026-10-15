@@ -430,6 +430,33 @@ fn local_network_hint_requires_a_known_active_request_with_a_different_value() {
 }
 
 #[test]
+fn network_protection_hint_uses_running_request_not_edited_settings() {
+    let mut state = connected_state_for_apply();
+    state.status.state = ConnectionState::Reconnecting;
+    state.config.settings.kill_switch = false;
+    state
+        .session
+        .session_request
+        .as_mut()
+        .unwrap()
+        .settings
+        .kill_switch = true;
+    assert!(state.running_session_protected());
+
+    state.config.settings.kill_switch = true;
+    state
+        .session
+        .session_request
+        .as_mut()
+        .unwrap()
+        .settings
+        .kill_switch = false;
+    assert!(!state.running_session_protected());
+    state.session.session_request = None;
+    assert!(!state.running_session_protected());
+}
+
+#[test]
 fn auto_update_setting_uses_settings_job_and_respects_busy_state() {
     let mut state = State {
         config_ready: true,
