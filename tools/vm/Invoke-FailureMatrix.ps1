@@ -504,6 +504,14 @@ Test-Step 'no network' 'connect succeeds after the route returns' { (Get-Rosetun
 Test-Step 'no network' 'direct egress is blocked after the route returns' { -not (Test-RosetunDirectEgress) }
 
 Write-Host 'No network during a protected session...'
+Disconnect-RosetunTunnel | Out-Null
+$autoConnect = Connect-RosetunTunnel -RequestName 'request-auto-reconnect.json' -Quiet
+Test-Step 'no network session' 'auto-reconnect request is Connected' -Note "exit $($autoConnect.ExitCode)" {
+    $autoConnect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
+}
+Test-Step 'no network session' 'direct egress is blocked before network loss' {
+    -not (Test-RosetunDirectEgress)
+}
 Start-RosetunEgressWatch
 $egressWatchActive = $true
 $watch = $null
@@ -550,6 +558,12 @@ finally {
 }
 Test-Step 'no network session' "no direct leak through loss and recovery ($($watch.Probes) probes)" {
     $watch.Probes -gt 0 -and $watch.Leaks -eq 0
+}
+Disconnect-RosetunTunnel | Out-Null
+$baseConnect = Connect-RosetunTunnel -Quiet
+Test-Step 'no network session' 'base request is restored' -Note "exit $($baseConnect.ExitCode)" {
+    $baseConnect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected') -and
+        -not (Test-RosetunDirectEgress)
 }
 
 # Not the first connect of the run: the first adapter creation in a fresh VM

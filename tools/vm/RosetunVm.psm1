@@ -597,6 +597,10 @@ function Publish-Rosetun {
         $derived[$name] = $lan
     }
 
+    $autoReconnect = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
+    $autoReconnect.settings.auto_reconnect = $true
+    $derived['request-auto-reconnect.json'] = $autoReconnect
+
     $dnsLock = Get-Content -Path $RequestPath -Raw | ConvertFrom-Json
     $dnsLock.settings.kill_switch = $false
     $dnsLock.settings.auto_reconnect = $true
