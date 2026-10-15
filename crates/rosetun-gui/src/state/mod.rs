@@ -26,7 +26,7 @@ mod system_checks;
 mod traffic;
 mod updates;
 
-pub(crate) use connection::{ExitLookup, ExitRoute, TunnelDelay, primary_label};
+pub(crate) use connection::{ExitLookup, ExitRoute, SessionExitRow, TunnelDelay, primary_label};
 use exits::ExitsState;
 pub(crate) use exits::{ExitDialog, ExitKind};
 use lists::ListsState;

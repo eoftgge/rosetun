@@ -12,9 +12,11 @@ use super::rose_button::{self, RosePhase};
 use super::rules::{rule_label, target_color};
 
 mod controls;
+mod exits;
 mod hero;
 
 use controls::control_cards;
+use exits::exits_card;
 use hero::hero_card;
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -27,6 +29,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }
     hero_card(ui, state, actions);
     ui.add_space(theme::SECTION_GAP);
+    if exits_card(ui, state) {
+        ui.add_space(theme::SECTION_GAP);
+    }
     control_cards(ui, state, actions);
 }
 

@@ -18,6 +18,13 @@ use crate::errors;
 use crate::rules::{ProcessGroup, ProcessMatchMode};
 use crate::worker::HelperCommandError;
 
+fn main_delay(proxy: ProbeOutcome) -> rosetun_ipc::TunnelDelays {
+    rosetun_ipc::TunnelDelays {
+        proxy,
+        exits: Vec::new(),
+    }
+}
+
 fn report() -> UpdateReport {
     UpdateReport {
         added: 2,

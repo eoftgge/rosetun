@@ -941,7 +941,7 @@ fn applying_changes_refreshes_the_session_exit_and_delay() {
         Some(Job::LookupExit { .. })
     ));
     state.exit = ExitLookup::Failed(ExitRoute::Tunnel);
-    state.tunnel_delay = TunnelDelay::Done(ProbeOutcome::Fails);
+    state.tunnel_delay = TunnelDelay::Done(main_delay(ProbeOutcome::Fails));
     state.delay_last_auto = Some(now_unix());
     let Some(Job::Apply(request)) = state.act(Action::Apply) else {
         panic!("DNS change must apply");

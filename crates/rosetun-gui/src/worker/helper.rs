@@ -130,7 +130,7 @@ impl WorkerDispatcher {
     pub(crate) fn tunnel_delay(&self) {
         self.spawn_helper(
             "rosetun-tunnel-delay",
-            |client| client.tunnel_delay().map(|delays| delays.proxy),
+            |client| client.tunnel_delay(),
             |publisher, result| publisher.complete(WorkerEvent::TunnelDelay(result)),
         );
     }

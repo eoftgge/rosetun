@@ -28,8 +28,8 @@ use rosetun_core::{
     set_verbose_log, update_all, update_all_lists, update_list, update_rule, update_subscription,
 };
 use rosetun_ipc::{
-    ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeOutcome,
-    ProbeRequest, ProbeResult,
+    ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES,
+    ProbeRequest, ProbeResult, TunnelDelays,
 };
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
@@ -177,7 +177,7 @@ pub(crate) enum WorkerEvent {
         subscription: SubscriptionId,
         result: Result<Vec<ProbeResult>, HelperCommandError>,
     },
-    TunnelDelay(Result<ProbeOutcome, HelperCommandError>),
+    TunnelDelay(Result<TunnelDelays, HelperCommandError>),
     UpdateAll {
         subscriptions: Result<Vec<SubscriptionUpdateResult>, StoreError>,
         lists: Result<Vec<ListUpdateResult>, StoreError>,

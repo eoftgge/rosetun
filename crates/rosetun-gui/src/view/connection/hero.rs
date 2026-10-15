@@ -398,17 +398,15 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             }) {
                                 detail_row(ui, tr!("delay"), |ui| {
                                     ui.spacing_mut().item_spacing.x = 6.0;
-                                    let (text, color) = match state.tunnel_delay {
-                                        TunnelDelay::Done(ProbeOutcome::Works { millis }) => (
+                                    let (text, color) = match state.tunnel_delay.proxy() {
+                                        Some(ProbeOutcome::Works { millis }) => (
                                             tr!("ping-ms", ms = millis.max(1).to_string()),
                                             theme::TEXT,
                                         ),
-                                        TunnelDelay::Done(_) => {
+                                        Some(_) => {
                                             (tr!("ping-no-answer").to_owned(), theme::ERROR)
                                         }
-                                        TunnelDelay::Idle | TunnelDelay::Measuring => {
-                                            (tr!("ping-pending").to_owned(), theme::TEXT_DIM)
-                                        }
+                                        None => (tr!("ping-pending").to_owned(), theme::TEXT_DIM),
                                     };
                                     let enabled =
                                         !matches!(state.tunnel_delay, TunnelDelay::Measuring);

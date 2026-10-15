@@ -1,17 +1,36 @@
-use rosetun_config::{ConnectionState, FailureKind, Status};
+use rosetun_config::{ConnectionState, Exit, FailureKind, Status};
 use rosetun_core::AppliedSnapshot;
-use rosetun_ipc::{ClientError, ErrorCode, HelperError, ProbeOutcome};
+use rosetun_ipc::{ClientError, ErrorCode, ExitOutcome, HelperError, ProbeOutcome, TunnelDelays};
 
 use super::{Action, Job, Screen, State};
 use crate::actions::{self, PrimaryAction};
 use crate::errors;
 use crate::worker::{HelperCommandError, WorkerEvent};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TunnelDelay {
     Idle,
     Measuring,
-    Done(ProbeOutcome),
+    Done(TunnelDelays),
+}
+
+impl TunnelDelay {
+    pub(crate) fn proxy(&self) -> Option<ProbeOutcome> {
+        match self {
+            Self::Done(delays) => Some(delays.proxy),
+            Self::Idle | Self::Measuring => None,
+        }
+    }
+}
+
+/// A row of "Rules through other servers": an exit of the running session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionExitRow<'a> {
+    /// `None` when the exit was deleted after the session started.
+    pub(crate) exit: Option<&'a Exit>,
+    pub(crate) node: &'a str,
+    /// `None` until the delay check answers for this exit.
+    pub(crate) outcome: Option<ExitOutcome>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +193,40 @@ impl State {
             request: self.failure_interference_request,
             own_alias: self.config.settings.tun.name.clone(),
         })
+    }
+
+    /// The exits of the running session with their last delay, in request order.
+    pub(crate) fn session_exit_rows(&self) -> Vec<SessionExitRow<'_>> {
+        if !matches!(
+            self.visible_status().map(|status| &status.state),
+            Some(ConnectionState::Connected | ConnectionState::Reconnecting)
+        ) {
+            return Vec::new();
+        }
+        let Some(request) = self.session.session_request.as_ref() else {
+            return Vec::new();
+        };
+        let delays = match &self.tunnel_delay {
+            TunnelDelay::Done(delays) => delays.exits.as_slice(),
+            TunnelDelay::Idle | TunnelDelay::Measuring => &[],
+        };
+        request
+            .extra_nodes
+            .iter()
+            .map(|extra| SessionExitRow {
+                exit: self.config.exits.iter().find(|exit| exit.id == extra.exit),
+                node: &extra.node.name,
+                outcome: delays
+                    .iter()
+                    .find(|delay| delay.exit == extra.exit)
+                    .map(|delay| delay.outcome),
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_session_request_for_test(&mut self, request: rosetun_ipc::ConnectRequest) {
+        self.session.session_request = Some(request);
     }
 
     pub(crate) fn take_tunnel_delay(&mut self, now: u64) -> Option<Job> {
@@ -410,12 +463,15 @@ impl State {
                     return;
                 }
                 self.tunnel_delay = match result {
-                    Ok(outcome) => TunnelDelay::Done(outcome),
+                    Ok(delays) => TunnelDelay::Done(delays),
                     Err(HelperCommandError::Client(ClientError::Helper(HelperError {
                         code: ErrorCode::InvalidState | ErrorCode::Busy,
                         ..
                     }))) => TunnelDelay::Idle,
-                    Err(_) => TunnelDelay::Done(ProbeOutcome::Fails),
+                    Err(_) => TunnelDelay::Done(TunnelDelays {
+                        proxy: ProbeOutcome::Fails,
+                        exits: Vec::new(),
+                    }),
                 };
             }
             _ => unreachable!("only connection events are dispatched here"),

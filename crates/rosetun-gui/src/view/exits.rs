@@ -17,7 +17,7 @@ const MIN_NODE_LIST: f32 = 66.0;
 // Everything else in the node form at its tallest, plus room above and below the dialog.
 const NODE_FORM_REST: f32 = 540.0;
 
-fn exit_title(exit: &Exit) -> String {
+pub(crate) fn exit_title(exit: &Exit) -> String {
     let name = display::safe_text(&exit.name);
     match destinations::exit_country(exit) {
         Some(code) => format!("{name} · {}", code.as_str()),
