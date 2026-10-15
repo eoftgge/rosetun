@@ -47,7 +47,8 @@ pub fn node_country(name: &str) -> Option<CountryCode> {
     let characters: Vec<_> = name.chars().collect();
     for pair in characters.windows(2) {
         if let (Some(first), Some(second)) = (indicator(pair[0]), indicator(pair[1])) {
-            let code = String::from_utf8(vec![first, second]).expect("regional indicators are ASCII");
+            let code =
+                String::from_utf8(vec![first, second]).expect("regional indicators are ASCII");
             if let Some(country) = CountryCode::parse(&code) {
                 return Some(country);
             }
@@ -272,7 +273,11 @@ mod tests {
             ("🇩 test 🇪", None),
             ("ZZ server", None),
         ] {
-            assert_eq!(node_country(name).as_ref().map(CountryCode::as_str), expected, "{name}");
+            assert_eq!(
+                node_country(name).as_ref().map(CountryCode::as_str),
+                expected,
+                "{name}"
+            );
         }
     }
 

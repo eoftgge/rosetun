@@ -361,8 +361,8 @@ mod tests {
         assert_eq!(super::PROTOCOL_VERSION, 10);
     }
     use rosetun_config::{
-        AppConfig, CountryCode, EngineKind, Exit, ExitId, ExitTarget, Node, NodeId, Outbound,
-        Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection,
+        AppConfig, CountryCode, EngineKind, Exit, ExitId, ExitTarget, Node, NodeId, Outbound, Rule,
+        RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection,
         StreamSettings, Subscription, SubscriptionId, TrojanParams,
     };
 
@@ -505,7 +505,11 @@ mod tests {
             .filter(|rule| rule.id.as_str() == "exit")
             .collect();
         assert_eq!(exit_rules.len(), RuleTemplate::Youtube.matchers().len());
-        assert!(exit_rules.iter().all(|rule| rule.target == RuleTarget::Block && rule.exit.is_none()));
+        assert!(
+            exit_rules
+                .iter()
+                .all(|rule| rule.target == RuleTarget::Block && rule.exit.is_none())
+        );
         assert_eq!(request.rule_set.rules[0].target, RuleTarget::Block);
         assert_eq!(config.rule_sets[0].rules[1].target, RuleTarget::Exit);
 

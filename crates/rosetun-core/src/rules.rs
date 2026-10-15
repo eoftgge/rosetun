@@ -69,7 +69,7 @@ pub fn restore_rules_and_dns(
     })
 }
 
-fn next_id<'a>(ids: impl Iterator<Item = &'a str>) -> String {
+pub(crate) fn next_id<'a>(ids: impl Iterator<Item = &'a str>) -> String {
     let occupied: BTreeSet<_> = ids.collect();
     let mut candidate = 1_u64;
     loop {
@@ -334,6 +334,9 @@ pub fn update_rule(
         let existing = rule_mut(set, rule)?;
         existing.matcher = matcher;
         existing.target = target;
+        if target != RuleTarget::Exit {
+            existing.exit = None;
+        }
         Ok(())
     })
 }
@@ -345,7 +348,11 @@ pub fn set_rule_target(
     target: RuleTarget,
 ) -> Result<(), RuleSetError> {
     store.modify(|config| {
-        rule_mut(rule_set_mut(config, set)?, rule)?.target = target;
+        let existing = rule_mut(rule_set_mut(config, set)?, rule)?;
+        existing.target = target;
+        if target != RuleTarget::Exit {
+            existing.exit = None;
+        }
         Ok(())
     })
 }

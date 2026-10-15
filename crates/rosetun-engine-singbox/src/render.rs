@@ -867,9 +867,13 @@ mod tests {
         });
         let (route, unsupported) = route_section(&set, RuleCapabilities::ALL, false);
         assert_eq!(unsupported, vec![RuleId::new("exit")]);
-        assert!(!route["rules"].as_array().unwrap().iter().any(|rule| {
-            rule["ip_cidr"] == serde_json::json!(["192.0.2.0/24"])
-        }));
+        assert!(
+            !route["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|rule| { rule["ip_cidr"] == serde_json::json!(["192.0.2.0/24"]) })
+        );
     }
 
     #[test]

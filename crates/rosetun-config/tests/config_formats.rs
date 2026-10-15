@@ -3,7 +3,8 @@ mod support;
 use rosetun_config::{
     AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId, ExitTarget,
     FormatError, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId, Outbound,
-    Rule, RuleId, RuleMatcher, RuleTarget, StreamSettings, TlsMode, TlsParams, Transport, from_json,
+    Rule, RuleId, RuleMatcher, RuleTarget, StreamSettings, TlsMode, TlsParams, Transport,
+    from_json,
 };
 use serde_json::{Value, json};
 
@@ -254,17 +255,26 @@ fn exit_references_and_country_codes_are_validated() {
     assert_eq!(from_json(&encoded).unwrap().0, config);
 
     config.exits.clear();
-    assert!(matches!(config.validate(), Err(ConfigError::InvalidRuleExit)));
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidRuleExit)
+    ));
     config.exits.push(Exit {
         id: id.clone(),
         name: "Example exit".into(),
         target: ExitTarget::Country(CountryCode::parse("GB").unwrap()),
     });
     config.rule_sets[0].rules[0].exit = None;
-    assert!(matches!(config.validate(), Err(ConfigError::InvalidRuleExit)));
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidRuleExit)
+    ));
     config.rule_sets[0].rules[0].target = RuleTarget::Direct;
     config.rule_sets[0].rules[0].exit = Some(id.clone());
-    assert!(matches!(config.validate(), Err(ConfigError::InvalidRuleExit)));
+    assert!(matches!(
+        config.validate(),
+        Err(ConfigError::InvalidRuleExit)
+    ));
     config.exits.push(config.exits[0].clone());
     assert!(matches!(config.validate(), Err(ConfigError::InvalidExitId)));
 

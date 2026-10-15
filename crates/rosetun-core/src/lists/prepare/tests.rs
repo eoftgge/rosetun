@@ -72,7 +72,6 @@ fn list_rule(id: &str, list: ListId, category: Option<&str>) -> Rule {
         },
         target: RuleTarget::Direct,
         exit: None,
-    exit: None,
     }
 }
 

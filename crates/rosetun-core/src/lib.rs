@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod exit;
+mod exits;
 mod fetch;
 mod lists;
 mod ping;
@@ -16,6 +17,10 @@ mod update;
 mod updates;
 
 pub use exit::{ExitInfo, ExitInfoError, exit_info};
+pub use exits::{
+    ExitError, change_exit_target, delete_exit, exit_for_country, exit_for_node, exit_rule_count,
+    rename_exit, resolve_exits,
+};
 pub use fetch::{FetchError, Timeouts, fetch};
 pub use lists::{
     ListError, ListOperation, ListParseError, ListPayload, ListPreparationError, ListUpdateResult,
