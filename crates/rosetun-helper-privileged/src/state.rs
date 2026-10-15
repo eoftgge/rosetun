@@ -492,39 +492,7 @@ impl Helper {
                 tracing::info!("physical network lost");
             }
         }
-        if !network_available && !auto_reconnect {
-            let protected = session.keeps_protection();
-            if protected {
-                if let Err(error) = session.stop_engine() {
-                    tracing::error!(%error, "failed to stop engine after network loss");
-                }
-            } else {
-                session.teardown();
-            }
-            self.with_status(|status| {
-                let reason = "physical network is unavailable".to_owned();
-                let failure_kind = Some(rosetun_config::FailureKind::NoNetwork);
-                status.state = if protected {
-                    ConnectionState::FailedProtected {
-                        reason,
-                        failure_kind,
-                    }
-                } else {
-                    ConnectionState::Failed {
-                        reason,
-                        failure_kind,
-                    }
-                };
-                status.reconnect_failure_kind = None;
-                status.since_unix = None;
-                status.connect_stage = None;
-                status.stage_since_unix = None;
-            });
-            session.request = None;
-            session.pin_lists(&[]);
-            return;
-        }
-        if !network_available {
+        if !network_available && auto_reconnect {
             if session.reconnect.is_none() {
                 self.begin_attempt(ConnectionState::Reconnecting);
                 session.reconnect = Some(Reconnect {

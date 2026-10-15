@@ -2816,29 +2816,66 @@ fn network_reconnect_does_not_wait_for_the_full_dns_timeout() {
 }
 
 #[test]
-fn supervisor_keeps_protection_on_network_loss_without_auto_reconnect() {
+fn network_loss_without_auto_reconnect_keeps_live_session() {
     let _lock = ROUTE_TEST_LOCK.lock().unwrap();
-    let (helper, _, _, reverted) = supervised_helper(true);
-    let helper = helper.with_test_physical_interface(changing_route);
-    NETWORK_PRESENT.store(true, Ordering::Release);
+    set_route_script(20);
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let helper = helper.with_test_physical_interface(scripted_route);
     let mut request = connect_request();
     request.settings.kill_switch = true;
     request.settings.auto_reconnect = false;
     helper.connect(&request).expect("first protected connect");
-    NETWORK_PRESENT.store(false, Ordering::Release);
+    let since = helper.status().since_unix;
     let now = Instant::now();
-    helper.supervise(now);
+
+    for tick in 0..20 {
+        helper.supervise(now + tick * SUPERVISOR_TICK);
+        assert_eq!(helper.status().state, ConnectionState::Connected);
+        assert_eq!(helper.status().reconnect_failure_kind, None);
+        assert_eq!(helper.status().since_unix, since);
+        assert!(helper.session().unwrap().request.is_some());
+        assert!(helper.session().unwrap().process.is_some());
+        assert_eq!(controls.spawns(), 1);
+        assert_eq!(prepared.load(Ordering::Acquire), 0);
+        assert_eq!(reverted.load(Ordering::Acquire), 0);
+    }
+
+    helper.supervise(now + 20 * SUPERVISOR_TICK);
     assert_eq!(helper.status().state, ConnectionState::Connected);
-    helper.supervise(now + SUPERVISOR_TICK);
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn engine_exit_without_auto_reconnect_still_fails_protected_during_network_loss() {
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    set_route_script(20);
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let helper = helper.with_test_physical_interface(scripted_route);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.auto_reconnect = false;
+    helper.connect(&request).expect("first protected connect");
+    let now = Instant::now();
+
+    for tick in 0..4 {
+        helper.supervise(now + tick * SUPERVISOR_TICK);
+        assert_eq!(helper.status().state, ConnectionState::Connected);
+    }
+    controls.kill();
+    helper.supervise(now + 4 * SUPERVISOR_TICK);
     assert!(matches!(
         helper.status().state,
         ConnectionState::FailedProtected {
-            failure_kind: Some(rosetun_config::FailureKind::NoNetwork),
-            ..
-        }
+            ref reason,
+            failure_kind: None,
+        } if reason == "the engine process exited"
     ));
+    assert!(helper.session().unwrap().request.is_none());
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
-    NETWORK_PRESENT.store(true, Ordering::Release);
 }
 
 fn signal_dns_stall(helper: &Helper) {
