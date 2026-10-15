@@ -55,11 +55,17 @@ pub fn node_country(name: &str) -> Option<CountryCode> {
         }
     }
 
-    name.split(|character: char| !character.is_alphanumeric() && character != '_')
-        .find_map(|word| {
-            let code = if word == "UK" { "GB" } else { word };
-            CountryCode::parse(code)
-        })
+    let mut country = None;
+    for word in name.split(|character: char| !character.is_alphanumeric() && character != '_') {
+        let code = if word == "UK" { "GB" } else { word };
+        if let Some(found) = CountryCode::parse(code) {
+            if country.as_ref().is_some_and(|previous| previous != &found) {
+                return None;
+            }
+            country = Some(found);
+        }
+    }
+    country
 }
 
 impl fmt::Debug for Node {
@@ -267,6 +273,9 @@ mod tests {
             ("US server 🇬🇧", Some("GB")),
             ("Node UK #2", Some("GB")),
             ("Node DE #2", Some("DE")),
+            ("PREMIUM IN NL", None),
+            ("🇳🇱 IN NL", Some("NL")),
+            ("NL #1 NL", Some("NL")),
             ("VPN server", None),
             ("someUSnode", None),
             ("VPN_DE", None),

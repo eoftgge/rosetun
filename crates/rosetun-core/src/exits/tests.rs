@@ -123,6 +123,24 @@ fn creating_exits_reuses_target_and_remembers_node_country() {
         exit_for_node(&store, &selection("sub", "de"), "New name").unwrap(),
         node
     );
+    change_exit_target(
+        &store,
+        &node.id,
+        ExitTarget::Node {
+            selection: selection("sub", "de"),
+            fallback: None,
+        },
+    )
+    .unwrap();
+    let reused = exit_for_node(&store, &selection("sub", "de"), "Again").unwrap();
+    assert_eq!(reused.id, node.id);
+    assert_eq!(
+        reused.target,
+        ExitTarget::Node {
+            selection: selection("sub", "de"),
+            fallback: None,
+        }
+    );
     let plain = exit_for_node(&store, &selection("sub", "plain"), "Plain").unwrap();
     assert_eq!(
         plain.target,
@@ -252,9 +270,31 @@ fn node_exit_prefers_exact_then_country_fallback_then_none() {
     );
     assert_eq!(
         resolve_exits(std::slice::from_ref(&german), &nodes, &delays, &previous)[0].1,
-        Some(selection("sub", "fallback"))
+        Some(selection("sub", "primary"))
     );
     assert_eq!(resolve_exits(&[german], &[], &delays, &[])[0].1, None);
+}
+
+#[test]
+fn retargeted_node_overrides_previous_fallback_until_it_disappears() {
+    let target = exit(
+        "1",
+        ExitTarget::Node {
+            selection: selection("sub", "nl2"),
+            fallback: Some(country("NL")),
+        },
+    );
+    let previous = [(target.id.clone(), selection("sub", "nl1"))];
+    let both = [subscription("sub", &[("nl1", "NL 1"), ("nl2", "NL 2")])];
+    assert_eq!(
+        resolve_exits(std::slice::from_ref(&target), &both, &[], &previous)[0].1,
+        Some(selection("sub", "nl2"))
+    );
+    let only_old = [subscription("sub", &[("nl1", "NL 1")])];
+    assert_eq!(
+        resolve_exits(&[target], &only_old, &[], &previous)[0].1,
+        Some(selection("sub", "nl1"))
+    );
 }
 
 #[test]

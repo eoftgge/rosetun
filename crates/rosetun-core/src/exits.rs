@@ -24,7 +24,20 @@ fn get_or_create(
     target: ExitTarget,
     name: &str,
 ) -> Result<Exit, ExitError> {
-    if let Some(exit) = config.exits.iter().find(|exit| exit.target == target) {
+    if let Some(exit) = config
+        .exits
+        .iter()
+        .find(|exit| match (&exit.target, &target) {
+            (
+                ExitTarget::Node {
+                    selection: existing,
+                    ..
+                },
+                ExitTarget::Node { selection, .. },
+            ) => existing == selection,
+            _ => exit.target == target,
+        })
+    {
         return Ok(exit.clone());
     }
     let name = name.trim();
@@ -183,17 +196,7 @@ pub fn resolve_exits(
                     selection,
                     fallback,
                 } => {
-                    let pinned = previous.filter(|choice| {
-                        selected_node(subscriptions, choice).is_some_and(|node| {
-                            *choice == selection
-                                || fallback.as_ref().is_some_and(|country| {
-                                    node_country(&node.name).as_ref() == Some(country)
-                                })
-                        })
-                    });
-                    if let Some(pinned) = pinned {
-                        Some(pinned.clone())
-                    } else if selected_node(subscriptions, selection).is_some() {
+                    if selected_node(subscriptions, selection).is_some() {
                         Some(selection.clone())
                     } else {
                         fallback.as_ref().and_then(|country| {
