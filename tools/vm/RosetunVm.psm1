@@ -26,6 +26,9 @@ $script:Config = @{
     # www.example.com fail the TLS handshake there when the node bypasses the
     # host VPN.
     TunnelProbeUrl = 'https://ya.ru'
+    # Routed through the second test node by an Exit rule; like TunnelProbeUrl it
+    # must be reachable from the node's exit, and on another host than it.
+    ExitRuleUrl = 'https://yandex.ru'
 }
 $script:Session = $null
 
@@ -224,17 +227,22 @@ function Start-RosetunTestNode {
         # running in TUN mode on the host. Such a client accepts TCP itself and
         # can leave the node with open connections that never carry data.
         [string]$BindInterface,
-        [switch]$CloudflareBlocked
+        [switch]$CloudflareBlocked,
+        # A second plain node for rules that leave through another server.
+        [switch]$ExitNode
     )
 
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
-    $tcpPort = ($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' }).listen_port
+    $tcpPort = Get-RosetunTestNodePort -CloudflareBlocked:$CloudflareBlocked -ExitNode:$ExitNode
     $udpPort = ($config.inbounds | Where-Object { $_.type -eq 'hysteria2' }).listen_port
-    if ($CloudflareBlocked) {
-        $tcpPort++
+    $tcpOnly = $CloudflareBlocked -or $ExitNode
+    $suffix = if ($CloudflareBlocked) { '-cloudflare-blocked' } elseif ($ExitNode) { '-exit' } else { '' }
+    if ($tcpOnly) {
         $udpPort = $null
         $config.inbounds = @($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' })
         $config.inbounds[0].listen_port = $tcpPort
+    }
+    if ($CloudflareBlocked) {
         $config | Add-Member -NotePropertyName route -NotePropertyValue ([pscustomobject]@{
             rules = @(
                 [pscustomobject]@{ action = 'sniff' }
@@ -251,8 +259,8 @@ function Start-RosetunTestNode {
     $udpListening = if ($null -ne $udpPort) {
         Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
     } else { $null }
-    $ports = if ($CloudflareBlocked) { "TCP $tcpPort" } else { "TCP $tcpPort and UDP $udpPort" }
-    if ($tcpListening -and ($CloudflareBlocked -or $udpListening)) {
+    $ports = if ($tcpOnly) { "TCP $tcpPort" } else { "TCP $tcpPort and UDP $udpPort" }
+    if ($tcpListening -and ($tcpOnly -or $udpListening)) {
         Write-Host "Test node already listens on $ports."
         return $false
     }
@@ -267,7 +275,7 @@ function Start-RosetunTestNode {
 
     $logDir = Join-Path $PSScriptRoot 'logs'
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    if (-not $CloudflareBlocked) {
+    if (-not $tcpOnly) {
         $keyPath = Join-Path $logDir 'test-node.key'
         $certPath = Join-Path $logDir 'test-node.crt'
         if ((Test-Path $keyPath) -ne (Test-Path $certPath)) {
@@ -296,9 +304,9 @@ function Start-RosetunTestNode {
     $config.log = [pscustomobject]@{
         level     = 'debug'
         timestamp = $true
-        output    = Join-Path $logDir $(if ($CloudflareBlocked) { 'test-node-cloudflare-blocked.log' } else { 'test-node.log' })
+        output    = Join-Path $logDir "test-node$suffix.log"
     }
-    $configPath = Join-Path $env:TEMP $(if ($CloudflareBlocked) { 'rosetun-test-node-cloudflare-blocked.json' } else { 'rosetun-test-node.json' })
+    $configPath = Join-Path $env:TEMP "rosetun-test-node$suffix.json"
     [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 10))
 
     $node = Start-Process -FilePath $SingBoxPath -ArgumentList 'run', '--disable-color', '-c', $configPath `
@@ -310,9 +318,9 @@ function Start-RosetunTestNode {
             Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
         })
         if (-not $node.HasExited -and $tcpListening.Count -gt 0 -and
-            ($CloudflareBlocked -or $udpListening.Count -gt 0) -and
+            ($tcpOnly -or $udpListening.Count -gt 0) -and
             -not ($tcpListening | Where-Object { $_.OwningProcess -ne $node.Id }) -and
-            ($CloudflareBlocked -or -not ($udpListening | Where-Object { $_.OwningProcess -ne $node.Id }))) {
+            ($tcpOnly -or -not ($udpListening | Where-Object { $_.OwningProcess -ne $node.Id }))) {
             break
         }
         if ($node.HasExited -or (Get-Date) -gt $deadline) {
@@ -328,28 +336,65 @@ function Start-RosetunTestNode {
     return $true
 }
 
+function Get-RosetunTestNodePort {
+    # TCP port of a host test node: the main node, the Cloudflare-blocked node
+    # next to it, and the exit node after the REALITY node's port (+2).
+    param([switch]$CloudflareBlocked, [switch]$ExitNode)
+
+    if ($CloudflareBlocked -and $ExitNode) {
+        throw 'Choose one of -CloudflareBlocked and -ExitNode.'
+    }
+    $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
+    $port = ($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' }).listen_port
+    if ($CloudflareBlocked) { return $port + 1 }
+    if ($ExitNode) { return $port + 3 }
+    return $port
+}
+
+function Get-RosetunTestNodeConnections {
+    # How many proxied connections a host test node has logged so far.
+    param([switch]$ExitNode)
+
+    $log = Join-Path $PSScriptRoot $(if ($ExitNode) { 'logs	est-node-exit.log' } else { 'logs	est-node.log' })
+    if (-not (Test-Path $log)) {
+        return 0
+    }
+    # The node keeps its log open for writing.
+    $stream = [IO.File]::Open($log, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+        [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+    try {
+        $reader = [IO.StreamReader]::new($stream)
+        $count = 0
+        while ($null -ne ($line = $reader.ReadLine())) {
+            if ($line -like '*inbound connection to*') { $count++ }
+        }
+        return $count
+    }
+    finally { $stream.Dispose() }
+}
+
 function Stop-RosetunTestNode {
-    param([switch]$CloudflareBlocked)
+    param([switch]$CloudflareBlocked, [switch]$ExitNode)
 
     $config = Get-Content -Path (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
-    $tcpPort = ($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' }).listen_port
+    $tcpPort = Get-RosetunTestNodePort -CloudflareBlocked:$CloudflareBlocked -ExitNode:$ExitNode
     $udpPort = ($config.inbounds | Where-Object { $_.type -eq 'hysteria2' }).listen_port
-    if ($CloudflareBlocked) {
-        $tcpPort++
+    $tcpOnly = $CloudflareBlocked -or $ExitNode
+    if ($tcpOnly) {
         $udpPort = $null
     }
-    $ports = if ($CloudflareBlocked) { "TCP $tcpPort" } else { "TCP $tcpPort and UDP $udpPort" }
+    $ports = if ($tcpOnly) { "TCP $tcpPort" } else { "TCP $tcpPort and UDP $udpPort" }
     $tcpListening = @(Get-NetTCPConnection -LocalPort $tcpPort -State Listen -ErrorAction SilentlyContinue)
     $udpListening = @(if ($null -ne $udpPort) {
         Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
     })
-    if ($tcpListening.Count -eq 0 -or (-not $CloudflareBlocked -and $udpListening.Count -eq 0)) {
+    if ($tcpListening.Count -eq 0 -or (-not $tcpOnly -and $udpListening.Count -eq 0)) {
         Write-Warning "No complete test node listens on $ports; nothing stopped."
         return
     }
     $tcpOwners = @($tcpListening | Select-Object -ExpandProperty OwningProcess -Unique)
     # @() keeps a single owner an array; Set-StrictMode has no .Count on a bare integer.
-    $udpOwners = @(if ($CloudflareBlocked) { $tcpOwners } else {
+    $udpOwners = @(if ($tcpOnly) { $tcpOwners } else {
         $udpListening | Select-Object -ExpandProperty OwningProcess -Unique
     })
     if ($tcpOwners.Count -ne 1 -or $udpOwners.Count -ne 1 -or $tcpOwners[0] -ne $udpOwners[0]) {
@@ -365,7 +410,7 @@ function Stop-RosetunTestNode {
     $udpListening = @(if ($null -ne $udpPort) {
         Get-NetUDPEndpoint -LocalPort $udpPort -ErrorAction SilentlyContinue
     })
-    if ($tcpListening.Count -eq 0 -or (-not $CloudflareBlocked -and $udpListening.Count -eq 0) -or
+    if ($tcpListening.Count -eq 0 -or (-not $tcpOnly -and $udpListening.Count -eq 0) -or
         @($tcpListening | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0 -or
         @($udpListening | Where-Object { $_.OwningProcess -ne $node.Id }).Count -gt 0) {
         Write-Warning "Test node port ownership changed; nothing stopped."
@@ -516,6 +561,35 @@ function Publish-Rosetun {
         server_name = 'dns.google'
     }
     $derived['request-cloudflare-blocked.json'] = $cloudflareBlocked
+
+    $ruleExit = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $ruleExit.settings.kill_switch = $true
+    $exitNode = $request.node | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $exitNode.id = 'home-exit'
+    $exitNode.name = 'Exit test node'
+    $exitNode.port = Get-RosetunTestNodePort -ExitNode
+    $ruleExit | Add-Member -NotePropertyName extra_nodes -Force -NotePropertyValue @(
+        [pscustomobject]@{
+            exit      = 'second-node'
+            selection = [pscustomobject]@{
+                subscription = $request.selection.subscription
+                node         = $exitNode.id
+            }
+            node      = $exitNode
+        }
+    )
+    $ruleExit.rule_set.rules = @(
+        [pscustomobject]@{
+            id      = 'exit-domain'
+            enabled = $true
+            matcher = [pscustomobject]@{
+                domain = [pscustomobject]@{ exact = ([uri]$script:Config.ExitRuleUrl).Host }
+            }
+            target  = 'exit'
+            exit    = 'second-node'
+        }
+    ) + @($ruleExit.rule_set.rules)
+    $derived['request-rule-exit.json'] = $ruleExit
 
     if ($XrayNode) {
         $reality = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
@@ -862,6 +936,10 @@ function Get-RosetunVmName {
 
 function Get-RosetunTunnelProbeUrl {
     return $script:Config.TunnelProbeUrl
+}
+
+function Get-RosetunExitRuleUrl {
+    return $script:Config.ExitRuleUrl
 }
 
 function Get-RosetunStatus {

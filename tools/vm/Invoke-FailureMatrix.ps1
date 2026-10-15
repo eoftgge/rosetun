@@ -592,6 +592,76 @@ if ($UseHostNode) {
         Test-RosetunDirectEgress
     }
 
+    Write-Host 'Route one domain through a second node...'
+    $exitNodeStartedByMatrix = $false
+    try {
+        $exitNodeStartedByMatrix = if ($NodeBindInterface) {
+            Start-RosetunTestNode -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface -ExitNode
+        }
+        else {
+            Start-RosetunTestNode -SingBoxPath $SingBoxPath -ExitNode
+        }
+        $exitRuleUrl = Get-RosetunExitRuleUrl
+        $exitConnect = Connect-RosetunTunnel -RequestName 'request-rule-exit.json' -Quiet
+        Test-Step 'Rule through another server' 'connect succeeds' -Note "exit $($exitConnect.ExitCode)" {
+            $exitConnect.ExitCode -eq 0
+        }
+        Test-Step 'Rule through another server' 'state is Connected' { Wait-RosetunState 'Connected' }
+        $exitSince = (Get-RosetunStatus -ProtocolVersion $protocolVersion).since_unix
+
+        # Each node logs a line per proxied connection, so the counts show
+        # which node carried a request. Only the rule's domain goes to the second.
+        $secondBefore = Get-RosetunTestNodeConnections -ExitNode
+        $egress = Wait-RosetunTunnelEgress -Url $exitRuleUrl -SkipRevocationCheck
+        Start-Sleep -Seconds 1
+        $secondAfterRule = Get-RosetunTestNodeConnections -ExitNode
+        Test-Step 'Rule through another server' 'rule domain goes through the second node' `
+            -Note "$(Format-Egress $egress); second node +$($secondAfterRule - $secondBefore)" {
+            $egress.Ok -and $secondAfterRule -gt $secondBefore
+        }
+        $firstBefore = Get-RosetunTestNodeConnections
+        $egress = Wait-RosetunTunnelEgress
+        Start-Sleep -Seconds 1
+        $firstAfter = Get-RosetunTestNodeConnections
+        $secondAfterOther = Get-RosetunTestNodeConnections -ExitNode
+        Test-Step 'Rule through another server' 'other traffic goes through the first node' `
+            -Note "$(Format-Egress $egress); first node +$($firstAfter - $firstBefore), second node +$($secondAfterOther - $secondAfterRule)" {
+            $egress.Ok -and $firstAfter -gt $firstBefore -and $secondAfterOther -eq $secondAfterRule
+        }
+
+        Stop-RosetunTestNode -ExitNode
+        $exitNodeStartedByMatrix = $false
+        Test-Step 'Rule through another server' 'rule domain fails without the second node' {
+            -not (Test-RosetunTunnelEgress -Url $exitRuleUrl -SkipRevocationCheck)
+        }
+        $egress = Wait-RosetunTunnelEgress
+        Test-Step 'Rule through another server' 'other traffic still works' -Note (Format-Egress $egress) {
+            $egress.Ok
+        }
+        # Longer than the watchdog interval: a dead second node must not restart the session.
+        Start-Sleep -Seconds 35
+        $exitStatus = Get-RosetunStatus -ProtocolVersion $protocolVersion
+        Test-Step 'Rule through another server' 'session stays Connected without a restart' {
+            $exitStatus.state -eq 'connected' -and $exitStatus.since_unix -eq $exitSince
+        }
+        Test-Step 'Rule through another server' 'direct egress stays blocked' {
+            -not (Test-RosetunDirectEgress)
+        }
+    }
+    finally {
+        if ($exitNodeStartedByMatrix -and -not $KeepNode) {
+            try { Stop-RosetunTestNode -ExitNode }
+            catch { Write-Warning "Could not stop the exit test node: $_" }
+        }
+    }
+    Disconnect-RosetunTunnel | Out-Null
+    $baseConnect = Connect-RosetunTunnel -Quiet
+    Test-Step 'Rule through another server' 'base request is restored' -Note "exit $($baseConnect.ExitCode)" {
+        $baseConnect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected') -and
+            -not (Test-RosetunDirectEgress)
+    }
+    Disconnect-RosetunTunnel | Out-Null
+
     Write-Host 'Connect to a new Xray REALITY server in automatic mode...'
     $realityConnect = Connect-RosetunTunnel -RequestName 'request-reality.json' -Quiet
     Test-Step 'REALITY auto' 'connect succeeds' -Note "exit $($realityConnect.ExitCode)" {
