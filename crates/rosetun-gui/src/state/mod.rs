@@ -187,6 +187,10 @@ pub(crate) enum Action {
     ConfirmResetSettings,
     SetVerboseLog(bool),
     #[cfg(windows)]
+    SaveReport,
+    #[cfg(windows)]
+    ShowReportFolder,
+    #[cfg(windows)]
     OpenFolder(AboutFolder),
     OpenRules,
     OpenActiveRules,
@@ -311,6 +315,11 @@ pub(crate) enum Job {
     ResetSettings,
     SetVerboseLog(bool),
     #[cfg(windows)]
+    SaveReport {
+        snapshot: Box<crate::report::ReportSnapshot>,
+        own_alias: String,
+    },
+    #[cfg(windows)]
     OpenFolder(PathBuf),
     SelectNode(SubscriptionId, NodeId),
     SelectRuleSet(Option<RuleSetId>),
@@ -431,7 +440,8 @@ impl State {
             | WorkerEvent::ResetSettings(_)
             | WorkerEvent::SetVerboseLog(_)) => self.reduce_settings(event),
             #[cfg(windows)]
-            event @ (WorkerEvent::AutostartLoaded(_)
+            event @ (WorkerEvent::ReportSaved { .. }
+            | WorkerEvent::AutostartLoaded(_)
             | WorkerEvent::SetAutostart(_)
             | WorkerEvent::OpenFolder(_)) => self.reduce_settings(event),
             WorkerEvent::UpdateCheck { checked_at, result } => {
@@ -500,6 +510,8 @@ impl State {
             #[cfg(windows)]
             action @ (Action::SetAutostart(_)
             | Action::SetCloseToTray(_)
+            | Action::SaveReport
+            | Action::ShowReportFolder
             | Action::OpenFolder(_)) => {
                 return self.act_settings(action);
             }

@@ -71,6 +71,11 @@ pub(crate) enum WorkerEvent {
         request: u64,
         results: Vec<rosetun_core::CheckResult>,
     },
+    #[cfg(windows)]
+    ReportSaved {
+        result: std::io::Result<Option<PathBuf>>,
+        new_checks: Option<Vec<rosetun_core::CheckResult>>,
+    },
     HelperAvailable {
         version: String,
     },
@@ -191,6 +196,8 @@ struct ConfigPublisher {
 
 mod helper;
 mod lists;
+#[cfg(windows)]
+mod report;
 mod rules;
 mod settings;
 mod subscriptions;

@@ -62,7 +62,10 @@ impl HelperClient {
     }
 
     pub fn engine_versions(&self) -> (Option<&str>, Option<&str>) {
-        (self.sing_box_version.as_deref(), self.xray_version.as_deref())
+        (
+            self.sing_box_version.as_deref(),
+            self.xray_version.as_deref(),
+        )
     }
 
     pub fn diagnostic_log(&mut self) -> Result<String, ClientError> {

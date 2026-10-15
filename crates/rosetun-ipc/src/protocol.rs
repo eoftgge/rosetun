@@ -223,7 +223,9 @@ pub enum Response {
     },
     Status(Status),
     TemporaryRules(Vec<Rule>),
-    DiagnosticLog { text: String },
+    DiagnosticLog {
+        text: String,
+    },
     ListStatus {
         missing: Vec<String>,
     },

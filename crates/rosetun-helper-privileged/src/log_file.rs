@@ -3,7 +3,9 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+};
 
 pub(crate) const LOG_LIMIT: u64 = 10 * 1024 * 1024;
 pub(crate) const REPORT_LOG_LIMIT: usize = 1024 * 1024;
@@ -130,7 +132,11 @@ mod tests {
     #[test]
     fn report_tail_keeps_only_the_latest_megabyte_across_both_files() {
         let dir = TestDir::new();
-        fs::write(dir.0.join("helper.previous.log"), vec![b'p'; REPORT_LOG_LIMIT]).unwrap();
+        fs::write(
+            dir.0.join("helper.previous.log"),
+            vec![b'p'; REPORT_LOG_LIMIT],
+        )
+        .unwrap();
         fs::write(dir.0.join("helper.log"), vec![b'c'; 32]).unwrap();
         let text = report_tail(&dir.0).unwrap();
         assert_eq!(text.len(), REPORT_LOG_LIMIT);

@@ -17,6 +17,8 @@ mod display;
 mod errors;
 mod icons;
 mod reorder;
+#[cfg(windows)]
+mod report;
 mod rose_icon;
 mod rules;
 mod state;

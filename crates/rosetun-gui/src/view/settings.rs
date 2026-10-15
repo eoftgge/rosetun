@@ -603,13 +603,37 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
         card.row(tr!("log-title"), Some(&tr!("log-detail")), |ui| {
             #[cfg(windows)]
-            if widgets::outline_button(ui, tr!("open-folder"), state.can_edit_settings()).clicked()
-            {
-                actions.push(Action::OpenFolder(AboutFolder::Config));
-            }
+            ui.horizontal(|ui| {
+                if widgets::outline_button(
+                    ui,
+                    if state.settings.screen.report_running {
+                        tr!("report-collecting")
+                    } else {
+                        tr!("report-save")
+                    },
+                    state.config_ready && !state.settings.screen.report_running,
+                )
+                .clicked()
+                {
+                    actions.push(Action::SaveReport);
+                }
+                if widgets::outline_button(ui, tr!("open-folder"), state.can_edit_settings())
+                    .clicked()
+                {
+                    actions.push(Action::OpenFolder(AboutFolder::Config));
+                }
+            });
             #[cfg(not(windows))]
             let _ = ui;
         });
+        #[cfg(windows)]
+        if state.settings.screen.report_saved.is_some() {
+            card.row(tr!("report-saved"), None, |ui| {
+                if widgets::outline_button(ui, tr!("report-show-in-folder"), true).clicked() {
+                    actions.push(Action::ShowReportFolder);
+                }
+            });
+        }
         let settings = &state.config.settings;
         let now = now_unix();
         let mut on = settings.verbose_log_active(now);

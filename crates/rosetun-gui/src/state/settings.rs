@@ -34,6 +34,10 @@ pub(crate) struct SettingsScreen {
     pub(crate) licenses_folder: Option<PathBuf>,
     #[cfg(windows)]
     pub(crate) autostart: Option<bool>,
+    #[cfg(windows)]
+    pub(crate) report_running: bool,
+    #[cfg(windows)]
+    pub(crate) report_saved: Option<PathBuf>,
     pub(super) opened: bool,
 }
 
@@ -201,6 +205,25 @@ impl State {
                 self.finish_settings(result);
             }
             WorkerEvent::SetVerboseLog(result) => self.finish_settings(result),
+            #[cfg(windows)]
+            WorkerEvent::ReportSaved { result, new_checks } => {
+                self.settings.screen.report_running = false;
+                if let Some(checks) = new_checks
+                    && self.system_checks.results.is_none()
+                    && !self.system_checks.checking
+                {
+                    self.system_checks.results = Some(checks);
+                    self.system_checks.checked_at = Some(now_unix());
+                }
+                match result {
+                    Ok(Some(path)) => self.settings.screen.report_saved = Some(path),
+                    Ok(None) => {}
+                    Err(error) => {
+                        let message = tr!("report-save-error", detail = error.to_string());
+                        self.operation_error = Some(self.text(&message));
+                    }
+                }
+            }
             #[cfg(windows)]
             WorkerEvent::OpenFolder(result) => {
                 self.operations.settings = false;
@@ -387,6 +410,39 @@ impl State {
                     && self.config.settings.verbose_log_active(now_unix()) != on
                 {
                     return self.start_settings(Job::SetVerboseLog(on));
+                }
+            }
+            #[cfg(windows)]
+            Action::SaveReport => {
+                if self.config_ready && !self.settings.screen.report_running {
+                    self.settings.screen.report_running = true;
+                    self.settings.screen.report_saved = None;
+                    self.operation_error = None;
+                    return Some(Job::SaveReport {
+                        snapshot: Box::new(crate::report::ReportSnapshot::new(
+                            &self.config,
+                            &self.status,
+                            self.helper_available,
+                            self.system_checks.results.as_deref(),
+                            self.helper_version.as_deref(),
+                            crate::i18n::language(),
+                            now_unix(),
+                        )),
+                        own_alias: self.config.settings.tun.name.clone(),
+                    });
+                }
+            }
+            #[cfg(windows)]
+            Action::ShowReportFolder => {
+                if let Some(folder) = self
+                    .settings
+                    .screen
+                    .report_saved
+                    .as_ref()
+                    .and_then(|path| path.parent())
+                    .map(PathBuf::from)
+                {
+                    return self.start_settings(Job::OpenFolder(folder));
                 }
             }
             #[cfg(windows)]

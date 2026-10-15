@@ -329,7 +329,9 @@ fn dispatch(
             Response::Hello {
                 helper_version: HELPER_VERSION.to_owned(),
                 protocol_version: PROTOCOL_VERSION,
-                sing_box_version: Some(rosetun_engine_singbox::SUPPORTED_SING_BOX_VERSION.to_owned()),
+                sing_box_version: Some(
+                    rosetun_engine_singbox::SUPPORTED_SING_BOX_VERSION.to_owned(),
+                ),
                 xray_version: Some(rosetun_engine_xray::SUPPORTED_XRAY_VERSION.to_owned()),
             }
         }

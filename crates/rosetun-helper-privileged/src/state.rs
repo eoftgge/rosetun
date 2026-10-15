@@ -389,7 +389,13 @@ impl Helper {
         self.check_diagnostic_owner(caller)?;
         let printable: String = text
             .chars()
-            .map(|ch| if ch.is_control() && !matches!(ch, '\n' | '\r' | '\t') { ' ' } else { ch })
+            .map(|ch| {
+                if ch.is_control() && !matches!(ch, '\n' | '\r' | '\t') {
+                    ' '
+                } else {
+                    ch
+                }
+            })
             .collect();
         Ok(rosetun_config::redact_report_text(&printable))
     }
@@ -1028,7 +1034,10 @@ pub(crate) fn access_denied() -> HelperError {
 
 #[cfg(windows)]
 fn report_log_error(_: std::io::Error) -> HelperError {
-    HelperError::new(ErrorCode::Internal, "could not read the helper diagnostic log")
+    HelperError::new(
+        ErrorCode::Internal,
+        "could not read the helper diagnostic log",
+    )
 }
 
 fn validate_tun_name(name: &str) -> Result<(), HelperError> {

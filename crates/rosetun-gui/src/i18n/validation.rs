@@ -260,14 +260,16 @@ fn source_keys(source: &str, path: &Path) -> BTreeSet<String> {
         position == 0
             || !matches!(source.as_bytes()[position - 1], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
     };
-    let macro_call = concat!("tr", "!(");
-    for (position, _) in source.match_indices(macro_call) {
-        if !boundary(position) {
-            continue;
+    for macro_call in [concat!("tr", "!("), concat!("report", "_label!(")] {
+        for (position, _) in source.match_indices(macro_call) {
+            if !boundary(position) {
+                continue;
+            }
+            let key = string_literal(source, position + macro_call.len()).unwrap_or_else(|| {
+                panic!("Dynamic translation key in {}:{position}", path.display())
+            });
+            keys.insert(key);
         }
-        let key = string_literal(source, position + macro_call.len())
-            .unwrap_or_else(|| panic!("Dynamic tr! key in {}:{position}", path.display()));
-        keys.insert(key);
     }
     let function_call = concat!("tr", "_in(");
     for (position, _) in source.match_indices(function_call) {

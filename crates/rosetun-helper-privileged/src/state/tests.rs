@@ -1977,7 +1977,9 @@ fn diagnostic_log_is_only_available_to_the_last_session_owner() {
         ErrorCode::AccessDenied
     );
 
-    helper.connect_as(&other, &request).expect("new owner connects");
+    helper
+        .connect_as(&other, &request)
+        .expect("new owner connects");
     assert_eq!(
         helper.diagnostic_log_as(&owner).unwrap_err().code,
         ErrorCode::AccessDenied

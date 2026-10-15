@@ -33,3 +33,4 @@ rosetun-shell.workspace = true
 serde_json.workspace = true
 tray-icon.workspace = true
 rfd.workspace = true
+windows-sys.workspace = true

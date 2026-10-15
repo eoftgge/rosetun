@@ -627,6 +627,39 @@ fn failed_autostart_write_clears_busy_and_loaded_state() {
 
 #[cfg(windows)]
 #[test]
+fn report_flow_handles_cancel_and_saved_folder_without_a_helper() {
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    assert!(matches!(
+        state.act(Action::SaveReport),
+        Some(Job::SaveReport { snapshot, .. }) if snapshot.helper_version.is_none()
+    ));
+    assert!(state.act(Action::SaveReport).is_none());
+    state.reduce(WorkerEvent::ReportSaved {
+        result: Ok(None),
+        new_checks: None,
+    });
+    assert!(!state.settings.screen.report_running);
+    assert!(state.settings.screen.report_saved.is_none());
+
+    assert!(matches!(
+        state.act(Action::SaveReport),
+        Some(Job::SaveReport { .. })
+    ));
+    state.reduce(WorkerEvent::ReportSaved {
+        result: Ok(Some(PathBuf::from("C:\\Users\\ExampleUser\\report.txt"))),
+        new_checks: None,
+    });
+    assert!(matches!(
+        state.act(Action::ShowReportFolder),
+        Some(Job::OpenFolder(path)) if path.as_path() == std::path::Path::new("C:\\Users\\ExampleUser")
+    ));
+}
+
+#[cfg(windows)]
+#[test]
 fn folder_launch_uses_the_worker_and_reports_failures() {
     let mut state = State {
         config_ready: true,

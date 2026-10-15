@@ -17,6 +17,9 @@ mod language;
 mod system_checks;
 #[cfg(windows)]
 #[allow(unsafe_code)]
+mod system_info;
+#[cfg(windows)]
+#[allow(unsafe_code)]
 mod window;
 
 #[cfg(windows)]
@@ -27,5 +30,7 @@ pub use instance::{Activation, Instance, acquire};
 pub use language::user_language_is_russian;
 #[cfg(windows)]
 pub use system_checks::{proxy_settings, windivert_running};
+#[cfg(windows)]
+pub use system_info::{local_report_timestamp, windows_build};
 #[cfg(windows)]
 pub use window::{SavedWindow, place_window, saved_window};
