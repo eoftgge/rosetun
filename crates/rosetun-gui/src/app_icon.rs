@@ -12,12 +12,7 @@ fn app_icon() -> Vec<u8> {
 
     let mut images = Vec::new();
     for size in SIZES {
-        let icon = if size >= 40 {
-            RoseIcon::Large
-        } else {
-            RoseIcon::Small
-        };
-        let rgba = rose_icon::rose_icon_rgba(size, icon);
+        let rgba = rose_icon::rose_icon_rgba(size, RoseIcon::Large);
         let image = dib(&rgba, size);
         let offset = (6 + 16 * SIZES.len() + images.len()) as u32;
         ico.extend_from_slice(&[size as u8, size as u8, 0, 0]);
@@ -86,6 +81,11 @@ mod tests {
             &[11, 10, 9, 12, 15, 14, 13, 16, 3, 2, 1, 4, 7, 6, 5, 8]
         );
         assert_eq!(&image[56..], &[0; 8]);
+    }
+
+    #[test]
+    fn committed_icon_matches_the_rose_renderer() {
+        assert_eq!(include_bytes!("../assets/rosetun.ico").as_slice(), app_icon());
     }
 
     #[test]

@@ -21,6 +21,7 @@ mod reorder;
 #[cfg(windows)]
 mod report;
 mod rose_icon;
+mod rose_shape;
 mod rules;
 mod state;
 mod theme;
