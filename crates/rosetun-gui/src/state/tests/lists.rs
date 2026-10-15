@@ -49,7 +49,7 @@ fn selected_list_categories_submit_one_ordered_batch() {
     }
     dialog.toggle_category("beta");
     assert_eq!(dialog.selected_categories, ["google", "alpha", "beta"]);
-    let Some(Job::AddRules(_, matchers, RuleTarget::Proxy)) = state.act(Action::SubmitAddRule)
+    let Some(Job::AddRules(_, matchers, RuleDestination::Proxy)) = state.act(Action::SubmitAddRule)
     else {
         panic!("list categories must produce one batch job");
     };
@@ -353,7 +353,7 @@ fn list_rule_requires_a_dat_category_and_submits_a_valid_matcher() {
         .unwrap()
         .selected_categories
         .push("example@cn".into());
-    let Some(Job::AddRules(set, mut matchers, RuleTarget::Proxy)) =
+    let Some(Job::AddRules(set, mut matchers, RuleDestination::Proxy)) =
         state.act(Action::SubmitAddRule)
     else {
         panic!("a valid category must produce a list rule job");

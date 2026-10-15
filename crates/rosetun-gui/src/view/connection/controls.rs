@@ -129,7 +129,10 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                         },
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.colored_label(target_color(rule.target), target_label(rule.target));
+                        ui.colored_label(
+                            target_color(rule.target),
+                            rule_label(rule, &state.config.exits),
+                        );
                     });
                 });
             }

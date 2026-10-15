@@ -514,3 +514,10 @@ fn rejected_reality_node_uses_its_own_hint_and_tls_keeps_the_existing_one() {
         });
     }
 }
+
+#[test]
+fn country_names_follow_the_interface_language() {
+    let code = rosetun_config::CountryCode::parse("US").unwrap();
+    assert_eq!(in_language(Language::Russian, || country_name(&code)), "США");
+    assert_eq!(in_language(Language::English, || country_name(&code)), "United States");
+}

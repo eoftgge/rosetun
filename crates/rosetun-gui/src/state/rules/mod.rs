@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use rosetun_config::{RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget};
+use rosetun_core::RuleDestination;
 
 use super::{Action, Job, Screen, State};
 use crate::errors;
@@ -212,6 +213,15 @@ impl State {
         }
     }
 
+    /// Adds the temporary rule once its new exit is saved and the config reloaded.
+    pub(crate) fn take_rule_resubmit(&mut self) -> Option<Job> {
+        let dialog = self.rules.screen.add.as_mut()?;
+        if !std::mem::take(&mut dialog.resubmit) {
+            return None;
+        }
+        self.act(Action::SubmitAddRule)
+    }
+
     pub(super) fn start_rule_edit(&mut self, job: Job) -> Option<Job> {
         self.operations.rules_edit = true;
         self.operation_error = None;
@@ -263,6 +273,25 @@ impl State {
             }
             WorkerEvent::UpdateRule(result) => self.finish_dialog_rule_edit(result),
             WorkerEvent::SetRuleTarget(result) => self.finish_rule_edit(result),
+            WorkerEvent::CreateExit(result) => {
+                self.operations.rules_edit = false;
+                let message = result
+                    .as_ref()
+                    .err()
+                    .map(|error| self.text(&errors::exit(crate::i18n::language(), error)));
+                if let Some(dialog) = &mut self.rules.screen.add {
+                    dialog.busy = false;
+                    match result {
+                        Ok(exit) => {
+                            dialog.target = RuleDestination::Exit(exit.id);
+                            dialog.resubmit = true;
+                        }
+                        Err(_) => dialog.error = message,
+                    }
+                } else {
+                    self.operation_error = message;
+                }
+            }
             WorkerEvent::SetRuleEnabled(result) => self.finish_rule_edit(result),
             WorkerEvent::MoveRule(result) => self.finish_rule_edit(result),
             WorkerEvent::MoveRules(result) => self.finish_rule_edit(result),
@@ -455,7 +484,7 @@ impl State {
                     return self.start_rule_edit(Job::AddRule(
                         set.id.clone(),
                         RuleMatcher::Template(template),
-                        template.default_target(),
+                        template.default_target().into(),
                     ));
                 }
             }
@@ -482,7 +511,7 @@ impl State {
                     && set
                         .rules
                         .iter()
-                        .any(|item| item.id == rule && item.target != target)
+                        .any(|item| item.id == rule && RuleDestination::of(item) != target)
                 {
                     return self.start_rule_edit(Job::SetRuleTarget(set.id.clone(), rule, target));
                 }

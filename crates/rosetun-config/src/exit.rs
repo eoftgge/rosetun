@@ -36,6 +36,13 @@ impl CountryCode {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Every accepted code, in alphabetical order.
+    pub fn all() -> impl Iterator<Item = Self> {
+        ISO_CODES
+            .split_ascii_whitespace()
+            .map(|code| Self(code.to_owned()))
+    }
 }
 
 impl<'de> Deserialize<'de> for CountryCode {

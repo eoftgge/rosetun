@@ -363,7 +363,7 @@ fn disconnect_resets_the_open_rule_dialog_to_permanent() {
     assert!(!state.rules.screen.add.as_ref().unwrap().temporary_only);
     assert!(matches!(
         state.act(Action::SubmitAddRule),
-        Some(Job::AddRules(_, _, RuleTarget::Direct))
+        Some(Job::AddRules(_, _, RuleDestination::Direct))
     ));
 }
 
@@ -479,7 +479,7 @@ fn keeping_temporary_rule_saves_first_then_applies_without_the_overlay() {
     state.rules.screen.selected_set = Some(RuleSetId::new("1"));
     assert!(matches!(
         state.act(Action::KeepTemporary(rule.id.clone())),
-        Some(Job::AddRules(set, matchers, RuleTarget::Direct))
+        Some(Job::AddRules(set, matchers, RuleDestination::Direct))
             if set == RuleSetId::new("1") && matchers == vec![rule.matcher.clone()]
     ));
     assert!(state.take_keep_apply().is_none());
@@ -1291,4 +1291,57 @@ fn grouped_edit_while_connected_requires_explicit_apply() {
     assert!(state.pending_reconnect(SessionPart::Rules));
     assert!(state.can_apply());
     assert!(state.take_apply().is_none());
+}
+
+#[test]
+fn temporary_rule_through_a_new_exit_saves_the_exit_then_applies() {
+    let mut state = connected_state_for_apply();
+    temporary_dialog(&mut state, "session.example");
+    let code = rosetun_config::CountryCode::parse("NL").unwrap();
+    let new = NewExit::Country {
+        code: code.clone(),
+        name: "Netherlands".into(),
+    };
+    state.rules.screen.add.as_mut().unwrap().target = RuleDestination::NewExit(new.clone());
+    assert!(matches!(
+        state.act(Action::SubmitAddRule),
+        Some(Job::CreateExit(exit)) if exit == new
+    ));
+    assert!(state.rules.screen.add.as_ref().unwrap().busy);
+    assert!(state.take_rule_resubmit().is_none());
+
+    let exit = rosetun_config::Exit {
+        id: rosetun_config::ExitId::new("1"),
+        name: "Netherlands".into(),
+        target: rosetun_config::ExitTarget::Country(code),
+    };
+    state.config.exits.push(exit.clone());
+    state.reduce(WorkerEvent::CreateExit(Ok(exit.clone())));
+    let Some(Job::Apply(request)) = state.take_rule_resubmit() else {
+        panic!("the temporary rule must apply once its exit is saved");
+    };
+    let rule = &state.session.temporary_rules[0];
+    assert_eq!(rule.target, RuleTarget::Exit);
+    assert_eq!(rule.exit.as_ref(), Some(&exit.id));
+    assert_eq!(&request.temporary_rules[0].matcher, &rule.matcher);
+    assert!(state.rules.screen.add.is_none());
+    assert!(state.take_rule_resubmit().is_none());
+}
+
+#[test]
+fn failed_exit_for_a_temporary_rule_keeps_the_dialog_with_the_error() {
+    let mut state = connected_state_for_apply();
+    temporary_dialog(&mut state, "session.example");
+    state.rules.screen.add.as_mut().unwrap().target =
+        RuleDestination::NewExit(NewExit::Country {
+            code: rosetun_config::CountryCode::parse("NL").unwrap(),
+            name: "Netherlands".into(),
+        });
+    assert!(state.act(Action::SubmitAddRule).is_some());
+    state.reduce(WorkerEvent::CreateExit(Err(rosetun_core::ExitError::TooMany)));
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    assert!(!dialog.busy);
+    assert!(dialog.error.as_deref().unwrap().contains("16"));
+    assert!(state.take_rule_resubmit().is_none());
+    assert!(state.session.temporary_rules.is_empty());
 }

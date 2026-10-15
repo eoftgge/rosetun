@@ -1,5 +1,6 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
-use rosetun_config::{Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
+use rosetun_config::{Exit, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
+use rosetun_core::{NewExit, RuleDestination};
 
 use crate::icons::{self, Icon};
 use crate::reorder::group_drop_target;
@@ -15,6 +16,8 @@ const ICON_WIDTH: f32 = 34.0;
 const TARGET_WIDTH: f32 = 150.0;
 const TARGET_DOT_X: f32 = 14.0;
 const TARGET_TEXT_X: f32 = 26.0;
+const TARGET_CHEVRON_SPACE: f32 = 28.0;
+const TARGET_MENU_WIDTH: f32 = 240.0;
 const TOGGLE_WIDTH: f32 = 38.0;
 const MENU_WIDTH: f32 = 32.0;
 const ROW_INSET: f32 = 12.0;
@@ -46,7 +49,9 @@ use selection::{clear_selection_on_click_away, selection_shortcuts, selection_sl
 use sets::set_controls;
 use table::{default_rule, rule_row, scroll_rules_while_dragging};
 #[cfg(test)]
-use table::{drag_scroll_delta, drag_target, drop_action, table_cell, target_button, value_cell};
+use table::{
+    TargetChoice, drag_scroll_delta, drag_target, drop_action, table_cell, target_button, value_cell,
+};
 #[cfg(test)]
 use templates::template_card;
 use templates::template_section;
@@ -385,7 +390,12 @@ fn target_filter(
                     .selected_text(selected_text)
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut selected, None, tr!("any-action"));
-                        for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
+                        for target in [
+                            RuleTarget::Proxy,
+                            RuleTarget::Direct,
+                            RuleTarget::Block,
+                            RuleTarget::Exit,
+                        ] {
                             ui.selectable_value(
                                 &mut selected,
                                 Some(target),
@@ -409,7 +419,8 @@ pub(crate) fn target_label(target: RuleTarget) -> String {
     match target {
         RuleTarget::Proxy => tr!("proxy"),
         RuleTarget::Direct => tr!("direct"),
-        RuleTarget::Block | RuleTarget::Exit => tr!("block"),
+        RuleTarget::Block => tr!("block"),
+        RuleTarget::Exit => tr!("target-exit-any"),
     }
 }
 
@@ -417,8 +428,39 @@ pub(crate) fn target_color(target: RuleTarget) -> Color32 {
     match target {
         RuleTarget::Proxy => theme::ROSE_LIGHT,
         RuleTarget::Direct => theme::TEXT_MUTED,
-        RuleTarget::Block | RuleTarget::Exit => theme::ERROR,
+        RuleTarget::Block => theme::ERROR,
+        RuleTarget::Exit => theme::EXIT,
     }
+}
+
+/// "Through <exit name>" for an exit, the plain target's word otherwise.
+pub(crate) fn destination_label(destination: &RuleDestination, exits: &[Exit]) -> String {
+    let name = match destination {
+        RuleDestination::Proxy => return target_label(RuleTarget::Proxy),
+        RuleDestination::Direct => return target_label(RuleTarget::Direct),
+        RuleDestination::Block => return target_label(RuleTarget::Block),
+        RuleDestination::Exit(id) => match exits.iter().find(|exit| &exit.id == id) {
+            Some(exit) => &exit.name,
+            None => return target_label(RuleTarget::Exit),
+        },
+        RuleDestination::NewExit(NewExit::Country { name, .. } | NewExit::Node { name, .. }) => {
+            name
+        }
+    };
+    tr!("target-exit", name = crate::display::safe_text(name))
+}
+
+pub(crate) fn destination_color(destination: &RuleDestination) -> Color32 {
+    match destination {
+        RuleDestination::Proxy => target_color(RuleTarget::Proxy),
+        RuleDestination::Direct => target_color(RuleTarget::Direct),
+        RuleDestination::Block => target_color(RuleTarget::Block),
+        RuleDestination::Exit(_) | RuleDestination::NewExit(_) => target_color(RuleTarget::Exit),
+    }
+}
+
+pub(crate) fn rule_label(rule: &Rule, exits: &[Exit]) -> String {
+    destination_label(&RuleDestination::of(rule), exits)
 }
 
 #[cfg(test)]

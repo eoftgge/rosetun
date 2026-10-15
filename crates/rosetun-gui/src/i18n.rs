@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 
 use fluent_bundle::concurrent::FluentBundle;
 use fluent_bundle::{FluentArgs, FluentResource};
-use rosetun_config::LanguageSetting;
+use rosetun_config::{CountryCode, LanguageSetting};
 
 macro_rules! tr {
     ($key:literal $(,)?) => {
@@ -111,6 +111,16 @@ pub(crate) fn tr_in(language: Language, key: &str, args: &FluentArgs<'_>) -> Str
         tracing::warn!(key, "Could not format interface text");
     }
     format(Language::English, key, args).unwrap_or_else(|| key.to_owned())
+}
+
+/// The country's short name; every `CountryCode::all` code has a `country-XX` message.
+pub(crate) fn country_name(code: &CountryCode) -> String {
+    format(
+        language(),
+        &format!("country-{}", code.as_str()),
+        &FluentArgs::new(),
+    )
+    .unwrap_or_else(|| code.as_str().to_owned())
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ mod app;
 mod app_icon;
 mod brand;
 mod constants;
+mod destinations;
 mod display;
 mod errors;
 mod icons;

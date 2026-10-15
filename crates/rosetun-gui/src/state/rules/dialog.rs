@@ -1,9 +1,8 @@
 #[cfg(windows)]
 use std::path::PathBuf;
 
-use rosetun_config::{
-    DomainMatch, ListId, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSetId, RuleTarget,
-};
+use rosetun_config::{DomainMatch, ListId, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSetId};
+use rosetun_core::RuleDestination;
 
 use super::super::{Action, Job, State};
 use crate::errors;
@@ -24,7 +23,11 @@ pub(crate) const MAX_LIST_RULES: usize = 256;
 pub(crate) struct AddRuleDialog {
     pub(crate) set: RuleSetId,
     pub(crate) kind: RuleInputKind,
-    pub(crate) target: RuleTarget,
+    pub(crate) target: RuleDestination,
+    /// The "Specific server" search in the destination picker.
+    pub(crate) node_search: String,
+    /// A temporary rule's new exit was saved; submit again with it.
+    pub(crate) resubmit: bool,
     pub(crate) domains: String,
     pub(crate) ips: String,
     pub(crate) list: Option<ListId>,
@@ -58,7 +61,9 @@ impl AddRuleDialog {
         Self {
             set,
             kind: RuleInputKind::Process,
-            target: RuleTarget::Proxy,
+            target: RuleDestination::Proxy,
+            node_search: String::new(),
+            resubmit: false,
             domains: String::new(),
             ips: String::new(),
             list: None,
@@ -91,7 +96,7 @@ impl AddRuleDialog {
     pub(in crate::state) fn for_rule(set: RuleSetId, rule: &Rule) -> Option<Self> {
         let mut dialog = Self::new(set);
         dialog.editing = Some(rule.id.clone());
-        dialog.target = rule.target;
+        dialog.target = RuleDestination::of(rule);
         match &rule.matcher {
             RuleMatcher::Domain(domain) => {
                 dialog.kind = RuleInputKind::Domain;
@@ -499,7 +504,15 @@ impl State {
                             return None;
                         }
                         if dialog.temporary_only && dialog.editing.is_none() {
-                            let target = dialog.target;
+                            if let RuleDestination::NewExit(exit) = &dialog.target {
+                                let job = Job::CreateExit(exit.clone());
+                                if let Some(dialog) = &mut self.rules.screen.add {
+                                    dialog.busy = true;
+                                    dialog.error = None;
+                                }
+                                return self.start_rule_edit(job);
+                            }
+                            let target = dialog.target.clone();
                             return self.act(Action::AddTemporary(matchers, target));
                         }
                         let job = if let Some(id) = &dialog.editing {
@@ -507,18 +520,29 @@ impl State {
                                 .selected_rules()
                                 .and_then(|set| set.rules.iter().find(|rule| &rule.id == id))?;
                             let matcher = matchers.pop().unwrap();
-                            if current.matcher == matcher && current.target == dialog.target {
+                            if current.matcher == matcher
+                                && RuleDestination::of(current) == dialog.target
+                            {
                                 self.rules.screen.add = None;
                                 return None;
                             }
-                            Job::UpdateRule(dialog.set.clone(), id.clone(), matcher, dialog.target)
+                            Job::UpdateRule(
+                                dialog.set.clone(),
+                                id.clone(),
+                                matcher,
+                                dialog.target.clone(),
+                            )
                         } else if matches!(
                             dialog.kind,
                             RuleInputKind::Domain | RuleInputKind::List | RuleInputKind::Ip
                         ) {
-                            Job::AddRules(dialog.set.clone(), matchers, dialog.target)
+                            Job::AddRules(dialog.set.clone(), matchers, dialog.target.clone())
                         } else {
-                            Job::AddRule(dialog.set.clone(), matchers.pop().unwrap(), dialog.target)
+                            Job::AddRule(
+                                dialog.set.clone(),
+                                matchers.pop().unwrap(),
+                                dialog.target.clone(),
+                            )
                         };
                         if let Some(dialog) = &mut self.rules.screen.add {
                             dialog.busy = true;

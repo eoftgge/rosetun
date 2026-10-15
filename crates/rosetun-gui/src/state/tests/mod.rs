@@ -156,7 +156,7 @@ fn temporary_dialog(state: &mut State, domain: &str) {
     dialog.kind = RuleInputKind::Domain;
     dialog.domains = domain.into();
     dialog.subdomains = false;
-    dialog.target = RuleTarget::Direct;
+    dialog.target = RuleDestination::Direct;
     dialog.temporary_only = true;
     state.rules.screen.add = Some(dialog);
 }

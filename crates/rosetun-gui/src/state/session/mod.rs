@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use rosetun_config::{ConnectionState, ExitId, Rule, RuleId, Selection, Status};
-use rosetun_core::AppliedSnapshot;
+use rosetun_core::{AppliedSnapshot, RuleDestination};
 use rosetun_ipc::{
     ClientError, ConnectRequest, ConnectRequestError, ErrorCode, ExitContext, HelperError,
 };
@@ -818,7 +818,7 @@ impl State {
                         .chain(set.rules.iter())
                         .cloned()
                         .collect();
-                    let added = rosetun_core::temporary_rules(&existing, matchers, &target.into())
+                    let added = rosetun_core::temporary_rules(&existing, matchers, &target)
                         .map_or_else(|_| Vec::new(), |rules| rules.added);
                     if added.is_empty() {
                         let message = self.text(&errors::rule_set(
@@ -878,7 +878,7 @@ impl State {
                         .find(|rule| rule.id == id)
                 {
                     let job =
-                        Job::AddRules(set.id.clone(), vec![rule.matcher.clone()], rule.target);
+                        Job::AddRules(set.id.clone(), vec![rule.matcher.clone()], RuleDestination::of(rule));
                     self.session.keep_temporary = Some(id);
                     return self.start_rule_edit(job);
                 }

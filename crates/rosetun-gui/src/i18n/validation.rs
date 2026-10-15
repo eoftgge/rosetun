@@ -326,6 +326,10 @@ fn source_uses_only_existing_messages_and_no_messages_are_orphaned() {
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
         &mut used,
     );
+    // `country_name` builds these keys at run time.
+    used.extend(
+        rosetun_config::CountryCode::all().map(|code| format!("country-{}", code.as_str())),
+    );
     for key in &used {
         assert!(
             english.messages.contains_key(key),
@@ -443,5 +447,17 @@ fn translation_files_use_plain_punctuation() {
     for (_, source) in resources() {
         assert!(!source.contains('—'));
         assert!(!source.contains("..."));
+    }
+}
+
+#[test]
+fn every_country_code_has_a_name_in_both_languages() {
+    let [(.., english), (.., russian)] = resources();
+    let english = catalog(english);
+    let russian = catalog(russian);
+    for code in rosetun_config::CountryCode::all() {
+        let key = format!("country-{}", code.as_str());
+        assert!(english.messages.contains_key(&key), "English {key}");
+        assert!(russian.messages.contains_key(&key), "Russian {key}");
     }
 }

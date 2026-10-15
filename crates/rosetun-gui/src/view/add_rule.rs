@@ -1,13 +1,14 @@
 use eframe::egui::{self, Color32, FontFamily, FontId, RichText, Stroke};
-use rosetun_config::{List, ListId, ProcessMatch, RuleTarget};
+use rosetun_config::{AppConfig, ExitTarget, List, ListId, ProcessMatch, RuleTarget};
+use rosetun_core::{NewExit, RuleDestination};
 
 use crate::display;
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::rules::{ProcessMatchMode, process_matches_filter, update_process_match_mode};
 use crate::state::{Action, AddRuleDialog, RuleInputKind};
-use crate::view::rules::{target_color, target_label};
-use crate::{constants, i18n, theme, widgets};
+use crate::view::rules::{destination_color, destination_label, target_color, target_label};
+use crate::{constants, destinations, i18n, theme, widgets};
 
 const DIALOG_WIDTH: f32 = 640.0;
 const DIALOG_TOP: f32 = 100.0;
@@ -25,6 +26,10 @@ const ADVANCED_HEADER_HEIGHT: f32 = 32.0;
 const ADVANCED_ROW_HEIGHT: f32 = 44.0;
 const DIVIDER_HEIGHT: f32 = 16.0;
 const BOTTOM_GAP: f32 = 24.0;
+const DESTINATION_HEIGHT: f32 = 36.0;
+const DESTINATION_HINT_HEIGHT: f32 = 18.0;
+const DESTINATION_POPUP_MARGIN: f32 = 24.0;
+const MIN_DESTINATION_POPUP: f32 = 120.0;
 
 fn process_body_height(top: f32, limit: f32, advanced: bool) -> f32 {
     let min_list = if advanced {
@@ -80,11 +85,12 @@ fn footer_buttons(
 pub(crate) fn show(
     ctx: &egui::Context,
     dialog: &mut AddRuleDialog,
-    lists: &[List],
+    config: &AppConfig,
     can_temporary: bool,
     existing_list_rules: usize,
     actions: &mut Vec<Action>,
 ) {
+    let lists = &config.lists;
     if !can_temporary {
         dialog.temporary_only = false;
     }
@@ -93,7 +99,7 @@ pub(crate) fn show(
         ERROR_HEIGHT
     } else {
         0.0
-    };
+    } + destination_hint_height(dialog);
     let top = DIALOG_TOP
         .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0));
     let dialog_width = DIALOG_WIDTH.min((ctx.content_rect().width() - 144.0).max(320.0));
@@ -150,6 +156,7 @@ pub(crate) fn show(
                         - DIVIDER_HEIGHT
                         - 104.0
                         - advanced_height(dialog)
+                        - destination_hint_height(dialog)
                         - if dialog.error.is_some() {
                             ERROR_HEIGHT
                         } else {
@@ -176,7 +183,7 @@ pub(crate) fn show(
                     .small()
                     .color(theme::TEXT_DIM),
             );
-            target_cards(ui, dialog);
+            destination_picker(ui, dialog, config);
             if has_advanced(dialog) {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -1206,40 +1213,269 @@ fn full_path_available(dialog: &AddRuleDialog) -> bool {
     available
 }
 
-fn target_cards(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        let width = (ui.available_width() - 16.0) / 3.0;
-        for (index, target) in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
-            .into_iter()
-            .enumerate()
-        {
-            let response = widgets::choice_card(
-                ui,
-                index,
-                width,
-                dialog.target == target,
-                !dialog.busy,
-                &target_label(target),
-                |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            RichText::new(target_label(target))
-                                .font(FontId::new(
-                                    13.0,
-                                    FontFamily::Name(theme::UI_SEMIBOLD.into()),
-                                ))
-                                .color(target_color(target)),
-                        );
-                    });
+fn destination_hint_height(dialog: &AddRuleDialog) -> f32 {
+    if matches!(dialog.target, RuleDestination::NewExit(_)) {
+        DESTINATION_HINT_HEIGHT
+    } else {
+        0.0
+    }
+}
+
+/// "Where to send it": one field whose list opens over the dialog.
+fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &AppConfig) {
+    let enabled = !dialog.busy && ui.is_enabled();
+    let label = if dialog.target == RuleDestination::Proxy {
+        tr!("where-proxy-main")
+    } else {
+        destination_label(&dialog.target, &config.exits)
+    };
+    let color = if enabled {
+        destination_color(&dialog.target)
+    } else {
+        theme::DISABLED
+    };
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), DESTINATION_HEIGHT),
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, enabled, &label));
+    let open = egui::Popup::is_id_open(ui.ctx(), destination_popup_id());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect(
+            rect,
+            theme::RADIUS,
+            theme::INPUT,
+            Stroke::new(
+                1.0,
+                if open {
+                    theme::ROSE
+                } else if response.hovered() && enabled {
+                    theme::BORDER_STRONG
+                } else {
+                    theme::BORDER
                 },
-            );
-            if response.clicked() && !dialog.busy {
-                dialog.target = target;
-                dialog.error = None;
+            ),
+            egui::StrokeKind::Inside,
+        );
+        painter.circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 3.5, color);
+        let galley = egui::WidgetText::from(RichText::new(&label).color(color)).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (rect.width() - 62.0).max(40.0),
+            egui::TextStyle::Body,
+        );
+        painter.galley(
+            egui::pos2(rect.left() + 26.0, rect.center().y - galley.size().y / 2.0),
+            galley,
+            color,
+        );
+        icons::paint(
+            painter,
+            egui::pos2(rect.right() - 16.0, rect.center().y),
+            Icon::Chevron { open: true },
+            if enabled {
+                theme::TEXT_DIM
+            } else {
+                theme::DISABLED
+            },
+        );
+    }
+    if let RuleDestination::NewExit(NewExit::Country { name, .. } | NewExit::Node { name, .. }) =
+        &dialog.target
+    {
+        let hint = tr!("where-new-exit", name = display::safe_text(name));
+        ui.add(egui::Label::new(RichText::new(&hint).small().color(theme::TEXT_DIM)).truncate())
+            .on_hover_text(hint);
+    }
+    if !enabled {
+        return;
+    }
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let screen = ui.ctx().content_rect();
+    let room = (screen.bottom() - rect.bottom()).max(rect.top() - screen.top());
+    let mut chosen = None;
+    widgets::menu_popup(&response)
+        .id(destination_popup_id())
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .width(rect.width())
+        .show(|ui| {
+            ui.set_min_width(rect.width());
+            egui::ScrollArea::vertical()
+                .max_height((room - DESTINATION_POPUP_MARGIN).max(MIN_DESTINATION_POPUP))
+                .show(ui, |ui| {
+                    // As in `list_picker`: `menu_item` takes the width the ui already spans.
+                    ui.set_min_width(ui.available_width());
+                    chosen = destination_menu(ui, dialog, config);
+                });
+        });
+    if let Some(destination) = chosen {
+        dialog.target = destination;
+        dialog.error = None;
+    }
+}
+
+pub(crate) fn destination_popup_id() -> egui::Id {
+    egui::Id::new("rule_destination")
+}
+
+fn destination_item(
+    ui: &mut egui::Ui,
+    label: &str,
+    color: Color32,
+    enabled: bool,
+    selected: bool,
+) -> bool {
+    let item = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding.x = 26.0;
+            ui.visuals_mut().override_text_color = Some(color);
+            widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label,
+                    enabled,
+                    selected,
+                    danger: false,
+                    note: None,
+                },
+            )
+        })
+        .inner;
+    if ui.is_rect_visible(item.rect) {
+        ui.painter().circle_filled(
+            egui::pos2(item.rect.left() + 14.0, item.rect.center().y),
+            3.5,
+            if enabled { color } else { theme::DISABLED },
+        );
+    }
+    if item.clicked() {
+        ui.close();
+        return true;
+    }
+    false
+}
+
+fn destination_section(ui: &mut egui::Ui, title: String) {
+    ui.add_space(4.0);
+    ui.separator();
+    ui.label(RichText::new(title).small().color(theme::TEXT_DIM));
+}
+
+fn destination_note(ui: &mut egui::Ui, note: String) {
+    ui.add(egui::Label::new(RichText::new(note).small().color(theme::TEXT_MUTED)).wrap());
+}
+
+fn exits_full_note(ui: &mut egui::Ui) {
+    destination_note(
+        ui,
+        tr!(
+            "where-exits-full",
+            count = rosetun_ipc::MAX_EXTRA_NODES.to_string()
+        ),
+    );
+}
+
+fn destination_menu(
+    ui: &mut egui::Ui,
+    dialog: &mut AddRuleDialog,
+    config: &AppConfig,
+) -> Option<RuleDestination> {
+    let mut chosen = None;
+    for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
+        let destination = RuleDestination::from(target);
+        let selected = dialog.target == destination;
+        if destination_item(ui, &target_label(target), target_color(target), true, selected) {
+            chosen = Some(destination);
+        }
+    }
+    if !config.exits.is_empty() {
+        destination_section(ui, tr!("where-section-exits"));
+        for exit in &config.exits {
+            let name = display::safe_text(&exit.name);
+            let label = match destinations::exit_country(exit) {
+                Some(code) => format!("{name} · {}", code.as_str()),
+                None => name,
+            };
+            let destination = RuleDestination::Exit(exit.id.clone());
+            let selected = dialog.target == destination;
+            if destination_item(ui, &label, theme::EXIT, true, selected) {
+                chosen = Some(destination);
             }
         }
-    });
+    }
+    let full = destinations::exits_full(config);
+    let countries = destinations::new_countries(config);
+    let has_country_exit = config
+        .exits
+        .iter()
+        .any(|exit| matches!(exit.target, ExitTarget::Country(_)));
+    if !countries.is_empty() || has_country_exit {
+        destination_section(ui, tr!("where-section-country"));
+        if full {
+            exits_full_note(ui);
+        }
+        if countries.is_empty() {
+            destination_note(ui, tr!("where-country-none"));
+        }
+        for code in countries {
+            let name = i18n::country_name(&code);
+            let selected = matches!(
+                &dialog.target,
+                RuleDestination::NewExit(NewExit::Country { code: picked, .. }) if picked == &code
+            );
+            let label = format!("{name} · {}", code.as_str());
+            if destination_item(ui, &label, theme::EXIT, !full, selected) {
+                chosen = Some(RuleDestination::NewExit(NewExit::Country { code, name }));
+            }
+        }
+    }
+    if config
+        .subscriptions
+        .iter()
+        .any(|subscription| !subscription.nodes.is_empty())
+    {
+        destination_section(ui, tr!("where-section-node"));
+        if full {
+            exits_full_note(ui);
+        }
+        ui.add_enabled(
+            !full,
+            egui::TextEdit::singleline(&mut dialog.node_search)
+                .desired_width(ui.available_width())
+                .hint_text(tr!("where-node-search")),
+        );
+        let nodes = destinations::matching_nodes(config, &dialog.node_search);
+        if nodes.is_empty() {
+            destination_note(ui, tr!("where-node-none"));
+        }
+        for node in nodes {
+            let selected = match (&dialog.target, node.exit) {
+                (RuleDestination::Exit(picked), Some(exit)) => picked == exit,
+                (RuleDestination::NewExit(NewExit::Node { selection, .. }), _) => {
+                    selection == &node.selection
+                }
+                _ => false,
+            };
+            let enabled = !full || node.exit.is_some();
+            let label = display::safe_text(node.name);
+            if destination_item(ui, &label, theme::EXIT, enabled, selected) {
+                chosen = Some(match node.exit {
+                    Some(exit) => RuleDestination::Exit(exit.clone()),
+                    None => RuleDestination::NewExit(NewExit::Node {
+                        selection: node.selection,
+                        name: node.name.to_owned(),
+                    }),
+                });
+            }
+        }
+    }
+    chosen
 }
 
 #[cfg(test)]
@@ -1308,7 +1544,7 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, &[], can_temporary, 0, &mut Vec::new()),
+                |ctx| show(ctx, &mut dialog, &AppConfig::default(), can_temporary, 0, &mut Vec::new()),
             );
             output.textures_delta.clear();
             assert_eq!(dialog.temporary_only, can_temporary && temporary);
@@ -1358,7 +1594,10 @@ mod tests {
                 show(
                     ctx,
                     &mut dialog,
-                    std::slice::from_ref(&list),
+                    &AppConfig {
+                        lists: vec![list.clone()],
+                        ..AppConfig::default()
+                    },
                     true,
                     0,
                     &mut Vec::new(),
@@ -1392,13 +1631,77 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, &[], true, 0, &mut Vec::new()),
+                |ctx| show(ctx, &mut dialog, &AppConfig::default(), true, 0, &mut Vec::new()),
             );
             output.textures_delta.clear();
             let rect = ctx
                 .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
                 .unwrap();
             assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
+        }
+    }
+
+    #[test]
+    fn modal_fits_compact_window_with_open_destination_list() {
+        use super::*;
+        use crate::destinations::tests::{config, exit};
+        use rosetun_config::{CountryCode, RuleSetId};
+
+        let names: Vec<(String, String)> = ["NL", "DE", "JP", "US", "GB", "FR", "SE", "FI"]
+            .iter()
+            .flat_map(|code| (0..4).map(move |index| (format!("{code}{index}"), format!("{code} {index}"))))
+            .collect();
+        let nodes: Vec<(&str, &str)> = names
+            .iter()
+            .map(|(id, name)| (id.as_str(), name.as_str()))
+            .collect();
+        let exits = (0..6)
+            .map(|index| {
+                exit(
+                    &index.to_string(),
+                    ExitTarget::Country(CountryCode::parse("NL").unwrap()),
+                )
+            })
+            .collect();
+        let config = config(&nodes, exits);
+        for (width, height) in [(960.0, 640.0), (1200.0, 780.0)] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            dialog.kind = RuleInputKind::Domain;
+            dialog.target = RuleDestination::NewExit(NewExit::Country {
+                code: CountryCode::parse("DE").unwrap(),
+                name: "Germany".into(),
+            });
+            let input = || egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, height),
+                )),
+                ..egui::RawInput::default()
+            };
+            let run = |dialog: &mut AddRuleDialog| {
+                let mut output = ctx.run_ui(input(), |ctx| {
+                    show(ctx, dialog, &config, false, 0, &mut Vec::new())
+                });
+                output.textures_delta.clear();
+            };
+            run(&mut dialog);
+            egui::Popup::open_id(&ctx, destination_popup_id());
+            for _ in 0..3 {
+                run(&mut dialog);
+            }
+            let modal = ctx
+                .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+                .unwrap();
+            let popup = ctx
+                .memory(|memory| memory.area_rect(destination_popup_id()))
+                .expect("the destination list is open");
+            for rect in [modal, popup] {
+                assert!(rect.top() >= 0.0, "{rect:?} in {width}×{height}");
+                assert!(rect.bottom() <= height, "{rect:?} in {width}×{height}");
+            }
+            assert!(egui::Popup::is_id_open(&ctx, destination_popup_id()));
         }
     }
 
@@ -1421,7 +1724,7 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, &[], false, 0, &mut Vec::new()),
+                |ctx| show(ctx, &mut dialog, &AppConfig::default(), false, 0, &mut Vec::new()),
             );
             output.textures_delta.clear();
             let rect = ctx

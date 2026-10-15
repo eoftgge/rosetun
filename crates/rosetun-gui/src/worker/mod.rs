@@ -8,11 +8,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, DnsSettings, LanguageSetting, List, ListId, Node, NodeId, Rule, RuleId, RuleMatcher,
+    AppConfig, DnsSettings, Exit, LanguageSetting, List, ListId, Node, NodeId, Rule, RuleId,
+    RuleMatcher,
     RuleSet, RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
-    AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitInfo, ExitInfoError, ListError,
+    AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitError, ExitInfo,
+    ExitInfoError, ListError, NewExit, RuleDestination, create_exit,
     ListOperation, ListPreparationError, ListUpdateResult, MissingListCategory,
     MoveSubscriptionError, PING_PARALLEL, PING_TIMEOUT, Ping, Release, RemoveSubscriptionError,
     RenameSubscriptionError, RuleSetError, SelectNodeError, SelectRuleSetError, SettingChange,
@@ -133,6 +135,7 @@ pub(crate) enum WorkerEvent {
     AddRules(Result<AddedRules, RuleSetError>),
     UpdateRule(Result<(), RuleSetError>),
     SetRuleTarget(Result<(), RuleSetError>),
+    CreateExit(Result<Exit, ExitError>),
     SetRuleEnabled(Result<(), RuleSetError>),
     MoveRule(Result<(), RuleSetError>),
     MoveRules(Result<(), RuleSetError>),

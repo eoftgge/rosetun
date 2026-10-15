@@ -9,7 +9,7 @@ use crate::state::{Action, ExitLookup, ExitRoute, SessionPart, State, TunnelDela
 use crate::{display, i18n, theme, widgets};
 
 use super::rose_button::{self, RosePhase};
-use super::rules::{target_color, target_label};
+use super::rules::{rule_label, target_color};
 
 mod controls;
 mod hero;

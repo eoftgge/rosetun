@@ -76,14 +76,64 @@ pub(super) fn value_cell(
     })
 }
 
+/// One entry of a target menu.
+pub(super) struct TargetChoice {
+    pub(super) destination: RuleDestination,
+    pub(super) label: String,
+    pub(super) color: Color32,
+    /// A section title drawn above this entry.
+    pub(super) section: Option<String>,
+}
+
+impl TargetChoice {
+    pub(super) fn plain(target: RuleTarget) -> Self {
+        Self {
+            destination: target.into(),
+            label: target_label(target),
+            color: target_color(target),
+            section: None,
+        }
+    }
+
+    pub(super) fn of(destination: RuleDestination, exits: &[Exit]) -> Self {
+        Self {
+            label: destination_label(&destination, exits),
+            color: destination_color(&destination),
+            destination,
+            section: None,
+        }
+    }
+}
+
+/// A rule row's choices: the plain targets, then "Your exits". New exits are made in the dialog.
+pub(super) fn rule_target_choices(exits: &[Exit]) -> Vec<TargetChoice> {
+    let mut choices: Vec<_> = [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
+        .into_iter()
+        .map(TargetChoice::plain)
+        .collect();
+    for (index, exit) in exits.iter().enumerate() {
+        let mut choice = TargetChoice::of(RuleDestination::Exit(exit.id.clone()), exits);
+        let name = crate::display::safe_text(&exit.name);
+        choice.label = match crate::destinations::exit_country(exit) {
+            Some(code) => format!("{name} · {}", code.as_str()),
+            None => name,
+        };
+        if index == 0 {
+            choice.section = Some(tr!("where-section-exits"));
+        }
+        choices.push(choice);
+    }
+    choices
+}
+
 /// A target picker: a dot and a word in the target's colour; a click opens the choices.
 pub(super) fn target_button(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
-    target: RuleTarget,
-    choices: &[RuleTarget],
+    current: &TargetChoice,
+    choices: &[TargetChoice],
     enabled: bool,
-) -> Option<RuleTarget> {
+) -> Option<RuleDestination> {
     ui.push_id(egui::Id::new(id_salt), |ui| {
         let enabled = enabled && ui.is_enabled();
         let sense = if enabled {
@@ -103,7 +153,7 @@ pub(super) fn target_button(
                 egui::StrokeKind::Inside,
             );
             let color = if enabled {
-                target_color(target)
+                current.color
             } else {
                 theme::DISABLED
             };
@@ -112,11 +162,21 @@ pub(super) fn target_button(
                 3.5,
                 color,
             );
-            ui.painter().text(
-                egui::pos2(rect.left() + TARGET_TEXT_X, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                target_label(target),
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                current.label.clone(),
                 egui::TextStyle::Button.resolve(ui.style()),
+                color,
+            );
+            job.wrap = egui::text::TextWrapping::truncate_at_width(
+                rect.width() - TARGET_TEXT_X - TARGET_CHEVRON_SPACE,
+            );
+            let galley = ui.painter().layout_job(job);
+            ui.painter().galley(
+                egui::pos2(
+                    rect.left() + TARGET_TEXT_X,
+                    rect.center().y - galley.size().y / 2.0,
+                ),
+                galley,
                 color,
             );
             icons::paint(
@@ -133,22 +193,33 @@ pub(super) fn target_button(
         if !enabled {
             return None;
         }
-        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let response = response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(&current.label);
+        let width = if choices.len() > 3 {
+            TARGET_MENU_WIDTH
+        } else {
+            TARGET_WIDTH
+        };
         let mut selected = None;
         widgets::menu_popup(&response).show(|ui| {
-            ui.set_min_width(TARGET_WIDTH);
-            for &choice in choices {
+            ui.set_min_width(width);
+            for choice in choices {
+                if let Some(section) = &choice.section {
+                    ui.separator();
+                    ui.label(RichText::new(section).small().color(theme::TEXT_DIM));
+                }
                 let item = ui
                     .scope(|ui| {
-                        ui.set_min_width(TARGET_WIDTH);
+                        ui.set_min_width(width);
                         ui.spacing_mut().button_padding.x = TARGET_TEXT_X;
-                        ui.visuals_mut().override_text_color = Some(target_color(choice));
+                        ui.visuals_mut().override_text_color = Some(choice.color);
                         widgets::menu_item(
                             ui,
                             widgets::MenuItem {
-                                label: &target_label(choice),
+                                label: &choice.label,
                                 enabled: true,
-                                selected: choice == target,
+                                selected: choice.destination == current.destination,
                                 danger: false,
                                 note: None,
                             },
@@ -159,11 +230,12 @@ pub(super) fn target_button(
                     ui.painter().circle_filled(
                         egui::pos2(item.rect.left() + TARGET_DOT_X, item.rect.center().y),
                         3.5,
-                        target_color(choice),
+                        choice.color,
                     );
                 }
                 if item.clicked() {
-                    selected = (choice != target).then_some(choice);
+                    selected = (choice.destination != current.destination)
+                        .then(|| choice.destination.clone());
                     ui.close();
                 }
             }
@@ -289,11 +361,12 @@ pub(super) fn rule_row(
                     rule_value(ui, state, rule, index.map(|_| &set.id));
                 });
                 table_cell(ui, TARGET_WIDTH, theme::RULE_ROW, |ui| {
+                    let exits = &state.config.exits;
                     if let Some(target) = target_button(
                         ui,
                         "target",
-                        rule.target,
-                        &[RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block],
+                        &TargetChoice::of(RuleDestination::of(rule), exits),
+                        &rule_target_choices(exits),
                         !temporary && state.can_edit_rules(),
                     ) {
                         actions.push(Action::SetRuleTarget(rule.id.clone(), target));
@@ -555,6 +628,11 @@ fn rule_value(
         RuleCaption::Template => tr!("caption-template"),
     };
     let missing = state.missing_list_rule(set, &rule.id);
+    let exit_missing = rule.target == RuleTarget::Exit
+        && rule
+            .exit
+            .as_ref()
+            .is_none_or(|id| crate::destinations::unresolved_exits(&state.config).contains(id));
     let tooltip = if let RuleMatcher::Template(template) = &rule.matcher {
         let list = template
             .matchers()
@@ -594,6 +672,19 @@ fn rule_value(
                 .on_hover_text(tr!("rule-category-hint"));
             ui.add(egui::Label::new(RichText::new(warning).small().color(theme::ERROR)).truncate())
                 .on_hover_text(tr!("rule-category-hint"));
+        });
+    } else if exit_missing {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            icons::icon_badge_colored(ui, Icon::Warning, 16.0, theme::ERROR);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(tr!("exit-node-missing"))
+                        .small()
+                        .color(theme::ERROR),
+                )
+                .truncate(),
+            );
         });
     } else {
         ui.add(
@@ -656,18 +747,23 @@ pub(super) fn default_rule(
                         .on_hover_text(tr!("default-rule-tooltip"));
                     });
                     table_cell(ui, TARGET_WIDTH, theme::RULE_ROW, |ui| {
-                        let choices = if set.default_target == RuleTarget::Block {
-                            &[RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block][..]
+                        let choices: &[RuleTarget] = if set.default_target == RuleTarget::Block {
+                            &[RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block]
                         } else {
-                            &[RuleTarget::Proxy, RuleTarget::Direct][..]
+                            &[RuleTarget::Proxy, RuleTarget::Direct]
                         };
-                        if let Some(target) = target_button(
+                        let choices: Vec<_> =
+                            choices.iter().copied().map(TargetChoice::plain).collect();
+                        if let Some((target, _)) = target_button(
                             ui,
                             "target",
-                            set.default_target,
-                            choices,
+                            &TargetChoice::plain(set.default_target),
+                            &choices,
                             state.can_edit_rules(),
-                        ) {
+                        )
+                        .as_ref()
+                        .and_then(RuleDestination::settled)
+                        {
                             actions.push(Action::SetDefaultTarget(target));
                         }
                     });

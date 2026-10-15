@@ -6,7 +6,7 @@ use rosetun_config::{
     AppConfig, DnsSettings, LanguageSetting, ListId, ListSource, NodeId, RuleId, RuleMatcher,
     RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId, XrayUse,
 };
-use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset, SettingChange};
+use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, SettingChange};
 use rosetun_ipc::{ClientError, ConnectRequest};
 
 use crate::display;
@@ -240,10 +240,10 @@ pub(crate) enum Action {
     #[cfg(windows)]
     BrowseExecutable,
     SubmitAddRule,
-    AddTemporary(Vec<RuleMatcher>, RuleTarget),
+    AddTemporary(Vec<RuleMatcher>, RuleDestination),
     RemoveTemporary(RuleId),
     KeepTemporary(RuleId),
-    SetRuleTarget(RuleId, RuleTarget),
+    SetRuleTarget(RuleId, RuleDestination),
     SetRuleEnabled(RuleId, bool),
     DropRule(RuleId, usize),
     DropRules(Vec<RuleId>, usize),
@@ -330,10 +330,11 @@ pub(crate) enum Job {
     LoadProcesses(u64),
     #[cfg(windows)]
     BrowseExecutable,
-    AddRule(RuleSetId, RuleMatcher, RuleTarget),
-    AddRules(RuleSetId, Vec<RuleMatcher>, RuleTarget),
-    UpdateRule(RuleSetId, RuleId, RuleMatcher, RuleTarget),
-    SetRuleTarget(RuleSetId, RuleId, RuleTarget),
+    AddRule(RuleSetId, RuleMatcher, RuleDestination),
+    AddRules(RuleSetId, Vec<RuleMatcher>, RuleDestination),
+    UpdateRule(RuleSetId, RuleId, RuleMatcher, RuleDestination),
+    SetRuleTarget(RuleSetId, RuleId, RuleDestination),
+    CreateExit(NewExit),
     SetRuleEnabled(RuleSetId, RuleId, bool),
     MoveRule(RuleSetId, RuleId, usize),
     MoveRules(RuleSetId, Vec<RuleId>, usize),
@@ -425,6 +426,7 @@ impl State {
             | WorkerEvent::AddRules(_)
             | WorkerEvent::UpdateRule(_)
             | WorkerEvent::SetRuleTarget(_)
+            | WorkerEvent::CreateExit(_)
             | WorkerEvent::SetRuleEnabled(_)
             | WorkerEvent::MoveRule(_)
             | WorkerEvent::MoveRules(_)

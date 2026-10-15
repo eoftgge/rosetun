@@ -63,15 +63,20 @@ impl WorkerDispatcher {
         });
     }
 
-    pub(crate) fn add_rule(&self, set: RuleSetId, matcher: RuleMatcher, target: RuleTarget) {
+    pub(crate) fn add_rule(&self, set: RuleSetId, matcher: RuleMatcher, target: RuleDestination) {
         self.spawn_complete("rosetun-add-rule", move |store| {
-            WorkerEvent::AddRule(add_rule(store, &set, matcher, &target.into()))
+            WorkerEvent::AddRule(add_rule(store, &set, matcher, &target))
         });
     }
 
-    pub(crate) fn add_rules(&self, set: RuleSetId, matchers: Vec<RuleMatcher>, target: RuleTarget) {
+    pub(crate) fn add_rules(
+        &self,
+        set: RuleSetId,
+        matchers: Vec<RuleMatcher>,
+        target: RuleDestination,
+    ) {
         self.spawn_complete("rosetun-add-rules", move |store| {
-            WorkerEvent::AddRules(add_rules(store, &set, matchers, &target.into()))
+            WorkerEvent::AddRules(add_rules(store, &set, matchers, &target))
         });
     }
 
@@ -80,16 +85,22 @@ impl WorkerDispatcher {
         set: RuleSetId,
         rule: RuleId,
         matcher: RuleMatcher,
-        target: RuleTarget,
+        target: RuleDestination,
     ) {
         self.spawn_complete("rosetun-update-rule", move |store| {
-            WorkerEvent::UpdateRule(update_rule(store, &set, &rule, matcher, &target.into()))
+            WorkerEvent::UpdateRule(update_rule(store, &set, &rule, matcher, &target))
         });
     }
 
-    pub(crate) fn set_rule_target(&self, set: RuleSetId, rule: RuleId, target: RuleTarget) {
+    pub(crate) fn set_rule_target(&self, set: RuleSetId, rule: RuleId, target: RuleDestination) {
         self.spawn_complete("rosetun-set-rule-target", move |store| {
-            WorkerEvent::SetRuleTarget(set_rule_target(store, &set, &rule, &target.into()))
+            WorkerEvent::SetRuleTarget(set_rule_target(store, &set, &rule, &target))
+        });
+    }
+
+    pub(crate) fn create_exit(&self, exit: NewExit) {
+        self.spawn_complete("rosetun-create-exit", move |store| {
+            WorkerEvent::CreateExit(create_exit(store, &exit))
         });
     }
 

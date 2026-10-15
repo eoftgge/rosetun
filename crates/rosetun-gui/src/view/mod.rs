@@ -148,7 +148,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             add_rule::show(
                 ctx,
                 dialog,
-                &state.config.lists,
+                &state.config,
                 can_temporary,
                 existing_list_rules,
                 &mut actions,

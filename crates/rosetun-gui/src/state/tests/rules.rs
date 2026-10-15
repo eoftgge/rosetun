@@ -496,7 +496,7 @@ fn site_batch_requires_every_line_to_be_valid_and_obeys_subdomain_toggle() {
             "https://www.youtube.com/watch?v=1\ninstagram.com".into();
         assert!(matches!(
             state.act(Action::SubmitAddRule),
-            Some(Job::AddRules(_, matchers, RuleTarget::Proxy)) if matchers == expected
+            Some(Job::AddRules(_, matchers, RuleDestination::Proxy)) if matchers == expected
         ));
     }
 }
@@ -521,7 +521,7 @@ fn ip_rule_dialog_adds_multiple_addresses_and_corrects_host_bits() {
         "192.0.2.0/24\n2001:db8::1\n198.51.100.0/24\n192.0.2.0/24".into();
     assert!(matches!(
         state.act(Action::SubmitAddRule),
-        Some(Job::AddRules(_, matchers, RuleTarget::Proxy))
+        Some(Job::AddRules(_, matchers, RuleDestination::Proxy))
             if matchers == [
                 RuleMatcher::IpCidr("192.0.2.0/24".into()),
                 RuleMatcher::IpCidr("2001:db8::1/128".into()),
@@ -546,7 +546,7 @@ fn editing_ip_rule_opens_ip_tab_and_updates_one_rule() {
     state.rules.screen.add.as_mut().unwrap().ips = "203.0.113.1".into();
     assert!(matches!(
         state.act(Action::SubmitAddRule),
-        Some(Job::UpdateRule(_, rule, RuleMatcher::IpCidr(cidr), RuleTarget::Proxy))
+        Some(Job::UpdateRule(_, rule, RuleMatcher::IpCidr(cidr), RuleDestination::Proxy))
             if rule == id && cidr == "203.0.113.1/32"
     ));
 }
@@ -589,10 +589,10 @@ fn editing_a_suffix_rule_populates_the_site_form_and_saves_only_changes() {
     assert!(!state.operations.rules_edit);
 
     state.act(Action::OpenEditRule(id.clone()));
-    state.rules.screen.add.as_mut().unwrap().target = RuleTarget::Direct;
+    state.rules.screen.add.as_mut().unwrap().target = RuleDestination::Direct;
     assert!(matches!(
         state.act(Action::SubmitAddRule),
-        Some(Job::UpdateRule(set, rule, RuleMatcher::Domain(DomainMatch::Suffix(domain)), RuleTarget::Direct))
+        Some(Job::UpdateRule(set, rule, RuleMatcher::Domain(DomainMatch::Suffix(domain)), RuleDestination::Direct))
             if set == RuleSetId::new("2") && rule == id && domain == "example.com"
     ));
     assert!(state.rules.screen.add.as_ref().unwrap().busy);
@@ -617,10 +617,10 @@ fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
         assert!(state.act(Action::SubmitAddRule).is_none());
         assert!(state.rules.screen.add.is_none());
         state.act(Action::OpenEditRule(id.clone()));
-        state.rules.screen.add.as_mut().unwrap().target = RuleTarget::Block;
+        state.rules.screen.add.as_mut().unwrap().target = RuleDestination::Block;
         assert!(matches!(
             state.act(Action::SubmitAddRule),
-            Some(Job::UpdateRule(_, _, RuleMatcher::Domain(DomainMatch::Suffix(value)), RuleTarget::Block))
+            Some(Job::UpdateRule(_, _, RuleMatcher::Domain(DomainMatch::Suffix(value)), RuleDestination::Block))
                 if value == domain
         ));
     }
@@ -674,10 +674,10 @@ fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
     state.act(Action::SelectRuleInput(RuleInputKind::Domain));
     let dialog = state.rules.screen.add.as_mut().unwrap();
     dialog.domains = "*.example.com".into();
-    dialog.target = RuleTarget::Direct;
+    dialog.target = RuleDestination::Direct;
     assert!(matches!(
         state.act(Action::SubmitAddRule),
-        Some(Job::AddRules(set, matchers, RuleTarget::Direct))
+        Some(Job::AddRules(set, matchers, RuleDestination::Direct))
             if set == RuleSetId::new("2") && matchers == vec![RuleMatcher::Domain(DomainMatch::Suffix("example.com".into()))]
     ));
     assert!(state.act(Action::CancelAddRule).is_none());
@@ -744,7 +744,7 @@ fn add_template_requires_a_selected_set_and_no_existing_template_or_edit() {
     state.config.rule_sets[1].rules.clear();
     assert!(matches!(
         state.act(Action::AddTemplate(template)),
-        Some(Job::AddRule(set, RuleMatcher::Template(RuleTemplate::RussianSites), RuleTarget::Direct))
+        Some(Job::AddRule(set, RuleMatcher::Template(RuleTemplate::RussianSites), RuleDestination::Direct))
             if set == RuleSetId::new("2")
     ));
     assert!(state.act(Action::AddTemplate(template)).is_none());
@@ -922,8 +922,8 @@ fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
     ));
     state.reduce(WorkerEvent::MoveRule(Ok(())));
     assert!(matches!(
-        state.act(Action::SetRuleTarget(rule.clone(), RuleTarget::Direct)),
-        Some(Job::SetRuleTarget(_, _, RuleTarget::Direct))
+        state.act(Action::SetRuleTarget(rule.clone(), RuleDestination::Direct)),
+        Some(Job::SetRuleTarget(_, _, RuleDestination::Direct))
     ));
     state.reduce(WorkerEvent::SetRuleTarget(Ok(())));
     assert!(matches!(
@@ -946,10 +946,10 @@ fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
     let dialog = state.rules.screen.add.as_mut().unwrap();
     dialog.domains = "new.example".into();
     dialog.subdomains = false;
-    dialog.target = RuleTarget::Block;
+    dialog.target = RuleDestination::Block;
     assert!(matches!(
         state.act(Action::SubmitAddRule),
-        Some(Job::AddRules(_, matchers, RuleTarget::Block))
+        Some(Job::AddRules(_, matchers, RuleDestination::Block))
             if matchers == vec![RuleMatcher::Domain(DomainMatch::Exact("new.example".into()))]
     ));
     state.reduce(WorkerEvent::AddRules(Ok(rosetun_core::AddedRules {
@@ -963,4 +963,37 @@ fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
     ));
     state.reduce(WorkerEvent::RemoveRule(Ok(())));
     assert!(state.rules.screen.delete.is_none());
+}
+
+#[test]
+fn editing_an_exit_rule_keeps_its_exit() {
+    let mut state = state_with_rules();
+    let exit = rosetun_config::ExitId::new("1");
+    state.config.exits.push(rosetun_config::Exit {
+        id: exit.clone(),
+        name: "Netherlands".into(),
+        target: rosetun_config::ExitTarget::Country(
+            rosetun_config::CountryCode::parse("NL").unwrap(),
+        ),
+    });
+    let id = state.config.rule_sets[1].rules[0].id.clone();
+    state.config.rule_sets[1].rules[0].matcher =
+        RuleMatcher::Domain(DomainMatch::Suffix("example.com".into()));
+    state.config.rule_sets[1].rules[0].target = RuleTarget::Exit;
+    state.config.rule_sets[1].rules[0].exit = Some(exit.clone());
+    state.act(Action::OpenRules);
+    state.act(Action::OpenEditRule(id.clone()));
+    assert_eq!(
+        state.rules.screen.add.as_ref().unwrap().target,
+        RuleDestination::Exit(exit.clone())
+    );
+    assert!(state.act(Action::SubmitAddRule).is_none());
+    assert!(state.rules.screen.add.is_none());
+
+    state.act(Action::OpenEditRule(id.clone()));
+    state.rules.screen.add.as_mut().unwrap().domains = "example.org".into();
+    assert!(matches!(
+        state.act(Action::SubmitAddRule),
+        Some(Job::UpdateRule(_, rule, _, RuleDestination::Exit(kept))) if rule == id && kept == exit
+    ));
 }
