@@ -1,6 +1,7 @@
 use rosetun_config::{
-    DomainMatch, EngineKind, ExitId, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSetId,
-    RuleTarget, RuleTemplate, Selection, SubscriptionId, Traffic, VlessParams,
+    DomainMatch, EngineKind, ExitId, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
+    RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId, Traffic,
+    VlessParams,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
@@ -527,6 +528,8 @@ struct EngineControls {
     outcomes: Mutex<VecDeque<bool>>,
     readiness: Mutex<VecDeque<bool>>,
     rendered_rules: Mutex<Vec<RuleSet>>,
+    /// Server addresses of the extra nodes in each render.
+    rendered_extra: Mutex<Vec<Vec<String>>>,
     render_block: Mutex<Option<(Sender<()>, Receiver<()>)>>,
 }
 
@@ -601,6 +604,13 @@ impl EngineBackend for ControlledEngine {
             .lock()
             .expect("test rendered rules mutex")
             .push(request.rules.clone());
+        self.controls.rendered_extra.lock().unwrap().push(
+            request
+                .extra
+                .iter()
+                .map(|extra| extra.node.server.clone())
+                .collect(),
+        );
         Ok(RenderedConfig {
             file_name: "config.json".to_owned(),
             body: Vec::new(),
@@ -4488,14 +4498,17 @@ fn invalid_extra_nodes_are_rejected_before_connect_and_apply() {
 
     missing.extra_nodes.push(extra);
     assert!(validate_request(&missing).is_ok());
-    let safe = renderable_rule_set(&missing);
+    let effective = missing.effective_rule_set();
+    let unresolved = super::exits::ExtraNodes::new(&missing.extra_nodes, &[None], &effective);
+    let safe = unresolved.rules(&effective);
+    assert_eq!(unresolved.blocked_rules(), 1);
     assert_eq!(safe.rules[0].target, RuleTarget::Block);
     assert_eq!(missing.rule_set.rules[0].target, RuleTarget::Exit);
     let rendered = rosetun_engine_singbox::render(&RenderRequest {
         extra: &[],
         node: &missing.node,
         socks: None,
-        rules: &safe,
+        rules: safe,
         lists: &[],
         settings: &missing.settings,
         control: None,
@@ -5638,4 +5651,173 @@ fn failed_apply_restages_the_previous_list_under_protection() {
             .exists()
     );
     helper.disconnect().unwrap();
+}
+
+fn extra_node(exit: &str, server: &str) -> ExtraNode {
+    let mut node = connect_request().node;
+    node.id = NodeId::new(exit);
+    node.server = server.into();
+    ExtraNode {
+        exit: ExitId::new(exit),
+        selection: Selection {
+            subscription: SubscriptionId::new("sub"),
+            node: node.id.clone(),
+        },
+        node,
+    }
+}
+
+/// A protected request whose `198.51.100.0/24` rule leaves through `exit`.
+fn exit_request(exit: &str, server: &str) -> ConnectRequest {
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.node.server = "203.0.113.10".into();
+    request.extra_nodes = vec![extra_node(exit, server)];
+    request.rule_set.rules.push(Rule {
+        id: RuleId::new("through-exit"),
+        enabled: true,
+        matcher: RuleMatcher::IpCidr("198.51.100.0/24".into()),
+        target: RuleTarget::Exit,
+        exit: Some(ExitId::new(exit)),
+    });
+    request
+}
+
+fn last_exit_target(controls: &EngineControls) -> RuleTarget {
+    let rendered = controls.rendered_rules.lock().unwrap();
+    rendered
+        .last()
+        .unwrap()
+        .rules
+        .iter()
+        .find(|rule| rule.id == RuleId::new("through-exit"))
+        .unwrap()
+        .target
+}
+
+fn last_extra_servers(controls: &EngineControls) -> Vec<String> {
+    controls.rendered_extra.lock().unwrap().last().unwrap().clone()
+}
+
+#[test]
+fn protected_reconnect_blocks_rules_of_an_extra_name_without_an_address() {
+    let (helper, controls, _, reverted) = supervised_helper(true);
+    helper.connect(&exit_request("other", "198.51.100.20")).unwrap();
+    assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
+    assert_eq!(last_extra_servers(&controls), ["198.51.100.20"]);
+    {
+        let mut session = helper.session().unwrap();
+        // This name must never be resolved under the kill switch.
+        session.request.as_mut().unwrap().extra_nodes[0].node.server = "exit.invalid".into();
+        session.last_extra_endpoints.clear();
+    }
+
+    controls.kill();
+    helper.supervise(Instant::now());
+
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.status().node, Some(NodeId::new("node")));
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(last_exit_target(&controls), RuleTarget::Block);
+    assert!(last_extra_servers(&controls).is_empty());
+    let session = helper.session().unwrap();
+    assert_eq!(
+        session.last_endpoint.as_ref().unwrap().address,
+        "203.0.113.10".parse::<IpAddr>().unwrap()
+    );
+}
+
+#[test]
+fn protected_reconnect_uses_the_remembered_extra_address() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    helper.connect(&exit_request("other", "198.51.100.20")).unwrap();
+    {
+        let mut session = helper.session().unwrap();
+        assert_eq!(
+            session.last_extra_endpoints[&ExitId::new("other")].address,
+            "198.51.100.20".parse::<IpAddr>().unwrap()
+        );
+        session.request.as_mut().unwrap().extra_nodes[0].node.server = "EXIT.INVALID.".into();
+        session.last_extra_endpoints.insert(
+            ExitId::new("other"),
+            SuccessfulEndpoint {
+                server: "exit.invalid".into(),
+                address: "198.51.100.21".parse().unwrap(),
+            },
+        );
+    }
+
+    controls.kill();
+    helper.supervise(Instant::now());
+
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
+    assert_eq!(last_extra_servers(&controls), ["198.51.100.21"]);
+}
+
+#[test]
+fn apply_with_other_extra_nodes_restarts_and_rollback_restores_them() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let first = exit_request("other", "198.51.100.20");
+    helper.connect(&first).unwrap();
+
+    let mut second = first.clone();
+    second.extra_nodes[0].node.server = "198.51.100.30".into();
+    helper.apply(&second).unwrap();
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(last_extra_servers(&controls), ["198.51.100.30"]);
+    assert_eq!(
+        helper.session().unwrap().last_extra_endpoints[&ExitId::new("other")].address,
+        "198.51.100.30".parse::<IpAddr>().unwrap()
+    );
+
+    let mut third = second.clone();
+    third.extra_nodes[0].node.server = "198.51.100.40".into();
+    controls.fail_next(1);
+    helper.apply(&third).expect_err("the new engine fails");
+    assert_eq!(controls.spawns(), 4);
+    assert_eq!(last_extra_servers(&controls), ["198.51.100.30"]);
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&second));
+}
+
+#[test]
+fn xray_is_permitted_when_only_an_extra_node_needs_it() {
+    let (helper, _, runner, binaries, _, _) = xray_chain_helper();
+    let mut request = exit_request("other", "198.51.100.20");
+    request.extra_nodes[0].node.stream.tls = reality_request().node.stream.tls;
+    helper.connect(&request).unwrap();
+
+    let permitted = binaries.lock().unwrap()[0].clone();
+    assert_eq!(permitted.len(), 2);
+    assert_eq!(permitted[1].file_name().unwrap(), "xray.exe");
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 1);
+    assert!(helper.session().unwrap().xray_chain);
+    assert!(!helper.status().xray);
+}
+
+#[test]
+fn xray_is_not_permitted_when_no_node_needs_it() {
+    let (helper, _, runner, binaries, _, _) = xray_chain_helper();
+    helper.connect(&exit_request("other", "198.51.100.20")).unwrap();
+
+    assert_eq!(binaries.lock().unwrap()[0].len(), 1);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 0);
+    assert!(!helper.session().unwrap().xray_chain);
+}
+
+#[test]
+fn main_and_extra_nodes_share_one_xray_process() {
+    let (helper, _, runner, binaries, _, _) = xray_chain_helper();
+    let mut request = exit_request("other", "198.51.100.20");
+    request.node.stream.tls = reality_request().node.stream.tls;
+    request.extra_nodes[0].node.stream.tls = reality_request().node.stream.tls;
+    helper.connect(&request).unwrap();
+
+    assert_eq!(binaries.lock().unwrap()[0].len(), 2);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 2);
+    assert!(helper.status().xray);
 }

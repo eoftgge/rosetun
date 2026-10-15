@@ -3,13 +3,12 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use rosetun_config::{ConnectionState, uses_xray};
-use rosetun_engine::{RenderRequest, SocksProxy};
-use rosetun_engine_xray::SocksEndpoint;
+use rosetun_engine::RenderRequest;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
-    Caller, Helper, RECONNECT_BACKOFF, Reconnect, StartMode, node_with_endpoint, normalize_server,
-    probe::resolve_for_apply, render_config, renderable_rule_set, validate_request,
+    Caller, Helper, RECONNECT_BACKOFF, Reconnect, StartMode, exits, node_with_endpoint,
+    normalize_server, probe::resolve_for_apply, render_config, validate_request,
 };
 
 impl Helper {
@@ -84,35 +83,25 @@ impl Helper {
             )
         })?;
         let prepared_node = node_with_endpoint(&request.node, endpoint);
-        let socks = if uses_xray(&request.node, request.settings.xray) {
-            Some(SocksEndpoint::local().map_err(|_| {
-                HelperError::new(
-                    ErrorCode::XrayStartFailed,
-                    "Xray SOCKS endpoint is unavailable",
-                )
-            })?)
-        } else {
-            None
-        };
-        let rules = renderable_rule_set(request);
+        let extra_endpoints =
+            exits::apply_endpoints(&request.extra_nodes, &session.last_extra_endpoints);
+        let effective = request.effective_rule_set();
+        let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, &effective);
+        let socks = exits::XraySocks::new(&request.node, &extra, &request.settings)?;
         render_config(
             backend,
             &RenderRequest {
-                extra: &[],
                 node: &prepared_node,
-                socks: socks.as_ref().map(|socks| SocksProxy {
-                    address: socks.address(),
-                    username: socks.username(),
-                    password: socks.password(),
-                }),
-                rules: &rules,
+                socks: socks.main(),
+                extra: &extra.outbounds(&socks),
+                rules: extra.rules(&effective),
                 lists: &request.lists,
                 settings: &request.settings,
                 control: None,
                 verbose_log: false,
             },
         )?;
-        if let Some(socks) = socks.as_ref() {
+        if socks.any() {
             let interface =
                 (session.physical_interface)(&request.settings.tun.name).ok_or_else(|| {
                     HelperError::new(
@@ -120,14 +109,15 @@ impl Helper {
                         "physical interface is unavailable for Xray",
                     )
                 })?;
-            rosetun_engine_xray::render(
-                &[("proxy", &prepared_node, socks)],
+            socks.render(
+                &prepared_node,
+                &extra,
                 &interface,
                 false,
                 request.settings.log_level,
-            )
-            .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?;
+            )?;
         }
+        drop(socks);
 
         let previous_endpoint = current
             .node
@@ -147,6 +137,11 @@ impl Helper {
                     "previous server address is unavailable",
                 )
             })?;
+        let previous_extra_endpoints = exits::start_endpoints(
+            &current.extra_nodes,
+            StartMode::ProtectedReconnect,
+            &session.last_extra_endpoints,
+        );
         session.reserve_lists(request, Some(&current))?;
         tracing::info!(
             server = current.node != request.node || current.selection != request.selection,
@@ -154,6 +149,7 @@ impl Helper {
                 current.rule_set != request.rule_set || current.extra_nodes != request.extra_nodes,
             temporary = current.temporary_rules != request.temporary_rules,
             temporary_rules = request.temporary_rules.len(),
+            extra_nodes = request.extra_nodes.len(),
             dns = current.settings.dns != request.settings.dns,
             "applying session changes"
         );
@@ -164,14 +160,7 @@ impl Helper {
             StartMode::Fresh
         };
         match session
-            .start(
-                &request.node,
-                &rules,
-                &request.lists,
-                &request.settings,
-                mode,
-                Some(endpoint),
-            )
+            .start(request, mode, Some(endpoint), Some(extra_endpoints))
             .and_then(|()| {
                 self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
@@ -198,12 +187,10 @@ impl Helper {
                 tracing::warn!(code = ?error.code, "session changes failed; restoring previous session");
                 let rollback = session
                     .start(
-                        &current.node,
-                        &renderable_rule_set(&current),
-                        &current.lists,
-                        &current.settings,
+                        &current,
                         mode,
                         Some(previous_endpoint),
+                        Some(previous_extra_endpoints),
                     )
                     .and_then(|()| {
                         self.publish_terminal(|status| {

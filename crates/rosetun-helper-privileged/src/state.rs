@@ -1,11 +1,13 @@
 mod apply;
 mod dns;
+mod exits;
 mod path;
 mod probe;
 #[cfg(test)]
 mod tests;
 mod watchdog;
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -14,12 +16,12 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
-    ConnectionState, ListRef, Node, Rule, RuleMatcher, RuleSet, RuleTarget, Settings, Status,
-    Traffic, list_tag, uses_xray,
+    ConnectionState, ExitId, ListRef, Node, Rule, RuleMatcher, RuleTarget, Status, Traffic,
+    list_tag, uses_xray,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
-    SocksProxy, TrafficProbe, TrafficTotals, UrlTestTarget, errors::EngineError, url_test_any,
+    TrafficProbe, TrafficTotals, UrlTestTarget, errors::EngineError, url_test_any,
 };
 use rosetun_engine_xray::{SocksEndpoint, XrayHelper};
 use rosetun_ipc::transport::PeerIdentity;
@@ -132,6 +134,8 @@ enum StartMode {
 struct StartOptions {
     mode: StartMode,
     endpoint: Option<IpAddr>,
+    /// Extra node addresses in request order; `None` resolves them for `mode`.
+    extra_endpoints: Option<Vec<Option<IpAddr>>>,
     dns_timeout: Duration,
 }
 
@@ -208,6 +212,10 @@ struct Session {
     path_addresses: Arc<Mutex<Vec<Ipv4Addr>>>,
     guard: Option<Guard>,
     last_endpoint: Option<SuccessfulEndpoint>,
+    /// Last addresses of extra nodes by exit, for reconnects that cannot resolve.
+    last_extra_endpoints: HashMap<ExitId, SuccessfulEndpoint>,
+    /// Whether the running session started Xray for any node.
+    xray_chain: bool,
     request: Option<ConnectRequest>,
     owner: Arc<Mutex<Option<Vec<u8>>>>,
     reconnect: Option<Reconnect>,
@@ -275,6 +283,8 @@ impl Helper {
                 path_addresses: Arc::new(Mutex::new(Vec::new())),
                 guard: None,
                 last_endpoint: None,
+                last_extra_endpoints: HashMap::new(),
+                xray_chain: false,
                 request: None,
                 owner,
                 reconnect: None,
@@ -587,11 +597,7 @@ impl Helper {
                 return;
             }
         } else {
-            let xray_exited = if session
-                .request
-                .as_ref()
-                .is_some_and(|request| uses_xray(&request.node, request.settings.xray))
-            {
+            let xray_exited = if session.request.is_some() && session.xray_chain {
                 match session.xray_process.as_mut() {
                     Some(process) => !matches!(process.is_running(), Ok(true)),
                     None => true,
@@ -711,13 +717,11 @@ impl Helper {
         };
         match session
             .start_with_options(
-                &request.node,
-                &renderable_rule_set(&request),
-                &request.lists,
-                &request.settings,
+                &request,
                 StartOptions {
                     mode,
                     endpoint: None,
+                    extra_endpoints: None,
                     dns_timeout,
                 },
             )
@@ -849,6 +853,7 @@ impl Helper {
             dns_server = %request.settings.dns.server,
             dns_server_name = %request.settings.dns.server_name,
             verbose_log = request.settings.verbose_log_active(now_unix()),
+            extra_nodes = request.extra_nodes.len(),
             ?mode,
             "starting tunnel connection"
         );
@@ -860,14 +865,7 @@ impl Helper {
         session.missing_route_since = None;
 
         match session
-            .start(
-                &request.node,
-                &renderable_rule_set(request),
-                &request.lists,
-                &request.settings,
-                mode,
-                None,
-            )
+            .start(request, mode, None, None)
             .and_then(|()| {
                 self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
@@ -1147,27 +1145,6 @@ fn validate_tun_name(name: &str) -> Result<(), HelperError> {
         ));
     }
     Ok(())
-}
-
-fn renderable_rule_set(request: &ConnectRequest) -> RuleSet {
-    let mut rules = request.effective_rule_set();
-    let mut blocked = 0;
-    for rule in &mut rules.rules {
-        if rule.target == RuleTarget::Exit {
-            rule.target = RuleTarget::Block;
-            rule.exit = None;
-            if rule.enabled {
-                blocked += 1;
-            }
-        }
-    }
-    if blocked > 0 {
-        tracing::warn!(
-            count = blocked,
-            "exit rules rendered as reject until exit routing is available"
-        );
-    }
-    rules
 }
 
 fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
@@ -1553,21 +1530,17 @@ impl Session {
 
     fn start(
         &mut self,
-        node: &Node,
-        rules: &RuleSet,
-        lists: &[ListRef],
-        settings: &Settings,
+        request: &ConnectRequest,
         mode: StartMode,
         endpoint: Option<IpAddr>,
+        extra_endpoints: Option<Vec<Option<IpAddr>>>,
     ) -> Result<(), HelperError> {
         self.start_with_options(
-            node,
-            rules,
-            lists,
-            settings,
+            request,
             StartOptions {
                 mode,
                 endpoint,
+                extra_endpoints,
                 dns_timeout: self.dns_timeout,
             },
         )
@@ -1575,17 +1548,19 @@ impl Session {
 
     fn start_with_options(
         &mut self,
-        node: &Node,
-        rules: &RuleSet,
-        lists: &[ListRef],
-        settings: &Settings,
+        request: &ConnectRequest,
         options: StartOptions,
     ) -> Result<(), HelperError> {
         let StartOptions {
             mode,
             endpoint,
+            extra_endpoints,
             dns_timeout,
         } = options;
+        let node = &request.node;
+        let rules = &request.effective_rule_set();
+        let lists = request.lists.as_slice();
+        let settings = &request.settings;
         // Dispose of the old process before borrowing the backend or spawning another.
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
@@ -1643,23 +1618,20 @@ impl Session {
         };
 
         let resolved_node = endpoint.map(|address| node_with_endpoint(node, address));
-        let chain = settings.engine == rosetun_config::EngineKind::SingBox
-            && uses_xray(node, settings.xray);
-        let socks = if chain {
-            Some(SocksEndpoint::local().map_err(|_| {
-                HelperError::new(
-                    ErrorCode::XrayStartFailed,
-                    "Xray SOCKS endpoint is unavailable",
-                )
-            })?)
-        } else {
-            None
-        };
-        let socks_proxy = socks.as_ref().map(|socks| SocksProxy {
-            address: socks.address(),
-            username: socks.username(),
-            password: socks.password(),
+        let extra_endpoints = extra_endpoints.unwrap_or_else(|| {
+            exits::start_endpoints(&request.extra_nodes, mode, &self.last_extra_endpoints)
         });
+        let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, rules);
+        if extra.blocked_rules() > 0 {
+            tracing::warn!(
+                count = extra.blocked_rules(),
+                "exit rules blocked because their servers have no address"
+            );
+        }
+        let rules = extra.rules(rules);
+        let socks = exits::XraySocks::new(node, &extra, settings)?;
+        let chain = socks.any();
+        self.xray_chain = chain;
         let backend = self.engines.get(settings.engine).ok_or_else(|| {
             HelperError::new(
                 ErrorCode::EngineFailed,
@@ -1688,8 +1660,8 @@ impl Session {
             backend,
             &RenderRequest {
                 node: resolved_node.as_ref().unwrap_or(node),
-                socks: socks_proxy,
-                extra: &[],
+                socks: socks.main(),
+                extra: &extra.outbounds(&socks),
                 rules,
                 lists,
                 settings,
@@ -1795,7 +1767,7 @@ impl Session {
         // Without a guard there is no filter to authorize on the tunnel.
         let tunnel = tunnel.filter(|_| self.guard.is_some());
 
-        if let Some(socks) = socks.as_ref() {
+        if chain {
             let xray = self.xray.as_ref().ok_or_else(|| {
                 HelperError::new(ErrorCode::XrayStartFailed, "Xray helper is unavailable")
             })?;
@@ -1808,18 +1780,18 @@ impl Session {
                     "physical interface is unavailable for Xray",
                 )
             })?;
-            let xray_config = rosetun_engine_xray::render(
-                &[("proxy", resolved_node.as_ref().unwrap_or(node), socks)],
+            let xray_config = socks.render(
+                resolved_node.as_ref().unwrap_or(node),
+                &extra,
                 &interface,
                 verbose_until.is_some(),
                 settings.log_level,
-            )
-            .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?;
-            tracing::info!("engine chain: sing-box + xray");
+            )?;
+            tracing::info!(extra_nodes = extra.len(), "engine chain: sing-box + xray");
             check_cancelled(&self.cancelled)?;
             let spawned_at = Instant::now();
             self.xray_process = Some(
-                xray.spawn(&xray_binary, &xray_config, &[socks], self.gate.deadline())
+                xray.spawn(&xray_binary, &xray_config, &socks.endpoints(), self.gate.deadline())
                     .map_err(|error| {
                         HelperError::new(ErrorCode::XrayStartFailed, error.to_string())
                     })?,
@@ -1840,7 +1812,7 @@ impl Session {
                 }
             })?;
         } else {
-            tracing::info!("engine chain: sing-box");
+            tracing::info!(extra_nodes = extra.len(), "engine chain: sing-box");
         }
 
         tracing::info!(engine = %backend.kind().as_str(), "spawning tunnel engine");
@@ -2057,6 +2029,11 @@ impl Session {
             server: normalize_server(&node.server),
             address,
         });
+        exits::remember(
+            &mut self.last_extra_endpoints,
+            &request.extra_nodes,
+            &extra_endpoints,
+        );
         check_cancelled(&self.cancelled)
     }
 
@@ -2111,11 +2088,7 @@ impl Session {
             .process
             .as_mut()
             .is_some_and(|process| matches!(process.is_running(), Ok(true)));
-        let xray_running = if self
-            .request
-            .as_ref()
-            .is_some_and(|request| uses_xray(&request.node, request.settings.xray))
-        {
+        let xray_running = if self.request.is_some() && self.xray_chain {
             self.xray_process
                 .as_mut()
                 .is_some_and(|process| matches!(process.is_running(), Ok(true)))
