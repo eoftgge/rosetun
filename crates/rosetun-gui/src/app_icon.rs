@@ -85,7 +85,10 @@ mod tests {
 
     #[test]
     fn committed_icon_matches_the_rose_renderer() {
-        assert_eq!(include_bytes!("../assets/rosetun.ico").as_slice(), app_icon());
+        assert_eq!(
+            include_bytes!("../assets/rosetun.ico").as_slice(),
+            app_icon()
+        );
     }
 
     #[test]
