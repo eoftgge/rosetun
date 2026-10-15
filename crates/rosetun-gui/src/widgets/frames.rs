@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn error_banner_keeps_action_on_one_line_in_compact_window() {
-        let message = "Rules were not applied: the engine failed: The engine did not start. Try again; if it keeps happening, save a report under Settings › Service and log. Restored previous rules.";
+        let message = "Rules were not applied: the engine did not start. Try again; if it keeps happening, save a report under Settings › Service and log. Restored previous rules.";
         let action = "Restore my edits";
         for scale in [1.0, 1.25, 1.5] {
             let width = 960.0 / scale;
@@ -133,7 +133,7 @@ mod tests {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     dismissible_error_with_action(
                         ui,
-                        "Правила не применились: сбой ядра: Ядро не запустилось. Попробуйте ещё раз; если повторяется, соберите отчёт в Настройки › Служба и журнал. Вернули прежние.",
+                        "Правила не применились: ядро не запустилось. Попробуйте ещё раз; если повторяется, соберите отчёт в Настройки › Служба и журнал. Вернули прежние.",
                         Some((action, true)),
                     );
                 });

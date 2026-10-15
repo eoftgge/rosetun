@@ -714,13 +714,11 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                 ErrorCode::Internal => tr_in(language, "error-code-internal", &FluentArgs::new()),
             };
             if error.code == ErrorCode::EngineFailed {
-                format!(
-                    "{title}: {}",
-                    tr_in(
-                        language,
-                        "error-code-engine-failed-hint",
-                        &FluentArgs::new()
-                    )
+                // The helper's detail is English and internal; it stays in the service log.
+                tr_in(
+                    language,
+                    "error-code-engine-failed-hint",
+                    &FluentArgs::new(),
                 )
             } else if error.message.is_empty() || error.code == ErrorCode::AccessDenied {
                 title.to_owned()
@@ -1109,11 +1107,11 @@ mod tests {
         let error = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, detail));
         assert_eq!(
             client(Language::English, &error),
-            "the engine failed: The engine did not start. Try again; if it keeps happening, save a report under Settings › Service and log."
+            "the engine did not start. Try again; if it keeps happening, save a report under Settings › Service and log"
         );
         assert_eq!(
             client(Language::Russian, &error),
-            "сбой ядра: Ядро не запустилось. Попробуйте ещё раз; если повторяется, соберите отчёт в Настройки › Служба и журнал."
+            "ядро не запустилось. Попробуйте ещё раз; если повторяется, соберите отчёт в Настройки › Служба и журнал"
         );
         for language in [Language::English, Language::Russian] {
             let message = client(language, &error);
