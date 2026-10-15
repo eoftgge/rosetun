@@ -70,6 +70,18 @@ impl ReportSnapshot {
         } else {
             (ConnectionStateKind::Unavailable, None)
         };
+        let mut sensitive_names: Vec<String> = config
+            .subscriptions
+            .iter()
+            .flat_map(|subscription| {
+                std::iter::once(subscription.name.clone())
+                    .chain(subscription.nodes.iter().map(|node| node.name.clone()))
+            })
+            .chain(config.lists.iter().map(|list| list.name.clone()))
+            .chain(config.rule_sets.iter().map(|set| set.name.clone()))
+            .filter(|name| name.chars().count() >= 3)
+            .collect();
+        sensitive_names.sort_by_key(|name| std::cmp::Reverse(name.chars().count()));
         Self {
             kill_switch: config.settings.kill_switch,
             allow_lan: config.settings.allow_lan,
@@ -85,17 +97,7 @@ impl ReportSnapshot {
                 .sum(),
             rules: config.rule_sets.iter().map(|set| set.rules.len()).sum(),
             lists: config.lists.len(),
-            sensitive_names: config
-                .subscriptions
-                .iter()
-                .flat_map(|subscription| {
-                    std::iter::once(subscription.name.clone())
-                        .chain(subscription.nodes.iter().map(|node| node.name.clone()))
-                })
-                .chain(config.lists.iter().map(|list| list.name.clone()))
-                .chain(config.rule_sets.iter().map(|set| set.name.clone()))
-                .filter(|name| !name.is_empty())
-                .collect(),
+            sensitive_names,
             state,
             failure,
             engine: status.engine.unwrap_or(config.settings.engine),
@@ -113,7 +115,7 @@ impl ReportSnapshot {
     fn scrub_names(&self, text: &str) -> String {
         let mut text = redact_report_text(text);
         for name in &self.sensitive_names {
-            text = text.replace(name, "<redacted>");
+            text = redact_whole_name(&text, name);
         }
         text
     }
@@ -302,6 +304,22 @@ impl ReportSnapshot {
     }
 }
 
+fn redact_whole_name(text: &str, name: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (start, _) in text.match_indices(name) {
+        let end = start + name.len();
+        let boundary = |ch: Option<char>| ch.is_none_or(|ch| !ch.is_alphanumeric() && ch != '_');
+        if boundary(text[..start].chars().next_back()) && boundary(text[end..].chars().next()) {
+            result.push_str(&text[copied..start]);
+            result.push_str("<redacted>");
+            copied = end;
+        }
+    }
+    result.push_str(&text[copied..]);
+    result
+}
+
 fn check_statuses(checks: &[CheckResult]) -> Vec<(CheckKind, CheckStatus)> {
     checks
         .iter()
@@ -311,7 +329,9 @@ fn check_statuses(checks: &[CheckResult]) -> Vec<(CheckKind, CheckStatus)> {
 
 #[cfg(test)]
 mod tests {
-    use rosetun_config::{Node, NodeId, Outbound, Subscription, SubscriptionId};
+    use rosetun_config::{
+        Node, NodeId, Outbound, RuleSet, RuleSetId, RuleTarget, Subscription, SubscriptionId,
+    };
 
     use super::*;
 
@@ -369,6 +389,14 @@ mod tests {
     }
 
     #[test]
+    fn replaces_only_whole_names() {
+        assert_eq!(
+            redact_whole_name("Amsterdam Amsterdamer _Amsterdam Amsterdam_\nAmsterdam", "Amsterdam"),
+            "<redacted> Amsterdamer _Amsterdam Amsterdam_\n<redacted>"
+        );
+    }
+
+    #[test]
     fn report_never_includes_node_subscription_or_windows_account() {
         let mut config = AppConfig::default();
         config.subscriptions.push(Subscription {
@@ -398,6 +426,18 @@ mod tests {
             announce: None,
             notices: Vec::new(),
         });
+        let example = config.subscriptions[0].nodes[0].clone();
+        for name in ["1", "DE", "NL", "Amsterdam 3", "Amsterdam", "Server NL 2"] {
+            let mut node = example.clone();
+            node.id = NodeId::new(name);
+            node.name = name.to_owned();
+            config.subscriptions[0].nodes.push(node);
+        }
+        config.rule_sets.push(RuleSet::new(
+            RuleSetId::new("server"),
+            "Server",
+            RuleTarget::Proxy,
+        ));
         config.settings.dns.server_name = "custom.example.com".to_owned();
         let snapshot = ReportSnapshot::new(
             &config,
@@ -412,7 +452,7 @@ mod tests {
             None,
             (None, None),
             "WARN Private node at 203.0.113.12 failed; C:\\Users\\ExampleUser\\AppData",
-            "TRACE Secret provider visited www.example.com password=credential_marker",
+            "TRACE Secret provider visited www.example.com password=credential_marker\n2026-10-15T15:02:03Z ErrorCode::DnsTimeout 1 DE NL Amsterdam 3 Amsterdamer Server NL 2 Default",
         );
         for private in [
             "203.0.113.12",
@@ -428,6 +468,10 @@ mod tests {
         assert!(text.contains("<ip>"));
         assert!(text.contains("C:\\Users\\<user>"));
         assert!(text.contains("Subscriptions: 1"));
-        assert!(text.contains("Nodes: 1"));
+        assert!(text.contains("Nodes: 7"));
+        assert!(text.contains(
+            "2026-10-15T15:02:03Z ErrorCode::DnsTimeout 1 DE NL <redacted> Amsterdamer <redacted> Default"
+        ));
+        assert!(!text.contains("<redacted> NL 2"));
     }
 }
