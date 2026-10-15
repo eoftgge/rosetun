@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::*;
+use crate::RuleDestination;
 use rosetun_config::{
     DomainMatch, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId,
     StreamSettings, Subscription, SubscriptionId,
@@ -222,12 +223,186 @@ fn changing_rule_to_direct_clears_old_exit_reference() {
         &store,
         &RuleSetId::new("first"),
         &RuleId::new("a"),
-        RuleTarget::Direct,
+        &RuleDestination::Direct,
     )
     .unwrap();
     let config = store.load().unwrap();
     assert!(config.rule_sets[0].rules[0].exit.is_none());
     assert_eq!(exit_rule_count(&config, &german.id), 0);
+}
+
+fn domain(value: &str) -> RuleMatcher {
+    RuleMatcher::Domain(DomainMatch::Exact(value.into()))
+}
+
+fn store_with_set(directory: &TestDirectory) -> Store {
+    let store = Store::at(directory.0.join("config.json"));
+    store
+        .modify(|config| {
+            config.subscriptions = vec![subscription("sub", &[("nl", "🇳🇱 Example")])];
+            config.rule_sets.push(RuleSet::new(
+                RuleSetId::new("first"),
+                "First",
+                RuleTarget::Proxy,
+            ));
+            Ok::<_, ExitError>(())
+        })
+        .unwrap();
+    store
+}
+
+fn new_country(code: &str, name: &str) -> RuleDestination {
+    RuleDestination::NewExit(NewExit::Country {
+        code: country(code),
+        name: name.into(),
+    })
+}
+
+#[test]
+fn rule_to_new_country_creates_one_exit_and_reuses_it() {
+    let directory = TestDirectory::new();
+    let store = store_with_set(&directory);
+    let set = RuleSetId::new("first");
+
+    let rule = crate::add_rule(
+        &store,
+        &set,
+        domain("a.example.com"),
+        &new_country("NL", "Netherlands"),
+    )
+    .unwrap();
+    let config = store.load().unwrap();
+    assert_eq!(config.exits.len(), 1);
+    assert_eq!(config.exits[0].name, "Netherlands");
+    assert_eq!(rule.target, RuleTarget::Exit);
+    assert_eq!(rule.exit.as_ref(), Some(&config.exits[0].id));
+
+    let again = crate::add_rules(
+        &store,
+        &set,
+        vec![domain("b.example.com"), domain("c.example.com")],
+        &new_country("NL", "Other name"),
+    )
+    .unwrap();
+    let config = store.load().unwrap();
+    assert_eq!(config.exits.len(), 1);
+    assert!(again.added.iter().all(|rule| rule.exit == rule_exit(&config)));
+    assert_eq!(exit_rule_count(&config, &config.exits[0].id), 3);
+
+    let node = RuleDestination::NewExit(NewExit::Node {
+        selection: selection("sub", "nl"),
+        name: "🇳🇱 Example".into(),
+    });
+    crate::update_rule(&store, &set, &rule.id, domain("a.example.com"), &node).unwrap();
+    let config = store.load().unwrap();
+    assert_eq!(config.exits.len(), 2);
+    assert_eq!(
+        config.rule_sets[0].rules.last().unwrap().exit,
+        Some(config.exits[1].id.clone())
+    );
+}
+
+fn rule_exit(config: &AppConfig) -> Option<ExitId> {
+    Some(config.exits[0].id.clone())
+}
+
+#[test]
+fn rule_to_missing_or_unknown_exit_writes_nothing() {
+    let directory = TestDirectory::new();
+    let store = store_with_set(&directory);
+    let set = RuleSetId::new("first");
+    assert!(matches!(
+        crate::add_rule(
+            &store,
+            &set,
+            domain("a.example.com"),
+            &RuleDestination::Exit(ExitId::new("missing")),
+        ),
+        Err(crate::RuleSetError::Exit(ExitError::NotFound))
+    ));
+    let missing_node = RuleDestination::NewExit(NewExit::Node {
+        selection: selection("sub", "gone"),
+        name: "Gone".into(),
+    });
+    assert!(matches!(
+        crate::add_rule(&store, &set, domain("a.example.com"), &missing_node),
+        Err(crate::RuleSetError::Exit(ExitError::NodeNotFound))
+    ));
+    let config = store.load().unwrap();
+    assert!(config.exits.is_empty());
+    assert!(config.rule_sets[0].rules.is_empty());
+}
+
+#[test]
+fn exit_limit_refuses_a_new_exit_and_its_rule() {
+    let directory = TestDirectory::new();
+    let store = store_with_set(&directory);
+    let set = RuleSetId::new("first");
+    store
+        .modify(|config| {
+            config.exits = (0..rosetun_ipc::MAX_EXTRA_NODES)
+                .map(|index| exit(&format!("e{index}"), ExitTarget::Country(country("DE"))))
+                .collect();
+            Ok::<_, ExitError>(())
+        })
+        .unwrap();
+
+    let error = crate::add_rule(
+        &store,
+        &set,
+        domain("a.example.com"),
+        &new_country("NL", "Netherlands"),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::RuleSetError::Exit(ExitError::TooMany)
+    ));
+    assert!(error.to_string().contains("16"));
+    assert!(matches!(
+        exit_for_country(&store, country("NL"), "Netherlands"),
+        Err(ExitError::TooMany)
+    ));
+    let config = store.load().unwrap();
+    assert_eq!(config.exits.len(), rosetun_ipc::MAX_EXTRA_NODES);
+    assert!(config.rule_sets[0].rules.is_empty());
+
+    let existing = crate::add_rule(
+        &store,
+        &set,
+        domain("a.example.com"),
+        &new_country("DE", "Germany"),
+    )
+    .unwrap();
+    assert_eq!(existing.exit, Some(ExitId::new("e0")));
+}
+
+#[test]
+fn temporary_rule_goes_through_an_exit_saved_in_settings() {
+    let directory = TestDirectory::new();
+    let store = store_with_set(&directory);
+    let new = NewExit::Country {
+        code: country("NL"),
+        name: "Netherlands".into(),
+    };
+    assert!(matches!(
+        crate::temporary_rules(&[], vec![domain("a.example.com")], &RuleDestination::NewExit(new.clone())),
+        Err(crate::RuleSetError::Exit(ExitError::NotFound))
+    ));
+
+    let exit = create_exit(&store, &new).unwrap();
+    let added = crate::temporary_rules(
+        &[],
+        vec![domain("a.example.com")],
+        &RuleDestination::Exit(exit.id.clone()),
+    )
+    .unwrap()
+    .added;
+    assert_eq!(added[0].target, RuleTarget::Exit);
+    assert_eq!(added[0].exit, Some(exit.id));
+    let config = store.load().unwrap();
+    assert_eq!(config.exits.len(), 1);
+    assert!(config.rule_sets[0].rules.is_empty());
 }
 
 #[test]

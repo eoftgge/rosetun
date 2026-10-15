@@ -7,6 +7,7 @@ use rosetun_config::{
 };
 
 use super::*;
+use crate::RuleDestination;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -202,7 +203,7 @@ fn dat_categories_are_stored_once_and_rendered_only_when_selected() {
                 list: list.id.clone(),
                 category: None
             },
-            RuleTarget::Direct
+            &RuleDestination::Direct
         ),
         Err(crate::RuleSetError::ListCategory(
             ListCategoryError::Required
@@ -215,7 +216,7 @@ fn dat_categories_are_stored_once_and_rendered_only_when_selected() {
             list: list.id.clone(),
             category: Some("example@cn".to_owned()),
         },
-        RuleTarget::Direct,
+        &RuleDestination::Direct,
     )
     .unwrap();
 }
@@ -614,7 +615,7 @@ fn removing_an_in_use_list_names_all_rule_sets() {
                 list: list.id.clone(),
                 category: None,
             },
-            RuleTarget::Direct,
+            &RuleDestination::Direct,
         )
         .unwrap();
     }
@@ -951,7 +952,7 @@ fn list_rule_validation_rejects_a_missing_id() {
             list: ListId::new("42"),
             category: None,
         },
-        RuleTarget::Direct,
+        &RuleDestination::Direct,
     )
     .unwrap_err();
     assert!(matches!(error, crate::RuleSetError::ListNotFound));

@@ -10,6 +10,7 @@ use rosetun_config::{
 use rosetun_ipc::HelperError;
 
 use super::*;
+use crate::RuleDestination;
 use crate::add_list_from_bytes;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -208,7 +209,7 @@ fn updating_a_dat_can_remove_a_used_category_without_breaking_connect() {
             list: dat.id.clone(),
             category: Some("example@cn".into()),
         },
-        RuleTarget::Direct,
+        &RuleDestination::Direct,
     )
     .unwrap();
     let replacement = site_dat_with_category(b"OTHER");
@@ -384,7 +385,7 @@ fn last_good_copy_is_pruned_when_no_rule_references_its_tag() {
             list: dat.id.clone(),
             category: Some("example".into()),
         },
-        RuleTarget::Direct,
+        &RuleDestination::Direct,
     )
     .unwrap();
     let mut with_rule = request();

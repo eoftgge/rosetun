@@ -1,6 +1,7 @@
 use rosetun_config::{ConfigError, ListCategoryError};
 use rosetun_core::{
-    AddFromUrlError, AddSubscriptionError, DnsInputError, FetchError, ListError, ListParseError,
+    AddFromUrlError, AddSubscriptionError, DnsInputError, ExitError, FetchError, ListError,
+    ListParseError,
     ListPreparationError, MoveSubscriptionError, ParseError, RemoveSubscriptionError,
     RenameSubscriptionError, RuleInputError, RuleSetError, SelectNodeError, SelectRuleSetError,
     SettingsError, SkipReason, StoreError, SubscriptionUrlError, TextErrorKind,
@@ -133,6 +134,21 @@ pub(crate) fn rule_set(language: Language, error: &RuleSetError) -> String {
         RuleSetError::DuplicateRule => tr_in(language, "error-duplicate-rule", &FluentArgs::new()),
         RuleSetError::ListNotFound => tr_in(language, "error-list-not-found", &FluentArgs::new()),
         RuleSetError::ListCategory(error) => list_category(language, error),
+        RuleSetError::Exit(error) => exit(language, error),
+    }
+}
+
+pub(crate) fn exit(language: Language, error: &ExitError) -> String {
+    match error {
+        ExitError::Store(error) => store(language, error),
+        ExitError::NotFound => tr_in(language, "error-exit-not-found", &FluentArgs::new()),
+        ExitError::NodeNotFound => tr_in(language, "error-exit-node-not-found", &FluentArgs::new()),
+        ExitError::EmptyName => tr_in(language, "error-exit-name-empty", &FluentArgs::new()),
+        ExitError::TooMany => tr_in(
+            language,
+            "error-exits-too-many",
+            &arguments(&[("count", &rosetun_ipc::MAX_EXTRA_NODES.to_string())]),
+        ),
     }
 }
 

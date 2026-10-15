@@ -3,6 +3,7 @@ use rosetun_config::{
 };
 
 pub use rosetun_config::resolve_exits;
+use rosetun_ipc::MAX_EXTRA_NODES;
 
 use crate::{Store, StoreError, rules::next_id};
 
@@ -16,6 +17,15 @@ pub enum ExitError {
     NodeNotFound,
     #[error("exit name must not be empty")]
     EmptyName,
+    #[error("there are already {MAX_EXTRA_NODES} exits, the most one connection can use")]
+    TooMany,
+}
+
+/// An exit the user picked by country or node; created on the first rule that uses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewExit {
+    Country { code: CountryCode, name: String },
+    Node { selection: Selection, name: String },
 }
 
 fn get_or_create(
@@ -39,6 +49,9 @@ fn get_or_create(
     {
         return Ok(exit.clone());
     }
+    if config.exits.len() >= MAX_EXTRA_NODES {
+        return Err(ExitError::TooMany);
+    }
     let name = name.trim();
     if name.is_empty() {
         return Err(ExitError::EmptyName);
@@ -52,24 +65,47 @@ fn get_or_create(
     Ok(exit)
 }
 
+pub(crate) fn exit_in(config: &mut AppConfig, new: &NewExit) -> Result<Exit, ExitError> {
+    match new {
+        NewExit::Country { code, name } => get_or_create(config, ExitTarget::Country(code.clone()), name),
+        NewExit::Node { selection, name } => {
+            let node = config
+                .subscriptions
+                .iter()
+                .find(|subscription| subscription.id == selection.subscription)
+                .and_then(|subscription| subscription.node(&selection.node))
+                .ok_or(ExitError::NodeNotFound)?;
+            let target = ExitTarget::Node {
+                selection: selection.clone(),
+                fallback: node_country(&node.name),
+            };
+            get_or_create(config, target, name)
+        }
+    }
+}
+
+pub fn create_exit(store: &Store, new: &NewExit) -> Result<Exit, ExitError> {
+    store.modify(|config| exit_in(config, new))
+}
+
 pub fn exit_for_country(store: &Store, code: CountryCode, name: &str) -> Result<Exit, ExitError> {
-    store.modify(|config| get_or_create(config, ExitTarget::Country(code), name))
+    create_exit(
+        store,
+        &NewExit::Country {
+            code,
+            name: name.to_owned(),
+        },
+    )
 }
 
 pub fn exit_for_node(store: &Store, selection: &Selection, name: &str) -> Result<Exit, ExitError> {
-    store.modify(|config| {
-        let node = config
-            .subscriptions
-            .iter()
-            .find(|subscription| subscription.id == selection.subscription)
-            .and_then(|subscription| subscription.node(&selection.node))
-            .ok_or(ExitError::NodeNotFound)?;
-        let target = ExitTarget::Node {
+    create_exit(
+        store,
+        &NewExit::Node {
             selection: selection.clone(),
-            fallback: node_country(&node.name),
-        };
-        get_or_create(config, target, name)
-    })
+            name: name.to_owned(),
+        },
+    )
 }
 
 pub fn rename_exit(store: &Store, id: &ExitId, name: &str) -> Result<(), ExitError> {

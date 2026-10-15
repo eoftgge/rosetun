@@ -3,11 +3,12 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 use rosetun_config::{
-    AppConfig, DnsSettings, DomainMatch, ListCategoryError, ProcessMatch, Rule, RuleId,
+    AppConfig, DnsSettings, DomainMatch, ExitId, ListCategoryError, ProcessMatch, Rule, RuleId,
     RuleMatcher, RuleSet, RuleSetId, RuleTarget,
 };
 use url::Host;
 
+use crate::exits::{ExitError, NewExit, exit_in};
 use crate::{Store, StoreError};
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +27,74 @@ pub enum RuleSetError {
     ListNotFound,
     #[error(transparent)]
     ListCategory(#[from] ListCategoryError),
+    #[error(transparent)]
+    Exit(ExitError),
+}
+
+impl From<ExitError> for RuleSetError {
+    fn from(error: ExitError) -> Self {
+        match error {
+            ExitError::Store(error) => Self::Store(error),
+            error => Self::Exit(error),
+        }
+    }
+}
+
+/// Where a rule sends its traffic: a plain target, an existing exit, or an
+/// exit created in the same save as the rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleDestination {
+    Proxy,
+    Direct,
+    Block,
+    Exit(ExitId),
+    NewExit(NewExit),
+}
+
+impl RuleDestination {
+    pub fn of(rule: &Rule) -> Self {
+        match (rule.target, &rule.exit) {
+            (RuleTarget::Proxy, _) => Self::Proxy,
+            (RuleTarget::Direct, _) => Self::Direct,
+            (RuleTarget::Exit, Some(id)) => Self::Exit(id.clone()),
+            (RuleTarget::Block | RuleTarget::Exit, _) => Self::Block,
+        }
+    }
+
+    /// The target and exit reference, unless an exit still has to be created.
+    pub fn settled(&self) -> Option<(RuleTarget, Option<ExitId>)> {
+        match self {
+            Self::Proxy => Some((RuleTarget::Proxy, None)),
+            Self::Direct => Some((RuleTarget::Direct, None)),
+            Self::Block => Some((RuleTarget::Block, None)),
+            Self::Exit(id) => Some((RuleTarget::Exit, Some(id.clone()))),
+            Self::NewExit(_) => None,
+        }
+    }
+}
+
+impl From<RuleTarget> for RuleDestination {
+    /// A bare `RuleTarget::Exit` points nowhere, so it blocks like an unresolved exit.
+    fn from(target: RuleTarget) -> Self {
+        match target {
+            RuleTarget::Proxy => Self::Proxy,
+            RuleTarget::Direct => Self::Direct,
+            RuleTarget::Block | RuleTarget::Exit => Self::Block,
+        }
+    }
+}
+
+fn destination_in(
+    config: &mut AppConfig,
+    destination: &RuleDestination,
+) -> Result<(RuleTarget, Option<ExitId>), RuleSetError> {
+    match destination {
+        RuleDestination::Exit(id) if !config.exits.iter().any(|exit| &exit.id == id) => {
+            Err(ExitError::NotFound.into())
+        }
+        RuleDestination::NewExit(new) => Ok((RuleTarget::Exit, Some(exit_in(config, new)?.id))),
+        settled => Ok(settled.settled().expect("only a new exit is unsettled")),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,10 +256,11 @@ pub fn add_rule(
     store: &Store,
     set: &RuleSetId,
     matcher: RuleMatcher,
-    target: RuleTarget,
+    destination: &RuleDestination,
 ) -> Result<Rule, RuleSetError> {
     store.modify(|config| {
         validate_list_matcher(config, &matcher)?;
+        let (target, exit) = destination_in(config, destination)?;
         let set = rule_set_mut(config, set)?;
         if set
             .rules
@@ -205,7 +275,7 @@ pub fn add_rule(
             enabled: true,
             matcher,
             target,
-            exit: None,
+            exit,
         };
         set.rules.insert(0, rule.clone());
         Ok(rule)
@@ -223,7 +293,7 @@ pub fn add_rules(
     store: &Store,
     set: &RuleSetId,
     matchers: Vec<RuleMatcher>,
-    target: RuleTarget,
+    destination: &RuleDestination,
 ) -> Result<AddedRules, RuleSetError> {
     if matchers.is_empty() {
         return Ok(AddedRules {
@@ -235,6 +305,7 @@ pub fn add_rules(
         for matcher in &matchers {
             validate_list_matcher(config, matcher)?;
         }
+        let (target, exit) = destination_in(config, destination)?;
         let set = rule_set_mut(config, set)?;
         let mut added = Vec::new();
         let mut skipped = 0;
@@ -259,7 +330,7 @@ pub fn add_rules(
                 enabled: true,
                 matcher,
                 target,
-                exit: None,
+                exit: exit.clone(),
             });
         }
         if added.is_empty() {
@@ -270,12 +341,16 @@ pub fn add_rules(
     })
 }
 
-/// Builds a session overlay without writing it to the configuration.
+/// Builds a session overlay without writing it to the configuration. A new
+/// exit is saved first with `create_exit`, so `destination` must be settled.
 pub fn temporary_rules(
     existing: &[Rule],
     matchers: Vec<RuleMatcher>,
-    target: RuleTarget,
-) -> AddedRules {
+    destination: &RuleDestination,
+) -> Result<AddedRules, RuleSetError> {
+    let (target, exit) = destination
+        .settled()
+        .ok_or(RuleSetError::Exit(ExitError::NotFound))?;
     let mut added = Vec::new();
     let mut skipped = 0;
     let mut candidate = 1_u64;
@@ -304,10 +379,10 @@ pub fn temporary_rules(
             enabled: true,
             matcher,
             target,
-            exit: None,
+            exit: exit.clone(),
         });
     }
-    AddedRules { added, skipped }
+    Ok(AddedRules { added, skipped })
 }
 
 /// Replaces a rule's matcher and target, keeping its id, position and enabled flag.
@@ -316,27 +391,25 @@ pub fn update_rule(
     set: &RuleSetId,
     rule: &RuleId,
     matcher: RuleMatcher,
-    target: RuleTarget,
+    destination: &RuleDestination,
 ) -> Result<(), RuleSetError> {
     store.modify(|config| {
         validate_list_matcher(config, &matcher)?;
-        let set = rule_set_mut(config, set)?;
-        if !set.rules.iter().any(|item| &item.id == rule) {
+        let rules = &rule_set_mut(config, set)?.rules;
+        if !rules.iter().any(|item| &item.id == rule) {
             return Err(RuleSetError::RuleNotFound);
         }
-        if set
-            .rules
+        if rules
             .iter()
             .any(|item| &item.id != rule && same_matcher(&item.matcher, &matcher, cfg!(windows)))
         {
             return Err(RuleSetError::DuplicateRule);
         }
-        let existing = rule_mut(set, rule)?;
+        let (target, exit) = destination_in(config, destination)?;
+        let existing = rule_mut(rule_set_mut(config, set)?, rule)?;
         existing.matcher = matcher;
         existing.target = target;
-        if target != RuleTarget::Exit {
-            existing.exit = None;
-        }
+        existing.exit = exit;
         Ok(())
     })
 }
@@ -345,14 +418,14 @@ pub fn set_rule_target(
     store: &Store,
     set: &RuleSetId,
     rule: &RuleId,
-    target: RuleTarget,
+    destination: &RuleDestination,
 ) -> Result<(), RuleSetError> {
     store.modify(|config| {
+        rule_mut(rule_set_mut(config, set)?, rule)?;
+        let (target, exit) = destination_in(config, destination)?;
         let existing = rule_mut(rule_set_mut(config, set)?, rule)?;
         existing.target = target;
-        if target != RuleTarget::Exit {
-            existing.exit = None;
-        }
+        existing.exit = exit;
         Ok(())
     })
 }

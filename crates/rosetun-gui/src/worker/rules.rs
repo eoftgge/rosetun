@@ -65,13 +65,13 @@ impl WorkerDispatcher {
 
     pub(crate) fn add_rule(&self, set: RuleSetId, matcher: RuleMatcher, target: RuleTarget) {
         self.spawn_complete("rosetun-add-rule", move |store| {
-            WorkerEvent::AddRule(add_rule(store, &set, matcher, target))
+            WorkerEvent::AddRule(add_rule(store, &set, matcher, &target.into()))
         });
     }
 
     pub(crate) fn add_rules(&self, set: RuleSetId, matchers: Vec<RuleMatcher>, target: RuleTarget) {
         self.spawn_complete("rosetun-add-rules", move |store| {
-            WorkerEvent::AddRules(add_rules(store, &set, matchers, target))
+            WorkerEvent::AddRules(add_rules(store, &set, matchers, &target.into()))
         });
     }
 
@@ -83,13 +83,13 @@ impl WorkerDispatcher {
         target: RuleTarget,
     ) {
         self.spawn_complete("rosetun-update-rule", move |store| {
-            WorkerEvent::UpdateRule(update_rule(store, &set, &rule, matcher, target))
+            WorkerEvent::UpdateRule(update_rule(store, &set, &rule, matcher, &target.into()))
         });
     }
 
     pub(crate) fn set_rule_target(&self, set: RuleSetId, rule: RuleId, target: RuleTarget) {
         self.spawn_complete("rosetun-set-rule-target", move |store| {
-            WorkerEvent::SetRuleTarget(set_rule_target(store, &set, &rule, target))
+            WorkerEvent::SetRuleTarget(set_rule_target(store, &set, &rule, &target.into()))
         });
     }
 

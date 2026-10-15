@@ -818,7 +818,8 @@ impl State {
                         .chain(set.rules.iter())
                         .cloned()
                         .collect();
-                    let added = rosetun_core::temporary_rules(&existing, matchers, target).added;
+                    let added = rosetun_core::temporary_rules(&existing, matchers, &target.into())
+                        .map_or_else(|_| Vec::new(), |rules| rules.added);
                     if added.is_empty() {
                         let message = self.text(&errors::rule_set(
                             crate::i18n::language(),

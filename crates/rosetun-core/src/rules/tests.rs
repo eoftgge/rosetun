@@ -280,8 +280,8 @@ fn added_rules_are_enabled_first_and_unique_even_when_disabled() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
-    let first = add_rule(&store, &set.id, domain("a.example"), RuleTarget::Direct).unwrap();
-    let second = add_rule(&store, &set.id, domain("b.example"), RuleTarget::Block).unwrap();
+    let first = add_rule(&store, &set.id, domain("a.example"), &RuleDestination::Direct).unwrap();
+    let second = add_rule(&store, &set.id, domain("b.example"), &RuleDestination::Block).unwrap();
     assert_eq!(first.id, RuleId::new("1"));
     assert_eq!(second.id, RuleId::new("2"));
     assert!(second.enabled);
@@ -294,7 +294,7 @@ fn added_rules_are_enabled_first_and_unique_even_when_disabled() {
     set_rule_enabled(&store, &set.id, &first.id, false).unwrap();
     assert_no_write!(
         store,
-        add_rule(&store, &set.id, domain("a.example"), RuleTarget::Block),
+        add_rule(&store, &set.id, domain("a.example"), &RuleDestination::Block),
         RuleSetError::DuplicateRule
     );
     assert_no_write!(
@@ -303,7 +303,7 @@ fn added_rules_are_enabled_first_and_unique_even_when_disabled() {
             &store,
             &RuleSetId::new("missing"),
             domain("c.example"),
-            RuleTarget::Proxy
+            &RuleDestination::Proxy
         ),
         RuleSetError::SetNotFound
     );
@@ -320,8 +320,9 @@ fn temporary_rules_skip_existing_and_repeated_matchers_without_reusing_ids() {
             domain("second.example"),
             domain("first.example"),
         ],
-        RuleTarget::Direct,
-    );
+        &RuleDestination::Direct,
+    )
+    .unwrap();
     assert_eq!(result.skipped, 2);
     assert_eq!(result.added.len(), 2);
     assert_eq!(result.added[0].id, RuleId::new("t2"));
@@ -335,7 +336,7 @@ fn temporary_rules_skip_existing_and_repeated_matchers_without_reusing_ids() {
             .all(|rule| rule.enabled && rule.target == RuleTarget::Direct)
     );
     assert_eq!(
-        temporary_rules(&existing, vec![domain("old.example")], RuleTarget::Proxy),
+        temporary_rules(&existing, vec![domain("old.example")], &RuleDestination::Proxy).unwrap(),
         AddedRules {
             added: Vec::new(),
             skipped: 1
@@ -348,7 +349,7 @@ fn batch_add_preserves_input_order_at_the_top_and_skips_duplicates() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
-    let old = add_rule(&store, &set.id, domain("old.example"), RuleTarget::Block).unwrap();
+    let old = add_rule(&store, &set.id, domain("old.example"), &RuleDestination::Block).unwrap();
     let result = add_rules(
         &store,
         &set.id,
@@ -358,7 +359,7 @@ fn batch_add_preserves_input_order_at_the_top_and_skips_duplicates() {
             domain("second.example"),
             domain("first.example"),
         ],
-        RuleTarget::Direct,
+        &RuleDestination::Direct,
     )
     .unwrap();
     assert_eq!(result.skipped, 2);
@@ -383,13 +384,13 @@ fn batch_add_preserves_input_order_at_the_top_and_skips_duplicates() {
             &store,
             &set.id,
             vec![domain("old.example"), domain("first.example")],
-            RuleTarget::Proxy
+            &RuleDestination::Proxy
         ),
         RuleSetError::DuplicateRule
     );
     let before = fs::read(store.path()).unwrap();
     assert_eq!(
-        add_rules(&store, &set.id, Vec::new(), RuleTarget::Proxy).unwrap(),
+        add_rules(&store, &set.id, Vec::new(), &RuleDestination::Proxy).unwrap(),
         AddedRules {
             added: Vec::new(),
             skipped: 0
@@ -403,9 +404,9 @@ fn update_rule_keeps_identity_position_and_enabled_and_rejects_other_matchers() 
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
-    let first = add_rule(&store, &set.id, domain("first.example"), RuleTarget::Proxy).unwrap();
-    let middle = add_rule(&store, &set.id, domain("middle.example"), RuleTarget::Block).unwrap();
-    let last = add_rule(&store, &set.id, domain("last.example"), RuleTarget::Proxy).unwrap();
+    let first = add_rule(&store, &set.id, domain("first.example"), &RuleDestination::Proxy).unwrap();
+    let middle = add_rule(&store, &set.id, domain("middle.example"), &RuleDestination::Block).unwrap();
+    let last = add_rule(&store, &set.id, domain("last.example"), &RuleDestination::Proxy).unwrap();
     set_rule_enabled(&store, &set.id, &middle.id, false).unwrap();
     assert_no_write!(
         store,
@@ -414,7 +415,7 @@ fn update_rule_keeps_identity_position_and_enabled_and_rejects_other_matchers() 
             &set.id,
             &middle.id,
             domain("first.example"),
-            RuleTarget::Direct
+            &RuleDestination::Direct
         ),
         RuleSetError::DuplicateRule
     );
@@ -425,7 +426,7 @@ fn update_rule_keeps_identity_position_and_enabled_and_rejects_other_matchers() 
             &set.id,
             &RuleId::new("missing"),
             domain("new.example"),
-            RuleTarget::Proxy
+            &RuleDestination::Proxy
         ),
         RuleSetError::RuleNotFound
     );
@@ -434,7 +435,7 @@ fn update_rule_keeps_identity_position_and_enabled_and_rejects_other_matchers() 
         &set.id,
         &middle.id,
         domain("middle.example"),
-        RuleTarget::Direct,
+        &RuleDestination::Direct,
     )
     .unwrap();
     update_rule(
@@ -442,7 +443,7 @@ fn update_rule_keeps_identity_position_and_enabled_and_rejects_other_matchers() 
         &set.id,
         &middle.id,
         domain("new.example"),
-        RuleTarget::Proxy,
+        &RuleDestination::Proxy,
     )
     .unwrap();
     let rules = store.load().unwrap().rule_sets.remove(0).rules;
@@ -485,11 +486,11 @@ fn new_ids_reuse_gaps_and_ignore_non_numeric_ids() {
         &store,
         &RuleSetId::new("1"),
         domain("d.example"),
-        RuleTarget::Proxy,
+        &RuleDestination::Proxy,
     )
     .unwrap();
     assert_eq!(in_existing.id, RuleId::new("2"));
-    let in_new = add_rule(&store, &created.id, domain("d.example"), RuleTarget::Proxy).unwrap();
+    let in_new = add_rule(&store, &created.id, domain("d.example"), &RuleDestination::Proxy).unwrap();
     assert_eq!(in_new.id, RuleId::new("1"));
 }
 
@@ -498,8 +499,8 @@ fn changing_rule_target_and_enabled_state_persists() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
-    let rule = add_rule(&store, &set.id, domain("a.example"), RuleTarget::Proxy).unwrap();
-    set_rule_target(&store, &set.id, &rule.id, RuleTarget::Direct).unwrap();
+    let rule = add_rule(&store, &set.id, domain("a.example"), &RuleDestination::Proxy).unwrap();
+    set_rule_target(&store, &set.id, &rule.id, &RuleDestination::Direct).unwrap();
     set_rule_enabled(&store, &set.id, &rule.id, false).unwrap();
     assert_eq!(
         store.load().unwrap().rule_sets[0].rules[0].target,
@@ -513,12 +514,12 @@ fn changing_rule_target_and_enabled_state_persists() {
     let missing_rule = RuleId::new("missing");
     assert_no_write!(
         store,
-        set_rule_target(&store, &missing_set, &rule.id, RuleTarget::Block),
+        set_rule_target(&store, &missing_set, &rule.id, &RuleDestination::Block),
         RuleSetError::SetNotFound
     );
     assert_no_write!(
         store,
-        set_rule_target(&store, &set.id, &missing_rule, RuleTarget::Block),
+        set_rule_target(&store, &set.id, &missing_rule, &RuleDestination::Block),
         RuleSetError::RuleNotFound
     );
     assert_no_write!(
@@ -538,9 +539,9 @@ fn moving_rules_up_down_and_past_the_end_preserves_order() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
-    let first = add_rule(&store, &set.id, domain("a.example"), RuleTarget::Proxy).unwrap();
-    let middle = add_rule(&store, &set.id, domain("b.example"), RuleTarget::Proxy).unwrap();
-    let last = add_rule(&store, &set.id, domain("c.example"), RuleTarget::Proxy).unwrap();
+    let first = add_rule(&store, &set.id, domain("a.example"), &RuleDestination::Proxy).unwrap();
+    let middle = add_rule(&store, &set.id, domain("b.example"), &RuleDestination::Proxy).unwrap();
+    let last = add_rule(&store, &set.id, domain("c.example"), &RuleDestination::Proxy).unwrap();
 
     let ids = || {
         store.load().unwrap().rule_sets[0]
@@ -581,7 +582,7 @@ fn moving_several_rules_preserves_source_order_and_clamps_after_removal() {
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
     let rules = ["a", "b", "c", "d", "e"]
         .into_iter()
-        .map(|value| add_rule(&store, &set.id, domain(value), RuleTarget::Proxy).unwrap())
+        .map(|value| add_rule(&store, &set.id, domain(value), &RuleDestination::Proxy).unwrap())
         .collect::<Vec<_>>();
     let ids = || {
         store.load().unwrap().rule_sets[0]
@@ -688,7 +689,7 @@ fn removing_rules_persists_and_missing_ids_do_not_write() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
-    let rule = add_rule(&store, &set.id, domain("a.example"), RuleTarget::Direct).unwrap();
+    let rule = add_rule(&store, &set.id, domain("a.example"), &RuleDestination::Direct).unwrap();
     assert_no_write!(
         store,
         remove_rule(&store, &RuleSetId::new("missing"), &rule.id),
@@ -715,7 +716,7 @@ fn removing_several_rules_deduplicates_and_validates_before_writing() {
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
     let rules = ["a", "b", "c", "d"]
         .into_iter()
-        .map(|value| add_rule(&store, &set.id, domain(value), RuleTarget::Proxy).unwrap())
+        .map(|value| add_rule(&store, &set.id, domain(value), &RuleDestination::Proxy).unwrap())
         .collect::<Vec<_>>();
 
     assert_no_write!(
@@ -1012,11 +1013,11 @@ fn template_rules_are_unique_even_when_disabled() {
     let store = Store::at(directory.config_path());
     let set = create_rule_set(&store, "Set", RuleTarget::Proxy).unwrap();
     let matcher = RuleMatcher::Template(RuleTemplate::RussianSites);
-    let first = add_rule(&store, &set.id, matcher.clone(), RuleTarget::Direct).unwrap();
+    let first = add_rule(&store, &set.id, matcher.clone(), &RuleDestination::Direct).unwrap();
     set_rule_enabled(&store, &set.id, &first.id, false).unwrap();
     assert_no_write!(
         store,
-        add_rule(&store, &set.id, matcher, RuleTarget::Block),
+        add_rule(&store, &set.id, matcher, &RuleDestination::Block),
         RuleSetError::DuplicateRule
     );
     assert!(
@@ -1024,7 +1025,7 @@ fn template_rules_are_unique_even_when_disabled() {
             &store,
             &set.id,
             RuleMatcher::Template(RuleTemplate::Youtube),
-            RuleTarget::Proxy
+            &RuleDestination::Proxy
         )
         .is_ok()
     );
