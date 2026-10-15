@@ -19,6 +19,7 @@ use super::*;
 
 static DNS_SLOTS: Mutex<()> = Mutex::new(());
 static ROUTE_TEST_LOCK: Mutex<()> = Mutex::new(());
+static ROUTE_SCRIPT: Mutex<VecDeque<bool>> = Mutex::new(VecDeque::new());
 static ROUTE_CHECKS: AtomicUsize = AtomicUsize::new(0);
 static NETWORK_PRESENT: AtomicBool = AtomicBool::new(true);
 
@@ -30,6 +31,23 @@ fn changing_route(_: &str) -> Option<String> {
     NETWORK_PRESENT
         .load(Ordering::Acquire)
         .then(|| "Ethernet".to_owned())
+}
+
+fn scripted_route(_: &str) -> Option<String> {
+    ROUTE_SCRIPT
+        .lock()
+        .unwrap()
+        .pop_front()
+        .expect("unexpected physical route lookup")
+        .then(|| "Ethernet".to_owned())
+}
+
+fn set_route_script(down_ticks: usize) {
+    let mut script = ROUTE_SCRIPT.lock().unwrap();
+    *script = std::iter::once(true)
+        .chain(std::iter::repeat_n(false, down_ticks))
+        .chain(std::iter::repeat_n(true, 20))
+        .collect();
 }
 
 #[test]
@@ -2566,6 +2584,216 @@ fn supervisor_resets_missing_route_ticks_after_network_returns() {
     assert_eq!(controls.spawns(), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
     NETWORK_PRESENT.store(true, Ordering::Release);
+}
+
+fn assert_waiting_for_network(helper: &Helper, controls: &EngineControls, reverted: &AtomicUsize, expected_spawns: usize) {
+    let status = helper.status();
+    assert_eq!(status.state, ConnectionState::Reconnecting);
+    assert_eq!(status.reconnect_failure_kind, Some(rosetun_config::FailureKind::NoNetwork));
+    assert_eq!(controls.spawns(), expected_spawns);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn network_loss_for_twenty_ticks_reuses_a_live_tunnel() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    set_route_script(20);
+    let server = Server::new(Behavior::Addresses);
+    let (helper, controls, prepared, reverted) =
+        supervised_helper_with_dns(true, Some(server.address()));
+    let helper = helper.with_test_physical_interface(scripted_route);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("initial tunnel");
+    let since = helper.status().since_unix;
+    let now = Instant::now();
+
+    for tick in 0..20 {
+        helper.supervise(now + tick * SUPERVISOR_TICK);
+        if tick == 0 {
+            assert_eq!(helper.status().state, ConnectionState::Connected);
+            assert_eq!(helper.status().reconnect_failure_kind, None);
+        } else {
+            assert_waiting_for_network(&helper, &controls, &reverted, 1);
+        }
+        assert_eq!(controls.spawns(), 1);
+        assert_eq!(reverted.load(Ordering::Acquire), 0);
+    }
+    helper.supervise(now + 20 * SUPERVISOR_TICK);
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(helper.status().reconnect_failure_kind, None);
+    assert_eq!(helper.status().since_unix, since);
+    assert_eq!(controls.spawns(), 1, "the live tunnel must not be restarted");
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn engine_exit_during_network_loss_restarts_only_when_route_returns() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    set_route_script(20);
+    let server = Server::new(Behavior::Addresses);
+    let (helper, controls, prepared, reverted) =
+        supervised_helper_with_dns(true, Some(server.address()));
+    let helper = helper.with_test_physical_interface(scripted_route);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("initial tunnel");
+    let now = Instant::now();
+
+    for tick in 0..20 {
+        if tick == 3 {
+            controls.kill();
+        }
+        helper.supervise(now + tick * SUPERVISOR_TICK);
+        if tick == 0 {
+            assert_eq!(helper.status().state, ConnectionState::Connected);
+        } else {
+            assert_waiting_for_network(&helper, &controls, &reverted, 1);
+        }
+    }
+    assert!(helper.session().unwrap().process.is_none());
+    helper.supervise(now + 20 * SUPERVISOR_TICK);
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(helper.status().reconnect_failure_kind, None);
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn brief_network_change_keeps_the_engine_and_protection() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    set_route_script(3);
+    let server = Server::new(Behavior::Addresses);
+    let (helper, controls, prepared, reverted) =
+        supervised_helper_with_dns(true, Some(server.address()));
+    let helper = helper.with_test_physical_interface(scripted_route);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("initial tunnel");
+    let now = Instant::now();
+
+    for tick in 0..3 {
+        helper.supervise(now + tick * SUPERVISOR_TICK);
+        if tick == 0 {
+            assert_eq!(helper.status().state, ConnectionState::Connected);
+            assert_eq!(helper.status().reconnect_failure_kind, None);
+        } else {
+            assert_waiting_for_network(&helper, &controls, &reverted, 1);
+        }
+    }
+    helper.supervise(now + 3 * SUPERVISOR_TICK);
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(helper.status().reconnect_failure_kind, None);
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn network_loss_longer_than_grace_stops_engine_and_restarts_on_return() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    set_route_script(65);
+    let server = Server::new(Behavior::Addresses);
+    let (helper, controls, prepared, reverted) =
+        supervised_helper_with_dns(true, Some(server.address()));
+    let helper = helper.with_test_physical_interface(scripted_route);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("initial tunnel");
+    let now = Instant::now();
+
+    for tick in 0..65 {
+        helper.supervise(now + tick * SUPERVISOR_TICK);
+        if tick == 0 {
+            assert_eq!(helper.status().state, ConnectionState::Connected);
+        } else {
+            assert_waiting_for_network(&helper, &controls, &reverted, 1);
+        }
+        if tick < 30 {
+            assert!(helper.session().unwrap().process.is_some());
+        } else {
+            assert!(helper.session().unwrap().process.is_none());
+        }
+    }
+    helper.supervise(now + 65 * SUPERVISOR_TICK);
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(helper.status().reconnect_failure_kind, None);
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn failed_live_dns_check_restarts_inside_existing_protection() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    set_route_script(3);
+    let server = Server::new(Behavior::Addresses);
+    let (helper, controls, prepared, reverted) =
+        supervised_helper_with_dns(true, Some(server.address()));
+    let helper = helper.with_test_physical_interface(scripted_route);
+    shorten_dns_timeouts(&helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("initial tunnel");
+    drop(server);
+    let now = Instant::now();
+    for tick in 0..3 {
+        helper.supervise(now + tick * SUPERVISOR_TICK);
+    }
+    assert_waiting_for_network(&helper, &controls, &reverted, 1);
+
+    helper.supervise(now + 3 * SUPERVISOR_TICK);
+    assert_eq!(helper.status().state, ConnectionState::Reconnecting);
+    assert_eq!(helper.status().reconnect_failure_kind, None);
+    assert_eq!(controls.spawns(), 2, "failed DNS must trigger an immediate restart");
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn network_reconnect_does_not_wait_for_the_full_dns_timeout() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    set_route_script(32);
+    let server = Server::new(Behavior::Addresses);
+    let (helper, controls, prepared, reverted) =
+        supervised_helper_with_dns(true, Some(server.address()));
+    let helper = helper.with_test_physical_interface(scripted_route);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("initial tunnel");
+    drop(server);
+    let now = Instant::now();
+
+    for tick in 0..32 {
+        helper.supervise(now + tick * SUPERVISOR_TICK);
+        if tick == 0 {
+            assert_eq!(helper.status().state, ConnectionState::Connected);
+        } else {
+            assert_waiting_for_network(&helper, &controls, &reverted, 1);
+        }
+    }
+    assert!(helper.session().unwrap().process.is_none());
+    let started = Instant::now();
+    helper.supervise(now + 32 * SUPERVISOR_TICK);
+    assert!(started.elapsed() < Duration::from_secs(8), "retry must not wait for the full 60-second DNS deadline");
+    assert_eq!(helper.status().state, ConnectionState::Reconnecting);
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
 
 #[test]

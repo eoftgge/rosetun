@@ -61,12 +61,25 @@ const RECONNECT_BACKOFF: [Duration; 4] = [
 /// The network needs a moment after a resume.
 const RESUME_DELAY: Duration = Duration::from_secs(2);
 const SUPERVISOR_TICK: Duration = Duration::from_millis(500);
+const NETWORK_GRACE: Duration = Duration::from_secs(15);
+const NETWORK_DNS_TIMEOUT: Duration = Duration::from_secs(5);
 /// A wall-clock jump this large between two ticks means the machine slept.
 const SLEEP_GAP: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 fn test_physical_interface(_: &str) -> Option<String> {
     Some("Ethernet".to_owned())
+}
+
+fn connection_state_name(state: &ConnectionState) -> &'static str {
+    match state {
+        ConnectionState::Disconnected => "disconnected",
+        ConnectionState::Connecting => "connecting",
+        ConnectionState::Connected => "connected",
+        ConnectionState::Reconnecting => "reconnecting",
+        ConnectionState::Failed { .. } => "failed",
+        ConnectionState::FailedProtected { .. } => "failed_protected",
+    }
 }
 
 pub(crate) struct Caller {
@@ -191,6 +204,7 @@ struct Session {
     owner: Arc<Mutex<Option<Vec<u8>>>>,
     reconnect: Option<Reconnect>,
     missing_route_ticks: u8,
+    missing_route_since: Option<Instant>,
     stopping: bool,
     dns_timeout: Duration,
     dns_attempt_timeout: Duration,
@@ -257,6 +271,7 @@ impl Helper {
                 owner,
                 reconnect: None,
                 missing_route_ticks: 0,
+                missing_route_since: None,
                 stopping: false,
                 dns_timeout: TUNNEL_DNS_TIMEOUT,
                 dns_attempt_timeout: TUNNEL_DNS_ATTEMPT_TIMEOUT,
@@ -431,6 +446,7 @@ impl Helper {
             .map(|request| request.settings.auto_reconnect)
         else {
             session.missing_route_ticks = 0;
+            session.missing_route_since = None;
             self.resumed.store(false, Ordering::Release);
             return;
         };
@@ -445,12 +461,26 @@ impl Helper {
                 .name,
         )
         .is_some();
+        let loss_duration = session
+            .missing_route_since
+            .map(|since| now.saturating_duration_since(since));
         if network_available {
+            if session.missing_route_ticks >= 2
+                && let Some(duration) = loss_duration
+            {
+                tracing::info!(elapsed_ms = duration.as_millis() as u64, "physical network returned");
+            }
+            session.missing_route_since = None;
             session.missing_route_ticks = 0;
         } else {
+            session.missing_route_since.get_or_insert(now);
+            let first_confirmed = session.missing_route_ticks == 1;
             session.missing_route_ticks = (session.missing_route_ticks + 1).min(2);
             if session.missing_route_ticks < 2 {
                 return;
+            }
+            if first_confirmed {
+                tracing::info!("physical network lost");
             }
         }
         if !network_available && !auto_reconnect {
@@ -488,9 +518,6 @@ impl Helper {
         if !network_available {
             if session.reconnect.is_none() {
                 self.begin_attempt(ConnectionState::Reconnecting);
-                if let Err(error) = session.stop_engine() {
-                    tracing::error!(%error, "failed to stop engine after network loss");
-                }
                 session.reconnect = Some(Reconnect {
                     failures: 0,
                     next_at: now,
@@ -502,16 +529,69 @@ impl Helper {
                 status.connect_stage = None;
                 status.stage_since_unix = None;
             });
+            let expired = session.missing_route_since.is_some_and(|since| {
+                now.saturating_duration_since(since) >= NETWORK_GRACE
+            });
+            let exited = session.process.is_some() && !session.live_engine_running();
+            if (expired || exited) && session.process.is_some() {
+                tracing::info!(expired, exited, "stopping engine while waiting for physical network");
+                if let Err(error) = session.stop_engine() {
+                    tracing::error!(%error, "failed to stop engine after network loss");
+                }
+            }
             return;
         }
-        if let Some(reconnect) = &mut session.reconnect {
-            if self
-                .with_status(|status| status.reconnect_failure_kind.take())
-                .is_some()
+        if session.reconnect.is_some() {
+            let from_network_loss = session
+                .reconnect
+                .as_ref()
+                .is_some_and(|reconnect| reconnect.cause == "network lost");
+            if from_network_loss
+                && loss_duration.is_some_and(|duration| duration < NETWORK_GRACE)
+                && session.process.is_some()
+                && session.live_engine_running()
             {
-                reconnect.next_at = now;
+                tracing::info!("checking live tunnel after physical network returned");
+                let remaining = NETWORK_GRACE.saturating_sub(
+                    loss_duration.expect("short network loss has a start time"),
+                );
+                match session.check_live_tunnel(remaining.min(NETWORK_DNS_TIMEOUT)) {
+                    Ok(()) => {
+                        if let Err(error) = self.publish_terminal(|status| {
+                            status.state = ConnectionState::Connected;
+                            status.reconnect_failure_kind = None;
+                        }) {
+                            if error.code == ErrorCode::Cancelled {
+                                self.finish_cancelled(&mut session);
+                                return;
+                            }
+                            tracing::warn!(code = ?error.code, "could not confirm tunnel recovery; restarting");
+                        } else {
+                            session.reconnect = None;
+                            if let Some(watchdog) = session.watchdog.take() {
+                                watchdog.stop();
+                            }
+                            session.start_watchdog();
+                            tracing::info!("tunnel recovered without an engine restart");
+                            return;
+                        }
+                    }
+                    Err(error) if error.code == ErrorCode::Cancelled => {
+                        self.finish_cancelled(&mut session);
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::warn!(code = ?error.code, "live tunnel did not recover; restarting");
+                    }
+                }
             }
-            if now < reconnect.next_at {
+            let had_no_network = self.with_status(|status| {
+                status.reconnect_failure_kind == Some(rosetun_config::FailureKind::NoNetwork)
+            });
+            if had_no_network {
+                session.reconnect.as_mut().expect("pending reconnect").next_at = now;
+            }
+            if now < session.reconnect.as_ref().expect("pending reconnect").next_at {
                 return;
             }
         } else {
@@ -626,14 +706,21 @@ impl Helper {
         } else {
             StartMode::Fresh
         };
+        tracing::info!(cause = reconnect.cause, attempt, ?mode, "attempting tunnel reconnect");
+        let dns_timeout = if reconnect.cause == "network lost" {
+            session.dns_timeout.min(NETWORK_DNS_TIMEOUT)
+        } else {
+            session.dns_timeout
+        };
         match session
-            .start(
+            .start_with_dns_timeout(
                 &request.node,
                 &request.effective_rule_set(),
                 &request.lists,
                 &request.settings,
                 mode,
                 None,
+                dns_timeout,
             )
             .and_then(|()| {
                 self.publish_terminal(|status| {
@@ -660,6 +747,7 @@ impl Helper {
                     status.stage_since_unix = None;
                 });
                 if error.code == ErrorCode::NoNetwork {
+                    tracing::warn!(cause = reconnect.cause, attempt, code = ?error.code, "tunnel reconnect deferred until network returns");
                     if let Err(cleanup_error) = session.stop_engine() {
                         tracing::error!(%cleanup_error, "failed to stop engine after network loss");
                     }
@@ -674,6 +762,7 @@ impl Helper {
                     });
                     return;
                 }
+                self.with_status(|status| status.reconnect_failure_kind = None);
                 let failures = attempt;
                 if failures < RECONNECT_ATTEMPTS {
                     if let Err(cleanup_error) = session.stop_engine() {
@@ -769,6 +858,7 @@ impl Helper {
         session.request = None;
         session.reconnect = None;
         session.missing_route_ticks = 0;
+        session.missing_route_since = None;
 
         match session
             .start(
@@ -958,7 +1048,13 @@ impl Helper {
             .status
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        apply(&mut status)
+        let previous = connection_state_name(&status.state);
+        let result = apply(&mut status);
+        let current = connection_state_name(&status.state);
+        if previous != current {
+            tracing::debug!(previous, current, "connection state changed");
+        }
+        result
     }
 
     fn check_owner(&self, caller: &Caller) -> Result<(), HelperError> {
@@ -1419,6 +1515,19 @@ impl Session {
         mode: StartMode,
         endpoint: Option<IpAddr>,
     ) -> Result<(), HelperError> {
+        self.start_with_dns_timeout(node, rules, lists, settings, mode, endpoint, self.dns_timeout)
+    }
+
+    fn start_with_dns_timeout(
+        &mut self,
+        node: &Node,
+        rules: &RuleSet,
+        lists: &[ListRef],
+        settings: &Settings,
+        mode: StartMode,
+        endpoint: Option<IpAddr>,
+        dns_timeout: Duration,
+    ) -> Result<(), HelperError> {
         // Dispose of the old process before borrowing the backend or spawning another.
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
@@ -1798,7 +1907,7 @@ impl Session {
                     let mut xray_process = self.xray_process.as_mut();
                     dns::check_cancellable(
                         server,
-                        self.dns_timeout,
+                        dns_timeout,
                         self.dns_attempt_timeout,
                         grace_deadline,
                         || {
@@ -1937,6 +2046,55 @@ impl Session {
             Ok(watchdog) => self.watchdog = Some(watchdog),
             Err(error) => tracing::warn!(%error, "DNS watchdog is unavailable"),
         }
+    }
+
+    fn live_engine_running(&mut self) -> bool {
+        let engine_running = self.process.as_mut().is_some_and(|process| {
+            matches!(process.is_running(), Ok(true))
+        });
+        let xray_running = if self.request.as_ref().is_some_and(|request| {
+            uses_xray(&request.node, request.settings.xray)
+        }) {
+            self.xray_process.as_mut().is_some_and(|process| {
+                matches!(process.is_running(), Ok(true))
+            })
+        } else {
+            true
+        };
+        engine_running && xray_running
+    }
+
+    fn check_live_tunnel(&mut self, timeout: Duration) -> Result<(), HelperError> {
+        let server = self.tunnel_dns.ok_or_else(|| {
+            HelperError::new(ErrorCode::DnsTimeout, "tunnel DNS server is unavailable")
+        })?;
+        let process = self.process.as_mut().ok_or_else(|| {
+            HelperError::new(ErrorCode::EngineFailed, "engine process is missing")
+        })?;
+        let mut xray = self.xray_process.as_mut();
+        dns::check_cancellable(
+            server,
+            self.dns_timeout.min(timeout),
+            self.dns_attempt_timeout.min(timeout),
+            None,
+            || {
+                let running = process.is_running()?;
+                let mut counters = process.outbound_failures();
+                let xray_running = match xray.as_mut() {
+                    Some(process) => {
+                        let running = process.is_running()?;
+                        let failures = process.outbound_failures();
+                        counters.unreachable = counters.unreachable.saturating_add(failures.unreachable);
+                        counters.rejected = counters.rejected.saturating_add(failures.rejected);
+                        counters.closed = counters.closed.saturating_add(failures.closed);
+                        running
+                    }
+                    None => true,
+                };
+                Ok((running && xray_running, counters))
+            },
+            || self.cancelled.load(Ordering::Acquire),
+        )
     }
 
     fn wait_for_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), HelperError> {
