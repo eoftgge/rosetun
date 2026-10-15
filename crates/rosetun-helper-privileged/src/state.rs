@@ -862,7 +862,7 @@ impl Helper {
         match session
             .start(
                 &request.node,
-                &renderable_rule_set(&request),
+                &renderable_rule_set(request),
                 &request.lists,
                 &request.settings,
                 mode,
