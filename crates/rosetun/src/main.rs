@@ -1,5 +1,6 @@
 #![allow(unreachable_pub)]
 
+mod exits;
 mod subcommands;
 mod subscriptions;
 
@@ -32,6 +33,7 @@ enum Command {
         request_path: Option<String>,
     },
     Delay,
+    Exits,
     Select {
         subscription_id: String,
         node_id: String,
@@ -106,6 +108,7 @@ fn main() -> ExitCode {
             Err(message) => local_result(Err(message)),
         },
         Command::Delay => with_helper(delay),
+        Command::Exits => local_result(exits::run()),
         Command::Status => with_helper(status),
         Command::Temporary => with_helper(temporary),
         Command::Disconnect => with_helper(disconnect),
@@ -219,13 +222,20 @@ fn probe(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
 }
 
 fn delay(client: &mut HelperClient) -> ExitCode {
-    match client.tunnel_delay().map(|delays| delays.proxy) {
-        Ok(ProbeOutcome::Works { millis }) => {
-            println!("works {millis} ms");
-            ExitCode::SUCCESS
-        }
-        Ok(_) => {
-            println!("fails");
+    match client.tunnel_delay() {
+        Ok(delays) => {
+            match delays.proxy {
+                ProbeOutcome::Works { millis } => println!("works {millis} ms"),
+                _ => println!("fails"),
+            }
+            if !delays.exits.is_empty() {
+                let config = rosetun_core::Store::open_default()
+                    .ok()
+                    .and_then(|store| store.load().ok());
+                for line in exits::delay_lines(config.as_ref(), &delays.exits) {
+                    println!("{line}");
+                }
+            }
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -425,23 +435,37 @@ fn prepare_list_request(request_path: Option<&str>) -> Result<PreparedCliRequest
 }
 
 fn prepare_apply_request(client: &mut HelperClient) -> Result<PreparedCliRequest, String> {
-    let temporary = client.temporary_rules().map_err(|error| {
+    let helper_error = |error: ClientError| {
         access_denied_message(&error)
             .map(str::to_owned)
             .unwrap_or_else(|| error.to_string())
-    })?;
+    };
+    let temporary = client.temporary_rules().map_err(helper_error)?;
+    let session = client.session_exits().map_err(helper_error)?;
     let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
     let config = store.load().map_err(|error| error.to_string())?;
-    let request = ConnectRequest::for_apply_with_exits(
-        &config,
-        None,
-        temporary,
-        rosetun_ipc::ExitContext::default(),
-    )
-    .map_err(connect_request_error)?;
+    let request =
+        apply_request(&config, temporary, exits::pinned(session)).map_err(connect_request_error)?;
     rosetun_core::prepare_lists(&store, request)
         .map(PreparedCliRequest::Lists)
         .map_err(|error| error.to_string())
+}
+
+/// Like the GUI, `apply` keeps each exit on the node the session already uses.
+fn apply_request(
+    config: &rosetun_config::AppConfig,
+    temporary: Vec<Rule>,
+    pinned: Vec<(rosetun_config::ExitId, rosetun_config::Selection)>,
+) -> Result<ConnectRequest, rosetun_ipc::ConnectRequestError> {
+    ConnectRequest::for_apply_with_exits(
+        config,
+        None,
+        temporary,
+        rosetun_ipc::ExitContext {
+            delays: &[],
+            selected: &pinned,
+        },
+    )
 }
 
 fn connect_request_error(error: rosetun_ipc::ConnectRequestError) -> String {
@@ -568,6 +592,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
             request_path: Some((*path).to_owned()),
         }),
         ["delay"] => Ok(Command::Delay),
+        ["exits"] => Ok(Command::Exits),
         ["select", subscription_id, node_id] => Ok(Command::Select {
             subscription_id: (*subscription_id).to_owned(),
             node_id: (*node_id).to_owned(),
@@ -587,6 +612,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["apply", ..] => Err("apply accepts zero or one request JSON path".to_owned()),
         ["probe", ..] => Err("probe accepts zero or one request JSON path".to_owned()),
         ["delay", ..] => Err("delay does not accept arguments".to_owned()),
+        ["exits", ..] => Err("exits does not accept arguments".to_owned()),
         ["select", ..] => Err("select requires exactly a subscription ID and a node ID".to_owned()),
         ["config", ..] => Err("config does not accept arguments".to_owned()),
         ["xray", ..] => Err("xray requires auto, off or always".to_owned()),
@@ -617,6 +643,7 @@ Usage:
   rosetun apply [request.json]
   rosetun probe [request.json]
   rosetun delay
+  rosetun exits
   rosetun select <subscription-id> <node-id>
   rosetun sub add <url> [--name <name>] [--user-agent <ua>] [--no-hwid]
   rosetun sub update [<id>]
@@ -860,6 +887,33 @@ mod tests {
             parse(&["delay", "extra"]),
             Err("delay does not accept arguments".to_owned())
         );
+    }
+
+    #[test]
+    fn exits_takes_no_arguments() {
+        assert_eq!(parse(&["exits"]), Ok(Command::Exits));
+        assert_eq!(
+            parse(&["exits", "extra"]),
+            Err("exits does not accept arguments".to_owned())
+        );
+    }
+
+    #[test]
+    fn apply_keeps_the_exit_node_the_service_reports() {
+        use crate::exits::tests::{config, selection};
+        use rosetun_config::ExitId;
+        use rosetun_ipc::SessionExit;
+
+        let config = config();
+        let unpinned = super::apply_request(&config, Vec::new(), Vec::new()).unwrap();
+        assert_eq!(unpinned.extra_nodes[0].selection, selection("nl-1"));
+        let pinned = crate::exits::pinned(vec![SessionExit {
+            exit: ExitId::new("nl"),
+            selection: selection("nl-2"),
+        }]);
+        let request = super::apply_request(&config, Vec::new(), pinned).unwrap();
+        assert_eq!(request.extra_nodes.len(), 1);
+        assert_eq!(request.extra_nodes[0].selection, selection("nl-2"));
     }
 
     #[test]

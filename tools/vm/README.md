@@ -20,7 +20,7 @@ Replace `example.com` with a suitable real cover site before running. The matrix
 
 `no network session` uses the derived `request-auto-reconnect.json`; `network change` uses the base `request.json` with auto-reconnect off.
 
-`Rule through another server` (with `-UseHostNode`) starts a second plain node on TCP 8391 (`Start-RosetunTestNode -ExitNode`, stopped in `finally`), connects with `request-rule-exit.json` whose Exit rule sends `yandex.ru` (`ExitRuleUrl`) through it, counts each node's logged connections to check which node carried the rule and the rest, then stops the second node and checks that only the rule fails while the session stays Connected and direct egress stays blocked.
+`Rule through another server` (with `-UseHostNode`) starts a second plain node on TCP 8391 (`Start-RosetunTestNode -ExitNode`, stopped in `finally`), connects with `request-rule-exit.json` whose Exit rule sends `yandex.ru` (`ExitRuleUrl`) through it, counts each node's logged connections to check which node carried the rule and the rest, checks that `rosetun delay` reports the second node, applies an isolated config (`exit-matrix\config.json`) whose country exit lists an unreachable decoy first and checks that the exit stays on the session's node (`rosetun exits` names it, the rule still reaches the second node), then stops the second node and checks that `rosetun delay` reports it not answering, only the rule fails, the session stays Connected and direct egress stays blocked.
 
 Run the separate list rule-set scenario after the same guest/network prerequisites are satisfied (the owner runs this, not the agent):
 

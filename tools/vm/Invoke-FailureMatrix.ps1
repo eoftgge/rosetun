@@ -125,7 +125,7 @@ function Get-NetworkWaitNote {
 function Invoke-SettingsCli {
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
-        [Parameter(Mandatory)][ValidateSet('connect', 'apply')][string]$Action
+        [Parameter(Mandatory)][ValidateSet('connect', 'apply', 'exits')][string]$Action
     )
     Invoke-RosetunGuest -ScriptBlock {
         param($dir, $configPath, $action)
@@ -594,6 +594,7 @@ if ($UseHostNode) {
 
     Write-Host 'Route one domain through a second node...'
     $exitNodeStartedByMatrix = $false
+    $exitConfigPath = Join-Path (Get-RosetunGuestDir) 'exit-matrix\config.json'
     try {
         $exitNodeStartedByMatrix = if ($NodeBindInterface) {
             Start-RosetunTestNode -SingBoxPath $SingBoxPath -BindInterface $NodeBindInterface -ExitNode
@@ -628,11 +629,79 @@ if ($UseHostNode) {
             -Note "$(Format-Egress $egress); first node +$($firstAfter - $firstBefore), second node +$($secondAfterOther - $secondAfterRule)" {
             $egress.Ok -and $firstAfter -gt $firstBefore -and $secondAfterOther -eq $secondAfterRule
         }
+        $delay = Invoke-RosetunCli -Quiet 'delay'
+        Test-Step 'Rule through another server' 'delay shows the second node answering' `
+            -Note "exit $($delay.ExitCode)" {
+            $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$' -and
+                $delay.Output -match '(?m)^  second-node\tworks \d+ ms$'
+        }
+
+        # A settings apply must keep the exit on the session's node. The config
+        # lists an unreachable Dutch decoy first, which an unpinned resolution
+        # would pick for the country exit.
+        Invoke-RosetunGuest -ScriptBlock {
+            param($dir, $configPath)
+            New-Item -Path (Split-Path -Parent $configPath) -ItemType Directory -Force | Out-Null
+            $request = Get-Content -Path (Join-Path $dir 'request-rule-exit.json') -Raw | ConvertFrom-Json
+            $flag = [char]::ConvertFromUtf32(0x1F1F3) + [char]::ConvertFromUtf32(0x1F1F1)
+            $exitNode = $request.extra_nodes[0].node
+            $exitNode.name = "$flag Exit test node"
+            $decoy = $exitNode | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+            $decoy.id = 'home-exit-decoy'
+            $decoy.name = "$flag Decoy node"
+            $decoy.server = '192.0.2.1'
+            $config = @{
+                version = 5
+                settings = $request.settings
+                subscriptions = @(@{
+                    id = $request.selection.subscription
+                    name = 'Test node'
+                    url = 'https://example.invalid/subscription'
+                    nodes = @($request.node, $decoy, $exitNode)
+                })
+                active = $request.selection
+                active_rule_set = $request.rule_set.id
+                rule_sets = @($request.rule_set)
+                exits = @(@{
+                    id = 'second-node'
+                    name = 'Second node'
+                    target = @{ country = 'NL' }
+                })
+            }
+            [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 30))
+        } -ArgumentList (Get-RosetunGuestDir), $exitConfigPath
+        $exitApply = Invoke-SettingsCli -ConfigPath $exitConfigPath -Action apply
+        Test-Step 'Rule through another server' 'apply in the session succeeds' `
+            -Note "exit $($exitApply.ExitCode)" {
+            $exitApply.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
+        }
+        $exitList = Invoke-SettingsCli -ConfigPath $exitConfigPath -Action exits
+        Test-Step 'Rule through another server' 'exits lists the session node' `
+            -Note "exit $($exitList.ExitCode)" {
+            $exitList.ExitCode -eq 0 -and
+                $exitList.Output -match '(?m)^  second-node\tSecond node\tcountry NL\t[^\t]*Exit test node\t1$' -and
+                $exitList.Output -notmatch '192\.0\.2\.1\b'
+        }
+        $secondBefore = Get-RosetunTestNodeConnections -ExitNode
+        $egress = Wait-RosetunTunnelEgress -Url $exitRuleUrl -SkipRevocationCheck
+        Start-Sleep -Seconds 1
+        $secondAfterApply = Get-RosetunTestNodeConnections -ExitNode
+        Test-Step 'Rule through another server' 'apply keeps the exit node' `
+            -Note "$(Format-Egress $egress); second node +$($secondAfterApply - $secondBefore)" {
+            $egress.Ok -and $secondAfterApply -gt $secondBefore
+        }
+        $exitSince = (Get-RosetunStatus -ProtocolVersion $protocolVersion).since_unix
 
         Stop-RosetunTestNode -ExitNode
         $exitNodeStartedByMatrix = $false
         Test-Step 'Rule through another server' 'rule domain fails without the second node' {
             -not (Test-RosetunTunnelEgress -Url $exitRuleUrl -SkipRevocationCheck)
+        }
+        $delay = Invoke-RosetunCli -Quiet 'delay'
+        Test-Step 'Rule through another server' 'delay shows the second node not answering' `
+            -Note "exit $($delay.ExitCode)" {
+            $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$' -and
+                $delay.Output -match '(?m)^  second-node\tnot answering$'
         }
         $egress = Wait-RosetunTunnelEgress
         Test-Step 'Rule through another server' 'other traffic still works' -Note (Format-Egress $egress) {
@@ -653,6 +722,10 @@ if ($UseHostNode) {
             try { Stop-RosetunTestNode -ExitNode }
             catch { Write-Warning "Could not stop the exit test node: $_" }
         }
+        Invoke-RosetunGuest -ScriptBlock {
+            param($configPath)
+            Remove-Item -Path (Split-Path -Parent $configPath) -Recurse -Force -ErrorAction SilentlyContinue
+        } -ArgumentList $exitConfigPath
     }
     Disconnect-RosetunTunnel | Out-Null
     $baseConnect = Connect-RosetunTunnel -Quiet
