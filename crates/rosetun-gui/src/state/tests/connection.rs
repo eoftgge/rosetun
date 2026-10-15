@@ -578,7 +578,9 @@ fn busy_connect_and_failed_disconnect_still_show_errors() {
     assert!(!state.operations.helper);
     assert_eq!(
         state.operation_error.as_deref(),
-        Some("the engine failed: boom")
+        Some(
+            "the engine failed: The engine did not start. Try again; if it keeps happening, save a report under Settings › Service and log."
+        )
     );
 }
 

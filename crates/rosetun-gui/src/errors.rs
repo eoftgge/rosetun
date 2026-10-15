@@ -716,7 +716,11 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
             if error.code == ErrorCode::EngineFailed {
                 format!(
                     "{title}: {}",
-                    tr_in(language, "error-code-engine-failed-hint", &FluentArgs::new())
+                    tr_in(
+                        language,
+                        "error-code-engine-failed-hint",
+                        &FluentArgs::new()
+                    )
                 )
             } else if error.message.is_empty() || error.code == ErrorCode::AccessDenied {
                 title.to_owned()
@@ -1129,10 +1133,19 @@ mod tests {
             "Туннель подключён из другой учётной записи Windows. Управлять им может только она или администратор."
         );
         let empty = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, ""));
-        assert_eq!(client(Language::English, &empty), client(Language::English, &error));
-        assert_eq!(client(Language::Russian, &empty), client(Language::Russian, &error));
+        assert_eq!(
+            client(Language::English, &empty),
+            client(Language::English, &error)
+        );
+        assert_eq!(
+            client(Language::Russian, &empty),
+            client(Language::Russian, &error)
+        );
         let routing = ClientError::Helper(HelperError::new(ErrorCode::RoutingFailed, "boom"));
-        assert_eq!(client(Language::English, &routing), "routing setup failed: boom");
+        assert_eq!(
+            client(Language::English, &routing),
+            "routing setup failed: boom"
+        );
         let transport = ClientError::Transport("x".to_owned());
         assert_eq!(
             client(Language::Russian, &transport),
