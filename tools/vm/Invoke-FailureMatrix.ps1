@@ -57,6 +57,51 @@ function Format-Egress {
     "curl $($Egress.CurlExit), local '$($Egress.LocalIp)', tun '$($Egress.TunAddresses)': $($Egress.Error)"
 }
 
+function Set-GuestEgressAdapter {
+    param([Parameter(Mandatory)][int]$Index, [Parameter(Mandatory)][bool]$Enabled)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($index, $enabled)
+        $adapter = Get-NetAdapter -InterfaceIndex $index -ErrorAction Stop
+        if ($enabled) {
+            $adapter | Enable-NetAdapter -Confirm:$false
+        }
+        else {
+            $adapter | Disable-NetAdapter -Confirm:$false
+        }
+    } -ArgumentList $Index, $Enabled
+}
+
+function Wait-GuestEgressRoute {
+    param([Parameter(Mandatory)][int]$Index)
+    Wait-RosetunCondition {
+        Invoke-RosetunGuest -ScriptBlock {
+            param($index)
+            $address = Get-NetIPAddress -InterfaceIndex $index -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.PrefixOrigin -eq 'Dhcp' -and $_.AddressState -eq 'Preferred' } |
+                Select-Object -First 1
+            $route = Get-NetRoute -InterfaceIndex $index -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            [bool]($address -and $route)
+        } -ArgumentList $Index
+    } -TimeoutSeconds 60
+}
+
+function Test-RosetunWfpFilters {
+    Invoke-RosetunGuest -ScriptBlock {
+        $path = Join-Path $env:TEMP ("rosetun-wfp-$([guid]::NewGuid().ToString('N')).xml")
+        try {
+            & netsh.exe wfp show state "file=$path" *> $null
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $path)) {
+                throw 'Cannot inspect WFP state.'
+            }
+            (Get-Content -Raw -LiteralPath $path) -match '51a47ec7-6459-4b84-8854-075e1576e7f9'
+        }
+        finally {
+            Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Invoke-SettingsCli {
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -388,6 +433,32 @@ Test-Step 'baseline' 'LAN listener is reachable before connect' {
     Wait-RosetunCondition { Test-RosetunLanListener $lanListener } -TimeoutSeconds 10
 }
 
+Write-Host 'No network before connect...'
+$networkAdapter = Get-RosetunEgressInterface
+try {
+    Set-GuestEgressAdapter -Index $networkAdapter.Index -Enabled $false
+    $networkTimer = [Diagnostics.Stopwatch]::StartNew()
+    $attempt = Connect-RosetunTunnel -Quiet
+    $failed = Wait-RosetunState 'Failed' -TimeoutSeconds 10
+    $networkTimer.Stop()
+    $status = Get-RosetunStatus -ProtocolVersion $protocolVersion
+    Test-Step 'no network' 'Failed with no network within 10 s' `
+        -Note "exit $($attempt.ExitCode); after $($networkTimer.Elapsed.TotalSeconds) s" {
+        $attempt.ExitCode -ne 0 -and $failed -and $networkTimer.Elapsed.TotalSeconds -le 10 -and
+            $status.state.failed.failure_kind -eq 'no_network' -and
+            $attempt.Output -match 'NoNetwork'
+    }
+    Test-Step 'no network' 'no WFP filters were installed' { -not (Test-RosetunWfpFilters) }
+    Test-Step 'no network' 'no TUN adapter was created' { -not (Test-RosetunTunAdapter) }
+    Test-Step 'no network' 'engine did not start' { -not (Test-RosetunEngineRunning) }
+}
+finally {
+    Set-GuestEgressAdapter -Index $networkAdapter.Index -Enabled $true
+}
+$routeRestored = Wait-GuestEgressRoute -Index $networkAdapter.Index
+Test-Step 'no network' 'physical route returns after adapter enable' { $routeRestored }
+if (-not $routeRestored) { throw 'The guest physical route did not return after adapter enable.' }
+
 Write-Host 'Connect...'
 Connect-RosetunTunnel | Out-Null
 Test-Step 'connect' 'state is Connected' { Wait-RosetunState 'Connected' }
@@ -409,6 +480,47 @@ Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
 }
 # The same check as through Xray: if it fails here too, the test or the lab is at fault.
 Test-Step 'connect' 'UDP reaches the internet through the node (NTP)' { Test-RosetunUdpInternet }
+Test-Step 'no network' 'connect succeeds after the route returns' { (Get-RosetunState) -eq 'Connected' }
+Test-Step 'no network' 'direct egress is blocked after the route returns' { -not (Test-RosetunDirectEgress) }
+
+Write-Host 'No network during a protected session...'
+Start-RosetunEgressWatch
+$egressWatchActive = $true
+$watch = $null
+$returnTimer = $null
+try {
+    try {
+        Set-GuestEgressAdapter -Index $networkAdapter.Index -Enabled $false
+        $networkLost = Wait-RosetunCondition {
+            $status = Get-RosetunStatus -ProtocolVersion $protocolVersion
+            $status.state -eq 'reconnecting' -and $status.reconnect_failure_kind -eq 'no_network'
+        } -TimeoutSeconds 10
+        Test-Step 'no network session' 'status reports no network while waiting' { $networkLost }
+        Test-Step 'no network session' 'WFP filters stay installed' { Test-RosetunWfpFilters }
+    }
+    finally {
+        $returnTimer = [Diagnostics.Stopwatch]::StartNew()
+        Set-GuestEgressAdapter -Index $networkAdapter.Index -Enabled $true
+    }
+    $routeRestored = Wait-GuestEgressRoute -Index $networkAdapter.Index
+    Test-Step 'no network session' 'physical route returns' { $routeRestored }
+    $connected = Wait-RosetunState 'Connected' -TimeoutSeconds 60
+    $returnTimer.Stop()
+    Test-Step 'no network session' 'reconnected within 60 s of adapter enable' `
+        -Note "after $($returnTimer.Elapsed.TotalSeconds) s" {
+        $routeRestored -and $connected -and $returnTimer.Elapsed.TotalSeconds -le 60
+    }
+    Test-Step 'no network session' 'direct egress stays blocked after recovery' {
+        -not (Test-RosetunDirectEgress)
+    }
+}
+finally {
+    $watch = Stop-RosetunEgressWatch
+    $egressWatchActive = $false
+}
+Test-Step 'no network session' "no direct leak through loss and recovery ($($watch.Probes) probes)" {
+    $watch.Probes -gt 0 -and $watch.Leaks -eq 0
+}
 
 # Not the first connect of the run: the first adapter creation in a fresh VM
 # can leave the tunnel silent for a while, which this scenario must not measure.

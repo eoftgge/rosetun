@@ -169,7 +169,10 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     ui.colored_label(theme::ERROR, title)
                                         .on_hover_text(state.text(reason));
                                     if *kind == FailureKind::NoNetwork
-                                        && matches!(status.state, ConnectionState::FailedProtected { .. })
+                                        && matches!(
+                                            status.state,
+                                            ConnectionState::FailedProtected { .. }
+                                        )
                                     {
                                         ui.colored_label(theme::ERROR, tr!("no-network-protected"));
                                     }

@@ -395,7 +395,13 @@ impl Helper {
         };
 
         let network_available = (session.physical_interface)(
-            &session.request.as_ref().expect("active request").settings.tun.name,
+            &session
+                .request
+                .as_ref()
+                .expect("active request")
+                .settings
+                .tun
+                .name,
         )
         .is_some();
         if !network_available && !auto_reconnect {
@@ -450,7 +456,10 @@ impl Helper {
             return;
         }
         if let Some(reconnect) = &mut session.reconnect {
-            if self.with_status(|status| status.reconnect_failure_kind.take()).is_some() {
+            if self
+                .with_status(|status| status.reconnect_failure_kind.take())
+                .is_some()
+            {
                 reconnect.next_at = now;
             }
             if now < reconnect.next_at {
@@ -611,7 +620,8 @@ impl Helper {
                         cause: reconnect.cause,
                     });
                     self.with_status(|status| {
-                        status.reconnect_failure_kind = Some(rosetun_config::FailureKind::NoNetwork);
+                        status.reconnect_failure_kind =
+                            Some(rosetun_config::FailureKind::NoNetwork);
                     });
                     return;
                 }
@@ -1796,8 +1806,10 @@ impl Session {
             });
             self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
             dns_result.map_err(|error| {
-                if matches!(error.code, ErrorCode::ServerUnreachable | ErrorCode::DnsTimeout)
-                    && (self.physical_interface)(&settings.tun.name).is_none()
+                if matches!(
+                    error.code,
+                    ErrorCode::ServerUnreachable | ErrorCode::DnsTimeout
+                ) && (self.physical_interface)(&settings.tun.name).is_none()
                 {
                     HelperError::new(ErrorCode::NoNetwork, "physical network is unavailable")
                 } else {

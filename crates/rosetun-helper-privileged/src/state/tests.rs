@@ -1528,7 +1528,9 @@ fn lost_route_during_server_check_is_no_network() {
     let stopped = Arc::new(AtomicUsize::new(0));
     let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped))
         .with_test_physical_interface(route_then_disappears);
-    let error = helper.connect(&connect_request()).expect_err("network went away");
+    let error = helper
+        .connect(&connect_request())
+        .expect_err("network went away");
 
     assert_eq!(error.code, ErrorCode::NoNetwork);
     assert!(ROUTE_CHECKS.load(Ordering::Acquire) >= 2);
@@ -2458,13 +2460,29 @@ fn supervisor_waits_for_route_and_recovers_without_releasing_protection() {
     helper.supervise(now);
     let status = helper.status();
     assert_eq!(status.state, ConnectionState::Reconnecting);
-    assert_eq!(status.reconnect_failure_kind, Some(rosetun_config::FailureKind::NoNetwork));
+    assert_eq!(
+        status.reconnect_failure_kind,
+        Some(rosetun_config::FailureKind::NoNetwork)
+    );
     assert_eq!(controls.spawns(), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 
     helper.supervise(now + Duration::from_secs(3600));
-    assert_eq!(controls.spawns(), 1, "missing route must not consume retries");
-    assert_eq!(helper.session().unwrap().reconnect.as_ref().unwrap().failures, 0);
+    assert_eq!(
+        controls.spawns(),
+        1,
+        "missing route must not consume retries"
+    );
+    assert_eq!(
+        helper
+            .session()
+            .unwrap()
+            .reconnect
+            .as_ref()
+            .unwrap()
+            .failures,
+        0
+    );
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 
     NETWORK_PRESENT.store(true, Ordering::Release);
