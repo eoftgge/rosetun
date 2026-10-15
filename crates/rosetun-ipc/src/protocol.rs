@@ -286,7 +286,10 @@ impl ConnectRequest {
 
 fn warn_blocked_exits(count: usize) {
     if count > 0 {
-        tracing::warn!(count, "exit rules blocked because their exits could not be resolved");
+        tracing::warn!(
+            count,
+            "exit rules blocked because their exits could not be resolved"
+        );
     }
 }
 
@@ -454,7 +457,8 @@ mod tests {
     };
 
     use super::{
-        ConnectRequest, ConnectRequestError, ExitContext, ListFormat, ListRef, ProbeRequest, Request,
+        ConnectRequest, ConnectRequestError, ExitContext, ListFormat, ListRef, ProbeRequest,
+        Request,
     };
 
     #[test]

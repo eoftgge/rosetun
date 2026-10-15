@@ -700,7 +700,10 @@ fn country_exit_uses_check_results_but_keeps_its_session_node() {
         panic!("expected connect job");
     };
     let request = ConnectRequest::from_config_with_exits(&state.config, inputs.context()).unwrap();
-    assert_eq!(request.extra_nodes[0].selection.node, NodeId::new("gb-first"));
+    assert_eq!(
+        request.extra_nodes[0].selection.node,
+        NodeId::new("gb-first")
+    );
     state.reduce(WorkerEvent::Connect(Ok(request)));
     state.status.state = ConnectionState::Connected;
     assert!(matches!(
@@ -759,7 +762,10 @@ fn country_exit_uses_check_results_but_keeps_its_session_node() {
         panic!("expected a new connect job");
     };
     let request = ConnectRequest::from_config_with_exits(&state.config, inputs.context()).unwrap();
-    assert_eq!(request.extra_nodes[0].selection.node, NodeId::new("gb-second"));
+    assert_eq!(
+        request.extra_nodes[0].selection.node,
+        NodeId::new("gb-second")
+    );
 }
 
 #[test]

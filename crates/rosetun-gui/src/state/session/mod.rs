@@ -349,7 +349,7 @@ impl State {
             SessionPart::Server => session.selection != current.selection,
             SessionPart::Rules => {
                 session.rule_set != current.rule_set || session.extra_nodes != current.extra_nodes
-            },
+            }
             SessionPart::Dns => session.settings.dns != current.settings.dns,
             SessionPart::Protection => session.settings.kill_switch != current.settings.kill_switch,
         }

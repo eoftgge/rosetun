@@ -150,7 +150,8 @@ impl Helper {
         session.reserve_lists(request, Some(&current))?;
         tracing::info!(
             server = current.node != request.node || current.selection != request.selection,
-            rules = current.rule_set != request.rule_set || current.extra_nodes != request.extra_nodes,
+            rules =
+                current.rule_set != request.rule_set || current.extra_nodes != request.extra_nodes,
             temporary = current.temporary_rules != request.temporary_rules,
             temporary_rules = request.temporary_rules.len(),
             dns = current.settings.dns != request.settings.dns,

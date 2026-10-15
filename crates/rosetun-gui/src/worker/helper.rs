@@ -9,7 +9,8 @@ impl WorkerDispatcher {
                 .load()
                 .map_err(HelperCommandError::Store)
                 .and_then(|config| {
-                    let request = ConnectRequest::from_config_with_exits(&config, inputs.context())?;
+                    let request =
+                        ConnectRequest::from_config_with_exits(&config, inputs.context())?;
                     let prepared = rosetun_core::prepare_lists(&publisher.store, request.clone())?;
                     let snapshot = AppliedSnapshot::from_config(&config);
                     with_helper(|client| {
