@@ -708,3 +708,37 @@ fn exit_rules_read_through_their_exit_in_their_own_colour() {
     let config = crate::destinations::tests::config(&[("a", "🇩🇪 Example")], vec![exit.clone()]);
     assert!(crate::destinations::unresolved_exits(&config).contains(&exit.id));
 }
+
+#[test]
+fn exit_button_shows_the_exit_name_without_truncation() {
+    let mut exit = crate::destinations::tests::exit(
+        "1",
+        rosetun_config::ExitTarget::Country(rosetun_config::CountryCode::parse("NL").unwrap()),
+    );
+    exit.name = "Нидерланды".into();
+    let exits = std::slice::from_ref(&exit);
+    let current = TargetChoice::of(RuleDestination::Exit(exit.id.clone()), exits);
+    assert_eq!(current.button, "Нидерланды");
+    assert_eq!(current.label, "Through VPN · Нидерланды");
+    assert_eq!(
+        TargetChoice::plain(RuleTarget::Direct).button,
+        tr!("direct")
+    );
+    let ctx = egui::Context::default();
+    theme::apply(&ctx);
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            target_button(ui, "exit_target", &current, &[], true);
+        });
+    });
+    output.textures_delta.clear();
+    let texts: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, ["Нидерланды"]);
+}

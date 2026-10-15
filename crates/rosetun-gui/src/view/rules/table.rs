@@ -84,6 +84,8 @@ pub(super) fn value_cell(
 pub(super) struct TargetChoice {
     pub(super) destination: RuleDestination,
     pub(super) label: String,
+    /// What the closed button shows. An exit drops "Through VPN": its colour already says it.
+    pub(super) button: String,
     pub(super) color: Color32,
     /// A section title drawn above this entry.
     pub(super) section: Option<String>,
@@ -91,17 +93,28 @@ pub(super) struct TargetChoice {
 
 impl TargetChoice {
     pub(super) fn plain(target: RuleTarget) -> Self {
+        let label = target_label(target);
         Self {
             destination: target.into(),
-            label: target_label(target),
+            button: label.clone(),
+            label,
             color: target_color(target),
             section: None,
         }
     }
 
     pub(super) fn of(destination: RuleDestination, exits: &[Exit]) -> Self {
+        let label = destination_label(&destination, exits);
+        let button = match &destination {
+            RuleDestination::Exit(id) => exits
+                .iter()
+                .find(|exit| &exit.id == id)
+                .map(|exit| crate::display::safe_text(&exit.name)),
+            _ => None,
+        };
         Self {
-            label: destination_label(&destination, exits),
+            button: button.unwrap_or_else(|| label.clone()),
+            label,
             color: destination_color(&destination),
             destination,
             section: None,
@@ -167,7 +180,7 @@ pub(super) fn target_button(
                 color,
             );
             let mut job = egui::text::LayoutJob::simple_singleline(
-                current.label.clone(),
+                current.button.clone(),
                 egui::TextStyle::Button.resolve(ui.style()),
                 color,
             );
