@@ -293,6 +293,7 @@ pub(crate) fn connection_failure(
             (tr!("error-code-xray-start-failed"), tr!("xray-start-hint"))
         }
         FailureKind::XrayStopped => (tr!("error-code-xray-stopped"), tr!("xray-stopped-hint")),
+        FailureKind::NoNetwork => (tr!("error-code-no-network"), tr!("no-network-hint")),
         FailureKind::ServerUnreachable => (
             tr!("error-code-server-unreachable"),
             tr!(

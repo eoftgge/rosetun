@@ -5,7 +5,7 @@ use rosetun_config::{
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_LIST_CHUNK_BYTES: usize = 1024 * 1024;
@@ -279,6 +279,7 @@ pub enum ErrorCode {
     EngineFailed,
     XrayStartFailed,
     XrayStopped,
+    NoNetwork,
     ServerUnreachable,
     ServerRejected,
     ServerClosed,
@@ -302,6 +303,7 @@ mod tests {
             super::ErrorCode::AccessDenied,
             super::ErrorCode::XrayStartFailed,
             super::ErrorCode::XrayStopped,
+            super::ErrorCode::NoNetwork,
             super::ErrorCode::ServerUnreachable,
             super::ErrorCode::ServerRejected,
             super::ErrorCode::ServerClosed,
@@ -317,7 +319,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 9);
+        assert_eq!(super::PROTOCOL_VERSION, 10);
     }
     use rosetun_config::{
         AppConfig, EngineKind, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,

@@ -674,6 +674,9 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                 ErrorCode::XrayStopped => {
                     tr_in(language, "error-code-xray-stopped", &FluentArgs::new())
                 }
+                ErrorCode::NoNetwork => {
+                    tr_in(language, "error-code-no-network", &FluentArgs::new())
+                }
                 ErrorCode::ServerUnreachable => tr_in(
                     language,
                     "error-code-server-unreachable",

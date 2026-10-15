@@ -16,6 +16,7 @@ pub enum FailureKind {
     EngineNotReady,
     XrayStartFailed,
     XrayStopped,
+    NoNetwork,
     ServerUnreachable,
     ServerRejected,
     ServerClosed,
@@ -63,6 +64,8 @@ pub struct Traffic {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Status {
     pub state: ConnectionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconnect_failure_kind: Option<FailureKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connect_stage: Option<ConnectStage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,6 +119,25 @@ mod failure_tests {
             "server_unreachable"
         );
         assert_eq!(serde_json::from_value::<Status>(encoded).unwrap(), typed);
+    }
+
+    #[test]
+    fn reconnect_reports_network_loss_without_changing_state_shape() {
+        let status = Status {
+            state: ConnectionState::Reconnecting,
+            reconnect_failure_kind: Some(FailureKind::NoNetwork),
+            ..Status::default()
+        };
+        let encoded = serde_json::to_value(&status).unwrap();
+        assert_eq!(encoded["state"], "reconnecting");
+        assert_eq!(encoded["reconnect_failure_kind"], "no_network");
+        assert_eq!(serde_json::from_value::<Status>(encoded).unwrap(), status);
+        assert!(
+            serde_json::to_value(Status::default())
+                .unwrap()
+                .get("reconnect_failure_kind")
+                .is_none()
+        );
     }
 
     #[test]

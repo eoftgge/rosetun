@@ -64,6 +64,11 @@ const SUPERVISOR_TICK: Duration = Duration::from_millis(500);
 /// A wall-clock jump this large between two ticks means the machine slept.
 const SLEEP_GAP: Duration = Duration::from_secs(30);
 
+#[cfg(test)]
+fn test_physical_interface(_: &str) -> Option<String> {
+    Some("Ethernet".to_owned())
+}
+
 pub(crate) struct Caller {
     sid: Vec<u8>,
     administrator: bool,
@@ -217,7 +222,10 @@ impl Helper {
             owner: Arc::clone(&owner),
             engines: Arc::clone(&engines),
             xray: None,
+            #[cfg(not(test))]
             physical_interface: rosetun_routing::physical_default_interface,
+            #[cfg(test)]
+            physical_interface: test_physical_interface,
             probe: Mutex::new(()),
             lists: None,
             shutting_down: AtomicBool::new(false),
@@ -231,7 +239,10 @@ impl Helper {
                 process: None,
                 xray_process: None,
                 xray: None,
+                #[cfg(not(test))]
                 physical_interface: rosetun_routing::physical_default_interface,
+                #[cfg(test)]
+                physical_interface: test_physical_interface,
                 control: None,
                 monitor: None,
                 watchdog: None,
@@ -383,7 +394,65 @@ impl Helper {
             return;
         };
 
-        if let Some(reconnect) = &session.reconnect {
+        let network_available = (session.physical_interface)(
+            &session.request.as_ref().expect("active request").settings.tun.name,
+        )
+        .is_some();
+        if !network_available && !auto_reconnect {
+            let protected = session.keeps_protection();
+            if protected {
+                if let Err(error) = session.stop_engine() {
+                    tracing::error!(%error, "failed to stop engine after network loss");
+                }
+            } else {
+                session.teardown();
+            }
+            self.with_status(|status| {
+                let reason = "physical network is unavailable".to_owned();
+                let failure_kind = Some(rosetun_config::FailureKind::NoNetwork);
+                status.state = if protected {
+                    ConnectionState::FailedProtected {
+                        reason,
+                        failure_kind,
+                    }
+                } else {
+                    ConnectionState::Failed {
+                        reason,
+                        failure_kind,
+                    }
+                };
+                status.reconnect_failure_kind = None;
+                status.since_unix = None;
+                status.connect_stage = None;
+                status.stage_since_unix = None;
+            });
+            session.request = None;
+            session.pin_lists(&[]);
+            return;
+        }
+        if !network_available {
+            if session.reconnect.is_none() {
+                self.begin_attempt(ConnectionState::Reconnecting);
+                if let Err(error) = session.stop_engine() {
+                    tracing::error!(%error, "failed to stop engine after network loss");
+                }
+                session.reconnect = Some(Reconnect {
+                    failures: 0,
+                    next_at: now,
+                    cause: "network lost",
+                });
+            }
+            self.with_status(|status| {
+                status.reconnect_failure_kind = Some(rosetun_config::FailureKind::NoNetwork);
+                status.connect_stage = None;
+                status.stage_since_unix = None;
+            });
+            return;
+        }
+        if let Some(reconnect) = &mut session.reconnect {
+            if self.with_status(|status| status.reconnect_failure_kind.take()).is_some() {
+                reconnect.next_at = now;
+            }
             if now < reconnect.next_at {
                 return;
             }
@@ -511,6 +580,7 @@ impl Helper {
             .and_then(|()| {
                 self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
+                    status.reconnect_failure_kind = None;
                     status.xray = uses_xray(&request.node, request.settings.xray);
                     status.xray_use = Some(request.settings.xray);
                     status.xray_stopped = false;
@@ -531,6 +601,20 @@ impl Helper {
                     status.connect_stage = None;
                     status.stage_since_unix = None;
                 });
+                if error.code == ErrorCode::NoNetwork {
+                    if let Err(cleanup_error) = session.stop_engine() {
+                        tracing::error!(%cleanup_error, "failed to stop engine after network loss");
+                    }
+                    session.reconnect = Some(Reconnect {
+                        failures: reconnect.failures,
+                        next_at: Instant::now(),
+                        cause: reconnect.cause,
+                    });
+                    self.with_status(|status| {
+                        status.reconnect_failure_kind = Some(rosetun_config::FailureKind::NoNetwork);
+                    });
+                    return;
+                }
                 let failures = attempt;
                 if failures < RECONNECT_ATTEMPTS {
                     if let Err(cleanup_error) = session.stop_engine() {
@@ -837,6 +921,7 @@ impl Helper {
                 self.cancelled.store(true, Ordering::Release);
             }
             status.state = ConnectionState::Connecting;
+            status.reconnect_failure_kind = None;
             status.connect_stage = None;
             status.stage_since_unix = None;
             Ok(previous)
@@ -850,6 +935,7 @@ impl Helper {
                 self.cancelled.store(true, Ordering::Release);
             }
             status.state = state;
+            status.reconnect_failure_kind = None;
             status.connect_stage = None;
             status.stage_since_unix = None;
         });
@@ -1267,6 +1353,12 @@ impl Session {
         // Dispose of the old process before borrowing the backend or spawning another.
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
+        if (self.physical_interface)(&settings.tun.name).is_none() {
+            return Err(HelperError::new(
+                ErrorCode::NoNetwork,
+                "physical network is unavailable",
+            ));
+        }
 
         self.stage(rosetun_config::ConnectStage::WaitingForAdapter)?;
         wait_for_previous_adapter_cancellable(
@@ -1703,7 +1795,15 @@ impl Session {
                 result
             });
             self.ensure_xray_running(ErrorCode::XrayStartFailed)?;
-            dns_result?;
+            dns_result.map_err(|error| {
+                if matches!(error.code, ErrorCode::ServerUnreachable | ErrorCode::DnsTimeout)
+                    && (self.physical_interface)(&settings.tun.name).is_none()
+                {
+                    HelperError::new(ErrorCode::NoNetwork, "physical network is unavailable")
+                } else {
+                    error
+                }
+            })?;
             self.tunnel_dns = Some(server);
             self.refresh_path_addresses();
         } else {
@@ -2004,6 +2104,7 @@ fn failure_kind(code: ErrorCode) -> Option<rosetun_config::FailureKind> {
         ErrorCode::EngineNotReady => Some(FailureKind::EngineNotReady),
         ErrorCode::XrayStartFailed => Some(FailureKind::XrayStartFailed),
         ErrorCode::XrayStopped => Some(FailureKind::XrayStopped),
+        ErrorCode::NoNetwork => Some(FailureKind::NoNetwork),
         ErrorCode::ServerUnreachable => Some(FailureKind::ServerUnreachable),
         ErrorCode::ServerRejected => Some(FailureKind::ServerRejected),
         ErrorCode::ServerClosed => Some(FailureKind::ServerClosed),

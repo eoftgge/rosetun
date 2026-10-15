@@ -18,6 +18,19 @@ use std::sync::{Arc, Mutex};
 use super::*;
 
 static DNS_SLOTS: Mutex<()> = Mutex::new(());
+static ROUTE_TEST_LOCK: Mutex<()> = Mutex::new(());
+static ROUTE_CHECKS: AtomicUsize = AtomicUsize::new(0);
+static NETWORK_PRESENT: AtomicBool = AtomicBool::new(true);
+
+fn route_then_disappears(_: &str) -> Option<String> {
+    (ROUTE_CHECKS.fetch_add(1, Ordering::AcqRel) == 0).then(|| "Ethernet".to_owned())
+}
+
+fn changing_route(_: &str) -> Option<String> {
+    NETWORK_PRESENT
+        .load(Ordering::Acquire)
+        .then(|| "Ethernet".to_owned())
+}
 
 #[test]
 fn startup_hint_extends_only_slow_tunnel_deadline() {
@@ -1506,6 +1519,30 @@ fn three_server_checks_fail_before_the_dns_deadline() {
 }
 
 #[test]
+fn lost_route_during_server_check_is_no_network() {
+    use super::dns::test_support::{Behavior, Server};
+
+    ROUTE_CHECKS.store(0, Ordering::Release);
+    let dns = Server::new(Behavior::Silent);
+    let api = FakeClashApi::start(ClashReply::Fails);
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let helper = server_check_helper(dns.address(), &api, Arc::clone(&stopped))
+        .with_test_physical_interface(route_then_disappears);
+    let error = helper.connect(&connect_request()).expect_err("network went away");
+
+    assert_eq!(error.code, ErrorCode::NoNetwork);
+    assert!(ROUTE_CHECKS.load(Ordering::Acquire) >= 2);
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed {
+            failure_kind: Some(rosetun_config::FailureKind::NoNetwork),
+            ..
+        }
+    ));
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
+}
+
+#[test]
 fn server_check_and_engine_log_failures_share_the_threshold() {
     use super::dns::test_support::{Behavior, Server};
 
@@ -2187,6 +2224,34 @@ fn kill_switch_authorizes_the_configured_tunnel_after_spawning_the_engine() {
 }
 
 #[test]
+fn missing_route_fails_before_starting_engine_or_protection() {
+    let controls = Arc::new(EngineControls::default());
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(&controls),
+        dns_server: None,
+    }));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default())
+        .with_test_physical_interface(|_| None);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+
+    let started = Instant::now();
+    let error = helper.connect(&request).expect_err("no physical route");
+    assert_eq!(error.code, ErrorCode::NoNetwork);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(controls.spawns(), 0);
+    assert!(helper.session().unwrap().guard.is_none());
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed {
+            failure_kind: Some(rosetun_config::FailureKind::NoNetwork),
+            ..
+        }
+    ));
+}
+
+#[test]
 fn supervisor_marks_the_session_failed_when_reconnect_is_disabled() {
     let running = Arc::new(AtomicBool::new(true));
 
@@ -2376,6 +2441,62 @@ fn supervisor_reuses_protection_after_exit() {
     assert_eq!(controls.spawns(), 2);
     assert_eq!(prepared.load(Ordering::Acquire), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn supervisor_waits_for_route_and_recovers_without_releasing_protection() {
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    NETWORK_PRESENT.store(true, Ordering::Release);
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let helper = helper.with_test_physical_interface(changing_route);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("first protected connect");
+
+    NETWORK_PRESENT.store(false, Ordering::Release);
+    let now = Instant::now();
+    helper.supervise(now);
+    let status = helper.status();
+    assert_eq!(status.state, ConnectionState::Reconnecting);
+    assert_eq!(status.reconnect_failure_kind, Some(rosetun_config::FailureKind::NoNetwork));
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+
+    helper.supervise(now + Duration::from_secs(3600));
+    assert_eq!(controls.spawns(), 1, "missing route must not consume retries");
+    assert_eq!(helper.session().unwrap().reconnect.as_ref().unwrap().failures, 0);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+
+    NETWORK_PRESENT.store(true, Ordering::Release);
+    helper.supervise(now + Duration::from_secs(3601));
+    assert_eq!(helper.status().state, ConnectionState::Connected);
+    assert_eq!(helper.status().reconnect_failure_kind, None);
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn supervisor_keeps_protection_on_network_loss_without_auto_reconnect() {
+    let _lock = ROUTE_TEST_LOCK.lock().unwrap();
+    let (helper, _, _, reverted) = supervised_helper(true);
+    let helper = helper.with_test_physical_interface(changing_route);
+    NETWORK_PRESENT.store(true, Ordering::Release);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.settings.auto_reconnect = false;
+    helper.connect(&request).expect("first protected connect");
+    NETWORK_PRESENT.store(false, Ordering::Release);
+    helper.supervise(Instant::now());
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::FailedProtected {
+            failure_kind: Some(rosetun_config::FailureKind::NoNetwork),
+            ..
+        }
+    ));
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    NETWORK_PRESENT.store(true, Ordering::Release);
 }
 
 fn signal_dns_stall(helper: &Helper) {
