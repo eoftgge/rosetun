@@ -4,18 +4,36 @@ use serde_json::{Value, json};
 
 use crate::SocksEndpoint;
 
+/// One outbound per `(tag, node, socks)`, reached through its own SOCKS inbound
+/// `<tag>-in`.
 pub fn render(
-    node: &Node,
-    socks: &SocksEndpoint,
+    nodes: &[(&str, &Node, &SocksEndpoint)],
     interface: &str,
     verbose: bool,
     log_level: LogLevel,
 ) -> Result<RenderedConfig, EngineError> {
-    let config = json!({
+    let mut inbounds = Vec::with_capacity(nodes.len());
+    let mut outbounds = Vec::with_capacity(nodes.len());
+    let mut rules = Vec::with_capacity(nodes.len());
+    for (tag, node, socks) in nodes {
+        let inbound_tag = format!("{tag}-in");
+        inbounds.push(socks_inbound(socks, &inbound_tag));
+        outbounds.push(proxy_outbound(node, tag, interface)?);
+        rules.push(json!({
+            "type": "field",
+            "inboundTag": [inbound_tag],
+            "outboundTag": tag,
+        }));
+    }
+    let mut config = json!({
         "log": log_section(verbose, log_level),
-        "inbounds": [socks_inbound(socks, "proxy-in")],
-        "outbounds": [proxy_outbound(node, "proxy", interface)?],
+        "inbounds": inbounds,
+        "outbounds": outbounds,
     });
+    // Xray sends everything to its first outbound, so one node needs no routing.
+    if nodes.len() > 1 {
+        config["routing"] = json!({ "rules": rules });
+    }
     rendered("config.json", config)
 }
 
@@ -245,7 +263,13 @@ mod tests {
     #[test]
     fn reality_config_uses_authenticated_loopback_and_bound_server() {
         let socks = SocksEndpoint::local().unwrap();
-        let rendered = render(&reality_node(), &socks, "Ethernet", false, LogLevel::Info).unwrap();
+        let rendered = render(
+            &[("proxy", &reality_node(), &socks)],
+            "Ethernet",
+            false,
+            LogLevel::Info,
+        )
+        .unwrap();
         let debug = format!("{rendered:?}");
         assert!(!debug.contains(socks.password()));
         let value: Value = serde_json::from_slice(&rendered.body).unwrap();
@@ -276,6 +300,34 @@ mod tests {
         );
         assert!(value.get("routing").is_none());
         assert!(value.get("dns").is_none());
+    }
+
+    #[test]
+    fn extra_nodes_share_the_process_with_their_own_inbounds() {
+        let main = SocksEndpoint::local().unwrap();
+        let extra = SocksEndpoint::local().unwrap();
+        let mut extra_node = reality_node();
+        extra_node.server = "198.51.100.20".into();
+        let rendered = render(
+            &[
+                ("proxy", &reality_node(), &main),
+                ("exit-1", &extra_node, &extra),
+            ],
+            "Ethernet",
+            false,
+            LogLevel::Info,
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        assert_eq!(value["inbounds"][0]["tag"], "proxy-in");
+        assert_eq!(value["inbounds"][1]["tag"], "exit-1-in");
+        assert_eq!(value["inbounds"][1]["port"], extra.address().port());
+        assert_eq!(value["outbounds"][1]["tag"], "exit-1");
+        assert_eq!(value["outbounds"][1]["settings"]["address"], "198.51.100.20");
+        assert_eq!(
+            value["routing"]["rules"][1],
+            json!({ "type": "field", "inboundTag": ["exit-1-in"], "outboundTag": "exit-1" })
+        );
     }
 
     #[test]

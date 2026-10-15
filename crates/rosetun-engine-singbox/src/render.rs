@@ -1,11 +1,12 @@
 use rosetun_config::{
-    DnsSettings, DomainMatch, EXIT_TRACE_IP, EXIT_TRACE_PORT, ListRef, LogLevel, Node, Outbound,
-    ProcessMatch, RuleId, RuleMatcher, RuleSet, RuleTarget, Settings, TlsMode, Transport,
-    UploadedListFormat, list_tag,
+    DnsSettings, DomainMatch, EXIT_TRACE_IP, EXIT_TRACE_PORT, ExitId, ListRef, LogLevel, Node,
+    Outbound, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet, RuleTarget, Settings, TlsMode,
+    Transport, UploadedListFormat, list_tag,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities, SocksProxy,
+    ExtraOutbound, ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities,
+    SocksProxy, exit_tag,
 };
 use serde_json::{Map, Value, json};
 
@@ -22,6 +23,7 @@ pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
     process_path: true,
     ip_cidr: true,
     lists: true,
+    exits: true,
 };
 
 pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
@@ -30,18 +32,26 @@ pub fn render(request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError
         RULE_CAPABILITIES,
         request.settings.allow_lan,
         request.lists,
+        request.extra,
     );
+    let mut outbounds = Vec::with_capacity(request.extra.len() + 2);
+    outbounds.push(match request.socks {
+        Some(socks) => socks_outbound(socks, TAG_PROXY),
+        None => proxy_outbound(request.node, TAG_PROXY)?,
+    });
+    for (index, extra) in request.extra.iter().enumerate() {
+        let tag = exit_tag(index);
+        outbounds.push(match extra.socks {
+            Some(socks) => socks_outbound(socks, &tag),
+            None => proxy_outbound(extra.node, &tag)?,
+        });
+    }
+    outbounds.push(json!({ "type": "direct", "tag": TAG_DIRECT }));
     let mut config = json!({
         "log": log_section(request),
         "dns": dns_section(&request.settings.dns)?,
         "inbounds": [tun_inbound(request.settings)],
-        "outbounds": [
-            match request.socks {
-                Some(socks) => socks_outbound(socks, TAG_PROXY),
-                None => proxy_outbound(request.node, TAG_PROXY)?,
-            },
-            json!({ "type": "direct", "tag": TAG_DIRECT }),
-        ],
+        "outbounds": outbounds,
         "route": route,
     });
     if let Some(control) = request.control {
@@ -355,7 +365,7 @@ pub(crate) fn route_section(
     capabilities: RuleCapabilities,
     allow_lan: bool,
 ) -> (Value, Vec<RuleId>) {
-    route_section_with_lists(rules, capabilities, allow_lan, &[])
+    route_section_with_lists(rules, capabilities, allow_lan, &[], &[])
 }
 
 fn route_section_with_lists(
@@ -363,6 +373,7 @@ fn route_section_with_lists(
     capabilities: RuleCapabilities,
     allow_lan: bool,
     lists: &[ListRef],
+    extra: &[ExtraOutbound<'_>],
 ) -> (Value, Vec<RuleId>) {
     let mut route_rules = vec![
         json!({
@@ -389,6 +400,10 @@ fn route_section_with_lists(
             unsupported.push(rule.id.clone());
             continue;
         }
+        let Some(action) = route_action(rule, extra) else {
+            unsupported.push(rule.id.clone());
+            continue;
+        };
         let value = match &rule.matcher {
             RuleMatcher::List { list, category } => {
                 let tag = list_tag(list, category.as_deref());
@@ -400,16 +415,16 @@ fn route_section_with_lists(
                         }
                         let mut value = Map::new();
                         value.insert("rule_set".into(), json!([tag]));
-                        route_action(&mut value, rule.target);
-                        Some(Value::Object(value))
+                        Some(value)
                     }
                     _ => None,
                 }
             }
             _ => route_rule(rule),
         };
-        if let Some(value) = value {
-            route_rules.push(value);
+        if let Some(mut value) = value {
+            value.extend(action);
+            route_rules.push(Value::Object(value));
         } else {
             unsupported.push(rule.id.clone());
         }
@@ -458,7 +473,8 @@ fn route_section_with_lists(
     (route, unsupported)
 }
 
-fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
+/// The rule's condition; the caller appends its [`route_action`].
+fn route_rule(rule: &Rule) -> Option<Map<String, Value>> {
     let mut value = Map::new();
     match &rule.matcher {
         RuleMatcher::Domain(DomainMatch::Exact(domain)) => {
@@ -485,9 +501,7 @@ fn route_rule(rule: &rosetun_config::Rule) -> Option<Value> {
         RuleMatcher::List { .. } | RuleMatcher::Template(_) => return None,
     }
 
-    route_action(&mut value, rule.target);
-
-    Some(Value::Object(value))
+    Some(value)
 }
 
 fn process_name_regex(name: &str) -> String {
@@ -505,29 +519,36 @@ fn quote_process_name(name: &str) -> String {
     quoted
 }
 
-fn route_action(value: &mut Map<String, Value>, target: RuleTarget) {
-    match target {
-        RuleTarget::Proxy | RuleTarget::Direct => {
-            value.insert("action".into(), "route".into());
-            value.insert(
-                "outbound".into(),
-                match target {
-                    RuleTarget::Proxy => TAG_PROXY,
-                    _ => TAG_DIRECT,
-                }
-                .into(),
-            );
+/// `None` for an `Exit` rule whose exit has no extra node in the request.
+fn route_action(rule: &Rule, extra: &[ExtraOutbound<'_>]) -> Option<Map<String, Value>> {
+    let outbound = match rule.target {
+        RuleTarget::Proxy => TAG_PROXY.to_owned(),
+        RuleTarget::Direct => TAG_DIRECT.to_owned(),
+        RuleTarget::Block => {
+            let mut action = Map::new();
+            action.insert("action".into(), "reject".into());
+            return Some(action);
         }
-        RuleTarget::Block | RuleTarget::Exit => {
-            value.insert("action".into(), "reject".into());
-        }
-    }
+        RuleTarget::Exit => exit_outbound(rule.exit.as_ref()?, extra)?,
+    };
+    let mut action = Map::new();
+    action.insert("action".into(), "route".into());
+    action.insert("outbound".into(), outbound.into());
+    Some(action)
+}
+
+fn exit_outbound(exit: &ExitId, extra: &[ExtraOutbound<'_>]) -> Option<String> {
+    extra
+        .iter()
+        .position(|node| node.exit == exit)
+        .map(exit_tag)
 }
 
 #[cfg(test)]
 mod tests {
     use rosetun_config::{
-        Hysteria2Params, ListId, NodeId, Rule, RuleSetId, RuleTemplate, StreamSettings, TlsParams,
+        ExitId, Hysteria2Params, ListId, NodeId, Rule, RuleSetId, RuleTemplate, StreamSettings,
+        TlsParams,
     };
 
     use super::*;
@@ -654,6 +675,7 @@ mod tests {
             format: UploadedListFormat::Source,
         }];
         let request = RenderRequest {
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rules,
@@ -670,6 +692,8 @@ mod tests {
         );
 
         let chained = render(&RenderRequest {
+
+            extra: &[],
             socks: Some(SocksProxy {
                 address: "127.0.0.1:10801".parse().unwrap(),
                 username: "fixture-user",
@@ -683,6 +707,198 @@ mod tests {
             chained.body,
             include_bytes!("../tests/fixtures/xray-chain-config.json")
         );
+    }
+
+    fn shadowsocks_node(id: &str, server: &str) -> Node {
+        Node {
+            id: NodeId::new(id),
+            name: format!("Node {id}"),
+            server: server.into(),
+            port: 443,
+            outbound: Outbound::Shadowsocks(rosetun_config::ShadowsocksParams {
+                method: "aes-128-gcm".into(),
+                password: "test-secret".into(),
+            }),
+            stream: StreamSettings::default(),
+            raw: None,
+        }
+    }
+
+    fn exit_rule(id: &str, matcher: RuleMatcher, exit: &str) -> Rule {
+        Rule {
+            id: RuleId::new(id),
+            enabled: true,
+            matcher,
+            target: RuleTarget::Exit,
+            exit: Some(ExitId::new(exit)),
+        }
+    }
+
+    #[test]
+    fn exit_rules_render_through_extra_nodes_golden() {
+        let node = shadowsocks_node("main", "203.0.113.10");
+        let work = shadowsocks_node("work", "198.51.100.20");
+        let media = shadowsocks_node("media", "198.51.100.30");
+        let work_exit = ExitId::new("work-exit");
+        let media_exit = ExitId::new("media-exit");
+        let mut rules = RuleSet::new(
+            RuleSetId::new("exit-rules"),
+            "Exits",
+            RuleTarget::Proxy,
+        );
+        rules.rules = vec![
+            exit_rule(
+                "work-suffix",
+                RuleMatcher::Domain(DomainMatch::Suffix("example.org".into())),
+                "work-exit",
+            ),
+            exit_rule(
+                "work-keyword",
+                RuleMatcher::Domain(DomainMatch::Keyword("example".into())),
+                "work-exit",
+            ),
+            exit_rule(
+                "media-cidr",
+                RuleMatcher::IpCidr("192.0.2.0/24".into()),
+                "media-exit",
+            ),
+        ];
+        let mut settings = Settings {
+            dns: DnsSettings {
+                server: "192.0.2.53".parse().unwrap(),
+                server_name: "dns.example.com".into(),
+                port: None,
+                path: None,
+            },
+            ..Settings::default()
+        };
+        settings.tun.ipv4 = "198.51.100.1/30".into();
+        let extra = [
+            ExtraOutbound {
+                exit: &work_exit,
+                node: &work,
+                socks: None,
+            },
+            ExtraOutbound {
+                exit: &media_exit,
+                node: &media,
+                socks: Some(SocksProxy {
+                    address: "127.0.0.1:10802".parse().unwrap(),
+                    username: "fixture-user",
+                    password: "fixture-password",
+                }),
+            },
+        ];
+        let rendered = render(&RenderRequest {
+            node: &node,
+            socks: None,
+            extra: &extra,
+            rules: &rules,
+            lists: &[],
+            settings: &settings,
+            control: None,
+            verbose_log: false,
+        })
+        .unwrap();
+        assert!(rendered.unsupported.is_empty());
+        assert_eq!(
+            rendered.body,
+            include_bytes!("../tests/fixtures/extra-exits-config.json")
+        );
+
+        let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        let tags = value["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|outbound| outbound["tag"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(tags, ["proxy", "exit-0", "exit-1", "direct"]);
+        assert_eq!(value["outbounds"][2]["type"], "socks");
+        let routed = value["route"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|rule| rule["outbound"].as_str())
+            .filter(|outbound| outbound.starts_with("exit-"))
+            .collect::<Vec<_>>();
+        assert_eq!(routed, ["exit-0", "exit-0", "exit-1"]);
+    }
+
+    #[test]
+    fn exit_rule_without_extra_node_is_unsupported() {
+        let node = shadowsocks_node("main", "203.0.113.10");
+        let mut rules = RuleSet::new(
+            RuleSetId::new("exit-rules"),
+            "Exits",
+            RuleTarget::Proxy,
+        );
+        rules.rules = vec![exit_rule(
+            "orphan",
+            RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
+            "missing-exit",
+        )];
+        let rendered = render(&RenderRequest {
+            node: &node,
+            socks: None,
+            extra: &[],
+            rules: &rules,
+            lists: &[],
+            settings: &Settings::default(),
+            control: None,
+            verbose_log: false,
+        })
+        .unwrap();
+        assert_eq!(rendered.unsupported, vec![RuleId::new("orphan")]);
+        let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        assert!(
+            value["route"]["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|rule| rule.get("domain").is_none())
+        );
+    }
+
+    #[test]
+    fn render_request_debug_hides_extra_node_addresses() {
+        let node = shadowsocks_node("main", "203.0.113.10");
+        let work = shadowsocks_node("work", "198.51.100.20");
+        let work_exit = ExitId::new("work-exit");
+        let rules = RuleSet::new(RuleSetId::new("rules"), "Rules", RuleTarget::Proxy);
+        let extra = [ExtraOutbound {
+            exit: &work_exit,
+            node: &work,
+            socks: Some(SocksProxy {
+                address: "127.0.0.1:10802".parse().unwrap(),
+                username: "fixture-user",
+                password: "fixture-password",
+            }),
+        }];
+        let debug = format!(
+            "{:?}",
+            RenderRequest {
+                node: &node,
+                socks: None,
+                extra: &extra,
+                rules: &rules,
+                lists: &[],
+                settings: &Settings::default(),
+                control: None,
+                verbose_log: false,
+            }
+        );
+        assert!(debug.contains("work-exit"));
+        for secret in [
+            "198.51.100.20",
+            "203.0.113.10",
+            "10802",
+            "fixture-user",
+            "fixture-password",
+            "test-secret",
+        ] {
+            assert!(!debug.contains(secret), "{secret} leaked into {debug}");
+        }
     }
 
     #[test]
@@ -829,7 +1045,7 @@ mod tests {
             });
         }
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference]);
+            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[]);
         assert!(unsupported.is_empty());
         assert_eq!(
             route["rule_set"],
@@ -848,7 +1064,7 @@ mod tests {
             json!({"rule_set": [tag], "action": "reject"})
         );
         assert!(
-            route_section_with_lists(&set, RuleCapabilities::NONE, false, &[])
+            route_section_with_lists(&set, RuleCapabilities::NONE, false, &[], &[])
                 .1
                 .len()
                 == 2
@@ -908,7 +1124,7 @@ mod tests {
             format: UploadedListFormat::Source,
         };
         let (route, unsupported) =
-            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference]);
+            route_section_with_lists(&set, RULE_CAPABILITIES, false, &[reference], &[]);
         assert_eq!(unsupported, [vanished]);
         assert_eq!(route["rules"].as_array().unwrap().len(), 4);
         assert_eq!(

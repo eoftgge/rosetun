@@ -1689,6 +1689,7 @@ impl Session {
             &RenderRequest {
                 node: resolved_node.as_ref().unwrap_or(node),
                 socks: socks_proxy,
+                extra: &[],
                 rules,
                 lists,
                 settings,
@@ -1808,8 +1809,7 @@ impl Session {
                 )
             })?;
             let xray_config = rosetun_engine_xray::render(
-                resolved_node.as_ref().unwrap_or(node),
-                socks,
+                &[("proxy", resolved_node.as_ref().unwrap_or(node), socks)],
                 &interface,
                 verbose_until.is_some(),
                 settings.log_level,

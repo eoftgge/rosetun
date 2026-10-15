@@ -101,6 +101,7 @@ fn sing_box_check_validates_local_rule_set_config() {
     }];
     let config = SingBoxBackend::new(&directory.0)
         .render(&RenderRequest {
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rules,
@@ -127,6 +128,7 @@ fn sing_box_check_validates_local_rule_set_config() {
         if let Some(socks) = body {
             let chain = SingBoxBackend::new(&directory.0)
                 .render(&RenderRequest {
+                    extra: &[],
                     node: &node,
                     socks: Some(socks),
                     rules: &rules,

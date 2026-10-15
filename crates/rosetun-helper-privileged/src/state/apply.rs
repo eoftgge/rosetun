@@ -98,6 +98,7 @@ impl Helper {
         render_config(
             backend,
             &RenderRequest {
+                extra: &[],
                 node: &prepared_node,
                 socks: socks.as_ref().map(|socks| SocksProxy {
                     address: socks.address(),
@@ -120,8 +121,7 @@ impl Helper {
                     )
                 })?;
             rosetun_engine_xray::render(
-                &prepared_node,
-                socks,
+                &[("proxy", &prepared_node, socks)],
                 &interface,
                 false,
                 request.settings.log_level,

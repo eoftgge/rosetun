@@ -17,7 +17,7 @@ pub mod errors;
 pub const ENGINE_OUTPUT_TARGET: &str = "engine_output";
 
 use errors::EngineError;
-use rosetun_config::{EngineKind, Node, RuleId, RuleSet, Settings};
+use rosetun_config::{EngineKind, ExitId, Node, RuleId, RuleSet, Settings};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::AtomicU64, mpsc};
@@ -95,6 +95,8 @@ pub struct RuleCapabilities {
     pub process_path: bool,
     pub ip_cidr: bool,
     pub lists: bool,
+    /// Rules with [`rosetun_config::RuleTarget::Exit`] routed through extra nodes.
+    pub exits: bool,
 }
 
 impl RuleCapabilities {
@@ -106,6 +108,7 @@ impl RuleCapabilities {
         process_path: false,
         ip_cidr: false,
         lists: false,
+        exits: false,
     };
 
     pub const ALL: Self = Self {
@@ -116,10 +119,11 @@ impl RuleCapabilities {
         process_path: true,
         ip_cidr: true,
         lists: true,
+        exits: true,
     };
 
     pub fn supports_target(self, target: rosetun_config::RuleTarget) -> bool {
-        target != rosetun_config::RuleTarget::Exit
+        target != rosetun_config::RuleTarget::Exit || self.exits
     }
 
     pub fn supports(self, matcher: &rosetun_config::RuleMatcher) -> bool {
@@ -222,10 +226,35 @@ impl std::fmt::Debug for SocksProxy<'_> {
     }
 }
 
+/// Outbound tag of the extra node at `index` in the request.
+pub fn exit_tag(index: usize) -> String {
+    format!("exit-{index}")
+}
+
+/// A node that `Exit` rules naming `exit` are routed through. Its outbound tag is
+/// [`exit_tag`] of its position in [`RenderRequest::extra`].
+#[derive(Clone, Copy)]
+pub struct ExtraOutbound<'a> {
+    pub exit: &'a ExitId,
+    pub node: &'a Node,
+    pub socks: Option<SocksProxy<'a>>,
+}
+
+impl std::fmt::Debug for ExtraOutbound<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtraOutbound")
+            .field("exit", &self.exit)
+            .field("node_id", &self.node.id)
+            .field("xray", &self.socks.is_some())
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct RenderRequest<'a> {
     pub node: &'a Node,
     pub socks: Option<SocksProxy<'a>>,
+    pub extra: &'a [ExtraOutbound<'a>],
     pub rules: &'a RuleSet,
     pub lists: &'a [rosetun_config::ListRef],
     pub settings: &'a Settings,
@@ -238,6 +267,7 @@ impl std::fmt::Debug for RenderRequest<'_> {
         f.debug_struct("RenderRequest")
             .field("node_id", &self.node.id)
             .field("socks", &self.socks)
+            .field("extra", &self.extra)
             .field("engine", &self.settings.engine)
             .field("kill_switch", &self.settings.kill_switch)
             .field("rule_set_id", &self.rules.id)

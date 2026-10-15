@@ -1,0 +1,118 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "detour": "proxy",
+        "server": "192.0.2.53",
+        "tag": "dns-proxy",
+        "tls": {
+          "server_name": "dns.example.com"
+        },
+        "type": "https"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "address": [
+        "198.51.100.1/30"
+      ],
+      "auto_route": true,
+      "interface_name": "rosetun0",
+      "mtu": 1500,
+      "stack": "gvisor",
+      "strict_route": true,
+      "tag": "tun-in",
+      "type": "tun"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "method": "aes-128-gcm",
+      "password": "test-secret",
+      "server": "203.0.113.10",
+      "server_port": 443,
+      "tag": "proxy",
+      "type": "shadowsocks"
+    },
+    {
+      "method": "aes-128-gcm",
+      "password": "test-secret",
+      "server": "198.51.100.20",
+      "server_port": 443,
+      "tag": "exit-0",
+      "type": "shadowsocks"
+    },
+    {
+      "inet4_bind_address": "127.0.0.1",
+      "password": "fixture-password",
+      "server": "127.0.0.1",
+      "server_port": 10802,
+      "tag": "exit-1",
+      "type": "socks",
+      "username": "fixture-user",
+      "version": "5"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "proxy",
+    "rules": [
+      {
+        "action": "sniff",
+        "sniffer": [
+          "http",
+          "tls",
+          "quic",
+          "dns"
+        ]
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "action": "route",
+        "ip_cidr": [
+          "1.1.1.1/32"
+        ],
+        "outbound": "proxy",
+        "port": [
+          443
+        ],
+        "process_path_regex": [
+          "(?i)(?:^|[\\\\/])rosetun-gui\\.exe$"
+        ]
+      },
+      {
+        "action": "route",
+        "domain_suffix": [
+          "example.org"
+        ],
+        "outbound": "exit-0"
+      },
+      {
+        "action": "route",
+        "domain_keyword": [
+          "example"
+        ],
+        "outbound": "exit-0"
+      },
+      {
+        "action": "route",
+        "ip_cidr": [
+          "192.0.2.0/24"
+        ],
+        "outbound": "exit-1"
+      }
+    ]
+  }
+}

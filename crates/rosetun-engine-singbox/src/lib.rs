@@ -540,6 +540,7 @@ mod tests {
             secret: "private-secret".to_owned(),
         };
         let request = RenderRequest {
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rules,
@@ -616,6 +617,7 @@ mod tests {
             ..Settings::default()
         };
         let request = RenderRequest {
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rules,
@@ -636,6 +638,7 @@ mod tests {
             ..Settings::default()
         };
         let config = render::render(&RenderRequest {
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rules,
@@ -662,6 +665,7 @@ mod tests {
         ] {
             settings.log_level = log_level;
             let config = render::render(&RenderRequest {
+                extra: &[],
                 node: &node,
                 socks: None,
                 rules: &rules,
@@ -688,6 +692,7 @@ mod tests {
             secret: "private-secret".to_owned(),
         };
         let config = render::render(&RenderRequest {
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rules,
@@ -1190,6 +1195,7 @@ mod tests {
                 process_path: false,
                 ip_cidr: true,
                 lists: false,
+                exits: false,
             },
             true,
         );
@@ -1292,6 +1298,7 @@ mod tests {
             ..Settings::default()
         };
         let config = render::render(&RenderRequest {
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rule_set,
@@ -1434,6 +1441,7 @@ mod tests {
             ..Settings::default()
         };
         let rendered = render::render(&RenderRequest {
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rule_set,
@@ -1515,6 +1523,7 @@ mod tests {
         let rules = rules();
         let settings = Settings::default();
         let request = RenderRequest {
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rules,
@@ -1540,6 +1549,8 @@ mod tests {
         rule_set.default_target = RuleTarget::Block;
 
         let rendered = render::render(&RenderRequest {
+
+            extra: &[],
             node: &node,
             socks: None,
             rules: &rule_set,
@@ -1604,6 +1615,7 @@ mod tests {
             let node = node();
             let rules = rules();
             let rendered = render::render(&RenderRequest {
+                extra: &[],
                 node: &node,
                 socks: None,
                 rules: &rules,

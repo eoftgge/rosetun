@@ -4492,6 +4492,7 @@ fn invalid_extra_nodes_are_rejected_before_connect_and_apply() {
     assert_eq!(safe.rules[0].target, RuleTarget::Block);
     assert_eq!(missing.rule_set.rules[0].target, RuleTarget::Exit);
     let rendered = rosetun_engine_singbox::render(&RenderRequest {
+        extra: &[],
         node: &missing.node,
         socks: None,
         rules: &safe,
