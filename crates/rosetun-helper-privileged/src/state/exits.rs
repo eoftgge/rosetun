@@ -87,6 +87,26 @@ pub(super) fn remember(
     }
 }
 
+/// Each exit's outbound tag, numbered among the exits that have an address as
+/// [`ExtraNodes`] renders them; `None` for an exit without one.
+pub(super) fn exit_tags(
+    extra: &[ExtraNode],
+    endpoints: &[Option<IpAddr>],
+) -> Vec<(ExitId, Option<String>)> {
+    let mut next = 0;
+    extra
+        .iter()
+        .enumerate()
+        .map(|(index, extra)| {
+            let tag = endpoints.get(index).copied().flatten().map(|_| {
+                next += 1;
+                exit_tag(next - 1)
+            });
+            (extra.exit.clone(), tag)
+        })
+        .collect()
+}
+
 /// Extra nodes that have an address, with that address substituted.
 pub(super) struct ExtraNodes<'a> {
     nodes: Vec<(&'a ExitId, Node)>,

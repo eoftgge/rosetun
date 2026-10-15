@@ -219,7 +219,7 @@ fn probe(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
 }
 
 fn delay(client: &mut HelperClient) -> ExitCode {
-    match client.tunnel_delay() {
+    match client.tunnel_delay().map(|delays| delays.proxy) {
         Ok(ProbeOutcome::Works { millis }) => {
             println!("works {millis} ms");
             ExitCode::SUCCESS

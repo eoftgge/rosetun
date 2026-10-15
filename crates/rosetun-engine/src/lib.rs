@@ -305,6 +305,8 @@ impl std::fmt::Debug for ProbeRenderRequest<'_> {
 pub enum UrlTestTarget<'a> {
     /// The proxy outbound of a running session.
     Session,
+    /// An extra node's outbound of a running session, by [`exit_tag`].
+    SessionExit(&'a str),
     /// An outbound of a probe config, by tag.
     Probe(&'a str),
 }
@@ -323,14 +325,16 @@ pub fn url_test_any(
         let control = control.clone();
         let target = match target {
             UrlTestTarget::Session => None,
-            UrlTestTarget::Probe(tag) => Some(tag.to_owned()),
+            UrlTestTarget::SessionExit(tag) => Some((true, tag.to_owned())),
+            UrlTestTarget::Probe(tag) => Some((false, tag.to_owned())),
         };
         let tx = tx.clone();
         thread::Builder::new()
             .name("rosetun-url-test".to_owned())
             .spawn(move || {
-                let target = match target.as_deref() {
-                    Some(tag) => UrlTestTarget::Probe(tag),
+                let target = match &target {
+                    Some((true, tag)) => UrlTestTarget::SessionExit(tag),
+                    Some((false, tag)) => UrlTestTarget::Probe(tag),
                     None => UrlTestTarget::Session,
                 };
                 let _ = tx.send(backend.url_test(&control, target, url, timeout));

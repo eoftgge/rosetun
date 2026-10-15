@@ -345,6 +345,10 @@ fn dispatch(
             Ok(rules) => Response::TemporaryRules(rules),
             Err(error) => Response::Error(error),
         },
+        Request::SessionExits => match helper.session_exits_as(caller.expect("caller checked")) {
+            Ok(exits) => Response::SessionExits(exits),
+            Err(error) => Response::Error(error),
+        },
         Request::DiagnosticLog => match helper.diagnostic_log_as(caller.expect("caller checked")) {
             Ok(text) => Response::DiagnosticLog { text },
             Err(error) => Response::Error(error),
@@ -374,7 +378,7 @@ fn dispatch(
             Err(error) => Response::Error(error),
         },
         Request::TunnelDelay => match helper.tunnel_delay_as(caller.expect("caller checked")) {
-            Ok(outcome) => Response::Delay(outcome),
+            Ok(delays) => Response::Delay(delays),
             Err(error) => Response::Error(error),
         },
         Request::Disconnect => match helper.disconnect_as(caller.expect("caller checked")) {
@@ -496,6 +500,7 @@ mod tests {
         ));
         for request in [
             Request::TemporaryRules,
+            Request::SessionExits,
             Request::DiagnosticLog,
             Request::TunnelDelay,
             Request::Disconnect,

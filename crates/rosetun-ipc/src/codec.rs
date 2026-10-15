@@ -46,13 +46,14 @@ mod tests {
     use std::io::BufReader;
 
     use rosetun_config::{
-        ConnectionState, DomainMatch, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
+        ConnectionState, DomainMatch, ExitId, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
         RuleSetId, RuleTarget, Selection, Settings, StreamSettings, SubscriptionId, TrojanParams,
     };
 
     use super::*;
     use crate::{
-        ConnectRequest, Event, ProbeOutcome, ProbeRequest, ProbeResult, Request, Response,
+        ConnectRequest, Event, ExitDelay, ExitOutcome, ProbeOutcome, ProbeRequest, ProbeResult,
+        Request, Response, SessionExit, TunnelDelays,
     };
 
     fn roundtrip(frame: &Frame) -> Frame {
@@ -203,9 +204,64 @@ mod tests {
         assert_eq!(roundtrip(&results), results);
         let delay = Frame::Response {
             id: 10,
-            body: Response::Delay(ProbeOutcome::Fails),
+            body: Response::Delay(TunnelDelays {
+                proxy: ProbeOutcome::Fails,
+                exits: Vec::new(),
+            }),
         };
         assert_eq!(roundtrip(&delay), delay);
+    }
+
+    #[test]
+    fn exit_delays_and_session_exits_survive_roundtrip() {
+        let delay = Frame::Response {
+            id: 12,
+            body: Response::Delay(TunnelDelays {
+                proxy: ProbeOutcome::Works { millis: 40 },
+                exits: vec![
+                    ExitDelay {
+                        exit: ExitId::new("exit-a"),
+                        outcome: ExitOutcome::Probed(ProbeOutcome::Works { millis: 90 }),
+                    },
+                    ExitDelay {
+                        exit: ExitId::new("exit-b"),
+                        outcome: ExitOutcome::Probed(ProbeOutcome::Fails),
+                    },
+                    ExitDelay {
+                        exit: ExitId::new("exit-c"),
+                        outcome: ExitOutcome::NoAddress,
+                    },
+                ],
+            }),
+        };
+        assert_eq!(roundtrip(&delay), delay);
+
+        let request = Frame::Request {
+            id: 13,
+            body: Request::SessionExits,
+        };
+        assert_eq!(roundtrip(&request), request);
+        let response = Frame::Response {
+            id: 13,
+            body: Response::SessionExits(vec![SessionExit {
+                exit: ExitId::new("exit-a"),
+                selection: Selection {
+                    subscription: SubscriptionId::new("subscription"),
+                    node: NodeId::new("node"),
+                },
+            }]),
+        };
+        assert_eq!(roundtrip(&response), response);
+    }
+
+    #[test]
+    fn main_delay_without_exits_omits_the_field() {
+        let json = serde_json::to_value(TunnelDelays {
+            proxy: ProbeOutcome::Works { millis: 7 },
+            exits: Vec::new(),
+        })
+        .unwrap();
+        assert!(json.get("exits").is_none());
     }
 
     #[test]

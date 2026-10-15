@@ -24,6 +24,7 @@ pub enum Request {
     },
     Status,
     TemporaryRules,
+    SessionExits,
     DiagnosticLog,
     ListStatus {
         hashes: Vec<String>,
@@ -76,6 +77,7 @@ impl std::fmt::Debug for Request {
             Self::ProbeNodes(request) => f.debug_tuple("ProbeNodes").field(request).finish(),
             Self::Status => f.write_str("Status"),
             Self::TemporaryRules => f.write_str("TemporaryRules"),
+            Self::SessionExits => f.write_str("SessionExits"),
             Self::DiagnosticLog => f.write_str("DiagnosticLog"),
             Self::TunnelDelay => f.write_str("TunnelDelay"),
             Self::Disconnect => f.write_str("Disconnect"),
@@ -327,6 +329,36 @@ pub enum ProbeOutcome {
     Unsupported,
 }
 
+/// How an exit of the running session answered a delay check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitOutcome {
+    Probed(ProbeOutcome),
+    /// The exit's server had no address, so its rules block instead.
+    NoAddress,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExitDelay {
+    pub exit: ExitId,
+    pub outcome: ExitOutcome,
+}
+
+/// Delay through the main node and through each exit of the session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelDelays {
+    pub proxy: ProbeOutcome,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exits: Vec<ExitDelay>,
+}
+
+/// The node an exit of the running session goes through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionExit {
+    pub exit: ExitId,
+    pub selection: Selection,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Response {
@@ -340,6 +372,7 @@ pub enum Response {
     },
     Status(Status),
     TemporaryRules(Vec<Rule>),
+    SessionExits(Vec<SessionExit>),
     DiagnosticLog {
         text: String,
     },
@@ -347,7 +380,7 @@ pub enum Response {
         missing: Vec<String>,
     },
     Probe(Vec<ProbeResult>),
-    Delay(ProbeOutcome),
+    Delay(TunnelDelays),
     Ok,
     Error(HelperError),
 }
@@ -982,5 +1015,33 @@ mod tests {
         assert!(!debug.contains("test-secret"));
         assert!(!debug.contains("example.com"));
         assert!(!debug.contains(node.id.as_str()));
+    }
+
+    #[test]
+    fn exit_responses_debug_has_no_node_addresses() {
+        use super::{ExitDelay, ExitOutcome, ProbeOutcome, Response, SessionExit, TunnelDelays};
+        use rosetun_config::ExitId;
+
+        let config = selected_config();
+        let node = &config.subscriptions[0].nodes[0];
+        let responses = [
+            Response::SessionExits(vec![SessionExit {
+                exit: ExitId::new("exit"),
+                selection: config.active.clone().unwrap(),
+            }]),
+            Response::Delay(TunnelDelays {
+                proxy: ProbeOutcome::Works { millis: 12 },
+                exits: vec![ExitDelay {
+                    exit: ExitId::new("exit"),
+                    outcome: ExitOutcome::NoAddress,
+                }],
+            }),
+        ];
+        for response in responses {
+            let debug = format!("{response:?}");
+            assert!(debug.contains("exit"));
+            assert!(!debug.contains(&node.server));
+            assert!(!debug.contains("test-secret"));
+        }
     }
 }

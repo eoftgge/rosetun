@@ -13,7 +13,8 @@ use rosetun_engine::{
 };
 use rosetun_engine_xray::SocksEndpoint;
 use rosetun_ipc::{
-    ErrorCode, HelperError, MAX_PROBE_NODES, ProbeOutcome, ProbeRequest, ProbeResult,
+    ErrorCode, ExitDelay, ExitOutcome, HelperError, MAX_PROBE_NODES, ProbeOutcome, ProbeRequest,
+    ProbeResult, TunnelDelays,
 };
 use rosetun_routing::RoutingGuard;
 
@@ -453,7 +454,7 @@ impl Helper {
         Ok(results)
     }
 
-    pub(crate) fn tunnel_delay_as(&self, caller: &Caller) -> Result<ProbeOutcome, HelperError> {
+    pub(crate) fn tunnel_delay_as(&self, caller: &Caller) -> Result<TunnelDelays, HelperError> {
         self.check_owner(caller)?;
         let session = self.session()?;
         self.check_owner(caller)?;
@@ -470,6 +471,7 @@ impl Helper {
                 "the engine control API is unavailable",
             )
         })?;
+        let exit_tags = session.exit_tags.clone();
         drop(session);
         let backend = self
             .engines
@@ -485,16 +487,70 @@ impl Helper {
                     "the connected engine is unavailable",
                 )
             })?;
-        Ok(probe_outcome(url_test_any(
-            backend,
-            &control,
-            UrlTestTarget::Session,
-            PROBE_TIMEOUT,
-        )))
+        // The main node and every exit are checked at once, so the answer takes
+        // as long as a single check.
+        let delays = thread::scope(|scope| {
+            let exits = exit_tags
+                .iter()
+                .map(|(exit, tag)| {
+                    let backend = Arc::clone(&backend);
+                    let control = &control;
+                    let check = tag.as_deref().map(|tag| {
+                        scope.spawn(move || {
+                            probe_outcome(url_test_any(
+                                backend,
+                                control,
+                                UrlTestTarget::SessionExit(tag),
+                                PROBE_TIMEOUT,
+                            ))
+                        })
+                    });
+                    (exit, check)
+                })
+                .collect::<Vec<_>>();
+            let proxy = probe_outcome(url_test_any(
+                Arc::clone(&backend),
+                &control,
+                UrlTestTarget::Session,
+                PROBE_TIMEOUT,
+            ));
+            let exits = exits
+                .into_iter()
+                .map(|(exit, check)| ExitDelay {
+                    exit: exit.clone(),
+                    outcome: match check {
+                        Some(check) => {
+                            ExitOutcome::Probed(check.join().unwrap_or(ProbeOutcome::Fails))
+                        }
+                        None => ExitOutcome::NoAddress,
+                    },
+                })
+                .collect();
+            TunnelDelays { proxy, exits }
+        });
+        if !delays.exits.is_empty() {
+            let count = |works: bool| {
+                delays
+                    .exits
+                    .iter()
+                    .filter(|delay| {
+                        matches!(delay.outcome, ExitOutcome::Probed(ProbeOutcome::Works { .. }))
+                            == works
+                    })
+                    .count()
+            };
+            tracing::debug!(
+                exits = delays.exits.len(),
+                works = count(true),
+                other = count(false),
+                "exit delays checked"
+            );
+        }
+        Ok(delays)
     }
 
     #[cfg(test)]
-    pub fn tunnel_delay(&self) -> Result<ProbeOutcome, HelperError> {
+    pub fn tunnel_delay(&self) -> Result<TunnelDelays, HelperError> {
         self.tunnel_delay_as(&super::test_caller())
     }
 }

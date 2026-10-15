@@ -27,6 +27,7 @@ use rosetun_engine_xray::{SocksEndpoint, XrayHelper};
 use rosetun_ipc::transport::PeerIdentity;
 use rosetun_ipc::{
     ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_EXTRA_NODES, MAX_TEMPORARY_RULES,
+    SessionExit,
 };
 use rosetun_routing::{
     ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
@@ -214,6 +215,8 @@ struct Session {
     last_endpoint: Option<SuccessfulEndpoint>,
     /// Last addresses of extra nodes by exit, for reconnects that cannot resolve.
     last_extra_endpoints: HashMap<ExitId, SuccessfulEndpoint>,
+    /// Each exit's outbound tag in the running config, `None` without an address.
+    exit_tags: Vec<(ExitId, Option<String>)>,
     /// Whether the running session started Xray for any node.
     xray_chain: bool,
     request: Option<ConnectRequest>,
@@ -284,6 +287,7 @@ impl Helper {
                 guard: None,
                 last_endpoint: None,
                 last_extra_endpoints: HashMap::new(),
+                exit_tags: Vec::new(),
                 xray_chain: false,
                 request: None,
                 owner,
@@ -403,6 +407,31 @@ impl Helper {
             .as_ref()
             .map(|request| request.temporary_rules.clone())
             .unwrap_or_default())
+    }
+
+    pub(crate) fn session_exits_as(&self, caller: &Caller) -> Result<Vec<SessionExit>, HelperError> {
+        self.check_owner(caller)?;
+        let session = self.session()?;
+        self.check_owner(caller)?;
+        Ok(session
+            .request
+            .as_ref()
+            .map(|request| {
+                request
+                    .extra_nodes
+                    .iter()
+                    .map(|extra| SessionExit {
+                        exit: extra.exit.clone(),
+                        selection: extra.selection.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    #[cfg(test)]
+    pub fn session_exits(&self) -> Result<Vec<SessionExit>, HelperError> {
+        self.session_exits_as(&test_caller())
     }
 
     #[cfg(test)]
@@ -2035,6 +2064,7 @@ impl Session {
             &request.extra_nodes,
             &extra_endpoints,
         );
+        self.exit_tags = exits::exit_tags(&request.extra_nodes, &extra_endpoints);
         check_cancelled(&self.cancelled)
     }
 

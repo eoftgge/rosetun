@@ -138,7 +138,7 @@ impl EngineBackend for SingBoxBackend {
     ) -> Result<Duration, EngineError> {
         let tag = match target {
             UrlTestTarget::Session => render::TAG_PROXY,
-            UrlTestTarget::Probe(tag) => tag,
+            UrlTestTarget::SessionExit(tag) | UrlTestTarget::Probe(tag) => tag,
         };
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
@@ -785,7 +785,7 @@ mod tests {
         };
         let expected_tag = match target {
             UrlTestTarget::Session => "proxy",
-            UrlTestTarget::Probe(tag) => tag,
+            UrlTestTarget::SessionExit(tag) | UrlTestTarget::Probe(tag) => tag,
         }
         .to_owned();
         let expected_timeout = format!("timeout={}", timeout.as_millis());

@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use crate::{
-    ConnectRequest, Connection, Frame, HelperError, ListFormat, PROTOCOL_VERSION, ProbeOutcome,
-    ProbeRequest, ProbeResult, Request, Response,
+    ConnectRequest, Connection, Frame, HelperError, ListFormat, PROTOCOL_VERSION, ProbeRequest,
+    ProbeResult, Request, Response, SessionExit, TunnelDelays,
 };
 use rosetun_config::{Rule, Status};
 
@@ -89,6 +89,13 @@ impl HelperClient {
         }
     }
 
+    pub fn session_exits(&mut self) -> Result<Vec<SessionExit>, ClientError> {
+        match self.request(Request::SessionExits)? {
+            Response::SessionExits(exits) => Ok(exits),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
     pub fn list_status(&mut self, hashes: Vec<String>) -> Result<Vec<String>, ClientError> {
         match self.request(Request::ListStatus { hashes })? {
             Response::ListStatus { missing } => Ok(missing),
@@ -128,9 +135,9 @@ impl HelperClient {
         }
     }
 
-    pub fn tunnel_delay(&mut self) -> Result<ProbeOutcome, ClientError> {
+    pub fn tunnel_delay(&mut self) -> Result<TunnelDelays, ClientError> {
         match self.request(Request::TunnelDelay)? {
-            Response::Delay(outcome) => Ok(outcome),
+            Response::Delay(delays) => Ok(delays),
             _ => Err(ClientError::Unexpected),
         }
     }

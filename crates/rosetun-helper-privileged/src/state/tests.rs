@@ -6,7 +6,7 @@ use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
     EngineBackend, EngineCapabilities, EngineIntegration, RenderedConfig, RuleCapabilities,
 };
-use rosetun_ipc::ExtraNode;
+use rosetun_ipc::{ExtraNode, SessionExit, TunnelDelays};
 use rosetun_routing::errors::RoutingError;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -2030,6 +2030,7 @@ fn another_account_cannot_change_or_read_an_active_session() {
         helper.connect_as(&other, &request),
         helper.apply_as(&other, &request),
         helper.temporary_rules_as(&other).map(|_| ()),
+        helper.session_exits_as(&other).map(|_| ()),
         helper.tunnel_delay_as(&other).map(|_| ()),
         helper.disconnect_as(&other),
     ] {
@@ -4823,7 +4824,7 @@ impl EngineBackend for ProbeEngine {
         assert!(!self.panic_url, "test URL worker panicked");
         let tag = match target {
             rosetun_engine::UrlTestTarget::Session => "proxy",
-            rosetun_engine::UrlTestTarget::Probe(tag) => tag,
+            rosetun_engine::UrlTestTarget::SessionExit(tag) | rosetun_engine::UrlTestTarget::Probe(tag) => tag,
         };
         let blocked = (tag == "probe-0")
             .then(|| self.blocked.lock().unwrap().take())
@@ -4931,6 +4932,7 @@ fn probe_fixture_with_counter(
             ("probe-0".to_owned(), Some(17)),
             ("probe-4".to_owned(), Some(45)),
             ("proxy".to_owned(), Some(23)),
+            ("exit-0".to_owned(), Some(61)),
         ]
         .into(),
         blocked: Mutex::new(blocked),
@@ -5208,10 +5210,72 @@ fn tunnel_delay_requires_connection_and_uses_its_control() {
     helper.connect(&connect_request()).unwrap();
     assert_eq!(
         helper.tunnel_delay().unwrap(),
-        ProbeOutcome::Works { millis: 23 }
+        TunnelDelays {
+            proxy: ProbeOutcome::Works { millis: 23 },
+            exits: Vec::new(),
+        }
     );
+    assert!(helper.session_exits().unwrap().is_empty());
     helper.disconnect().unwrap();
     assert_eq!(stopped.load(Ordering::Acquire), 1);
+    std::fs::remove_file(dir.join("config.json")).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn tunnel_delay_checks_each_exit_by_its_tag() {
+    use rosetun_ipc::{ExitDelay, ExitOutcome, ProbeOutcome};
+
+    let (helper, _, dir) = probe_fixture(true, None);
+    let mut request = connect_request();
+    request.extra_nodes = vec![
+        extra_node("first", "192.0.2.20"),
+        extra_node("missing", "missing.invalid"),
+        extra_node("silent", "192.0.2.30"),
+    ];
+    for exit in ["first", "missing", "silent"] {
+        request.rule_set.rules.push(Rule {
+            id: RuleId::new(format!("through-{exit}")),
+            enabled: true,
+            matcher: RuleMatcher::IpCidr("198.51.100.0/24".into()),
+            target: RuleTarget::Exit,
+            exit: Some(ExitId::new(exit)),
+        });
+    }
+    helper.connect(&request).unwrap();
+
+    assert_eq!(
+        helper.tunnel_delay().unwrap(),
+        TunnelDelays {
+            proxy: ProbeOutcome::Works { millis: 23 },
+            exits: vec![
+                ExitDelay {
+                    exit: ExitId::new("first"),
+                    outcome: ExitOutcome::Probed(ProbeOutcome::Works { millis: 61 }),
+                },
+                ExitDelay {
+                    exit: ExitId::new("missing"),
+                    outcome: ExitOutcome::NoAddress,
+                },
+                ExitDelay {
+                    exit: ExitId::new("silent"),
+                    outcome: ExitOutcome::Probed(ProbeOutcome::Fails),
+                },
+            ],
+        }
+    );
+    assert_eq!(
+        helper.session_exits().unwrap(),
+        request
+            .extra_nodes
+            .iter()
+            .map(|extra| SessionExit {
+                exit: extra.exit.clone(),
+                selection: extra.selection.clone(),
+            })
+            .collect::<Vec<_>>()
+    );
+    helper.disconnect().unwrap();
     std::fs::remove_file(dir.join("config.json")).unwrap();
     std::fs::remove_dir(dir).unwrap();
 }
