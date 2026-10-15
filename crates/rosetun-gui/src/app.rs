@@ -59,6 +59,9 @@ pub(crate) struct App {
     maximize_in: Option<u8>,
     #[cfg(windows)]
     window_minimized: bool,
+    /// eframe on Windows cannot tell a window hidden in the tray from a shown one.
+    #[cfg(windows)]
+    window_hidden: bool,
     #[cfg(windows)]
     quitting: bool,
     #[cfg(windows)]
@@ -113,6 +116,8 @@ impl App {
             maximize_in: None,
             #[cfg(windows)]
             window_minimized: false,
+            #[cfg(windows)]
+            window_hidden: false,
             #[cfg(windows)]
             quitting: false,
             #[cfg(windows)]
@@ -189,6 +194,7 @@ impl App {
                 )));
             }
         }
+        self.window_hidden = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -202,6 +208,7 @@ impl App {
         if let Some(job) = self.state.apply_on_leave() {
             self.dispatch(job);
         }
+        self.window_hidden = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 
@@ -214,6 +221,16 @@ impl App {
 
     #[cfg(not(windows))]
     fn hides_on_close(&self) -> bool {
+        false
+    }
+
+    #[cfg(windows)]
+    fn window_hidden(&self) -> bool {
+        self.window_hidden
+    }
+
+    #[cfg(not(windows))]
+    fn window_hidden(&self) -> bool {
         false
     }
 
@@ -512,7 +529,7 @@ impl eframe::App for App {
             }
         }
         if let Some(delay) = repaint_delay(
-            view::shows_clock(&self.state),
+            !self.window_hidden() && view::shows_clock(&self.state),
             self.state.next_wake(display::now_unix()),
         ) {
             ui.ctx().request_repaint_after(delay);

@@ -344,10 +344,22 @@ pub(crate) fn start(
                         ) {
                             return;
                         }
+                        let mut last_status = None;
+                        let mut quiet = 0;
                         loop {
                             match client.status() {
                                 Ok(status) => {
-                                    if !emit(&tx, &repaint, WorkerEvent::Status(status)) {
+                                    let wake = quiet >= QUIET_STATUS_LIMIT
+                                        || status_changed(last_status.as_ref(), &status);
+                                    quiet = if wake { 0 } else { quiet + 1 };
+                                    last_status = Some(status.clone());
+                                    let event = WorkerEvent::Status(status);
+                                    let sent = if wake {
+                                        emit(&tx, &repaint, event)
+                                    } else {
+                                        tx.send(event).is_ok()
+                                    };
+                                    if !sent {
                                         return;
                                     }
                                 }
@@ -409,6 +421,19 @@ fn log_helper_availability(previous: &mut Option<bool>, available: bool) {
     } else {
         tracing::warn!("Helper unavailable");
     }
+}
+
+/// Traffic-only status updates queue without waking the window; this many of them in a row
+/// wake it anyway, so a hidden window drains the queue about once a minute.
+const QUIET_STATUS_LIMIT: u32 = 60;
+
+fn status_changed(last: Option<&Status>, next: &Status) -> bool {
+    last.is_none_or(|last| {
+        Status {
+            traffic: next.traffic,
+            ..last.clone()
+        } != *next
+    })
 }
 
 fn emit(tx: &Sender<WorkerEvent>, repaint: &egui::Context, event: WorkerEvent) -> bool {
@@ -484,5 +509,24 @@ mod tests {
         }
         assert_eq!(last_count, 8);
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn only_non_traffic_status_changes_wake_the_window() {
+        let connected = Status {
+            state: rosetun_config::ConnectionState::Connected,
+            since_unix: Some(1_000),
+            ..Status::default()
+        };
+        assert!(status_changed(None, &connected));
+        let busier = Status {
+            traffic: rosetun_config::Traffic {
+                down_bps: 1_000,
+                ..Default::default()
+            },
+            ..connected.clone()
+        };
+        assert!(!status_changed(Some(&connected), &busier));
+        assert!(status_changed(Some(&busier), &Status::default()));
     }
 }

@@ -208,7 +208,10 @@ pub(crate) fn shows_clock(state: &State) -> bool {
     };
     match state.screen {
         Screen::Connection => status.since_unix.is_some() || status.state.is_transitional(),
-        Screen::Traffic => matches!(status.state, ConnectionState::Connected),
+        Screen::Traffic => matches!(
+            status.state,
+            ConnectionState::Connected | ConnectionState::Reconnecting
+        ),
         Screen::Rules | Screen::Settings => false,
     }
 }
