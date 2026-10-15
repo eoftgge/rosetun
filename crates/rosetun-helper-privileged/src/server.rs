@@ -329,6 +329,8 @@ fn dispatch(
             Response::Hello {
                 helper_version: HELPER_VERSION.to_owned(),
                 protocol_version: PROTOCOL_VERSION,
+                sing_box_version: Some(rosetun_engine_singbox::SUPPORTED_SING_BOX_VERSION.to_owned()),
+                xray_version: Some(rosetun_engine_xray::SUPPORTED_XRAY_VERSION.to_owned()),
             }
         }
         Request::Status => Response::Status(helper.status()),
@@ -339,6 +341,10 @@ fn dispatch(
         Request::TemporaryRules => match helper.temporary_rules_as(caller.expect("caller checked"))
         {
             Ok(rules) => Response::TemporaryRules(rules),
+            Err(error) => Response::Error(error),
+        },
+        Request::DiagnosticLog => match helper.diagnostic_log_as(caller.expect("caller checked")) {
+            Ok(text) => Response::DiagnosticLog { text },
             Err(error) => Response::Error(error),
         },
         Request::ListStatus { hashes } => match helper.list_status(hashes) {
@@ -488,6 +494,7 @@ mod tests {
         ));
         for request in [
             Request::TemporaryRules,
+            Request::DiagnosticLog,
             Request::TunnelDelay,
             Request::Disconnect,
             Request::Shutdown,

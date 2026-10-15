@@ -1115,6 +1115,8 @@ mod tests {
                 body: Response::Hello {
                     helper_version: "test".to_owned(),
                     protocol_version: crate::PROTOCOL_VERSION,
+                    sing_box_version: None,
+                    xray_version: None,
                 },
             })
         );
@@ -1146,6 +1148,8 @@ mod tests {
                         body: Response::Hello {
                             helper_version: "test".to_owned(),
                             protocol_version: crate::PROTOCOL_VERSION,
+                            sing_box_version: None,
+                            xray_version: None,
                         },
                     })
                     .expect("response is written");
@@ -1195,6 +1199,8 @@ mod tests {
                     body: Response::Hello {
                         helper_version: "test".to_owned(),
                         protocol_version: crate::PROTOCOL_VERSION,
+                        sing_box_version: None,
+                        xray_version: None,
                     },
                 })
                 .expect("second response is written");

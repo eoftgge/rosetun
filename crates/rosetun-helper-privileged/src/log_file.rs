@@ -1,8 +1,47 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE};
+
 pub(crate) const LOG_LIMIT: u64 = 10 * 1024 * 1024;
+pub(crate) const REPORT_LOG_LIMIT: usize = 1024 * 1024;
+
+pub(crate) fn report_tail(dir: &Path) -> io::Result<String> {
+    let current = read_tail(&dir.join("helper.log"), REPORT_LOG_LIMIT)?;
+    let previous = read_tail(
+        &dir.join("helper.previous.log"),
+        REPORT_LOG_LIMIT.saturating_sub(current.len() + usize::from(!current.is_empty())),
+    )?;
+    let mut combined = previous;
+    if !combined.is_empty() && !current.is_empty() {
+        combined.push(b'\n');
+    }
+    combined.extend_from_slice(&current);
+    Ok(String::from_utf8_lossy(&combined).into_owned())
+}
+
+fn read_tail(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let length = file.metadata()?.len();
+    let count = length.min(limit as u64) as usize;
+    file.seek(SeekFrom::Start(length - count as u64))?;
+    let mut tail = Vec::with_capacity(count);
+    file.take(count as u64).read_to_end(&mut tail)?;
+    Ok(tail)
+}
 
 /// Keeps the previous run in `helper.previous.log` and rotates `helper.log`
 /// when it exceeds the limit.
@@ -86,6 +125,29 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).expect("remove test directory");
         }
+    }
+
+    #[test]
+    fn report_tail_keeps_only_the_latest_megabyte_across_both_files() {
+        let dir = TestDir::new();
+        fs::write(dir.0.join("helper.previous.log"), vec![b'p'; REPORT_LOG_LIMIT]).unwrap();
+        fs::write(dir.0.join("helper.log"), vec![b'c'; 32]).unwrap();
+        let text = report_tail(&dir.0).unwrap();
+        assert_eq!(text.len(), REPORT_LOG_LIMIT);
+        assert!(text.starts_with('p'));
+        assert!(text.ends_with(&"c".repeat(32)));
+
+        fs::write(dir.0.join("helper.log"), vec![b'n'; REPORT_LOG_LIMIT + 32]).unwrap();
+        let text = report_tail(&dir.0).unwrap();
+        assert_eq!(text, "n".repeat(REPORT_LOG_LIMIT));
+    }
+
+    #[test]
+    fn report_tail_reads_current_open_log_and_missing_previous() {
+        let dir = TestDir::new();
+        let mut log = RotatingFile::open(&dir.0, LOG_LIMIT).unwrap();
+        log.write_all(b"2001:db8::1\n").unwrap();
+        assert_eq!(report_tail(&dir.0).unwrap(), "2001:db8::1\n");
     }
 
     #[test]

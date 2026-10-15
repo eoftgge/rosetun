@@ -97,6 +97,7 @@ pub struct Helper {
     status: Arc<Mutex<Status>>,
     session: Mutex<Session>,
     owner: Arc<Mutex<Option<Vec<u8>>>>,
+    last_owner: Mutex<Option<Vec<u8>>>,
     engines: Arc<EngineRegistry>,
     xray: Option<Arc<dyn XrayRunner>>,
     physical_interface: fn(&str) -> Option<String>,
@@ -221,6 +222,7 @@ impl Helper {
         Self {
             status: Arc::clone(&status),
             owner: Arc::clone(&owner),
+            last_owner: Mutex::new(None),
             engines: Arc::clone(&engines),
             xray: None,
             #[cfg(not(test))]
@@ -373,6 +375,36 @@ impl Helper {
     #[cfg(test)]
     pub fn temporary_rules(&self) -> Result<Vec<Rule>, HelperError> {
         self.temporary_rules_as(&test_caller())
+    }
+
+    pub(crate) fn diagnostic_log_as(&self, caller: &Caller) -> Result<String, HelperError> {
+        self.check_diagnostic_owner(caller)?;
+        #[cfg(windows)]
+        let text = {
+            let dir = crate::data_dir::data_dir().map_err(report_log_error)?;
+            crate::log_file::report_tail(&dir.join("logs")).map_err(report_log_error)?
+        };
+        #[cfg(not(windows))]
+        let text = String::new();
+        self.check_diagnostic_owner(caller)?;
+        let printable: String = text
+            .chars()
+            .map(|ch| if ch.is_control() && !matches!(ch, '\n' | '\r' | '\t') { ' ' } else { ch })
+            .collect();
+        Ok(rosetun_config::redact_report_text(&printable))
+    }
+
+    fn check_diagnostic_owner(&self, caller: &Caller) -> Result<(), HelperError> {
+        let owner = self.owner.lock().map_err(|_| access_denied())?;
+        let last_owner = self.last_owner.lock().map_err(|_| access_denied())?;
+        let expected = owner.as_ref().or(last_owner.as_ref());
+        if expected != Some(&caller.sid) {
+            return Err(HelperError::new(
+                ErrorCode::AccessDenied,
+                "only the account that started the most recent session can read the diagnostic log",
+            ));
+        }
+        Ok(())
     }
 
     /// The machine woke from sleep; the supervisor restarts a live tunnel.
@@ -938,6 +970,7 @@ impl Helper {
         self.with_status(|status| {
             let mut owner = self.owner.lock().map_err(|_| access_denied())?;
             let previous = owner.replace(caller.sid.clone());
+            *self.last_owner.lock().map_err(|_| access_denied())? = Some(caller.sid.clone());
             self.cancelled.store(false, Ordering::Release);
             if self.shutting_down.load(Ordering::Acquire) {
                 self.cancelled.store(true, Ordering::Release);
@@ -991,6 +1024,11 @@ pub(crate) fn access_denied() -> HelperError {
         ErrorCode::AccessDenied,
         "the tunnel belongs to another Windows account; only that account or an administrator can control it",
     )
+}
+
+#[cfg(windows)]
+fn report_log_error(_: std::io::Error) -> HelperError {
+    HelperError::new(ErrorCode::Internal, "could not read the helper diagnostic log")
 }
 
 fn validate_tun_name(name: &str) -> Result<(), HelperError> {

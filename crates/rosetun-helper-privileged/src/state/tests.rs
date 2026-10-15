@@ -1950,6 +1950,42 @@ fn session_owner_controls_connected_operations_and_releases_it_on_disconnect() {
 }
 
 #[test]
+fn diagnostic_log_is_only_available_to_the_last_session_owner() {
+    let helper = owned_helper();
+    let owner = Caller::fake(b"owner", false);
+    let other = Caller::fake(b"other", false);
+    let admin = Caller::fake(b"admin", true);
+    assert_eq!(
+        helper.diagnostic_log_as(&owner).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect_as(&owner, &request).expect("owner connects");
+    for caller in [&other, &admin] {
+        assert_eq!(
+            helper.diagnostic_log_as(caller).unwrap_err().code,
+            ErrorCode::AccessDenied
+        );
+    }
+    assert!(helper.diagnostic_log_as(&owner).is_ok());
+    helper.disconnect_as(&owner).expect("owner disconnects");
+    assert!(helper.diagnostic_log_as(&owner).is_ok());
+    assert_eq!(
+        helper.diagnostic_log_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+
+    helper.connect_as(&other, &request).expect("new owner connects");
+    assert_eq!(
+        helper.diagnostic_log_as(&owner).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    helper.disconnect_as(&other).expect("new owner disconnects");
+}
+
+#[test]
 fn another_account_cannot_change_or_read_an_active_session() {
     let helper = owned_helper();
     let owner = Caller::fake(b"owner", false);

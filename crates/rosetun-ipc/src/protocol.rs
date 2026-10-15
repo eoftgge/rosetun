@@ -22,6 +22,7 @@ pub enum Request {
     },
     Status,
     TemporaryRules,
+    DiagnosticLog,
     ListStatus {
         hashes: Vec<String>,
     },
@@ -73,6 +74,7 @@ impl std::fmt::Debug for Request {
             Self::ProbeNodes(request) => f.debug_tuple("ProbeNodes").field(request).finish(),
             Self::Status => f.write_str("Status"),
             Self::TemporaryRules => f.write_str("TemporaryRules"),
+            Self::DiagnosticLog => f.write_str("DiagnosticLog"),
             Self::TunnelDelay => f.write_str("TunnelDelay"),
             Self::Disconnect => f.write_str("Disconnect"),
             Self::Subscribe => f.write_str("Subscribe"),
@@ -214,9 +216,14 @@ pub enum Response {
     Hello {
         helper_version: String,
         protocol_version: u32,
+        #[serde(default)]
+        sing_box_version: Option<String>,
+        #[serde(default)]
+        xray_version: Option<String>,
     },
     Status(Status),
     TemporaryRules(Vec<Rule>),
+    DiagnosticLog { text: String },
     ListStatus {
         missing: Vec<String>,
     },

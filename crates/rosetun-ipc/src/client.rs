@@ -23,6 +23,8 @@ pub struct HelperClient {
     connection: Connection,
     next_id: u64,
     helper_version: String,
+    sing_box_version: Option<String>,
+    xray_version: Option<String>,
 }
 
 impl HelperClient {
@@ -33,13 +35,22 @@ impl HelperClient {
             connection,
             next_id: 1,
             helper_version: String::new(),
+            sing_box_version: None,
+            xray_version: None,
         };
         match client.request(Request::Hello {
             client: client_name.to_owned(),
             protocol_version: PROTOCOL_VERSION,
         })? {
-            Response::Hello { helper_version, .. } => {
+            Response::Hello {
+                helper_version,
+                sing_box_version,
+                xray_version,
+                ..
+            } => {
                 client.helper_version = helper_version;
+                client.sing_box_version = sing_box_version;
+                client.xray_version = xray_version;
                 Ok(client)
             }
             _ => Err(ClientError::Unexpected),
@@ -48,6 +59,17 @@ impl HelperClient {
 
     pub fn helper_version(&self) -> &str {
         &self.helper_version
+    }
+
+    pub fn engine_versions(&self) -> (Option<&str>, Option<&str>) {
+        (self.sing_box_version.as_deref(), self.xray_version.as_deref())
+    }
+
+    pub fn diagnostic_log(&mut self) -> Result<String, ClientError> {
+        match self.request(Request::DiagnosticLog)? {
+            Response::DiagnosticLog { text } => Ok(text),
+            _ => Err(ClientError::Unexpected),
+        }
     }
 
     pub fn status(&mut self) -> Result<Status, ClientError> {

@@ -5,6 +5,7 @@ mod ids;
 mod list;
 mod list_validation;
 mod node;
+mod report;
 mod rule;
 mod runtime;
 mod settings;
@@ -22,6 +23,7 @@ pub use node::{
     Hysteria2Params, Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
     TlsParams, Transport, TrojanParams, VlessParams, VmessParams, uses_xray,
 };
+pub use report::redact_report_text;
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{ConnectStage, ConnectionState, FailureKind, Status, Traffic};
 pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings, XrayUse};
