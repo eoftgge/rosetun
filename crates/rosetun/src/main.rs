@@ -10,7 +10,8 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
 use rosetun_config::{
-    DomainMatch, NodeId, ProcessMatch, Rule, RuleMatcher, RuleTarget, SubscriptionId, XrayUse,
+    ConnectionState, DomainMatch, FailureKind, NodeId, ProcessMatch, Rule, RuleMatcher, RuleTarget,
+    Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{ListOperation, PreparedConnection, terminal_text};
 use rosetun_ipc::{
@@ -243,6 +244,19 @@ fn print_probe_outcome(outcome: ProbeOutcome) {
     }
 }
 
+fn status_has_no_network(status: &Status) -> bool {
+    match &status.state {
+        ConnectionState::Failed { failure_kind, .. }
+        | ConnectionState::FailedProtected { failure_kind, .. } => {
+            *failure_kind == Some(FailureKind::NoNetwork)
+        }
+        ConnectionState::Reconnecting => {
+            status.reconnect_failure_kind == Some(FailureKind::NoNetwork)
+        }
+        _ => false,
+    }
+}
+
 fn status(client: &mut HelperClient) -> ExitCode {
     let result = client.status().and_then(|status| {
         temporary_rules_status(client.temporary_rules())
@@ -251,6 +265,9 @@ fn status(client: &mut HelperClient) -> ExitCode {
     match result {
         Ok((status, temporary_count)) => {
             println!("state: {:?}", status.state);
+            if status_has_no_network(&status) {
+                println!("network: no network");
+            }
             println!("temporary rules: {temporary_count}");
             println!(
                 "node: {}",
@@ -615,10 +632,11 @@ Options for sub add may appear in any order after the URL."
 mod tests {
     use super::{
         Command, access_denied_message, apply_error_message, parse_command_arguments,
-        temporary_rule_line, temporary_rules_status,
+        status_has_no_network, temporary_rule_line, temporary_rules_status,
     };
     use rosetun_config::{
-        DomainMatch, ProcessMatch, Rule, RuleId, RuleMatcher, RuleTarget, XrayUse,
+        ConnectionState, DomainMatch, FailureKind, ProcessMatch, Rule, RuleId, RuleMatcher,
+        RuleTarget, Status, XrayUse,
     };
     use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
@@ -628,6 +646,37 @@ mod tests {
             .map(|argument| (*argument).to_owned())
             .collect();
         parse_command_arguments(&arguments)
+    }
+
+    #[test]
+    fn status_labels_missing_network_on_failure_and_while_waiting() {
+        for state in [
+            ConnectionState::Failed {
+                reason: "no route".into(),
+                failure_kind: Some(FailureKind::NoNetwork),
+            },
+            ConnectionState::FailedProtected {
+                reason: "no route".into(),
+                failure_kind: Some(FailureKind::NoNetwork),
+            },
+        ] {
+            assert!(status_has_no_network(&Status {
+                state,
+                ..Status::default()
+            }));
+        }
+        assert!(status_has_no_network(&Status {
+            state: ConnectionState::Reconnecting,
+            reconnect_failure_kind: Some(FailureKind::NoNetwork),
+            ..Status::default()
+        }));
+        assert!(!status_has_no_network(&Status {
+            state: ConnectionState::Failed {
+                reason: "server".into(),
+                failure_kind: Some(FailureKind::ServerUnreachable),
+            },
+            ..Status::default()
+        }));
     }
 
     #[test]

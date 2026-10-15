@@ -398,6 +398,35 @@ fn localized_failures_use_the_existing_action_labels() {
 }
 
 #[test]
+fn no_network_text_distinguishes_retry_from_automatic_wait() {
+    for (language, title, hint, waiting, protected) in [
+        (
+            Language::English,
+            "No network connection",
+            "Check the cable or Wi-Fi.",
+            "Rosetun will reconnect when the network returns.",
+            "Network lost · the kill switch blocks internet access until it returns.",
+        ),
+        (
+            Language::Russian,
+            "Нет подключения к сети",
+            "Проверьте кабель или Wi-Fi.",
+            "Rosetun подключится, когда сеть появится.",
+            "Сеть пропала · интернет закрыт защитой, пока она не вернётся.",
+        ),
+    ] {
+        in_language(language, || {
+            let actual = connection_failure(FailureKind::NoNetwork, None, XrayUse::Auto);
+            assert_eq!(actual, (title.to_owned(), hint.to_owned()));
+            let waiting_hint = tr!("no-network-waiting-hint");
+            assert!(waiting_hint.contains(hint));
+            assert!(waiting_hint.contains(waiting));
+            assert_eq!(tr!("no-network-protected"), protected);
+        });
+    }
+}
+
+#[test]
 fn xray_warning_and_status_texts_are_localized() {
     assert_eq!(
         in_language(Language::Russian, || xray_off_warning(3)),

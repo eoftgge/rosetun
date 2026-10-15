@@ -389,9 +389,13 @@ fn failure_conflicts_are_checked_once_and_stale_results_are_ignored() {
 }
 
 #[test]
-fn unrelated_and_dns_timeout_failures_do_not_scan_for_conflicts() {
+fn unrelated_dns_timeout_and_no_network_failures_do_not_scan_for_conflicts() {
     let mut state = state_for_auto_connect();
-    for kind in [None, Some(FailureKind::DnsTimeout)] {
+    for kind in [
+        None,
+        Some(FailureKind::DnsTimeout),
+        Some(FailureKind::NoNetwork),
+    ] {
         state.reduce(WorkerEvent::Status(Status {
             state: ConnectionState::Failed {
                 reason: "no DNS answer".into(),
@@ -401,6 +405,28 @@ fn unrelated_and_dns_timeout_failures_do_not_scan_for_conflicts() {
         }));
         assert!(state.take_failure_interference().is_none());
     }
+}
+
+#[test]
+fn no_network_keeps_retry_and_protection_controls() {
+    let mut state = state_for_auto_connect();
+    state.status.state = ConnectionState::Failed {
+        reason: "physical network is unavailable".into(),
+        failure_kind: Some(FailureKind::NoNetwork),
+    };
+    assert_eq!(state.primary_action(), PrimaryAction::Retry);
+    assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+    state.operations.helper = false;
+
+    state.status.state = ConnectionState::FailedProtected {
+        reason: "physical network is unavailable".into(),
+        failure_kind: Some(FailureKind::NoNetwork),
+    };
+    assert_eq!(state.primary_action(), PrimaryAction::Reconnect);
+    assert!(matches!(state.act(Action::Primary), Some(Job::Connect)));
+    state.operations.helper = false;
+    state.act(Action::RequestProtectionOff);
+    assert!(state.protection_confirmation);
 }
 
 #[test]
@@ -507,6 +533,7 @@ fn command_completion_clears_flags_and_maps_selection_errors() {
 fn failed_connect_reported_by_status_has_no_second_error() {
     for code in [
         ErrorCode::EngineFailed,
+        ErrorCode::NoNetwork,
         ErrorCode::RoutingFailed,
         ErrorCode::UnsupportedRules,
     ] {

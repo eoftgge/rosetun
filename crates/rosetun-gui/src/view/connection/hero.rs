@@ -1,5 +1,20 @@
 use super::*;
 
+fn server_check_available(kind: FailureKind) -> bool {
+    kind != FailureKind::NoNetwork
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_network_does_not_offer_a_server_check() {
+        assert!(!server_check_available(FailureKind::NoNetwork));
+        assert!(server_check_available(FailureKind::ServerUnreachable));
+    }
+}
+
 pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let narrow = ui.available_width() < 560.0;
     widgets::card_frame()
@@ -9,7 +24,12 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
             let visible_status = state.visible_status();
             let (label, color) =
                 visible_status.map_or((tr!("status-unknown"), theme::DISCONNECTED), |status| {
-                    if status.xray_stopped && matches!(status.state, ConnectionState::Reconnecting)
+                    if matches!(status.state, ConnectionState::Reconnecting)
+                        && status.reconnect_failure_kind == Some(FailureKind::NoNetwork)
+                    {
+                        (tr!("error-code-no-network"), theme::ERROR)
+                    } else if status.xray_stopped
+                        && matches!(status.state, ConnectionState::Reconnecting)
                     {
                         (tr!("xray-reconnecting-title"), theme::ERROR)
                     } else {
@@ -76,7 +96,21 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             );
                         });
                         if let Some(status) = visible_status {
-                            if status.xray_stopped
+                            if matches!(status.state, ConnectionState::Reconnecting)
+                                && status.reconnect_failure_kind == Some(FailureKind::NoNetwork)
+                            {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(tr!("no-network-waiting-hint"))
+                                            .small()
+                                            .color(theme::TEXT_MUTED),
+                                    )
+                                    .wrap(),
+                                );
+                                if state.config.settings.kill_switch {
+                                    ui.colored_label(theme::ERROR, tr!("no-network-protected"));
+                                }
+                            } else if status.xray_stopped
                                 && matches!(status.state, ConnectionState::Reconnecting)
                             {
                                 ui.add(
@@ -134,6 +168,11 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     );
                                     ui.colored_label(theme::ERROR, title)
                                         .on_hover_text(state.text(reason));
+                                    if *kind == FailureKind::NoNetwork
+                                        && matches!(status.state, ConnectionState::FailedProtected { .. })
+                                    {
+                                        ui.colored_label(theme::ERROR, tr!("no-network-protected"));
+                                    }
                                     ui.add(
                                         egui::Label::new(
                                             RichText::new(hint).small().color(theme::TEXT_MUTED),
@@ -204,7 +243,8 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             );
                                         }
                                     }
-                                    if let Some(selection) = &state.config.active
+                                    if server_check_available(*kind)
+                                        && let Some(selection) = &state.config.active
                                         && widgets::outline_button(
                                             ui,
                                             tr!("check-full"),
