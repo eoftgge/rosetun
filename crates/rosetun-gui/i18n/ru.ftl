@@ -94,6 +94,7 @@ error-code-handshake-required = нарушен порядок обмена со 
 error-code-not-privileged = служба запущена без прав администратора
 error-code-access-denied = Туннель подключён из другой учётной записи Windows. Управлять им может только она или администратор.
 error-code-engine-failed = сбой ядра
+error-code-engine-failed-hint = Ядро не запустилось. Попробуйте ещё раз; если повторяется, соберите отчёт в Настройки › Служба и журнал.
 error-code-xray-start-failed = Xray не запустился
 error-code-xray-stopped = Xray остановился
 error-code-no-network = Нет подключения к сети

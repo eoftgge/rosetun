@@ -94,6 +94,7 @@ error-code-handshake-required = the service expected a handshake first
 error-code-not-privileged = the service is not running with administrator rights
 error-code-access-denied = The tunnel was connected from another Windows account. Only that account or an administrator can control it.
 error-code-engine-failed = the engine failed
+error-code-engine-failed-hint = The engine did not start. Try again; if it keeps happening, save a report under Settings › Service and log.
 error-code-xray-start-failed = Xray did not start
 error-code-xray-stopped = Xray stopped
 error-code-no-network = No network connection

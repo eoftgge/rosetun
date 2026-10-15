@@ -713,7 +713,12 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                 }
                 ErrorCode::Internal => tr_in(language, "error-code-internal", &FluentArgs::new()),
             };
-            if error.message.is_empty() || error.code == ErrorCode::AccessDenied {
+            if error.code == ErrorCode::EngineFailed {
+                format!(
+                    "{title}: {}",
+                    tr_in(language, "error-code-engine-failed-hint", &FluentArgs::new())
+                )
+            } else if error.message.is_empty() || error.code == ErrorCode::AccessDenied {
                 title.to_owned()
             } else {
                 format!("{title}: {}", error.message)
@@ -1095,10 +1100,22 @@ mod tests {
     }
 
     #[test]
-    fn helper_codes_use_localized_titles_and_preserve_details() {
-        let error = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, "boom"));
-        assert_eq!(client(Language::English, &error), "the engine failed: boom");
-        assert_eq!(client(Language::Russian, &error), "сбой ядра: boom");
+    fn helper_codes_hide_engine_details_and_preserve_other_details() {
+        let detail = "changes were not applied: engine exited with code Some(1)";
+        let error = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, detail));
+        assert_eq!(
+            client(Language::English, &error),
+            "the engine failed: The engine did not start. Try again; if it keeps happening, save a report under Settings › Service and log."
+        );
+        assert_eq!(
+            client(Language::Russian, &error),
+            "сбой ядра: Ядро не запустилось. Попробуйте ещё раз; если повторяется, соберите отчёт в Настройки › Служба и журнал."
+        );
+        for language in [Language::English, Language::Russian] {
+            let message = client(language, &error);
+            assert!(!message.contains("Some("));
+            assert!(!message.contains(detail));
+        }
         let denied = ClientError::Helper(HelperError::new(
             ErrorCode::AccessDenied,
             "the tunnel belongs to another Windows account",
@@ -1112,8 +1129,10 @@ mod tests {
             "Туннель подключён из другой учётной записи Windows. Управлять им может только она или администратор."
         );
         let empty = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, ""));
-        assert_eq!(client(Language::English, &empty), "the engine failed");
-        assert_eq!(client(Language::Russian, &empty), "сбой ядра");
+        assert_eq!(client(Language::English, &empty), client(Language::English, &error));
+        assert_eq!(client(Language::Russian, &empty), client(Language::Russian, &error));
+        let routing = ClientError::Helper(HelperError::new(ErrorCode::RoutingFailed, "boom"));
+        assert_eq!(client(Language::English, &routing), "routing setup failed: boom");
         let transport = ClientError::Transport("x".to_owned());
         assert_eq!(
             client(Language::Russian, &transport),
