@@ -877,8 +877,11 @@ impl State {
                         .iter()
                         .find(|rule| rule.id == id)
                 {
-                    let job =
-                        Job::AddRules(set.id.clone(), vec![rule.matcher.clone()], RuleDestination::of(rule));
+                    let job = Job::AddRules(
+                        set.id.clone(),
+                        vec![rule.matcher.clone()],
+                        RuleDestination::of(rule),
+                    );
                     self.session.keep_temporary = Some(id);
                     return self.start_rule_edit(job);
                 }

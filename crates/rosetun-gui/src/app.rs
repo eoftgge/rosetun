@@ -267,9 +267,7 @@ impl App {
             Job::SetRuleTarget(set, rule, target) => {
                 self.workers.set_rule_target(set, rule, target)
             }
-            Job::CreateExit(exit) => {
-                self.workers.create_exit(exit)
-            }
+            Job::CreateExit(exit) => self.workers.create_exit(exit),
             Job::SetRuleEnabled(set, rule, enabled) => {
                 self.workers.set_rule_enabled(set, rule, enabled);
             }

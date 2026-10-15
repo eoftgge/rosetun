@@ -67,7 +67,9 @@ fn get_or_create(
 
 pub(crate) fn exit_in(config: &mut AppConfig, new: &NewExit) -> Result<Exit, ExitError> {
     match new {
-        NewExit::Country { code, name } => get_or_create(config, ExitTarget::Country(code.clone()), name),
+        NewExit::Country { code, name } => {
+            get_or_create(config, ExitTarget::Country(code.clone()), name)
+        }
         NewExit::Node { selection, name } => {
             let node = config
                 .subscriptions

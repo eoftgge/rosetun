@@ -1242,8 +1242,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             egui::Sense::hover()
         },
     );
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, enabled, &label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, enabled, &label));
     let open = egui::Popup::is_id_open(ui.ctx(), destination_popup_id());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
@@ -1390,7 +1389,13 @@ fn destination_menu(
     for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
         let destination = RuleDestination::from(target);
         let selected = dialog.target == destination;
-        if destination_item(ui, &target_label(target), target_color(target), true, selected) {
+        if destination_item(
+            ui,
+            &target_label(target),
+            target_color(target),
+            true,
+            selected,
+        ) {
             chosen = Some(destination);
         }
     }
@@ -1544,7 +1549,16 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, &AppConfig::default(), can_temporary, 0, &mut Vec::new()),
+                |ctx| {
+                    show(
+                        ctx,
+                        &mut dialog,
+                        &AppConfig::default(),
+                        can_temporary,
+                        0,
+                        &mut Vec::new(),
+                    )
+                },
             );
             output.textures_delta.clear();
             assert_eq!(dialog.temporary_only, can_temporary && temporary);
@@ -1631,7 +1645,16 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, &AppConfig::default(), true, 0, &mut Vec::new()),
+                |ctx| {
+                    show(
+                        ctx,
+                        &mut dialog,
+                        &AppConfig::default(),
+                        true,
+                        0,
+                        &mut Vec::new(),
+                    )
+                },
             );
             output.textures_delta.clear();
             let rect = ctx
@@ -1649,7 +1672,9 @@ mod tests {
 
         let names: Vec<(String, String)> = ["NL", "DE", "JP", "US", "GB", "FR", "SE", "FI"]
             .iter()
-            .flat_map(|code| (0..4).map(move |index| (format!("{code}{index}"), format!("{code} {index}"))))
+            .flat_map(|code| {
+                (0..4).map(move |index| (format!("{code}{index}"), format!("{code} {index}")))
+            })
             .collect();
         let nodes: Vec<(&str, &str)> = names
             .iter()
@@ -1724,7 +1749,16 @@ mod tests {
                     )),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, &mut dialog, &AppConfig::default(), false, 0, &mut Vec::new()),
+                |ctx| {
+                    show(
+                        ctx,
+                        &mut dialog,
+                        &AppConfig::default(),
+                        false,
+                        0,
+                        &mut Vec::new(),
+                    )
+                },
             );
             output.textures_delta.clear();
             let rect = ctx

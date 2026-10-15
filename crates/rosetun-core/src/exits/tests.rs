@@ -286,7 +286,12 @@ fn rule_to_new_country_creates_one_exit_and_reuses_it() {
     .unwrap();
     let config = store.load().unwrap();
     assert_eq!(config.exits.len(), 1);
-    assert!(again.added.iter().all(|rule| rule.exit == rule_exit(&config)));
+    assert!(
+        again
+            .added
+            .iter()
+            .all(|rule| rule.exit == rule_exit(&config))
+    );
     assert_eq!(exit_rule_count(&config, &config.exits[0].id), 3);
 
     let node = RuleDestination::NewExit(NewExit::Node {
@@ -386,7 +391,11 @@ fn temporary_rule_goes_through_an_exit_saved_in_settings() {
         name: "Netherlands".into(),
     };
     assert!(matches!(
-        crate::temporary_rules(&[], vec![domain("a.example.com")], &RuleDestination::NewExit(new.clone())),
+        crate::temporary_rules(
+            &[],
+            vec![domain("a.example.com")],
+            &RuleDestination::NewExit(new.clone())
+        ),
         Err(crate::RuleSetError::Exit(ExitError::NotFound))
     ));
 

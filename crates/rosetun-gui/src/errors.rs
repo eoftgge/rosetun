@@ -1,11 +1,10 @@
 use rosetun_config::{ConfigError, ListCategoryError};
 use rosetun_core::{
     AddFromUrlError, AddSubscriptionError, DnsInputError, ExitError, FetchError, ListError,
-    ListParseError,
-    ListPreparationError, MoveSubscriptionError, ParseError, RemoveSubscriptionError,
-    RenameSubscriptionError, RuleInputError, RuleSetError, SelectNodeError, SelectRuleSetError,
-    SettingsError, SkipReason, StoreError, SubscriptionUrlError, TextErrorKind,
-    UnsupportedTransport, UpdateSubscriptionError,
+    ListParseError, ListPreparationError, MoveSubscriptionError, ParseError,
+    RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
+    SelectNodeError, SelectRuleSetError, SettingsError, SkipReason, StoreError,
+    SubscriptionUrlError, TextErrorKind, UnsupportedTransport, UpdateSubscriptionError,
 };
 use rosetun_ipc::{ClientError, ConnectRequestError, ErrorCode};
 use rosetun_processes::ProcessListError;

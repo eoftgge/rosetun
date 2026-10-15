@@ -685,11 +685,17 @@ fn exit_rules_read_through_their_exit_in_their_own_colour() {
         target: RuleTarget::Exit,
         exit: Some(exit.id.clone()),
     };
-    assert_eq!(rule_label(&rule, std::slice::from_ref(&exit)), "Through Example exit");
+    assert_eq!(
+        rule_label(&rule, std::slice::from_ref(&exit)),
+        "Through Example exit"
+    );
     assert_eq!(rule_label(&rule, &[]), "Through an exit");
     let destination = RuleDestination::of(&rule);
     assert_eq!(destination_color(&destination), theme::EXIT);
-    assert_ne!(destination_color(&destination), target_color(RuleTarget::Block));
+    assert_ne!(
+        destination_color(&destination),
+        target_color(RuleTarget::Block)
+    );
     let choices = table::rule_target_choices(std::slice::from_ref(&exit));
     assert_eq!(choices.len(), 4);
     assert_eq!(choices[3].label, "Example exit · NL");

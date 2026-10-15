@@ -18,8 +18,8 @@ mod updates;
 
 pub use exit::{ExitInfo, ExitInfoError, exit_info};
 pub use exits::{
-    ExitError, NewExit, change_exit_target, create_exit, delete_exit, exit_for_country, exit_for_node, exit_rule_count,
-    rename_exit, resolve_exits,
+    ExitError, NewExit, change_exit_target, create_exit, delete_exit, exit_for_country,
+    exit_for_node, exit_rule_count, rename_exit, resolve_exits,
 };
 pub use fetch::{FetchError, Timeouts, fetch};
 pub use lists::{
@@ -32,12 +32,13 @@ pub use lists::{
 pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
 pub use rosetun_subscription::{ParseError, SkipReason, Skipped, UnsupportedTransport};
 pub use rules::{
-    AddedRules, AppliedSnapshot, RuleDestination, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,
-    RuleInputError, RuleSetError, add_rule, add_rules, create_rule_set, delete_rule_set,
-    ip_lines_have_local_address, move_rule, move_rules, parse_domain_input, parse_domain_lines,
-    parse_ip_cidr, parse_ip_lines, parse_process_input, remove_rule, remove_rules, rename_rule_set,
-    restore_rules_and_dns, rule_value_ascii, rule_value_text, set_default_target, set_rule_enabled,
-    set_rule_target, temporary_rules, update_rule, validate_list_matcher,
+    AddedRules, AppliedSnapshot, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,
+    RuleDestination, RuleInputError, RuleSetError, add_rule, add_rules, create_rule_set,
+    delete_rule_set, ip_lines_have_local_address, move_rule, move_rules, parse_domain_input,
+    parse_domain_lines, parse_ip_cidr, parse_ip_lines, parse_process_input, remove_rule,
+    remove_rules, rename_rule_set, restore_rules_and_dns, rule_value_ascii, rule_value_text,
+    set_default_target, set_rule_enabled, set_rule_target, temporary_rules, update_rule,
+    validate_list_matcher,
 };
 pub use selection::{
     SelectNodeError, SelectRuleSetError, select_node, select_rule_set, set_kill_switch,

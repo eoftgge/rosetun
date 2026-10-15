@@ -2,9 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use rosetun_config::{
-    AppConfig, CountryCode, Exit, ExitId, ExitTarget, Selection, node_country,
-};
+use rosetun_config::{AppConfig, CountryCode, Exit, ExitId, ExitTarget, Selection, node_country};
 use rosetun_core::resolve_exits;
 
 pub(crate) const MAX_NODE_RESULTS: usize = 20;
@@ -154,7 +152,12 @@ pub(crate) mod tests {
 
     #[test]
     fn country_with_an_exit_is_not_offered_again() {
-        let nodes = [("a", "🇳🇱 One"), ("b", "🇩🇪 Two"), ("c", "NL Three"), ("d", "Plain")];
+        let nodes = [
+            ("a", "🇳🇱 One"),
+            ("b", "🇩🇪 Two"),
+            ("c", "NL Three"),
+            ("d", "Plain"),
+        ];
         assert_eq!(
             new_countries(&config(&nodes, Vec::new())),
             [country("DE"), country("NL")]

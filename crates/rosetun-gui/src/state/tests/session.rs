@@ -1332,13 +1332,14 @@ fn temporary_rule_through_a_new_exit_saves_the_exit_then_applies() {
 fn failed_exit_for_a_temporary_rule_keeps_the_dialog_with_the_error() {
     let mut state = connected_state_for_apply();
     temporary_dialog(&mut state, "session.example");
-    state.rules.screen.add.as_mut().unwrap().target =
-        RuleDestination::NewExit(NewExit::Country {
-            code: rosetun_config::CountryCode::parse("NL").unwrap(),
-            name: "Netherlands".into(),
-        });
+    state.rules.screen.add.as_mut().unwrap().target = RuleDestination::NewExit(NewExit::Country {
+        code: rosetun_config::CountryCode::parse("NL").unwrap(),
+        name: "Netherlands".into(),
+    });
     assert!(state.act(Action::SubmitAddRule).is_some());
-    state.reduce(WorkerEvent::CreateExit(Err(rosetun_core::ExitError::TooMany)));
+    state.reduce(WorkerEvent::CreateExit(Err(
+        rosetun_core::ExitError::TooMany,
+    )));
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(!dialog.busy);
     assert!(dialog.error.as_deref().unwrap().contains("16"));

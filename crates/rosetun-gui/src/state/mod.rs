@@ -6,7 +6,9 @@ use rosetun_config::{
     AppConfig, DnsSettings, LanguageSetting, ListId, ListSource, NodeId, RuleId, RuleMatcher,
     RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId, XrayUse,
 };
-use rosetun_core::{AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, SettingChange};
+use rosetun_core::{
+    AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, SettingChange,
+};
 use rosetun_ipc::{ClientError, ConnectRequest};
 
 use crate::display;
