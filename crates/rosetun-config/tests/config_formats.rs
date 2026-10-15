@@ -3,8 +3,8 @@ mod support;
 use rosetun_config::{
     AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId, ExitTarget,
     FormatError, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId, Outbound,
-    Rule, RuleId, RuleMatcher, RuleTarget, StreamSettings, TlsMode, TlsParams, Transport,
-    from_json,
+    Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings, SubscriptionId, TlsMode,
+    TlsParams, Transport, from_json,
 };
 use serde_json::{Value, json};
 
@@ -85,6 +85,32 @@ fn current_config() -> AppConfig {
     config
 }
 
+fn format_five_config() -> AppConfig {
+    let mut config = current_config();
+    let country = CountryCode::parse("CN").unwrap();
+    config.exits = vec![
+        Exit {
+            id: ExitId::new("node-exit"),
+            name: "Example node exit".to_owned(),
+            target: ExitTarget::Node {
+                selection: Selection {
+                    subscription: SubscriptionId::new("subscription-one"),
+                    node: NodeId::new("vless-reality"),
+                },
+                fallback: Some(country.clone()),
+            },
+        },
+        Exit {
+            id: ExitId::new("country-exit"),
+            name: "Example country exit".to_owned(),
+            target: ExitTarget::Country(country),
+        },
+    ];
+    config.rule_sets[0].rules[0].target = RuleTarget::Exit;
+    config.rule_sets[0].rules[0].exit = Some(ExitId::new("node-exit"));
+    config
+}
+
 fn expected_migrated_legacy_config() -> AppConfig {
     let mut config = support::legacy_config();
     config.version = CONFIG_VERSION;
@@ -123,11 +149,36 @@ fn released_configurations_migrate_to_the_expected_configuration() {
 
 #[test]
 fn current_configuration_fixture_guards_the_serialized_format() {
-    let expected = current_config();
+    let expected = format_five_config();
     let (loaded, migrated_from) = from_json(V5).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
+    assert_eq!(loaded.exits.len(), 2);
+    assert!(matches!(
+        &loaded.exits[0].target,
+        ExitTarget::Node { selection, fallback }
+            if selection.subscription == SubscriptionId::new("subscription-one")
+                && selection.node == NodeId::new("vless-reality")
+                && fallback.as_ref() == CountryCode::parse("CN").as_ref()
+    ));
+    assert_eq!(
+        loaded.exits[1].target,
+        ExitTarget::Country(CountryCode::parse("CN").unwrap())
+    );
+    assert_eq!(loaded.rule_sets[0].rules[0].target, RuleTarget::Exit);
+    assert_eq!(
+        loaded.rule_sets[0].rules[0].exit,
+        Some(loaded.exits[0].id.clone())
+    );
+    let encoded = serde_json::to_vec(&loaded).expect("serialize current fixture");
+    let (round_trip, migrated_from) = from_json(&encoded).expect("current fixture round trip");
+    assert_eq!(migrated_from, None);
+    assert_eq!(round_trip.exits, loaded.exits);
+    assert_eq!(
+        round_trip.rule_sets[0].rules[0],
+        loaded.rule_sets[0].rules[0]
+    );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
         value(V5),
@@ -141,7 +192,6 @@ fn version_four_adds_empty_exits() {
     assert_eq!(migrated_from, Some(4));
     assert_eq!(config, current_config());
     assert!(config.exits.is_empty());
-    assert_eq!(value(V5)["exits"], json!([]));
 }
 
 #[test]

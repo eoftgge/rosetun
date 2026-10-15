@@ -214,7 +214,28 @@
       ]
     }
   ],
-  "exits": [],
+  "exits": [
+    {
+      "id": "node-exit",
+      "name": "Example node exit",
+      "target": {
+        "node": {
+          "selection": {
+            "subscription": "subscription-one",
+            "node": "vless-reality"
+          },
+          "fallback": "CN"
+        }
+      }
+    },
+    {
+      "id": "country-exit",
+      "name": "Example country exit",
+      "target": {
+        "country": "CN"
+      }
+    }
+  ],
   "rule_sets": [
     {
       "id": "routing",
@@ -228,7 +249,8 @@
               "exact": "exact.example.com"
             }
           },
-          "target": "direct"
+          "target": "exit",
+          "exit": "node-exit"
         },
         {
           "id": "domain-suffix",
