@@ -355,7 +355,8 @@ function Get-RosetunTestNodeConnections {
     # How many proxied connections a host test node has logged so far.
     param([switch]$ExitNode)
 
-    $log = Join-Path $PSScriptRoot $(if ($ExitNode) { 'logs	est-node-exit.log' } else { 'logs	est-node.log' })
+    $name = if ($ExitNode) { 'test-node-exit.log' } else { 'test-node.log' }
+    $log = Join-Path (Join-Path $PSScriptRoot 'logs') $name
     if (-not (Test-Path $log)) {
         return 0
     }
