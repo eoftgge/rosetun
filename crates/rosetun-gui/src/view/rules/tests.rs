@@ -687,7 +687,7 @@ fn exit_rules_read_through_their_exit_in_their_own_colour() {
     };
     assert_eq!(
         rule_label(&rule, std::slice::from_ref(&exit)),
-        "Through Example exit"
+        "Through VPN · Example exit"
     );
     assert_eq!(rule_label(&rule, &[]), "Through an exit");
     let destination = RuleDestination::of(&rule);
