@@ -1330,8 +1330,11 @@ fn destination_item(
     enabled: bool,
     selected: bool,
 ) -> bool {
+    // `menu_item` takes the width its ui already spans, and a scope starts empty.
+    let width = ui.min_rect().width().max(ui.available_width());
     let item = ui
         .scope(|ui| {
+            ui.set_min_width(width);
             ui.spacing_mut().button_padding.x = 26.0;
             ui.visuals_mut().override_text_color = Some(color);
             widgets::menu_item(
