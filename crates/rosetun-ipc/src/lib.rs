@@ -10,8 +10,7 @@ pub use client::{ClientError, HelperClient};
 pub use codec::{CodecError, MAX_FRAME_BYTES, read_frame, write_frame};
 pub use protocol::{
     ConnectRequest, ConnectRequestError, ErrorCode, Event, ExitContext, ExitDelay, ExitOutcome,
-    ExtraNode, Frame,
-    HelperError, ListFormat, ListRef, MAX_EXTRA_NODES, MAX_LIST_CHUNK_BYTES,
+    ExtraNode, Frame, HelperError, ListFormat, ListRef, MAX_EXTRA_NODES, MAX_LIST_CHUNK_BYTES,
     MAX_LIST_PAYLOAD_BYTES, MAX_PROBE_NODES, MAX_TEMPORARY_RULES, PROTOCOL_VERSION, ProbeOutcome,
     ProbeRequest, ProbeResult, Request, Response, SessionExit, TunnelDelays,
 };

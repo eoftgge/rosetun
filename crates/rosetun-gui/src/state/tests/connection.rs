@@ -224,9 +224,9 @@ fn tunnel_delay_starts_after_three_seconds_once_per_session() {
     ));
     assert_eq!(state.tunnel_delay, TunnelDelay::Measuring);
     assert!(state.take_tunnel_delay(1_004).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(Ok(main_delay(ProbeOutcome::Works {
-        millis: 85,
-    }))));
+    state.reduce(WorkerEvent::TunnelDelay(Ok(main_delay(
+        ProbeOutcome::Works { millis: 85 },
+    ))));
     assert_eq!(
         state.tunnel_delay,
         TunnelDelay::Done(main_delay(ProbeOutcome::Works { millis: 85 }))
@@ -305,7 +305,10 @@ fn tunnel_delay_manual_refresh_and_stale_completion() {
     state.reduce(WorkerEvent::TunnelDelay(Err(HelperCommandError::Client(
         ClientError::Closed,
     ))));
-    assert_eq!(state.tunnel_delay, TunnelDelay::Done(main_delay(ProbeOutcome::Fails)));
+    assert_eq!(
+        state.tunnel_delay,
+        TunnelDelay::Done(main_delay(ProbeOutcome::Fails))
+    );
     assert!(matches!(
         state.act(Action::MeasureDelay),
         Some(Job::TunnelDelay)
@@ -313,9 +316,9 @@ fn tunnel_delay_manual_refresh_and_stale_completion() {
     state.reduce(WorkerEvent::Status(Status::default()));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
     assert!(state.act(Action::MeasureDelay).is_none());
-    state.reduce(WorkerEvent::TunnelDelay(Ok(main_delay(ProbeOutcome::Works {
-        millis: 25,
-    }))));
+    state.reduce(WorkerEvent::TunnelDelay(Ok(main_delay(
+        ProbeOutcome::Works { millis: 25 },
+    ))));
     assert_eq!(state.tunnel_delay, TunnelDelay::Idle);
 }
 

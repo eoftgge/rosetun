@@ -28,8 +28,8 @@ use rosetun_core::{
     set_verbose_log, update_all, update_all_lists, update_list, update_rule, update_subscription,
 };
 use rosetun_ipc::{
-    ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES,
-    ProbeRequest, ProbeResult, TunnelDelays,
+    ClientError, ConnectRequest, ConnectRequestError, HelperClient, MAX_PROBE_NODES, ProbeRequest,
+    ProbeResult, TunnelDelays,
 };
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 

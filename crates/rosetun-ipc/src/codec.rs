@@ -46,8 +46,9 @@ mod tests {
     use std::io::BufReader;
 
     use rosetun_config::{
-        ConnectionState, DomainMatch, ExitId, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
-        RuleSetId, RuleTarget, Selection, Settings, StreamSettings, SubscriptionId, TrojanParams,
+        ConnectionState, DomainMatch, ExitId, Node, NodeId, Outbound, Rule, RuleId, RuleMatcher,
+        RuleSet, RuleSetId, RuleTarget, Selection, Settings, StreamSettings, SubscriptionId,
+        TrojanParams,
     };
 
     use super::*;

@@ -53,10 +53,9 @@ fn exit_row(ui: &mut egui::Ui, state: &State, row: &SessionExitRow<'_>) {
 /// The delay column of a row and its colour.
 fn exit_status(outcome: Option<ExitOutcome>) -> (String, Color32) {
     match outcome {
-        Some(ExitOutcome::Probed(ProbeOutcome::Works { millis })) => (
-            tr!("ping-ms", ms = millis.max(1).to_string()),
-            theme::TEXT,
-        ),
+        Some(ExitOutcome::Probed(ProbeOutcome::Works { millis })) => {
+            (tr!("ping-ms", ms = millis.max(1).to_string()), theme::TEXT)
+        }
         Some(ExitOutcome::Probed(_)) => (tr!("connection-exit-no-answer"), theme::WARNING),
         Some(ExitOutcome::NoAddress) => (tr!("connection-exit-no-address"), theme::WARNING),
         None => (tr!("ping-pending").to_owned(), theme::TEXT_DIM),
@@ -184,7 +183,11 @@ mod tests {
         assert!(texts.is_empty());
         let (shown, texts, _) = render(&state(true, None), 960.0);
         assert!(shown);
-        assert!(texts.iter().any(|(text, _)| text == &tr!("connection-exits")));
+        assert!(
+            texts
+                .iter()
+                .any(|(text, _)| text == &tr!("connection-exits"))
+        );
         assert!(
             texts
                 .iter()

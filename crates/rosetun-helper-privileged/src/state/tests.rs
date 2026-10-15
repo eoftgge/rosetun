@@ -4824,7 +4824,8 @@ impl EngineBackend for ProbeEngine {
         assert!(!self.panic_url, "test URL worker panicked");
         let tag = match target {
             rosetun_engine::UrlTestTarget::Session => "proxy",
-            rosetun_engine::UrlTestTarget::SessionExit(tag) | rosetun_engine::UrlTestTarget::Probe(tag) => tag,
+            rosetun_engine::UrlTestTarget::SessionExit(tag)
+            | rosetun_engine::UrlTestTarget::Probe(tag) => tag,
         };
         let blocked = (tag == "probe-0")
             .then(|| self.blocked.lock().unwrap().take())

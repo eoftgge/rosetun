@@ -403,9 +403,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             tr!("ping-ms", ms = millis.max(1).to_string()),
                                             theme::TEXT,
                                         ),
-                                        Some(_) => {
-                                            (tr!("ping-no-answer").to_owned(), theme::ERROR)
-                                        }
+                                        Some(_) => (tr!("ping-no-answer").to_owned(), theme::ERROR),
                                         None => (tr!("ping-pending").to_owned(), theme::TEXT_DIM),
                                     };
                                     let enabled =

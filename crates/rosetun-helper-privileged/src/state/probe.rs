@@ -534,8 +534,10 @@ impl Helper {
                     .exits
                     .iter()
                     .filter(|delay| {
-                        matches!(delay.outcome, ExitOutcome::Probed(ProbeOutcome::Works { .. }))
-                            == works
+                        matches!(
+                            delay.outcome,
+                            ExitOutcome::Probed(ProbeOutcome::Works { .. })
+                        ) == works
                     })
                     .count()
             };

@@ -409,7 +409,10 @@ impl Helper {
             .unwrap_or_default())
     }
 
-    pub(crate) fn session_exits_as(&self, caller: &Caller) -> Result<Vec<SessionExit>, HelperError> {
+    pub(crate) fn session_exits_as(
+        &self,
+        caller: &Caller,
+    ) -> Result<Vec<SessionExit>, HelperError> {
         self.check_owner(caller)?;
         let session = self.session()?;
         self.check_owner(caller)?;
