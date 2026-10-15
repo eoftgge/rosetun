@@ -127,6 +127,12 @@ enum StartMode {
     ProtectedReconnect,
 }
 
+struct StartOptions {
+    mode: StartMode,
+    endpoint: Option<IpAddr>,
+    dns_timeout: Duration,
+}
+
 #[derive(Debug, Clone)]
 struct SuccessfulEndpoint {
     server: String,
@@ -468,7 +474,10 @@ impl Helper {
             if session.missing_route_ticks >= 2
                 && let Some(duration) = loss_duration
             {
-                tracing::info!(elapsed_ms = duration.as_millis() as u64, "physical network returned");
+                tracing::info!(
+                    elapsed_ms = duration.as_millis() as u64,
+                    "physical network returned"
+                );
             }
             session.missing_route_since = None;
             session.missing_route_ticks = 0;
@@ -529,12 +538,16 @@ impl Helper {
                 status.connect_stage = None;
                 status.stage_since_unix = None;
             });
-            let expired = session.missing_route_since.is_some_and(|since| {
-                now.saturating_duration_since(since) >= NETWORK_GRACE
-            });
+            let expired = session
+                .missing_route_since
+                .is_some_and(|since| now.saturating_duration_since(since) >= NETWORK_GRACE);
             let exited = session.process.is_some() && !session.live_engine_running();
             if (expired || exited) && session.process.is_some() {
-                tracing::info!(expired, exited, "stopping engine while waiting for physical network");
+                tracing::info!(
+                    expired,
+                    exited,
+                    "stopping engine while waiting for physical network"
+                );
                 if let Err(error) = session.stop_engine() {
                     tracing::error!(%error, "failed to stop engine after network loss");
                 }
@@ -552,9 +565,8 @@ impl Helper {
                 && session.live_engine_running()
             {
                 tracing::info!("checking live tunnel after physical network returned");
-                let remaining = NETWORK_GRACE.saturating_sub(
-                    loss_duration.expect("short network loss has a start time"),
-                );
+                let remaining = NETWORK_GRACE
+                    .saturating_sub(loss_duration.expect("short network loss has a start time"));
                 match session.check_live_tunnel(remaining.min(NETWORK_DNS_TIMEOUT)) {
                     Ok(()) => {
                         if let Err(error) = self.publish_terminal(|status| {
@@ -589,9 +601,19 @@ impl Helper {
                 status.reconnect_failure_kind == Some(rosetun_config::FailureKind::NoNetwork)
             });
             if had_no_network {
-                session.reconnect.as_mut().expect("pending reconnect").next_at = now;
+                session
+                    .reconnect
+                    .as_mut()
+                    .expect("pending reconnect")
+                    .next_at = now;
             }
-            if now < session.reconnect.as_ref().expect("pending reconnect").next_at {
+            if now
+                < session
+                    .reconnect
+                    .as_ref()
+                    .expect("pending reconnect")
+                    .next_at
+            {
                 return;
             }
         } else {
@@ -706,21 +728,28 @@ impl Helper {
         } else {
             StartMode::Fresh
         };
-        tracing::info!(cause = reconnect.cause, attempt, ?mode, "attempting tunnel reconnect");
+        tracing::info!(
+            cause = reconnect.cause,
+            attempt,
+            ?mode,
+            "attempting tunnel reconnect"
+        );
         let dns_timeout = if reconnect.cause == "network lost" {
             session.dns_timeout.min(NETWORK_DNS_TIMEOUT)
         } else {
             session.dns_timeout
         };
         match session
-            .start_with_dns_timeout(
+            .start_with_options(
                 &request.node,
                 &request.effective_rule_set(),
                 &request.lists,
                 &request.settings,
-                mode,
-                None,
-                dns_timeout,
+                StartOptions {
+                    mode,
+                    endpoint: None,
+                    dns_timeout,
+                },
             )
             .and_then(|()| {
                 self.publish_terminal(|status| {
@@ -1515,19 +1544,32 @@ impl Session {
         mode: StartMode,
         endpoint: Option<IpAddr>,
     ) -> Result<(), HelperError> {
-        self.start_with_dns_timeout(node, rules, lists, settings, mode, endpoint, self.dns_timeout)
+        self.start_with_options(
+            node,
+            rules,
+            lists,
+            settings,
+            StartOptions {
+                mode,
+                endpoint,
+                dns_timeout: self.dns_timeout,
+            },
+        )
     }
 
-    fn start_with_dns_timeout(
+    fn start_with_options(
         &mut self,
         node: &Node,
         rules: &RuleSet,
         lists: &[ListRef],
         settings: &Settings,
-        mode: StartMode,
-        endpoint: Option<IpAddr>,
-        dns_timeout: Duration,
+        options: StartOptions,
     ) -> Result<(), HelperError> {
+        let StartOptions {
+            mode,
+            endpoint,
+            dns_timeout,
+        } = options;
         // Dispose of the old process before borrowing the backend or spawning another.
         // A stop failure retains its handle and prevents a second engine from starting.
         self.stop_engine()?;
@@ -2049,15 +2091,18 @@ impl Session {
     }
 
     fn live_engine_running(&mut self) -> bool {
-        let engine_running = self.process.as_mut().is_some_and(|process| {
-            matches!(process.is_running(), Ok(true))
-        });
-        let xray_running = if self.request.as_ref().is_some_and(|request| {
-            uses_xray(&request.node, request.settings.xray)
-        }) {
-            self.xray_process.as_mut().is_some_and(|process| {
-                matches!(process.is_running(), Ok(true))
-            })
+        let engine_running = self
+            .process
+            .as_mut()
+            .is_some_and(|process| matches!(process.is_running(), Ok(true)));
+        let xray_running = if self
+            .request
+            .as_ref()
+            .is_some_and(|request| uses_xray(&request.node, request.settings.xray))
+        {
+            self.xray_process
+                .as_mut()
+                .is_some_and(|process| matches!(process.is_running(), Ok(true)))
         } else {
             true
         };
@@ -2084,7 +2129,8 @@ impl Session {
                     Some(process) => {
                         let running = process.is_running()?;
                         let failures = process.outbound_failures();
-                        counters.unreachable = counters.unreachable.saturating_add(failures.unreachable);
+                        counters.unreachable =
+                            counters.unreachable.saturating_add(failures.unreachable);
                         counters.rejected = counters.rejected.saturating_add(failures.rejected);
                         counters.closed = counters.closed.saturating_add(failures.closed);
                         running

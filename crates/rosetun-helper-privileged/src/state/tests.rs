@@ -2586,10 +2586,18 @@ fn supervisor_resets_missing_route_ticks_after_network_returns() {
     NETWORK_PRESENT.store(true, Ordering::Release);
 }
 
-fn assert_waiting_for_network(helper: &Helper, controls: &EngineControls, reverted: &AtomicUsize, expected_spawns: usize) {
+fn assert_waiting_for_network(
+    helper: &Helper,
+    controls: &EngineControls,
+    reverted: &AtomicUsize,
+    expected_spawns: usize,
+) {
     let status = helper.status();
     assert_eq!(status.state, ConnectionState::Reconnecting);
-    assert_eq!(status.reconnect_failure_kind, Some(rosetun_config::FailureKind::NoNetwork));
+    assert_eq!(
+        status.reconnect_failure_kind,
+        Some(rosetun_config::FailureKind::NoNetwork)
+    );
     assert_eq!(controls.spawns(), expected_spawns);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
@@ -2625,7 +2633,11 @@ fn network_loss_for_twenty_ticks_reuses_a_live_tunnel() {
     assert_eq!(helper.status().state, ConnectionState::Connected);
     assert_eq!(helper.status().reconnect_failure_kind, None);
     assert_eq!(helper.status().since_unix, since);
-    assert_eq!(controls.spawns(), 1, "the live tunnel must not be restarted");
+    assert_eq!(
+        controls.spawns(),
+        1,
+        "the live tunnel must not be restarted"
+    );
     assert_eq!(prepared.load(Ordering::Acquire), 0);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
@@ -2757,7 +2769,11 @@ fn failed_live_dns_check_restarts_inside_existing_protection() {
     helper.supervise(now + 3 * SUPERVISOR_TICK);
     assert_eq!(helper.status().state, ConnectionState::Reconnecting);
     assert_eq!(helper.status().reconnect_failure_kind, None);
-    assert_eq!(controls.spawns(), 2, "failed DNS must trigger an immediate restart");
+    assert_eq!(
+        controls.spawns(),
+        2,
+        "failed DNS must trigger an immediate restart"
+    );
     assert_eq!(prepared.load(Ordering::Acquire), 1);
     assert_eq!(reverted.load(Ordering::Acquire), 0);
 }
@@ -2789,7 +2805,10 @@ fn network_reconnect_does_not_wait_for_the_full_dns_timeout() {
     assert!(helper.session().unwrap().process.is_none());
     let started = Instant::now();
     helper.supervise(now + 32 * SUPERVISOR_TICK);
-    assert!(started.elapsed() < Duration::from_secs(8), "retry must not wait for the full 60-second DNS deadline");
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "retry must not wait for the full 60-second DNS deadline"
+    );
     assert_eq!(helper.status().state, ConnectionState::Reconnecting);
     assert_eq!(controls.spawns(), 2);
     assert_eq!(prepared.load(Ordering::Acquire), 1);
