@@ -102,6 +102,26 @@ function Test-RosetunWfpFilters {
     }
 }
 
+function Get-NetworkWaitNote {
+    param($Status)
+    if ($null -eq $Status) {
+        return 'last state: unavailable; reconnect_failure_kind: unavailable'
+    }
+    $stateName = if ($Status.state -is [string]) {
+        $Status.state
+    }
+    else {
+        $Status.state.PSObject.Properties.Name | Select-Object -First 1
+    }
+    $kind = if ($Status.PSObject.Properties.Name -contains 'reconnect_failure_kind') {
+        $Status.reconnect_failure_kind
+    }
+    else {
+        'none'
+    }
+    "last state: $stateName; reconnect_failure_kind: $kind"
+}
+
 function Invoke-SettingsCli {
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -491,11 +511,17 @@ $returnTimer = $null
 try {
     try {
         Set-GuestEgressAdapter -Index $networkAdapter.Index -Enabled $false
+        $script:lastNetworkStatus = $null
         $networkLost = Wait-RosetunCondition {
-            $status = Get-RosetunStatus -ProtocolVersion $protocolVersion
-            $status.state -eq 'reconnecting' -and $status.reconnect_failure_kind -eq 'no_network'
+            $script:lastNetworkStatus = Get-RosetunStatus -ProtocolVersion $protocolVersion
+            $script:lastNetworkStatus.state -eq 'reconnecting' -and
+                $script:lastNetworkStatus.PSObject.Properties.Name -contains 'reconnect_failure_kind' -and
+                $script:lastNetworkStatus.reconnect_failure_kind -eq 'no_network'
         } -TimeoutSeconds 10
-        Test-Step 'no network session' 'status reports no network while waiting' { $networkLost }
+        $networkLostNote = if ($networkLost) { '' } else { Get-NetworkWaitNote $script:lastNetworkStatus }
+        Test-Step 'no network session' 'status reports no network while waiting' -Note $networkLostNote {
+            $networkLost
+        }
         Test-Step 'no network session' 'WFP filters stay installed' { Test-RosetunWfpFilters }
     }
     finally {
@@ -506,8 +532,12 @@ try {
     Test-Step 'no network session' 'physical route returns' { $routeRestored }
     $connected = Wait-RosetunState 'Connected' -TimeoutSeconds 60
     $returnTimer.Stop()
+    $reconnectNote = "after $($returnTimer.Elapsed.TotalSeconds) s"
+    if (-not $connected) {
+        $reconnectNote += "; $(Get-NetworkWaitNote (Get-RosetunStatus -ProtocolVersion $protocolVersion))"
+    }
     Test-Step 'no network session' 'reconnected within 60 s of adapter enable' `
-        -Note "after $($returnTimer.Elapsed.TotalSeconds) s" {
+        -Note $reconnectNote {
         $routeRestored -and $connected -and $returnTimer.Elapsed.TotalSeconds -le 60
     }
     Test-Step 'no network session' 'direct egress stays blocked after recovery' {
@@ -1069,7 +1099,11 @@ $watch = Stop-RosetunEgressWatch
 $egressWatchActive = $false
 Test-Step 'network change' 'adapter gets its address from DHCP again' `
     -Note "after $($adapter.Seconds) s: $($adapter.Addresses)" { $adapter.Ok }
-Test-Step 'network change' 'tunnel carries traffic again within 15 s' -Note (Format-Egress $egress) {
+$networkChangeNote = Format-Egress $egress
+if (-not $egress.Ok -or $egress.Seconds -gt 15) {
+    $networkChangeNote += "; $(Get-NetworkWaitNote (Get-RosetunStatus -ProtocolVersion $protocolVersion))"
+}
+Test-Step 'network change' 'tunnel carries traffic again within 15 s' -Note $networkChangeNote {
     $egress.Ok -and $egress.Seconds -le 15
 }
 Test-Step 'network change' "no leak while the network changes ($($watch.Probes) probes)" {
