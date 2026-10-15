@@ -5,6 +5,7 @@ use rosetun_core::{CheckKind, CheckStatus, DnsPreset};
 use crate::brand;
 use crate::display;
 use crate::errors;
+use crate::icons::{self, Icon};
 use crate::state::{AboutFolder, Action, SessionPart, SettingsSection, State, now_unix};
 use crate::{constants, i18n, theme, widgets};
 
@@ -573,15 +574,22 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     CheckKind::OtherVpn => tr!("system-check-vpn"),
                 };
                 let (icon, color) = match result.status {
-                    CheckStatus::Ok => ("✓", theme::CONNECTED),
-                    CheckStatus::Warning => ("!", theme::WARNING),
-                    CheckStatus::Unavailable => ("?", theme::TEXT_DIM),
+                    CheckStatus::Ok => (Icon::Check, theme::CONNECTED),
+                    CheckStatus::Warning => (Icon::Warning, theme::WARNING),
+                    CheckStatus::Unavailable => (Icon::Unknown, theme::TEXT_DIM),
                 };
                 let detail = i18n::check_detail(result);
                 card.row_with_title(
                     |ui| {
                         ui.horizontal(|ui| {
-                            ui.colored_label(color, icon);
+                            let size = ui.text_style_height(&egui::TextStyle::Body);
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(size, size),
+                                egui::Sense::hover(),
+                            );
+                            if ui.is_rect_visible(rect) {
+                                icons::paint(ui.painter(), rect.center(), icon, color);
+                            }
                             ui.label(title);
                         });
                     },

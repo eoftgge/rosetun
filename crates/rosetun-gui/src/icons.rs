@@ -6,6 +6,7 @@ use crate::theme;
 pub(crate) enum Icon {
     Grip,
     Check,
+    Unknown,
     Chevron { open: bool },
     Refresh,
     Clock,
@@ -109,6 +110,9 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
                 ],
                 stroke,
             );
+        }
+        Icon::Unknown => {
+            painter.circle_stroke(center, 5.0, stroke);
         }
         Icon::Chevron { open } => {
             let points = if open {
