@@ -19,6 +19,7 @@ mod rules;
 mod session;
 mod settings;
 mod subscriptions;
+mod system_checks;
 mod traffic;
 mod updates;
 
@@ -33,6 +34,7 @@ use settings::SettingsState;
 pub(crate) use settings::{AboutFolder, SettingsSection};
 use subscriptions::SubscriptionsState;
 pub(crate) use subscriptions::{AddDialog, PingResult, UpdateOutcome, shared_auto_update_hours};
+use system_checks::SystemChecksState;
 pub(crate) use traffic::TrafficRange;
 use traffic::TrafficState;
 use updates::UpdatesState;
@@ -93,6 +95,7 @@ pub(crate) struct State {
     pub(crate) helper_error: Option<ClientError>,
     pub(crate) operation_error: Option<String>,
     pub(crate) failure_interference: Option<FailureInterference>,
+    pub(crate) system_checks: SystemChecksState,
     failure_interference_checked: bool,
     failure_interference_request: u64,
     pub(crate) cancel_in_flight: bool,
@@ -132,6 +135,7 @@ impl Default for State {
             helper_error: None,
             operation_error: None,
             failure_interference: None,
+            system_checks: SystemChecksState::default(),
             failure_interference_checked: false,
             failure_interference_request: 0,
             cancel_in_flight: false,
@@ -156,6 +160,8 @@ pub(crate) enum Action {
     #[cfg(windows)]
     WindowMinimized,
     OpenSettingsSection(SettingsSection),
+    CheckSystem,
+    ShowSystemChecks,
     OpenLanSettings,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
@@ -279,6 +285,10 @@ pub(crate) enum Action {
 
 pub(crate) enum Job {
     Connect,
+    CheckSystem {
+        request: u64,
+        own_alias: String,
+    },
     CheckFailureInterference {
         request: u64,
         own_alias: String,
@@ -378,6 +388,9 @@ impl State {
                 self.request_list_inspection();
             }
             WorkerEvent::ConfigError(error) => self.config_error = Some(error),
+            WorkerEvent::SystemChecks { request, results } => {
+                self.reduce_system_checks(request, results)
+            }
             event @ (WorkerEvent::HelperAvailable { .. }
             | WorkerEvent::HelperUnavailable(_)
             | WorkerEvent::Status(_)
@@ -445,6 +458,9 @@ impl State {
 
     pub(crate) fn act(&mut self, action: Action) -> Option<Job> {
         match action {
+            action @ (Action::CheckSystem | Action::ShowSystemChecks) => {
+                return self.act_system_checks(action);
+            }
             action @ (Action::ShowConnection
             | Action::Primary
             | Action::CancelConnection

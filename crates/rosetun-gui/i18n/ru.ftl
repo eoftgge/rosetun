@@ -267,6 +267,43 @@ service-label = Служба Rosetun:
 service-running = работает
 service-stopped = не запущена
 service-detail = Служба управляет туннелем с правами системы. Без неё подключиться нельзя.
+system-check-title = Проверка системы
+system-check-intro = Ищет частые причины сбоев VPN. Ничего не исправляет сама.
+system-check-run = Проверить
+system-check-running = Проверяю…
+system-check-never = Пока не проверяли
+system-check-last = Последняя проверка { $when }
+system-check-clock = Часы
+system-check-proxy = Системный прокси
+system-check-packet = Zapret и WinDivert
+system-check-vpn = Другие VPN-клиенты
+system-check-ok = В порядке
+system-check-unavailable = Не удалось проверить
+system-check-found = Найдено: { $issue }
+system-check-more = Подробнее
+system-check-separator = { " · " }
+system-check-with-advice = { $issue } · { $advice }
+system-check-clock-ahead = часы спешат на { $count ->
+    [one] { $n } минуту
+    [few] { $n } минуты
+    [many] { $n } минут
+   *[other] { $n } минут
+}
+system-check-clock-behind = часы отстают на { $count ->
+    [one] { $n } минуту
+    [few] { $n } минуты
+    [many] { $n } минут
+   *[other] { $n } минут
+}
+system-check-clock-advice = Из-за этого могут не работать TLS и REALITY. Включите синхронизацию времени в параметрах Windows.
+system-check-proxy-manual = системный прокси: { $address }
+system-check-proxy-auto = автоматический прокси: { $address }
+system-check-proxy-advice = Браузер пойдёт через этот прокси. При kill switch сайты могут не открыться. Выключите его в Параметры › Сеть и Интернет › Прокси.
+system-check-windivert = WinDivert
+system-check-packet-found = перехват пакетов: { $names }
+system-check-packet-advice = Эти программы перехватывают пакеты и могут мешать туннелю. Если сайты не открываются, закройте их на время проверки.
+system-check-vpn-found = другой VPN: { $names }
+system-check-vpn-advice = Два VPN спорят за маршруты. Выключите другой VPN и попробуйте снова.
 reset-settings = Сбросить настройки
 reset-settings-detail = Подписки и правила останутся, вернутся только параметры этого экрана.
 reset-settings-question = Сбросить настройки?

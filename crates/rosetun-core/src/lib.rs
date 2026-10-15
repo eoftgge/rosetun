@@ -6,11 +6,11 @@ mod lists;
 mod ping;
 mod rules;
 mod selection;
-mod system_checks;
 mod settings;
 pub(crate) mod store;
 mod subscription_url;
 mod subscriptions;
+mod system_checks;
 mod text;
 mod update;
 mod updates;
@@ -43,7 +43,6 @@ pub use settings::{
     set_language, set_verbose_log, skip_version,
 };
 pub use store::{Store, StoreError};
-pub use system_checks::{CheckDetail, CheckKind, CheckResult, CheckStatus, check_system};
 pub use subscription_url::{
     SubscriptionUrlError, normalize as normalize_subscription_url,
     redacted as redacted_subscription_url,
@@ -56,6 +55,7 @@ pub use subscriptions::{
     prepare_subscription, remove_subscription, rename_subscription, update_all,
     update_subscription,
 };
+pub use system_checks::{CheckDetail, CheckKind, CheckResult, CheckStatus, check_system};
 pub use text::{
     expiry_text, fetch_error_message, node_address, node_protocol, node_tls, node_transport,
     provider_text, terminal_text, traffic_text, updated_text,

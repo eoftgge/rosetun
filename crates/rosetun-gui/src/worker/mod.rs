@@ -67,6 +67,10 @@ pub(crate) enum WorkerEvent {
         config: AppConfig,
     },
     ConfigError(ConfigWorkerError),
+    SystemChecks {
+        request: u64,
+        results: Vec<rosetun_core::CheckResult>,
+    },
     HelperAvailable {
         version: String,
     },
@@ -190,6 +194,7 @@ mod lists;
 mod rules;
 mod settings;
 mod subscriptions;
+mod system_checks;
 mod updates;
 
 impl WorkerDispatcher {

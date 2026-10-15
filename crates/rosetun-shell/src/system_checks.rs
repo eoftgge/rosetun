@@ -1,7 +1,9 @@
 use std::io;
 use std::mem::size_of;
 
-use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SERVICE_DOES_NOT_EXIST};
+use windows_sys::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SERVICE_DOES_NOT_EXIST,
+};
 use windows_sys::Win32::System::Registry::{
     HKEY_CURRENT_USER, RRF_NOEXPAND, RRF_RT_REG_DWORD, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
     RegGetValueW,
@@ -28,8 +30,13 @@ fn value(name: &str, flags: u32) -> io::Result<Option<Vec<u8>>> {
         // strings and the size output remain live through the synchronous ABI call.
         let status = unsafe {
             RegGetValueW(
-                HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), flags,
-                std::ptr::null_mut(), std::ptr::null_mut(), &mut size,
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                name.as_ptr(),
+                flags,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size,
             )
         };
         if status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND {
@@ -47,8 +54,13 @@ fn value(name: &str, flags: u32) -> io::Result<Option<Vec<u8>>> {
         // the registry API writes no more than the supplied length synchronously.
         let status = unsafe {
             RegGetValueW(
-                HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), flags,
-                std::ptr::null_mut(), bytes.as_mut_ptr().cast(), &mut returned,
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                name.as_ptr(),
+                flags,
+                std::ptr::null_mut(),
+                bytes.as_mut_ptr().cast(),
+                &mut returned,
             )
         };
         if status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND {
@@ -75,7 +87,10 @@ fn string_value(name: &str) -> io::Result<Option<String>> {
             if bytes.len() % 2 != 0 {
                 return Err(io::Error::other("invalid proxy setting text"));
             }
-            let text: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+            let text: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
             let text = text.strip_suffix(&[0]).unwrap_or(&text);
             String::from_utf16(text).map_err(|_| io::Error::other("invalid proxy setting text"))
         })
@@ -86,11 +101,17 @@ fn string_value(name: &str) -> io::Result<Option<String>> {
 pub fn proxy_settings() -> io::Result<(Option<u32>, Option<String>, Option<String>)> {
     let enabled = value("ProxyEnable", RRF_RT_REG_DWORD)?
         .map(|bytes| -> io::Result<u32> {
-            let bytes: [u8; 4] = bytes.try_into().map_err(|_| io::Error::other("invalid proxy flag"))?;
+            let bytes: [u8; 4] = bytes
+                .try_into()
+                .map_err(|_| io::Error::other("invalid proxy flag"))?;
             Ok(u32::from_le_bytes(bytes))
         })
         .transpose()?;
-    Ok((enabled, string_value("ProxyServer")?, string_value("AutoConfigURL")?))
+    Ok((
+        enabled,
+        string_value("ProxyServer")?,
+        string_value("AutoConfigURL")?,
+    ))
 }
 
 struct ServiceHandle(SC_HANDLE);
@@ -130,10 +151,14 @@ pub fn windivert_running() -> io::Result<bool> {
         // exactly the advertised ABI size and lives until the call returns.
         if unsafe {
             QueryServiceStatusEx(
-                service.0, SC_STATUS_PROCESS_INFO, (&raw mut status).cast(),
-                size_of::<SERVICE_STATUS_PROCESS>() as u32, &mut returned,
+                service.0,
+                SC_STATUS_PROCESS_INFO,
+                (&raw mut status).cast(),
+                size_of::<SERVICE_STATUS_PROCESS>() as u32,
+                &mut returned,
             )
-        } == 0 {
+        } == 0
+        {
             return Err(io::Error::last_os_error());
         }
         if (returned as usize) < size_of::<SERVICE_STATUS_PROCESS>() {

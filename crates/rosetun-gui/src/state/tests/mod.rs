@@ -191,5 +191,6 @@ mod session;
 mod settings;
 mod startup;
 mod subscriptions;
+mod system_checks;
 mod traffic;
 mod updates;

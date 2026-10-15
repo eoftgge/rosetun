@@ -230,12 +230,16 @@ impl State {
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;
                 self.reset_failure_interference();
+                self.reset_system_failure();
                 self.cancel_in_flight = false;
                 self.connect_in_flight = false;
                 self.cancelled_connect = true;
                 self.deferred_connect = None;
             }
             WorkerEvent::Status(status) => {
+                if status.state.is_transitional() && !self.status.state.is_transitional() {
+                    self.reset_system_failure();
+                }
                 if (status.state.is_transitional() && !self.status.state.is_transitional())
                     || (matches!(
                         status.state,
@@ -427,6 +431,7 @@ impl State {
                 self.connect_in_flight = matches!(job, Job::Connect);
                 if self.connect_in_flight {
                     self.reset_failure_interference();
+                    self.reset_system_failure();
                     self.cancelled_connect = false;
                     self.deferred_connect = None;
                 }

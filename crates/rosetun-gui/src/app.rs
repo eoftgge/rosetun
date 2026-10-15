@@ -220,6 +220,9 @@ impl App {
     fn dispatch(&self, job: Job) {
         match job {
             Job::Connect => self.workers.connect(),
+            Job::CheckSystem { request, own_alias } => {
+                self.workers.check_system(request, own_alias)
+            }
             Job::CheckFailureInterference { request, own_alias } => {
                 self.workers.check_failure_interference(request, own_alias)
             }
@@ -371,6 +374,9 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_failure_interference() {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_system_check() {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_tunnel_delay(display::now_unix()) {

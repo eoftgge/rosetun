@@ -258,6 +258,39 @@ service-label = Rosetun service:
 service-running = running
 service-stopped = not running
 service-detail = The service runs the tunnel with system rights. Without it you can't connect.
+system-check-title = System check
+system-check-intro = Finds common causes of VPN failures. Nothing is changed automatically.
+system-check-run = Check
+system-check-running = Checking…
+system-check-never = Not checked yet
+system-check-last = Last checked { $when }
+system-check-clock = Clock
+system-check-proxy = System proxy
+system-check-packet = Zapret and WinDivert
+system-check-vpn = Other VPN clients
+system-check-ok = All good
+system-check-unavailable = Could not check
+system-check-found = Found: { $issue }
+system-check-more = Details
+system-check-separator = { " · " }
+system-check-with-advice = { $issue } · { $advice }
+system-check-clock-ahead = the clock is { $count ->
+    [one] { $n } minute
+   *[other] { $n } minutes
+} ahead
+system-check-clock-behind = the clock is { $count ->
+    [one] { $n } minute
+   *[other] { $n } minutes
+} behind
+system-check-clock-advice = TLS and REALITY may fail. Enable time synchronization in Windows settings.
+system-check-proxy-manual = system proxy: { $address }
+system-check-proxy-auto = automatic proxy: { $address }
+system-check-proxy-advice = Your browser uses this proxy. With the kill switch, sites may not open. Turn it off in Windows Settings › Network & internet › Proxy.
+system-check-windivert = WinDivert
+system-check-packet-found = packet interception: { $names }
+system-check-packet-advice = These programs intercept packets and may disrupt the tunnel. If sites do not open, close them while testing.
+system-check-vpn-found = another VPN: { $names }
+system-check-vpn-advice = Two VPNs compete for routes. Turn off the other VPN and try again.
 reset-settings = Reset settings
 reset-settings-detail = Subscriptions and rules stay; only the options on this screen go back to defaults.
 reset-settings-question = Reset settings?

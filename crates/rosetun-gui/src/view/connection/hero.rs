@@ -227,6 +227,20 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         .wrap(),
                                     );
                                 }
+                                if let Some(warning) = &state.system_checks.failure_warning {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.colored_label(
+                                            theme::WARNING,
+                                            tr!(
+                                                "system-check-found",
+                                                issue = i18n::check_issue(warning)
+                                            ),
+                                        );
+                                        if ui.link(tr!("system-check-more")).clicked() {
+                                            actions.push(Action::ShowSystemChecks);
+                                        }
+                                    });
+                                }
                             }
                             if protection_action(status, state.operations.helper)
                                 == ProtectionAction::ConfirmDisconnect

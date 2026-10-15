@@ -14,10 +14,10 @@ mod instance;
 mod language;
 #[cfg(windows)]
 #[allow(unsafe_code)]
-mod window;
+mod system_checks;
 #[cfg(windows)]
 #[allow(unsafe_code)]
-mod system_checks;
+mod window;
 
 #[cfg(windows)]
 pub use autostart::{autostart_enabled, disable_autostart, enable_autostart};

@@ -1,6 +1,6 @@
 use eframe::egui::{self, RichText};
 use rosetun_config::{ConnectionState, LanguageSetting, TlsMode, XrayUse};
-use rosetun_core::DnsPreset;
+use rosetun_core::{CheckKind, CheckStatus, DnsPreset};
 
 use crate::brand;
 use crate::display;
@@ -537,6 +537,61 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             Some(&detail),
             |_| {},
         );
+    });
+    ui.add_space(16.0);
+    widgets::settings_card(ui, |card| {
+        let checked = state.system_checks.checked_at.map_or_else(
+            || tr!("system-check-never"),
+            |at| {
+                tr!(
+                    "system-check-last",
+                    when = i18n::updated_ago(at, now_unix())
+                )
+            },
+        );
+        card.row(tr!("system-check-title"), Some(&checked), |ui| {
+            if widgets::outline_button(
+                ui,
+                if state.system_checks.checking {
+                    tr!("system-check-running")
+                } else {
+                    tr!("system-check-run")
+                },
+                !state.system_checks.checking,
+            )
+            .clicked()
+            {
+                actions.push(Action::CheckSystem);
+            }
+        });
+        if let Some(results) = &state.system_checks.results {
+            for result in results {
+                let title = match result.kind {
+                    CheckKind::Clock => tr!("system-check-clock"),
+                    CheckKind::Proxy => tr!("system-check-proxy"),
+                    CheckKind::PacketInterceptor => tr!("system-check-packet"),
+                    CheckKind::OtherVpn => tr!("system-check-vpn"),
+                };
+                let (icon, color) = match result.status {
+                    CheckStatus::Ok => ("✓", theme::CONNECTED),
+                    CheckStatus::Warning => ("!", theme::WARNING),
+                    CheckStatus::Unavailable => ("?", theme::TEXT_DIM),
+                };
+                let detail = i18n::check_detail(result);
+                card.row_with_title(
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(color, icon);
+                            ui.label(title);
+                        });
+                    },
+                    Some(&detail),
+                    |_| {},
+                );
+            }
+        } else {
+            card.row(tr!("system-check-intro"), None, |_| {});
+        }
     });
     ui.add_space(16.0);
     widgets::settings_card(ui, |card| {
