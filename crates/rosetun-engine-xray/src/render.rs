@@ -323,7 +323,10 @@ mod tests {
         assert_eq!(value["inbounds"][1]["tag"], "exit-1-in");
         assert_eq!(value["inbounds"][1]["port"], extra.address().port());
         assert_eq!(value["outbounds"][1]["tag"], "exit-1");
-        assert_eq!(value["outbounds"][1]["settings"]["address"], "198.51.100.20");
+        assert_eq!(
+            value["outbounds"][1]["settings"]["address"],
+            "198.51.100.20"
+        );
         assert_eq!(
             value["routing"]["rules"][1],
             json!({ "type": "field", "inboundTag": ["exit-1-in"], "outboundTag": "exit-1" })

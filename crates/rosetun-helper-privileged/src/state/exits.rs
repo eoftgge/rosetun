@@ -104,12 +104,18 @@ impl std::fmt::Debug for ExtraNodes<'_> {
 }
 
 impl<'a> ExtraNodes<'a> {
-    pub(super) fn new(extra: &'a [ExtraNode], endpoints: &[Option<IpAddr>], rules: &RuleSet) -> Self {
+    pub(super) fn new(
+        extra: &'a [ExtraNode],
+        endpoints: &[Option<IpAddr>],
+        rules: &RuleSet,
+    ) -> Self {
         let mut nodes = Vec::with_capacity(extra.len());
         let mut unresolved = HashSet::new();
         for (index, extra) in extra.iter().enumerate() {
             match endpoints.get(index).copied().flatten() {
-                Some(address) => nodes.push((&extra.exit, node_with_endpoint(&extra.node, address))),
+                Some(address) => {
+                    nodes.push((&extra.exit, node_with_endpoint(&extra.node, address)))
+                }
                 None => {
                     unresolved.insert(&extra.exit);
                 }
@@ -122,7 +128,10 @@ impl<'a> ExtraNodes<'a> {
             let mut count = 0;
             for rule in &mut rules.rules {
                 if rule.target == RuleTarget::Exit
-                    && rule.exit.as_ref().is_some_and(|exit| unresolved.contains(exit))
+                    && rule
+                        .exit
+                        .as_ref()
+                        .is_some_and(|exit| unresolved.contains(exit))
                 {
                     rule.target = RuleTarget::Block;
                     rule.exit = None;
@@ -214,7 +223,10 @@ impl XraySocks {
     }
 
     pub(super) fn endpoints(&self) -> Vec<&SocksEndpoint> {
-        self.main.iter().chain(self.extra.iter().flatten()).collect()
+        self.main
+            .iter()
+            .chain(self.extra.iter().flatten())
+            .collect()
     }
 
     /// The Xray configuration: the main node as `proxy`, each extra node under

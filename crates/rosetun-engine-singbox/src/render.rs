@@ -5,8 +5,8 @@ use rosetun_config::{
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    ExtraOutbound, ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities,
-    SocksProxy, exit_tag,
+    ExtraOutbound, ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities, SocksProxy,
+    exit_tag,
 };
 use serde_json::{Map, Value, json};
 
@@ -692,7 +692,6 @@ mod tests {
         );
 
         let chained = render(&RenderRequest {
-
             extra: &[],
             socks: Some(SocksProxy {
                 address: "127.0.0.1:10801".parse().unwrap(),
@@ -741,11 +740,7 @@ mod tests {
         let media = shadowsocks_node("media", "198.51.100.30");
         let work_exit = ExitId::new("work-exit");
         let media_exit = ExitId::new("media-exit");
-        let mut rules = RuleSet::new(
-            RuleSetId::new("exit-rules"),
-            "Exits",
-            RuleTarget::Proxy,
-        );
+        let mut rules = RuleSet::new(RuleSetId::new("exit-rules"), "Exits", RuleTarget::Proxy);
         rules.rules = vec![
             exit_rule(
                 "work-suffix",
@@ -828,11 +823,7 @@ mod tests {
     #[test]
     fn exit_rule_without_extra_node_is_unsupported() {
         let node = shadowsocks_node("main", "203.0.113.10");
-        let mut rules = RuleSet::new(
-            RuleSetId::new("exit-rules"),
-            "Exits",
-            RuleTarget::Proxy,
-        );
+        let mut rules = RuleSet::new(RuleSetId::new("exit-rules"), "Exits", RuleTarget::Proxy);
         rules.rules = vec![exit_rule(
             "orphan",
             RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),

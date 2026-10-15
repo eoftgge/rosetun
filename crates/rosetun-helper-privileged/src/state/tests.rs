@@ -1,7 +1,6 @@
 use rosetun_config::{
     DomainMatch, EngineKind, ExitId, NodeId, Outbound, Rule, RuleId, RuleMatcher, RuleSet,
-    RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId, Traffic,
-    VlessParams,
+    RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId, Traffic, VlessParams,
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
@@ -5696,13 +5695,21 @@ fn last_exit_target(controls: &EngineControls) -> RuleTarget {
 }
 
 fn last_extra_servers(controls: &EngineControls) -> Vec<String> {
-    controls.rendered_extra.lock().unwrap().last().unwrap().clone()
+    controls
+        .rendered_extra
+        .lock()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone()
 }
 
 #[test]
 fn protected_reconnect_blocks_rules_of_an_extra_name_without_an_address() {
     let (helper, controls, _, reverted) = supervised_helper(true);
-    helper.connect(&exit_request("other", "198.51.100.20")).unwrap();
+    helper
+        .connect(&exit_request("other", "198.51.100.20"))
+        .unwrap();
     assert_eq!(last_exit_target(&controls), RuleTarget::Exit);
     assert_eq!(last_extra_servers(&controls), ["198.51.100.20"]);
     {
@@ -5731,7 +5738,9 @@ fn protected_reconnect_blocks_rules_of_an_extra_name_without_an_address() {
 #[test]
 fn protected_reconnect_uses_the_remembered_extra_address() {
     let (helper, controls, _, _) = supervised_helper(true);
-    helper.connect(&exit_request("other", "198.51.100.20")).unwrap();
+    helper
+        .connect(&exit_request("other", "198.51.100.20"))
+        .unwrap();
     {
         let mut session = helper.session().unwrap();
         assert_eq!(
@@ -5801,7 +5810,9 @@ fn xray_is_permitted_when_only_an_extra_node_needs_it() {
 #[test]
 fn xray_is_not_permitted_when_no_node_needs_it() {
     let (helper, _, runner, binaries, _, _) = xray_chain_helper();
-    helper.connect(&exit_request("other", "198.51.100.20")).unwrap();
+    helper
+        .connect(&exit_request("other", "198.51.100.20"))
+        .unwrap();
 
     assert_eq!(binaries.lock().unwrap()[0].len(), 1);
     assert_eq!(runner.starts.load(Ordering::Acquire), 0);

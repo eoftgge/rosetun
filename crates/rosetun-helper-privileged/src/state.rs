@@ -864,19 +864,17 @@ impl Helper {
         session.missing_route_ticks = 0;
         session.missing_route_since = None;
 
-        match session
-            .start(request, mode, None, None)
-            .and_then(|()| {
-                self.publish_terminal(|status| {
-                    status.state = ConnectionState::Connected;
-                    status.node = Some(request.node.id.clone());
-                    status.engine = Some(request.settings.engine);
-                    status.xray = uses_xray(&request.node, request.settings.xray);
-                    status.xray_use = Some(request.settings.xray);
-                    status.xray_stopped = false;
-                    status.since_unix = Some(now_unix());
-                })
-            }) {
+        match session.start(request, mode, None, None).and_then(|()| {
+            self.publish_terminal(|status| {
+                status.state = ConnectionState::Connected;
+                status.node = Some(request.node.id.clone());
+                status.engine = Some(request.settings.engine);
+                status.xray = uses_xray(&request.node, request.settings.xray);
+                status.xray_use = Some(request.settings.xray);
+                status.xray_stopped = false;
+                status.since_unix = Some(now_unix());
+            })
+        }) {
             Ok(()) => {
                 session.request = Some(request.clone());
                 self.resumed.store(false, Ordering::Release);
@@ -1791,10 +1789,13 @@ impl Session {
             check_cancelled(&self.cancelled)?;
             let spawned_at = Instant::now();
             self.xray_process = Some(
-                xray.spawn(&xray_binary, &xray_config, &socks.endpoints(), self.gate.deadline())
-                    .map_err(|error| {
-                        HelperError::new(ErrorCode::XrayStartFailed, error.to_string())
-                    })?,
+                xray.spawn(
+                    &xray_binary,
+                    &xray_config,
+                    &socks.endpoints(),
+                    self.gate.deadline(),
+                )
+                .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?,
             );
             wait_for_engine_ready_from(
                 self.xray_process

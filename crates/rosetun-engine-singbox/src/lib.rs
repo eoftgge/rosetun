@@ -1549,7 +1549,6 @@ mod tests {
         rule_set.default_target = RuleTarget::Block;
 
         let rendered = render::render(&RenderRequest {
-
             extra: &[],
             node: &node,
             socks: None,
