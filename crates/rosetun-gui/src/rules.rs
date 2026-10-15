@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use rosetun_config::{ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
+use rosetun_config::{
+    ExitId, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate,
+};
 use rosetun_processes::RunningProcess;
 
 use crate::i18n::{self, Language, tr_in};
@@ -96,11 +98,16 @@ pub(crate) struct RuleFilter {
     pub(crate) search: String,
     pub(crate) kind: TypeFilter,
     pub(crate) target: Option<RuleTarget>,
+    /// Narrows `RuleTarget::Exit` to one exit.
+    pub(crate) exit: Option<ExitId>,
 }
 
 impl RuleFilter {
     pub(crate) fn is_active(&self) -> bool {
-        !self.search.is_empty() || self.kind != TypeFilter::All || self.target.is_some()
+        !self.search.is_empty()
+            || self.kind != TypeFilter::All
+            || self.target.is_some()
+            || self.exit.is_some()
     }
 }
 
@@ -228,6 +235,10 @@ fn visible_rules_in<'a>(
         .filter(|(_, rule)| {
             (filter.kind == TypeFilter::All || kind(rule) == filter.kind)
                 && filter.target.is_none_or(|target| rule.target == target)
+                && filter
+                    .exit
+                    .as_ref()
+                    .is_none_or(|exit| rule.exit.as_ref() == Some(exit))
                 && (search.is_empty()
                     || rosetun_core::rule_value_text(&rule.matcher)
                         .to_lowercase()
@@ -492,6 +503,7 @@ mod tests {
             search: "SESSION".into(),
             kind: TypeFilter::Domains,
             target: Some(RuleTarget::Direct),
+            exit: None,
         };
         assert_eq!(
             visible_rules_slice(&rules, &filter)[0].1.id,
@@ -524,5 +536,32 @@ mod tests {
         filter.search = "NEWS".into();
         assert_eq!(indices(&set, &filter), vec![3]);
         assert_eq!(visible_rules(&set, &filter)[0].1.id.as_str(), "3");
+    }
+
+    #[test]
+    fn exit_filter_keeps_only_that_exits_rules() {
+        let rule = |id: &str, exit: Option<&str>| Rule {
+            id: RuleId::new(id),
+            enabled: true,
+            matcher: RuleMatcher::Domain(DomainMatch::Exact(format!("{id}.example.com"))),
+            target: if exit.is_some() {
+                RuleTarget::Exit
+            } else {
+                RuleTarget::Proxy
+            },
+            exit: exit.map(ExitId::new),
+        };
+        let rules = vec![rule("a", Some("1")), rule("b", Some("2")), rule("c", None)];
+        let filter = RuleFilter {
+            target: Some(RuleTarget::Exit),
+            exit: Some(ExitId::new("2")),
+            ..RuleFilter::default()
+        };
+        assert!(filter.is_active());
+        let visible: Vec<_> = visible_rules_slice(&rules, &filter)
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(visible, [1]);
     }
 }

@@ -13,6 +13,7 @@ pub(crate) enum RulesTab {
     #[default]
     Rules,
     Lists,
+    Exits,
 }
 
 pub(crate) struct AddListDialog {

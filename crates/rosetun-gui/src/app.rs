@@ -268,6 +268,9 @@ impl App {
                 self.workers.set_rule_target(set, rule, target)
             }
             Job::CreateExit(exit) => self.workers.create_exit(exit),
+            Job::SaveExit { id, name, target } => self.workers.save_exit(id, name, target),
+            Job::RenameExit(id, name) => self.workers.rename_exit(id, name),
+            Job::DeleteExit(id) => self.workers.delete_exit(id),
             Job::SetRuleEnabled(set, rule, enabled) => {
                 self.workers.set_rule_enabled(set, rule, enabled);
             }

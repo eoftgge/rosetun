@@ -631,6 +631,37 @@ where-exits-full = { $count } exits at most · remove one in the Exits tab
 target-exit = Through VPN · { $name }
 target-exit-any = Through an exit
 exit-node-missing = server is gone · rule blocks
+exits-title = Exits
+exits-subtitle = Where “Through VPN · …” rules lead: a country or a specific server.
+exits-empty = Exits appear when a rule picks a country or a server.
+new-exit-button = + New exit
+new-exit = New exit
+edit-exit = Edit exit
+rename-exit = Rename exit
+delete-exit = Delete exit?
+delete-exit-detail = Rules ({ $n }) will become “Block”.
+exit-name = Name
+exit-kind-country = Any server in a country
+exit-kind-node = Specific server
+exit-country = Country
+exit-country-pick = Choose a country
+exit-node = Server
+exit-now = Now { $node }
+exit-now-fallback = Fallback: any server in { $country }
+exit-now-gone = Server is gone from the subscription · rules block
+exit-now-no-nodes = No servers in { $country } · rules block
+exit-node-gone-pick = The server is gone from the subscription, pick another
+exit-node-taken = Already in exit “{ $name }”
+exit-fallback = If the server disappears, any server in { $country }
+exit-fallback-off = If the server disappears, any server from the same country
+exit-fallback-no-country = The server name has no country, so there is no fallback
+exit-country-hint = Servers in one country can reach the internet differently: they have different addresses and routes to sites. Rosetun picks the fastest server when connecting and keeps it until you disconnect. If a site ties your sign-in to an address, pick a specific server.
+exit-rules = { $count ->
+    [one] { $n } rule
+   *[other] { $n } rules
+}
+exit-rules-hint = Show these rules
+exit-no-rules = No rules
 temporary-dialog-hint = The rule is removed when you disconnect from the VPN.
 temporary-only = Only until disconnect
 rule-kind-app = App

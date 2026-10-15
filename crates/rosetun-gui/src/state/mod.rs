@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AppConfig, DnsSettings, LanguageSetting, ListId, ListSource, NodeId, RuleId, RuleMatcher,
-    RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId, XrayUse,
+    AppConfig, DnsSettings, ExitId, ExitTarget, LanguageSetting, ListId, ListSource, NodeId,
+    RuleId, RuleMatcher, RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{
     AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, SettingChange,
@@ -16,6 +16,7 @@ use crate::rules::TypeFilter;
 use crate::worker::{ConfigWorkerError, FailureInterference, WorkerEvent};
 
 mod connection;
+mod exits;
 mod lists;
 mod rules;
 mod session;
@@ -26,6 +27,8 @@ mod traffic;
 mod updates;
 
 pub(crate) use connection::{ExitLookup, ExitRoute, TunnelDelay, primary_label};
+use exits::ExitsState;
+pub(crate) use exits::{ExitDialog, ExitKind};
 use lists::ListsState;
 pub(crate) use lists::{AddListDialog, ListOutcome, RulesTab, source_file_name, used_by};
 use rules::RulesState;
@@ -107,6 +110,7 @@ pub(crate) struct State {
     pub(crate) screen: Screen,
     pub(crate) rules: RulesState,
     pub(crate) lists: ListsState,
+    pub(crate) exits: ExitsState,
     pub(crate) settings: SettingsState,
     pub(crate) operations: Operations,
     pub(crate) protection_confirmation: bool,
@@ -147,6 +151,7 @@ impl Default for State {
             screen: Screen::default(),
             rules: RulesState::default(),
             lists: ListsState::default(),
+            exits: ExitsState::default(),
             settings: SettingsState::default(),
             operations: Operations::default(),
             protection_confirmation: false,
@@ -211,9 +216,22 @@ pub(crate) enum Action {
     CancelRemoveList,
     ConfirmRemoveList,
     DismissListsError,
+    ShowExits,
+    ShowExitRules(ExitId),
+    OpenNewExit,
+    OpenEditExit(ExitId),
+    CancelExitDialog,
+    SubmitExitDialog,
+    OpenRenameExit(ExitId),
+    CancelRenameExit,
+    SubmitRenameExit,
+    RequestDeleteExit(ExitId),
+    CancelDeleteExit,
+    ConfirmDeleteExit,
     ChooseRuleSet(RuleSetId),
     SetRuleTypeFilter(TypeFilter),
     SetRuleTargetFilter(Option<RuleTarget>),
+    SetRuleExitFilter(ExitId),
     SelectRule {
         rule: RuleId,
         additive: bool,
@@ -337,6 +355,13 @@ pub(crate) enum Job {
     UpdateRule(RuleSetId, RuleId, RuleMatcher, RuleDestination),
     SetRuleTarget(RuleSetId, RuleId, RuleDestination),
     CreateExit(NewExit),
+    SaveExit {
+        id: Option<ExitId>,
+        name: String,
+        target: ExitTarget,
+    },
+    RenameExit(ExitId, String),
+    DeleteExit(ExitId),
     SetRuleEnabled(RuleSetId, RuleId, bool),
     MoveRule(RuleSetId, RuleId, usize),
     MoveRules(RuleSetId, Vec<RuleId>, usize),
@@ -396,6 +421,7 @@ impl State {
                 }
                 self.reconcile_subscriptions();
                 self.reconcile_lists();
+                self.reconcile_exits();
                 self.reconcile_selected_set();
                 self.request_list_inspection();
             }
@@ -436,6 +462,9 @@ impl State {
             | WorkerEvent::RemoveRules(_)) => self.reduce_rules(event),
             #[cfg(windows)]
             event @ WorkerEvent::BrowsedExecutable(_) => self.reduce_rules(event),
+            event @ (WorkerEvent::SaveExit(_)
+            | WorkerEvent::RenameExit(_)
+            | WorkerEvent::DeleteExit { .. }) => self.reduce_exits(event),
             event @ (WorkerEvent::SetInterfaceScale(_)
             | WorkerEvent::SetLanguage(_)
             | WorkerEvent::Setting(_, _)
@@ -537,11 +566,24 @@ impl State {
             | Action::CancelRemoveList
             | Action::ConfirmRemoveList
             | Action::DismissListsError) => return self.act_lists(action),
+            action @ (Action::ShowExits
+            | Action::ShowExitRules(_)
+            | Action::OpenNewExit
+            | Action::OpenEditExit(_)
+            | Action::CancelExitDialog
+            | Action::SubmitExitDialog
+            | Action::OpenRenameExit(_)
+            | Action::CancelRenameExit
+            | Action::SubmitRenameExit
+            | Action::RequestDeleteExit(_)
+            | Action::CancelDeleteExit
+            | Action::ConfirmDeleteExit) => return self.act_exits(action),
             action @ (Action::OpenRules
             | Action::OpenActiveRules
             | Action::ChooseRuleSet(_)
             | Action::SetRuleTypeFilter(_)
             | Action::SetRuleTargetFilter(_)
+            | Action::SetRuleExitFilter(_)
             | Action::SelectRule { .. }
             | Action::SelectVisibleRules
             | Action::ClearRuleSelection

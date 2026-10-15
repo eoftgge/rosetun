@@ -298,6 +298,17 @@ impl State {
         ExitInputs { delays, selected }
     }
 
+    /// Each exit's node as the next connect or apply would pick it.
+    pub(crate) fn resolved_exits(&self) -> Vec<(ExitId, Option<Selection>)> {
+        let inputs = self.exit_inputs();
+        rosetun_core::resolve_exits(
+            &self.config.exits,
+            &self.config.subscriptions,
+            &inputs.delays,
+            &inputs.selected,
+        )
+    }
+
     pub(super) fn refresh_cached_request(&mut self) {
         if self.session.cached_request.is_some()
             && (self.session.cached_temporary_rules != self.session.temporary_rules

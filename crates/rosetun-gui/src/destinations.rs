@@ -93,6 +93,49 @@ pub(crate) fn unresolved_exits(config: &AppConfig) -> BTreeSet<ExitId> {
         .collect()
 }
 
+/// What an exit leads to right now, as the Exits tab shows it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ExitNow<'a> {
+    Node(&'a str),
+    /// A node exit whose node is gone, served by any node of this country.
+    Fallback(&'a CountryCode),
+    NodeGone,
+    NoCountryNodes(&'a CountryCode),
+}
+
+/// `resolved` is the exit's node from `resolve_exits`.
+pub(crate) fn exit_now<'a>(
+    config: &'a AppConfig,
+    exit: &'a Exit,
+    resolved: Option<&Selection>,
+) -> ExitNow<'a> {
+    let node_name = |selection: &Selection| {
+        config
+            .subscriptions
+            .iter()
+            .find(|subscription| subscription.id == selection.subscription)
+            .and_then(|subscription| subscription.node(&selection.node))
+            .map(|node| node.name.as_str())
+    };
+    match (&exit.target, resolved) {
+        (ExitTarget::Node { selection, .. }, Some(node)) if node == selection => {
+            node_name(node).map_or(ExitNow::NodeGone, ExitNow::Node)
+        }
+        (
+            ExitTarget::Node {
+                fallback: Some(code),
+                ..
+            },
+            Some(_),
+        ) => ExitNow::Fallback(code),
+        (ExitTarget::Node { .. }, _) => ExitNow::NodeGone,
+        (ExitTarget::Country(code), Some(node)) => {
+            node_name(node).map_or(ExitNow::NoCountryNodes(code), ExitNow::Node)
+        }
+        (ExitTarget::Country(code), None) => ExitNow::NoCountryNodes(code),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::BTreeMap;
@@ -206,6 +249,46 @@ pub(crate) mod tests {
         assert_eq!(
             unresolved_exits(&config),
             BTreeSet::from([ExitId::new("2")])
+        );
+    }
+
+    #[test]
+    fn exit_now_names_the_node_the_fallback_or_the_gap() {
+        let selection = |node: &str| Selection {
+            subscription: SubscriptionId::new("sub"),
+            node: NodeId::new(node),
+        };
+        let config = config(&[("a", "🇳🇱 One"), ("b", "🇳🇱 Two")], Vec::new());
+        let node_exit = |node: &str, fallback: Option<CountryCode>| {
+            exit(
+                "1",
+                ExitTarget::Node {
+                    selection: selection(node),
+                    fallback,
+                },
+            )
+        };
+        let present = node_exit("a", Some(country("NL")));
+        assert_eq!(
+            exit_now(&config, &present, Some(&selection("a"))),
+            ExitNow::Node("🇳🇱 One")
+        );
+        let gone = node_exit("gone", Some(country("NL")));
+        assert_eq!(
+            exit_now(&config, &gone, Some(&selection("b"))),
+            ExitNow::Fallback(&country("NL"))
+        );
+        let gone = node_exit("gone", None);
+        assert_eq!(exit_now(&config, &gone, None), ExitNow::NodeGone);
+        let nl = exit("2", ExitTarget::Country(country("NL")));
+        assert_eq!(
+            exit_now(&config, &nl, Some(&selection("b"))),
+            ExitNow::Node("🇳🇱 Two")
+        );
+        let jp = exit("3", ExitTarget::Country(country("JP")));
+        assert_eq!(
+            exit_now(&config, &jp, None),
+            ExitNow::NoCountryNodes(&country("JP"))
         );
     }
 }

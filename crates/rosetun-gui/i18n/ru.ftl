@@ -644,6 +644,39 @@ where-exits-full = Не больше { $count } направлений · лиш
 target-exit = Через VPN · { $name }
 target-exit-any = Через направление
 exit-node-missing = узел пропал · правило блокирует
+exits-title = Направления
+exits-subtitle = Куда ведут правила «Через VPN · …»: страна или конкретный узел.
+exits-empty = Направления появляются, когда в правиле выбрана страна или узел.
+new-exit-button = + Новое направление
+new-exit = Новое направление
+edit-exit = Изменить направление
+rename-exit = Переименовать направление
+delete-exit = Удалить направление?
+delete-exit-detail = Правила ({ $n }) станут «Блокировать».
+exit-name = Название
+exit-kind-country = Любой узел страны
+exit-kind-node = Конкретный узел
+exit-country = Страна
+exit-country-pick = Выберите страну
+exit-node = Узел
+exit-now = Сейчас { $node }
+exit-now-fallback = Запасной: любой узел из { $country }
+exit-now-gone = Узел пропал из подписки · правила блокируют
+exit-now-no-nodes = Нет узлов из { $country } · правила блокируют
+exit-node-gone-pick = Узел пропал из подписки, выберите другой
+exit-node-taken = Уже в направлении «{ $name }»
+exit-fallback = Если узла не станет, любой узел из { $country }
+exit-fallback-off = Если узла не станет, любой узел той же страны
+exit-fallback-no-country = В имени узла нет страны, запасной узел выбрать нельзя
+exit-country-hint = Узлы одной страны могут выходить в интернет по-разному: у них разные адреса и маршруты до сайтов. Rosetun выберет самый быстрый узел при подключении и не будет менять его до отключения. Если сайт привязывает вход к адресу, выберите конкретный узел.
+exit-rules = { $count ->
+    [one] { $n } правило
+    [few] { $n } правила
+    [many] { $n } правил
+   *[other] { $n } правила
+}
+exit-rules-hint = Показать эти правила
+exit-no-rules = Нет правил
 temporary-dialog-hint = Правило удалится, когда вы отключитесь от VPN.
 temporary-only = Только до отключения
 rule-kind-app = Приложение

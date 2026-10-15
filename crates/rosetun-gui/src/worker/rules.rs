@@ -104,6 +104,25 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn save_exit(&self, id: Option<ExitId>, name: String, target: ExitTarget) {
+        self.spawn_complete("rosetun-save-exit", move |store| {
+            WorkerEvent::SaveExit(save_exit(store, id.as_ref(), &name, target))
+        });
+    }
+
+    pub(crate) fn rename_exit(&self, id: ExitId, name: String) {
+        self.spawn_complete("rosetun-rename-exit", move |store| {
+            WorkerEvent::RenameExit(rename_exit(store, &id, &name))
+        });
+    }
+
+    pub(crate) fn delete_exit(&self, id: ExitId) {
+        self.spawn_complete("rosetun-delete-exit", move |store| {
+            let result = delete_exit(store, &id);
+            WorkerEvent::DeleteExit { id, result }
+        });
+    }
+
     pub(crate) fn set_rule_enabled(&self, set: RuleSetId, rule: RuleId, enabled: bool) {
         self.spawn_complete("rosetun-set-rule-enabled", move |store| {
             WorkerEvent::SetRuleEnabled(set_rule_enabled(store, &set, &rule, enabled))
@@ -133,4 +152,37 @@ impl WorkerDispatcher {
             WorkerEvent::RemoveRules(remove_rules(store, &set, &rules))
         });
     }
+}
+
+fn save_exit(
+    store: &Store,
+    id: Option<&ExitId>,
+    name: &str,
+    target: ExitTarget,
+) -> Result<(), ExitError> {
+    let id = match id {
+        Some(id) => {
+            rename_exit(store, id, name)?;
+            id.clone()
+        }
+        None => {
+            let new = match &target {
+                ExitTarget::Country(code) => NewExit::Country {
+                    code: code.clone(),
+                    name: name.to_owned(),
+                },
+                ExitTarget::Node { selection, .. } => NewExit::Node {
+                    selection: selection.clone(),
+                    name: name.to_owned(),
+                },
+            };
+            let exit = create_exit(store, &new)?;
+            // A new node exit gets the node's country as its fallback; keep the user's choice.
+            if exit.target == target {
+                return Ok(());
+            }
+            exit.id
+        }
+    };
+    change_exit_target(store, &id, target)
 }

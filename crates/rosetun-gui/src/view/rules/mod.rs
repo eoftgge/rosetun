@@ -73,6 +73,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                 &[
                     (RulesTab::Rules, tr!("rules")),
                     (RulesTab::Lists, tr!("lists-title")),
+                    (RulesTab::Exits, tr!("exits-title")),
                 ],
                 false,
                 true,
@@ -80,6 +81,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
                 selected_tab = Some(match tab {
                     RulesTab::Rules => Action::ShowRuleSets,
                     RulesTab::Lists => Action::ShowLists,
+                    RulesTab::Exits => Action::ShowExits,
                 });
             }
         },
@@ -93,9 +95,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         actions.push(action);
     }
     ui.add_space(20.0);
-    if state.lists.tab == RulesTab::Lists {
-        super::lists::show(ui, state, actions);
-        return;
+    match state.lists.tab {
+        RulesTab::Rules => {}
+        RulesTab::Lists => return super::lists::show(ui, state, actions),
+        RulesTab::Exits => return super::exits::show(ui, state, actions),
     }
     let text_edit_focused = ui.ctx().text_edit_focused();
     let pending_apply = state.config_ready
@@ -152,6 +155,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     filter_controls(
         ui,
         &mut state.rules.screen.filter,
+        &state.config.exits,
         set,
         temporary,
         can_add,
@@ -241,6 +245,7 @@ fn apply_notice(ui: &mut egui::Ui, can_apply: bool) -> (egui::Response, Option<e
 fn filter_controls(
     ui: &mut egui::Ui,
     filter: &mut RuleFilter,
+    exits: &[Exit],
     set: &RuleSet,
     temporary: &[Rule],
     can_add: bool,
@@ -341,7 +346,7 @@ fn filter_controls(
             .clamp(MIN_SEARCH_WIDTH, SEARCH_WIDTH);
         ui.horizontal(|ui| primary(ui, search_width, filter, &mut rects, actions));
         ui.horizontal(|ui| {
-            rects.filter = target_filter(ui, filter, actions).rect;
+            rects.filter = target_filter(ui, filter, exits, actions).rect;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let response = widgets::button_fill(ui, add_label, can_add);
                 rects.add = response.rect;
@@ -351,7 +356,7 @@ fn filter_controls(
     } else {
         ui.horizontal(|ui| {
             primary(ui, SEARCH_WIDTH, filter, &mut rects, actions);
-            rects.filter = target_filter(ui, filter, actions).rect;
+            rects.filter = target_filter(ui, filter, exits, actions).rect;
             let response = widgets::button_fill(ui, add_label, can_add);
             rects.add = response.rect;
             add_rule = response.clicked();
@@ -366,9 +371,14 @@ fn filter_controls(
 fn target_filter(
     ui: &mut egui::Ui,
     filter: &RuleFilter,
+    exits: &[Exit],
     actions: &mut Vec<Action>,
 ) -> egui::Response {
     let mut selected = filter.target;
+    let mut selected_exit = filter.exit.clone();
+    let exit_label = |id: &rosetun_config::ExitId| {
+        destination_label(&RuleDestination::Exit(id.clone()), exits)
+    };
     let response = ui
         .scope(|ui| {
             ui.spacing_mut().button_padding.y = 6.0;
@@ -380,8 +390,15 @@ fn target_filter(
             visuals.inactive.bg_stroke = border;
             visuals.hovered.bg_stroke = border;
             visuals.open.bg_stroke = border;
-            let selected_text = selected
-                .map(|target| RichText::new(target_label(target)).color(target_color(target)))
+            let selected_label = match (&selected_exit, selected) {
+                (Some(id), _) => Some(exit_label(id)),
+                (None, Some(target)) => Some(target_label(target)),
+                (None, None) => None,
+            };
+            let selected_text = selected_label
+                .clone()
+                .zip(selected)
+                .map(|(label, target)| RichText::new(label).color(target_color(target)))
                 .unwrap_or_else(|| RichText::new(tr!("any-action")));
             ui.allocate_ui(egui::vec2(TARGET_FILTER_WIDTH, 38.0), |ui| {
                 ui.set_width(TARGET_FILTER_WIDTH);
@@ -390,28 +407,48 @@ fn target_filter(
                     .truncate()
                     .selected_text(selected_text)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut selected, None, tr!("any-action"));
+                        if ui
+                            .selectable_label(selected.is_none(), tr!("any-action"))
+                            .clicked()
+                        {
+                            selected = None;
+                            selected_exit = None;
+                        }
                         for target in [
                             RuleTarget::Proxy,
                             RuleTarget::Direct,
                             RuleTarget::Block,
                             RuleTarget::Exit,
                         ] {
-                            ui.selectable_value(
-                                &mut selected,
-                                Some(target),
-                                RichText::new(target_label(target)).color(target_color(target)),
-                            );
+                            let picked = selected == Some(target) && selected_exit.is_none();
+                            let label =
+                                RichText::new(target_label(target)).color(target_color(target));
+                            if ui.selectable_label(picked, label).clicked() {
+                                selected = Some(target);
+                                selected_exit = None;
+                            }
+                        }
+                        for exit in exits {
+                            let picked = selected_exit.as_ref() == Some(&exit.id);
+                            let label = RichText::new(exit_label(&exit.id))
+                                .color(target_color(RuleTarget::Exit));
+                            if ui.selectable_label(picked, label).clicked() {
+                                selected = Some(RuleTarget::Exit);
+                                selected_exit = Some(exit.id.clone());
+                            }
                         }
                     })
                     .response
-                    .on_hover_text(selected.map_or_else(|| tr!("any-action"), target_label))
+                    .on_hover_text(selected_label.unwrap_or_else(|| tr!("any-action")))
             })
             .inner
         })
         .inner;
-    if selected != filter.target {
-        actions.push(Action::SetRuleTargetFilter(selected));
+    if selected_exit != filter.exit || selected != filter.target {
+        actions.push(match selected_exit {
+            Some(exit) => Action::SetRuleExitFilter(exit),
+            None => Action::SetRuleTargetFilter(selected),
+        });
     }
     response
 }

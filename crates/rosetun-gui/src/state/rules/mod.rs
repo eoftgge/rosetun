@@ -341,8 +341,18 @@ impl State {
                 }
             }
             Action::SetRuleTargetFilter(target) => {
-                if self.rules.screen.filter.target != target {
-                    self.rules.screen.filter.target = target;
+                let filter = &mut self.rules.screen.filter;
+                if filter.target != target || filter.exit.is_some() {
+                    filter.target = target;
+                    filter.exit = None;
+                    self.rules.screen.clear_selection();
+                }
+            }
+            Action::SetRuleExitFilter(exit) => {
+                let filter = &mut self.rules.screen.filter;
+                if filter.exit.as_ref() != Some(&exit) {
+                    filter.target = Some(RuleTarget::Exit);
+                    filter.exit = Some(exit);
                     self.rules.screen.clear_selection();
                 }
             }

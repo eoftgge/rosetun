@@ -1,6 +1,7 @@
 pub(crate) mod add_rule;
 pub(crate) mod add_subscription;
 pub(crate) mod connection;
+pub(crate) mod exits;
 pub(crate) mod header;
 pub(crate) mod lists;
 pub(crate) mod rose_button;
@@ -139,6 +140,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     if state.screen == Screen::Rules {
         rules::name_dialog(ctx, state, &mut actions);
         rules::delete_dialog(ctx, state, &mut actions);
+        exits::exit_dialog(ctx, state, &mut actions);
+        exits::rename_dialog(ctx, state, &mut actions);
+        exits::delete_dialog(ctx, state, &mut actions);
         let can_temporary = state.can_change_temporary();
         let existing_list_rules = state.selected_list_rule_count();
         if let Some(dialog) = &mut state.rules.screen.add {

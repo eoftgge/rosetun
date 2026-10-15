@@ -44,6 +44,7 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
                         rects = Some(filter_controls(
                             ui,
                             &mut filter,
+                            &[],
                             &set,
                             &[],
                             true,
@@ -510,7 +511,7 @@ fn action_filter_button_matches_the_search_field_height() {
     theme::apply(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let response = target_filter(ui, &RuleFilter::default(), &mut Vec::new());
+            let response = target_filter(ui, &RuleFilter::default(), &[], &mut Vec::new());
             assert!(
                 (response.rect.height() - 38.0).abs() < 1.0,
                 "action filter: {:?}",
