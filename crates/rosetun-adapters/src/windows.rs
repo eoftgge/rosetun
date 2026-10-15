@@ -17,7 +17,7 @@ use windows_sys::Win32::{
     Networking::WinSock::AF_INET,
 };
 
-use crate::{Adapter, DefaultRoutes, is_other_tunnel};
+use crate::{Adapter, DefaultRoutes, is_active_vpn_adapter, is_other_tunnel};
 
 struct ForwardTable(NonNull<MIB_IPFORWARD_TABLE2>);
 
@@ -168,6 +168,14 @@ fn adapters() -> io::Result<Vec<Adapter>> {
         return Ok(found);
     }
     Err(io::Error::other("adapter enumeration kept changing"))
+}
+
+pub(super) fn active_vpn_adapters(own_alias: &str) -> io::Result<Vec<String>> {
+    Ok(adapters()?
+        .into_iter()
+        .filter(|adapter| is_active_vpn_adapter(adapter, own_alias))
+        .map(|adapter| adapter.name)
+        .collect())
 }
 
 pub(super) fn other_tunnels(own_alias: &str) -> io::Result<Vec<String>> {

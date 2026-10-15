@@ -2741,9 +2741,12 @@ version = "0.2.0-alpha.2"
 dependencies = [
  "base64",
  "idna",
+ "rosetun-adapters",
  "rosetun-config",
  "rosetun-hwid",
  "rosetun-ipc",
+ "rosetun-processes",
+ "rosetun-shell",
  "rosetun-subscription",
  "serde_json",
  "sha2",

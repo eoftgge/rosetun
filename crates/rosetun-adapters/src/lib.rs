@@ -57,6 +57,29 @@ fn is_other_tunnel(adapter: &Adapter, routes: DefaultRoutes, own_alias: &str) ->
         && routes.covers_default()
 }
 
+fn is_active_vpn_adapter(adapter: &Adapter, own_alias: &str) -> bool {
+    let description = adapter.description.to_ascii_lowercase();
+    adapter.up
+        && !adapter.name.is_empty()
+        && !adapter.name.eq_ignore_ascii_case(own_alias)
+        && ["wintun", "wireguard", "tap"].iter().any(|marker| {
+            description.contains(marker) || adapter.name.to_ascii_lowercase().contains(marker)
+        })
+}
+
+/// Names of active Wintun, TAP or WireGuard adapters other than our own.
+pub fn active_vpn_adapters(own_alias: &str) -> io::Result<Vec<String>> {
+    #[cfg(windows)]
+    {
+        windows::active_vpn_adapters(own_alias)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = own_alias;
+        Ok(Vec::new())
+    }
+}
+
 /// Names of operational virtual/tunnel adapters that carry an IPv4 default route.
 /// A lookup failure is returned without adapter names so callers can log it privately.
 pub fn other_tunnels(own_alias: &str) -> io::Result<Vec<String>> {
@@ -91,6 +114,34 @@ mod tests {
             routes.observe(address, prefix);
         }
         routes
+    }
+
+    #[test]
+    fn active_vpn_adapters_require_up_and_exclude_our_alias() {
+        assert!(is_active_vpn_adapter(
+            &adapter("Example", "Example Wintun Adapter", 53, true),
+            "rosetun0"
+        ));
+        assert!(is_active_vpn_adapter(
+            &adapter("Example TAP", "Example virtual adapter", 6, true),
+            "rosetun0"
+        ));
+        assert!(is_active_vpn_adapter(
+            &adapter("Example", "WireGuard Tunnel", 53, true),
+            "rosetun0"
+        ));
+        assert!(!is_active_vpn_adapter(
+            &adapter("rosetun0", "Wintun", 53, true),
+            "ROSETUN0"
+        ));
+        assert!(!is_active_vpn_adapter(
+            &adapter("Example", "TAP", 53, false),
+            "rosetun0"
+        ));
+        assert!(!is_active_vpn_adapter(
+            &adapter("Ethernet", "Physical adapter", 6, true),
+            "rosetun0"
+        ));
     }
 
     #[test]

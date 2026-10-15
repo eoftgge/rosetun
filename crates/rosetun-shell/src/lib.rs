@@ -15,6 +15,9 @@ mod language;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod window;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod system_checks;
 
 #[cfg(windows)]
 pub use autostart::{autostart_enabled, disable_autostart, enable_autostart};
@@ -22,5 +25,7 @@ pub use autostart::{autostart_enabled, disable_autostart, enable_autostart};
 pub use instance::{Activation, Instance, acquire};
 #[cfg(windows)]
 pub use language::user_language_is_russian;
+#[cfg(windows)]
+pub use system_checks::{proxy_settings, windivert_running};
 #[cfg(windows)]
 pub use window::{SavedWindow, place_window, saved_window};

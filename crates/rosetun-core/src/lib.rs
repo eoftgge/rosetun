@@ -6,6 +6,7 @@ mod lists;
 mod ping;
 mod rules;
 mod selection;
+mod system_checks;
 mod settings;
 pub(crate) mod store;
 mod subscription_url;
@@ -42,6 +43,7 @@ pub use settings::{
     set_language, set_verbose_log, skip_version,
 };
 pub use store::{Store, StoreError};
+pub use system_checks::{CheckDetail, CheckKind, CheckResult, CheckStatus, check_system};
 pub use subscription_url::{
     SubscriptionUrlError, normalize as normalize_subscription_url,
     redacted as redacted_subscription_url,
