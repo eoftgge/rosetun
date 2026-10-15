@@ -8,8 +8,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId, Node, NodeId, Rule, RuleId,
-    RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
+    AppConfig, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId, Node, NodeId,
+    Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, Subscription,
+    SubscriptionId,
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitError, ExitInfo, ExitInfoError,
@@ -18,11 +19,12 @@ use rosetun_core::{
     RemoveSubscriptionError, RenameSubscriptionError, RuleDestination, RuleSetError,
     SelectNodeError, SelectRuleSetError, SettingChange, SettingsError, Store, StoreError,
     SubscriptionUpdateResult, Timeouts, UpdateCheckError, UpdateReport, UpdateSubscriptionError,
-    add_prepared_subscription, add_rule, add_rules, change_exit_target, create_exit, create_rule_set, delete_exit, delete_rule_set,
-    move_rule, move_rules, move_subscription, ping_all, prepare_subscription, reconcile_lists,
-    remove_rule, remove_rules, remove_subscription, rename_exit, rename_rule_set, rename_subscription,
-    reset_settings, restore_rules_and_dns, select_node, select_rule_set, set_default_target,
-    set_dns, set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
+    add_prepared_subscription, add_rule, add_rules, change_exit_target, create_exit,
+    create_rule_set, delete_exit, delete_rule_set, move_rule, move_rules, move_subscription,
+    ping_all, prepare_subscription, reconcile_lists, remove_rule, remove_rules,
+    remove_subscription, rename_exit, rename_rule_set, rename_subscription, reset_settings,
+    restore_rules_and_dns, select_node, select_rule_set, set_default_target, set_dns,
+    set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
     set_verbose_log, update_all, update_all_lists, update_list, update_rule, update_subscription,
 };
 use rosetun_ipc::{

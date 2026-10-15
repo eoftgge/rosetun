@@ -84,10 +84,7 @@ impl ExitDialog {
             ExitKind::Country => self.country.clone().map(ExitTarget::Country),
             ExitKind::Node => self.node.clone().map(|selection| ExitTarget::Node {
                 selection,
-                fallback: self
-                    .fallback_country
-                    .clone()
-                    .filter(|_| self.fallback),
+                fallback: self.fallback_country.clone().filter(|_| self.fallback),
             }),
         }
     }
@@ -206,7 +203,12 @@ impl State {
                 }
             }
             Action::CancelExitDialog => {
-                if self.exits.dialog.as_ref().is_some_and(|dialog| !dialog.busy) {
+                if self
+                    .exits
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| !dialog.busy)
+                {
                     self.exits.dialog = None;
                 }
             }
@@ -241,7 +243,12 @@ impl State {
                 }
             }
             Action::CancelRenameExit => {
-                if self.exits.rename.as_ref().is_some_and(|dialog| !dialog.busy) {
+                if self
+                    .exits
+                    .rename
+                    .as_ref()
+                    .is_some_and(|dialog| !dialog.busy)
+                {
                     self.exits.rename = None;
                 }
             }
@@ -270,7 +277,12 @@ impl State {
                 });
             }
             Action::CancelDeleteExit => {
-                if self.exits.delete.as_ref().is_some_and(|dialog| !dialog.busy) {
+                if self
+                    .exits
+                    .delete
+                    .as_ref()
+                    .is_some_and(|dialog| !dialog.busy)
+                {
                     self.exits.delete = None;
                 }
             }

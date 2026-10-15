@@ -1799,7 +1799,10 @@ mod tests {
             target_label(RuleTarget::Direct),
             target_label(RuleTarget::Block),
             "Example exit · NL".to_owned(),
-            format!("{} · DE", i18n::country_name(&CountryCode::parse("DE").unwrap())),
+            format!(
+                "{} · DE",
+                i18n::country_name(&CountryCode::parse("DE").unwrap())
+            ),
             "NL One".to_owned(),
         ] {
             assert!(texts.contains(&label), "{label} in {texts:?}");

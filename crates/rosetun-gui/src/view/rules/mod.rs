@@ -47,12 +47,12 @@ mod templates;
 pub(crate) use dialogs::{delete_dialog, name_dialog};
 use selection::{clear_selection_on_click_away, selection_shortcuts, selection_slot};
 use sets::set_controls;
+use table::{RowContext, default_rule, rule_row, scroll_rules_while_dragging};
 #[cfg(test)]
 use table::{
     TargetChoice, drag_scroll_delta, drag_target, drop_action, table_cell, target_button,
     value_cell,
 };
-use table::{RowContext, default_rule, rule_row, scroll_rules_while_dragging};
 #[cfg(test)]
 use templates::template_card;
 use templates::template_section;
@@ -381,9 +381,8 @@ fn target_filter(
 ) -> egui::Response {
     let mut selected = filter.target;
     let mut selected_exit = filter.exit.clone();
-    let exit_label = |id: &rosetun_config::ExitId| {
-        destination_label(&RuleDestination::Exit(id.clone()), exits)
-    };
+    let exit_label =
+        |id: &rosetun_config::ExitId| destination_label(&RuleDestination::Exit(id.clone()), exits);
     let response = ui
         .scope(|ui| {
             ui.spacing_mut().button_padding.y = 6.0;

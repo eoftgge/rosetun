@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use rosetun_config::{
-    ExitId, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate,
-};
+use rosetun_config::{ExitId, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 use rosetun_processes::RunningProcess;
 
 use crate::i18n::{self, Language, tr_in};

@@ -176,10 +176,13 @@ fn exit_row(
                             actions.push(Action::OpenEditExit(exit.id.clone()));
                         }
                         if rules == 0 {
-                            ui.label(RichText::new(tr!("exit-no-rules")).small().color(theme::TEXT_DIM));
+                            ui.label(
+                                RichText::new(tr!("exit-no-rules"))
+                                    .small()
+                                    .color(theme::TEXT_DIM),
+                            );
                         } else {
-                            let label =
-                                tr!("exit-rules", count = rules, n = rules.to_string());
+                            let label = tr!("exit-rules", count = rules, n = rules.to_string());
                             if widgets::link(ui, &label, true)
                                 .on_hover_text(tr!("exit-rules-hint"))
                                 .clicked()
@@ -200,8 +203,16 @@ fn exit_menu(ui: &mut egui::Ui, exit: &Exit, can_edit: bool, actions: &mut Vec<A
     widgets::menu_popup(&menu).show(|ui| {
         ui.set_width(210.0);
         for (label, danger, action) in [
-            (tr!("rename"), false, Action::OpenRenameExit(exit.id.clone())),
-            (tr!("delete"), true, Action::RequestDeleteExit(exit.id.clone())),
+            (
+                tr!("rename"),
+                false,
+                Action::OpenRenameExit(exit.id.clone()),
+            ),
+            (
+                tr!("delete"),
+                true,
+                Action::RequestDeleteExit(exit.id.clone()),
+            ),
         ] {
             if widgets::menu_item(
                 ui,

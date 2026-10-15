@@ -81,10 +81,15 @@ fn rule_count_click_opens_the_rules_with_that_exit() {
 #[test]
 fn deleting_a_used_exit_asks_and_blocks_its_rules() {
     let mut state = state_with_exits();
-    state.session.temporary_rules = vec![exit_rule("temp", "1"), temporary_rule("other", "x.example")];
+    state.session.temporary_rules =
+        vec![exit_rule("temp", "1"), temporary_rule("other", "x.example")];
     state.rules.screen.filter.exit = Some(ExitId::new("1"));
 
-    assert!(state.act(Action::RequestDeleteExit(ExitId::new("1"))).is_none());
+    assert!(
+        state
+            .act(Action::RequestDeleteExit(ExitId::new("1")))
+            .is_none()
+    );
     assert_eq!(state.exits.delete.as_ref().unwrap().rules, 2);
     assert!(matches!(
         state.act(Action::ConfirmDeleteExit),
@@ -162,7 +167,9 @@ fn exit_dialog_saves_a_new_node_and_a_new_country() {
         panic!("expected a save job");
     };
     assert_eq!(target, ExitTarget::Country(country("NL")));
-    state.reduce(WorkerEvent::SaveExit(Err(rosetun_core::ExitError::EmptyName)));
+    state.reduce(WorkerEvent::SaveExit(Err(
+        rosetun_core::ExitError::EmptyName,
+    )));
     let dialog = state.exits.dialog.as_ref().unwrap();
     assert!(!dialog.busy && dialog.error.is_some());
 }
@@ -235,7 +242,9 @@ fn deleted_exit_closes_its_dialogs_on_reload() {
     let mut state = state_with_exits();
     state.act(Action::OpenEditExit(ExitId::new("2")));
     let mut config = state.config.clone();
-    config.exits.retain(|exit: &Exit| exit.id != ExitId::new("2"));
+    config
+        .exits
+        .retain(|exit: &Exit| exit.id != ExitId::new("2"));
     state.reduce(WorkerEvent::Config {
         generation: 1,
         config,

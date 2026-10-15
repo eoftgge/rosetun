@@ -642,10 +642,7 @@ fn rule_value(
     };
     let missing = state.missing_list_rule(set, &rule.id);
     let exit_missing = rule.target == RuleTarget::Exit
-        && rule
-            .exit
-            .as_ref()
-            .is_none_or(|id| unresolved.contains(id));
+        && rule.exit.as_ref().is_none_or(|id| unresolved.contains(id));
     let tooltip = if let RuleMatcher::Template(template) = &rule.matcher {
         let list = template
             .matchers()
