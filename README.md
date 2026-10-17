@@ -6,11 +6,11 @@ Rosetun is a Windows VPN client powered by sing-box. A Windows service maintains
 
 <a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download.svg" alt="Download Rosetun for Windows" height="56"></a>
 
-**Beta software:** expect bugs.
+**Young project:** one developer maintains it and it has few users yet. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues).
 
 ## Features
 
-- A **Kill switch** blocks traffic when the tunnel drops. Without it, a DNS lock keeps system DNS from leaking outside the tunnel throughout the session, including while the engine restarts.
+- A **Kill switch** blocks traffic when the tunnel drops, as long as the Rosetun service is running (see [How it works](#how-it-works)). Without it, a DNS lock keeps system DNS from leaking outside the tunnel throughout the session, including while the engine restarts.
 - **Routing rules** for apps and websites, with **Quick templates** and actions **Through VPN**, **Direct** and **Block**.
 - Provider subscriptions in plain or base64-encoded link lists, Xray JSON and sing-box JSON. **Send device ID** (HWID) is optional for providers that require it.
 - VLESS, VMess, Trojan, Shadowsocks and Hysteria2 nodes (Salamander obfuscation and port hopping); TCP, WebSocket, gRPC and HTTPUpgrade transports for TCP-based nodes; plain, TLS and Reality security modes. Hysteria2 uses QUIC over UDP.
