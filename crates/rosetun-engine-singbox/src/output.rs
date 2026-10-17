@@ -36,6 +36,12 @@ pub(super) fn classify_failure(line: &str) -> Option<OutboundFailure> {
         return None;
     }
     let plain = strip_ansi_csi(line).to_ascii_lowercase();
+    // Only the proxy outbound can speak REALITY, but sing-box reports its
+    // failure under whoever dialled: with DNS as the only traffic the line is
+    // `router: process DNS packet: reality verification failed`, with no tag.
+    if plain.contains("reality verification failed") {
+        return Some(OutboundFailure::Rejected);
+    }
     let proxy = plain.split_whitespace().any(|word| {
         word.starts_with("outbound/")
             && !word.starts_with("outbound/direct[")
@@ -235,6 +241,16 @@ mod tests {
                 );
             }
         }
+        assert_eq!(
+            super::classify_failure(
+                "+0300 2026-10-14 16:46:24 ERROR [2202218134 261ms] router: process DNS packet: reality verification failed"
+            ),
+            Some(Rejected)
+        );
+        assert_eq!(
+            super::classify_failure("INFO router: process DNS packet: reality verification failed"),
+            None
+        );
         for line in [
             "ERROR outbound/direct[direct]: connection refused",
             "ERROR dns: EOF",
