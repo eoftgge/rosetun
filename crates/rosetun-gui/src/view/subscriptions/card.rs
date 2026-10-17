@@ -54,6 +54,10 @@ pub(super) fn subscription_card(
                         egui::Sense::drag(),
                     )
                 });
+                // Set before the buttons, so their pointing hand wins over the grab cursor.
+                if header_drag.as_ref().is_some_and(egui::Response::hovered) {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
                 let mut buttons = Vec::with_capacity(3);
                 ui.horizontal(|ui| {
                     let chevron = icons::icon_button(ui, Icon::Chevron { open: expanded }, true)
@@ -174,14 +178,12 @@ pub(super) fn subscription_card(
                 });
                 // The buttons only sense clicks, so egui hands a drag that starts on them
                 // to the header zone underneath; such a drag must not move the card.
-                if let Some(header_drag) = header_drag {
-                    let from_button = header_drag.drag_started()
-                        && ui
-                            .input(|input| input.pointer.press_origin())
-                            .is_some_and(|origin| buttons.iter().any(|rect| rect.contains(origin)));
-                    if !from_button {
-                        header_drag.dnd_set_drag_payload(subscription.id.clone());
-                    }
+                if header_drag.is_some_and(|header_drag| header_drag.drag_started())
+                    && !ui
+                        .input(|input| input.pointer.press_origin())
+                        .is_some_and(|origin| buttons.iter().any(|rect| rect.contains(origin)))
+                {
+                    egui::DragAndDrop::set_payload(ui.ctx(), subscription.id.clone());
                 }
                 ui.horizontal(|ui| {
                     ui.add_space(22.0 + ui.spacing().item_spacing.x);
@@ -560,6 +562,15 @@ mod tests {
         subscription: &Subscription,
         events: Vec<egui::Event>,
     ) -> Vec<Action> {
+        card_frame(ctx, state, subscription, events).0
+    }
+
+    fn card_frame(
+        ctx: &egui::Context,
+        state: &State,
+        subscription: &Subscription,
+        events: Vec<egui::Event>,
+    ) -> (Vec<Action>, egui::CursorIcon) {
         let mut actions = Vec::new();
         let mut output = ctx.run_ui(
             egui::RawInput {
@@ -580,7 +591,7 @@ mod tests {
             },
         );
         output.textures_delta.clear();
-        actions
+        (actions, output.platform_output.cursor_icon)
     }
 
     fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
@@ -631,6 +642,31 @@ mod tests {
                 drags.then_some(&subscription.id),
                 "drag from {pos:?}"
             );
+        }
+    }
+
+    #[test]
+    fn header_buttons_keep_the_pointing_hand_cursor() {
+        let subscription = card_subscription();
+        let mut state = State::default();
+        state.config_ready = true;
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        card_frame(&ctx, &state, &subscription, Vec::new());
+        for (pos, drags) in header_points(&ctx) {
+            card_frame(
+                &ctx,
+                &state,
+                &subscription,
+                vec![egui::Event::PointerMoved(pos)],
+            );
+            let (_, cursor) = card_frame(&ctx, &state, &subscription, Vec::new());
+            let expected = if drags {
+                egui::CursorIcon::Grab
+            } else {
+                egui::CursorIcon::PointingHand
+            };
+            assert_eq!(cursor, expected, "hover at {pos:?}");
         }
     }
 
