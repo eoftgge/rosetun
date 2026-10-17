@@ -1,8 +1,12 @@
 # Rosetun {{version}}
 
-Rosetun 0.2. Its goal: connect everywhere, and show what is going on. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+The first beta of Rosetun 0.2. Its goal: connect everywhere, and show what is going on. REALITY servers on new Xray connect again, a rule can send its sites or programs through another country or server, and Rosetun explains more of what goes wrong.
 
-**Going back to 0.1 takes a manual step.** 0.2 upgrades the settings file to a new format, and 0.1 refuses a file from a newer version instead of overwriting it. Rosetun keeps your previous settings next to it as `%APPDATA%\Rosetun\config.v3.json`: to return to the beta, install it and rename that file to `config.json`. Changes made in 0.2 are not carried back.
+**This is a test version.** The stable release is [0.1.0](https://github.com/eoftgge/rosetun/releases/tag/v0.1.0): stay on it if you need Rosetun to just work. Betas get fixes in the next beta only; security fixes are made for the stable line ([SECURITY.md](https://github.com/eoftgge/rosetun/blob/master/SECURITY.md)). Rosetun 0.1.0 does not offer this beta as an update; 0.1.0-beta.1 and beta.2 do, so if you are on one of them and want the stable version, install 0.1.0 instead.
+
+Settings from 0.1 are upgraded on the first start; from this beta on they carry over to the next betas and to 0.2.0. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+
+**Going back to 0.1 takes a manual step.** 0.2 upgrades the settings file to a new format, and 0.1 refuses a file from a newer version instead of overwriting it. Rosetun keeps your previous settings next to it as `%APPDATA%\Rosetun\config.v3.json`: to return to 0.1.0, install it and rename that file to `config.json`. Changes made in 0.2 are not carried back.
 
 ## What's changed
 
@@ -29,11 +33,13 @@ Rosetun 0.2. Its goal: connect everywhere, and show what is going on. Please rep
   - A country exit picks the fastest server of that country at connect and keeps it until you disconnect: servers of one country may leave to the internet from different addresses.
   - If an exit's server disappears from the subscription, its rules block (never go direct) and the rule list warns.
   - The connection screen lists the exits in use with the server and its delay. From the command line: `rosetun exits`; `rosetun delay` shows each exit's delay.
-- **All fixes from 0.1.0-beta.2** are included.
+- **A window hidden in the tray stays idle.** It no longer redraws every second and wakes only when something is due, such as a subscription update.
+- **All fixes from 0.1.0** are included.
 
 ## Known issues
 
 - If you switch between networks (for example Wi-Fi and cable) while connected through Xray, the connection may stop until Rosetun reconnects.
+- **"Apply" while connected failed once with an engine error** on a 0.1 test version, and the cause was not found. If it happens to you, use **Collect report** (Settings › Service and log) and attach the file to an issue.
 
 ## Install
 
@@ -53,9 +59,13 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-Rosetun 0.2. Её цель: подключаться везде и показывать, что происходит. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Первая бета Rosetun 0.2. Её цель: подключаться везде и показывать, что происходит. Серверы REALITY на новом Xray снова подключаются, правило может вести свои сайты или программы через другую страну или сервер, а Rosetun понятнее объясняет, что пошло не так.
 
-**Вернуться на 0.1 можно только вручную.** 0.2 переводит файл настроек на новый формат, а 0.1 отказывается читать файл более новой версии и не перезаписывает его. Прежние настройки Rosetun сохраняет рядом, в `%APPDATA%\Rosetun\config.v3.json`: чтобы вернуться на бету, установите её и переименуйте этот файл в `config.json`. Изменения, сделанные в 0.2, при этом не переносятся.
+**Это тестовая версия.** Стабильный выпуск: [0.1.0](https://github.com/eoftgge/rosetun/releases/tag/v0.1.0); оставайтесь на нём, если Rosetun нужен просто для работы. Исправления для беты выходят только в следующей бете; исправления безопасности делаются для стабильной линии ([SECURITY.md](https://github.com/eoftgge/rosetun/blob/master/SECURITY.md)). Rosetun 0.1.0 не предлагает эту бету как обновление, а 0.1.0-beta.1 и beta.2 предлагают: если у вас одна из них и нужна стабильная версия, установите 0.1.0.
+
+Настройки из 0.1 обновляются при первом запуске; начиная с этой беты они переносятся в следующие беты и в 0.2.0. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+
+**Вернуться на 0.1 можно только вручную.** 0.2 переводит файл настроек на новый формат, а 0.1 отказывается читать файл более новой версии и не перезаписывает его. Прежние настройки Rosetun сохраняет рядом, в `%APPDATA%\Rosetun\config.v3.json`: чтобы вернуться на 0.1.0, установите её и переименуйте этот файл в `config.json`. Изменения, сделанные в 0.2, при этом не переносятся.
 
 ### Что изменилось
 
@@ -82,11 +92,13 @@ Rosetun 0.2. Её цель: подключаться везде и показы�
   - Направление на страну выбирает самый быстрый сервер страны при подключении и держит его до отключения: серверы одной страны могут выходить в интернет с разных адресов.
   - Если сервер направления пропал из подписки, его правила блокируют (никогда не идут напрямую), а список правил предупреждает.
   - Экран подключения показывает используемые направления с сервером и задержкой. Из командной строки: `rosetun exits`; `rosetun delay` показывает задержку каждого направления.
-- **Все исправления из 0.1.0-beta.2** входят в эту версию.
+- **Окно, свёрнутое в трей, не нагружает компьютер.** Оно больше не перерисовывается каждую секунду и просыпается, только когда пора что-то сделать, например обновить подписку.
+- **Все исправления из 0.1.0** входят в эту версию.
 
 ### Известные проблемы
 
 - Если во время подключения через Xray сменить сеть (например, Wi-Fi на кабель), соединение может прерваться, пока Rosetun не переподключится.
+- **«Применить» во время подключения однажды завершилось ошибкой ядра** на тестовой версии 0.1, причину не нашли. Если это случится у вас, нажмите **Собрать отчёт** (Настройки › Служба и журнал) и приложите файл к Issue.
 
 ### Установка
 
