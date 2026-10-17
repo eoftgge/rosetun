@@ -4,7 +4,7 @@
 
 Planned attribution:
 
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 
 ## Scope and provenance
 
@@ -19,3 +19,5 @@ Project owner [@eoftgge](https://github.com/eoftgge) is the sole committer, revi
 ## Privacy
 
 Rosetun is a VPN client and necessarily contacts the servers and services described in [Privacy and network access](README.md#privacy-and-network-access). This includes subscription providers, configured DNS resolvers, connectivity and public-IP endpoints, and GitHub for update checks. There is no telemetry or Rosetun account; logs stay on the local machine. Some requests may include subscription credentials or optional device information. See the linked section for the full list of requests, defaults, and controls; this policy does not claim that Rosetun makes no network requests.
+
+Third-party services contacted by default, and their privacy policies: Cloudflare for the default DNS-over-HTTPS resolver, the connectivity check and the exit-country lookup ([1.1.1.1 public resolver](https://developers.cloudflare.com/1.1.1.1/privacy/public-dns-resolver/), [Cloudflare privacy policy](https://www.cloudflare.com/privacypolicy/)); GitHub for the update check ([GitHub General Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)). The resolver can be changed and the update check turned off in Settings. Subscription providers and VPN servers are chosen by the user and are covered by their own policies.
