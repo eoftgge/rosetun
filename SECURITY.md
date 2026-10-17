@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest alpha release is supported. Older alphas may not receive security fixes.
+Only the latest release of the current line (0.1.x) is supported. Pre-releases of the next version are for testing and are not supported; older releases do not receive security fixes.
 
 ## Report a vulnerability privately
 
@@ -12,8 +12,8 @@ In particular, please report problems involving the SYSTEM-privileged service or
 
 Install-folder checks inspect current ownership and ACLs. They cannot detect access handles opened while a folder or file was writable in the past: changing its ACL does not revoke those handles. If an installation was ever writable by an untrusted account, do not execute its binaries or treat an in-place upgrade as a repair. Disable the affected service using trusted administrative tools before rebooting to clear old handles, then reinstall into a fresh protected folder.
 
-This is an alpha project maintained by one developer. A response is intended, but no response or fix deadline is guaranteed.
+Rosetun is a young project maintained by one developer and has not had an external security review. A response is intended, but no response or fix deadline is guaranteed.
 
 ## По-русски
 
-Поддерживается только последняя альфа-версия. Сообщайте об уязвимостях приватно через [Security → Report a vulnerability](https://github.com/eoftgge/rosetun/security/advisories/new), не через публичный Issue. Не прикладывайте ссылки подписок и серверов, пароли или непроверенные журналы. Проверка папки установки не обнаруживает дескрипторы, открытые до исправления прав: если обычный пользователь когда-либо мог менять файлы программы, не запускайте файлы прежней установки. Сначала отключите службу доверенными системными средствами, затем перезагрузите компьютер и установите программу заново в новую защищённую папку, а не обновляйте поверх. Срок ответа и исправления в альфа-версии не гарантирован.
+Поддерживается только последний выпуск текущей линии (0.1.x); предварительные версии следующего выпуска предназначены для тестирования и не поддерживаются. Сообщайте об уязвимостях приватно через [Security → Report a vulnerability](https://github.com/eoftgge/rosetun/security/advisories/new), не через публичный Issue. Не прикладывайте ссылки подписок и серверов, пароли или непроверенные журналы. Проверка папки установки не обнаруживает дескрипторы, открытые до исправления прав: если обычный пользователь когда-либо мог менять файлы программы, не запускайте файлы прежней установки. Сначала отключите службу доверенными системными средствами, затем перезагрузите компьютер и установите программу заново в новую защищённую папку, а не обновляйте поверх. Проект молодой, его ведёт один разработчик, внешней проверки безопасности не было; срок ответа и исправления не гарантирован.
