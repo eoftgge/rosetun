@@ -43,7 +43,7 @@ Settings from 0.1 are upgraded on the first start; from this beta on they carry 
 
 ## Install
 
-Windows 10 or 11, x64. Download `{{setup}}` from this release. The installer is not code-signed yet: if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
+Windows 10 or 11, x64. Download `{{setup}}` from this release. [Code signing policy](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md): the installer is not code-signed yet; if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
 
 ## Verify
 
@@ -102,7 +102,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ### Установка
 
-Windows 10 или 11, x64. Скачайте `{{setup}}` из этого релиза. Установщик пока не подписан: если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
+Windows 10 или 11, x64. Скачайте `{{setup}}` из этого релиза. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md) (Code signing policy): установщик пока не подписан; если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
 
 ### Проверка
 
