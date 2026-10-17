@@ -47,23 +47,23 @@ pub(super) fn subscription_card(
                     ui.next_widget_position(),
                     egui::vec2(ui.available_width(), 28.0),
                 );
-                if reorder {
+                let header_drag = reorder.then(|| {
                     ui.interact(
                         header_rect,
                         ui.id().with("header_drag"),
                         egui::Sense::drag(),
                     )
-                    .dnd_set_drag_payload(subscription.id.clone());
-                }
+                });
+                let mut buttons = Vec::with_capacity(3);
                 ui.horizontal(|ui| {
-                    if icons::icon_button(ui, Icon::Chevron { open: expanded }, true)
+                    let chevron = icons::icon_button(ui, Icon::Chevron { open: expanded }, true)
                         .on_hover_text(if expanded {
                             constants::COLLAPSE
                         } else {
                             constants::EXPAND
-                        })
-                        .clicked()
-                    {
+                        });
+                    buttons.push(chevron.rect);
+                    if chevron.clicked() {
                         actions.push(Action::ToggleExpanded(subscription.id.clone()));
                     }
                     let name_width =
@@ -96,28 +96,33 @@ pub(super) fn subscription_card(
                     if state.operations.update_all
                         || state.operations.updating.contains(&subscription.id)
                     {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(28.0, 28.0),
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                            |ui| {
-                                ui.add(egui::Spinner::new().size(18.0));
-                            },
+                        let spinner = ui
+                            .allocate_ui_with_layout(
+                                egui::vec2(28.0, 28.0),
+                                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                                |ui| {
+                                    ui.add(egui::Spinner::new().size(18.0));
+                                },
+                            )
+                            .response
+                            .on_hover_text(format!("{}\n{updated}", tr!("updating")));
+                        buttons.push(spinner.rect);
+                    } else {
+                        let refresh = icons::icon_button_sized(
+                            ui,
+                            Icon::Refresh,
+                            !state.subscription_busy(&subscription.id),
+                            28.0,
                         )
-                        .response
-                        .on_hover_text(format!("{}\n{updated}", tr!("updating")));
-                    } else if icons::icon_button_sized(
-                        ui,
-                        Icon::Refresh,
-                        !state.subscription_busy(&subscription.id),
-                        28.0,
-                    )
-                    .on_hover_text(format!("{}\n{updated}", tr!("update")))
-                    .clicked()
-                    {
-                        actions.push(Action::Update(subscription.id.clone()));
+                        .on_hover_text(format!("{}\n{updated}", tr!("update")));
+                        buttons.push(refresh.rect);
+                        if refresh.clicked() {
+                            actions.push(Action::Update(subscription.id.clone()));
+                        }
                     }
                     let menu = icons::icon_button_sized(ui, Icon::More, true, 28.0)
                         .on_hover_text(tr!("more-actions"));
+                    buttons.push(menu.rect);
                     widgets::menu_popup(&menu).show(|ui| {
                         ui.set_width(180.0);
                         ui.add(
@@ -167,6 +172,17 @@ pub(super) fn subscription_card(
                         }
                     });
                 });
+                // The buttons only sense clicks, so egui hands a drag that starts on them
+                // to the header zone underneath; such a drag must not move the card.
+                if let Some(header_drag) = header_drag {
+                    let from_button = header_drag.drag_started()
+                        && ui
+                            .input(|input| input.pointer.press_origin())
+                            .is_some_and(|origin| buttons.iter().any(|rect| rect.contains(origin)));
+                    if !from_button {
+                        header_drag.dnd_set_drag_payload(subscription.id.clone());
+                    }
+                }
                 ui.horizontal(|ui| {
                     ui.add_space(22.0 + ui.spacing().item_spacing.x);
                     egui::Sides::new().shrink_left().show(
@@ -514,6 +530,133 @@ fn quota_fraction(info: &SubscriptionInfo, now: u64) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const WIDTH: f32 = 800.0;
+    // The panel has no margin; the card adds its 12 px margin and 1 px stroke.
+    const ROW_Y: f32 = 27.0;
+
+    fn card_subscription() -> Subscription {
+        Subscription {
+            id: SubscriptionId::new("card"),
+            name: "Provider".into(),
+            url: "https://example.com/subscription".into(),
+            nodes: vec![],
+            auto_update: false,
+            updated_at_unix: None,
+            user_agent: None,
+            send_hwid: true,
+            info: None,
+            update_interval_hours: None,
+            support_url: None,
+            web_page_url: None,
+            announce: None,
+            notices: vec![],
+        }
+    }
+
+    fn card_frame_actions(
+        ctx: &egui::Context,
+        state: &State,
+        subscription: &Subscription,
+        events: Vec<egui::Event>,
+    ) -> Vec<Action> {
+        let mut actions = Vec::new();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(WIDTH, 200.0),
+                )),
+                events,
+                ..egui::RawInput::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new())
+                    .show(ctx, |ui| {
+                        ui.style_mut().interaction.selectable_labels = false;
+                        subscription_card(ui, state, subscription, &mut actions);
+                    });
+            },
+        );
+        output.textures_delta.clear();
+        actions
+    }
+
+    fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn header_points(ctx: &egui::Context) -> [(egui::Pos2, bool); 5] {
+        let spacing = ctx.global_style().spacing.item_spacing.x;
+        let right = WIDTH - 13.0;
+        [
+            (egui::pos2(24.0, ROW_Y), false),
+            (egui::pos2(right - 28.0 - spacing - 14.0, ROW_Y), false),
+            (egui::pos2(right - 14.0, ROW_Y), false),
+            (egui::pos2(13.0 + 22.0 + spacing + 12.0, ROW_Y), true),
+            (egui::pos2(WIDTH / 2.0, ROW_Y), true),
+        ]
+    }
+
+    #[test]
+    fn card_drags_from_its_header_but_not_from_its_buttons() {
+        let subscription = card_subscription();
+        let mut state = State::default();
+        state.config_ready = true;
+        for (pos, drags) in header_points(&egui::Context::default()) {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            card_frame_actions(&ctx, &state, &subscription, Vec::new());
+            card_frame_actions(
+                &ctx,
+                &state,
+                &subscription,
+                vec![egui::Event::PointerMoved(pos), press(pos, true)],
+            );
+            let moved = pos + egui::vec2(0.0, 20.0);
+            card_frame_actions(
+                &ctx,
+                &state,
+                &subscription,
+                vec![egui::Event::PointerMoved(moved)],
+            );
+            assert_eq!(
+                egui::DragAndDrop::payload::<SubscriptionId>(&ctx).as_deref(),
+                drags.then_some(&subscription.id),
+                "drag from {pos:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn update_button_still_clicks() {
+        let subscription = card_subscription();
+        let mut state = State::default();
+        state.config_ready = true;
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let (pos, _) = header_points(&ctx)[1];
+        card_frame_actions(&ctx, &state, &subscription, Vec::new());
+        card_frame_actions(
+            &ctx,
+            &state,
+            &subscription,
+            vec![egui::Event::PointerMoved(pos), press(pos, true)],
+        );
+        let actions = card_frame_actions(&ctx, &state, &subscription, vec![press(pos, false)]);
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, Action::Update(id) if *id == subscription.id))
+        );
+        assert!(egui::DragAndDrop::payload::<SubscriptionId>(&ctx).is_none());
+    }
 
     #[test]
     fn expiry_colors_change_within_seven_days_and_after_expiry() {
