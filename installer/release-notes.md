@@ -1,24 +1,24 @@
 # Rosetun {{version}}
 
-This is the second beta of 0.1: fixes only. Please keep using it every day and report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+The first release of Rosetun: a VPN client for Windows with rules for what goes through the tunnel, a kill switch and a Windows service, on sing-box. It is a young project with one developer: please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-## What's changed
+## What's changed since 0.1.0-beta.2
 
-- **The country in the header is the server's.** With the default "Direct" rule the header could show the country of your own connection instead of the server's. The lookup now always goes through the tunnel.
-- **The main screen no longer shows the server address.** It often ends up in screenshots, and published server addresses get blocked. The address is still in the server list.
-- **First connection after installing.** When Windows was slow to set up the tunnel adapter, a single failed server check right after the waiting time could still stop the connection. Checks that failed while the adapter was being set up no longer count.
-- **Update notices follow your version.** A beta now offers newer betas and the release, not test versions of the next release. A release offers releases only.
-- **`rosetun connect`** prints `connected` when the tunnel is up.
+- **REALITY rejections are recognised in every case.** When a REALITY server refused the connection while only DNS was passing, sing-box reported it without the outbound's name and Rosetun did not count it; now it does, so the connection stops with the explanation instead of waiting for the timeout.
+- **The README and the security policy** say what is supported: the latest 0.1.x release, not test versions of the next one. The kill switch works while the Rosetun service is running; the README says so next to it.
 
-## Known issue: REALITY servers on Xray 26.9.8 and newer
+Everything from 0.1.0-beta.1 and beta.2 is included.
 
-VLESS + REALITY servers updated to Xray 26.9.8 or newer refuse connections from sing-box, the engine Rosetun uses ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)). Rosetun then says the server rejected the connection and explains why. Try another server or ask your provider. Rosetun 0.2 will connect these servers through Xray.
+## Known issues
+
+- **REALITY servers on Xray 26.9.8 and newer** refuse connections from sing-box, the engine Rosetun uses ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)). Rosetun then says the server rejected the connection and explains why. Try another server or ask your provider. Rosetun 0.2 connects these servers through Xray.
+- **"Apply" while connected failed once with an engine error** on an early test version, and the cause was not found. If it happens to you, please open an issue with the lines of `%ProgramFiles%\Rosetun\data\logs\helper*.log` around the error (remove server addresses first).
 
 ## Help wanted: IPv6
 
 If your provider gives you IPv6, connect and open [test-ipv6.com](https://test-ipv6.com). It should show no IPv6 address. Please report what it shows in [Issues](https://github.com/eoftgge/rosetun/issues).
 
-Settings, subscriptions, lists and rules from 0.1.0-beta.1 are kept as they are; older versions are upgraded on the first start as before. The app and the service are updated together by the installer.
+Settings, subscriptions, lists and rules from the betas are kept as they are; older versions are upgraded on the first start as before. The app and the service are updated together by the installer.
 
 ## Install
 
@@ -36,25 +36,25 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-Это вторая бета-версия 0.1, только исправления. Пользуйтесь ей каждый день и сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях сообщайте приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Первый выпуск Rosetun: VPN-клиент для Windows с правилами, что идёт через туннель, с kill switch и службой Windows, на sing-box. Проект молодой, его ведёт один разработчик: сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-### Что изменилось
+### Что изменилось после 0.1.0-beta.2
 
-- **Страна в шапке теперь страна сервера.** С правилом по умолчанию «Напрямую» шапка могла показывать страну вашего собственного подключения, а не сервера. Теперь запрос всегда идёт через туннель.
-- **Главный экран больше не показывает адрес сервера.** Он часто попадает на снимки экрана, а опубликованные адреса серверов блокируют. Адрес по-прежнему есть в списке серверов.
-- **Первое подключение после установки.** Если Windows долго настраивала адаптер туннеля, одна неудачная проверка сервера сразу после ожидания всё ещё могла прервать подключение. Проверки, которые не прошли, пока адаптер настраивался, больше не учитываются.
-- **Уведомления об обновлениях учитывают вашу версию.** Бета предлагает более новые беты и выпуск, но не тестовые версии следующего выпуска. Выпуск предлагает только выпуски.
-- **`rosetun connect`** пишет `connected`, когда туннель поднят.
+- **Отказ сервера REALITY распознаётся всегда.** Если сервер REALITY отклонял подключение, пока шёл только DNS, sing-box сообщал об этом без имени выхода, и Rosetun это не учитывал; теперь учитывает, и подключение останавливается с объяснением, а не ждёт тайм-аута.
+- **README и политика безопасности** говорят, что поддерживается: последний выпуск 0.1.x, а не тестовые версии следующего. Kill switch работает, пока запущена служба Rosetun; README говорит об этом рядом с ним.
 
-### Известная проблема: серверы REALITY на Xray 26.9.8 и новее
+Всё из 0.1.0-beta.1 и beta.2 входит в этот выпуск.
 
-Серверы VLESS + REALITY, обновлённые до Xray 26.9.8 или новее, не принимают подключения от sing-box, на котором работает Rosetun ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)). Rosetun в этом случае пишет, что сервер отклонил подключение, и объясняет почему. Попробуйте другой сервер или напишите провайдеру. Rosetun 0.2 будет подключать такие серверы через Xray.
+### Известные проблемы
+
+- **Серверы REALITY на Xray 26.9.8 и новее** не принимают подключения от sing-box, на котором работает Rosetun ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)). Rosetun в этом случае пишет, что сервер отклонил подключение, и объясняет почему. Попробуйте другой сервер или напишите провайдеру. Rosetun 0.2 подключает такие серверы через Xray.
+- **«Применить» при подключении однажды не сработало** с ошибкой ядра на ранней тестовой версии, причину найти не удалось. Если это случится у вас, откройте Issue и приложите строки из `%ProgramFiles%\Rosetun\data\logs\helper*.log` рядом с ошибкой (сначала уберите адреса серверов).
 
 ### Нужна помощь: IPv6
 
 Если провайдер даёт вам IPv6, подключитесь и откройте [test-ipv6.com](https://test-ipv6.com). Адреса IPv6 там быть не должно. Пожалуйста, сообщите, что показала страница, в [Issues](https://github.com/eoftgge/rosetun/issues).
 
-Настройки, подписки, списки и правила из 0.1.0-beta.1 сохраняются как есть; более старые версии, как и раньше, обновляются при первом запуске. Программу и службу установщик обновляет вместе.
+Настройки, подписки, списки и правила из бета-версий сохраняются как есть; более старые версии, как и раньше, обновляются при первом запуске. Программу и службу установщик обновляет вместе.
 
 ### Установка
 
