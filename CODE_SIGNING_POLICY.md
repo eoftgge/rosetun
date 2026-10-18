@@ -1,6 +1,6 @@
 # Code signing policy
 
-**Rosetun releases are not code-signed yet.** Rosetun is preparing an application to SignPath Foundation. The signing arrangement and controls below are planned; they do not imply acceptance by the Foundation or that any current release is signed.
+**Rosetun releases are not code-signed yet.** SignPath Foundation declined Rosetun's first application in October 2026 because the project is not yet well known; Rosetun plans to apply again. The signing arrangement and controls below are planned; they do not imply acceptance by the Foundation or that any current release is signed.
 
 Planned attribution:
 
