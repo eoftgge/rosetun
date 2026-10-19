@@ -15,5 +15,9 @@ tracing.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
 
+# The Lockdown probe example flushes the registry hive BFE writes to.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Registry"] }
+
 [lints]
 workspace = true
