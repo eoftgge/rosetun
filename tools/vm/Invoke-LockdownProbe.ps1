@@ -158,11 +158,21 @@ function Stop-Permit {
     Invoke-RosetunGuest -ScriptBlock {
         param($id)
         # A kill, not Enter: the dynamic session must clean up after a crash too.
-        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
-        Wait-Process -Id $id -Timeout 10 -ErrorAction SilentlyContinue
-        if (Get-Process -Id $id -ErrorAction SilentlyContinue) {
-            throw "permit process $id is still running"
-        }
+        $stopError = ''
+        try { Stop-Process -Id $id -Force -ErrorAction Stop }
+        catch { $stopError = "$_" }
+        # The Process object from Start-Process keeps a handle, so the exited
+        # permit stays listed as a zombie until it is collected: test HasExited,
+        # not presence.
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        $deadline = (Get-Date).AddSeconds(15)
+        do {
+            $alive = Get-Process -Id $id -ErrorAction SilentlyContinue | Where-Object { -not $_.HasExited }
+            if (-not $alive) { return }
+            Start-Sleep -Milliseconds 300
+        } while ((Get-Date) -lt $deadline)
+        throw "permit process $id is still running after 15 s; Stop-Process: '$stopError'"
     } -ArgumentList $Id
 }
 
