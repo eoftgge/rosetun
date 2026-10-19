@@ -67,8 +67,7 @@ pub(crate) fn show(
                     Ok(_) => {
                         if let Some(note) = assumed_https_note(&dialog.url) {
                             ui.add(
-                                egui::Label::new(RichText::new(note).color(theme::TEXT_DIM))
-                                    .wrap(),
+                                egui::Label::new(RichText::new(note).color(theme::TEXT_DIM)).wrap(),
                             );
                         }
                     }
@@ -178,8 +177,14 @@ mod tests {
         let note = assumed_https_note("sub.example.com/private-token?key=query-secret").unwrap();
         assert!(note.contains("https://sub.example.com/…"), "{note}");
         assert!(!note.contains("private-token") && !note.contains("query-secret"));
-        assert_eq!(assumed_https_note("https://sub.example.com/private-token"), None);
-        assert_eq!(assumed_https_note("http://sub.example.com/private-token"), None);
+        assert_eq!(
+            assumed_https_note("https://sub.example.com/private-token"),
+            None
+        );
+        assert_eq!(
+            assumed_https_note("http://sub.example.com/private-token"),
+            None
+        );
         assert_eq!(assumed_https_note("sub"), None);
     }
 

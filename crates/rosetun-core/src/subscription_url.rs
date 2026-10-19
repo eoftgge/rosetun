@@ -102,9 +102,9 @@ fn is_host_with_port(authority: &str) -> bool {
     };
 
     let port_is_valid = port.is_empty()
-        || port
-            .strip_prefix(':')
-            .is_some_and(|port| port.bytes().all(|byte| byte.is_ascii_digit()) && port.parse::<u16>().is_ok());
+        || port.strip_prefix(':').is_some_and(|port| {
+            port.bytes().all(|byte| byte.is_ascii_digit()) && port.parse::<u16>().is_ok()
+        });
     port_is_valid && host.is_none_or(is_host_name)
 }
 
@@ -235,7 +235,11 @@ mod tests {
             "happ://add/sub.example.com/x",
         ] {
             assert!(!assumes_https(input), "{input}");
-            assert_eq!(normalize(input), Err(SubscriptionUrlError::Invalid), "{input}");
+            assert_eq!(
+                normalize(input),
+                Err(SubscriptionUrlError::Invalid),
+                "{input}"
+            );
         }
     }
 
