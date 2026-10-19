@@ -1,8 +1,12 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod console;
 mod output;
 mod readiness;
 mod render;
+mod stop;
 mod version;
 
 use std::borrow::Cow;
@@ -201,7 +205,8 @@ impl EngineBackend for SingBoxBackend {
         if !probe {
             tracing::info!(binary = %binary.display(), config = %config_path.display(), "starting sing-box");
         }
-        let mut child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .arg("run")
             .arg("--disable-color")
             .arg("-c")
@@ -209,8 +214,11 @@ impl EngineBackend for SingBoxBackend {
             .current_dir(&self.work_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        let mut child = console::spawn(&mut command)?;
+        #[cfg(not(windows))]
+        let mut child = command.spawn()?;
 
         let (ready_sender, readiness) = Readiness::new();
         let hints = Arc::new(HintFlags::default());
@@ -258,6 +266,7 @@ impl EngineBackend for SingBoxBackend {
             hints,
             stderr_drain: Some(stderr_drain),
             failures,
+            probe,
         }))
     }
 }
@@ -333,11 +342,9 @@ impl TrafficProbe for ClashTrafficProbe {
 }
 
 fn stop_failed_spawn(child: &mut Child) {
-    if let Err(error) = child.kill() {
-        tracing::error!(%error, "failed to kill sing-box after startup setup failed");
-    }
-    if let Err(error) = child.wait() {
-        tracing::error!(%error, "failed to reap sing-box after startup setup failed");
+    match stop::stop(&mut stop::ChildStop(child), stop::FAILED_SPAWN_GRACE) {
+        Ok(outcome) => outcome.log(false),
+        Err(error) => tracing::error!(%error, "failed to stop sing-box after startup setup failed"),
     }
 }
 
@@ -446,6 +453,7 @@ struct SingBoxProcess {
     hints: Arc<HintFlags>,
     stderr_drain: Option<thread::JoinHandle<()>>,
     failures: Arc<output::FailureCounters>,
+    probe: bool,
 }
 
 impl SingBoxProcess {
@@ -492,24 +500,7 @@ impl EngineProcess for SingBoxProcess {
     }
 
     fn stop(&mut self) -> Result<(), EngineError> {
-        if self.child.try_wait()?.is_some() {
-            return Ok(());
-        }
-
-        // TODO: on Unix, first issue SIGTERM to allow the engine time to remove the routes,
-        // and only then kill. It's rough now, but predictable.
-        match self.child.kill() {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
-            Err(error) => {
-                // The process can exit between try_wait and kill.
-                if self.child.try_wait()?.is_none() {
-                    return Err(error.into());
-                }
-                return Ok(());
-            }
-        }
-        self.child.wait()?;
+        stop::stop(&mut stop::ChildStop(&mut self.child), stop::STOP_GRACE)?.log(self.probe);
         Ok(())
     }
 }

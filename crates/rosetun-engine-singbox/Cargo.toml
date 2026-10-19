@@ -15,5 +15,8 @@ serde_json.workspace = true
 tracing.workspace = true
 ureq = { version = "3.4", default-features = false }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Console"] }
+
 [lints]
 workspace = true
