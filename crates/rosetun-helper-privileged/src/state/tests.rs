@@ -528,6 +528,7 @@ struct EngineControls {
     running: Mutex<Option<Arc<AtomicBool>>>,
     outcomes: Mutex<VecDeque<bool>>,
     readiness: Mutex<VecDeque<bool>>,
+    adapter_busy: Mutex<VecDeque<bool>>,
     rendered_rules: Mutex<Vec<RuleSet>>,
     /// Server addresses of the extra nodes in each render.
     rendered_extra: Mutex<Vec<Vec<String>>>,
@@ -540,6 +541,14 @@ impl EngineControls {
             .lock()
             .expect("test outcomes mutex")
             .extend(std::iter::repeat_n(false, count));
+    }
+
+    /// The next starts exit like sing-box while Windows removes the old adapter.
+    fn adapter_busy_next(&self, count: usize) {
+        self.adapter_busy
+            .lock()
+            .unwrap()
+            .extend(std::iter::repeat_n(true, count));
     }
 
     fn fail_readiness_next(&self, count: usize) {
@@ -643,7 +652,14 @@ impl EngineBackend for ControlledEngine {
         {
             return Err(EngineError::BinaryNotFound("test engine".to_owned()));
         }
-        let running = Arc::new(AtomicBool::new(true));
+        let adapter_busy = self
+            .controls
+            .adapter_busy
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(false);
+        let running = Arc::new(AtomicBool::new(!adapter_busy));
         *self.controls.running.lock().expect("test process mutex") = Some(Arc::clone(&running));
         let ready = self
             .controls
@@ -652,7 +668,11 @@ impl EngineBackend for ControlledEngine {
             .expect("test readiness mutex")
             .pop_front()
             .unwrap_or(true);
-        Ok(Box::new(ControlledProcess { running, ready }))
+        Ok(Box::new(ControlledProcess {
+            running,
+            ready,
+            adapter_busy,
+        }))
     }
 }
 
@@ -660,9 +680,17 @@ impl EngineBackend for ControlledEngine {
 struct ControlledProcess {
     running: Arc<AtomicBool>,
     ready: bool,
+    adapter_busy: bool,
 }
 
 impl EngineProcess for ControlledProcess {
+    fn startup_hints(&self) -> rosetun_engine::StartupHints {
+        rosetun_engine::StartupHints {
+            adapter_still_removing: self.adapter_busy,
+            ..Default::default()
+        }
+    }
+
     fn is_running(&mut self) -> Result<bool, EngineError> {
         Ok(self.running.load(Ordering::Acquire))
     }
@@ -3651,6 +3679,7 @@ impl XrayRunner for FakeXrayRunner {
         Ok(Box::new(ControlledProcess {
             running,
             ready: true,
+            adapter_busy: false,
         }))
     }
 }
@@ -4102,6 +4131,59 @@ fn apply_rules_restarts_under_the_guard_and_supervisor_uses_new_rules() {
         controls.rendered_rules.lock().unwrap().last(),
         Some(&changed.rule_set)
     );
+}
+
+#[test]
+fn connect_retries_while_the_old_adapter_is_removed_under_the_same_guard() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    controls.adapter_busy_next(1);
+
+    helper.connect(&request).expect("second start connects");
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn apply_retries_while_the_old_adapter_is_removed_without_rollback() {
+    let (helper, controls, prepared, reverted) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let changed = request_with_new_rules(&request);
+    controls.adapter_busy_next(2);
+
+    helper.apply(&changed).expect("third start applies the change");
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 4);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
+    assert_eq!(
+        controls.rendered_rules.lock().unwrap().last(),
+        Some(&changed.rule_set)
+    );
+}
+
+#[test]
+fn engine_start_retries_end_after_two_and_other_exits_are_not_retried() {
+    let (helper, controls, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    controls.adapter_busy_next(3);
+
+    let error = helper.connect(&request).expect_err("retries run out");
+    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert_eq!(controls.spawns(), 3);
+
+    let (helper, controls, _, _) = supervised_helper(true);
+    controls.fail_readiness_next(1);
+    let error = helper.connect(&request).expect_err("an ordinary exit fails");
+    assert_eq!(error.code, ErrorCode::EngineFailed);
+    assert_eq!(controls.spawns(), 1);
 }
 
 #[test]

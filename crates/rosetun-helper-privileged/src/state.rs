@@ -46,6 +46,13 @@ const SERVER_CHECK_INTERVAL: Duration = Duration::from_secs(4);
 const SERVER_CHECK_GRACE: Duration = Duration::from_secs(30);
 const SERVER_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
 const SERVER_CHECK_FAILURES: u64 = 3;
+/// Starts repeated when the engine reports that Windows is still removing the
+/// previous tunnel adapter; the next start one or two seconds later succeeds.
+const ADAPTER_BUSY_RETRIES: u32 = 2;
+#[cfg(not(test))]
+const ADAPTER_BUSY_RETRY_DELAY: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const ADAPTER_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 const WATCHDOG_TIMING: WatchdogTiming = WatchdogTiming {
     interval: Duration::from_secs(30),
     retry: Duration::from_secs(5),
@@ -1427,6 +1434,18 @@ fn rates(previous: (TrafficTotals, Instant), current: (TrafficTotals, Instant)) 
 }
 
 impl Session {
+    fn wait_for_previous_adapter(&self, alias: &str) -> Result<(), HelperError> {
+        self.stage(rosetun_config::ConnectStage::WaitingForAdapter)?;
+        wait_for_previous_adapter_cancellable(
+            alias,
+            Duration::from_secs(20),
+            Duration::from_millis(250),
+            self.adapter_lookup,
+            &self.cancelled,
+        )?;
+        self.stage(rosetun_config::ConnectStage::StartingEngine)
+    }
+
     fn stage(&self, stage: rosetun_config::ConnectStage) -> Result<(), HelperError> {
         let mut status = self
             .status
@@ -1601,15 +1620,7 @@ impl Session {
             ));
         }
 
-        self.stage(rosetun_config::ConnectStage::WaitingForAdapter)?;
-        wait_for_previous_adapter_cancellable(
-            &settings.tun.name,
-            Duration::from_secs(20),
-            Duration::from_millis(250),
-            self.adapter_lookup,
-            &self.cancelled,
-        )?;
-        self.stage(rosetun_config::ConnectStage::StartingEngine)?;
+        self.wait_for_previous_adapter(&settings.tun.name)?;
 
         if mode == StartMode::Fresh
             && let Some(guard) = self.guard.take()
@@ -1848,24 +1859,54 @@ impl Session {
             tracing::info!(extra_nodes = extra.len(), "engine chain: sing-box");
         }
 
-        tracing::info!(engine = %backend.kind().as_str(), "spawning tunnel engine");
-        let spawned_at = Instant::now();
-        check_cancelled(&self.cancelled)?;
-        self.process = Some(
-            backend
-                .spawn_with_log_gate(&binary, &config, self.gate.deadline())
-                .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?,
-        );
-        self.control = control;
-
-        wait_for_engine_ready_from(
-            self.process
+        let mut attempt = 1;
+        let spawned_at = loop {
+            tracing::info!(engine = %backend.kind().as_str(), attempt, "spawning tunnel engine");
+            let spawned_at = Instant::now();
+            check_cancelled(&self.cancelled)?;
+            self.process = Some(
+                backend
+                    .spawn_with_log_gate(&binary, &config, self.gate.deadline())
+                    .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?,
+            );
+            let process = self
+                .process
                 .as_mut()
-                .expect("engine process was stored before readiness")
-                .as_mut(),
-            spawned_at,
-            &self.cancelled,
-        )?;
+                .expect("engine process was stored before readiness");
+            let error = match wait_for_engine_ready_from(process.as_mut(), spawned_at, &self.cancelled)
+            {
+                Ok(()) => break spawned_at,
+                Err(error) => error,
+            };
+            let adapter_busy = error.code == ErrorCode::EngineFailed
+                && process.startup_hints().adapter_still_removing;
+            if !adapter_busy || attempt > ADAPTER_BUSY_RETRIES {
+                if adapter_busy {
+                    tracing::warn!(
+                        attempts = attempt,
+                        "engine start failed: the previous tunnel adapter is still being removed"
+                    );
+                } else if attempt > 1 {
+                    tracing::warn!(attempts = attempt, "engine start failed after retries");
+                }
+                return Err(error);
+            }
+            tracing::warn!(
+                attempt,
+                delay_ms = ADAPTER_BUSY_RETRY_DELAY.as_millis(),
+                "previous tunnel adapter is still being removed; retrying the engine start"
+            );
+            // The engine has exited; protection stays as it is for the next attempt.
+            if let Some(mut process) = self.process.take() {
+                process
+                    .stop()
+                    .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+            }
+            sleep_cancellable(ADAPTER_BUSY_RETRY_DELAY, &self.cancelled)?;
+            self.wait_for_previous_adapter(&settings.tun.name)?;
+            attempt += 1;
+        };
+        self.control = control;
         let ready_at = Instant::now();
         let grace_deadline = server_check_grace_deadline(
             self.process
@@ -2419,6 +2460,18 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), HelperError> {
         ))
     } else {
         Ok(())
+    }
+}
+
+fn sleep_cancellable(duration: Duration, cancelled: &AtomicBool) -> Result<(), HelperError> {
+    let deadline = Instant::now() + duration;
+    loop {
+        check_cancelled(cancelled)?;
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Ok(());
+        }
+        thread::sleep(left.min(TUNNEL_READY_POLL_INTERVAL));
     }
 }
 
