@@ -266,7 +266,11 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
             ),
         ]);
         for (keys, name, path) in [
-            (keys::OUTBOUND_GUI, "Rosetun Lockdown: permit Rosetun", &apps.gui),
+            (
+                keys::OUTBOUND_GUI,
+                "Rosetun Lockdown: permit Rosetun",
+                &apps.gui,
+            ),
             (
                 keys::OUTBOUND_CLI,
                 "Rosetun Lockdown: permit the Rosetun CLI",
@@ -398,9 +402,15 @@ fn read_status(engine: &Engine) -> Result<LockdownStatus, RoutingError> {
     })
 }
 
-pub(in crate::platform) fn enable(allow_lan: bool, apps: &LockdownApps) -> Result<LockdownStatus, RoutingError> {
+pub(in crate::platform) fn enable(
+    allow_lan: bool,
+    apps: &LockdownApps,
+) -> Result<LockdownStatus, RoutingError> {
     let wanted = filter_set(allow_lan, apps);
-    let wanted_keys = wanted.iter().map(|filter| filter.key).collect::<HashSet<_>>();
+    let wanted_keys = wanted
+        .iter()
+        .map(|filter| filter.key)
+        .collect::<HashSet<_>>();
     let engine = Engine::standard()?;
     let transaction = engine.transaction()?;
 
@@ -450,9 +460,17 @@ pub(in crate::platform) fn disable() -> Result<bool, RoutingError> {
             "removing the Lockdown sublayer while a Rosetun session still has filters in it",
         ));
     }
-    removed |= found(status, FWP_E_SUBLAYER_NOT_FOUND, "removing the Lockdown sublayer")?;
+    removed |= found(
+        status,
+        FWP_E_SUBLAYER_NOT_FOUND,
+        "removing the Lockdown sublayer",
+    )?;
     let status = unsafe { FwpmProviderDeleteByKey0(engine.handle(), &PROVIDER_KEY) };
-    removed |= found(status, FWP_E_PROVIDER_NOT_FOUND, "removing the Lockdown provider")?;
+    removed |= found(
+        status,
+        FWP_E_PROVIDER_NOT_FOUND,
+        "removing the Lockdown provider",
+    )?;
 
     transaction.commit()?;
     flush();
@@ -461,7 +479,9 @@ pub(in crate::platform) fn disable() -> Result<bool, RoutingError> {
 
 /// Permits programs in the Lockdown sublayer from a dynamic session of their
 /// own, for server checks while no protection session is running.
-pub(in crate::platform) fn permit_programs(binaries: &[&Path]) -> Result<RoutingGuard, RoutingError> {
+pub(in crate::platform) fn permit_programs(
+    binaries: &[&Path],
+) -> Result<RoutingGuard, RoutingError> {
     let engine = Engine::dynamic()?;
     let transaction = engine.transaction()?;
     let name = wide("Rosetun Lockdown server check");
@@ -474,7 +494,10 @@ pub(in crate::platform) fn permit_programs(binaries: &[&Path]) -> Result<Routing
     };
     let status = unsafe { FwpmProviderAdd0(engine.handle(), &provider, ptr::null_mut()) };
     if status != 0 {
-        return Err(wfp_error(status, "adding the Lockdown server check provider"));
+        return Err(wfp_error(
+            status,
+            "adding the Lockdown server check provider",
+        ));
     }
     for binary in binaries {
         for rule in probe_authorization(binary) {
@@ -611,7 +634,11 @@ fn provider_exists(engine: &Engine) -> Result<bool, RoutingError> {
     let mut provider: *mut FWPM_PROVIDER0 = ptr::null_mut();
     // SAFETY: on success BFE allocates the result, freed at once.
     let status = unsafe { FwpmProviderGetByKey0(engine.handle(), &PROVIDER_KEY, &mut provider) };
-    let present = found(status, FWP_E_PROVIDER_NOT_FOUND, "reading the Lockdown provider")?;
+    let present = found(
+        status,
+        FWP_E_PROVIDER_NOT_FOUND,
+        "reading the Lockdown provider",
+    )?;
     free(provider);
     Ok(present)
 }
@@ -620,7 +647,11 @@ fn sublayer_weight(engine: &Engine) -> Result<Option<u16>, RoutingError> {
     let mut sublayer: *mut FWPM_SUBLAYER0 = ptr::null_mut();
     // SAFETY: as in `provider_exists`; the weight is copied out before the free.
     let status = unsafe { FwpmSubLayerGetByKey0(engine.handle(), &SUBLAYER_KEY, &mut sublayer) };
-    if !found(status, FWP_E_SUBLAYER_NOT_FOUND, "reading the Lockdown sublayer")? {
+    if !found(
+        status,
+        FWP_E_SUBLAYER_NOT_FOUND,
+        "reading the Lockdown sublayer",
+    )? {
         return Ok(None);
     }
     let weight = unsafe { (*sublayer).weight };
@@ -756,7 +787,11 @@ mod tests {
         let keys = all.iter().map(|filter| filter.key).collect::<HashSet<_>>();
         assert_eq!(keys.len(), all.len());
         assert_eq!(all.len(), 48);
-        for object in [super::PROVIDER_KEY, super::SUBLAYER_KEY, super::PROBE_PROVIDER_KEY] {
+        for object in [
+            super::PROVIDER_KEY,
+            super::SUBLAYER_KEY,
+            super::PROBE_PROVIDER_KEY,
+        ] {
             let object = (object.data1, object.data2, object.data3, object.data4);
             assert!(all.iter().all(|filter| {
                 let key = GUID::from_u128(filter.key);
@@ -885,7 +920,8 @@ mod tests {
             allow_lan: true,
             lockdown: true,
         };
-        let session = BootstrapPolicy::from_plan(&plan, &[std::path::Path::new(r"C:\sing-box.exe")]);
+        let session =
+            BootstrapPolicy::from_plan(&plan, &[std::path::Path::new(r"C:\sing-box.exe")]);
         let tunnel = policy::tunnel_authorization(123, true);
         let set = filter_set(true, &LockdownApps::default());
         let rules = persistent(&set)

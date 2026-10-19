@@ -425,7 +425,10 @@ mod tests {
             protection_scope(StartMode::Fresh, false, true, false),
             Some(ProtectionScope::DnsOnly)
         );
-        assert_eq!(protection_scope(StartMode::Fresh, false, false, false), None);
+        assert_eq!(
+            protection_scope(StartMode::Fresh, false, false, false),
+            None
+        );
         assert_eq!(
             protection_scope(StartMode::ProtectedReconnect, false, false, false),
             Some(ProtectionScope::DnsOnly)

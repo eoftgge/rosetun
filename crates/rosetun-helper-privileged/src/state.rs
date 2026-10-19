@@ -1755,12 +1755,8 @@ impl Session {
         if lockdown && !settings.kill_switch {
             tracing::info!("Lockdown is on: the kill switch is forced on");
         }
-        let scope = lockdown::protection_scope(
-            mode,
-            settings.kill_switch,
-            dns_server.is_some(),
-            lockdown,
-        );
+        let scope =
+            lockdown::protection_scope(mode, settings.kill_switch, dns_server.is_some(), lockdown);
         let tunnel = scope
             .map(|_| TunnelInterface::try_from(&settings.tun))
             .transpose()

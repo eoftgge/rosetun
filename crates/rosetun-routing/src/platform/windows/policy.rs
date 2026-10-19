@@ -222,9 +222,10 @@ fn common_rules(engine_binaries: &[&Path]) -> Vec<Rule> {
     }
 
     // A local resolver is not a leak; its outbound requests face the same filter.
-    rules.extend([AddressFamily::Ipv4, AddressFamily::Ipv6].map(|family| {
-        Rule::allow(family, vec![Condition::Loopback], BOOTSTRAP_ALLOW_WEIGHT)
-    }));
+    rules.extend(
+        [AddressFamily::Ipv4, AddressFamily::Ipv6]
+            .map(|family| Rule::allow(family, vec![Condition::Loopback], BOOTSTRAP_ALLOW_WEIGHT)),
+    );
     rules
 }
 
