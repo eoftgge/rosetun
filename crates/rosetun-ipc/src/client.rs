@@ -146,6 +146,10 @@ impl HelperClient {
         self.expect_ok(Request::Disconnect)
     }
 
+    pub fn set_lockdown(&mut self, enabled: bool, allow_lan: bool) -> Result<(), ClientError> {
+        self.expect_ok(Request::SetLockdown { enabled, allow_lan })
+    }
+
     pub fn shutdown(&mut self) -> Result<(), ClientError> {
         self.expect_ok(Request::Shutdown)
     }

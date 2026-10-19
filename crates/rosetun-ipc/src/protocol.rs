@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_EXTRA_NODES: usize = 16;
@@ -41,6 +41,11 @@ pub enum Request {
     TunnelDelay,
     Disconnect,
     Apply(Box<ConnectRequest>),
+    /// Turns Lockdown on (or updates its LAN permits) or off (protocol 12).
+    SetLockdown {
+        enabled: bool,
+        allow_lan: bool,
+    },
     Subscribe,
     Shutdown,
 }
@@ -81,6 +86,11 @@ impl std::fmt::Debug for Request {
             Self::DiagnosticLog => f.write_str("DiagnosticLog"),
             Self::TunnelDelay => f.write_str("TunnelDelay"),
             Self::Disconnect => f.write_str("Disconnect"),
+            Self::SetLockdown { enabled, allow_lan } => f
+                .debug_struct("SetLockdown")
+                .field("enabled", enabled)
+                .field("allow_lan", allow_lan)
+                .finish(),
             Self::Subscribe => f.write_str("Subscribe"),
             Self::Shutdown => f.write_str("Shutdown"),
         }
@@ -481,7 +491,20 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 11);
+        assert_eq!(super::PROTOCOL_VERSION, 12);
+        let lockdown = super::Request::SetLockdown {
+            enabled: true,
+            allow_lan: false,
+        };
+        let encoded = serde_json::to_string(&lockdown).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"set_lockdown":{"enabled":true,"allow_lan":false}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<super::Request>(&encoded).unwrap(),
+            lockdown
+        );
     }
     use rosetun_config::{
         AppConfig, CountryCode, EngineKind, Exit, ExitId, ExitTarget, Node, NodeId, Outbound, Rule,

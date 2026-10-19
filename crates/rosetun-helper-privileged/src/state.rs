@@ -1,6 +1,7 @@
 mod apply;
 mod dns;
 mod exits;
+mod lockdown;
 mod path;
 mod probe;
 #[cfg(test)]
@@ -131,6 +132,7 @@ pub struct Helper {
     shutting_down: AtomicBool,
     resumed: AtomicBool,
     cancelled: Arc<AtomicBool>,
+    lockdown: lockdown::SharedLockdown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +243,10 @@ struct Session {
     cancelled: Arc<AtomicBool>,
     lists: Option<Arc<Mutex<ListStore>>>,
     list_run_dir: Option<PathBuf>,
+    lockdown: lockdown::SharedLockdown,
+    /// The engine binaries the current protection permits, for changing its
+    /// scope when Lockdown is turned on or off.
+    protected_binaries: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for Helper {
@@ -259,7 +265,9 @@ impl Helper {
         let engines = Arc::new(engines);
         let cancelled = Arc::new(AtomicBool::new(false));
         let owner = Arc::new(Mutex::new(None));
+        let lockdown = lockdown::SharedLockdown::default();
         Self {
+            lockdown: Arc::clone(&lockdown),
             status: Arc::clone(&status),
             owner: Arc::clone(&owner),
             last_owner: Mutex::new(None),
@@ -310,6 +318,8 @@ impl Helper {
                 cancelled,
                 lists: None,
                 list_run_dir: None,
+                lockdown,
+                protected_binaries: Vec::new(),
                 #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
                 #[cfg(test)]
@@ -402,7 +412,9 @@ impl Helper {
     }
 
     pub fn status(&self) -> Status {
-        self.with_status(|status| status.clone())
+        let mut status = self.with_status(|status| status.clone());
+        status.lockdown = lockdown::read(&self.lockdown).enabled;
+        status
     }
 
     pub(crate) fn temporary_rules_as(&self, caller: &Caller) -> Result<Vec<Rule>, HelperError> {
@@ -1640,7 +1652,10 @@ impl Session {
                     "protected reconnect is impossible: the routing guard is missing",
                 ));
             }
-            if !settings.kill_switch && self.keeps_protection() {
+            if !settings.kill_switch
+                && self.keeps_protection()
+                && !lockdown::read(&self.lockdown).enabled
+            {
                 return Err(HelperError::new(
                     ErrorCode::InvalidState,
                     "disconnect first to turn protection off",
@@ -1733,23 +1748,19 @@ impl Session {
             binaries.push(path.as_path());
         }
 
-        let scope = match mode {
-            StartMode::Fresh => {
-                if settings.kill_switch {
-                    Some(ProtectionScope::AllTraffic)
-                } else if dns_server.is_some() {
-                    Some(ProtectionScope::DnsOnly)
-                } else {
-                    None
-                }
-            }
-            // The guard stays; only the kill switch may widen it.
-            StartMode::ProtectedReconnect => Some(if settings.kill_switch {
-                ProtectionScope::AllTraffic
-            } else {
-                ProtectionScope::DnsOnly
-            }),
-        };
+        self.protected_binaries = binaries.iter().map(|path| path.to_path_buf()).collect();
+
+        lockdown::sync_lan(self.routing.as_ref(), &self.lockdown, settings.allow_lan)?;
+        let lockdown = lockdown::read(&self.lockdown).enabled;
+        if lockdown && !settings.kill_switch {
+            tracing::info!("Lockdown is on: the kill switch is forced on");
+        }
+        let scope = lockdown::protection_scope(
+            mode,
+            settings.kill_switch,
+            dns_server.is_some(),
+            lockdown,
+        );
         let tunnel = scope
             .map(|_| TunnelInterface::try_from(&settings.tun))
             .transpose()
@@ -1759,7 +1770,7 @@ impl Session {
             let plan = RoutingPlan {
                 scope,
                 allow_lan: settings.allow_lan,
-                lockdown: false,
+                lockdown,
             };
 
             match mode {

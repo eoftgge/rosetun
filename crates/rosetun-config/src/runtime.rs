@@ -84,6 +84,9 @@ pub struct Status {
     pub since_unix: Option<u64>,
     #[serde(default)]
     pub traffic: Traffic,
+    /// Lockdown's persistent block is installed (protocol 12).
+    #[serde(default)]
+    pub lockdown: bool,
 }
 
 #[cfg(test)]

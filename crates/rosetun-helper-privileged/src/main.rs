@@ -294,6 +294,7 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
             .with_xray(xray)
             .with_list_store(lists, run_dir.join("sing-box")),
     );
+    helper.restore_lockdown();
     state::spawn_list_reaper(Arc::clone(&helper))
         .map_err(|error| StartError(format!("failed to start list cleanup thread: {error}")))?;
     state::spawn_supervisor(Arc::clone(&helper)).map_err(|error| {

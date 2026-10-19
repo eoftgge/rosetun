@@ -385,6 +385,12 @@ fn dispatch(
             Ok(()) => Response::Ok,
             Err(error) => Response::Error(error),
         },
+        Request::SetLockdown { enabled, allow_lan } => {
+            match helper.set_lockdown_as(caller.expect("caller checked"), *enabled, *allow_lan) {
+                Ok(()) => Response::Ok,
+                Err(error) => Response::Error(error),
+            }
+        }
         Request::Apply(request) => {
             match helper.apply_as(caller.expect("caller checked"), request) {
                 Ok(()) => Response::Ok,
@@ -504,6 +510,10 @@ mod tests {
             Request::DiagnosticLog,
             Request::TunnelDelay,
             Request::Disconnect,
+            Request::SetLockdown {
+                enabled: true,
+                allow_lan: false,
+            },
             Request::Shutdown,
             Request::ListStatus { hashes: Vec::new() },
             Request::PutListChunk {

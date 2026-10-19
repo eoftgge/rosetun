@@ -295,6 +295,14 @@ impl Helper {
                 "server check configuration cleanup is unavailable",
             )
         })?;
+        let engine_binary = backend.locate_binary().map_err(|_| {
+            HelperError::new(
+                ErrorCode::EngineFailed,
+                "server check engine is unavailable",
+            )
+        })?;
+        // Without a session nothing permits the check under Lockdown's block.
+        let lockdown_routing = self.lockdown_probe_routing(&engine_binary)?;
         let mut _permit: Option<ProbeBinaryPermit> = None;
         let mut _xray_process: Option<ProbeProcess> = None;
         let mut process = ProbeProcess {
@@ -350,23 +358,26 @@ impl Helper {
                 .filter(|(tag, _, _)| !xray_config.unsupported_probes.contains(tag))
                 .map(|(_, _, socks)| socks)
                 .collect::<Vec<_>>();
-            let routing = match self.session.try_lock() {
-                Ok(session) => session
-                    .guard
-                    .as_ref()
-                    .map(|guard| Arc::clone(&guard.routing)),
-                Err(TryLockError::WouldBlock) => {
-                    return Err(HelperError::new(
-                        ErrorCode::Busy,
-                        "tunnel changes are in progress during server checks",
-                    ));
-                }
-                Err(TryLockError::Poisoned(_)) => {
-                    return Err(HelperError::new(
-                        ErrorCode::Internal,
-                        "helper state is unavailable during server checks",
-                    ));
-                }
+            let routing = match &lockdown_routing {
+                Some(routing) => Some(Arc::clone(routing)),
+                None => match self.session.try_lock() {
+                    Ok(session) => session
+                        .guard
+                        .as_ref()
+                        .map(|guard| Arc::clone(&guard.routing)),
+                    Err(TryLockError::WouldBlock) => {
+                        return Err(HelperError::new(
+                            ErrorCode::Busy,
+                            "tunnel changes are in progress during server checks",
+                        ));
+                    }
+                    Err(TryLockError::Poisoned(_)) => {
+                        return Err(HelperError::new(
+                            ErrorCode::Internal,
+                            "helper state is unavailable during server checks",
+                        ));
+                    }
+                },
             };
             _permit = routing
                 .map(|routing| ProbeBinaryPermit::new(routing, &binary))
@@ -393,13 +404,7 @@ impl Helper {
             })?;
             _xray_process = Some(probe);
         }
-        let binary = backend.locate_binary().map_err(|_| {
-            HelperError::new(
-                ErrorCode::EngineFailed,
-                "server check engine is unavailable",
-            )
-        })?;
-        process.process = Some(backend.spawn(&binary, &config).map_err(|_| {
+        process.process = Some(backend.spawn(&engine_binary, &config).map_err(|_| {
             HelperError::new(
                 ErrorCode::EngineFailed,
                 "failed to start server check engine",
