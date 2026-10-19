@@ -45,6 +45,8 @@ enum Command {
     Config,
     Xray(XrayUse),
     Lan(bool),
+    Lockdown(bool),
+    ResetFirewall,
     Disconnect,
     Shutdown,
 }
@@ -88,7 +90,15 @@ fn main() -> ExitCode {
         }
         Command::Config => local_result(print_config()),
         Command::Xray(setting) => local_result(set_xray(setting)),
-        Command::Lan(enabled) => local_result(set_lan(enabled)),
+        Command::Lan(enabled) => match set_lan(enabled) {
+            Ok(()) => update_lockdown_lan(enabled),
+            Err(message) => local_result(Err(message)),
+        },
+        Command::Lockdown(enabled) => match saved_allow_lan() {
+            Ok(allow_lan) => with_helper(|client| lockdown(client, enabled, allow_lan)),
+            Err(message) => local_result(Err(message)),
+        },
+        Command::ResetFirewall => reset_firewall(),
         Command::Connect { request_path } => match prepare_list_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| connect(client, request)),
             Err(message) => local_result(Err(message)),
@@ -279,6 +289,7 @@ fn status(client: &mut HelperClient) -> ExitCode {
                 println!("network: no network");
             }
             println!("temporary rules: {temporary_count}");
+            println!("lockdown: {}", if status.lockdown { "on" } else { "off" });
             println!(
                 "node: {}",
                 terminal_text(status.node.as_ref().map(NodeId::as_str).unwrap_or("none"))
@@ -568,6 +579,73 @@ fn set_lan(enabled: bool) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+fn saved_allow_lan() -> Result<bool, String> {
+    let store = rosetun_core::Store::open_default().map_err(|error| error.to_string())?;
+    let config = store.load().map_err(|error| error.to_string())?;
+    Ok(config.settings.allow_lan)
+}
+
+fn lockdown(client: &mut HelperClient, enabled: bool, allow_lan: bool) -> ExitCode {
+    match client.set_lockdown(enabled, allow_lan) {
+        Ok(()) => {
+            println!("lockdown {}", if enabled { "on" } else { "off" });
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            report_helper_error(&error, "failed to change Lockdown");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Lockdown keeps its own LAN permits; they follow the setting at once.
+/// Without a running service there is nothing to update: the next connect
+/// brings Lockdown in line with the setting.
+fn update_lockdown_lan(enabled: bool) -> ExitCode {
+    let endpoint = rosetun_ipc::default_endpoint();
+    let client_name = concat!("rosetun/", env!("CARGO_PKG_VERSION"));
+    let Ok(mut client) = HelperClient::connect(&endpoint, client_name) else {
+        return ExitCode::SUCCESS;
+    };
+    match client.status() {
+        Ok(status) if status.lockdown => lockdown(&mut client, true, enabled),
+        _ => ExitCode::SUCCESS,
+    }
+}
+
+/// `rosetun-helper-privileged --reset-firewall` from this program's folder.
+fn reset_firewall() -> ExitCode {
+    let helper = match std::env::current_exe() {
+        Ok(exe) => exe.with_file_name(format!(
+            "rosetun-helper-privileged{}",
+            std::env::consts::EXE_SUFFIX
+        )),
+        Err(error) => {
+            eprintln!("cannot find the Rosetun folder: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match std::process::Command::new(&helper)
+        .arg("--reset-firewall")
+        .status()
+    {
+        Ok(status) => match status.code() {
+            Some(0) => ExitCode::SUCCESS,
+            // The helper's `reset_exit::NOT_ADMINISTRATOR`.
+            Some(3) => {
+                eprintln!("run `rosetun reset-firewall` from a terminal opened as administrator");
+                ExitCode::from(3)
+            }
+            Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+            None => ExitCode::FAILURE,
+        },
+        Err(error) => {
+            eprintln!("cannot run {}: {error}", helper.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn parse_command() -> Result<Command, String> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     parse_command_arguments(&arguments)
@@ -606,6 +684,9 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["xray", "always"] => Ok(Command::Xray(XrayUse::Always)),
         ["lan", "on"] => Ok(Command::Lan(true)),
         ["lan", "off"] => Ok(Command::Lan(false)),
+        ["lockdown", "on"] => Ok(Command::Lockdown(true)),
+        ["lockdown", "off"] => Ok(Command::Lockdown(false)),
+        ["reset-firewall"] => Ok(Command::ResetFirewall),
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
         ["connect", ..] => Err("connect accepts zero or one request JSON path".to_owned()),
@@ -617,6 +698,8 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["config", ..] => Err("config does not accept arguments".to_owned()),
         ["xray", ..] => Err("xray requires auto, off or always".to_owned()),
         ["lan", ..] => Err("lan requires on or off".to_owned()),
+        ["lockdown", ..] => Err("lockdown requires on or off".to_owned()),
+        ["reset-firewall", ..] => Err("reset-firewall does not accept arguments".to_owned()),
         ["status", ..] => Err("status does not accept arguments".to_owned()),
         ["temporary", ..] => Err("temporary does not accept arguments".to_owned()),
         ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),
@@ -653,10 +736,15 @@ Usage:
   rosetun config
   rosetun xray <auto|off|always>
   rosetun lan <on|off>
+  rosetun lockdown <on|off>
+  rosetun reset-firewall
   rosetun disconnect
   rosetun shutdown
 
 Subscription and node commands are local and do not require the helper.
+Lockdown blocks all traffic outside the tunnel, also when disconnected and
+after a reboot. reset-firewall removes it without the service; run it as
+administrator.
 Options for sub add may appear in any order after the URL."
     );
 }
@@ -760,6 +848,12 @@ mod tests {
         assert_eq!(parse(&["lan", "on"]), Ok(Command::Lan(true)));
         assert_eq!(parse(&["lan", "off"]), Ok(Command::Lan(false)));
         assert!(parse(&["lan", "unknown"]).is_err());
+        assert_eq!(parse(&["lockdown", "on"]), Ok(Command::Lockdown(true)));
+        assert_eq!(parse(&["lockdown", "off"]), Ok(Command::Lockdown(false)));
+        assert!(parse(&["lockdown"]).is_err());
+        assert!(parse(&["lockdown", "on", "now"]).is_err());
+        assert_eq!(parse(&["reset-firewall"]), Ok(Command::ResetFirewall));
+        assert!(parse(&["reset-firewall", "now"]).is_err());
         assert_eq!(parse(&["disconnect"]), Ok(Command::Disconnect));
         assert_eq!(parse(&["shutdown"]), Ok(Command::Shutdown));
     }

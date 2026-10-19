@@ -370,6 +370,9 @@ begin
   begin
     RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/F /IM {#GuiExe}', ResultCode);
     RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--uninstall-service', ResultCode);
+    // Lockdown's persistent filters outlive the program. Only uninstall
+    // removes them; an upgrade over a locked machine keeps Lockdown on.
+    RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--reset-firewall', ResultCode);
     // Autostart is per user. Only the current user's values are reachable here.
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Rosetun');
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run', 'Rosetun');

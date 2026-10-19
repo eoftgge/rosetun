@@ -12,7 +12,7 @@ use crate::server::{Server, ShutdownHandle};
 use crate::state::Helper;
 use rosetun_ipc::SERVICE_NAME;
 use windows_sys::Win32::Foundation::{
-    ERROR_CALL_NOT_IMPLEMENTED, ERROR_FAILED_SERVICE_CONTROLLER_CONNECT,
+    ERROR_ACCESS_DENIED, ERROR_CALL_NOT_IMPLEMENTED, ERROR_FAILED_SERVICE_CONTROLLER_CONNECT,
     ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL, ERROR_SERVICE_DOES_NOT_EXIST,
     ERROR_SERVICE_EXISTS, ERROR_SERVICE_NOT_ACTIVE, ERROR_SERVICE_SPECIFIC_ERROR, NO_ERROR,
 };
@@ -400,7 +400,24 @@ pub(crate) fn uninstall() -> io::Result<()> {
         return Err(error);
     }
     let service = ScHandle(service);
+    stop_and_wait(&service)?;
+
+    // SAFETY: The service handle remains live until deletion completes.
+    if unsafe { DeleteService(service.0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    println!("Rosetun service removed");
+    Ok(())
+}
+
+/// Stops the service and waits until it has; returns whether it was running.
+fn stop_and_wait(service: &ScHandle) -> io::Result<bool> {
     let mut status = SERVICE_STATUS::default();
+    // SAFETY: The service handle and status output remain live during the call.
+    if unsafe { QueryServiceStatus(service.0, &mut status) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let was_running = status.dwCurrentState != SERVICE_STOPPED;
     // SAFETY: The service handle and status output remain live during the call.
     if unsafe { ControlService(service.0, SERVICE_CONTROL_STOP, &mut status) } == 0 {
         let error = io::Error::last_os_error();
@@ -419,7 +436,7 @@ pub(crate) fn uninstall() -> io::Result<()> {
             return Err(io::Error::last_os_error());
         }
         if status.dwCurrentState == SERVICE_STOPPED {
-            break;
+            return Ok(was_running);
         }
         if status.dwCurrentState == SERVICE_RUNNING {
             // SAFETY: The service handle and status output remain live during the call.
@@ -433,13 +450,109 @@ pub(crate) fn uninstall() -> io::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
 
-    // SAFETY: The service handle remains live until deletion completes.
-    if unsafe { DeleteService(service.0) } == 0 {
-        return Err(io::Error::last_os_error());
+/// Exit codes of `--reset-firewall`; `rosetun reset-firewall` reads them.
+pub(crate) mod reset_exit {
+    pub(crate) const FAILED: u8 = 1;
+    pub(crate) const NOT_ADMINISTRATOR: u8 = 3;
+    pub(crate) const SERVICE_DID_NOT_STOP: u8 = 4;
+    pub(crate) const FILTERS_REMAIN: u8 = 5;
+    pub(crate) const SERVICE_DID_NOT_START: u8 = 6;
+}
+
+/// Removes Lockdown's persistent objects, and nothing else, by their fixed
+/// keys. A running service is stopped first: its dynamic filters in the
+/// Lockdown sublayer go with it, so the removal does not hit FWP_E_IN_USE.
+/// The service is started again if it was running.
+pub(crate) fn reset_firewall() -> ExitCode {
+    let not_administrator = || {
+        eprintln!("removing Lockdown needs administrator rights");
+        ExitCode::from(reset_exit::NOT_ADMINISTRATOR)
+    };
+    // SAFETY: Null names select the local SCM and active database.
+    let manager = unsafe { OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT) };
+    if manager.is_null() {
+        eprintln!(
+            "cannot open the service manager: {}",
+            io::Error::last_os_error()
+        );
+        return ExitCode::from(reset_exit::FAILED);
     }
-    println!("Rosetun service removed");
-    Ok(())
+    let manager = ScHandle(manager);
+    let name = wide(SERVICE_NAME);
+    // SAFETY: The SCM handle and NUL-terminated name are live during the call.
+    let service = unsafe {
+        OpenServiceW(
+            manager.0,
+            name.as_ptr(),
+            SERVICE_STOP | SERVICE_START | SERVICE_QUERY_STATUS,
+        )
+    };
+    let service = if service.is_null() {
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(code) if code == ERROR_SERVICE_DOES_NOT_EXIST as i32 => None,
+            Some(code) if code == ERROR_ACCESS_DENIED as i32 => return not_administrator(),
+            _ => {
+                eprintln!("cannot open the Rosetun service: {error}");
+                return ExitCode::from(reset_exit::FAILED);
+            }
+        }
+    } else {
+        Some(ScHandle(service))
+    };
+
+    let was_running = match service.as_ref().map(stop_and_wait).transpose() {
+        Ok(running) => running.unwrap_or(false),
+        Err(error) => {
+            eprintln!("cannot stop the Rosetun service: {error}");
+            return ExitCode::from(reset_exit::SERVICE_DID_NOT_STOP);
+        }
+    };
+    if was_running {
+        println!("Rosetun service stopped");
+    }
+
+    let removal = rosetun_routing::lockdown::disable();
+    let restarted = match service.as_ref().filter(|_| was_running) {
+        // SAFETY: The service handle is live and no start arguments are supplied.
+        Some(service) if unsafe { StartServiceW(service.0, 0, ptr::null()) } == 0 => {
+            Err(io::Error::last_os_error())
+        }
+        _ => Ok(()),
+    };
+    let code = match removal {
+        Ok(true) => {
+            println!("Lockdown removed");
+            ExitCode::SUCCESS
+        }
+        Ok(false) => {
+            println!("Lockdown was not on; nothing to remove");
+            ExitCode::SUCCESS
+        }
+        Err(rosetun_routing::RoutingError::Wfp { code, .. }) if code == ERROR_ACCESS_DENIED => {
+            return not_administrator();
+        }
+        Err(error) if error.is_in_use() => {
+            eprintln!(
+                "Lockdown is still in use by a running Rosetun helper; stop it and run this again"
+            );
+            ExitCode::from(reset_exit::FILTERS_REMAIN)
+        }
+        Err(error) => {
+            eprintln!("cannot remove Lockdown: {error}");
+            ExitCode::from(reset_exit::FILTERS_REMAIN)
+        }
+    };
+    if let Err(error) = restarted {
+        eprintln!("cannot start the Rosetun service again: {error}");
+        return ExitCode::from(reset_exit::SERVICE_DID_NOT_START);
+    }
+    if was_running {
+        println!("Rosetun service started again");
+    }
+    code
 }
 
 #[cfg(test)]

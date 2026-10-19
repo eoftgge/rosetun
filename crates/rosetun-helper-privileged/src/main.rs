@@ -28,7 +28,7 @@ use tracing_subscriber::prelude::*;
 use crate::log_gate::VerboseGate;
 use crate::server::{Helper, Server};
 
-const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path>]";
+const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --reset-firewall | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path>]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
@@ -36,6 +36,8 @@ enum Mode {
     Service,
     InstallService,
     UninstallService,
+    /// Removes Lockdown (administrator): exit codes in `service::reset_exit`.
+    ResetFirewall,
     VerifyInstallDir(std::path::PathBuf),
     SecureInstallDir(std::path::PathBuf),
     FinalizeInstallDir(std::path::PathBuf),
@@ -48,6 +50,7 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
         [arg] if arg == "--service" => Ok(Mode::Service),
         [arg] if arg == "--install-service" => Ok(Mode::InstallService),
         [arg] if arg == "--uninstall-service" => Ok(Mode::UninstallService),
+        [arg] if arg == "--reset-firewall" => Ok(Mode::ResetFirewall),
         [arg, path] if arg == "--verify-install-dir" => Ok(Mode::VerifyInstallDir(path.into())),
         [arg, path] if arg == "--secure-install-dir" => Ok(Mode::SecureInstallDir(path.into())),
         [arg, path] if arg == "--finalize-install-dir" => Ok(Mode::FinalizeInstallDir(path.into())),
@@ -103,6 +106,15 @@ fn main() -> std::process::ExitCode {
         Mode::InstallService => service_command(service::install()),
         #[cfg(windows)]
         Mode::UninstallService => service_command(service::uninstall()),
+        #[cfg(windows)]
+        Mode::ResetFirewall => {
+            // Only Lockdown's own warnings, such as a failed flush, on stderr.
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::new("warn"))
+                .with_writer(std::io::stderr)
+                .init();
+            service::reset_firewall()
+        }
         #[cfg(windows)]
         Mode::VerifyInstallDir(path) => {
             install_command(&path, "safe", install_dir::verify(&path, true))
@@ -337,6 +349,11 @@ mod tests {
         assert_eq!(mode(&["--service"]), Ok(Mode::Service));
         assert_eq!(mode(&["--install-service"]), Ok(Mode::InstallService));
         assert_eq!(mode(&["--uninstall-service"]), Ok(Mode::UninstallService));
+        assert_eq!(mode(&["--reset-firewall"]), Ok(Mode::ResetFirewall));
+        assert_eq!(
+            mode(&["--reset-firewall", "--service"]),
+            Err(USAGE.to_owned())
+        );
         assert_eq!(
             mode(&["--verify-install-dir", r"D:\Example\Rosetun"]),
             Ok(Mode::VerifyInstallDir(r"D:\Example\Rosetun".into()))
