@@ -2,9 +2,16 @@ English | [Русский](README.ru.md)
 
 <p align="center"><img src=".github/assets/banner.svg" alt="Rosetun: VPN client for Windows" width="100%"></p>
 
-Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rules and DNS; for VLESS + REALITY servers, Xray behind sing-box carries the connection to the server. A Windows service maintains the kill switch and DNS lock; routing rules split traffic by app, website and IP address, and provider subscriptions supply servers.
+<p align="center">
+  <a href="https://github.com/eoftgge/rosetun/releases/latest"><img src=".github/assets/download.svg" alt="Download Rosetun for Windows" height="56"></a>
+</p>
 
-<a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download.svg" alt="Download Rosetun for Windows" height="56"></a>
+<p align="center">
+<img alt="CI" src="https://img.shields.io/github/actions/workflow/status/eoftgge/rosetun/ci.yml?style=for-the-badge&logo=rust">
+<img alt="GitHub issues by-label" src="https://img.shields.io/github/issues/eoftgge/rosetun/bug?style=for-the-badge&logo=github">
+</p>
+
+Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rules and DNS; for VLESS + REALITY servers, Xray behind sing-box carries the connection to the server. A Windows service maintains the kill switch and DNS lock; routing rules split traffic by app, website and IP address, and provider subscriptions supply servers.
 
 **Young project:** one developer maintains it with AI coding agents, and it has few users yet. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues).
 
@@ -94,5 +101,3 @@ See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 Rosetun is licensed under **GPL-3.0-or-later**, © 2026 Sandaar. See [LICENSE](LICENSE). The bundled sing-box executable is the unmodified official build and is licensed under GPL-3.0-or-later. The bundled Xray-core executable is the unmodified official build and is licensed under MPL-2.0; its source is attached to each release, and its license is installed in `licenses/`. Xray's `geoip.dat` and `geosite.dat` are not installed. The executable embeds Wintun 0.14.1, copyrighted by WireGuard LLC and distributed under the [Wintun Prebuilt Binaries License](installer/third-party/wintun-prebuilt-binaries-license.txt); its license and notice are installed as `licenses/wintun-prebuilt-binaries-license.txt` and `licenses/wintun.txt`. The Manrope and Cormorant Garamond fonts use OFL-1.1. Notices for Rust crates are installed as `licenses/third-party.html`.
 
 Rosetun is not affiliated with sing-box, SagerNet or Project X.
-
-![CI](https://github.com/eoftgge/rosetun/actions/workflows/ci.yml/badge.svg)

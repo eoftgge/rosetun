@@ -1,10 +1,17 @@
 [English](README.md) | Русский
 
-<p align="center"><img src=".github/assets/banner-ru.svg" alt="Rosetun: VPN-клиент для Windows" width="100%"></p>
+<p align="center"><img src=".github/assets/banner.svg" alt="Rosetun: VPN client for Windows" width="100%"></p>
+
+<p align="center">
+  <a href="https://github.com/eoftgge/rosetun/releases/latest"><img src=".github/assets/download-ru.svg" alt="Download Rosetun for Windows" height="56"></a>
+</p>
+
+<p align="center">
+<img alt="CI" src="https://img.shields.io/github/actions/workflow/status/eoftgge/rosetun/ci.yml?style=for-the-badge&logo=rust">
+<img alt="GitHub issues by-label" src="https://img.shields.io/github/issues/eoftgge/rosetun/bug?style=for-the-badge&logo=github">
+</p>
 
 Rosetun: VPN-клиент для Windows на базе sing-box, который держит туннель, правила и DNS; для серверов VLESS + REALITY соединение с сервером ведёт Xray за sing-box. Служба Windows держит kill switch и замок DNS; правила разделяют трафик по программам, сайтам и IP-адресам, а подписки провайдеров поставляют серверы.
-
-<a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download-ru.svg" alt="Скачать Rosetun для Windows" height="56"></a>
 
 **Молодой проект:** его ведёт один разработчик с помощью ИИ-агентов, пользователей пока мало. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues).
 
