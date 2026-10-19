@@ -36,6 +36,14 @@ Both matrices stop sing-box host nodes on completion or error only if that invoc
 
 Before running, the guest must have a DHCP-assigned IPv4 address with a default route and be able to connect to the host's link-local IPv6 address on TCP 8388. The failure matrix verifies both baselines; the list scenario checks direct egress and DNS before connecting. A temporary static IPv4 address can restore connectivity for diagnosis, but it cannot pass the DHCP recovery check after the guest adapter restarts. The Default Switch does not pass IPv6 neighbor discovery, so the matrix pins each side's link-local neighbor on the other (the host in the guest, the guest's current MAC on the host) in ActiveStore only, and removes the entries it created in `finally`, also after an interrupted run. A failed IPv6 baseline would make every "IPv6 blocked" result meaningless, so the matrix stops there and prints both neighbor entries; fix guest-to-host IPv6 reachability before running it again.
 
+`Invoke-LockdownMatrix.ps1` is the Lockdown matrix (the owner runs it; about 30 minutes, it reboots the guest once and cuts its power six times unless `-SkipReboot`): off, on while disconnected (the CLI's path gets out, curl does not, server checks work), inbound and `lan on`, connect and disconnect, a killed helper, a reboot checked by a startup task, power cuts `-PowerCutDelaySeconds` (default 2) after `lockdown on` and after `lockdown off` (`-PowerCutRepeats`, default 3), `lockdown off` connected and disconnected, `--reset-firewall` with the real service running and stopped, and the uninstaller's steps. It takes the failure matrix's `-SingBoxPath`, `-RequestPath`, `-UseHostNode` and `-Build`:
+
+```powershell
+.	oolsm\Invoke-LockdownMatrix.ps1 -SingBoxPath .	ools\sing-box.exe -RequestPath .	oolsmequest-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .	arget\lockdown-matrix.txt
+```
+
+Its `finally` runs `--reset-firewall`. If a run was killed and the guest has no network, run in the guest as administrator `C:osetunosetun-helper-privileged.exe --reset-firewall` (it stops the Rosetun service if one runs; stop a console helper with `Stop-Process -Name rosetun-helper-privileged` first, or the removal reports that the sublayer is in use), then `Unregister-ScheduledTask RosetunLockdownMatrixBootCheck -Confirm:$false`. Without the binary, `netsh wfp show filters` lists the filters of provider `f12dbedd-f3c7-4a72-b0f8-20559c88b112`, and restoring the `clean` checkpoint removes everything.
+
 `Invoke-LockdownProbe.ps1` is a study for the 0.3 Lockdown, not a matrix: it checks which WFP permits from a dynamic session beat a persistent block in another sublayer, and whether the block holds across reboots. Run it with Rosetun disconnected in the guest (the owner runs it); it reboots the guest unless `-SkipReboot` is given:
 
 ```powershell

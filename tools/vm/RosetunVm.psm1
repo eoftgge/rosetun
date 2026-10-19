@@ -1126,7 +1126,9 @@ function Test-RosetunDirectEgress {
 function Test-RosetunDirectDns {
     param(
         # Resolvers fall back to TCP for long answers; the lock must cover it too.
-        [switch]$Tcp
+        [switch]$Tcp,
+        # Another resolver than DnsProbeServer, such as the guest's gateway.
+        [string]$Server = $script:Config.DnsProbeServer
     )
     # A non-engine guest process probes port 53 through the physical adapter.
     $address = Get-RosetunEgressAddress
@@ -1153,7 +1155,7 @@ function Test-RosetunDirectDns {
         }
         catch { return $false }
         finally { $client.Dispose() }
-    } -ArgumentList $address, $script:Config.DnsProbeServer, [bool]$Tcp
+    } -ArgumentList $address, $Server, [bool]$Tcp
 }
 
 function Get-RosetunIpv6NeighborTarget {
@@ -1755,6 +1757,257 @@ function Get-RosetunHelperLog {
         param($dir, $tail)
         Get-Content -Path "$dir\helper.log" -Tail $tail -ErrorAction SilentlyContinue
     } -ArgumentList $script:Config.GuestDir, $Tail
+}
+
+function Test-RosetunGuestLoopback {
+    # Loopback must keep working under a Lockdown block: local services use it.
+    Invoke-RosetunGuest -ScriptBlock {
+        $results = foreach ($address in [Net.IPAddress]::Loopback, [Net.IPAddress]::IPv6Loopback) {
+            $listener = [Net.Sockets.TcpListener]::new($address, 0)
+            $client = [Net.Sockets.TcpClient]::new($address.AddressFamily)
+            try {
+                $listener.Start()
+                $client.ConnectAsync($address, ([Net.IPEndPoint]$listener.LocalEndpoint).Port).Wait(3000)
+            }
+            catch { $false }
+            finally {
+                $client.Dispose()
+                $listener.Stop()
+            }
+        }
+        -not ($results -contains $false)
+    }
+}
+
+function Get-RosetunGuestLease {
+    # The DHCP address and default route of the guest, or why there is none.
+    Invoke-RosetunGuest -ScriptBlock {
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -First 1
+        $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.InterfaceAlias -notlike 'Loopback*' })
+        $dhcp = $addresses | Where-Object { $_.PrefixOrigin -eq 'Dhcp' -and $_.IPAddress -notlike '169.254.*' } |
+            Select-Object -First 1
+        [pscustomobject]@{
+            Leased = [bool]($route -and $dhcp)
+            Note   = "route=$([bool]$route) ipv4=$(($addresses | ForEach-Object { "$($_.IPAddress)/$($_.PrefixOrigin)" }) -join ',')"
+        }
+    }
+}
+
+function Restore-RosetunGuestLease {
+    # A boot under a boot-time block lost the DHCP lease on the VM, and the
+    # DHCP client only retries every few minutes on its own.
+    Invoke-RosetunGuest -ScriptBlock {
+        if (-not (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)) {
+            & ipconfig.exe /renew *> $null
+            $global:LASTEXITCODE = 0
+        }
+    }
+    $leased = Wait-RosetunCondition {
+        [bool](Invoke-RosetunGuest -ScriptBlock { Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue })
+    } -TimeoutSeconds 90
+    if (-not $leased) {
+        throw 'The guest got no default route back within 90 s.'
+    }
+}
+
+function Test-RosetunDhcpRenew {
+    # Renews the lease of the default-route adapter; under a block without a
+    # DHCP permit this loses the address.
+    Invoke-RosetunGuest -ScriptBlock {
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object -Property RouteMetric | Select-Object -First 1
+        $alias = $route.InterfaceAlias
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $output = (& ipconfig.exe /renew $alias 2>&1 | Out-String).Trim() -replace '\s+', ' '
+        $exitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        $lease = Get-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.PrefixOrigin -eq 'Dhcp' } | Select-Object -First 1
+        [pscustomobject]@{
+            Renewed = $exitCode -eq 0 -and [bool]$lease
+            Note    = "renew exit $exitCode after $([int]$watch.Elapsed.TotalSeconds) s, DHCP address kept: $([bool]$lease); $output"
+        }
+    }
+}
+
+function Test-RosetunIpv6Open {
+    # Re-pins first: a reboot drops the guest's ActiveStore entry.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Neighbors)
+    Set-RosetunIpv6Neighbor -Created $Neighbors
+    Test-RosetunIpv6Egress
+}
+
+function Test-RosetunGuestWfpKey {
+    # Whether a WFP object with this key (provider, sublayer or filter) exists.
+    param([Parameter(Mandatory)][string]$Key)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($key)
+        $path = Join-Path $env:TEMP ("rosetun-wfp-$([guid]::NewGuid().ToString('N')).xml")
+        try {
+            & netsh.exe wfp show state "file=$path" *> $null
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $path)) {
+                throw 'Cannot inspect WFP state.'
+            }
+            (Get-Content -Raw -LiteralPath $path) -match [regex]::Escape($key)
+        }
+        finally {
+            Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue
+            $global:LASTEXITCODE = 0
+        }
+    } -ArgumentList $Key
+}
+
+function Get-RosetunGuestBootTime {
+    # A string, so the boot check in the guest can write the same value.
+    Invoke-RosetunGuest -ScriptBlock {
+        (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')
+    }
+}
+
+function Restart-RosetunGuest {
+    # -PowerCut turns the VM off instead, as a power cut would.
+    param([switch]$PowerCut)
+    $before = Get-RosetunGuestBootTime
+    if ($PowerCut) {
+        Disconnect-RosetunVm
+        Stop-VM -Name $script:Config.VmName -TurnOff -Force
+        Start-VM -Name $script:Config.VmName
+    }
+    else {
+        try { Invoke-RosetunGuest -ScriptBlock { Restart-Computer -Force } }
+        catch { }
+        Disconnect-RosetunVm
+    }
+    # Connecting too early would reach the guest before it went down.
+    $deadline = (Get-Date).AddMinutes(5)
+    while ($true) {
+        try {
+            if ((Get-RosetunGuestBootTime) -ne $before) { return }
+        }
+        catch {
+            try { Disconnect-RosetunVm } catch { }
+        }
+        if ((Get-Date) -gt $deadline) {
+            throw 'The guest did not come back within 5 minutes.'
+        }
+        Start-Sleep -Seconds 5
+    }
+}
+
+function Register-RosetunBootCheck {
+    # Runs as SYSTEM at startup, before anyone signs in: an AtLogOn task would
+    # never fire, because PowerShell Direct is not an interactive sign-in. It
+    # records for up to 150 s whether the guest has a route and whether curl
+    # reaches -Url; Get-RosetunBootCheck reads the result.
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][string]$TaskName,
+        [string]$Url = $script:Config.ProbeUrl
+    )
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $task, $url)
+        $script = @'
+param($result, $url)
+$bootTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+$attempts = [System.Collections.Generic.List[object]]::new()
+$deadline = (Get-Date).AddSeconds(150)
+$withRoute = 0
+while ((Get-Date) -lt $deadline -and $withRoute -lt 3) {
+    $uptime = [int]((Get-Date) - $bootTime).TotalSeconds
+    $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $address = if ($route) {
+        Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.AddressState -eq 'Preferred' } | Select-Object -First 1
+    }
+    $curlExit = $null
+    $curlError = ''
+    if ($address) {
+        $withRoute++
+        $curlError = (& curl.exe --max-time 5 --silent --show-error --output NUL $url 2>&1 | ForEach-Object { "$_" }) -join ' '
+        $curlExit = $LASTEXITCODE
+    }
+    $attempts.Add([pscustomobject]@{
+        Uptime    = $uptime
+        Route     = [bool]$address
+        CurlExit  = $curlExit
+        CurlError = $curlError
+        User      = "$((Get-CimInstance Win32_ComputerSystem).UserName)"
+        Bfe       = "$((Get-Service -Name BFE).Status)"
+        Addresses = (@(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.InterfaceAlias -notlike 'Loopback*' } |
+            ForEach-Object { "$($_.IPAddress)/$($_.PrefixOrigin)/$($_.AddressState)" }) -join ',')
+    })
+    if ($withRoute -lt 3) { Start-Sleep -Seconds 3 }
+}
+# Tagged with the boot it belongs to: a power cut can undo the deletion of the
+# previous result, which the scenario must not mistake for this one. Written
+# to a temporary file first, so a reader never sees half of it.
+$record = [pscustomobject]@{ BootTime = $bootTime.ToUniversalTime().ToString('o'); Attempts = $attempts }
+$record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$result.tmp" -Encoding UTF8
+Move-Item -LiteralPath "$result.tmp" -Destination $result -Force
+'@
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $scriptPath = Join-Path $dir 'boot-check.ps1'
+        $resultPath = Join-Path $dir 'boot-check.json'
+        Set-Content -LiteralPath $scriptPath -Value $script -Encoding UTF8
+        Remove-Item -LiteralPath $resultPath -ErrorAction SilentlyContinue
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -result `"$resultPath`" -url `"$url`""
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::FromMinutes(5)) `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger -Principal $principal `
+            -Settings $settings -Force | Out-Null
+    } -ArgumentList $Directory, $TaskName, $Url
+}
+
+function Unregister-RosetunBootCheck {
+    param([Parameter(Mandatory)][string]$TaskName)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($task)
+        Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+    } -ArgumentList $TaskName
+}
+
+function Get-RosetunBootCheck {
+    # The boot check's attempts of the boot that started at -BootTime.
+    param([Parameter(Mandatory)][string]$Directory, [Parameter(Mandatory)][string]$BootTime)
+    $deadline = (Get-Date).AddMinutes(4)
+    $stale = $false
+    while ((Get-Date) -lt $deadline) {
+        $json = Invoke-RosetunGuest -ScriptBlock {
+            param($path)
+            if (Test-Path -LiteralPath $path) { Get-Content -Raw -LiteralPath $path }
+        } -ArgumentList (Join-Path $Directory 'boot-check.json')
+        if ($json) {
+            $record = $json | ConvertFrom-Json
+            if ($record.BootTime -eq $BootTime) { return @($record.Attempts) }
+            $stale = $true
+        }
+        Start-Sleep -Seconds 5
+    }
+    if ($stale) {
+        throw "The boot check left only a result of an earlier boot (current boot $BootTime): the task did not run or its result was lost."
+    }
+    throw 'The boot check wrote no result within 4 minutes.'
+}
+
+function Format-RosetunBootCheck {
+    param([Parameter(Mandatory)][object[]]$Attempts)
+    ($Attempts | ForEach-Object {
+        "t=$($_.Uptime)s route=$($_.Route) curl=$($_.CurlExit) user='$($_.User)' bfe=$($_.Bfe) ipv4=$($_.Addresses) $($_.CurlError)"
+    }) -join '; '
+}
+
+function Get-RosetunEgressAfterBoot {
+    try {
+        if (Test-RosetunDirectEgress) { 'open' } else { 'closed' }
+    }
+    catch {
+        if ("$_" -notmatch 'No default route') { throw }
+        'no default route'
+    }
 }
 
 Export-ModuleMember -Function *-Rosetun*
