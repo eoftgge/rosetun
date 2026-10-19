@@ -1,6 +1,8 @@
 # Probes WFP sublayer arbitration for Lockdown in the Hyper-V test VM with the
 # lockdown_probe example and prints a PASS/FAIL table. Exits with 1 if any
 # check fails. The owner runs it, with Rosetun disconnected in the guest.
+# Unless -SkipIpv6, it starts the host test node for the IPv6 checks and pins
+# the IPv6 neighbors on both sides like the failure matrix.
 #
 # The probe's persistent objects survive the script; `finally` removes them
 # whatever happens. If the run is killed before that, see tools/vm/README.md.
@@ -9,14 +11,26 @@ param(
     [string]$ProbePath = (Join-Path $PSScriptRoot '..\..\target\release\examples\lockdown_probe.exe'),
     # Builds the example first, so a forgotten build cannot deploy a stale probe.
     [switch]$Build,
-    # Step 7 reboots the guest three or four times; skip it for a quick pass.
+    # Step 7 reboots the guest three times, more with -PowerCut; skip it for a
+    # quick pass.
     [switch]$SkipReboot,
-    # Adds a reboot by turning the VM off, as after a power cut, with the
-    # boot-time filters installed.
+    # Adds reboots by turning the VM off, as after a power cut, with the
+    # boot-time filters installed: one per delay below, plus one with a flush.
     [switch]$PowerCut,
-    # Wait between installing and cutting the power. A cut a few seconds after
-    # the install lost every probe object on the VM (2026-10-20).
-    [int]$PowerCutDelaySeconds = 60,
+    # Waits between installing and cutting the power, to find the shortest one
+    # the objects survive. A cut a few seconds after the install lost every
+    # probe object on the VM (2026-10-20).
+    [int[]]$PowerCutDelaySeconds = @(5, 15, 30, 60),
+    # Wait after `install --flush` before the cut of the flush pass.
+    [int]$PowerCutFlushDelaySeconds = 2,
+    # Wait after registering the boot check and before the install, so the
+    # task itself reaches the disk and only the probe's objects are at stake.
+    [int]$PowerCutSettleSeconds = 60,
+    # The Lockdown sublayer weight passed to `persistent install`.
+    [string]$LockdownWeight = '0xC000',
+    # The host test node whose IPv6 port the IPv6 checks connect to.
+    [string]$SingBoxPath = (Join-Path $PSScriptRoot '..\sing-box.exe'),
+    [switch]$SkipIpv6,
     # Must match ProbeUrl in RosetunVm.psm1: reachable from the guest directly.
     [string]$ProbeUrl = 'https://1.1.1.1'
 )
@@ -78,27 +92,31 @@ function Invoke-Probe {
 
 function Get-ProbeStatus {
     $status = Invoke-Probe -Arguments @('persistent', 'status')
-    if ($status.ExitCode -ne 0 -or $status.Output -notmatch 'summary: provider=(\w+) sublayer=(\w+) persistent_filters=(\d)/2 boottime_filters=(\d)/2') {
+    $pattern = 'summary: provider=(\w+) sublayer=(\w+) persistent_filters=(\d+)/(\d+) boottime_filters=(\d+)/(\d+) same_weight_sublayers=(\d+)'
+    if ($status.ExitCode -ne 0 -or $status.Output -notmatch $pattern) {
         throw "persistent status failed: $($status.Output)"
     }
     $summary = $Matches
     # BFE may store another weight than the one requested (0x4001 for 0x4000 seen).
     $weight = if ($status.Output -match 'sublayer present flags=\S+ weight=(0x[0-9a-f]+)') { $Matches[1] } else { $null }
     [pscustomobject]@{
-        Provider   = $summary[1] -eq 'present'
-        Sublayer   = $summary[2] -eq 'present'
-        Weight     = $weight
-        Persistent = [int]$summary[3]
-        Boottime   = [int]$summary[4]
-        Output     = $status.Output
+        Provider        = $summary[1] -eq 'present'
+        Sublayer        = $summary[2] -eq 'present'
+        Weight          = $weight
+        Persistent      = [int]$summary[3]
+        PersistentTotal = [int]$summary[4]
+        Boottime        = [int]$summary[5]
+        BoottimeTotal   = [int]$summary[6]
+        SameWeight      = [int]$summary[7]
+        Output          = $status.Output
     }
 }
 
 function Test-ProbeInstalled {
     param([switch]$Boottime)
     $status = Get-ProbeStatus
-    $status.Provider -and $status.Sublayer -and $status.Persistent -eq 2 -and
-        $status.Boottime -eq $(if ($Boottime) { 2 } else { 0 })
+    $status.Provider -and $status.Sublayer -and $status.Persistent -eq $status.PersistentTotal -and
+        $status.Boottime -eq $(if ($Boottime) { $status.BoottimeTotal } else { 0 })
 }
 
 function Test-ProbeEmpty {
@@ -107,13 +125,61 @@ function Test-ProbeEmpty {
 }
 
 function Install-Probe {
-    param([switch]$Boottime)
-    $arguments = @('persistent', 'install')
+    param([switch]$Boottime, [switch]$Flush, [string]$Weight = $LockdownWeight)
+    $arguments = @('persistent', 'install', '--sublayer-weight', $Weight)
     if ($Boottime) { $arguments += '--boottime' }
+    if ($Flush) { $arguments += '--flush' }
     $install = Invoke-Probe -Arguments $arguments
     if ($install.ExitCode -ne 0) {
         throw "persistent install failed: $($install.Output)"
     }
+    $install.Output
+}
+
+function Format-Weight {
+    param([Parameter(Mandatory)][int]$Weight)
+    '0x{0:x4}' -f $Weight
+}
+
+function Test-GuestLoopback {
+    # The loopback permit must keep local services working under the block.
+    Invoke-RosetunGuest -ScriptBlock {
+        $results = foreach ($address in [Net.IPAddress]::Loopback, [Net.IPAddress]::IPv6Loopback) {
+            $listener = [Net.Sockets.TcpListener]::new($address, 0)
+            $client = [Net.Sockets.TcpClient]::new($address.AddressFamily)
+            try {
+                $listener.Start()
+                $client.ConnectAsync($address, ([Net.IPEndPoint]$listener.LocalEndpoint).Port).Wait(3000)
+            }
+            catch { $false }
+            finally {
+                $client.Dispose()
+                $listener.Stop()
+            }
+        }
+        -not ($results -contains $false)
+    }
+}
+
+function Get-GuestLease {
+    # The DHCP address and default route of the guest, or why there is none.
+    Invoke-RosetunGuest -ScriptBlock {
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -First 1
+        $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.InterfaceAlias -notlike 'Loopback*' })
+        $dhcp = $addresses | Where-Object { $_.PrefixOrigin -eq 'Dhcp' -and $_.IPAddress -notlike '169.254.*' } |
+            Select-Object -First 1
+        [pscustomobject]@{
+            Leased = [bool]($route -and $dhcp)
+            Note   = "route=$([bool]$route) ipv4=$(($addresses | ForEach-Object { "$($_.IPAddress)/$($_.PrefixOrigin)" }) -join ',')"
+        }
+    }
+}
+
+function Test-Ipv6Open {
+    # Re-pins first: a reboot drops the guest's ActiveStore entry.
+    Set-RosetunIpv6Neighbor -Created $ipv6Neighbors
+    Test-RosetunIpv6Egress
 }
 
 function Remove-Probe {
@@ -125,7 +191,6 @@ function Remove-Probe {
 }
 
 function Start-Permit {
-    # The soft permit at the default weight passes no options at all.
     param([Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Arguments)
     $permit = Invoke-RosetunGuest -ScriptBlock {
         param($exe, $dir, $arguments)
@@ -350,23 +415,28 @@ function Format-BootCheck {
     }) -join '; '
 }
 
+function Get-EgressAfterBoot {
+    try {
+        if (Test-RosetunDirectEgress) { 'open' } else { 'closed' }
+    }
+    catch {
+        if ("$_" -notmatch 'No default route') { throw }
+        'no default route'
+    }
+}
+
 function Invoke-RebootPass {
     param(
         [Parameter(Mandatory)][string]$Scenario,
-        [ValidateSet('none', 'persistent', 'boottime')][string]$Lockdown,
-        [switch]$PowerCut
+        [ValidateSet('none', 'persistent', 'boottime')][string]$Lockdown
     )
     Remove-Probe | Out-Null
     Restore-GuestLease
     if ($Lockdown -ne 'none') {
-        Install-Probe -Boottime:($Lockdown -eq 'boottime')
+        Install-Probe -Boottime:($Lockdown -eq 'boottime') | Out-Null
     }
     Register-BootCheck
-    if ($PowerCut) {
-        Start-Sleep -Seconds $PowerCutDelaySeconds
-        Add-Info $Scenario 'power cut after install' "$PowerCutDelaySeconds s"
-    }
-    Restart-Guest -PowerCut:$PowerCut
+    Restart-Guest
     $attempts = Get-BootCheck -BootTime (Get-GuestBootTime)
     $note = Format-BootCheck -Attempts $attempts
     $routed = @($attempts | Where-Object { $_.Route })
@@ -380,23 +450,57 @@ function Invoke-RebootPass {
         return
     }
     Test-Step $Scenario 'boot check ran before sign-in' { $attempts.Count -gt 0 -and $beforeSignIn } -Note $note
-    # Without a DHCP permit the block can cost the lease at boot: a finding
-    # for Lockdown's permits, not a failure of the block.
-    Add-Info $Scenario 'boot attempts with a default route' "$($routed.Count) of $($attempts.Count)"
+    # With the DHCPv4 permit in both sets the lease must survive the boot;
+    # without it the boot-time pass lost it (VM run 3). A routed attempt also
+    # makes the curl check below mean something.
+    Test-Step $Scenario 'a DHCP address and a default route before sign-in' {
+        @($routed | Where-Object { $_.Addresses -match '/Dhcp/Preferred' }).Count -gt 0
+    } -Note "$($routed.Count) of $($attempts.Count) attempts routed"
     Test-Step $Scenario 'no boot attempt reached the internet' {
         @($routed | Where-Object { $_.CurlExit -eq 0 }).Count -eq 0
     } -Note $note
     Test-Step $Scenario 'status shows the objects after boot' {
         Test-ProbeInstalled -Boottime:($Lockdown -eq 'boottime')
     } -Note (Get-ProbeStatus).Output
-    $after = try {
-        if (Test-RosetunDirectEgress) { 'open' } else { 'closed' }
-    }
-    catch {
-        if ("$_" -notmatch 'No default route') { throw }
-        'no default route'
-    }
+    $lease = Get-GuestLease
+    Test-Step $Scenario 'DHCP lease and default route after boot' { $lease.Leased } -Note $lease.Note
+    $after = Get-EgressAfterBoot
     Test-Step $Scenario 'egress closed after boot' { $after -ne 'open' } -Note $after
+    if (-not $SkipIpv6 -and $lease.Leased) {
+        Test-Step $Scenario 'IPv6 to the host closed after boot' { -not (Test-Ipv6Open) }
+    }
+}
+
+function Invoke-PowerCutPass {
+    # Measures whether the objects reach the disk within $Delay seconds of the
+    # install. Losing them is a finding about the delay, not a failure of the
+    # probe, so the outcome is returned and recorded as INFO.
+    param([Parameter(Mandatory)][int]$Delay, [switch]$Flush)
+    $scenario = "power cut $Delay s after install$(if ($Flush) { ' --flush' })"
+    # Everything but $survived goes to Out-Null: the caller tests the output.
+    Remove-Probe | Out-Null
+    Restore-GuestLease | Out-Null
+    Register-BootCheck | Out-Null
+    Start-Sleep -Seconds $PowerCutSettleSeconds
+    $install = Install-Probe -Boottime -Flush:$Flush
+    if ($Flush) { Add-Info $scenario 'install --flush output' ($install -replace '\s*\n\s*', '; ') }
+    Start-Sleep -Seconds $Delay
+    Restart-Guest -PowerCut | Out-Null
+    $bootTime = Get-GuestBootTime
+    $survived = Test-ProbeInstalled -Boottime
+    $status = Get-ProbeStatus
+    $bootNote = try { Format-BootCheck -Attempts (Get-BootCheck -BootTime $bootTime) }
+    catch { "boot check lost: $_" }
+    $after = Get-EgressAfterBoot
+    Add-Info $scenario 'objects survived the cut' "survived: $survived; egress after boot: $after; $bootNote"
+    if ($survived) {
+        Test-Step $scenario 'egress closed after boot' { $after -ne 'open' } -Note $after
+    }
+    elseif ($status.Provider -or $status.Sublayer -or $status.Persistent -or $status.Boottime) {
+        # Part of one transaction on disk would mean BFE's storage is not atomic.
+        Add-Info $scenario 'partial objects after the cut' ($status.Output -replace '\s*\n\s*', '; ')
+    }
+    $survived
 }
 
 if ($Build) {
@@ -405,8 +509,19 @@ if ($Build) {
 }
 $ProbePath = (Resolve-Path -LiteralPath $ProbePath).Path
 
+$lockdownValue = [int]$LockdownWeight
+# Relative to the Lockdown weight, so the arbitration cases stay the same
+# question at any weight; at 0xC000 "below" is the product's 0x8000.
+$aboveWeight = Format-Weight ([Math]::Min($lockdownValue + 0x2000, 0xFFFE))
+$belowWeight = Format-Weight ([Math]::Max($lockdownValue - 0x4000, 0x1000))
+
 $bootTaskRegistered = $false
+$ipv6Neighbors = [System.Collections.Generic.List[object]]::new()
+$nodeStarted = $false
 try {
+    if (-not $SkipIpv6) {
+        $nodeStarted = Start-RosetunTestNode -SingBoxPath ([IO.Path]::GetFullPath($SingBoxPath))
+    }
     $session = Connect-RosetunVm
     Invoke-RosetunGuest -ScriptBlock {
         param($dir)
@@ -424,11 +539,32 @@ try {
     Test-Step 'baseline' 'probe objects absent' { Test-ProbeEmpty }
     Test-Step 'baseline' 'curl reaches the internet directly' { Test-RosetunDirectEgress }
     Test-Step 'baseline' 'another program reaches the internet directly' { Test-OtherProgramEgress }
+    Test-Step 'baseline' 'loopback works' { Test-GuestLoopback }
+    if (-not $SkipIpv6) {
+        # Without a working baseline every "IPv6 closed" below proves nothing.
+        Test-Step 'baseline' 'IPv6 to the host works' { Test-Ipv6Open }
+    }
 
-    # 2. Persistent block-all.
-    Install-Probe
-    Test-Step 'install' 'status: provider, sublayer, 2 persistent filters' { Test-ProbeInstalled } -Note (Get-ProbeStatus).Output
+    # Why run 1 stored 0x4000 as 0x4001: who else sits there.
+    $sublayers = Invoke-Probe -Arguments @('persistent', 'sublayers')
+    Add-Info 'sublayers' 'all sublayers before install' ($sublayers.Output -replace '\s*\n\s*', '; ')
+    Install-Probe -Weight '0x4000' | Out-Null
+    $status = Get-ProbeStatus
+    Add-Info 'weight 0x4000' 'stored weight and other sublayers on it' "stored $($status.Weight), same weight: $($status.SameWeight); $((($status.Output -split "`n") -match '^same weight') -join '; ')"
+    Remove-Probe | Out-Null
+
+    # 2. Persistent block-all with the loopback and DHCPv4 permits.
+    Install-Probe | Out-Null
+    $status = Get-ProbeStatus
+    Test-Step 'install' 'status: provider, sublayer, all persistent filters' { Test-ProbeInstalled } -Note $status.Output
+    Add-Info 'install' "Lockdown sublayer weight stored by BFE (requested $LockdownWeight)" "stored $($status.Weight), other sublayers on it: $($status.SameWeight)"
+    $flush = Invoke-Probe -Arguments @('persistent', 'flush')
+    Add-Info 'install' 'BFE policy in the registry (persistent flush)' "exit $($flush.ExitCode); $($flush.Output -replace '\s*\n\s*', '; ')"
     Test-Step 'install' 'curl egress closed' { -not (Test-RosetunDirectEgress) }
+    Test-Step 'install' 'loopback stays open' { Test-GuestLoopback }
+    if (-not $SkipIpv6) {
+        Test-Step 'install' 'IPv6 to the host closed' { -not (Test-Ipv6Open) }
+    }
     Test-Step 'install' 'direct DNS over UDP closed' { -not (Test-RosetunDirectDns) }
     Test-Step 'install' 'direct DNS over TCP closed' { -not (Test-RosetunDirectDns -Tcp) }
     $resolver = Invoke-RosetunGuest -ScriptBlock {
@@ -443,10 +579,10 @@ try {
 
     # 3-5. A permit for curl.exe from a dynamic session, against the persistent block.
     $cases = @(
-        @{ Name = 'soft, sublayer 0x8000 (above)'; Args = @(); Open = $false },
-        @{ Name = 'hard, sublayer 0x8000 (above)'; Args = @('--hard'); Open = $true },
-        @{ Name = 'soft, sublayer 0x2000 (below)'; Args = @('--sublayer-weight', '0x2000'); Open = $false },
-        @{ Name = 'hard, sublayer 0x2000 (below)'; Args = @('--sublayer-weight', '0x2000', '--hard'); Open = $false },
+        @{ Name = "soft, sublayer $aboveWeight (above)"; Args = @('--sublayer-weight', $aboveWeight); Open = $false },
+        @{ Name = "hard, sublayer $aboveWeight (above)"; Args = @('--sublayer-weight', $aboveWeight, '--hard'); Open = $true },
+        @{ Name = "soft, sublayer $belowWeight (below)"; Args = @('--sublayer-weight', $belowWeight); Open = $false },
+        @{ Name = "hard, sublayer $belowWeight (below)"; Args = @('--sublayer-weight', $belowWeight, '--hard'); Open = $false },
         @{ Name = 'soft, in the Lockdown sublayer'; Args = @('--lockdown-sublayer'); Open = $true },
         @{ Name = 'hard, in the Lockdown sublayer'; Args = @('--lockdown-sublayer', '--hard'); Open = $true }
     )
@@ -477,7 +613,6 @@ try {
     # Equal sublayer weights have no documented order, so this is a finding only.
     # The weight BFE stored, not the requested one: they differed on the VM.
     $lockdownWeight = (Get-ProbeStatus).Weight
-    Add-Info 'install' 'Lockdown sublayer weight stored by BFE (requested 0x4000)' "$lockdownWeight"
     foreach ($hard in @($false, $true)) {
         $arguments = @('--sublayer-weight', $lockdownWeight)
         if ($hard) { $arguments += '--hard' }
@@ -494,7 +629,7 @@ try {
     }
 
     # 6. The permit process is killed while Lockdown stays.
-    $permit = Start-Permit -Arguments @('--hard')
+    $permit = Start-Permit -Arguments @('--sublayer-weight', $aboveWeight, '--hard')
     Test-Step 'permit killed' 'hard permit opened curl first' { Test-RosetunDirectEgress }
     Stop-Permit -Id $permit.Id
     Test-Step 'permit killed' 'dynamic permit objects gone' { -not (Test-GuestWfpKey $permitProviderKey) }
@@ -508,7 +643,16 @@ try {
         Invoke-RebootPass -Scenario 'reboot, persistent' -Lockdown persistent
         Invoke-RebootPass -Scenario 'reboot, persistent + boot-time' -Lockdown boottime
         if ($PowerCut) {
-            Invoke-RebootPass -Scenario 'power cut, persistent + boot-time' -Lockdown boottime -PowerCut
+            $longest = ($PowerCutDelaySeconds | Measure-Object -Maximum).Maximum
+            foreach ($delay in ($PowerCutDelaySeconds | Sort-Object)) {
+                $survived = Invoke-PowerCutPass -Delay $delay
+                if ($delay -eq $longest) {
+                    Test-Step "power cut $delay s after install" 'objects survive the longest delay' { $survived }
+                }
+            }
+            # The flush pass reports separately: it answers whether a flush
+            # makes the install durable at once.
+            Invoke-PowerCutPass -Delay $PowerCutFlushDelaySeconds -Flush | Out-Null
         }
     }
 
@@ -516,7 +660,7 @@ try {
     # need. A known state first, since the reboot passes may leave another.
     Remove-Probe | Out-Null
     Restore-GuestLease
-    Install-Probe
+    Install-Probe | Out-Null
     $dhcp = Invoke-RosetunGuest -ScriptBlock {
         $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object -Property RouteMetric | Select-Object -First 1
         $alias = $route.InterfaceAlias
@@ -526,15 +670,22 @@ try {
         $global:LASTEXITCODE = 0
         $lease = Get-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             Where-Object { $_.PrefixOrigin -eq 'Dhcp' } | Select-Object -First 1
-        "renew exit $exitCode after $([int]$watch.Elapsed.TotalSeconds) s, DHCP address kept: $([bool]$lease); $output"
+        [pscustomobject]@{
+            Renewed = $exitCode -eq 0 -and [bool]$lease
+            Note    = "renew exit $exitCode after $([int]$watch.Elapsed.TotalSeconds) s, DHCP address kept: $([bool]$lease); $output"
+        }
     }
-    Add-Info 'locked, persistent only' 'DHCP lease renewal (ipconfig /renew)' $dhcp
+    # The DHCPv4 permit makes this a check; before it, run 3 only recorded it.
+    Test-Step 'locked, persistent only' 'ipconfig /renew keeps the DHCP lease' { $dhcp.Renewed } -Note $dhcp.Note
 
     # 8. Remove.
     Remove-Probe | Out-Null
     Test-Step 'remove' 'status empty' { Test-ProbeEmpty } -Note (Get-ProbeStatus).Output
     Restore-GuestLease
     Test-Step 'remove' 'curl egress open again' { Test-RosetunDirectEgress }
+    if (-not $SkipIpv6) {
+        Test-Step 'remove' 'IPv6 to the host works again' { Test-Ipv6Open }
+    }
     Test-Step 'remove' 'second remove succeeds and removes nothing' { (Remove-Probe) -match 'removed: nothing' }
 }
 catch {
@@ -576,6 +727,14 @@ finally {
             } -ArgumentList $probeDir
         }
         catch { Write-Warning "Could not remove ${probeDir}: $_" }
+    }
+    if ($ipv6Neighbors.Count -gt 0) {
+        try { Remove-RosetunIpv6Neighbor -Created $ipv6Neighbors }
+        catch { Write-Warning "$_" }
+    }
+    if ($nodeStarted) {
+        try { Stop-RosetunTestNode }
+        catch { Write-Warning "Could not stop the host test node: $_" }
     }
 }
 
