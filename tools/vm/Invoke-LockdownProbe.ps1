@@ -78,11 +78,15 @@ function Get-ProbeStatus {
     if ($status.ExitCode -ne 0 -or $status.Output -notmatch 'summary: provider=(\w+) sublayer=(\w+) persistent_filters=(\d)/2 boottime_filters=(\d)/2') {
         throw "persistent status failed: $($status.Output)"
     }
+    $summary = $Matches
+    # BFE may store another weight than the one requested (0x4001 for 0x4000 seen).
+    $weight = if ($status.Output -match 'sublayer present flags=\S+ weight=(0x[0-9a-f]+)') { $Matches[1] } else { $null }
     [pscustomobject]@{
-        Provider   = $Matches[1] -eq 'present'
-        Sublayer   = $Matches[2] -eq 'present'
-        Persistent = [int]$Matches[3]
-        Boottime   = [int]$Matches[4]
+        Provider   = $summary[1] -eq 'present'
+        Sublayer   = $summary[2] -eq 'present'
+        Weight     = $weight
+        Persistent = [int]$summary[3]
+        Boottime   = [int]$summary[4]
         Output     = $status.Output
     }
 }
@@ -123,7 +127,8 @@ function Start-Permit {
     $permit = Invoke-RosetunGuest -ScriptBlock {
         param($exe, $dir, $arguments)
         $name = "permit-$([guid]::NewGuid().ToString('N'))"
-        $stdin = Join-Path $dir 'empty-stdin.txt'
+        # One stdin file per permit: a killed permit's handle can outlive it briefly.
+        $stdin = Join-Path $dir "$name.in.txt"
         $stdout = Join-Path $dir "$name.out.txt"
         $stderr = Join-Path $dir "$name.err.txt"
         [IO.File]::WriteAllText($stdin, '')
@@ -155,6 +160,9 @@ function Stop-Permit {
         # A kill, not Enter: the dynamic session must clean up after a crash too.
         Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
         Wait-Process -Id $id -Timeout 10 -ErrorAction SilentlyContinue
+        if (Get-Process -Id $id -ErrorAction SilentlyContinue) {
+            throw "permit process $id is still running"
+        }
     } -ArgumentList $Id
 }
 
@@ -403,11 +411,14 @@ try {
         }
     }
     # Equal sublayer weights have no documented order, so this is a finding only.
+    # The weight BFE stored, not the requested one: they differed on the VM.
+    $lockdownWeight = (Get-ProbeStatus).Weight
+    Add-Info 'install' 'Lockdown sublayer weight stored by BFE (requested 0x4000)' "$lockdownWeight"
     foreach ($hard in @($false, $true)) {
-        $arguments = @('--sublayer-weight', '0x4000')
+        $arguments = @('--sublayer-weight', $lockdownWeight)
         if ($hard) { $arguments += '--hard' }
         $permit = $null
-        $scenario = "permit $(if ($hard) { 'hard' } else { 'soft' }), sublayer 0x4000 (equal)"
+        $scenario = "permit $(if ($hard) { 'hard' } else { 'soft' }), sublayer $lockdownWeight (equal)"
         try {
             $permit = Start-Permit -Arguments $arguments
             Add-Info $scenario 'curl egress' "open: $(Test-RosetunDirectEgress)"
