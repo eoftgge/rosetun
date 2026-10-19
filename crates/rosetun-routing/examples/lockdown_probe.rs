@@ -40,8 +40,8 @@ mod probe {
         FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_PROVIDER0,
         FWPM_SESSION_FLAG_DYNAMIC, FWPM_SESSION0, FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0,
         FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterDeleteByKey0,
-        FwpmFilterGetByKey0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
-        FwpmProviderAdd0, FwpmProviderDeleteByKey0, FwpmProviderGetByKey0, FwpmSubLayerAdd0,
+        FwpmFilterGetByKey0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0, FwpmProviderAdd0,
+        FwpmProviderDeleteByKey0, FwpmProviderGetByKey0, FwpmSubLayerAdd0,
         FwpmSubLayerDeleteByKey0, FwpmSubLayerGetByKey0, FwpmTransactionAbort0,
         FwpmTransactionBegin0, FwpmTransactionCommit0,
     };
@@ -119,7 +119,9 @@ mod probe {
             ["persistent", "install", "--boottime"] => install(true),
             ["persistent", "remove"] => remove(),
             ["persistent", "status"] => status(),
-            ["permit", rest @ ..] => PermitOptions::parse(rest).and_then(|options| permit(&options)),
+            ["permit", rest @ ..] => {
+                PermitOptions::parse(rest).and_then(|options| permit(&options))
+            }
             _ => Err(usage()),
         };
         match result {
@@ -149,7 +151,11 @@ mod probe {
     impl Engine {
         fn open(dynamic: bool) -> Result<Self> {
             let session = FWPM_SESSION0 {
-                flags: if dynamic { FWPM_SESSION_FLAG_DYNAMIC } else { 0 },
+                flags: if dynamic {
+                    FWPM_SESSION_FLAG_DYNAMIC
+                } else {
+                    0
+                },
                 ..Default::default()
             };
             let mut handle = ptr::null_mut();
@@ -337,7 +343,8 @@ mod probe {
 
         let mut provider: *mut FWPM_PROVIDER0 = ptr::null_mut();
         // SAFETY: on success BFE allocates the result, freed below with FwpmFreeMemory0.
-        let code = unsafe { FwpmProviderGetByKey0(engine.handle, &LOCKDOWN_PROVIDER, &mut provider) };
+        let code =
+            unsafe { FwpmProviderGetByKey0(engine.handle, &LOCKDOWN_PROVIDER, &mut provider) };
         let provider_present = found(code, FWP_E_PROVIDER_NOT_FOUND, "reading the provider")?;
         if provider_present {
             // SAFETY: non-null after success; read before it is freed.
@@ -350,7 +357,8 @@ mod probe {
 
         let mut sublayer: *mut FWPM_SUBLAYER0 = ptr::null_mut();
         // SAFETY: as above.
-        let code = unsafe { FwpmSubLayerGetByKey0(engine.handle, &LOCKDOWN_SUBLAYER, &mut sublayer) };
+        let code =
+            unsafe { FwpmSubLayerGetByKey0(engine.handle, &LOCKDOWN_SUBLAYER, &mut sublayer) };
         let sublayer_present = found(code, FWP_E_SUBLAYER_NOT_FOUND, "reading the sublayer")?;
         if sublayer_present {
             // SAFETY: as above.
@@ -397,7 +405,11 @@ mod probe {
                 "filter present {} flags={flags:#x}{} action={} layer={} sublayer={}",
                 block.name,
                 describe_flags(flags),
-                if action == FWP_ACTION_BLOCK { "block" } else { "other" },
+                if action == FWP_ACTION_BLOCK {
+                    "block"
+                } else {
+                    "other"
+                },
                 if same(&layer, &FWPM_LAYER_ALE_AUTH_CONNECT_V4) {
                     "ALE_AUTH_CONNECT_V4"
                 } else if same(&layer, &FWPM_LAYER_ALE_AUTH_CONNECT_V6) {
@@ -405,7 +417,11 @@ mod probe {
                 } else {
                     "other"
                 },
-                if same(&sublayer, &LOCKDOWN_SUBLAYER) { "lockdown" } else { "other" },
+                if same(&sublayer, &LOCKDOWN_SUBLAYER) {
+                    "lockdown"
+                } else {
+                    "other"
+                },
             );
         }
         Ok(present)
@@ -489,7 +505,10 @@ mod probe {
     }
 
     fn parse_u16(value: &str) -> Result<u16> {
-        let parsed = match value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+        let parsed = match value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+        {
             Some(hex) => u16::from_str_radix(hex, 16),
             None => value.parse(),
         };
@@ -541,7 +560,10 @@ mod probe {
             };
             // SAFETY: `provider` and its name live across the call.
             let status = unsafe { FwpmProviderAdd0(engine.handle, &provider, ptr::null_mut()) };
-            check(status, "adding the permit provider (is another permit running?)")?;
+            check(
+                status,
+                "adding the permit provider (is another permit running?)",
+            )?;
 
             if !options.lockdown_sublayer {
                 let sublayer = FWPM_SUBLAYER0 {
@@ -552,8 +574,7 @@ mod probe {
                     ..Default::default()
                 };
                 // SAFETY: as above; the provider key is a static.
-                let status =
-                    unsafe { FwpmSubLayerAdd0(engine.handle, &sublayer, ptr::null_mut()) };
+                let status = unsafe { FwpmSubLayerAdd0(engine.handle, &sublayer, ptr::null_mut()) };
                 check(status, "adding the permit sublayer")?;
             }
 
