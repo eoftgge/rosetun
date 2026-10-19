@@ -65,6 +65,7 @@ The engine's control API and the link from sing-box to Xray use only local loopb
 - Run **System check** (Settings → Service and log) first: it finds other VPN clients, Zapret or WinDivert, a system proxy and a wrong clock. It also runs by itself after a failed connection and shows the first finding under the error.
 - Another VPN client in TUN mode can prevent the tunnel from starting. Disconnect it and retry.
 - Traffic-modifying programs such as zapret can disrupt the connection to the VPN server. Exclude the server addresses in that program's settings.
+- If setup stops because standard users can change a folder under `C:\Program Files\Rosetun`, this usually follows **Continue** in File Explorer, which gives your account permanent access to a protected Rosetun folder such as `data`. Uninstall Rosetun and install it again. To read the service log, use **Collect report** or an editor run as administrator instead.
 - **No network connection** means Windows has no working network, so the server is not to blame. Connecting fails at once. While connected, a short network change does not break the session; with **Reconnect automatically** on, Rosetun waits for the network and reconnects when it returns, and the kill switch keeps the internet closed meanwhile.
 
 ## How it works
