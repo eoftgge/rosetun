@@ -5,6 +5,32 @@ pub use errors::RoutingError;
 pub use platform::backend;
 pub use platform::tunnel_adapter_present;
 
+/// Lockdown: persistent WFP objects that keep the machine blocked outside the
+/// tunnel while disconnected, after a service crash and across reboots. The
+/// objects themselves are the only record of whether it is on.
+pub mod lockdown {
+    use crate::{LockdownApps, LockdownStatus, RoutingError};
+
+    /// Reads which Lockdown objects exist.
+    pub fn status() -> Result<LockdownStatus, RoutingError> {
+        crate::platform::lockdown_status()
+    }
+
+    /// Adds what is missing and removes what no longer applies, in one
+    /// transaction, then flushes the change to disk.
+    pub fn enable(allow_lan: bool, apps: &LockdownApps) -> Result<LockdownStatus, RoutingError> {
+        crate::platform::lockdown_enable(allow_lan, apps)
+    }
+
+    /// Removes every Lockdown object by its fixed key, in one transaction,
+    /// then flushes. Absent objects are not an error; returns whether anything
+    /// was removed. Fails with `FWP_E_IN_USE` while a running session still
+    /// has filters in the Lockdown sublayer.
+    pub fn disable() -> Result<bool, RoutingError> {
+        crate::platform::lockdown_disable()
+    }
+}
+
 /// Choose the physical default route: a probe engine without its own TUN would
 /// otherwise follow the connected session's default route back into that tunnel.
 pub fn physical_default_interface(exclude_alias: &str) -> Option<String> {
@@ -28,6 +54,33 @@ pub struct RoutingPlan {
     pub scope: ProtectionScope,
     /// Allows non-engine applications to reach private destinations; ignored for DNS-only protection.
     pub allow_lan: bool,
+    /// Puts the session's filters into the Lockdown sublayer instead of the
+    /// Rosetun one, above Lockdown's own block.
+    pub lockdown: bool,
+}
+
+/// What exists of Lockdown.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LockdownStatus {
+    /// The Lockdown provider exists.
+    pub enabled: bool,
+    /// Provider, sublayer and every filter of the base set are present, and
+    /// with `allow_lan` every LAN filter too. Application permits are not
+    /// counted: a missing program has none.
+    pub complete: bool,
+    pub allow_lan: bool,
+    /// The weight BFE stored for the sublayer, which may differ from the one
+    /// requested.
+    pub sublayer_weight: Option<u16>,
+}
+
+/// Programs Lockdown permits by application ID so a subscription can be
+/// updated without the tunnel. `None` (a program that is not installed) adds
+/// no permit.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LockdownApps {
+    pub gui: Option<std::path::PathBuf>,
+    pub cli: Option<std::path::PathBuf>,
 }
 
 pub trait RoutingBackend: std::fmt::Debug + Send {
@@ -41,6 +94,31 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
         plan: &RoutingPlan,
         engine_binaries: &[&std::path::Path],
     ) -> Result<RoutingGuard, RoutingError>;
+
+    fn lockdown_status(&self) -> Result<LockdownStatus, RoutingError> {
+        Ok(LockdownStatus::default())
+    }
+
+    fn enable_lockdown(
+        &self,
+        _allow_lan: bool,
+        _apps: &LockdownApps,
+    ) -> Result<LockdownStatus, RoutingError> {
+        Err(RoutingError::Unsupported)
+    }
+
+    fn disable_lockdown(&self) -> Result<bool, RoutingError> {
+        Err(RoutingError::Unsupported)
+    }
+
+    /// Permits these programs in the Lockdown sublayer for as long as the
+    /// guard lives, for server checks while no session is running.
+    fn permit_in_lockdown(
+        &mut self,
+        _binaries: &[&std::path::Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        Err(RoutingError::Unsupported)
+    }
 }
 
 /// An engine-owned tunnel interface that has passed engine readiness checks.
@@ -88,6 +166,9 @@ pub(crate) trait ProtectionSession: std::fmt::Debug + Send {
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError>;
     fn permit_probe_binary(&mut self, binary: &std::path::Path) -> Result<(), RoutingError>;
     fn remove_probe_binary(&mut self, binary: &std::path::Path) -> Result<(), RoutingError>;
+    /// Moves every filter of the session into the Lockdown sublayer or back,
+    /// in one transaction, so there is no moment without them.
+    fn set_lockdown(&mut self, lockdown: bool) -> Result<(), RoutingError>;
     fn teardown(&mut self) -> Result<(), RoutingError>;
 }
 
@@ -181,6 +262,13 @@ impl RoutingGuard {
         }
     }
 
+    pub fn set_lockdown(&mut self, lockdown: bool) -> Result<(), RoutingError> {
+        self.session
+            .as_mut()
+            .ok_or_else(|| RoutingError::Route("routing protection is not active".to_owned()))?
+            .set_lockdown(lockdown)
+    }
+
     pub fn revert(mut self) -> Result<(), RoutingError> {
         self.revert_in_place()
     }
@@ -235,6 +323,10 @@ impl ProtectionSession for ClosureSession {
     }
 
     fn remove_probe_binary(&mut self, _binary: &std::path::Path) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn set_lockdown(&mut self, _lockdown: bool) -> Result<(), RoutingError> {
         Ok(())
     }
 

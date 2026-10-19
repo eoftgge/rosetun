@@ -1,8 +1,9 @@
 use std::{path::Path, ptr};
 
 use super::{
-    policy::{Action, AddressFamily, Condition, Rule},
-    session::{DynamicSession, PROVIDER_KEY, SUBLAYER_KEY},
+    lockdown,
+    policy::{Action, AddressFamily, Condition, Layer, Rule},
+    session::{Engine, PROVIDER_KEY, SUBLAYER_KEY},
 };
 use crate::RoutingError;
 use crate::platform::windows::policy::Subnet;
@@ -22,6 +23,7 @@ use windows_sys::{
             FWPM_CONDITION_IP_LOCAL_INTERFACE, FWPM_CONDITION_IP_LOCAL_PORT,
             FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_PORT, FWPM_FILTER_CONDITION0,
             FWPM_FILTER0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+            FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
         },
     },
     Win32::Networking::WinSock::IPPROTO_UDP,
@@ -31,10 +33,38 @@ use windows_sys::{
 const DHCP_SERVER_PORT: u16 = 67;
 const DHCP_CLIENT_PORT: u16 = 68;
 
-struct AppIdBlob(*mut FWP_BYTE_BLOB);
+/// Where a filter goes and what it is called.
+#[derive(Clone, Copy)]
+pub(super) struct Placement {
+    pub(super) provider: GUID,
+    pub(super) sublayer: GUID,
+    /// A fixed key for persistent filters; `None` lets BFE choose one.
+    pub(super) key: Option<GUID>,
+    pub(super) flags: u32,
+    pub(super) name: &'static str,
+}
+
+impl Placement {
+    /// A filter of the dynamic protection session.
+    pub(super) fn session(lockdown: bool) -> Self {
+        Self {
+            provider: PROVIDER_KEY,
+            sublayer: if lockdown {
+                lockdown::SUBLAYER_KEY
+            } else {
+                SUBLAYER_KEY
+            },
+            key: None,
+            flags: 0,
+            name: "Rosetun routing filter",
+        }
+    }
+}
+
+pub(super) struct AppIdBlob(*mut FWP_BYTE_BLOB);
 
 impl AppIdBlob {
-    fn from_path(path: &Path) -> Result<Self, RoutingError> {
+    pub(super) fn from_path(path: &Path) -> Result<Self, RoutingError> {
         let path = wide_path(path)?;
         let mut blob = ptr::null_mut();
 
@@ -42,7 +72,7 @@ impl AppIdBlob {
         if status != 0 {
             return Err(RoutingError::Wfp {
                 code: status,
-                context: "getting the WFP application ID for the engine",
+                context: "getting the WFP application ID of a program",
             });
         }
 
@@ -52,6 +82,23 @@ impl AppIdBlob {
     fn as_ptr(&self) -> *mut FWP_BYTE_BLOB {
         self.0
     }
+
+    pub(super) fn bytes(&self) -> &[u8] {
+        // SAFETY: the blob came from FwpmGetAppIdFromFileName0 and lives until
+        // Drop; `data` holds `size` bytes.
+        unsafe { blob_bytes(&*self.0) }
+    }
+}
+
+/// The bytes of a blob BFE returned.
+///
+/// # Safety
+/// `blob.data` must point to `blob.size` readable bytes for the returned lifetime.
+pub(super) unsafe fn blob_bytes(blob: &FWP_BYTE_BLOB) -> &[u8] {
+    if blob.data.is_null() || blob.size == 0 {
+        return &[];
+    }
+    unsafe { std::slice::from_raw_parts(blob.data, blob.size as usize) }
 }
 
 impl Drop for AppIdBlob {
@@ -64,7 +111,11 @@ impl Drop for AppIdBlob {
     }
 }
 
-pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<u64, RoutingError> {
+pub(super) fn add_rule(
+    session: &Engine,
+    rule: &Rule,
+    placement: &Placement,
+) -> Result<u64, RoutingError> {
     let mut luid = NET_LUID_LH::default();
     let app_id: AppIdBlob;
     let mut v4 = FWP_V4_ADDR_AND_MASK::default();
@@ -114,7 +165,8 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<u64, Rou
         _ => return Err(RoutingError::Unsupported),
     }
 
-    let mut display_name = "Rosetun routing filter"
+    let mut display_name = placement
+        .name
         .encode_utf16()
         .chain(Some(0))
         .collect::<Vec<_>>();
@@ -124,9 +176,11 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<u64, Rou
             name: display_name.as_mut_ptr(),
             description: ptr::null_mut(),
         },
-        providerKey: (&PROVIDER_KEY as *const GUID).cast_mut(),
-        layerKey: layer_key(rule.family),
-        subLayerKey: SUBLAYER_KEY,
+        filterKey: placement.key.unwrap_or_default(),
+        flags: placement.flags,
+        providerKey: (&placement.provider as *const GUID).cast_mut(),
+        layerKey: layer_key(rule.family, rule.layer),
+        subLayerKey: placement.sublayer,
         action: action(rule.action),
         weight: weight(rule.weight),
         numFilterConditions: conditions.len() as u32,
@@ -136,6 +190,7 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<u64, Rou
 
     tracing::debug!(
         family = ?rule.family,
+        layer = ?rule.layer,
         action = ?rule.action,
         conditions = ?rule.conditions,
         "adding Rosetun WFP filter"
@@ -153,7 +208,7 @@ pub(super) fn add_rule(session: &DynamicSession, rule: &Rule) -> Result<u64, Rou
     Ok(id)
 }
 
-pub(super) fn delete_rule(session: &DynamicSession, id: u64) -> Result<(), RoutingError> {
+pub(super) fn delete_rule(session: &Engine, id: u64) -> Result<(), RoutingError> {
     let status = unsafe { FwpmFilterDeleteById0(session.handle(), id) };
     if status != 0 {
         return Err(RoutingError::Wfp {
@@ -220,10 +275,12 @@ fn application_condition(app_id: &AppIdBlob) -> FWPM_FILTER_CONDITION0 {
     }
 }
 
-fn layer_key(family: AddressFamily) -> GUID {
-    match family {
-        AddressFamily::Ipv4 => FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-        AddressFamily::Ipv6 => FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+fn layer_key(family: AddressFamily, layer: Layer) -> GUID {
+    match (layer, family) {
+        (Layer::Connect, AddressFamily::Ipv4) => FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+        (Layer::Connect, AddressFamily::Ipv6) => FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+        (Layer::RecvAccept, AddressFamily::Ipv4) => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+        (Layer::RecvAccept, AddressFamily::Ipv6) => FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
     }
 }
 
@@ -295,7 +352,7 @@ fn interface_condition(luid: &mut NET_LUID_LH) -> FWPM_FILTER_CONDITION0 {
 fn wide_path(path: &Path) -> Result<Vec<u16>, RoutingError> {
     let path = path.to_str().ok_or_else(|| RoutingError::Tun {
         name: path.display().to_string(),
-        reason: "the engine executable path is not valid UTF-8".to_owned(),
+        reason: "the executable path is not valid UTF-8".to_owned(),
     })?;
 
     Ok(path.encode_utf16().chain(Some(0)).collect())

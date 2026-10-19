@@ -12,7 +12,7 @@ use windows_sys::core::GUID;
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
 
 use super::{
-    filters,
+    filters::{self, Placement},
     policy::{self, BootstrapPolicy},
     tunnel,
 };
@@ -29,23 +29,32 @@ unsafe extern "system" {
     ) -> u32;
 }
 
-/// A dynamic WFP session owns all objects created through its engine handle.
-/// Windows removes those objects automatically when the handle is closed,
-/// providing fail-open recovery if the helper crashes.
+/// An open WFP engine handle. A dynamic session owns all objects created
+/// through it: Windows removes them when the handle closes, providing
+/// fail-open recovery if the helper crashes. A standard session only writes
+/// objects that outlive it (Lockdown's persistent ones).
 #[derive(Debug)]
-pub(super) struct DynamicSession {
+pub(super) struct Engine {
     handle: HANDLE,
 }
 
-impl DynamicSession {
-    pub(super) fn open() -> Result<Self, RoutingError> {
+impl Engine {
+    pub(super) fn dynamic() -> Result<Self, RoutingError> {
+        Self::open(FWPM_SESSION_FLAG_DYNAMIC, "opening the dynamic WFP session")
+    }
+
+    pub(super) fn standard() -> Result<Self, RoutingError> {
+        Self::open(0, "opening a WFP session")
+    }
+
+    fn open(flags: u32, context: &'static str) -> Result<Self, RoutingError> {
         let session = FWPM_SESSION0 {
-            flags: FWPM_SESSION_FLAG_DYNAMIC,
+            flags,
             ..Default::default()
         };
         let mut handle = ptr::null_mut();
 
-        tracing::debug!("opening dynamic WFP engine session");
+        tracing::debug!(flags, "opening WFP engine session");
         let status = unsafe {
             FwpmEngineOpen0(
                 ptr::null(),
@@ -56,10 +65,10 @@ impl DynamicSession {
             )
         };
         if status != 0 {
-            return Err(wfp_error(status, "opening the dynamic WFP session"));
+            return Err(wfp_error(status, context));
         }
 
-        tracing::debug!("dynamic WFP engine session opened");
+        tracing::debug!("WFP engine session opened");
         Ok(Self { handle })
     }
 
@@ -122,14 +131,14 @@ impl DynamicSession {
     }
 }
 
-impl Drop for DynamicSession {
+impl Drop for Engine {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             let status = unsafe { FwpmEngineClose0(self.handle) };
             if status != 0 {
                 tracing::error!(
                     code = status,
-                    "failed to close the dynamic WFP session during cleanup"
+                    "failed to close the WFP session during cleanup"
                 );
             }
             self.handle = ptr::null_mut();
@@ -140,15 +149,21 @@ impl Drop for DynamicSession {
 /// Bootstrap policy is installed before the engine starts. Tunnel authorization
 /// is added later to this same session after routing has discovered and
 /// validated the engine-created adapter.
+///
+/// With Lockdown every filter goes into the persistent Lockdown sublayer
+/// instead of Rosetun's: a permit there sits above Lockdown's block-all and
+/// opens it, while a soft permit in a lower sublayer could not (study, run 3).
+/// The provider and the Rosetun sublayer stay in this session either way.
 #[derive(Debug)]
 pub(super) struct WfpProtectionSession {
-    session: Option<DynamicSession>,
+    session: Option<Engine>,
+    lockdown: bool,
     bootstrap_policy: BootstrapPolicy,
     bootstrap_filter_ids: Vec<u64>,
+    tunnel_luid: Option<u64>,
     tunnel_filter_ids: Vec<u64>,
     probe_filter_ids: Vec<u64>,
     probe_binary: Option<std::path::PathBuf>,
-    tunnel_authorized: bool,
 }
 
 impl WfpProtectionSession {
@@ -156,31 +171,33 @@ impl WfpProtectionSession {
         plan: &RoutingPlan,
         engine_binaries: &[&Path],
     ) -> Result<Self, RoutingError> {
-        let session = DynamicSession::open()?;
+        let session = Engine::dynamic()?;
         let transaction = session.transaction()?;
 
         session.add_provider_and_sublayer()?;
 
+        let placement = Placement::session(plan.lockdown);
         let bootstrap_policy = BootstrapPolicy::from_plan(plan, engine_binaries);
         let mut bootstrap_filter_ids = Vec::with_capacity(bootstrap_policy.rules.len());
         for rule in &bootstrap_policy.rules {
-            bootstrap_filter_ids.push(filters::add_rule(&session, rule)?);
+            bootstrap_filter_ids.push(filters::add_rule(&session, rule, &placement)?);
         }
 
         transaction.commit()?;
 
         Ok(Self {
             session: Some(session),
+            lockdown: plan.lockdown,
             bootstrap_policy,
             bootstrap_filter_ids,
+            tunnel_luid: None,
             tunnel_filter_ids: Vec::new(),
             probe_filter_ids: Vec::new(),
             probe_binary: None,
-            tunnel_authorized: false,
         })
     }
 
-    fn active_session(&self) -> Result<&DynamicSession, RoutingError> {
+    fn active_session(&self) -> Result<&Engine, RoutingError> {
         self.session.as_ref().ok_or_else(|| {
             RoutingError::Route("the WFP protection session has been torn down".to_owned())
         })
@@ -197,8 +214,10 @@ impl ProtectionSession for WfpProtectionSession {
         plan: &RoutingPlan,
         engine_binaries: &[&Path],
     ) -> Result<(), RoutingError> {
+        self.set_lockdown(plan.lockdown)?;
         let policy = BootstrapPolicy::from_plan(plan, engine_binaries);
         let replace_bootstrap = policy != self.bootstrap_policy;
+        let placement = Placement::session(self.lockdown);
         let session = self.active_session()?;
         let transaction = session.transaction()?;
 
@@ -213,7 +232,7 @@ impl ProtectionSession for WfpProtectionSession {
             }
             replacement_ids.reserve(policy.rules.len());
             for rule in &policy.rules {
-                replacement_ids.push(filters::add_rule(session, rule)?);
+                replacement_ids.push(filters::add_rule(session, rule, &placement)?);
             }
         }
 
@@ -225,27 +244,28 @@ impl ProtectionSession for WfpProtectionSession {
             self.bootstrap_filter_ids = replacement_ids;
         }
         self.tunnel_filter_ids.clear();
-        self.tunnel_authorized = false;
+        self.tunnel_luid = None;
         Ok(())
     }
 
     fn authorize_tunnel(&mut self, tunnel: &TunnelInterface) -> Result<(), RoutingError> {
-        if self.tunnel_authorized {
+        if self.tunnel_luid.is_some() {
             return Ok(());
         }
 
-        let luid = tunnel::resolve_luid(tunnel)?;
+        let luid = tunnel::resolve_luid(tunnel)?.value();
+        let placement = Placement::session(self.lockdown);
         let session = self.active_session()?;
         let transaction = session.transaction()?;
-        let mut ids = Vec::with_capacity(2);
-
-        for rule in policy::tunnel_authorization(luid.value()) {
-            ids.push(filters::add_rule(session, &rule)?);
+        let rules = policy::tunnel_authorization(luid, self.lockdown);
+        let mut ids = Vec::with_capacity(rules.len());
+        for rule in &rules {
+            ids.push(filters::add_rule(session, rule, &placement)?);
         }
 
         transaction.commit()?;
         self.tunnel_filter_ids = ids;
-        self.tunnel_authorized = true;
+        self.tunnel_luid = Some(luid);
         Ok(())
     }
 
@@ -264,11 +284,12 @@ impl ProtectionSession for WfpProtectionSession {
                 "another probe application is authorized".into(),
             ));
         }
+        let placement = Placement::session(self.lockdown);
         let session = self.active_session()?;
         let transaction = session.transaction()?;
         let mut ids = Vec::with_capacity(2);
         for rule in policy::probe_authorization(binary) {
-            ids.push(filters::add_rule(session, &rule)?);
+            ids.push(filters::add_rule(session, &rule, &placement)?);
         }
         transaction.commit()?;
         self.probe_filter_ids = ids;
@@ -291,13 +312,57 @@ impl ProtectionSession for WfpProtectionSession {
         Ok(())
     }
 
+    fn set_lockdown(&mut self, lockdown: bool) -> Result<(), RoutingError> {
+        if self.lockdown == lockdown {
+            return Ok(());
+        }
+        let placement = Placement::session(lockdown);
+        let tunnel_rules = self
+            .tunnel_luid
+            .map(|luid| policy::tunnel_authorization(luid, lockdown))
+            .unwrap_or_default();
+        let probe_rules = self
+            .probe_binary
+            .as_deref()
+            .map(|binary| policy::probe_authorization(binary).to_vec())
+            .unwrap_or_default();
+        let session = self.active_session()?;
+        let transaction = session.transaction()?;
+
+        let add = |rules: &[policy::Rule]| -> Result<Vec<u64>, RoutingError> {
+            rules
+                .iter()
+                .map(|rule| filters::add_rule(session, rule, &placement))
+                .collect()
+        };
+        let bootstrap_ids = add(&self.bootstrap_policy.rules)?;
+        let tunnel_ids = add(&tunnel_rules)?;
+        let probe_ids = add(&probe_rules)?;
+        for &id in self
+            .bootstrap_filter_ids
+            .iter()
+            .chain(&self.tunnel_filter_ids)
+            .chain(&self.probe_filter_ids)
+        {
+            filters::delete_rule(session, id)?;
+        }
+
+        transaction.commit()?;
+        self.bootstrap_filter_ids = bootstrap_ids;
+        self.tunnel_filter_ids = tunnel_ids;
+        self.probe_filter_ids = probe_ids;
+        self.lockdown = lockdown;
+        tracing::info!(lockdown, "routing protection moved to the other sublayer");
+        Ok(())
+    }
+
     fn teardown(&mut self) -> Result<(), RoutingError> {
         self.session.take();
         self.probe_filter_ids.clear();
         self.probe_binary = None;
         self.bootstrap_filter_ids.clear();
         self.tunnel_filter_ids.clear();
-        self.tunnel_authorized = false;
+        self.tunnel_luid = None;
         Ok(())
     }
 }
@@ -307,7 +372,7 @@ impl ProtectionSession for WfpProtectionSession {
 /// filters behind.
 #[derive(Debug)]
 pub(super) struct Transaction<'session> {
-    session: &'session DynamicSession,
+    session: &'session Engine,
     completed: bool,
 }
 
@@ -353,24 +418,24 @@ pub(super) const SUBLAYER_KEY: GUID = GUID {
 };
 const SUBLAYER_WEIGHT: u16 = 0x8000;
 
-fn wide(value: &str) -> Vec<u16> {
+pub(super) fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
 }
 
-fn display_data(name: &[u16], description: &[u16]) -> FWPM_DISPLAY_DATA0 {
+pub(super) fn display_data(name: &[u16], description: &[u16]) -> FWPM_DISPLAY_DATA0 {
     FWPM_DISPLAY_DATA0 {
         name: name.as_ptr().cast_mut(),
         description: description.as_ptr().cast_mut(),
     }
 }
 
-fn empty_blob() -> FWP_BYTE_BLOB {
+pub(super) fn empty_blob() -> FWP_BYTE_BLOB {
     FWP_BYTE_BLOB {
         size: 0,
         data: ptr::null_mut(),
     }
 }
 
-fn wfp_error(code: u32, context: &'static str) -> RoutingError {
+pub(super) fn wfp_error(code: u32, context: &'static str) -> RoutingError {
     RoutingError::Wfp { code, context }
 }

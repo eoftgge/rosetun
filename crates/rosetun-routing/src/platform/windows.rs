@@ -1,4 +1,5 @@
 mod filters;
+pub(super) mod lockdown;
 mod physical;
 mod policy;
 mod session;
@@ -8,14 +9,16 @@ pub(super) fn tunnel_adapter_present(alias: &str) -> std::io::Result<bool> {
     tunnel::adapter_present(alias)
 }
 
-use session::DynamicSession;
+use session::Engine;
 
 pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> {
     physical::physical_default_interface(exclude_alias)
 }
 
 use crate::platform::windows::session::WfpProtectionSession;
-use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
+use crate::{
+    LockdownApps, LockdownStatus, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan,
+};
 
 #[derive(Debug, Default)]
 pub(super) struct WfpBackend;
@@ -32,7 +35,7 @@ impl RoutingBackend for WfpBackend {
     }
 
     fn preflight(&self) -> Result<(), RoutingError> {
-        let session = DynamicSession::open()?;
+        let session = Engine::dynamic()?;
         let transaction = session.transaction()?;
         session.add_provider_and_sublayer()?;
         transaction.commit()
@@ -47,5 +50,28 @@ impl RoutingBackend for WfpBackend {
             plan,
             engine_binaries,
         )?))
+    }
+
+    fn lockdown_status(&self) -> Result<LockdownStatus, RoutingError> {
+        lockdown::status()
+    }
+
+    fn enable_lockdown(
+        &self,
+        allow_lan: bool,
+        apps: &LockdownApps,
+    ) -> Result<LockdownStatus, RoutingError> {
+        lockdown::enable(allow_lan, apps)
+    }
+
+    fn disable_lockdown(&self) -> Result<bool, RoutingError> {
+        lockdown::disable()
+    }
+
+    fn permit_in_lockdown(
+        &mut self,
+        binaries: &[&std::path::Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        lockdown::permit_programs(binaries)
     }
 }

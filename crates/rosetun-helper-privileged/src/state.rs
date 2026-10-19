@@ -1759,6 +1759,7 @@ impl Session {
             let plan = RoutingPlan {
                 scope,
                 allow_lan: settings.allow_lan,
+                lockdown: false,
             };
 
             match mode {

@@ -43,6 +43,43 @@ pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> 
     }
 }
 
+pub(super) fn lockdown_status() -> Result<crate::LockdownStatus, crate::RoutingError> {
+    #[cfg(windows)]
+    {
+        windows::lockdown::status()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(crate::RoutingError::Unsupported)
+    }
+}
+
+pub(super) fn lockdown_enable(
+    allow_lan: bool,
+    apps: &crate::LockdownApps,
+) -> Result<crate::LockdownStatus, crate::RoutingError> {
+    #[cfg(windows)]
+    {
+        windows::lockdown::enable(allow_lan, apps)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (allow_lan, apps);
+        Err(crate::RoutingError::Unsupported)
+    }
+}
+
+pub(super) fn lockdown_disable() -> Result<bool, crate::RoutingError> {
+    #[cfg(windows)]
+    {
+        windows::lockdown::disable()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(crate::RoutingError::Unsupported)
+    }
+}
+
 #[cfg(target_os = "linux")]
 const PLATFORM_NAME: &str = "linux-netlink";
 #[cfg(target_os = "macos")]

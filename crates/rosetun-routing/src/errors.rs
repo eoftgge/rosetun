@@ -20,9 +20,17 @@ pub enum RoutingError {
     Io(#[from] std::io::Error),
 }
 
+/// `FWP_E_IN_USE`: an object is still referenced, as the Lockdown sublayer is
+/// by a running session's filters.
+const FWP_E_IN_USE: u32 = 0x8032_000A;
+
 impl RoutingError {
     pub fn is_tunnel_not_ready(&self) -> bool {
         matches!(self, Self::TunnelNotReady { .. })
+    }
+
+    pub fn is_in_use(&self) -> bool {
+        matches!(self, Self::Wfp { code, .. } if *code == FWP_E_IN_USE)
     }
 }
 
