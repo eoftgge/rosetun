@@ -1,6 +1,6 @@
 # Rosetun {{version}}
 
-The first beta of Rosetun 0.2. Its goal: connect everywhere, and show what is going on. REALITY servers on new Xray connect again, a rule can send its sites or programs through another country or server, and Rosetun explains more of what goes wrong.
+The second beta of Rosetun 0.2. Its goal: connect everywhere, and show what is going on. REALITY servers on new Xray connect again, a rule can send its sites or programs through another country or server, and Rosetun explains more of what goes wrong.
 
 **This is a test version.** The stable release is [0.1.0](https://github.com/eoftgge/rosetun/releases/tag/v0.1.0): stay on it if you need Rosetun to just work. Betas get fixes in the next beta only; security fixes are made for the stable line ([SECURITY.md](https://github.com/eoftgge/rosetun/blob/master/SECURITY.md)). Rosetun 0.1.0 does not offer this beta as an update; 0.1.0-beta.1 and beta.2 do, so if you are on one of them and want the stable version, install 0.1.0 instead.
 
@@ -8,7 +8,12 @@ Settings from 0.1 are upgraded on the first start; from this beta on they carry 
 
 **Going back to 0.1 takes a manual step.** 0.2 upgrades the settings file to a new format, and 0.1 refuses a file from a newer version instead of overwriting it. Rosetun keeps your previous settings next to it as `%APPDATA%\Rosetun\config.v3.json`: to return to 0.1.0, install it and rename that file to `config.json`. Changes made in 0.2 are not carried back.
 
-## What's changed
+## What's changed since 0.2.0-beta.1
+
+- **"Apply" and reconnecting no longer fail with "engine exited with code 1"** when Windows is slow to remove the previous tunnel adapter. This was the cause of the rare engine error on "Apply" known since 0.1; it also delayed reconnecting after a network loss. Rosetun now recognises it and starts the engine again a couple of seconds later, with the protection kept in place, and "Apply" keeps your change instead of rolling it back.
+- **The buttons on a subscription card** (expand, update, more) no longer start dragging the card or show the drag cursor. Drag a subscription by its name.
+
+## What's new in 0.2
 
 - **REALITY servers on Xray 26.9.8 and newer connect again.** sing-box cannot talk to them ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)), so Rosetun now connects VLESS + REALITY servers through Xray. sing-box still runs the tunnel, the rules, DNS and the kill switch; Xray only carries the connection to the server.
 - **Settings › Advanced › Connection through Xray:**
@@ -39,7 +44,7 @@ Settings from 0.1 are upgraded on the first start; from this beta on they carry 
 ## Known issues
 
 - If you switch between networks (for example Wi-Fi and cable) while connected through Xray, the connection may stop until Rosetun reconnects.
-- **"Apply" while connected failed once with an engine error** on a 0.1 test version, and the cause was not found. If it happens to you, use **Collect report** (Settings › Service and log) and attach the file to an issue.
+- **If "Apply" or a reconnect still fails with an engine error,** please use **Collect report** (Settings › Service and log) and attach the file to an issue: the fix above is confirmed by tests, not yet on every affected computer.
 
 ## Install
 
@@ -59,7 +64,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-Первая бета Rosetun 0.2. Её цель: подключаться везде и показывать, что происходит. Серверы REALITY на новом Xray снова подключаются, правило может вести свои сайты или программы через другую страну или сервер, а Rosetun понятнее объясняет, что пошло не так.
+Вторая бета Rosetun 0.2. Её цель: подключаться везде и показывать, что происходит. Серверы REALITY на новом Xray снова подключаются, правило может вести свои сайты или программы через другую страну или сервер, а Rosetun понятнее объясняет, что пошло не так.
 
 **Это тестовая версия.** Стабильный выпуск: [0.1.0](https://github.com/eoftgge/rosetun/releases/tag/v0.1.0); оставайтесь на нём, если Rosetun нужен просто для работы. Исправления для беты выходят только в следующей бете; исправления безопасности делаются для стабильной линии ([SECURITY.md](https://github.com/eoftgge/rosetun/blob/master/SECURITY.md)). Rosetun 0.1.0 не предлагает эту бету как обновление, а 0.1.0-beta.1 и beta.2 предлагают: если у вас одна из них и нужна стабильная версия, установите 0.1.0.
 
@@ -67,7 +72,12 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 **Вернуться на 0.1 можно только вручную.** 0.2 переводит файл настроек на новый формат, а 0.1 отказывается читать файл более новой версии и не перезаписывает его. Прежние настройки Rosetun сохраняет рядом, в `%APPDATA%\Rosetun\config.v3.json`: чтобы вернуться на 0.1.0, установите её и переименуйте этот файл в `config.json`. Изменения, сделанные в 0.2, при этом не переносятся.
 
-### Что изменилось
+### Что изменилось с 0.2.0-beta.1
+
+- **«Применить» и переподключение больше не падают с «engine exited with code 1»**, когда Windows долго удаляет прежний адаптер туннеля. Это и была причина редкой ошибки ядра при «Применить», известной с 0.1; из-за неё же затягивалось переподключение после пропажи сети. Теперь Rosetun распознаёт её и через пару секунд запускает ядро снова, не снимая защиту, а «Применить» сохраняет ваше изменение вместо отката.
+- **Кнопки на карточке подписки** (развернуть, обновить, ещё) больше не начинают перетаскивание карточки и не показывают курсор перетаскивания. Подписку перетаскивают за название.
+
+### Что нового в 0.2
 
 - **Серверы REALITY на Xray 26.9.8 и новее снова подключаются.** sing-box с ними работать не может ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)), поэтому серверы VLESS + REALITY Rosetun теперь подключает через Xray. Туннель, правила, DNS и kill switch по-прежнему работают на sing-box; Xray только ведёт соединение с сервером.
 - **Настройки › Дополнительно › Подключение через Xray:**
@@ -98,7 +108,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 ### Известные проблемы
 
 - Если во время подключения через Xray сменить сеть (например, Wi-Fi на кабель), соединение может прерваться, пока Rosetun не переподключится.
-- **«Применить» во время подключения однажды завершилось ошибкой ядра** на тестовой версии 0.1, причину не нашли. Если это случится у вас, нажмите **Собрать отчёт** (Настройки › Служба и журнал) и приложите файл к Issue.
+- **Если «Применить» или переподключение всё же завершится ошибкой ядра,** нажмите **Собрать отчёт** (Настройки › Служба и журнал) и приложите файл к Issue: исправление выше подтверждено тестами, но ещё не на всех компьютерах, где ошибка встречалась.
 
 ### Установка
 
