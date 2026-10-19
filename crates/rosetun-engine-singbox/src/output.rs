@@ -176,9 +176,28 @@ pub(super) fn line_level(line: &str) -> Option<LineLevel> {
         })
 }
 
+/// The FATAL sing-box prints when Wintun still holds the adapter of a killed
+/// predecessor: creating it collides with the old device that Windows has
+/// not removed yet, and opening it fails because the interface is gone.
+pub(super) fn is_adapter_busy_message(line: &str) -> bool {
+    let plain = strip_ansi_csi(line);
+    let fatal = plain
+        .split_whitespace()
+        .take(4)
+        .any(|word| word.split_once('[').map_or(word, |(prefix, _)| prefix) == "FATAL");
+    let Some((_, configure)) = plain.split_once("configure tun interface:") else {
+        return false;
+    };
+    let Some((_, create)) = configure.split_once("create adapter:") else {
+        return false;
+    };
+    let create = create.split([')', '|']).next().unwrap_or_default();
+    fatal && create.contains("already exists")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LineLevel, line_level};
+    use super::{LineLevel, is_adapter_busy_message, line_level};
 
     #[test]
     fn hides_destinations_but_not_the_server_or_failure_cause() {
@@ -315,6 +334,25 @@ mod tests {
             ("", None),
         ] {
             assert_eq!(line_level(line), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn recognizes_an_adapter_still_being_removed() {
+        const FATAL: &str = "FATAL[0015] start service: start inbound/tun[tun-in]: configure tun interface: (create adapter: Cannot create a file when that file already exists. | open existing adapter: Element not found.)";
+        assert!(is_adapter_busy_message(FATAL));
+        assert!(is_adapter_busy_message(&format!(
+            "+0900 2026-10-19 12:00:00 \x1b[31m{}",
+            FATAL.replacen("FATAL", "FATAL\x1b[0m", 1)
+        )));
+        for line in [
+            "FATAL[0015] start service: start inbound/tun[tun-in]: configure tun interface: (create adapter: Access is denied. | open existing adapter: Element not found.)",
+            "FATAL[0015] start service: start inbound/tun[tun-in]: configure tun interface: (create adapter: Access is denied. | open existing adapter: already exists)",
+            "ERROR[0015] start service: start inbound/tun[tun-in]: configure tun interface: (create adapter: Cannot create a file when that file already exists.)",
+            "FATAL[0015] start service: create adapter: Cannot create a file when that file already exists.",
+            "WARN inbound/tun[tun-in]: open interface take too much time to finish!",
+        ] {
+            assert!(!is_adapter_busy_message(line), "{line}");
         }
     }
 }

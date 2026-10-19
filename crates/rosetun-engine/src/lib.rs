@@ -383,6 +383,9 @@ impl RenderedConfig {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct StartupHints {
     pub slow_tunnel_creation: bool,
+    /// The engine failed because the previous tunnel adapter was still being
+    /// removed by the system; a later start is expected to succeed.
+    pub adapter_still_removing: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

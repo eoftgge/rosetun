@@ -59,7 +59,8 @@ fn startup_hint_extends_only_slow_tunnel_deadline() {
     );
     assert_eq!(
         startup_timeout(rosetun_engine::StartupHints {
-            slow_tunnel_creation: true
+            slow_tunnel_creation: true,
+            ..Default::default()
         }),
         Duration::from_secs(45)
     );
@@ -81,6 +82,7 @@ fn server_check_grace_needs_a_slow_hint_or_late_readiness() {
     );
     let slow = rosetun_engine::StartupHints {
         slow_tunnel_creation: true,
+        ..Default::default()
     };
     assert_eq!(
         server_check_grace_deadline(slow, spawned_at, spawned_at, SERVER_CHECK_GRACE),
@@ -1413,6 +1415,7 @@ impl EngineProcess for ServerCheckProcess {
     fn startup_hints(&self) -> rosetun_engine::StartupHints {
         rosetun_engine::StartupHints {
             slow_tunnel_creation: self.slow_adapter,
+            ..Default::default()
         }
     }
 

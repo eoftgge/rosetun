@@ -213,7 +213,7 @@ impl EngineBackend for SingBoxBackend {
             .spawn()?;
 
         let (ready_sender, readiness) = Readiness::new();
-        let slow_tunnel = Arc::new(AtomicBool::new(false));
+        let hints = Arc::new(HintFlags::default());
         let failures = Arc::new(output::FailureCounters::default());
 
         if let Some(stdout) = child.stdout.take()
@@ -236,23 +236,27 @@ impl EngineBackend for SingBoxBackend {
             return Err(std::io::Error::other("sing-box stderr pipe is unavailable").into());
         };
 
-        if let Err(error) = spawn_output_drain(
+        let stderr_drain = match spawn_output_drain(
             stderr,
             "stderr",
             Some(ready_sender),
             probe,
-            Some(Arc::clone(&slow_tunnel)),
+            Some(Arc::clone(&hints)),
             Arc::clone(&failures),
             verbose_until_unix,
         ) {
-            stop_failed_spawn(&mut child);
-            return Err(error.into());
-        }
+            Ok(drain) => drain,
+            Err(error) => {
+                stop_failed_spawn(&mut child);
+                return Err(error.into());
+            }
+        };
 
         Ok(Box::new(SingBoxProcess {
             child,
             readiness,
-            slow_tunnel,
+            hints,
+            stderr_drain: Some(stderr_drain),
             failures,
         }))
     }
@@ -342,10 +346,10 @@ fn spawn_output_drain<R>(
     stream: &'static str,
     mut ready_sender: Option<Sender<()>>,
     probe: bool,
-    slow_tunnel: Option<Arc<AtomicBool>>,
+    hints: Option<Arc<HintFlags>>,
     failures: Arc<output::FailureCounters>,
     verbose_until_unix: Arc<AtomicU64>,
-) -> std::io::Result<()>
+) -> std::io::Result<thread::JoinHandle<()>>
 where
     R: Read + Send + 'static,
 {
@@ -356,10 +360,8 @@ where
                 match line {
                     Ok(line) => {
                         failures.observe(&line);
-                        if readiness::is_slow_tunnel_message(&line)
-                            && let Some(hint) = &slow_tunnel
-                        {
-                            hint.store(true, Ordering::Release);
+                        if let Some(hints) = &hints {
+                            hints.observe(&line);
                         }
                         if ready_sender.is_some()
                             && readiness::is_startup_message(&line)
@@ -384,7 +386,6 @@ where
             // Dropping the sender reports EOF if no readiness signal was sent.
             tracing::debug!(stream, "sing-box output stream closed");
         })
-        .map(|_| ())
 }
 
 fn log_output_line(stream: &'static str, line: &str, verbose_until_unix: &AtomicU64) {
@@ -420,12 +421,48 @@ fn find_in_neighbours() -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
+/// Latched startup diagnostics, set by the stderr drain.
+#[derive(Debug, Default)]
+struct HintFlags {
+    slow_tunnel: AtomicBool,
+    adapter_still_removing: AtomicBool,
+}
+
+impl HintFlags {
+    fn observe(&self, line: &str) {
+        if readiness::is_slow_tunnel_message(line) {
+            self.slow_tunnel.store(true, Ordering::Release);
+        }
+        if output::is_adapter_busy_message(line) {
+            self.adapter_still_removing.store(true, Ordering::Release);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct SingBoxProcess {
     child: Child,
     readiness: Readiness,
-    slow_tunnel: Arc<AtomicBool>,
+    hints: Arc<HintFlags>,
+    stderr_drain: Option<thread::JoinHandle<()>>,
     failures: Arc<output::FailureCounters>,
+}
+
+impl SingBoxProcess {
+    /// The exit can be seen before the drain has read the last lines, and the
+    /// FATAL that explains it is one of them: let the hints latch first.
+    fn settle_stderr(&mut self) {
+        let Some(drain) = self.stderr_drain.take() else {
+            return;
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while !drain.is_finished() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        if drain.is_finished() {
+            let _ = drain.join();
+        }
+    }
 }
 
 impl EngineProcess for SingBoxProcess {
@@ -434,14 +471,18 @@ impl EngineProcess for SingBoxProcess {
     }
     fn startup_hints(&self) -> rosetun_engine::StartupHints {
         rosetun_engine::StartupHints {
-            slow_tunnel_creation: self.slow_tunnel.load(Ordering::Acquire),
+            slow_tunnel_creation: self.hints.slow_tunnel.load(Ordering::Acquire),
+            adapter_still_removing: self.hints.adapter_still_removing.load(Ordering::Acquire),
         }
     }
     fn is_running(&mut self) -> Result<bool, EngineError> {
         match self.child.try_wait()? {
-            Some(status) => Err(EngineError::Exited {
-                code: status.code(),
-            }),
+            Some(status) => {
+                self.settle_stderr();
+                Err(EngineError::Exited {
+                    code: status.code(),
+                })
+            }
             None => Ok(true),
         }
     }
