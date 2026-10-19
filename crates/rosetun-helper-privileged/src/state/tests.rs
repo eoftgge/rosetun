@@ -4156,7 +4156,9 @@ fn apply_retries_while_the_old_adapter_is_removed_without_rollback() {
     let changed = request_with_new_rules(&request);
     controls.adapter_busy_next(2);
 
-    helper.apply(&changed).expect("third start applies the change");
+    helper
+        .apply(&changed)
+        .expect("third start applies the change");
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(controls.spawns(), 4);
     assert_eq!(prepared.load(Ordering::Acquire), 1);
@@ -4181,7 +4183,9 @@ fn engine_start_retries_end_after_two_and_other_exits_are_not_retried() {
 
     let (helper, controls, _, _) = supervised_helper(true);
     controls.fail_readiness_next(1);
-    let error = helper.connect(&request).expect_err("an ordinary exit fails");
+    let error = helper
+        .connect(&request)
+        .expect_err("an ordinary exit fails");
     assert_eq!(error.code, ErrorCode::EngineFailed);
     assert_eq!(controls.spawns(), 1);
 }

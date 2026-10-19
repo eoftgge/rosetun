@@ -1867,17 +1867,19 @@ impl Session {
             self.process = Some(
                 backend
                     .spawn_with_log_gate(&binary, &config, self.gate.deadline())
-                    .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?,
+                    .map_err(|error| {
+                        HelperError::new(ErrorCode::EngineFailed, error.to_string())
+                    })?,
             );
             let process = self
                 .process
                 .as_mut()
                 .expect("engine process was stored before readiness");
-            let error = match wait_for_engine_ready_from(process.as_mut(), spawned_at, &self.cancelled)
-            {
-                Ok(()) => break spawned_at,
-                Err(error) => error,
-            };
+            let error =
+                match wait_for_engine_ready_from(process.as_mut(), spawned_at, &self.cancelled) {
+                    Ok(()) => break spawned_at,
+                    Err(error) => error,
+                };
             let adapter_busy = error.code == ErrorCode::EngineFailed
                 && process.startup_hints().adapter_still_removing;
             if !adapter_busy || attempt > ADAPTER_BUSY_RETRIES {
@@ -1898,9 +1900,9 @@ impl Session {
             );
             // The engine has exited; protection stays as it is for the next attempt.
             if let Some(mut process) = self.process.take() {
-                process
-                    .stop()
-                    .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+                process.stop().map_err(|error| {
+                    HelperError::new(ErrorCode::EngineFailed, error.to_string())
+                })?;
             }
             sleep_cancellable(ADAPTER_BUSY_RETRY_DELAY, &self.cancelled)?;
             self.wait_for_previous_adapter(&settings.tun.name)?;
