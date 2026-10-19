@@ -118,7 +118,8 @@ function Remove-Probe {
 }
 
 function Start-Permit {
-    param([Parameter(Mandatory)][string[]]$Arguments)
+    # The soft permit at the default weight passes no options at all.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Arguments)
     $permit = Invoke-RosetunGuest -ScriptBlock {
         param($exe, $dir, $arguments)
         $name = "permit-$([guid]::NewGuid().ToString('N'))"
@@ -127,7 +128,8 @@ function Start-Permit {
         $stderr = Join-Path $dir "$name.err.txt"
         [IO.File]::WriteAllText($stdin, '')
         $curl = (Get-Command -Name curl.exe -ErrorAction Stop).Source
-        $all = @('permit', '--program', "`"$curl`"") + $arguments
+        # Remoting may deliver an empty array as $null, which would add an empty argument.
+        $all = @('permit', '--program', "`"$curl`"") + @($arguments | Where-Object { $_ })
         # Stdin at EOF: the probe then holds the permit until it is killed.
         $process = Start-Process -FilePath $exe -ArgumentList $all -PassThru -WindowStyle Hidden `
             -RedirectStandardInput $stdin -RedirectStandardOutput $stdout -RedirectStandardError $stderr
