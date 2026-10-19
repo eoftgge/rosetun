@@ -42,10 +42,16 @@ impl StopOutcome {
         match self {
             Self::AlreadyExited => {}
             Self::Graceful(elapsed) => {
-                line!(elapsed_ms = elapsed.as_millis() as u64, "sing-box stopped gracefully");
+                line!(
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "sing-box stopped gracefully"
+                );
             }
             Self::KilledAfterTimeout(waited) => {
-                line!(waited_ms = waited.as_millis() as u64, "sing-box did not stop in time and was killed");
+                line!(
+                    waited_ms = waited.as_millis() as u64,
+                    "sing-box did not stop in time and was killed"
+                );
             }
             Self::Killed => line!("sing-box killed"),
         }
@@ -162,7 +168,10 @@ mod tests {
         fn has_exited(&mut self) -> io::Result<bool> {
             if self.interrupted {
                 self.checks_since_interrupt += 1;
-                if self.exits_after.is_some_and(|n| self.checks_since_interrupt >= n) {
+                if self
+                    .exits_after
+                    .is_some_and(|n| self.checks_since_interrupt >= n)
+                {
                     self.exited = true;
                 }
             }
@@ -192,14 +201,23 @@ mod tests {
 
     #[test]
     fn exited_process_is_left_alone() {
-        let mut fake = Fake { exited: true, ..Fake::default() };
-        assert_eq!(stop(&mut fake, STOP_GRACE).unwrap(), StopOutcome::AlreadyExited);
+        let mut fake = Fake {
+            exited: true,
+            ..Fake::default()
+        };
+        assert_eq!(
+            stop(&mut fake, STOP_GRACE).unwrap(),
+            StopOutcome::AlreadyExited
+        );
         assert!(!fake.interrupted && !fake.killed);
     }
 
     #[test]
     fn interrupted_process_that_exits_is_not_killed() {
-        let mut fake = Fake { exits_after: Some(3), ..Fake::default() };
+        let mut fake = Fake {
+            exits_after: Some(3),
+            ..Fake::default()
+        };
         let outcome = stop(&mut fake, STOP_GRACE).unwrap();
         assert!(matches!(outcome, StopOutcome::Graceful(_)), "{outcome:?}");
         assert!(fake.interrupted && !fake.killed);
@@ -220,7 +238,10 @@ mod tests {
 
     #[test]
     fn failed_interrupt_kills_without_waiting() {
-        let mut fake = Fake { interrupt_error: Some(io::ErrorKind::PermissionDenied), ..Fake::default() };
+        let mut fake = Fake {
+            interrupt_error: Some(io::ErrorKind::PermissionDenied),
+            ..Fake::default()
+        };
         let started = Instant::now();
         assert_eq!(stop(&mut fake, STOP_GRACE).unwrap(), StopOutcome::Killed);
         assert!(started.elapsed() < Duration::from_secs(1));
@@ -229,7 +250,10 @@ mod tests {
 
     #[test]
     fn unsupported_interrupt_kills() {
-        let mut fake = Fake { interrupt_error: Some(io::ErrorKind::Unsupported), ..Fake::default() };
+        let mut fake = Fake {
+            interrupt_error: Some(io::ErrorKind::Unsupported),
+            ..Fake::default()
+        };
         assert_eq!(stop(&mut fake, STOP_GRACE).unwrap(), StopOutcome::Killed);
         assert!(fake.killed);
     }
@@ -241,7 +265,10 @@ mod tests {
             exit_on_interrupt_error: true,
             ..Fake::default()
         };
-        assert_eq!(stop(&mut fake, STOP_GRACE).unwrap(), StopOutcome::AlreadyExited);
+        assert_eq!(
+            stop(&mut fake, STOP_GRACE).unwrap(),
+            StopOutcome::AlreadyExited
+        );
         assert!(!fake.killed);
     }
 }
