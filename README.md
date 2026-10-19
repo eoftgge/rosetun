@@ -6,7 +6,7 @@ Rosetun is a Windows VPN client powered by sing-box. A Windows service maintains
 
 <a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download.svg" alt="Download Rosetun for Windows" height="56"></a>
 
-**Young project:** one developer maintains it and it has few users yet. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues).
+**Young project:** one developer maintains it with AI coding agents, and it has few users yet. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues).
 
 ## Features
 

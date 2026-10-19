@@ -6,7 +6,7 @@ Rosetun: VPN-клиент для Windows на базе sing-box. Служба Wi
 
 <a href="https://github.com/eoftgge/rosetun/releases"><img src=".github/assets/download-ru.svg" alt="Скачать Rosetun для Windows" height="56"></a>
 
-**Молодой проект:** его ведёт один разработчик, пользователей пока мало. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues).
+**Молодой проект:** его ведёт один разработчик с помощью ИИ-агентов, пользователей пока мало. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues).
 
 ## Возможности
 
