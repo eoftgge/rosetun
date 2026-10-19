@@ -1156,33 +1156,154 @@ function Test-RosetunDirectDns {
     } -ArgumentList $address, $script:Config.DnsProbeServer, [bool]$Tcp
 }
 
-function Initialize-RosetunIpv6Neighbor {
-    $hostAddress = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+function Get-RosetunIpv6NeighborTarget {
+    # Both ends of the Default Switch link. The switch does not pass IPv6
+    # neighbor discovery, so each side needs the other's MAC pinned.
+    $hostAdapter = Get-NetAdapter -Name 'vEthernet (Default Switch)' -ErrorAction Stop
+    $hostAddress = Get-NetIPAddress -InterfaceIndex $hostAdapter.ifIndex -AddressFamily IPv6 -ErrorAction SilentlyContinue |
         Where-Object { $_.IPAddress -like 'fe80::*' } |
         Select-Object -First 1
     if ($null -eq $hostAddress) {
         throw 'The host has no link-local IPv6 address on the Default Switch.'
     }
-    $hostMac = (Get-NetAdapter -Name 'vEthernet (Default Switch)' -ErrorAction Stop).MacAddress
+    # The VM's MAC may be dynamic, so it is read on every run.
+    $vmAdapters = @(Get-VMNetworkAdapter -VMName $script:Config.VmName -ErrorAction Stop |
+        Where-Object { $_.SwitchName -eq 'Default Switch' })
+    if ($vmAdapters.Count -ne 1) {
+        throw "Expected one network adapter of $($script:Config.VmName) on the Default Switch, found $($vmAdapters.Count)."
+    }
     $egress = Get-RosetunEgressInterface
-    Invoke-RosetunGuest -ScriptBlock {
-        param($address, $index, $mac)
-        $neighbor = Get-NetNeighbor -InterfaceIndex $index -IPAddress $address -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+    $guest = Invoke-RosetunGuest -ScriptBlock {
+        param($index)
+        [pscustomobject]@{
+            Address = Get-NetIPAddress -InterfaceIndex $index -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -like 'fe80::*' } |
+                Select-Object -First 1 -ExpandProperty IPAddress
+            Mac     = (Get-NetAdapter -InterfaceIndex $index -ErrorAction Stop).MacAddress
+        }
+    } -ArgumentList $egress.Index
+    if (-not $guest.Address) {
+        throw 'The guest has no link-local IPv6 address on its egress adapter.'
+    }
+    $vmMac = $vmAdapters[0].MacAddress -replace '[^0-9A-Fa-f]', ''
+    if (($guest.Mac -replace '[^0-9A-Fa-f]', '') -ne $vmMac) {
+        throw "The guest egress adapter ($($guest.Mac)) is not the VM's Default Switch adapter ($vmMac)."
+    }
+    [pscustomobject]@{
+        HostIndex    = $hostAdapter.ifIndex
+        HostAddress  = $hostAddress.IPAddress -replace '%.*$', ''
+        HostMac      = $hostAdapter.MacAddress
+        GuestIndex   = $egress.Index
+        GuestAddress = $guest.Address -replace '%.*$', ''
+        GuestMac     = $vmMac
+    }
+}
+
+function Set-RosetunIpv6Neighbor {
+    # Pins the host in the guest and the guest on the host, in ActiveStore
+    # only, so nothing survives a reboot of either side. An exact Permanent
+    # entry is left alone; any other is replaced. Every entry this call creates
+    # is appended to $Created at once, so an interrupted run can still remove it.
+    # Safe to call again after the guest adapter restarts.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Created)
+    $pin = {
+        param($index, $address, $mac)
+        $wanted = ($mac -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+        $neighbor = Get-NetNeighbor -InterfaceIndex $index -IPAddress $address -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
             Select-Object -First 1
-        if ($null -ne $neighbor -and $neighbor.State -notin @('Unreachable', 'Incomplete')) {
+        if ($null -ne $neighbor -and $neighbor.State -eq 'Permanent' -and
+            ($neighbor.LinkLayerAddress -replace '[^0-9A-Fa-f]', '').ToUpperInvariant() -eq $wanted) {
             return $false
         }
+        if ($null -ne $neighbor) {
+            Remove-NetNeighbor -InterfaceIndex $index -IPAddress $address -PolicyStore ActiveStore -Confirm:$false -ErrorAction Stop
+        }
+        New-NetNeighbor -InterfaceIndex $index -IPAddress $address -LinkLayerAddress (($wanted -split '(..)' -ne '') -join '-') `
+            -State Permanent -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
+        $true
+    }
+    $target = Get-RosetunIpv6NeighborTarget
+    $sides = @(
+        [pscustomobject]@{ Side = 'guest'; Index = $target.GuestIndex; Address = $target.HostAddress; Mac = $target.HostMac }
+        [pscustomobject]@{ Side = 'host'; Index = $target.HostIndex; Address = $target.GuestAddress; Mac = $target.GuestMac }
+    )
+    foreach ($side in $sides) {
         try {
-            if ($null -ne $neighbor) {
-                Remove-NetNeighbor -InterfaceIndex $index -IPAddress $address -Confirm:$false -ErrorAction Stop
+            $createdNow = if ($side.Side -eq 'guest') {
+                Invoke-RosetunGuest -ScriptBlock $pin -ArgumentList $side.Index, $side.Address, $side.Mac
             }
-            New-NetNeighbor -InterfaceIndex $index -IPAddress $address -LinkLayerAddress $mac -State Permanent -ErrorAction Stop | Out-Null
+            else {
+                & $pin $side.Index $side.Address $side.Mac
+            }
         }
         catch {
-            throw 'Could not initialize the host IPv6 neighbor in the guest.'
+            throw "Could not pin the IPv6 neighbor $($side.Address) on the $($side.Side): $_"
         }
-        $true
-    } -ArgumentList ($hostAddress.IPAddress -replace '%.*$', ''), $egress.Index, $hostMac
+        $known = $Created | Where-Object {
+            $_.Side -eq $side.Side -and $_.Index -eq $side.Index -and $_.Address -eq $side.Address
+        }
+        if ($createdNow -and -not $known) {
+            $Created.Add([pscustomobject]@{ Side = $side.Side; Index = $side.Index; Address = $side.Address })
+        }
+    }
+}
+
+function Remove-RosetunIpv6Neighbor {
+    # Removes the entries Set-RosetunIpv6Neighbor created. Tries every entry
+    # and reports all failures at the end.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Created)
+    $unpin = {
+        param($index, $address)
+        if (Get-NetNeighbor -InterfaceIndex $index -IPAddress $address -PolicyStore ActiveStore -ErrorAction SilentlyContinue) {
+            Remove-NetNeighbor -InterfaceIndex $index -IPAddress $address -PolicyStore ActiveStore -Confirm:$false -ErrorAction Stop
+        }
+    }
+    $failures = @()
+    foreach ($entry in @($Created)) {
+        try {
+            if ($entry.Side -eq 'guest') {
+                Invoke-RosetunGuest -ScriptBlock $unpin -ArgumentList $entry.Index, $entry.Address
+            }
+            else {
+                & $unpin $entry.Index $entry.Address
+            }
+            [void]$Created.Remove($entry)
+        }
+        catch {
+            $failures += "$($entry.Address) on the $($entry.Side): $_"
+        }
+    }
+    if ($failures) {
+        throw "Could not remove IPv6 neighbors: $($failures -join '; ')"
+    }
+}
+
+function Get-RosetunIpv6NeighborReport {
+    # What each side holds for the other's link-local address, for the error
+    # that stops the matrix after a failed IPv6 baseline. Never throws.
+    try {
+        $target = Get-RosetunIpv6NeighborTarget
+    }
+    catch {
+        return "Neighbor entries unavailable: $_"
+    }
+    $describe = {
+        param($index, $address)
+        $entries = foreach ($store in 'ActiveStore', 'PersistentStore') {
+            Get-NetNeighbor -InterfaceIndex $index -IPAddress $address -PolicyStore $store -ErrorAction SilentlyContinue |
+                ForEach-Object { "$store $($_.State) $($_.LinkLayerAddress)" }
+        }
+        if ($entries) { $entries -join ', ' } else { 'none' }
+    }
+    $hostEntry = & $describe $target.HostIndex $target.GuestAddress
+    try {
+        $guestEntry = Invoke-RosetunGuest -ScriptBlock $describe -ArgumentList $target.GuestIndex, $target.HostAddress
+    }
+    catch {
+        $guestEntry = "unavailable: $_"
+    }
+    "Host neighbor $($target.GuestAddress) (expected $($target.GuestMac)): $hostEntry. " +
+        "Guest neighbor $($target.HostAddress) (expected $($target.HostMac)): $guestEntry."
 }
 
 function Test-RosetunIpv6Egress {

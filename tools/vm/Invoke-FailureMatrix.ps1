@@ -390,6 +390,7 @@ $egressWatchActive = $false
 $otherAccountName = $null
 $serviceAttempted = $false
 $consoleStoppedForOther = $false
+$ipv6Neighbors = [System.Collections.Generic.List[object]]::new()
 try {
 if ($Build) {
     Write-Host 'Building...'
@@ -435,7 +436,7 @@ Register-RosetunHelper
 Start-RosetunHelper
 $lanListener = Start-RosetunLanListener
 
-$ipv6NeighborCreated = Initialize-RosetunIpv6Neighbor
+Set-RosetunIpv6Neighbor -Created $ipv6Neighbors
 $protocolSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\..\crates\rosetun-ipc\src\protocol.rs')
 if (-not ($protocolSource -match 'pub const PROTOCOL_VERSION: u32 = (\d+);')) {
     throw 'Could not read PROTOCOL_VERSION from rosetun-ipc.'
@@ -448,6 +449,9 @@ Test-Step 'baseline' 'direct egress works before connect' { Test-RosetunDirectEg
 Test-Step 'baseline' 'direct DNS works before connect' { Test-RosetunDirectDns }
 Test-Step 'baseline' 'direct TCP DNS works before connect' { Test-RosetunDirectDns -Tcp }
 Test-Step 'baseline' 'IPv6 to the host works before connect' { Test-RosetunIpv6Egress }
+if ($results[$results.Count - 1].Result -eq 'FAIL') {
+    throw "IPv6 to the host does not work, so every 'IPv6 outside the tunnel is blocked' check would be meaningless. $(Get-RosetunIpv6NeighborReport)"
+}
 # The new firewall rule can take a moment to accept guest connections.
 Test-Step 'baseline' 'LAN listener is reachable before connect' {
     Wait-RosetunCondition { Test-RosetunLanListener $lanListener } -TimeoutSeconds 10
@@ -478,6 +482,8 @@ finally {
 $routeRestored = Wait-GuestEgressRoute -Index $networkAdapter.Index
 Test-Step 'no network' 'physical route returns after adapter enable' { $routeRestored }
 if (-not $routeRestored) { throw 'The guest physical route did not return after adapter enable.' }
+# An ActiveStore neighbor entry may not survive the adapter restart.
+Set-RosetunIpv6Neighbor -Created $ipv6Neighbors
 
 Write-Host 'Connect...'
 Connect-RosetunTunnel | Out-Null
@@ -548,6 +554,8 @@ try {
         -Note $reconnectNote {
         $routeRestored -and $connected -and $returnTimer.Elapsed.TotalSeconds -le 60
     }
+    # After the timed reconnect, so the pin does not count against it.
+    if ($routeRestored) { Set-RosetunIpv6Neighbor -Created $ipv6Neighbors }
     Test-Step 'no network session' 'direct egress stays blocked after recovery' {
         -not (Test-RosetunDirectEgress)
     }
@@ -1669,25 +1677,12 @@ Test-Step 'hysteria2' 'state is Disconnected' { Wait-RosetunState 'Disconnected'
 Test-Step 'hysteria2' 'direct egress works again' { Test-RosetunDirectEgress }
 Test-Step 'hysteria2' 'IPv6 works again' { Test-RosetunIpv6Egress }
 
-if ($ipv6NeighborCreated) {
-    Test-Step 'cleanup' 'created IPv6 neighbor is removed' {
-        $hostAddress = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv6 -ErrorAction Stop |
-            Where-Object { $_.IPAddress -like 'fe80::*' } |
-            Select-Object -First 1
-        if ($null -eq $hostAddress) {
-            throw 'The host has no link-local IPv6 address on the Default Switch.'
-        }
-        $egress = Get-RosetunEgressInterface
-        Invoke-RosetunGuest -ScriptBlock {
-            param($address, $index)
-            Remove-NetNeighbor -InterfaceIndex $index -IPAddress $address -Confirm:$false -ErrorAction Stop
-            $true
-        } -ArgumentList ($hostAddress.IPAddress -replace '%.*$', ''), $egress.Index
-    }
-}
-
 }
 finally {
+    if ($ipv6Neighbors.Count -gt 0) {
+        try { Remove-RosetunIpv6Neighbor -Created $ipv6Neighbors }
+        catch { Write-Warning "Could not remove the IPv6 neighbors pinned by the matrix: $_" }
+    }
     if ($egressWatchActive) {
         try { Stop-RosetunEgressWatch | Out-Null }
         catch { Write-Warning "Could not remove the egress watch: $_" }
