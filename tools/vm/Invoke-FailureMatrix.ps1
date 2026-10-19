@@ -49,6 +49,35 @@ function Test-Step {
     }
 }
 
+# A finding to record, not a pass or fail.
+function Add-Info {
+    param([Parameter(Mandatory)][string]$Scenario, [Parameter(Mandatory)][string]$Check, [string]$Note = '')
+    $results.Add([pscustomobject]@{ Result = 'INFO'; Scenario = $Scenario; Check = $Check; Note = $Note })
+}
+
+# A mark in helper.log, so a step reads only the lines it caused.
+function Get-HelperLogLength {
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        $item = Get-Item -Path "$dir\helper.log" -ErrorAction SilentlyContinue
+        if ($item) { $item.Length } else { 0 }
+    } -ArgumentList (Get-RosetunGuestDir)
+}
+
+function Get-HelperLogSince {
+    param([Parameter(Mandatory)][long]$Offset)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $offset)
+        $stream = [IO.File]::Open("$dir\helper.log", 'Open', 'Read', 'ReadWrite, Delete')
+        try {
+            # A rotated log is shorter than the mark: read it whole.
+            if ($offset -le $stream.Length) { $stream.Position = $offset }
+            [IO.StreamReader]::new($stream).ReadToEnd()
+        }
+        finally { $stream.Dispose() }
+    } -ArgumentList (Get-RosetunGuestDir), $Offset
+}
+
 function Format-Egress {
     param([Parameter(Mandatory)]$Egress)
     if ($Egress.Ok) {
@@ -1275,6 +1304,7 @@ try {
         [bool]$request.settings.kill_switch
     } -ArgumentList (Get-RosetunGuestDir), $seriesConfigPath
 
+    $seriesLogMark = Get-HelperLogLength
     $connect = Invoke-SettingsCli -ConfigPath $seriesConfigPath -Action connect
     Test-Step 'apply series' 'connect uses the isolated config' -Note "exit $($connect.ExitCode)" {
         $connect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
@@ -1305,18 +1335,20 @@ try {
     $seriesWatchActive = $false
     Test-Step 'apply series' 'all 20 applies succeed and stay Connected' `
         -Note ($failedApplies -join '; ') { $failedApplies.Count -eq 0 }
-    $retries = Invoke-RosetunGuest -ScriptBlock {
-        param($dir)
-        $stream = [IO.File]::Open("$dir\helper.log", 'Open', 'Read', 'ReadWrite, Delete')
-        try { $text = [IO.StreamReader]::new($stream).ReadToEnd() }
-        finally { $stream.Dispose() }
-        @{
-            Retries = ([regex]::Matches($text, 'retrying the engine start')).Count
-            Busy = ([regex]::Matches($text, 'already exists')).Count
-        }
-    } -ArgumentList (Get-RosetunGuestDir)
-    $seriesNote = "$($watch.Probes) probes; helper log: $($retries.Retries) retries, " +
-        "$($retries.Busy) 'already exists' lines"
+    $seriesLog = Get-HelperLogSince $seriesLogMark
+    $retries = ([regex]::Matches($seriesLog, 'retrying the engine start')).Count
+    $busy = ([regex]::Matches($seriesLog, 'already exists')).Count
+    $timeoutKills = ([regex]::Matches($seriesLog, 'sing-box did not stop in time')).Count
+    $seriesNote = "$($watch.Probes) probes; helper log: $retries retries, $busy 'already exists' lines"
+    Test-Step 'apply series' 'no sing-box is killed after the graceful stop timeout' `
+        -Note "$timeoutKills kills" { $timeoutKills -eq 0 }
+    # A retry is how the old race showed; clean Windows 11 never raced, so it is reported, not failed.
+    if ($retries -eq 0) {
+        Test-Step 'apply series' 'no engine start is retried' -Note "$busy 'already exists' lines" { $true }
+    }
+    else {
+        Add-Info 'apply series' 'engine start retries' "$retries retries, $busy 'already exists' lines"
+    }
     if ($killSwitch) {
         Test-Step 'apply series' 'direct egress stays blocked throughout' -Note $seriesNote {
             $watch.Probes -gt 0 -and $watch.Leaks -eq 0
@@ -1427,6 +1459,32 @@ Test-Step 'disconnect' 'direct egress works again' { Test-RosetunDirectEgress }
 Test-Step 'disconnect' 'IPv6 works again' { Test-RosetunIpv6Egress }
 Test-Step 'disconnect' 'tunnel adapter is gone' {
     Wait-RosetunCondition { -not (Test-RosetunTunAdapter) }
+}
+
+# The disconnect above follows a failed reconnect, which has already stopped
+# sing-box: connect once more, so this disconnect stops a live one.
+Write-Host 'Graceful disconnect...'
+$attempt = Connect-RosetunTunnel -Quiet
+Test-Step 'graceful disconnect' 'connects' -Note "exit $($attempt.ExitCode)" {
+    $attempt.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+}
+$logMark = Get-HelperLogLength
+Disconnect-RosetunTunnel | Out-Null
+# Measured from when the disconnect call returned, inside the guest.
+$adapterGoneMs = Invoke-RosetunGuest -ScriptBlock {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while (Get-NetAdapter -Name 'rosetun0' -ErrorAction SilentlyContinue) {
+        if ($watch.Elapsed.TotalSeconds -ge 2) { return $null }
+        Start-Sleep -Milliseconds 100
+    }
+    $watch.ElapsedMilliseconds
+}
+Test-Step 'graceful disconnect' 'adapter rosetun0 is gone within 2 s' -Note "$adapterGoneMs ms" {
+    $null -ne $adapterGoneMs
+}
+$stopLine = [regex]::Match((Get-HelperLogSince $logMark), 'sing-box (stopped gracefully|did not stop in time|killed).*').Value
+Test-Step 'graceful disconnect' 'helper log shows a graceful sing-box stop' -Note $stopLine.Trim() {
+    $stopLine -match 'stopped gracefully'
 }
 
 Write-Host 'Five immediate disconnect/reconnect cycles...'
