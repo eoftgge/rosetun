@@ -64,7 +64,14 @@ pub(crate) fn show(
                             .wrap(),
                         );
                     }
-                    _ => {}
+                    Ok(_) => {
+                        if let Some(note) = assumed_https_note(&dialog.url) {
+                            ui.add(
+                                egui::Label::new(RichText::new(note).color(theme::TEXT_DIM))
+                                    .wrap(),
+                            );
+                        }
+                    }
                 }
             }
             ui.add_space(16.0);
@@ -134,6 +141,17 @@ fn uses_plain_http(normalized: &str) -> bool {
     url::Url::parse(normalized).is_ok_and(|url| url.scheme() == "http")
 }
 
+fn assumed_https_note(input: &str) -> Option<String> {
+    if !rosetun_core::subscription_url_assumes_https(input) {
+        return None;
+    }
+    let url = rosetun_core::normalize_subscription_url(input).ok()?;
+    Some(tr!(
+        "url-assumed-https",
+        url = rosetun_core::redacted_subscription_url(&url)
+    ))
+}
+
 fn form_error(config: &AppConfig, dialog: &AddDialog, message: &str) -> String {
     let text = display::provider_multiline(&redact(config, message), &dialog.url);
     match rosetun_core::normalize_subscription_url(&dialog.url) {
@@ -153,6 +171,32 @@ mod tests {
                 .unwrap();
         assert!(uses_plain_http(&url));
         assert!(!uses_plain_http("https://provider.example/sub"));
+    }
+
+    #[test]
+    fn assumed_https_note_appears_only_without_a_scheme() {
+        let note = assumed_https_note("sub.example.com/private-token?key=query-secret").unwrap();
+        assert!(note.contains("https://sub.example.com/…"), "{note}");
+        assert!(!note.contains("private-token") && !note.contains("query-secret"));
+        assert_eq!(assumed_https_note("https://sub.example.com/private-token"), None);
+        assert_eq!(assumed_https_note("http://sub.example.com/private-token"), None);
+        assert_eq!(assumed_https_note("sub"), None);
+    }
+
+    #[test]
+    fn add_errors_without_a_scheme_redact_the_pending_url() {
+        let dialog = AddDialog {
+            url: "provider.example/private-token?key=query-secret".into(),
+            ..AddDialog::default()
+        };
+        let output = form_error(
+            &AppConfig::default(),
+            &dialog,
+            "failure
+https://provider.example/private-token?key=query-secret",
+        );
+        assert!(!output.contains("private-token"), "{output}");
+        assert!(!output.contains("query-secret"), "{output}");
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use url::Url;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -21,7 +23,12 @@ pub enum SubscriptionUrlError {
 }
 
 pub fn normalize(input: &str) -> Result<String, SubscriptionUrlError> {
-    let mut current = input.trim().to_owned();
+    let input = input.trim();
+    let mut current = if assumes_https(input) {
+        format!("https://{input}")
+    } else {
+        input.to_owned()
+    };
 
     for _ in 0..8 {
         let Some((scheme, remainder)) = current.split_once("://") else {
@@ -61,6 +68,62 @@ pub fn normalize(input: &str) -> Result<String, SubscriptionUrlError> {
     }
 
     Err(SubscriptionUrlError::TooManyNestedLinks)
+}
+
+/// Whether `normalize` reads `input` as an `https://` link: it has no scheme
+/// and starts with a host. Never assumes `http://`, which would send the
+/// token in clear text.
+pub fn assumes_https(input: &str) -> bool {
+    let input = input.trim();
+    if input.is_empty() || input.contains(char::is_whitespace) {
+        return false;
+    }
+    let authority_end = input.find(['/', '?', '#']).unwrap_or(input.len());
+    let has_scheme = input
+        .find("://")
+        .is_some_and(|index| !input[..index].contains(['/', '?', '#']));
+    !has_scheme && is_host_with_port(&input[..authority_end])
+}
+
+fn is_host_with_port(authority: &str) -> bool {
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        let Some((address, port)) = rest.split_once(']') else {
+            return false;
+        };
+        if address.parse::<Ipv6Addr>().is_err() {
+            return false;
+        }
+        (None, port)
+    } else {
+        match authority.find(':') {
+            Some(index) => (Some(&authority[..index]), &authority[index..]),
+            None => (Some(authority), ""),
+        }
+    };
+
+    let port_is_valid = port.is_empty()
+        || port
+            .strip_prefix(':')
+            .is_some_and(|port| port.bytes().all(|byte| byte.is_ascii_digit()) && port.parse::<u16>().is_ok());
+    port_is_valid && host.is_none_or(is_host_name)
+}
+
+fn is_host_name(host: &str) -> bool {
+    if host.parse::<Ipv4Addr>().is_ok() {
+        return true;
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    labels.len() > 1
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|character| character.is_alphanumeric() || character == '-')
+        })
+        // `1.2` is not a valid IPv4 address, but URL parsers read it as one.
+        && !labels
+            .last()
+            .is_some_and(|label| label.chars().all(|character| character.is_ascii_digit()))
 }
 
 fn unwrap_path(remainder: &str, prefix: &str) -> Result<String, SubscriptionUrlError> {
@@ -121,7 +184,7 @@ pub fn redacted(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SubscriptionUrlError, normalize, redacted};
+    use super::{SubscriptionUrlError, assumes_https, normalize, redacted};
 
     const SECRET_URL: &str = "https://sub.example.com/private-token?key=query-secret";
 
@@ -131,6 +194,62 @@ mod tests {
         assert_eq!(
             normalize("http://sub.example.com/private-token").unwrap(),
             "http://sub.example.com/private-token"
+        );
+    }
+
+    #[test]
+    fn a_host_without_a_scheme_becomes_https() {
+        for (input, expected) in [
+            (
+                "sub.example.com/path?token=x",
+                "https://sub.example.com/path?token=x",
+            ),
+            (
+                "  sub.example.com:8443/sub  ",
+                "https://sub.example.com:8443/sub",
+            ),
+            ("192.0.2.1/sub", "https://192.0.2.1/sub"),
+            ("[2001:db8::1]:443/sub", "https://[2001:db8::1]/sub"),
+            ("sub.example.com", "https://sub.example.com/"),
+            (
+                "sub.example.com/x?r=https://y",
+                "https://sub.example.com/x?r=https://y",
+            ),
+        ] {
+            assert!(assumes_https(input), "{input}");
+            assert_eq!(normalize(input).unwrap(), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn text_that_is_not_a_host_is_still_invalid() {
+        for input in [
+            "sub",
+            "sub example.com",
+            "",
+            "localhost/sub",
+            "user:pass@sub.example.com/x",
+            "sub.example.com:port/x",
+            "1.2/sub",
+            "[2001:db8::zz]/sub",
+            "happ://add/sub.example.com/x",
+        ] {
+            assert!(!assumes_https(input), "{input}");
+            assert_eq!(normalize(input), Err(SubscriptionUrlError::Invalid), "{input}");
+        }
+    }
+
+    #[test]
+    fn links_with_a_scheme_are_not_rewritten() {
+        assert!(!assumes_https("http://sub.example.com/x"));
+        assert_eq!(
+            normalize("http://sub.example.com/x").unwrap(),
+            "http://sub.example.com/x"
+        );
+        assert!(!assumes_https(&format!("happ://add/{SECRET_URL}")));
+        assert_eq!(
+            normalize("vless://private-token@example.com:443"),
+            Err(SubscriptionUrlError::UnsupportedScheme)
         );
     }
 

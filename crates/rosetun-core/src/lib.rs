@@ -50,8 +50,8 @@ pub use settings::{
 };
 pub use store::{Store, StoreError};
 pub use subscription_url::{
-    SubscriptionUrlError, normalize as normalize_subscription_url,
-    redacted as redacted_subscription_url,
+    SubscriptionUrlError, assumes_https as subscription_url_assumes_https,
+    normalize as normalize_subscription_url, redacted as redacted_subscription_url,
 };
 pub use subscriptions::{
     AddFromUrlError, AddOptions, AddSubscriptionError, CommitUpdateError, MoveSubscriptionError,

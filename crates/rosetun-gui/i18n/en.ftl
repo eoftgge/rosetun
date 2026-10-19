@@ -490,6 +490,7 @@ send-device-id = Send device ID
 device-id-explanation = Some providers require a device ID to enforce device limits. Disable it only if your provider does not need it.
 url-help = HTTP(S) subscription URLs and supported app import links
 http-warning = This subscription uses HTTP; its token is transmitted without encryption.
+url-assumed-https = Will be added as { $url }
 add = Add
 adding = Adding…
 cancel = Cancel
