@@ -56,8 +56,8 @@ mod probe {
     };
     use windows_sys::Win32::Networking::WinSock::IPPROTO_UDP;
     use windows_sys::Win32::System::Registry::{
-        HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RegCloseKey, RegEnumKeyExW, RegEnumValueW,
-        RegFlushKey, RegOpenKeyExW,
+        HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegFlushKey,
+        RegOpenKeyExW,
     };
     use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
     use windows_sys::core::GUID;
@@ -652,9 +652,8 @@ mod probe {
         let mut enum_handle = ptr::null_mut();
         // SAFETY: a null template enumerates everything; the handle is
         // destroyed below on every path.
-        let status = unsafe {
-            FwpmSubLayerCreateEnumHandle0(engine.handle, ptr::null(), &mut enum_handle)
-        };
+        let status =
+            unsafe { FwpmSubLayerCreateEnumHandle0(engine.handle, ptr::null(), &mut enum_handle) };
         check(status, "enumerating sublayers")?;
         let mut all = Vec::new();
         let result = loop {
@@ -887,7 +886,10 @@ mod probe {
                 ERROR_MORE_DATA => {}
                 ERROR_NO_MORE_ITEMS => break,
                 _ => {
-                    println!("registry HKLM\\{path}: values unreadable: {}", code_name(status));
+                    println!(
+                        "registry HKLM\\{path}: values unreadable: {}",
+                        code_name(status)
+                    );
                     break;
                 }
             }
@@ -913,7 +915,10 @@ mod probe {
                 ERROR_MORE_DATA => {}
                 ERROR_NO_MORE_ITEMS => break,
                 _ => {
-                    println!("registry HKLM\\{path}: subkeys unreadable: {}", code_name(status));
+                    println!(
+                        "registry HKLM\\{path}: subkeys unreadable: {}",
+                        code_name(status)
+                    );
                     break;
                 }
             }
