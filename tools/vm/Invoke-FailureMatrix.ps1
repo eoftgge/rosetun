@@ -1369,6 +1369,8 @@ Test-Step 'network change' "no leak while the network changes ($($watch.Probes) 
     $watch.Probes -gt 0 -and $watch.Leaks -eq 0
 }
 Test-Step 'network change' 'state is still Connected' { (Get-RosetunState) -eq 'Connected' }
+# The adapter restart can drop the guest's ActiveStore neighbor entry.
+Set-RosetunIpv6Neighbor -Created $ipv6Neighbors
 
 Write-Host 'Engine killed...'
 Stop-RosetunEngine

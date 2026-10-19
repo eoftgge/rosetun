@@ -1306,6 +1306,26 @@ function Get-RosetunIpv6NeighborReport {
         "Guest neighbor $($target.HostAddress) (expected $($target.HostMac)): $guestEntry."
 }
 
+function Assert-RosetunIpv6Neighbor {
+    # Without both pins the guest cannot reach the host over IPv6 at all, and
+    # every "IPv6 blocked" check would pass without proving anything. A guest
+    # adapter restart can drop the guest's ActiveStore entry.
+    $target = Get-RosetunIpv6NeighborTarget
+    $isPinned = {
+        param($index, $address, $mac)
+        $wanted = ($mac -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+        $neighbor = Get-NetNeighbor -InterfaceIndex $index -IPAddress $address -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        $null -ne $neighbor -and $neighbor.State -eq 'Permanent' -and
+            ($neighbor.LinkLayerAddress -replace '[^0-9A-Fa-f]', '').ToUpperInvariant() -eq $wanted
+    }
+    $hostPinned = & $isPinned $target.HostIndex $target.GuestAddress $target.GuestMac
+    $guestPinned = Invoke-RosetunGuest -ScriptBlock $isPinned -ArgumentList $target.GuestIndex, $target.HostAddress, $target.HostMac
+    if (-not ($hostPinned -and $guestPinned)) {
+        throw "The IPv6 neighbor pins are missing, so this IPv6 check would prove nothing. $(Get-RosetunIpv6NeighborReport)"
+    }
+}
+
 function Test-RosetunIpv6Egress {
     # True when a guest process opens a TCP connection over IPv6 outside the
     # tunnel. Neither the guest nor the developer's network has global IPv6, so
@@ -1322,6 +1342,7 @@ function Test-RosetunIpv6Egress {
     if (-not (Get-NetTCPConnection -LocalAddress '::' -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
         throw "The test node does not listen on IPv6 port $port. Restart it with Stop-RosetunTestNode and Start-RosetunTestNode."
     }
+    Assert-RosetunIpv6Neighbor
     $egress = Get-RosetunEgressInterface
 
     Invoke-RosetunGuest -ScriptBlock {
