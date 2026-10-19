@@ -14,6 +14,9 @@ param(
     # Adds a reboot by turning the VM off, as after a power cut, with the
     # boot-time filters installed.
     [switch]$PowerCut,
+    # Wait between installing and cutting the power. A cut a few seconds after
+    # the install lost every probe object on the VM (2026-10-20).
+    [int]$PowerCutDelaySeconds = 60,
     # Must match ProbeUrl in RosetunVm.psm1: reachable from the guest directly.
     [string]$ProbeUrl = 'https://1.1.1.1'
 )
@@ -206,7 +209,27 @@ function Test-OtherProgramEgress {
 }
 
 function Get-GuestBootTime {
-    Invoke-RosetunGuest -ScriptBlock { (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime }
+    # A string, so the boot check in the guest can write the same value.
+    Invoke-RosetunGuest -ScriptBlock {
+        (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')
+    }
+}
+
+function Restore-GuestLease {
+    # A boot under the boot-time block lost the DHCP lease on the VM, and the
+    # DHCP client only retries every few minutes on its own.
+    Invoke-RosetunGuest -ScriptBlock {
+        if (-not (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)) {
+            & ipconfig.exe /renew *> $null
+            $global:LASTEXITCODE = 0
+        }
+    }
+    $leased = Wait-RosetunCondition {
+        [bool](Invoke-RosetunGuest -ScriptBlock { Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue })
+    } -TimeoutSeconds 90
+    if (-not $leased) {
+        throw 'The guest got no default route back within 90 s.'
+    }
 }
 
 function Restart-Guest {
@@ -245,11 +268,12 @@ function Register-BootCheck {
         param($dir, $task, $url)
         $script = @'
 param($result, $url)
+$bootTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 $attempts = [System.Collections.Generic.List[object]]::new()
 $deadline = (Get-Date).AddSeconds(150)
 $withRoute = 0
 while ((Get-Date) -lt $deadline -and $withRoute -lt 3) {
-    $uptime = [int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds
+    $uptime = [int]((Get-Date) - $bootTime).TotalSeconds
     $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -First 1
     $address = if ($route) {
         Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -259,7 +283,7 @@ while ((Get-Date) -lt $deadline -and $withRoute -lt 3) {
     $curlError = ''
     if ($address) {
         $withRoute++
-        $curlError = (& curl.exe --max-time 5 --silent --show-error --output NUL $url 2>&1 | Out-String).Trim()
+        $curlError = (& curl.exe --max-time 5 --silent --show-error --output NUL $url 2>&1 | ForEach-Object { "$_" }) -join ' '
         $curlExit = $LASTEXITCODE
     }
     $attempts.Add([pscustomobject]@{
@@ -269,10 +293,18 @@ while ((Get-Date) -lt $deadline -and $withRoute -lt 3) {
         CurlError = $curlError
         User      = "$((Get-CimInstance Win32_ComputerSystem).UserName)"
         Bfe       = "$((Get-Service -Name BFE).Status)"
+        Addresses = (@(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.InterfaceAlias -notlike 'Loopback*' } |
+            ForEach-Object { "$($_.IPAddress)/$($_.PrefixOrigin)/$($_.AddressState)" }) -join ',')
     })
     if ($withRoute -lt 3) { Start-Sleep -Seconds 3 }
 }
-$attempts | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $result -Encoding UTF8
+# Tagged with the boot it belongs to: a power cut can undo the deletion of the
+# previous result, which the scenario must not mistake for this one. Written
+# to a temporary file first, so a reader never sees half of it.
+$record = [pscustomobject]@{ BootTime = $bootTime.ToUniversalTime().ToString('o'); Attempts = $attempts }
+$record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$result.tmp" -Encoding UTF8
+Move-Item -LiteralPath "$result.tmp" -Destination $result -Force
 '@
         $scriptPath = Join-Path $dir 'boot-check.ps1'
         $resultPath = Join-Path $dir 'boot-check.json'
@@ -290,14 +322,23 @@ $attempts | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $result -Encoding
 }
 
 function Get-BootCheck {
+    param([Parameter(Mandatory)][string]$BootTime)
     $deadline = (Get-Date).AddMinutes(4)
+    $stale = $false
     while ((Get-Date) -lt $deadline) {
         $json = Invoke-RosetunGuest -ScriptBlock {
             param($path)
             if (Test-Path -LiteralPath $path) { Get-Content -Raw -LiteralPath $path }
         } -ArgumentList (Join-Path $probeDir 'boot-check.json')
-        if ($json) { return @($json | ConvertFrom-Json) }
+        if ($json) {
+            $record = $json | ConvertFrom-Json
+            if ($record.BootTime -eq $BootTime) { return @($record.Attempts) }
+            $stale = $true
+        }
         Start-Sleep -Seconds 5
+    }
+    if ($stale) {
+        throw "The boot check left only a result of an earlier boot (current boot $BootTime): the task did not run or its result was lost."
     }
     throw 'The boot check wrote no result within 4 minutes.'
 }
@@ -305,7 +346,7 @@ function Get-BootCheck {
 function Format-BootCheck {
     param([Parameter(Mandatory)][object[]]$Attempts)
     ($Attempts | ForEach-Object {
-        "t=$($_.Uptime)s route=$($_.Route) curl=$($_.CurlExit) user='$($_.User)' bfe=$($_.Bfe) $($_.CurlError)"
+        "t=$($_.Uptime)s route=$($_.Route) curl=$($_.CurlExit) user='$($_.User)' bfe=$($_.Bfe) ipv4=$($_.Addresses) $($_.CurlError)"
     }) -join '; '
 }
 
@@ -316,12 +357,17 @@ function Invoke-RebootPass {
         [switch]$PowerCut
     )
     Remove-Probe | Out-Null
+    Restore-GuestLease
     if ($Lockdown -ne 'none') {
         Install-Probe -Boottime:($Lockdown -eq 'boottime')
     }
     Register-BootCheck
+    if ($PowerCut) {
+        Start-Sleep -Seconds $PowerCutDelaySeconds
+        Add-Info $Scenario 'power cut after install' "$PowerCutDelaySeconds s"
+    }
     Restart-Guest -PowerCut:$PowerCut
-    $attempts = Get-BootCheck
+    $attempts = Get-BootCheck -BootTime (Get-GuestBootTime)
     $note = Format-BootCheck -Attempts $attempts
     $routed = @($attempts | Where-Object { $_.Route })
     $beforeSignIn = @($attempts | Where-Object { $_.User }).Count -eq 0
@@ -333,16 +379,24 @@ function Invoke-RebootPass {
         } -Note $note
         return
     }
-    Test-Step $Scenario 'boot check ran with a route, before sign-in' {
-        $routed.Count -gt 0 -and $beforeSignIn
-    } -Note $note
-    Test-Step $Scenario 'egress closed at every routed boot attempt' {
-        $routed.Count -gt 0 -and @($routed | Where-Object { $_.CurlExit -eq 0 }).Count -eq 0
+    Test-Step $Scenario 'boot check ran before sign-in' { $attempts.Count -gt 0 -and $beforeSignIn } -Note $note
+    # Without a DHCP permit the block can cost the lease at boot: a finding
+    # for Lockdown's permits, not a failure of the block.
+    Add-Info $Scenario 'boot attempts with a default route' "$($routed.Count) of $($attempts.Count)"
+    Test-Step $Scenario 'no boot attempt reached the internet' {
+        @($routed | Where-Object { $_.CurlExit -eq 0 }).Count -eq 0
     } -Note $note
     Test-Step $Scenario 'status shows the objects after boot' {
         Test-ProbeInstalled -Boottime:($Lockdown -eq 'boottime')
     } -Note (Get-ProbeStatus).Output
-    Test-Step $Scenario 'egress closed after boot' { -not (Test-RosetunDirectEgress) }
+    $after = try {
+        if (Test-RosetunDirectEgress) { 'open' } else { 'closed' }
+    }
+    catch {
+        if ("$_" -notmatch 'No default route') { throw }
+        'no default route'
+    }
+    Test-Step $Scenario 'egress closed after boot' { $after -ne 'open' } -Note $after
 }
 
 if ($Build) {
@@ -431,7 +485,7 @@ try {
         $scenario = "permit $(if ($hard) { 'hard' } else { 'soft' }), sublayer $lockdownWeight (equal)"
         try {
             $permit = Start-Permit -Arguments $arguments
-            Add-Info $scenario 'curl egress' "open: $(Test-RosetunDirectEgress)"
+            Add-Info $scenario 'curl egress' "open: $(Test-RosetunDirectEgress); $($permit.Output -replace '\s+', ' ')"
         }
         catch { Add-Info $scenario 'permit starts' "$_" }
         finally {
@@ -458,7 +512,11 @@ try {
         }
     }
 
-    # Last while locked: a failed renewal could cost the lease the checks above need.
+    # Last while locked: a failed renewal could cost the lease the checks above
+    # need. A known state first, since the reboot passes may leave another.
+    Remove-Probe | Out-Null
+    Restore-GuestLease
+    Install-Probe
     $dhcp = Invoke-RosetunGuest -ScriptBlock {
         $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object -Property RouteMetric | Select-Object -First 1
         $alias = $route.InterfaceAlias
@@ -470,11 +528,12 @@ try {
             Where-Object { $_.PrefixOrigin -eq 'Dhcp' } | Select-Object -First 1
         "renew exit $exitCode after $([int]$watch.Elapsed.TotalSeconds) s, DHCP address kept: $([bool]$lease); $output"
     }
-    Add-Info 'locked' 'DHCP lease renewal (ipconfig /renew)' $dhcp
+    Add-Info 'locked, persistent only' 'DHCP lease renewal (ipconfig /renew)' $dhcp
 
     # 8. Remove.
     Remove-Probe | Out-Null
     Test-Step 'remove' 'status empty' { Test-ProbeEmpty } -Note (Get-ProbeStatus).Output
+    Restore-GuestLease
     Test-Step 'remove' 'curl egress open again' { Test-RosetunDirectEgress }
     Test-Step 'remove' 'second remove succeeds and removes nothing' { (Remove-Probe) -match 'removed: nothing' }
 }

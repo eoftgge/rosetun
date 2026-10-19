@@ -269,11 +269,26 @@ mod probe {
                     error
                 }
             })?;
+        let stored = stored_weight(&engine, &LOCKDOWN_SUBLAYER)?;
         println!(
-            "installed: provider, sublayer (weight {LOCKDOWN_SUBLAYER_WEIGHT:#06x}), {} filters",
+            "installed: provider, sublayer (weight {LOCKDOWN_SUBLAYER_WEIGHT:#06x}, stored {stored:#06x}), {} filters",
             if boottime { 4 } else { 2 }
         );
         Ok(())
+    }
+
+    /// The weight BFE kept for a sublayer, which on the test VM differed from
+    /// the requested one (0x4001 for 0x4000).
+    fn stored_weight(engine: &Engine, key: &GUID) -> Result<u16> {
+        let mut sublayer: *mut FWPM_SUBLAYER0 = ptr::null_mut();
+        // SAFETY: `key` outlives the call; on success BFE allocates the result,
+        // which is read once and freed.
+        let status = unsafe { FwpmSubLayerGetByKey0(engine.handle, key, &mut sublayer) };
+        check(status, "reading the sublayer weight")?;
+        // SAFETY: non-null after success.
+        let weight = unsafe { (*sublayer).weight };
+        free(sublayer);
+        Ok(weight)
     }
 
     fn add_block_filter(engine: &Engine, block: &BlockFilter) -> Result<()> {
@@ -584,13 +599,14 @@ mod probe {
             Ok(())
         })?;
 
-        let (sublayer, weight) = if options.lockdown_sublayer {
+        let (sublayer, requested) = if options.lockdown_sublayer {
             ("lockdown", LOCKDOWN_SUBLAYER_WEIGHT)
         } else {
             ("own", options.sublayer_weight)
         };
+        let stored = stored_weight(&engine, &sublayer_key)?;
         println!(
-            "permit active: program={} {} sublayer={sublayer} weight={weight:#06x}",
+            "permit active: program={} {} sublayer={sublayer} weight={requested:#06x} stored_weight={stored:#06x}",
             options.program.display(),
             if options.hard { "hard" } else { "soft" },
         );
