@@ -1239,6 +1239,100 @@ finally {
         } -ArgumentList $configPath
     }
 }
+# Each apply kills sing-box and starts a new one at once; on some Windows 10
+# machines the old Wintun adapter is then still being removed and the helper
+# has to retry the start instead of rolling the change back.
+Write-Host 'Twenty settings applies in a row...'
+$seriesConfigPath = Join-Path (Get-RosetunGuestDir) 'apply-series\config.json'
+$seriesWatchActive = $false
+try {
+    $killSwitch = Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $configPath)
+        New-Item -Path (Split-Path -Parent $configPath) -ItemType Directory -Force | Out-Null
+        $request = Get-Content -Path (Join-Path $dir 'request.json') -Raw | ConvertFrom-Json
+        $config = @{
+            version = 3
+            settings = $request.settings
+            subscriptions = @(@{
+                id = $request.selection.subscription
+                name = 'Test node'
+                url = 'https://example.invalid/subscription'
+                nodes = @($request.node)
+            })
+            active = $request.selection
+            active_rule_set = $request.rule_set.id
+            rule_sets = @($request.rule_set)
+        }
+        [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 30))
+        [bool]$request.settings.kill_switch
+    } -ArgumentList (Get-RosetunGuestDir), $seriesConfigPath
+
+    $connect = Invoke-SettingsCli -ConfigPath $seriesConfigPath -Action connect
+    Test-Step 'apply series' 'connect uses the isolated config' -Note "exit $($connect.ExitCode)" {
+        $connect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
+    }
+    Start-RosetunEgressWatch
+    $seriesWatchActive = $true
+    $failedApplies = [System.Collections.Generic.List[string]]::new()
+    for ($round = 1; $round -le 20; $round++) {
+        Invoke-RosetunGuest -ScriptBlock {
+            param($configPath, $round)
+            $config = Get-Content -Path $configPath -Raw | ConvertFrom-Json
+            $rules = @($config.rule_sets[0].rules | Where-Object { $_.id -ne 'apply-series' })
+            $config.rule_sets[0].rules = $rules + @([pscustomobject]@{
+                id = 'apply-series'
+                enabled = $true
+                matcher = @{ domain = @{ exact = "series-$round.example.com" } }
+                target = 'direct'
+            })
+            [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 30))
+        } -ArgumentList $seriesConfigPath, $round
+        $apply = Invoke-SettingsCli -ConfigPath $seriesConfigPath -Action apply
+        $state = Get-RosetunState
+        if ($apply.ExitCode -ne 0 -or $state -ne 'Connected') {
+            $failedApplies.Add("#${round}: exit $($apply.ExitCode), $state")
+        }
+    }
+    $watch = Stop-RosetunEgressWatch
+    $seriesWatchActive = $false
+    Test-Step 'apply series' 'all 20 applies succeed and stay Connected' `
+        -Note ($failedApplies -join '; ') { $failedApplies.Count -eq 0 }
+    $retries = Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        $stream = [IO.File]::Open("$dir\helper.log", 'Open', 'Read', 'ReadWrite, Delete')
+        try { $text = [IO.StreamReader]::new($stream).ReadToEnd() }
+        finally { $stream.Dispose() }
+        @{
+            Retries = ([regex]::Matches($text, 'retrying the engine start')).Count
+            Busy = ([regex]::Matches($text, 'already exists')).Count
+        }
+    } -ArgumentList (Get-RosetunGuestDir)
+    $seriesNote = "$($watch.Probes) probes; helper log: $($retries.Retries) retries, " +
+        "$($retries.Busy) 'already exists' lines"
+    if ($killSwitch) {
+        Test-Step 'apply series' 'direct egress stays blocked throughout' -Note $seriesNote {
+            $watch.Probes -gt 0 -and $watch.Leaks -eq 0
+        }
+    }
+    else {
+        Write-Host "apply series without kill switch: $seriesNote"
+    }
+}
+finally {
+    try {
+        if ($seriesWatchActive) { Stop-RosetunEgressWatch | Out-Null }
+    }
+    finally {
+        try { Disconnect-RosetunTunnel | Out-Null }
+        finally {
+            Invoke-RosetunGuest -ScriptBlock {
+                param($configPath)
+                Remove-Item -Path (Split-Path -Parent $configPath) -Recurse -Force -ErrorAction SilentlyContinue
+            } -ArgumentList $seriesConfigPath
+        }
+    }
+}
+
 $connect = Connect-RosetunTunnel -Quiet
 Test-Step 'settings apply' 'original request reconnects for the remaining matrix' `
     -Note "exit $($connect.ExitCode)" {
