@@ -569,10 +569,12 @@ mod tests {
         let moves = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&moves);
         helper.session.lock().unwrap().guard = Some(Guard {
-            routing: Arc::new(Mutex::new(RoutingGuard::new_with_lockdown(move |lockdown| {
-                recorded.lock().unwrap().push(lockdown);
-                Ok(())
-            }))),
+            routing: Arc::new(Mutex::new(RoutingGuard::new_with_lockdown(
+                move |lockdown| {
+                    recorded.lock().unwrap().push(lockdown);
+                    Ok(())
+                },
+            ))),
             scope: ProtectionScope::AllTraffic,
         });
         calls.fail_disable.store(true, Ordering::Release);
