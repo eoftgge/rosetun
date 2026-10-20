@@ -1,46 +1,30 @@
 # Rosetun {{version}}
 
-Rosetun 0.2. Its goal: connect everywhere, and show what is going on. REALITY servers on new Xray connect again, a rule can send its sites or programs through another country or server, and Rosetun explains more of what goes wrong.
+An early test build of Rosetun 0.3. Its main feature, **Lockdown**, is ready to try: no internet without the tunnel, also while disconnected, after a restart and if the Rosetun service stops. This is an alpha for testing; **0.2.0 stays the supported release**, and Rosetun 0.2.0 does not offer this build as an update.
 
-Rosetun 0.1.0 offers this release as an update. Settings from 0.1 are upgraded on the first start; settings from the 0.2 betas are kept as they are. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Settings keep their format, so nothing is converted. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-**Going back to 0.1 takes a manual step.** 0.2 upgrades the settings file to a new format, and 0.1 refuses a file from a newer version instead of overwriting it. Rosetun keeps your previous settings next to it as `%APPDATA%\Rosetun\config.v3.json`: to return to 0.1.0, install it and rename that file to `config.json`. Changes made in 0.2 are not carried back.
+**Turn Lockdown off before going back to 0.2.0.** 0.2.0 does not know Lockdown: it can neither remove it nor connect while it is on, and the computer stays offline. If you already went back, install this build again and turn Lockdown off, or run `rosetun reset-firewall` from it as administrator. Uninstalling this build removes Lockdown too.
 
-## What's new in 0.2
+## What's new in 0.3 so far
 
-- **REALITY servers on Xray 26.9.8 and newer connect again.** sing-box cannot talk to them ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)), so Rosetun now connects VLESS + REALITY servers through Xray. sing-box still runs the tunnel, the rules, DNS and the kill switch; Xray only carries the connection to the server.
-- **Settings › Advanced › Connection through Xray:**
-  - **Automatically** (default): Xray for VLESS servers with REALITY, sing-box for the rest.
-  - **Without Xray**: sing-box for everything, as in 0.1. If a REALITY server rejects sing-box, Rosetun says so and offers to switch to Automatically and connect.
-  - **Xray for all servers**: every supported server except Hysteria2 goes through Xray.
-- **You can see what is going on.** The server list marks servers that go through Xray, and the main screen shows "sing-box + Xray" while connected through it.
-- **Switching servers while connected** works between ordinary and REALITY servers; the kill switch stays on during the switch.
-- **Server checks and delay** go through the same chain as the connection.
-- **If Xray stops** while connected, the kill switch keeps the internet closed and Rosetun reconnects. If `xray.exe` is missing or damaged, Rosetun says so and links to the release page.
-- **The tray icon shows the state by shape, not only by colour.** The rose is in colour only while connected; otherwise it is grey with a corner badge: an arc while connecting, a lock when the kill switch keeps the internet closed, "!" when connecting failed, "×" when the Rosetun service is not running. The tooltip for the last one says "Service unavailable".
-- **A new rose, one everywhere.** The app icon, the header, Settings › About and the tray share one new rose, drawn to stay clear down to 16 pixels.
-- **Settings › Connection › Local network.** Your router, printer and other devices on your network are reached directly, past the tunnel; DNS on the local network stays closed. Off by default; turn it off on public networks. A change while connected applies at the next connection. From the command line: `rosetun lan on` or `rosetun lan off`.
-- **Rules by IP address.** The rule dialog has an "IP address" tab: IPv4 and IPv6 addresses or subnets, one per line. A subnet written with host bits (such as `192.0.2.5/24`) gets a **Fix** button, and addresses of the local network get a hint that points to the new Local network setting.
-- **Lists are not downloaded again when they have not changed.** Rosetun asks the server first (`ETag` / `Last-Modified`), so updating subscriptions no longer fetches large lists such as `geosite.dat` every time.
-- **Names in Task Manager.** The app shows as "Rosetun" and the service as "Rosetun Service"; the files also carry their version. sing-box and Xray keep their own names.
-- **Settings › Service and log › System check** looks for common causes of VPN trouble: a wrong clock (TLS and REALITY need it), a system proxy left by another program, Zapret or WinDivert intercepting packets, and other VPN clients or their adapters. It runs by itself after a failed connection and shows the first finding under the error. It only reports; it changes nothing.
-- **"No network connection" instead of blaming the server.** With no network, connecting fails at once with its own message. While connected, a short network change (switching Wi-Fi, replugging the cable) no longer breaks the session. With **Reconnect automatically** on, a longer outage shows "No network connection", Rosetun waits for the network and reconnects when it returns; the kill switch keeps the internet closed meanwhile.
-- **Collect report** (Settings › Service and log) saves one text file for a bug report: versions, settings without secrets, the connection state, the system check and the logs. IP addresses, links, domains, keys, server and subscription names and your Windows account name are removed; open the file to see exactly what you send. The service log is given only to the Windows account that started the session.
-- **Clearer errors:** when the engine fails to start, Rosetun says so in plain words instead of internal details, and the "Restore my edits" link fits on one line.
-- **Rules through another server.** A rule can send its sites or programs through another country or a specific server, while the rest goes through the server on the main screen. In the rule dialog, **Where** is one field: Through VPN, Direct, Block, your exits, another country or a specific server. Picking a country or a server creates an **exit** on its own; the new **Exits** tab next to Rules and Lists changes its server, turns on a fallback ("any server of this country if this one disappears") and shows which server is used now.
-  - A country exit picks the fastest server of that country at connect and keeps it until you disconnect: servers of one country may leave to the internet from different addresses.
-  - If an exit's server disappears from the subscription, its rules block (never go direct) and the rule list warns.
-  - The connection screen lists the exits in use with the server and its delay. From the command line: `rosetun exits`; `rosetun delay` shows each exit's delay.
-- **A window hidden in the tray stays idle.** It no longer redraws every second and wakes only when something is due, such as a subscription update.
-- **"Apply" and reconnecting no longer fail with "engine exited with code 1"** when Windows is slow to remove the previous tunnel adapter. This was the cause of the rare engine error on "Apply" known since 0.1; it also delayed reconnecting after a network loss. Rosetun now recognises it and starts the engine again a couple of seconds later, with the protection kept in place, and "Apply" keeps your change instead of rolling it back.
-- **The buttons on a subscription card** (expand, update, more) no longer start dragging the card or show the drag cursor. Drag a subscription by its name.
-- **A subscription link copied without `https://`** is accepted: Rosetun adds `https://` and shows the link as it will be added, without its token. It never assumes `http://`.
-- **All fixes from 0.1.0** are included.
-- **Since 0.2.0-beta.2,** only the subscription link without `https://` is new.
+- **Lockdown** (the **Protection** card on the connection screen, and Settings › Connection). Rosetun keeps its own Windows firewall filters that block everything outside the tunnel: while disconnected, after a restart (from boot, before you sign in to Windows) and if the service stops or crashes. Without Lockdown the kill switch still works as before, only while the service runs.
+  - While Lockdown is on, the **Kill switch** is always on, and incoming connections are blocked too, except from your network when **Local network** is on.
+  - Without a connection, Rosetun itself can still update subscriptions and lists, check servers and connect; other programs cannot. Rosetun then looks up names with its own DNS queries to your network's DNS servers, so the lookups of other programs stay closed. Your subscription provider sees your real IP address, as without Lockdown.
+  - Turning it on and off asks for confirmation; the dialog for turning it on says how to get out.
+  - **The way out:** turn Lockdown off in Rosetun. If Rosetun does not open or work, run `rosetun reset-firewall` in a terminal as administrator. Uninstalling Rosetun removes Lockdown; if it cannot, the uninstaller stops and keeps Rosetun, so you are never left offline without a way back. Updating Rosetun keeps Lockdown on.
+  - From the command line: `rosetun lockdown on`, `rosetun lockdown off`, `rosetun reset-firewall`.
+  - The tray shows "blocked" while Lockdown keeps a disconnected computer offline, and **Collect report** includes whether Lockdown is on.
+- **Disconnecting removes the tunnel adapter at once.** Rosetun now stops sing-box gracefully instead of killing it, so Windows no longer has to clean up a leftover adapter, and the next connection does not wait for it.
+- **The first connection after starting Windows** no longer fails when Windows Defender is slow to check sing-box.
+- **"Server name not found"** instead of "could not set up routing" when the server's address cannot be looked up; it no longer suggests turning off another VPN.
+- **Dialog buttons are on the right**, the main one last, in every dialog.
 
 ## Known issues
 
 - If you switch between networks (for example Wi-Fi and cable) while connected through Xray, the connection may stop until Rosetun reconnects.
+- **Lockdown is new and has been tested on Windows 11 only**, on a clean system and on one everyday computer. Not tested yet: Windows 10, other firewalls or antivirus programs with their own network filters, and sleep or hibernation with Lockdown on.
+- **With Lockdown on, Wi-Fi with a sign-in page** (a hotel or a café) cannot open its page, and **Windows cannot set the clock** without the tunnel. Turn Lockdown off for a moment, sign in or correct the clock, connect, and turn it on again.
 
 ## Install
 
@@ -60,47 +44,31 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-Rosetun 0.2. Её цель: подключаться везде и показывать, что происходит. Серверы REALITY на новом Xray снова подключаются, правило может вести свои сайты или программы через другую страну или сервер, а Rosetun понятнее объясняет, что пошло не так.
+Ранняя тестовая сборка Rosetun 0.3. Её главную функцию, **Lockdown**, уже можно попробовать: без туннеля интернета нет, и без подключения, и после перезагрузки, и если служба Rosetun остановится. Это альфа для тестирования; **поддерживаемый выпуск по-прежнему 0.2.0**, и Rosetun 0.2.0 не предлагает эту сборку как обновление.
 
-Rosetun 0.1.0 предлагает этот выпуск как обновление. Настройки из 0.1 обновляются при первом запуске, настройки бет 0.2 сохраняются как есть. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Формат настроек не изменился, ничего не преобразуется. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-**Вернуться на 0.1 можно только вручную.** 0.2 переводит файл настроек на новый формат, а 0.1 отказывается читать файл более новой версии и не перезаписывает его. Прежние настройки Rosetun сохраняет рядом, в `%APPDATA%\Rosetun\config.v3.json`: чтобы вернуться на 0.1.0, установите её и переименуйте этот файл в `config.json`. Изменения, сделанные в 0.2, при этом не переносятся.
+**Перед возвратом на 0.2.0 выключите Lockdown.** 0.2.0 не знает про Lockdown: она не может ни снять его, ни подключиться, пока он включён, и компьютер остаётся без сети. Если вы уже вернулись, установите эту сборку снова и выключите Lockdown или выполните её `rosetun reset-firewall` от имени администратора. Удаление этой сборки тоже снимает Lockdown.
 
-### Что нового в 0.2
+### Что нового в 0.3 на сейчас
 
-- **Серверы REALITY на Xray 26.9.8 и новее снова подключаются.** sing-box с ними работать не может ([SagerNet/sing-box#4520](https://github.com/SagerNet/sing-box/issues/4520)), поэтому серверы VLESS + REALITY Rosetun теперь подключает через Xray. Туннель, правила, DNS и kill switch по-прежнему работают на sing-box; Xray только ведёт соединение с сервером.
-- **Настройки › Дополнительно › Подключение через Xray:**
-  - **Автоматически** (по умолчанию): Xray для серверов VLESS с REALITY, sing-box для остальных.
-  - **Без Xray**: всё через sing-box, как в 0.1. Если сервер REALITY не примет sing-box, Rosetun скажет об этом и предложит включить «Автоматически» и подключиться.
-  - **Xray для всех серверов**: все поддерживаемые серверы, кроме Hysteria2, идут через Xray.
-- **Видно, что происходит.** В списке серверов отмечены те, что пойдут через Xray, а на главном экране во время подключения через него написано «sing-box + Xray».
-- **Смена сервера во время подключения** работает между обычными серверами и серверами REALITY; kill switch при этом не выключается.
-- **Проверка серверов и задержка** идут через ту же цепочку, что и подключение.
-- **Если Xray остановится** во время подключения, kill switch держит интернет закрытым, а Rosetun переподключается. Если `xray.exe` пропал или повреждён, Rosetun скажет об этом и даст ссылку на страницу выпуска.
-- **Значок в трее показывает состояние формой, а не только цветом.** Роза цветная только при подключении; в остальных состояниях она серая, а в углу значок: дуга при подключении, замок, когда kill switch держит интернет закрытым, «!», когда подключиться не удалось, «×», когда служба Rosetun не запущена. Подсказка в последнем случае: «Служба недоступна».
-- **Новая роза, одна везде.** Значок программы, шапка, «Настройки › О программе» и трей показывают одну новую розу, которая читается даже на 16 пикселях.
-- **Настройки › Подключение › Локальная сеть.** Роутер, принтер и другие устройства в вашей сети доступны напрямую, мимо туннеля; DNS в локальной сети остаётся закрытым. По умолчанию выключено; в общественных сетях лучше выключить. Если изменить во время подключения, применится при следующем подключении. Из командной строки: `rosetun lan on` или `rosetun lan off`.
-- **Правила по IP-адресам.** В окне правила появилась вкладка «IP-адрес»: адреса или подсети IPv4 и IPv6, по одному на строку. Для подсети с битами хоста (например, `192.0.2.5/24`) есть кнопка **Исправить**, а для адресов локальной сети подсказка со ссылкой на новую настройку «Локальная сеть».
-- **Неизменившиеся списки больше не скачиваются заново.** Rosetun сначала спрашивает сервер (`ETag` / `Last-Modified`), поэтому обновление подписок не качает каждый раз большие списки вроде `geosite.dat`.
-- **Названия в диспетчере задач.** Программа видна как «Rosetun», служба как «Rosetun Service»; у файлов также указана версия. sing-box и Xray остаются под своими именами.
-- **Настройки › Служба и журнал › Проверка системы** ищет частые причины сбоев VPN: неверные часы (без них не работают TLS и REALITY), системный прокси, оставленный другой программой, Zapret или WinDivert, перехватывающие пакеты, другие VPN-клиенты и их адаптеры. После неудачного подключения проверка запускается сама и показывает первую находку под ошибкой. Она только сообщает и ничего не меняет.
-- **«Нет подключения к сети» вместо «сервер не отвечает».** Без сети подключение сразу заканчивается своим сообщением. Во время подключения короткая смена сети (другой Wi-Fi, переподключённый кабель) больше не обрывает сессию. При включённом **Переподключаться при обрыве** долгая пропажа сети показывается как «Нет подключения к сети»: Rosetun ждёт сеть и подключается, когда она вернётся, а kill switch всё это время держит интернет закрытым.
-- **Собрать отчёт** (Настройки › Служба и журнал) сохраняет один текстовый файл для сообщения об ошибке: версии, настройки без секретов, состояние подключения, проверку системы и журналы. IP-адреса, ссылки, домены, ключи, имена серверов и подписок, имя учётной записи Windows вычищаются; откройте файл и посмотрите, что именно отправляете. Журнал службы выдаётся только учётной записи, которая запускала подключение.
-- **Понятнее ошибки:** если ядро не запустилось, Rosetun говорит об этом простыми словами вместо внутренних подробностей, а ссылка «Вернуть мои правки» помещается в одну строку.
-- **Правила через другой сервер.** Правило может вести свои сайты или программы через другую страну или конкретный сервер, а остальное идёт через сервер с главного экрана. В диалоге правила **Куда направить** стало одним полем: «Через VPN», «Напрямую», «Блокировать», ваши направления, другая страна или конкретный узел. Выбор страны или узла сам создаёт **направление**; новая вкладка **Направления** рядом с «Правила · Списки» меняет его сервер, включает запасной («любой узел этой страны, если этого не станет») и показывает, какой сервер используется сейчас.
-  - Направление на страну выбирает самый быстрый сервер страны при подключении и держит его до отключения: серверы одной страны могут выходить в интернет с разных адресов.
-  - Если сервер направления пропал из подписки, его правила блокируют (никогда не идут напрямую), а список правил предупреждает.
-  - Экран подключения показывает используемые направления с сервером и задержкой. Из командной строки: `rosetun exits`; `rosetun delay` показывает задержку каждого направления.
-- **Окно, свёрнутое в трей, не нагружает компьютер.** Оно больше не перерисовывается каждую секунду и просыпается, только когда пора что-то сделать, например обновить подписку.
-- **«Применить» и переподключение больше не падают с «engine exited with code 1»**, когда Windows долго удаляет прежний адаптер туннеля. Это и была причина редкой ошибки ядра при «Применить», известной с 0.1; из-за неё же затягивалось переподключение после пропажи сети. Теперь Rosetun распознаёт её и через пару секунд запускает ядро снова, не снимая защиту, а «Применить» сохраняет ваше изменение вместо отката.
-- **Кнопки на карточке подписки** (развернуть, обновить, ещё) больше не начинают перетаскивание карточки и не показывают курсор перетаскивания. Подписку перетаскивают за название.
-- **Ссылку подписки без `https://`** можно вставить как есть: Rosetun допишет `https://` и покажет, как ссылка будет добавлена, без токена. `http://` он не подставляет никогда.
-- **Все исправления из 0.1.0** входят в эту версию.
-- **С 0.2.0-beta.2** нового только ссылка подписки без `https://`.
+- **Lockdown** (карточка **Защита** на экране подключения и «Настройки › Подключение»). Rosetun держит собственные фильтры брандмауэра Windows, которые закрывают всё мимо туннеля: без подключения, после перезагрузки (с загрузки, ещё до входа в Windows) и если служба остановится или упадёт. Без Lockdown kill switch работает как раньше, только пока работает служба.
+  - Пока Lockdown включён, **Kill switch** включён всегда, а входящие соединения тоже закрыты, кроме вашей сети при включённой **Локальной сети**.
+  - Без подключения сам Rosetun по-прежнему может обновлять подписки и списки, проверять серверы и подключаться; другие программы нет. Имена Rosetun тогда ищет сам, своими запросами к DNS-серверам вашей сети, поэтому запросы других программ остаются закрыты. Провайдер подписки видит ваш настоящий IP-адрес, как и без Lockdown.
+  - Включение и выключение требуют подтверждения; в окне включения написано, как выйти.
+  - **Как выйти:** выключите Lockdown в Rosetun. Если Rosetun не открывается или не работает, выполните `rosetun reset-firewall` в терминале от имени администратора. Удаление Rosetun снимает Lockdown; если снять не удалось, удаление останавливается и оставляет Rosetun, так что вы не останетесь без сети и без выхода. Обновление Rosetun Lockdown не снимает.
+  - Из командной строки: `rosetun lockdown on`, `rosetun lockdown off`, `rosetun reset-firewall`.
+  - Значок в трее показывает «заблокировано», пока Lockdown держит отключённый компьютер без сети, а **Собрать отчёт** указывает, включён ли Lockdown.
+- **Отключение сразу убирает адаптер туннеля.** Теперь Rosetun останавливает sing-box штатно, а не убивает его, поэтому Windows не приходится убирать оставшийся адаптер, и следующее подключение его не ждёт.
+- **Первое подключение после запуска Windows** больше не срывается, когда Защитник Windows долго проверяет sing-box.
+- **«Не удалось найти адрес сервера»** вместо «не удалось настроить маршрутизацию», когда адрес сервера не находится; совета выключить другой VPN при этом больше нет.
+- **Кнопки окон справа**, основная крайняя, во всех окнах.
 
 ### Известные проблемы
 
 - Если во время подключения через Xray сменить сеть (например, Wi-Fi на кабель), соединение может прерваться, пока Rosetun не переподключится.
+- **Lockdown новый и проверен только на Windows 11**, на чистой системе и на одном рабочем компьютере. Ещё не проверены: Windows 10, другие брандмауэры и антивирусы со своими сетевыми фильтрами, сон и гибернация с включённым Lockdown.
+- **При включённом Lockdown Wi-Fi со входом через страницу** (гостиница, кафе) не откроет свою страницу, а **Windows не сможет выставить время** без туннеля. Выключите Lockdown на время, войдите или поправьте часы, подключитесь и включите его снова.
 
 ### Установка
 
