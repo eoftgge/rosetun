@@ -477,6 +477,7 @@ protection = Защита
 kill-switch-detail = Блокирует весь интернет-трафик, если туннель оборвётся.
 lockdown = Lockdown
 lockdown-detail = Без туннеля интернета нет: и без подключения, и после перезагрузки, и если служба Rosetun остановится. Сам Rosetun по-прежнему может обновлять подписки.
+lockdown-short = Без туннеля интернета нет, даже без подключения.
 kill-switch-lockdown = Включён вместе с Lockdown
 lockdown-on-question = Включить Lockdown?
 lockdown-on-body = Интернета не будет, пока Rosetun не подключится. Так останется и после перезагрузки, пока вы не выключите Lockdown.

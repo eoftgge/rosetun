@@ -41,7 +41,11 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         if widgets::toggle_row(
             ui,
             tr!("kill-switch"),
-            tr!("kill-switch-detail"),
+            if lockdown {
+                tr!("kill-switch-lockdown")
+            } else {
+                tr!("kill-switch-detail")
+            },
             &mut kill_switch,
             state.config_ready
                 && !state.operations.kill_switch
@@ -52,18 +56,12 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         {
             actions.push(Action::SetKillSwitch(kill_switch));
         }
-        if lockdown {
-            ui.label(
-                RichText::new(tr!("kill-switch-lockdown"))
-                    .small()
-                    .color(theme::ROSE_LIGHT),
-            );
-        }
+        row_divider(ui);
         let mut lockdown_on = lockdown;
         if widgets::toggle_row(
             ui,
             tr!("lockdown"),
-            tr!("lockdown-detail"),
+            tr!("lockdown-short"),
             &mut lockdown_on,
             state.can_change_lockdown(),
         )
@@ -71,6 +69,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         {
             actions.push(Action::RequestLockdown(lockdown_on));
         }
+        row_divider(ui);
         let mut connect_on_start = state.config.interface.connect_on_start;
         if widgets::toggle_row(
             ui,
@@ -91,6 +90,14 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
             );
         }
     });
+}
+
+/// The 1 px BORDER line `widgets::settings_card` draws between its rows.
+fn row_divider(ui: &mut egui::Ui) {
+    let (line, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter()
+        .hline(line.x_range(), line.center().y, (1.0, theme::BORDER));
 }
 
 fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, height: f32) {

@@ -464,6 +464,7 @@ protection = Protection
 kill-switch-detail = Blocks all internet traffic if the tunnel drops.
 lockdown = Lockdown
 lockdown-detail = No internet without the tunnel: also while disconnected, after a restart and if the Rosetun service stops. Rosetun itself can still update subscriptions.
+lockdown-short = No internet without the tunnel, even while disconnected.
 kill-switch-lockdown = On together with Lockdown
 lockdown-on-question = Turn on Lockdown?
 lockdown-on-body = There will be no internet until Rosetun connects. This stays so after a restart, until you turn Lockdown off.

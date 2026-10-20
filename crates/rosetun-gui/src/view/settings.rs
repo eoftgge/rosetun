@@ -161,6 +161,18 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         {
             actions.push(Action::SetKillSwitch(kill_switch));
         }
+        let mut lockdown_on = lockdown;
+        if card
+            .toggle(
+                tr!("lockdown"),
+                tr!("lockdown-detail"),
+                &mut lockdown_on,
+                state.can_change_lockdown(),
+            )
+            .changed()
+        {
+            actions.push(Action::RequestLockdown(lockdown_on));
+        }
         let mut allow_lan = state.config.settings.allow_lan;
         if card
             .toggle(
