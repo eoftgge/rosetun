@@ -88,6 +88,8 @@ english.UninstallCancel=Cancel
 russian.UninstallCancel=Отмена
 english.UninstallDataFailed=Could not delete user data at %1. Rosetun itself has already been removed.
 russian.UninstallDataFailed=Не удалось удалить данные пользователя в %1. Сама программа уже удалена.
+english.LockdownRemoveFailed=Could not remove Lockdown (code %1). Rosetun was kept so the network can be restored: restart the computer and run the uninstaller again, or run "rosetun reset-firewall" as administrator.
+russian.LockdownRemoveFailed=Не удалось снять Lockdown (код %1). Rosetun оставлен, чтобы сеть можно было вернуть: перезагрузите компьютер и запустите удаление ещё раз или выполните "rosetun reset-firewall" от администратора.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -299,8 +301,20 @@ var
   DataBox: TNewCheckBox;
   PathLabel, OtherUsersLabel: TNewStaticText;
   RemoveButton, CancelButton: TNewButton;
+  ResultCode: Integer;
 begin
   DeleteUserData := False;
+  // Lockdown's persistent filters outlive the program, so they go first: if
+  // they cannot, Rosetun stays, or nothing would be left to open the network.
+  // An upgrade never runs the uninstaller and keeps Lockdown on.
+  RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--reset-firewall', ResultCode);
+  if ResultCode <> 0 then
+  begin
+    if not UninstallSilent() then
+      MsgBox(FmtMessage(CustomMessage('LockdownRemoveFailed'), [IntToStr(ResultCode)]), mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
   Result := True;
   if UninstallSilent() then
     Exit;
@@ -370,9 +384,6 @@ begin
   begin
     RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/F /IM {#GuiExe}', ResultCode);
     RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--uninstall-service', ResultCode);
-    // Lockdown's persistent filters outlive the program. Only uninstall
-    // removes them; an upgrade over a locked machine keeps Lockdown on.
-    RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--reset-firewall', ResultCode);
     // Autostart is per user. Only the current user's values are reachable here.
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Rosetun');
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run', 'Rosetun');
