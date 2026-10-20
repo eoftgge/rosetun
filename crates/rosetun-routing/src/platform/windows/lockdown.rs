@@ -952,8 +952,7 @@ mod tests {
 
     #[test]
     fn rosetun_resolves_through_the_local_network_but_nothing_else_does() {
-        assert!(RESOLVER_WEIGHT > PRIVATE_DNS_BLOCK_WEIGHT);
-        assert_ne!(RESOLVER_WEIGHT, TUNNEL_WEIGHT);
+        const { assert!(RESOLVER_WEIGHT > PRIVATE_DNS_BLOCK_WEIGHT && RESOLVER_WEIGHT != TUNNEL_WEIGHT) };
         let apps = apps();
         let service = apps.service.as_deref();
         let gui = apps.gui.as_deref();
