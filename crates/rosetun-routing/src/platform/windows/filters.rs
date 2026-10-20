@@ -111,72 +111,100 @@ impl Drop for AppIdBlob {
     }
 }
 
+/// A rule's WFP conditions together with the values they point to. Built
+/// without a WFP engine, so tests can check that every rule has a shape.
+pub(super) struct FilterConditions {
+    conditions: Vec<FWPM_FILTER_CONDITION0>,
+    // The conditions hold raw pointers into these; boxed so they never move.
+    _app_id: Option<AppIdBlob>,
+    _luid: Box<NET_LUID_LH>,
+    _v4: Box<FWP_V4_ADDR_AND_MASK>,
+    _v6: Box<FWP_V6_ADDR_AND_MASK>,
+}
+
+impl FilterConditions {
+    pub(super) fn build(rule: &Rule) -> Result<Self, RoutingError> {
+        let mut luid = Box::new(NET_LUID_LH::default());
+        let mut app_id = None;
+        let mut v4 = Box::new(FWP_V4_ADDR_AND_MASK::default());
+        let mut v6 = Box::new(FWP_V6_ADDR_AND_MASK::default());
+        let mut conditions = Vec::with_capacity(3);
+
+        match rule.conditions.as_slice() {
+            [] => {}
+            [Condition::Application(engine_binary)] => {
+                let blob = app_id.insert(AppIdBlob::from_path(engine_binary)?);
+                conditions.push(application_condition(blob));
+            }
+            [Condition::LocalInterface(value)] => {
+                luid.Value = *value;
+                conditions.push(interface_condition(&mut luid));
+            }
+            [Condition::Loopback] => {
+                conditions.push(loopback_condition());
+            }
+            [Condition::DhcpV4] if rule.family == AddressFamily::Ipv4 => {
+                conditions.extend([
+                    protocol_condition(IPPROTO_UDP as u8),
+                    port_condition(FWPM_CONDITION_IP_LOCAL_PORT, DHCP_CLIENT_PORT),
+                    port_condition(FWPM_CONDITION_IP_REMOTE_PORT, DHCP_SERVER_PORT),
+                ]);
+            }
+            [Condition::RemoteSubnet(subnet)] => {
+                conditions.push(subnet_condition(rule.family, *subnet, &mut v4, &mut v6)?);
+            }
+            [Condition::Protocol(protocol), Condition::RemotePort(port)] => {
+                conditions.extend([
+                    protocol_condition(*protocol),
+                    port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
+                ]);
+            }
+            // Lockdown's DNS permits for Rosetun's own programs.
+            [
+                Condition::Application(binary),
+                Condition::Protocol(protocol),
+                Condition::RemotePort(port),
+            ] => {
+                let blob = app_id.insert(AppIdBlob::from_path(binary)?);
+                conditions.extend([
+                    application_condition(blob),
+                    protocol_condition(*protocol),
+                    port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
+                ]);
+            }
+            [
+                Condition::RemoteSubnet(subnet),
+                Condition::Protocol(protocol),
+                Condition::RemotePort(port),
+            ] => {
+                conditions.extend([
+                    subnet_condition(rule.family, *subnet, &mut v4, &mut v6)?,
+                    protocol_condition(*protocol),
+                    port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
+                ]);
+            }
+            // A new combination of conditions needs a branch here and a case
+            // in `tests::every_policy_rule_builds`, or the whole transaction
+            // that adds it fails.
+            _ => return Err(RoutingError::Unsupported),
+        }
+
+        Ok(Self {
+            conditions,
+            _app_id: app_id,
+            _luid: luid,
+            _v4: v4,
+            _v6: v6,
+        })
+    }
+}
+
 pub(super) fn add_rule(
     session: &Engine,
     rule: &Rule,
     placement: &Placement,
 ) -> Result<u64, RoutingError> {
-    let mut luid = NET_LUID_LH::default();
-    let app_id: AppIdBlob;
-    let mut v4 = FWP_V4_ADDR_AND_MASK::default();
-    let mut v6 = FWP_V6_ADDR_AND_MASK::default();
-    let mut conditions = Vec::with_capacity(3);
-
-    match rule.conditions.as_slice() {
-        [] => {}
-        [Condition::Application(engine_binary)] => {
-            app_id = AppIdBlob::from_path(engine_binary)?;
-            conditions.push(application_condition(&app_id));
-        }
-        [Condition::LocalInterface(value)] => {
-            luid.Value = *value;
-            conditions.push(interface_condition(&mut luid));
-        }
-        [Condition::Loopback] => {
-            conditions.push(loopback_condition());
-        }
-        [Condition::DhcpV4] if rule.family == AddressFamily::Ipv4 => {
-            conditions.extend([
-                protocol_condition(IPPROTO_UDP as u8),
-                port_condition(FWPM_CONDITION_IP_LOCAL_PORT, DHCP_CLIENT_PORT),
-                port_condition(FWPM_CONDITION_IP_REMOTE_PORT, DHCP_SERVER_PORT),
-            ]);
-        }
-        [Condition::RemoteSubnet(subnet)] => {
-            conditions.push(subnet_condition(rule.family, *subnet, &mut v4, &mut v6)?);
-        }
-        [Condition::Protocol(protocol), Condition::RemotePort(port)] => {
-            conditions.extend([
-                protocol_condition(*protocol),
-                port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
-            ]);
-        }
-        // Lockdown's DNS permits for Rosetun's own programs.
-        [
-            Condition::Application(binary),
-            Condition::Protocol(protocol),
-            Condition::RemotePort(port),
-        ] => {
-            app_id = AppIdBlob::from_path(binary)?;
-            conditions.extend([
-                application_condition(&app_id),
-                protocol_condition(*protocol),
-                port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
-            ]);
-        }
-        [
-            Condition::RemoteSubnet(subnet),
-            Condition::Protocol(protocol),
-            Condition::RemotePort(port),
-        ] => {
-            conditions.extend([
-                subnet_condition(rule.family, *subnet, &mut v4, &mut v6)?,
-                protocol_condition(*protocol),
-                port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
-            ]);
-        }
-        _ => return Err(RoutingError::Unsupported),
-    }
+    let mut conditions = FilterConditions::build(rule)?;
 
     let mut display_name = placement
         .name
@@ -196,8 +224,8 @@ pub(super) fn add_rule(
         subLayerKey: placement.sublayer,
         action: action(rule.action),
         weight: weight(rule.weight),
-        numFilterConditions: conditions.len() as u32,
-        filterCondition: conditions.as_mut_ptr(),
+        numFilterConditions: conditions.conditions.len() as u32,
+        filterCondition: conditions.conditions.as_mut_ptr(),
         ..Default::default()
     };
 
@@ -369,4 +397,64 @@ fn wide_path(path: &Path) -> Result<Vec<u16>, RoutingError> {
     })?;
 
     Ok(path.encode_utf16().chain(Some(0)).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FilterConditions;
+    use crate::platform::windows::lockdown;
+    use crate::platform::windows::policy::{
+        BootstrapPolicy, Condition, Rule, probe_authorization, tunnel_authorization,
+    };
+    use crate::{ProtectionScope, RoutingPlan};
+
+    /// Every rule a policy can hand to `add_rule`, with program paths that
+    /// exist, since a WFP application ID needs the file.
+    fn every_policy_rule() -> Vec<Rule> {
+        let program = std::env::current_exe().expect("the test binary has a path");
+        let mut rules = lockdown::every_filter()
+            .into_iter()
+            .map(|filter| filter.rule)
+            .collect::<Vec<_>>();
+        for scope in [ProtectionScope::AllTraffic, ProtectionScope::DnsOnly] {
+            for allow_lan in [false, true] {
+                for lockdown in [false, true] {
+                    let plan = RoutingPlan {
+                        scope,
+                        allow_lan,
+                        lockdown,
+                    };
+                    rules.extend(BootstrapPolicy::from_plan(&plan, &[&program, &program]).rules);
+                }
+            }
+        }
+        for lockdown in [false, true] {
+            rules.extend(tunnel_authorization(7, lockdown));
+        }
+        rules.extend(probe_authorization(&program));
+        for rule in &mut rules {
+            for condition in &mut rule.conditions {
+                if let Condition::Application(path) = condition {
+                    path.clone_from(&program);
+                }
+            }
+        }
+        rules
+    }
+
+    #[test]
+    fn every_policy_rule_builds() {
+        let rules = every_policy_rule();
+        assert!(rules.len() > 100);
+        for rule in &rules {
+            let built = FilterConditions::build(rule)
+                .unwrap_or_else(|error| panic!("{rule:?} does not build: {error}"));
+            // DHCP is one condition in the policy and three in WFP.
+            let expected = match rule.conditions.as_slice() {
+                [Condition::DhcpV4] => 3,
+                conditions => conditions.len(),
+            };
+            assert_eq!(built.conditions.len(), expected, "{rule:?}");
+        }
+    }
 }

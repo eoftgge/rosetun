@@ -438,7 +438,7 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
 }
 
 /// Every filter any version of the set can hold, for removal.
-fn every_filter() -> Vec<LockdownFilter> {
+pub(super) fn every_filter() -> Vec<LockdownFilter> {
     filter_set(
         true,
         &LockdownApps {
