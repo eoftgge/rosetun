@@ -505,6 +505,13 @@ impl EngineProcess for SingBoxProcess {
     }
 }
 
+impl Drop for SingBoxProcess {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        console::forget(self.child.id());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,6 @@
 use std::io::{self, Read};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,6 +26,18 @@ fn parse_version(output: &str) -> Option<&str> {
     versions.next().is_none().then_some(version)
 }
 
+/// `sing-box version` creates no adapter, so there is nothing to stop
+/// gracefully, and it runs outside a process group of its own: an interrupt
+/// would reach the whole console, the helper included.
+fn kill(child: &mut Child) {
+    if let Err(error) = child.kill()
+        && error.kind() != io::ErrorKind::InvalidInput
+    {
+        tracing::warn!(%error, "could not kill sing-box version");
+    }
+    let _ = child.wait();
+}
+
 fn failure(binary: &Path, message: impl std::fmt::Display) -> EngineError {
     io::Error::other(format!(
         "sing-box version check failed for {}: {message}",
@@ -45,7 +57,7 @@ pub(super) fn check(binary: &Path) -> Result<(), EngineError> {
         .map_err(|error| failure(binary, error))?;
 
     let Some(mut stdout) = child.stdout.take() else {
-        super::stop_failed_spawn(&mut child);
+        kill(&mut child);
         return Err(failure(binary, "stdout pipe is unavailable"));
     };
 
@@ -68,7 +80,7 @@ pub(super) fn check(binary: &Path) -> Result<(), EngineError> {
             let _ = sender.send(result);
         })
     {
-        super::stop_failed_spawn(&mut child);
+        kill(&mut child);
         return Err(failure(binary, error));
     }
 
@@ -77,13 +89,13 @@ pub(super) fn check(binary: &Path) -> Result<(), EngineError> {
             Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(error) => {
-                super::stop_failed_spawn(&mut child);
+                kill(&mut child);
                 return Err(failure(binary, error));
             }
         }
 
         if Instant::now() >= deadline {
-            super::stop_failed_spawn(&mut child);
+            kill(&mut child);
             return Err(failure(
                 binary,
                 format!(

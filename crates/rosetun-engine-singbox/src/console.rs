@@ -8,11 +8,18 @@
 //! the helper attaches to it for the moment of sending. Attaching is
 //! process-wide, so attaching and spawning are serialised: a spawn during the
 //! attach would inherit that console.
+//!
+//! Only a process that `spawn` started leads its own group. For any other pid
+//! the event would go to the whole console, the helper included, so
+//! `interrupt_group` refuses it and the caller kills instead.
 
+use std::collections::HashSet;
 use std::io;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::thread;
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{HANDLE, TRUE};
 use windows_sys::Win32::System::Console::{
@@ -23,9 +30,15 @@ use windows_sys::Win32::System::Console::{
 use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
 use windows_sys::core::BOOL;
 
-static CONSOLE: Mutex<()> = Mutex::new(());
+/// Pids of running processes started by `spawn`, each the leader of its group.
+static CONSOLE: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
-fn lock() -> MutexGuard<'static, ()> {
+/// Console events arrive on a thread the system starts in each receiving
+/// process after `GenerateConsoleCtrlEvent` returns, so the swallowing
+/// handler stays a little longer than the call.
+const DELIVERY_GRACE: Duration = Duration::from_millis(200);
+
+fn lock() -> MutexGuard<'static, Option<HashSet<u32>>> {
     CONSOLE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -40,24 +53,44 @@ fn has_console() -> bool {
 }
 
 pub(crate) fn spawn(command: &mut Command) -> io::Result<Child> {
-    let _console = lock();
+    let mut groups = lock();
     let mut flags = CREATE_NEW_PROCESS_GROUP;
     if !has_console() {
         flags |= CREATE_NO_WINDOW;
     }
-    command.creation_flags(flags).spawn()
+    let child = command.creation_flags(flags).spawn()?;
+    groups.get_or_insert_with(HashSet::new).insert(child.id());
+    Ok(child)
 }
 
-/// Sends `CTRL_BREAK_EVENT` to the process group `pid`, which a child
-/// spawned by `spawn` leads.
-pub(crate) fn interrupt_group(pid: u32) -> io::Result<()> {
-    let _console = lock();
-    if has_console() {
-        return generate(pid);
+/// The process has exited or is being dropped: its pid may be reused by a
+/// process that leads no group.
+pub(crate) fn forget(pid: u32) {
+    if let Some(groups) = lock().as_mut() {
+        groups.remove(&pid);
     }
+}
+
+/// Sends `CTRL_BREAK_EVENT` to the process group `pid`, which must be a
+/// child spawned by `spawn`; any other pid is `ErrorKind::Unsupported`.
+pub(crate) fn interrupt_group(pid: u32) -> io::Result<()> {
+    let groups = lock();
+    if !groups.as_ref().is_some_and(|groups| groups.contains(&pid)) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the process does not lead a group of its own",
+        ));
+    }
+    // Should the event reach the whole console after all, the helper lives.
     let _ignore = IgnoreCtrl::install()?;
-    let _attached = Attached::attach(pid)?;
-    generate(pid)
+    if has_console() {
+        generate(pid)?;
+    } else {
+        let _attached = Attached::attach(pid)?;
+        generate(pid)?;
+    }
+    thread::sleep(DELIVERY_GRACE);
+    Ok(())
 }
 
 fn generate(pid: u32) -> io::Result<()> {
@@ -73,8 +106,8 @@ unsafe extern "system" fn ignore_ctrl(_ctrl_type: u32) -> BOOL {
     TRUE
 }
 
-/// While the helper is attached, no console event may reach its default
-/// handler, which would end the service. `SetConsoleCtrlHandler(None, TRUE)`
+/// While the helper sends, no console event may reach its default handler,
+/// which would end the service, or the console helper and its `cmd`. `SetConsoleCtrlHandler(None, TRUE)`
 /// covers only Ctrl+C, so a handler that swallows every event is installed.
 struct IgnoreCtrl;
 

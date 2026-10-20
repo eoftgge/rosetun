@@ -121,9 +121,20 @@ fn kill(process: &mut impl Stoppable) -> io::Result<StopOutcome> {
 /// the group the interrupt goes to.
 pub(crate) struct ChildStop<'a>(pub(crate) &'a mut Child);
 
+impl ChildStop<'_> {
+    fn exited(&self) {
+        #[cfg(windows)]
+        crate::console::forget(self.0.id());
+    }
+}
+
 impl Stoppable for ChildStop<'_> {
     fn has_exited(&mut self) -> io::Result<bool> {
-        Ok(self.0.try_wait()?.is_some())
+        let exited = self.0.try_wait()?.is_some();
+        if exited {
+            self.exited();
+        }
+        Ok(exited)
     }
 
     fn interrupt(&mut self) -> io::Result<()> {
@@ -143,7 +154,9 @@ impl Stoppable for ChildStop<'_> {
     }
 
     fn wait(&mut self) -> io::Result<()> {
-        self.0.wait().map(drop)
+        self.0.wait()?;
+        self.exited();
+        Ok(())
     }
 }
 
@@ -256,6 +269,48 @@ mod tests {
         };
         assert_eq!(stop(&mut fake, STOP_GRACE).unwrap(), StopOutcome::Killed);
         assert!(fake.killed);
+    }
+
+    #[cfg(windows)]
+    fn waitfor() -> std::process::Command {
+        // Waits for a signal that never comes; ends with the kill.
+        let mut command = std::process::Command::new("waitfor.exe");
+        command
+            .args(["/t", "30", &format!("RosetunStopTest{}", std::process::id())])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        command
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_outside_its_own_group_is_killed_not_interrupted() {
+        let mut child = waitfor().spawn().unwrap();
+        let error = crate::console::interrupt_group(child.id()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(
+            stop(&mut ChildStop(&mut child), STOP_GRACE).unwrap(),
+            StopOutcome::Killed
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exited_child_gets_no_event_and_is_forgotten() {
+        let mut command = std::process::Command::new("cmd.exe");
+        command.args(["/c", "exit 0"]);
+        let mut child = crate::console::spawn(&mut command).unwrap();
+        child.wait().unwrap();
+        assert_eq!(
+            stop(&mut ChildStop(&mut child), STOP_GRACE).unwrap(),
+            StopOutcome::AlreadyExited
+        );
+        assert_eq!(
+            crate::console::interrupt_group(child.id())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
     }
 
     #[test]
