@@ -435,7 +435,7 @@ try {
         Stop-GuestListener
         $bootTaskRegistered = $true
         Register-RosetunBootCheck -Directory $matrixDir -TaskName $bootTask
-        Restart-RosetunGuest
+        Restart-RosetunGuest -Label '6 reboot, on'
         Test-BootClosed '6 reboot, on'
         Test-Step '6 reboot, on' 'objects present after boot' { Test-LockdownInstalled } -Note (Format-Objects (Get-LockdownObjects))
         $lease = Get-RosetunGuestLease
@@ -459,7 +459,7 @@ try {
         for ($pass = 1; $pass -le $PowerCutRepeats; $pass++) {
             $on = Invoke-Lockdown on
             Start-Sleep -Seconds $PowerCutDelaySeconds
-            Restart-RosetunGuest -PowerCut
+            Restart-RosetunGuest -PowerCut -Label "7 cut after on #$pass"
             Test-Step "7 cut $PowerCutDelaySeconds s after on #$pass" 'objects present after boot' {
                 $on.ExitCode -eq 0 -and (Test-LockdownInstalled)
             } -Note (Format-Objects (Get-LockdownObjects))
@@ -467,7 +467,7 @@ try {
             Start-RosetunHelper
             $off = Invoke-Lockdown off
             Start-Sleep -Seconds $PowerCutDelaySeconds
-            Restart-RosetunGuest -PowerCut
+            Restart-RosetunGuest -PowerCut -Label "7 cut after off #$pass"
             Test-Step "7 cut $PowerCutDelaySeconds s after off #$pass" 'no objects after boot' {
                 $off.ExitCode -eq 0 -and (Test-LockdownAbsent)
             } -Note (Format-Objects (Get-LockdownObjects))
@@ -610,6 +610,8 @@ finally {
         try { Stop-RosetunTestNode } catch { Write-Warning "Could not stop the host test node: $_" }
     }
 }
+
+Add-Info 'run' 'second cold starts when the guest did not come back' "$(Get-RosetunColdStartRetries)"
 
 # Result first, so a long note cannot push it off the screen.
 $results | Format-Table Result, Scenario, Check, Note -AutoSize -Wrap

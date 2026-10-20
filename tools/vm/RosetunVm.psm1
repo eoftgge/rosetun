@@ -31,6 +31,8 @@ $script:Config = @{
     ExitRuleUrl = 'https://yandex.ru'
 }
 $script:Session = $null
+# Second cold starts Restart-RosetunGuest needed in this session of the module.
+$script:ColdStartRetries = 0
 
 function Install-RosetunSingBox {
     # Downloads the pinned sing-box build into tools\ and checks it, so the
@@ -1865,8 +1867,9 @@ function Get-RosetunGuestBootTime {
 }
 
 function Restart-RosetunGuest {
-    # -PowerCut turns the VM off instead, as a power cut would.
-    param([switch]$PowerCut)
+    # -PowerCut turns the VM off instead, as a power cut would. -Label names
+    # the step in the warning when the guest does not come back.
+    param([switch]$PowerCut, [string]$Label = 'restart')
     $before = Get-RosetunGuestBootTime
     if ($PowerCut) {
         Disconnect-RosetunVm
@@ -1896,15 +1899,65 @@ function Restart-RosetunGuest {
     if (-not $PowerCut) {
         throw 'The guest did not come back within 5 minutes.'
     }
-    # Several cuts in a row once left Windows stuck in a crash at boot; a
-    # second cold start brought it back.
-    Write-Warning 'The guest did not come back within 5 minutes; turning it off and on once more.'
+    # Several cuts in a row left the guest stuck at boot without a single
+    # System event; a second cold start brought it back. The screen is the
+    # only evidence of where it stopped.
+    $screenshot = try { Save-RosetunGuestScreenshot } catch { "no screenshot: $_" }
+    $script:ColdStartRetries++
+    Write-Warning "${Label}: the guest did not come back within 5 minutes; turning it off and on once more. Screen: $screenshot"
     Disconnect-RosetunVm
     Stop-VM -Name $script:Config.VmName -TurnOff -Force
     Start-VM -Name $script:Config.VmName
     if (-not (& $back)) {
         throw 'The guest did not come back within 5 minutes, also after a second cold start.'
     }
+}
+
+function Get-RosetunColdStartRetries {
+    $script:ColdStartRetries
+}
+
+function Save-RosetunGuestScreenshot {
+    # Saves what the VM's screen shows as tools/vm/logs/guest-stuck-<time>.png
+    # and returns the path.
+    param([int]$Width = 1024, [int]$Height = 768)
+    $namespace = 'root\virtualization\v2'
+    $vm = Get-CimInstance -Namespace $namespace -ClassName Msvm_ComputerSystem `
+        -Filter "ElementName='$($script:Config.VmName)'"
+    $settings = Get-CimAssociatedInstance -InputObject $vm -ResultClassName Msvm_VirtualSystemSettingData |
+        Where-Object { $_.VirtualSystemType -eq 'Microsoft:Hyper-V:System:Realized' } |
+        Select-Object -First 1
+    $service = Get-CimInstance -Namespace $namespace -ClassName Msvm_VirtualSystemManagementService
+    $thumbnail = Invoke-CimMethod -InputObject $service -MethodName GetVirtualSystemThumbnailImage -Arguments @{
+        TargetSystem = $settings
+        WidthPixels  = [uint16]$Width
+        HeightPixels = [uint16]$Height
+    }
+    if ($thumbnail.ReturnValue -ne 0 -or -not $thumbnail.ImageData) {
+        throw "GetVirtualSystemThumbnailImage returned $($thumbnail.ReturnValue)."
+    }
+    # The image is RGB565, two bytes a pixel, rows without padding.
+    [byte[]]$pixels = $thumbnail.ImageData
+    Add-Type -AssemblyName System.Drawing
+    $format = [Drawing.Imaging.PixelFormat]::Format16bppRgb565
+    $bitmap = [Drawing.Bitmap]::new($Width, $Height, $format)
+    try {
+        $data = $bitmap.LockBits([Drawing.Rectangle]::new(0, 0, $Width, $Height),
+            [Drawing.Imaging.ImageLockMode]::WriteOnly, $format)
+        try {
+            for ($row = 0; $row -lt $Height; $row++) {
+                [Runtime.InteropServices.Marshal]::Copy($pixels, $row * $Width * 2,
+                    [IntPtr]::Add($data.Scan0, $row * $data.Stride), $Width * 2)
+            }
+        }
+        finally { $bitmap.UnlockBits($data) }
+        $dir = Join-Path $PSScriptRoot 'logs'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $path = Join-Path $dir "guest-stuck-$(Get-Date -Format 'yyyyMMdd-HHmmss').png"
+        $bitmap.Save($path, [Drawing.Imaging.ImageFormat]::Png)
+        $path
+    }
+    finally { $bitmap.Dispose() }
 }
 
 function Wait-RosetunGuest {
