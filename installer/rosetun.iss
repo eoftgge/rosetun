@@ -295,29 +295,33 @@ begin
   end;
 end;
 
+// Lockdown's persistent filters outlive the program, so they go before any
+// file: if they cannot, Rosetun stays, or nothing would be left to open the
+// network. Runs only once the user has confirmed, so a cancelled uninstall
+// keeps Lockdown on. An upgrade never runs the uninstaller.
+function RemoveLockdown(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--reset-firewall', ResultCode);
+  Result := ResultCode = 0;
+  if not Result and not UninstallSilent() then
+    MsgBox(FmtMessage(CustomMessage('LockdownRemoveFailed'), [IntToStr(ResultCode)]), mbError, MB_OK);
+end;
+
 function InitializeUninstall(): Boolean;
 var
   Form: TSetupForm;
   DataBox: TNewCheckBox;
   PathLabel, OtherUsersLabel: TNewStaticText;
   RemoveButton, CancelButton: TNewButton;
-  ResultCode: Integer;
 begin
   DeleteUserData := False;
-  // Lockdown's persistent filters outlive the program, so they go first: if
-  // they cannot, Rosetun stays, or nothing would be left to open the network.
-  // An upgrade never runs the uninstaller and keeps Lockdown on.
-  RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--reset-firewall', ResultCode);
-  if ResultCode <> 0 then
+  if UninstallSilent() then
   begin
-    if not UninstallSilent() then
-      MsgBox(FmtMessage(CustomMessage('LockdownRemoveFailed'), [IntToStr(ResultCode)]), mbError, MB_OK);
-    Result := False;
+    Result := RemoveLockdown();
     Exit;
   end;
-  Result := True;
-  if UninstallSilent() then
-    Exit;
 
   // The path belongs to the elevated uninstaller account, not necessarily
   // the account that launched setup. Show exactly which profile will be removed.
@@ -370,6 +374,9 @@ begin
     CancelButton.Cancel := True;
 
     Result := Form.ShowModal() = mrOk;
+    // Not in one expression: Lockdown must not go when the user cancels.
+    if Result then
+      Result := RemoveLockdown();
     DeleteUserData := Result and DataBox.Checked;
   finally
     Form.Free();
