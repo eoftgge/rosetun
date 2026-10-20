@@ -18,6 +18,7 @@ Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rule
 ## Features
 
 - A **Kill switch** blocks traffic when the tunnel drops, as long as the Rosetun service is running (see [How it works](#how-it-works)). Without it, a DNS lock keeps system DNS from leaking outside the tunnel throughout the session, including while the engine restarts.
+- **Lockdown** (the **Protection** card on the connection screen) closes the internet to everything outside the tunnel, not only while connected: also while disconnected, after a restart (from boot, before you sign in to Windows) and if the Rosetun service stops or crashes. While it is on, the **Kill switch** is always on. Incoming connections are blocked too, except from your network when **Local network** is on. Turning it on and off asks for confirmation.
 - **Routing rules** for apps, websites, IP addresses and subnets, and lists, with **Quick templates** and actions **Through VPN**, **Direct** and **Block**.
 - **Exits:** a rule can send its traffic through another country or a specific server while the rest goes through the server on the main screen. Picking a country or a server in the rule creates an exit on the **Exits** tab, where you can change its server and turn on a fallback to any server of the same country. If an exit's server disappears, its rules block traffic; they never go direct.
 - **Lists:** GeoIP and GeoSite (Xray `.dat` files, sing-box rule sets) and your own text lists, from a file or a link. A list from a link is downloaded again only when it has changed (`ETag` / `Last-Modified`).
@@ -32,8 +33,8 @@ Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rule
 - **Server checks:** a TCP ping and a URL test that sends a request through each server, even while connected, through the same chain as the connection.
 - **System check** (Settings → Service and log) looks for a wrong clock, a system proxy, Zapret or WinDivert intercepting packets, and other VPN clients or their adapters. It runs by itself after a failed connection and changes nothing.
 - **Collect report** (Settings → Service and log) saves one text file for a bug report: versions, settings without secrets, the connection state, the system check and the logs. IP addresses, links, domains, email addresses, keys and passwords, server, subscription, list and rule set names, and your Windows account name are removed.
-- The tray icon shows the state by shape: the rose is in colour only while connected; otherwise it is grey with a badge for connecting, the kill switch blocking traffic, a failed connection and the service not running.
-- Command line: `rosetun status`, `temporary`, `connect`, `apply`, `probe`, `delay`, `exits`, `select`, `sub add|update|list|remove`, `nodes`, `config`, `xray auto|off|always`, `lan on|off`, `disconnect`, `shutdown`.
+- The tray icon shows the state by shape: the rose is in colour only while connected; otherwise it is grey with a badge for connecting, traffic blocked (by the kill switch, or by Lockdown while disconnected), a failed connection and the service not running.
+- Command line: `rosetun status`, `temporary`, `connect`, `apply`, `probe`, `delay`, `exits`, `select`, `sub add|update|list|remove`, `nodes`, `config`, `xray auto|off|always`, `lan on|off`, `lockdown on|off`, `reset-firewall`, `disconnect`, `shutdown`.
 - **Start with Windows**, and English and Russian interfaces.
 
 ## Install
@@ -67,6 +68,8 @@ Rosetun makes these network requests:
 
 The engine's control API and the link from sing-box to Xray use only local loopback. There is no telemetry or Rosetun account. The application update check only reports a new version; it does not download or install it. Logs stay on this machine; the service log is accessible only to administrators, and **Collect report** receives it only for the Windows account that started the session. When **Verbose log** is off, destination addresses in engine messages are replaced with `[hidden]`; the VPN server address and error cause remain. Site addresses are logged only while the temporary **Verbose log** setting is enabled. Automatic *subscription* updates are separate from application updates.
 
+With **Lockdown** on and no connection, Rosetun itself (the app and the `rosetun` command) still reaches the internet directly: your subscription provider, list addresses, `cp.cloudflare.com` for **System check**, and the other requests above that go directly when disconnected (server checks, the public IP, the update check). Other programs do not. Your subscription provider then sees your real IP address, just as without Lockdown.
+
 ## Troubleshooting
 
 - Run **System check** (Settings → Service and log) first: it finds other VPN clients, Zapret or WinDivert, a system proxy and a wrong clock. It also runs by itself after a failed connection and shows the first finding under the error.
@@ -74,6 +77,8 @@ The engine's control API and the link from sing-box to Xray use only local loopb
 - Traffic-modifying programs such as zapret can disrupt the connection to the VPN server. Exclude the server addresses in that program's settings.
 - If setup stops because standard users can change a folder under `C:\Program Files\Rosetun`, this usually follows **Continue** in File Explorer, which gives your account permanent access to a protected Rosetun folder such as `data`. Uninstall Rosetun and install it again. To read the service log, use **Collect report** or an editor run as administrator instead.
 - **No network connection** means Windows has no working network, so the server is not to blame. Connecting fails at once. While connected, a short network change does not break the session; with **Reconnect automatically** on, Rosetun waits for the network and reconnects when it returns, and the kill switch keeps the internet closed meanwhile.
+- **Wi-Fi with a sign-in page** (a hotel or a café) or **a wrong clock** with **Lockdown** on: the sign-in page cannot open and Windows cannot set the time without the tunnel, and the tunnel cannot start without them. Turn Lockdown off for a moment, sign in or correct the clock, connect, and turn Lockdown on again.
+- **No network at all and Rosetun does not open**, with Lockdown on: run `rosetun reset-firewall` in a terminal as administrator. It removes Lockdown without the service. Uninstalling Rosetun removes it too.
 
 ## How it works
 
@@ -84,7 +89,9 @@ GUI (user) ──named pipe──► Rosetun service (SYSTEM) ──► sing-box
                                     └── WFP: kill switch / DNS lock
 ```
 
-The service (`rosetun-helper-privileged`) starts sing-box, which runs the tunnel, rules and DNS. For servers that go through Xray, sing-box hands the connection over loopback to `xray.exe`, which the service also starts and which connects to the server. The service owns protection, so closing the GUI does not remove it, and the kill switch holds while the service is running. If the service itself crashes, Windows removes its firewall filters (fail-open). This avoids leaving the computer permanently offline.
+The service (`rosetun-helper-privileged`) starts sing-box, which runs the tunnel, rules and DNS. For servers that go through Xray, sing-box hands the connection over loopback to `xray.exe`, which the service also starts and which connects to the server. The service owns protection, so closing the GUI does not remove it, and the kill switch holds while the service is running. Without Lockdown, if the service itself crashes, Windows removes its firewall filters (fail-open). This avoids leaving the computer permanently offline.
+
+With **Lockdown** on, Rosetun also keeps persistent WFP filters in its own sublayer that block everything outside the tunnel. Windows keeps them across a service crash and a restart, and the Base Filtering Engine (BFE) restores them at boot, with boot-time filters covering the time before it starts (fail-closed). They are removed only by turning Lockdown off, by `rosetun reset-firewall` (as administrator) or by uninstalling Rosetun.
 
 ## Build from source
 
