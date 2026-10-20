@@ -2149,4 +2149,245 @@ function Get-RosetunEgressAfterBoot {
     }
 }
 
+function Find-RosetunFreeAddress {
+    # An unused address near the top of the Default Switch subnet: the switch's
+    # DHCP hands out addresses from the bottom.
+    param([Parameter(Mandatory)][string]$Address, [Parameter(Mandatory)][int]$PrefixLength)
+    $bytes = [Net.IPAddress]::Parse($Address).GetAddressBytes()
+    [Array]::Reverse($bytes)
+    $value = [BitConverter]::ToUInt32($bytes, 0)
+    $hostBits = 32 - $PrefixLength
+    $network = [uint32](($value -shr $hostBits) -shl $hostBits)
+    $broadcast = [uint32]($network + [math]::Pow(2, $hostBits) - 1)
+    $ping = [Net.NetworkInformation.Ping]::new()
+    try {
+        for ($candidate = $broadcast - 1; $candidate -gt $broadcast - 20; $candidate--) {
+            $octets = [BitConverter]::GetBytes([uint32]$candidate)
+            [Array]::Reverse($octets)
+            $text = ([Net.IPAddress]::new($octets)).ToString()
+            if ($text -eq $Address -or (Get-NetIPAddress -IPAddress $text -ErrorAction SilentlyContinue)) { continue }
+            if ($ping.Send($text, 500).Status -eq 'Success') { continue }
+            return $text
+        }
+    }
+    finally { $ping.Dispose() }
+    throw "No free address near the top of the Default Switch subnet of $Address/$PrefixLength."
+}
+
+function Start-RosetunNameZone {
+    # A DNS responder for the zone rosetun.test (`.test` is reserved, RFC 2606)
+    # and an HTTP server for one subscription file, both on the host, so the
+    # guest reaches the test node and a subscription by name. node.rosetun.test
+    # and sub.rosetun.test point to the host's Default Switch address; other
+    # names in the zone get NXDOMAIN and names outside it REFUSED. TTL 0, so
+    # no resolver caches an answer from one scenario into the next.
+    param([Parameter(Mandatory)][string]$SubscriptionBody)
+
+    $alias = 'vEthernet (Default Switch)'
+    $ip = Get-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -AddressState Preferred -ErrorAction Stop |
+        Where-Object { $_.IPAddress -notlike '169.254.*' } |
+        Select-Object -First 1
+    if (-not $ip) { throw 'The Default Switch has no usable IPv4 address.' }
+    $zone = [pscustomobject]@{
+        HostAddress     = $ip.IPAddress
+        DnsAddress      = $ip.IPAddress
+        AddedAddress    = $null
+        HttpPort        = 0
+        SubscriptionUrl = $null
+        RuleNames       = [System.Collections.Generic.List[string]]::new()
+        Job             = $null
+    }
+    try {
+        # Internet Connection Sharing answers DNS for the Default Switch on the
+        # host's own address, so 53 there is usually taken. The responder then
+        # gets a second address on the same adapter; the guest reaches it on-link.
+        $free = try {
+            [Net.Sockets.UdpClient]::new([Net.IPEndPoint]::new([Net.IPAddress]::Parse($zone.HostAddress), 53)).Close()
+            $true
+        }
+        catch { $false }
+        if (-not $free) {
+            $zone.DnsAddress = Find-RosetunFreeAddress -Address $zone.HostAddress -PrefixLength $ip.PrefixLength
+            New-NetIPAddress -InterfaceAlias $alias -IPAddress $zone.DnsAddress -PrefixLength $ip.PrefixLength `
+                -SkipAsSource $true -ErrorAction Stop | Out-Null
+            $zone.AddedAddress = $zone.DnsAddress
+            $ready = Wait-RosetunCondition {
+                (Get-NetIPAddress -IPAddress $zone.DnsAddress -ErrorAction SilentlyContinue).AddressState -eq 'Preferred'
+            } -TimeoutSeconds 15
+            if (-not $ready) { throw "The second address $($zone.DnsAddress) did not become usable." }
+            Write-Host "Port 53 on $($zone.HostAddress) is taken (ICS); the name zone answers on $($zone.DnsAddress)."
+        }
+
+        $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Parse($zone.HostAddress), 0)
+        $probe.Start()
+        $zone.HttpPort = ([Net.IPEndPoint]$probe.LocalEndpoint).Port
+        $probe.Stop()
+        $zone.SubscriptionUrl = "http://sub.rosetun.test:$($zone.HttpPort)/sub"
+
+        foreach ($rule in @(
+                @{ Protocol = 'UDP'; Address = $zone.DnsAddress; Port = 53 },
+                @{ Protocol = 'TCP'; Address = $zone.HostAddress; Port = $zone.HttpPort })) {
+            $name = "Rosetun-name-zone-$([guid]::NewGuid().ToString('N'))"
+            New-NetFirewallRule -Name $name -DisplayName 'Rosetun name zone' -Direction Inbound -Action Allow `
+                -Protocol $rule.Protocol -LocalAddress $rule.Address -LocalPort $rule.Port `
+                -InterfaceAlias $alias -Profile Any -ErrorAction Stop | Out-Null
+            $zone.RuleNames.Add($name)
+        }
+
+        $zone.Job = Start-Job -ArgumentList $zone.DnsAddress, $zone.HostAddress, $zone.HttpPort, $SubscriptionBody -ScriptBlock {
+            param($dnsAddress, $hostAddress, $httpPort, $body)
+            $ErrorActionPreference = 'Stop'
+            $hostBytes = [Net.IPAddress]::Parse($hostAddress).GetAddressBytes()
+            $content = [Text.Encoding]::UTF8.GetBytes($body)
+            $udp = [Net.Sockets.UdpClient]::new([Net.IPEndPoint]::new([Net.IPAddress]::Parse($dnsAddress), 53))
+            # SIO_UDP_CONNRESET off: a reply to a port already closed would
+            # otherwise fail the next receive with WSAECONNRESET.
+            [void]$udp.Client.IOControl(-1744830452, [byte[]]@(0, 0, 0, 0), $null)
+            $http = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Parse($hostAddress), $httpPort)
+            $http.Start()
+            'ready'
+            $receive = $udp.ReceiveAsync()
+            $accept = $http.AcceptTcpClientAsync()
+            while ($true) {
+                $index = [Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($receive, $accept))
+                if ($index -eq 0) {
+                    $received = $receive
+                    $receive = $udp.ReceiveAsync()
+                    if ($received.IsFaulted) {
+                        "receive failed: $($received.Exception.InnerException.Message)"
+                        continue
+                    }
+                    $packet = $received.Result.Buffer
+                    $peer = $received.Result.RemoteEndPoint
+                    $offset = 12
+                    $labels = @()
+                    while ($offset -lt $packet.Length -and $packet[$offset] -ne 0 -and
+                        $offset + 1 + $packet[$offset] -le $packet.Length) {
+                        $labels += [Text.Encoding]::ASCII.GetString($packet, $offset + 1, $packet[$offset])
+                        $offset += 1 + $packet[$offset]
+                    }
+                    if ($offset + 5 -gt $packet.Length) { continue }
+                    $name = ($labels -join '.').ToLowerInvariant()
+                    $type = $packet[$offset + 1] * 256 + $packet[$offset + 2]
+                    $answers = 0
+                    $rcode = 0
+                    if ($name -in @('node.rosetun.test', 'sub.rosetun.test')) {
+                        if ($type -eq 1) { $answers = 1 }
+                    }
+                    elseif ($name -eq 'rosetun.test' -or $name.EndsWith('.rosetun.test')) { $rcode = 3 }
+                    else { $rcode = 5 }
+                    [byte[]]$reply = @($packet[0], $packet[1], 0x81, (0x80 -bor $rcode), 0, 1, 0, $answers, 0, 0, 0, 0) +
+                        $packet[12..($offset + 4)]
+                    if ($answers) {
+                        # The question's name by pointer, type A, class IN, TTL 0.
+                        $reply += [byte[]]@(0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4) + $hostBytes
+                    }
+                    [void]$udp.Send($reply, $reply.Length, $peer)
+                }
+                else {
+                    $client = $accept.Result
+                    $accept = $http.AcceptTcpClientAsync()
+                    try {
+                        $client.ReceiveTimeout = 3000
+                        $stream = $client.GetStream()
+                        $buffer = [byte[]]::new(8192)
+                        $read = 0
+                        do {
+                            $count = $stream.Read($buffer, $read, $buffer.Length - $read)
+                            $read += $count
+                        } while ($count -gt 0 -and $read -lt $buffer.Length -and
+                            -not [Text.Encoding]::ASCII.GetString($buffer, 0, $read).Contains("`r`n`r`n"))
+                        $head = [Text.Encoding]::ASCII.GetBytes(
+                            "HTTP/1.1 200 OK`r`nContent-Type: text/plain`r`nContent-Length: $($content.Length)`r`nConnection: close`r`n`r`n")
+                        $stream.Write($head, 0, $head.Length)
+                        $stream.Write($content, 0, $content.Length)
+                    }
+                    catch { }
+                    finally { $client.Close() }
+                }
+            }
+        }
+        $ready = Wait-RosetunCondition {
+            $zone.Job.State -ne 'Running' -or (@(Receive-Job -Job $zone.Job -Keep) -contains 'ready')
+        } -TimeoutSeconds 30
+        if (-not $ready -or $zone.Job.State -ne 'Running') {
+            $reason = try { Receive-Job -Job $zone.Job -Keep 2>&1 | Out-String } catch { "$_" }
+            throw "The name zone did not start: $reason"
+        }
+        Write-Host "Name zone rosetun.test on $($zone.DnsAddress):53, subscription at $($zone.SubscriptionUrl)"
+        return $zone
+    }
+    catch {
+        Stop-RosetunNameZone -Zone $zone
+        throw
+    }
+}
+
+function Stop-RosetunNameZone {
+    param([Parameter(Mandatory)]$Zone)
+    if ($Zone.Job) {
+        Stop-Job -Job $Zone.Job -ErrorAction SilentlyContinue
+        Remove-Job -Job $Zone.Job -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($name in $Zone.RuleNames) {
+        Remove-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
+    }
+    if ($Zone.AddedAddress) {
+        Remove-NetIPAddress -IPAddress $Zone.AddedAddress -Confirm:$false -ErrorAction SilentlyContinue
+    }
+}
+
+function Set-RosetunGuestResolver {
+    # Points the guest's physical adapter at one IPv4 DNS server and returns
+    # what to restore.
+    param([Parameter(Mandatory)][string]$Server)
+    $index = (Get-RosetunEgressInterface).Index
+    Invoke-RosetunGuest -ScriptBlock {
+        param($index, $server)
+        $saved = @((Get-DnsClientServerAddress -InterfaceIndex $index -AddressFamily IPv4).ServerAddresses)
+        Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses $server
+        Clear-DnsClientCache
+        [pscustomobject]@{ Index = $index; Servers = $saved }
+    } -ArgumentList $index, $Server
+}
+
+function Restore-RosetunGuestResolver {
+    # Back to the DHCP servers, or to the static ones the adapter had.
+    param([Parameter(Mandatory)]$Saved)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($index, [string[]]$servers)
+        Set-DnsClientServerAddress -InterfaceIndex $index -ResetServerAddresses
+        $now = @((Get-DnsClientServerAddress -InterfaceIndex $index -AddressFamily IPv4).ServerAddresses)
+        if ($servers.Count -gt 0 -and (Compare-Object -ReferenceObject $now -DifferenceObject $servers)) {
+            Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses $servers
+        }
+        Clear-DnsClientCache
+    } -ArgumentList $Saved.Index, ([string[]]@($Saved.Servers))
+}
+
+function Test-RosetunGuestSystemResolver {
+    # True when the system resolver (the Dnscache service) answers $Name.
+    param([Parameter(Mandatory)][string]$Name)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($name)
+        Clear-DnsClientCache
+        try {
+            @(Resolve-DnsName -Name $name -Type A -DnsOnly -QuickTimeout -ErrorAction Stop |
+                Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.IPAddress }).Count -gt 0
+        }
+        catch { $false }
+    } -ArgumentList $Name
+}
+
+function Test-RosetunGuestNslookup {
+    # True when nslookup, which sends its own queries, gets an answer for $Name.
+    param([Parameter(Mandatory)][string]$Name)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($name)
+        $output = (& nslookup.exe -timeout=2 -retry=1 $name 2>&1 | ForEach-Object { "$_" }) -join "`n"
+        $global:LASTEXITCODE = 0
+        $output -match "Name:\s+$([regex]::Escape($name))"
+    } -ArgumentList $Name
+}
+
 Export-ModuleMember -Function *-Rosetun*

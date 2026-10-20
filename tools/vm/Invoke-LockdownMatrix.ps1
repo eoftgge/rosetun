@@ -40,6 +40,8 @@ $lockdownKeys = [ordered]@{
     Inbound  = 'e599db5e-6aeb-4e4d-aa51-4314f1b3076c'
     Dhcp     = '98419911-30f0-4f71-9178-263b40bc7f6e'
     Cli      = '729b156a-c411-4f01-b7d9-a789c94e992b'
+    # The service's DNS permit (IPv4, UDP), present whenever Lockdown is.
+    ServiceDns = 'cb0f8c4b-4967-4626-a493-a4e32369e6f5'
     Lan      = 'ce01436a-65d3-48e9-b921-e0a167b05f7b'
 }
 $probeProviderKey = '8c9a1588-cf36-44b8-80d8-987a6b81b4d2'
@@ -144,7 +146,7 @@ function Test-LockdownInstalled {
     param([switch]$Lan)
     $objects = Get-LockdownObjects
     $objects.Provider -and $objects.Sublayer -and $objects.Outbound -and $objects.Inbound -and
-        $objects.Dhcp -and $objects.Cli -and $objects.Lan -eq [bool]$Lan
+        $objects.Dhcp -and $objects.Cli -and $objects.ServiceDns -and $objects.Lan -eq [bool]$Lan
 }
 
 function Test-LockdownAbsent {
@@ -272,6 +274,49 @@ function Remove-TestService {
     }
 }
 
+function New-GuestRequestByName {
+    # request.json with the node as node.rosetun.test. `allow_lan` matches
+    # Lockdown's, since a connect moves Lockdown's LAN set to the request's.
+    param([Parameter(Mandatory)][bool]$AllowLan)
+    $file = if ($AllowLan) { 'request-by-name-lan.json' } else { 'request-by-name.json' }
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $file, $allowLan)
+        $request = Get-Content -Raw -LiteralPath "$dir\request.json" | ConvertFrom-Json
+        $request.node.server = 'node.rosetun.test'
+        $request.settings | Add-Member -NotePropertyName allow_lan -NotePropertyValue $allowLan -Force
+        [IO.File]::WriteAllText("$dir\$file", ($request | ConvertTo-Json -Depth 20))
+    } -ArgumentList $guestDir, $file, $AllowLan
+    $file
+}
+
+function Test-ByName {
+    # A connect, a server check and a subscription update by name; under
+    # Lockdown also that names stay closed to everything but Rosetun.
+    param(
+        [Parameter(Mandatory)][string]$Scenario,
+        [Parameter(Mandatory)][string]$RequestName,
+        [switch]$Lockdown
+    )
+    $mark = Get-HelperLogLength
+    $connect = Connect-RosetunTunnel -RequestName $RequestName -Quiet
+    Test-Step $Scenario 'connect to node.rosetun.test succeeds' { $connect.ExitCode -eq 0 } -Note $connect.Output
+    Disconnect-RosetunTunnel | Out-Null
+    $probe = Invoke-RosetunProbe -RequestName $RequestName
+    Test-Step $Scenario 'server check of node.rosetun.test works' { $probe.Output -match '(?m)^works' } -Note $probe.Output
+    $update = Invoke-RosetunCli -Quiet 'sub' 'update' $subscriptionId
+    Test-Step $Scenario 'rosetun sub update from sub.rosetun.test succeeds' { $update.ExitCode -eq 0 } -Note $update.Output
+    if ($Lockdown) {
+        Test-Step $Scenario 'the system resolver (Dnscache) gets no answer' {
+            -not (Test-RosetunGuestSystemResolver 'node.rosetun.test')
+        }
+        Test-Step $Scenario 'nslookup gets no answer' { -not (Test-RosetunGuestNslookup 'node.rosetun.test') }
+        Test-Step $Scenario 'direct egress still closed' { -not (Test-RosetunDirectEgress) }
+    }
+    Test-Step $Scenario "no 'failed to resolve the VPN endpoint' in helper.log" {
+        (Get-HelperLogSince $mark) -notmatch 'failed to resolve the VPN endpoint'
+    }
+}
+
 function Test-BootClosed {
     # Reads the boot check of the current boot: before sign-in, a lease and a
     # route, and no attempt that reached the internet.
@@ -297,6 +342,9 @@ $serviceInstalled = $false
 $bootTaskRegistered = $false
 $bootRecovery = $null
 $ipv6Neighbors = [System.Collections.Generic.List[object]]::new()
+$zone = $null
+$guestResolver = $null
+$subscriptionId = $null
 try {
     if ($Build) {
         Write-Host 'Building...'
@@ -332,6 +380,11 @@ try {
     $hostLan = Start-RosetunLanListener
     $guestListenerPort = Start-GuestListener
     $gateway = Get-GuestGateway
+    # Names for scenarios 1 to 3: the guest's adapter asks the host's zone.
+    $zone = Start-RosetunNameZone -SubscriptionBody "ss://aes-256-gcm:rosetun-test@192.0.2.10:8388#Lockdown%20matrix`n"
+    $requestByName = New-GuestRequestByName -AllowLan $false
+    $requestByNameLan = New-GuestRequestByName -AllowLan $true
+    $guestResolver = Set-RosetunGuestResolver -Server $zone.DnsAddress
 
     # 1. Lockdown off: nothing of it exists, and the probes work.
     Test-Step '1 off' 'no Lockdown objects' { Test-LockdownAbsent } -Note (Format-Objects (Get-LockdownObjects))
@@ -349,6 +402,15 @@ try {
     Test-Step '1 off' 'curl at the CLI path works' { Test-CliPathEgress }
     $gatewayDns = Test-RosetunDirectDns -Server $gateway
     Add-Info '1 off' "DNS to the gateway $gateway" "answers: $gatewayDns"
+    Test-Step '1 off' 'the system resolver answers node.rosetun.test' { Test-RosetunGuestSystemResolver 'node.rosetun.test' }
+    if ($results[$results.Count - 1].Result -eq 'FAIL') {
+        throw "The guest cannot resolve rosetun.test through $($zone.DnsAddress), so every check by name would be meaningless."
+    }
+    $add = Invoke-RosetunCli -Quiet 'sub' 'add' $zone.SubscriptionUrl '--name' 'Lockdown matrix'
+    if ($add.Output -match '(?m)^(\S+): Lockdown matrix \|') { $subscriptionId = $Matches[1] }
+    Test-Step '1 off' 'rosetun sub add from sub.rosetun.test succeeds' { $add.ExitCode -eq 0 -and $subscriptionId } -Note $add.Output
+    if (-not $subscriptionId) { throw 'The subscription by name could not be added.' }
+    Test-ByName '1 off' $requestByName
 
     # 2. On while disconnected.
     $on = Invoke-Lockdown on
@@ -365,6 +427,7 @@ try {
     Test-Step '2 on, disconnected' 'server check works' { $probe.Output -match '(?m)^works' } -Note $probe.Output
     Test-Step '2 on, disconnected' 'server check left no permit behind' { -not (Test-RosetunGuestWfpKey $probeProviderKey) }
     Test-Step '2 on, disconnected' 'direct egress still closed after the check' { -not (Test-RosetunDirectEgress) }
+    Test-ByName '2 on, disconnected' $requestByName -Lockdown
 
     # 3. Inbound and LAN.
     Test-Step '3 inbound' 'the host cannot reach a guest listener' { -not (Test-InboundFromHost $guestListenerPort) }
@@ -382,10 +445,16 @@ try {
         Add-Info '3 lan on' 'DNS to the gateway' 'not checked: the gateway did not answer DNS without Lockdown either'
     }
     Test-Step '3 lan on' 'direct egress closed' { -not (Test-RosetunDirectEgress) }
+    # The zone's address is private like a router's: Rosetun's DNS permits
+    # must outrank Lockdown's private-DNS block.
+    Test-ByName '3 lan on' $requestByNameLan -Lockdown
     $lanOff = Invoke-RosetunCli -Quiet 'lan' 'off'
     Test-Step '3 lan off' 'rosetun lan off updates Lockdown' { $lanOff.ExitCode -eq 0 } -Note $lanOff.Output
     Test-Step '3 lan off' 'LAN filters gone' { Test-LockdownInstalled } -Note (Format-Objects (Get-LockdownObjects))
     Test-Step '3 lan off' 'the host cannot reach a guest listener' { -not (Test-InboundFromHost $guestListenerPort) }
+    # The rest checks the tunnel by names the zone does not know.
+    Restore-RosetunGuestResolver -Saved $guestResolver
+    $guestResolver = $null
 
     # 4. Connect under Lockdown, then disconnect.
     $connect = Connect-RosetunTunnel -Quiet
@@ -566,6 +635,17 @@ finally {
     # 11. Whatever happened: no Lockdown, the console helper back as before.
     # The session may have died with the guest in a power cut.
     try { Wait-RosetunGuest } catch { Write-Warning "$_" }
+    if ($guestResolver) {
+        try { Restore-RosetunGuestResolver -Saved $guestResolver }
+        catch { Write-Warning "Could not restore the guest's DNS servers: $_" }
+    }
+    if ($subscriptionId) {
+        try { Invoke-RosetunCli -Quiet 'sub' 'remove' $subscriptionId | Out-Null }
+        catch { Write-Warning "Could not remove the matrix subscription ${subscriptionId}: $_" }
+    }
+    if ($zone) {
+        try { Stop-RosetunNameZone -Zone $zone } catch { Write-Warning "Could not stop the name zone: $_" }
+    }
     if ($bootRecovery) {
         try { Restore-RosetunBootRecovery -Saved $bootRecovery }
         catch { Write-Warning "Could not restore the guest's boot recovery settings: $_" }
