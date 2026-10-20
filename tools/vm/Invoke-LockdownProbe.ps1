@@ -305,6 +305,7 @@ $aboveWeight = Format-Weight ([Math]::Min($lockdownValue + 0x2000, 0xFFFE))
 $belowWeight = Format-Weight ([Math]::Max($lockdownValue - 0x4000, 0x1000))
 
 $bootTaskRegistered = $false
+$bootRecovery = $null
 $ipv6Neighbors = [System.Collections.Generic.List[object]]::new()
 $nodeStarted = $false
 try {
@@ -432,6 +433,7 @@ try {
         Invoke-RebootPass -Scenario 'reboot, persistent' -Lockdown persistent
         Invoke-RebootPass -Scenario 'reboot, persistent + boot-time' -Lockdown boottime
         if ($PowerCut) {
+            $bootRecovery = Disable-RosetunBootRecovery
             $longest = ($PowerCutDelaySeconds | Measure-Object -Maximum).Maximum
             foreach ($delay in ($PowerCutDelaySeconds | Sort-Object)) {
                 $survived = Invoke-PowerCutPass -Delay $delay
@@ -468,7 +470,13 @@ catch {
     Test-Step 'run' 'completes without an error' { $false } -Note "$_"
 }
 finally {
-    # 9. Cleanup, whatever happened above.
+    # 9. Cleanup, whatever happened above. The session may have died with
+    # the guest in a power cut.
+    try { Wait-RosetunGuest } catch { Write-Warning "$_" }
+    if ($bootRecovery) {
+        try { Restore-RosetunBootRecovery -Saved $bootRecovery }
+        catch { Write-Warning "Could not restore the guest's boot recovery settings: $_" }
+    }
     try {
         Invoke-RosetunGuest -ScriptBlock {
             Get-Process -Name lockdown_probe -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue

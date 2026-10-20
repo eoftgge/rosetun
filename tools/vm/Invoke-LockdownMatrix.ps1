@@ -94,7 +94,8 @@ function Get-HelperLogSince {
         $stream = [IO.File]::Open("$dir\helper.log", 'Open', 'Read', 'ReadWrite, Delete')
         try {
             if ($offset -le $stream.Length) { $stream.Position = $offset }
-            [IO.StreamReader]::new($stream).ReadToEnd()
+            # The console helper colours its log; the codes split `name=value`.
+            [IO.StreamReader]::new($stream).ReadToEnd() -replace "\x1b\[[0-9;]*m", ''
         }
         finally { $stream.Dispose() }
     } -ArgumentList $guestDir, $Offset
@@ -294,6 +295,7 @@ $hostLan = $null
 $guestListenerPort = $null
 $serviceInstalled = $false
 $bootTaskRegistered = $false
+$bootRecovery = $null
 $ipv6Neighbors = [System.Collections.Generic.List[object]]::new()
 try {
     if ($Build) {
@@ -453,6 +455,7 @@ try {
         Test-Step '6 reboot, on' 'closed again after Disconnect' { -not (Test-RosetunDirectEgress) }
 
         # 7. Power cuts right after a change: the flush must make it durable.
+        $bootRecovery = Disable-RosetunBootRecovery
         for ($pass = 1; $pass -le $PowerCutRepeats; $pass++) {
             $on = Invoke-Lockdown on
             Start-Sleep -Seconds $PowerCutDelaySeconds
@@ -559,6 +562,12 @@ catch {
 }
 finally {
     # 11. Whatever happened: no Lockdown, the console helper back as before.
+    # The session may have died with the guest in a power cut.
+    try { Wait-RosetunGuest } catch { Write-Warning "$_" }
+    if ($bootRecovery) {
+        try { Restore-RosetunBootRecovery -Saved $bootRecovery }
+        catch { Write-Warning "Could not restore the guest's boot recovery settings: $_" }
+    }
     try { Disconnect-RosetunTunnel | Out-Null } catch { }
     try { Stop-GuestListener } catch { Write-Warning "Could not stop the guest listener: $_" }
     if ($hostLan) {

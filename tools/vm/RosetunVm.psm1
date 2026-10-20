@@ -1879,19 +1879,99 @@ function Restart-RosetunGuest {
         Disconnect-RosetunVm
     }
     # Connecting too early would reach the guest before it went down.
-    $deadline = (Get-Date).AddMinutes(5)
+    $back = {
+        $deadline = (Get-Date).AddMinutes(5)
+        while ((Get-Date) -lt $deadline) {
+            try {
+                if ((Get-RosetunGuestBootTime) -ne $before) { return $true }
+            }
+            catch {
+                try { Disconnect-RosetunVm } catch { }
+            }
+            Start-Sleep -Seconds 5
+        }
+        $false
+    }
+    if (& $back) { return }
+    if (-not $PowerCut) {
+        throw 'The guest did not come back within 5 minutes.'
+    }
+    # Several cuts in a row once left Windows stuck in a crash at boot; a
+    # second cold start brought it back.
+    Write-Warning 'The guest did not come back within 5 minutes; turning it off and on once more.'
+    Disconnect-RosetunVm
+    Stop-VM -Name $script:Config.VmName -TurnOff -Force
+    Start-VM -Name $script:Config.VmName
+    if (-not (& $back)) {
+        throw 'The guest did not come back within 5 minutes, also after a second cold start.'
+    }
+}
+
+function Wait-RosetunGuest {
+    # Drops a session that may have died with the guest, starts a VM that is
+    # off and waits until the guest answers again.
+    param([int]$TimeoutSeconds = 300)
+    try { Disconnect-RosetunVm } catch { }
+    if ((Get-VM -Name $script:Config.VmName).State -ne 'Running') {
+        Start-VM -Name $script:Config.VmName
+    }
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ($true) {
         try {
-            if ((Get-RosetunGuestBootTime) -ne $before) { return }
+            Invoke-RosetunGuest -ScriptBlock { $true } | Out-Null
+            return
         }
         catch {
             try { Disconnect-RosetunVm } catch { }
-        }
-        if ((Get-Date) -gt $deadline) {
-            throw 'The guest did not come back within 5 minutes.'
+            if ((Get-Date) -gt $deadline) {
+                throw "The guest did not answer within $TimeoutSeconds s: $_"
+            }
         }
         Start-Sleep -Seconds 5
     }
+}
+
+function Disable-RosetunBootRecovery {
+    # After several power cuts in a row Windows stops at a recovery screen
+    # instead of booting. Returns the previous values for
+    # Restore-RosetunBootRecovery; an absent value is $null.
+    Invoke-RosetunGuest -ScriptBlock {
+        $current = (& bcdedit.exe /enum '{current}' | Out-String) -split "`r?`n"
+        $saved = @{}
+        foreach ($name in 'bootstatuspolicy', 'recoveryenabled') {
+            $line = $current | Where-Object { $_ -match "^$name\s+(\S+)" } | Select-Object -First 1
+            $saved[$name] = if ($line -and $line -match "^$name\s+(\S+)") { $Matches[1] } else { $null }
+        }
+        foreach ($pair in @(@('bootstatuspolicy', 'ignoreallfailures'), @('recoveryenabled', 'no'))) {
+            & bcdedit.exe /set '{current}' $pair[0] $pair[1] | Out-Null
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            if ($exitCode -ne 0) { throw "bcdedit /set $($pair[0]) failed with exit code $exitCode." }
+        }
+        [pscustomobject]$saved
+    }
+}
+
+function Restore-RosetunBootRecovery {
+    param([Parameter(Mandatory)]$Saved)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($policy, $recovery)
+        # bcdedit prints booleans in the display language.
+        $recovery = switch -Regex ($recovery) {
+            '^(yes|\u0434\u0430)$' { 'yes' }
+            '^(no|\u043d\u0435\u0442)$' { 'no' }
+            default { $recovery }
+        }
+        foreach ($pair in @(@('bootstatuspolicy', $policy), @('recoveryenabled', $recovery))) {
+            if ($pair[1]) {
+                & bcdedit.exe /set '{current}' $pair[0] $pair[1] | Out-Null
+            }
+            else {
+                & bcdedit.exe /deletevalue '{current}' $pair[0] | Out-Null
+            }
+        }
+        $global:LASTEXITCODE = 0
+    } -ArgumentList $Saved.bootstatuspolicy, $Saved.recoveryenabled
 }
 
 function Register-RosetunBootCheck {
