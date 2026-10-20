@@ -1091,6 +1091,7 @@ mod tests {
         use rosetun_config::{ConnectionNetwork, ConnectionRoute, ExitId, LiveConnection};
 
         let connection = LiveConnection {
+            id: "0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f".to_owned(),
             start_unix_ms: 1,
             end_unix_ms: Some(2),
             process: Some(r"C:\Program Files\Example\app.exe".to_owned()),
@@ -1110,7 +1111,7 @@ mod tests {
         );
 
         assert!(debug.contains("download: 7"));
-        for secret in ["example.com", "Example", "443", "work-exit"] {
+        for secret in ["example.com", "Example", "443", "work-exit", "0d5c1f2e"] {
             assert!(!debug.contains(secret), "{secret} in {debug}");
         }
     }

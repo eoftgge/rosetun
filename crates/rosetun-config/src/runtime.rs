@@ -111,6 +111,10 @@ pub enum ConnectionRoute {
 /// it is the user's browsing history).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiveConnection {
+    /// The engine's own id for the connection (a random UUID in sing-box, not
+    /// an address), used to select and close it. Empty when the engine's id
+    /// is too long to be closed.
+    pub id: String,
     pub start_unix_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_unix_ms: Option<u64>,

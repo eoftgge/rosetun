@@ -100,6 +100,7 @@ mod tests {
     #[test]
     fn a_line_has_every_column_and_no_control_characters() {
         let connection = LiveConnection {
+            id: "0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f".to_owned(),
             start_unix_ms: 1_000,
             end_unix_ms: Some(6_500),
             process: Some("C:\\Program Files\\Example\\app.exe".to_owned()),

@@ -85,6 +85,9 @@ pub enum EngineRoute {
     Other,
 }
 
+/// Longest connection id the helper passes on or the engine closes.
+pub const MAX_CONNECTION_ID_CHARS: usize = 64;
+
 /// One connection the engine carries now. Its `Debug` shows no destination or
 /// program: the list is the user's browsing history.
 #[derive(Clone, PartialEq, Eq)]

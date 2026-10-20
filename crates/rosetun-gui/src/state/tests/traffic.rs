@@ -85,6 +85,7 @@ fn live(
     route: rosetun_config::ConnectionRoute,
 ) -> rosetun_config::LiveConnection {
     rosetun_config::LiveConnection {
+        id: format!("{host}-id"),
         start_unix_ms: 1_000,
         end_unix_ms: None,
         process: process.map(str::to_owned),

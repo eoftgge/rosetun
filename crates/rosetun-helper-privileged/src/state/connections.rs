@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{ConnectionRoute, ExitId, LiveConnection};
-use rosetun_engine::{EngineConnection, EngineRoute};
+use rosetun_engine::{EngineConnection, EngineRoute, MAX_CONNECTION_ID_CHARS};
 use rosetun_ipc::{
     MAX_ACTIVE_CONNECTIONS, MAX_CLOSED_CONNECTIONS, MAX_CONNECTION_HOST_CHARS,
     MAX_CONNECTION_PROCESS_CHARS,
@@ -147,7 +147,13 @@ impl Translation {
                         }),
                     EngineRoute::Other => ConnectionRoute::Other,
                 };
+                let id = if connection.id.chars().count() <= MAX_CONNECTION_ID_CHARS {
+                    connection.id.clone()
+                } else {
+                    String::new()
+                };
                 let entry = LiveConnection {
+                    id,
                     start_unix_ms: connection.start_unix_ms,
                     end_unix_ms: None,
                     process: connection
@@ -236,6 +242,27 @@ mod tests {
             .map(|connection| (connection.start_unix_ms, connection.end_unix_ms))
             .collect();
         assert_eq!(closed, [(2, Some(30)), (3, Some(20)), (1, Some(20))]);
+    }
+
+    #[test]
+    fn a_closed_connection_keeps_the_engine_id() {
+        let mut book = ConnectionBook::default();
+        book.record(entries(&[("0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f", 1)]), 10);
+        let (active, _) = book.snapshot();
+        assert_eq!(active[0].id, "0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f");
+
+        book.record(entries(&[]), 20);
+        let (_, closed) = book.snapshot();
+        assert_eq!(closed[0].id, "0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f");
+    }
+
+    #[test]
+    fn an_id_too_long_to_close_is_not_passed_on() {
+        let long = "i".repeat(MAX_CONNECTION_ID_CHARS + 1);
+        let translated = entries(&[(&long, 1), (&long[1..], 2)]);
+        assert_eq!(translated[0].0, long, "the book still tells it apart");
+        assert_eq!(translated[0].1.id, "");
+        assert_eq!(translated[1].1.id, long[1..]);
     }
 
     #[test]
@@ -338,6 +365,7 @@ mod tests {
         );
 
         let mut largest = entry.clone();
+        largest.id = "\u{10348}".repeat(MAX_CONNECTION_ID_CHARS);
         largest.route = ConnectionRoute::Exit(ExitId::new("e".repeat(MAX_EXIT_ID_BYTES)));
         largest.start_unix_ms = u64::MAX;
         largest.end_unix_ms = Some(u64::MAX);

@@ -1283,6 +1283,7 @@ fn connections_are_collected_only_while_read_and_cleared_on_disconnect() {
     let active = wait_for_active(&helper, &owner);
     assert!(asked.load(Ordering::Acquire) > 0);
     assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, "connection");
     assert_eq!(active[0].host, "example.com");
     assert_eq!(active[0].route, rosetun_config::ConnectionRoute::Proxy);
 
