@@ -1988,7 +1988,11 @@ function Disable-RosetunBootRecovery {
     # After several power cuts in a row Windows stops at a recovery screen
     # instead of booting. Returns the previous values for
     # Restore-RosetunBootRecovery; an absent value is $null.
-    Invoke-RosetunGuest -ScriptBlock {
+    # The BCD store is a registry hive with the same lazy flush as BFE's
+    # policy: a power cut soon after bcdedit can lose the change, and the guest
+    # still stopped at Automatic Repair. A clean restart writes it to disk;
+    # the caller starts the helper again afterwards.
+    $saved = Invoke-RosetunGuest -ScriptBlock {
         $current = (& bcdedit.exe /enum '{current}' | Out-String) -split "`r?`n"
         $saved = @{}
         foreach ($name in 'bootstatuspolicy', 'recoveryenabled') {
@@ -2003,6 +2007,8 @@ function Disable-RosetunBootRecovery {
         }
         [pscustomobject]$saved
     }
+    Restart-RosetunGuest -Label 'boot recovery off'
+    $saved
 }
 
 function Restore-RosetunBootRecovery {

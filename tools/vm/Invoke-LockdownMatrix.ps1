@@ -456,6 +456,8 @@ try {
 
         # 7. Power cuts right after a change: the flush must make it durable.
         $bootRecovery = Disable-RosetunBootRecovery
+        Restore-RosetunGuestLease
+        Start-RosetunHelper
         for ($pass = 1; $pass -le $PowerCutRepeats; $pass++) {
             $on = Invoke-Lockdown on
             Start-Sleep -Seconds $PowerCutDelaySeconds
