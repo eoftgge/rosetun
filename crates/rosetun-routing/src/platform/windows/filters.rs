@@ -151,6 +151,19 @@ pub(super) fn add_rule(
                 port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
             ]);
         }
+        // Lockdown's DNS permits for Rosetun's own programs.
+        [
+            Condition::Application(binary),
+            Condition::Protocol(protocol),
+            Condition::RemotePort(port),
+        ] => {
+            app_id = AppIdBlob::from_path(binary)?;
+            conditions.extend([
+                application_condition(&app_id),
+                protocol_condition(*protocol),
+                port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
+            ]);
+        }
         [
             Condition::RemoteSubnet(subnet),
             Condition::Protocol(protocol),
