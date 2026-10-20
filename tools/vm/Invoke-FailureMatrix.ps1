@@ -1828,7 +1828,8 @@ Test-Step 'connections' "no service log names the closed download's $longTransfe
     $namedIn.Count -eq 0
 }
 $closeLogged = @(Find-RosetunLogText 'closed a connection on request' -Anywhere)
-$namedIn = if ($closedId) { @(Find-RosetunLogText $closedId -Anywhere) } else { @() }
+# An if statement unrolls an empty array to $null; wrap the whole statement.
+$namedIn = @(if ($closedId) { Find-RosetunLogText $closedId -Anywhere })
 Test-Step 'connections' 'the close is logged without the connection id' `
     -Note "logged in: $($closeLogged -join ', '); id in: $($namedIn -join ', ')" {
     $closedId -and $closeLogged.Count -gt 0 -and $namedIn.Count -eq 0

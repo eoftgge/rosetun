@@ -1586,10 +1586,25 @@ function Stop-RosetunEgressWatch {
                 }
                 Start-Sleep -Milliseconds 200
             }
-            $counts = (Get-Content -Path $path -ErrorAction SilentlyContinue) -split ' '
+            # Move-Item -Force deletes the old counts before it moves the new ones
+            # in, so a stop in between leaves only the temporary file; a process
+            # that is still exiting can also hold the file for a moment.
+            $counts = @()
+            $deadline = (Get-Date).AddSeconds(3)
+            while ($counts.Count -lt 2) {
+                foreach ($candidate in $path, "$path.tmp") {
+                    try { $text = [IO.File]::ReadAllText($candidate) }
+                    catch { continue }
+                    $counts = @($text.Trim() -split ' ')
+                    if ($counts.Count -ge 2) { break }
+                }
+                if ($counts.Count -ge 2 -or (Get-Date) -gt $deadline) { break }
+                Start-Sleep -Milliseconds 200
+            }
             if ($counts.Count -lt 2) {
                 $failure = Get-Content -Path "$path.error" -Raw -ErrorAction SilentlyContinue
                 if ($failure) { Write-Warning "The egress watch failed: $failure" }
+                else { Write-Warning 'The egress watch left no readable counts.' }
                 return [pscustomobject]@{ Probes = 0; Leaks = 0 }
             }
             [pscustomobject]@{ Probes = [int]$counts[0]; Leaks = [int]$counts[1] }
