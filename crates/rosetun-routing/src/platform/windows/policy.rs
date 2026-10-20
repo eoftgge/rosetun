@@ -288,6 +288,19 @@ pub(super) mod tests {
         port: u16,
         luid: u64,
     ) -> Action {
+        decide_for(None, layer, rules, destination, protocol, port, luid)
+    }
+
+    /// `decide_at` for a connection made by `application`.
+    pub(in crate::platform::windows) fn decide_for(
+        application: Option<&Path>,
+        layer: Layer,
+        rules: &[&Rule],
+        destination: [u8; 4],
+        protocol: u8,
+        port: u16,
+        luid: u64,
+    ) -> Action {
         rules
             .iter()
             .filter(|rule| {
@@ -302,6 +315,7 @@ pub(super) mod tests {
                         Condition::Protocol(value) => *value == protocol,
                         Condition::RemotePort(value) => *value == port,
                         Condition::LocalInterface(value) => *value == luid,
+                        Condition::Application(path) => application == Some(path.as_path()),
                         _ => false,
                     })
             })

@@ -25,7 +25,7 @@ use windows_sys::core::GUID;
 
 use super::filters::{self, AppIdBlob, Placement, blob_bytes};
 use super::policy::{
-    AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, Condition, LAN_SUBNETS, Rule, lan_permit,
+    AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, Condition, DNS_PROTOCOLS, LAN_SUBNETS, Rule, lan_permit,
     private_dns_blocks, probe_authorization,
 };
 use super::session::{Engine, display_data, empty_blob, wfp_error, wide};
@@ -61,6 +61,37 @@ mod keys {
     pub(super) const OUTBOUND_CLI: [u128; 2] = [
         0x729b156a_c411_4f01_b7d9_a789c94e992b,
         0x9c72b60d_eece_47de_8f81_e48c081cee74,
+    ];
+    /// DNS permits, `[IPv4, IPv6]`, each `[UDP, TCP]`.
+    pub(super) const OUTBOUND_SERVICE_DNS: [[u128; 2]; 2] = [
+        [
+            0xcb0f8c4b_4967_4626_a493_a4e32369e6f5,
+            0xeb0b437f_3395_4d20_83dd_040fdc9d5b20,
+        ],
+        [
+            0x7c41059f_3c0d_40e5_9eda_7a04fb6f8c6d,
+            0x9bb140bf_4073_4561_a128_d84f0e75ee13,
+        ],
+    ];
+    pub(super) const OUTBOUND_GUI_DNS: [[u128; 2]; 2] = [
+        [
+            0xfba98c1b_e4b7_4861_b8d0_4257efdccb93,
+            0xeea65519_d105_4ea7_b4dc_20e2e22b0c8e,
+        ],
+        [
+            0x208cc620_16cc_4de1_ac55_7711bb1ef316,
+            0x2c602b3d_4afc_4ef5_8330_37bfc8d18beb,
+        ],
+    ];
+    pub(super) const OUTBOUND_CLI_DNS: [[u128; 2]; 2] = [
+        [
+            0x982cc554_9f41_4c9a_833f_87cc5149725f,
+            0x85ef3077_f8fd_4e3b_b45f_a7ce7341f61a,
+        ],
+        [
+            0xa0f1fdcf_267e_4792_bda1_bda1941c3b8a,
+            0xd49b219d_aa46_480f_8f7e_d82f5df6cf78,
+        ],
     ];
     /// In `LAN_SUBNETS` order.
     pub(super) const OUTBOUND_LAN: [u128; 6] = [
@@ -143,6 +174,10 @@ mod keys {
 const REQUESTED_SUBLAYER_WEIGHT: u16 = 0xD000;
 /// Below every filter the session adds to the Lockdown sublayer.
 const BLOCK_WEIGHT: u8 = 0;
+/// Rosetun's own DNS queries while no tunnel is up. Above the private-DNS
+/// block (3), so the router's resolver answers them with "Local network" on,
+/// and apart from the tunnel permit (4).
+const RESOLVER_WEIGHT: u8 = 5;
 const FAMILIES: [AddressFamily; 2] = [AddressFamily::Ipv4, AddressFamily::Ipv6];
 
 /// What a filter belongs to, for `LockdownStatus::complete`.
@@ -180,10 +215,13 @@ impl LockdownFilter {
     }
 
     fn application(&self) -> Option<&Path> {
-        match self.rule.conditions.as_slice() {
-            [Condition::Application(path)] => Some(path),
-            _ => None,
-        }
+        self.rule
+            .conditions
+            .iter()
+            .find_map(|condition| match condition {
+                Condition::Application(path) => Some(path.as_path()),
+                _ => None,
+            })
     }
 }
 
@@ -292,6 +330,43 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
                 ));
             }
         }
+        for (keys, name, path) in [
+            (
+                keys::OUTBOUND_SERVICE_DNS,
+                "Rosetun Lockdown: permit the Rosetun service's DNS queries",
+                &apps.service,
+            ),
+            (
+                keys::OUTBOUND_GUI_DNS,
+                "Rosetun Lockdown: permit Rosetun's DNS queries",
+                &apps.gui,
+            ),
+            (
+                keys::OUTBOUND_CLI_DNS,
+                "Rosetun Lockdown: permit the Rosetun CLI's DNS queries",
+                &apps.cli,
+            ),
+        ] {
+            if let Some(path) = path {
+                for (key, protocol) in keys[index].into_iter().zip(DNS_PROTOCOLS) {
+                    set.push(filter(
+                        key,
+                        name,
+                        Rule::allow(
+                            family,
+                            vec![
+                                Condition::Application(path.clone()),
+                                Condition::Protocol(protocol),
+                                Condition::RemotePort(53),
+                            ],
+                            RESOLVER_WEIGHT,
+                        ),
+                        false,
+                        Part::App,
+                    ));
+                }
+            }
+        }
     }
 
     // Without DHCP every boot under Lockdown lost the lease (study, run 3).
@@ -369,6 +444,7 @@ fn every_filter() -> Vec<LockdownFilter> {
         &LockdownApps {
             gui: Some(PathBuf::new()),
             cli: Some(PathBuf::new()),
+            service: Some(PathBuf::new()),
         },
     )
 }
@@ -761,10 +837,11 @@ mod tests {
 
     use windows_sys::core::GUID;
 
-    use super::{BLOCK_WEIGHT, LockdownFilter, Part, every_filter, filter_set};
+    use super::{BLOCK_WEIGHT, LockdownFilter, Part, RESOLVER_WEIGHT, every_filter, filter_set};
     use crate::platform::windows::policy::{
         self, Action, AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, BootstrapPolicy, Condition, Layer,
-        Rule, tests::decide_at,
+        PRIVATE_DNS_BLOCK_WEIGHT, Rule, TUNNEL_WEIGHT,
+        tests::{decide_at, decide_for},
     };
     use crate::{LockdownApps, ProtectionScope, RoutingPlan};
 
@@ -772,6 +849,9 @@ mod tests {
         LockdownApps {
             gui: Some(PathBuf::from(r"C:\Program Files\Rosetun\rosetun-gui.exe")),
             cli: Some(PathBuf::from(r"C:\Program Files\Rosetun\rosetun.exe")),
+            service: Some(PathBuf::from(
+                r"C:\Program Files\Rosetun\rosetun-helper-privileged.exe",
+            )),
         }
     }
 
@@ -787,7 +867,7 @@ mod tests {
         let all = every_filter();
         let keys = all.iter().map(|filter| filter.key).collect::<HashSet<_>>();
         assert_eq!(keys.len(), all.len());
-        assert_eq!(all.len(), 48);
+        assert_eq!(all.len(), 60);
         for object in [
             super::PROVIDER_KEY,
             super::SUBLAYER_KEY,
@@ -846,7 +926,7 @@ mod tests {
             .iter()
             .filter(|filter| filter.part == Part::App)
             .collect::<Vec<_>>();
-        assert_eq!(programs.len(), 4);
+        assert_eq!(programs.len(), 16);
         for filter in programs {
             assert!(!filter.boottime);
             assert_eq!(filter.rule.layer, Layer::Connect);
@@ -860,12 +940,57 @@ mod tests {
                 ..apps()
             },
         );
+        // The CLI's two permits and four DNS permits, the service's four.
         assert_eq!(
             only_cli
                 .iter()
                 .filter(|filter| filter.part == Part::App)
                 .count(),
-            2
+            10
+        );
+    }
+
+    #[test]
+    fn rosetun_resolves_through_the_local_network_but_nothing_else_does() {
+        assert!(RESOLVER_WEIGHT > PRIVATE_DNS_BLOCK_WEIGHT);
+        assert_ne!(RESOLVER_WEIGHT, TUNNEL_WEIGHT);
+        let apps = apps();
+        let service = apps.service.as_deref();
+        let gui = apps.gui.as_deref();
+        let other = Some(std::path::Path::new(r"C:\Windows\System32\svchost.exe"));
+        for allow_lan in [false, true] {
+            let set = filter_set(allow_lan, &apps);
+            let rules = persistent(&set);
+            let decide = |application, destination, protocol, port| {
+                decide_for(
+                    application,
+                    Layer::Connect,
+                    &rules,
+                    destination,
+                    protocol,
+                    port,
+                    0,
+                )
+            };
+            for protocol in [17, 6] {
+                for destination in [[192, 168, 3, 1], [203, 0, 113, 53]] {
+                    assert_eq!(decide(service, destination, protocol, 53), Action::Allow);
+                    assert_eq!(decide(gui, destination, protocol, 53), Action::Allow);
+                    assert_eq!(decide(other, destination, protocol, 53), Action::Block);
+                }
+            }
+            // The service gets DNS only; the GUI keeps its permit for everything.
+            assert_eq!(decide(service, [203, 0, 113, 7], 6, 443), Action::Block);
+            assert_eq!(decide(gui, [203, 0, 113, 7], 6, 443), Action::Allow);
+        }
+        assert!(
+            filter_set(true, &apps)
+                .iter()
+                .filter(|filter| filter.rule.weight == RESOLVER_WEIGHT)
+                .all(|filter| filter.part == Part::App
+                    && !filter.boottime
+                    && filter.rule.action == Action::Allow
+                    && filter.rule.conditions.contains(&Condition::RemotePort(53)))
         );
     }
 
@@ -962,6 +1087,19 @@ mod tests {
             set.iter()
                 .filter(|filter| filter.rule.action == Action::Allow)
                 .all(|filter| filter.rule.weight == BOOTSTRAP_ALLOW_WEIGHT)
+        );
+        // Rosetun's resolver permits outrank the private DNS block for its
+        // own programs only: anything else still cannot reach the tunnel's
+        // DNS address outside the tunnel.
+        let with_apps = filter_set(true, &apps());
+        let rules = persistent(&with_apps)
+            .into_iter()
+            .chain(&session.rules)
+            .chain(&tunnel)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decide_at(Layer::Connect, &rules, [172, 19, 0, 2], 17, 53, 999),
+            Action::Block
         );
     }
 }

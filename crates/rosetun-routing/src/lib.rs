@@ -81,6 +81,9 @@ pub struct LockdownStatus {
 pub struct LockdownApps {
     pub gui: Option<std::path::PathBuf>,
     pub cli: Option<std::path::PathBuf>,
+    /// The service itself, permitted DNS only: it resolves server names
+    /// with its own queries, since the system resolver's are blocked.
+    pub service: Option<std::path::PathBuf>,
 }
 
 pub trait RoutingBackend: std::fmt::Debug + Send {

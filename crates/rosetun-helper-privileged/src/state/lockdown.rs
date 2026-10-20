@@ -49,10 +49,12 @@ pub(super) fn protection_scope(
 }
 
 /// The GUI and the CLI next to the service, so a subscription can be updated
-/// while locked. A program that is not installed gets no permit.
+/// while locked, and the service for its own name lookups. A program that is
+/// not installed gets no permit.
 pub(super) fn lockdown_apps() -> LockdownApps {
-    let dir = std::env::current_exe()
-        .ok()
+    let exe = std::env::current_exe().ok();
+    let dir = exe
+        .as_ref()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
     let find = |name: &str| -> Option<PathBuf> {
         let path = dir.as_ref()?.join(name);
@@ -63,6 +65,7 @@ pub(super) fn lockdown_apps() -> LockdownApps {
     LockdownApps {
         gui: find("rosetun-gui.exe"),
         cli: find("rosetun.exe"),
+        service: exe.and_then(|exe| std::fs::canonicalize(exe).ok()),
     }
 }
 
