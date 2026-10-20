@@ -757,16 +757,16 @@ Usage:
   rosetun config
   rosetun xray <auto|off|always>
   rosetun lan <on|off>
-  rosetun lockdown <on|off>
+  rosetun lockdown <on|off>    (experimental)
   rosetun reset-firewall
   rosetun disconnect
   rosetun shutdown
 
 Subscription and node commands are local and do not require the helper.
 connections lists the tunnel's connections for the account that connected it.
-Lockdown blocks all traffic outside the tunnel, also when disconnected and
-after a reboot. reset-firewall removes it without the service; run it as
-administrator.
+Lockdown (experimental) blocks all traffic outside the tunnel, also when
+disconnected and after a reboot. reset-firewall removes it without the
+service; run it as administrator.
 Options for sub add may appear in any order after the URL."
     );
 }

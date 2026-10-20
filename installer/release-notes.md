@@ -8,7 +8,7 @@ Settings keep their format, so nothing is converted. Please report what breaks i
 
 ## What's new in 0.3 so far
 
-- **Lockdown** (the **Protection** card on the connection screen, and Settings › Connection). Rosetun keeps its own Windows firewall filters that block everything outside the tunnel: while disconnected, after a restart (from boot, before you sign in to Windows) and if the service stops or crashes. Without Lockdown the kill switch still works as before, only while the service runs.
+- **Lockdown**, experimental (the **Protection** card on the connection screen, and Settings › Connection; tested on Windows 11 only, see Known issues). Rosetun keeps its own Windows firewall filters that block everything outside the tunnel: while disconnected, after a restart (from boot, before you sign in to Windows) and if the service stops or crashes. Without Lockdown the kill switch still works as before, only while the service runs.
   - While Lockdown is on, the **Kill switch** is always on, and incoming connections are blocked too, except from your network when **Local network** is on.
   - Without a connection, Rosetun itself can still update subscriptions and lists, check servers and connect; other programs cannot. Rosetun then looks up names with its own DNS queries to your network's DNS servers, so the lookups of other programs stay closed. Your subscription provider sees your real IP address, as without Lockdown.
   - Turning it on and off asks for confirmation; the dialog for turning it on says how to get out.
@@ -25,6 +25,7 @@ Settings keep their format, so nothing is converted. Please report what breaks i
 - If you switch between networks (for example Wi-Fi and cable) while connected through Xray, the connection may stop until Rosetun reconnects.
 - **Lockdown is new and has been tested on Windows 11 only**, on a clean system and on one everyday computer. Not tested yet: Windows 10, other firewalls or antivirus programs with their own network filters, and sleep or hibernation with Lockdown on.
 - **With Lockdown on, Wi-Fi with a sign-in page** (a hotel or a café) cannot open its page, and **Windows cannot set the clock** without the tunnel. Turn Lockdown off for a moment, sign in or correct the clock, connect, and turn it on again.
+- **Lockdown leaves Hyper-V virtual machines on this computer without network**, and most likely WSL2, Docker Desktop, Windows Sandbox and Mobile hotspot too. Turn Lockdown off while you need them.
 
 ## Install
 
@@ -52,7 +53,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ### Что нового в 0.3 на сейчас
 
-- **Lockdown** (карточка **Защита** на экране подключения и «Настройки › Подключение»). Rosetun держит собственные фильтры брандмауэра Windows, которые закрывают всё мимо туннеля: без подключения, после перезагрузки (с загрузки, ещё до входа в Windows) и если служба остановится или упадёт. Без Lockdown kill switch работает как раньше, только пока работает служба.
+- **Lockdown**, экспериментальный (карточка **Защита** на экране подключения и «Настройки › Подключение»; проверен только на Windows 11, см. «Известные проблемы»). Rosetun держит собственные фильтры брандмауэра Windows, которые закрывают всё мимо туннеля: без подключения, после перезагрузки (с загрузки, ещё до входа в Windows) и если служба остановится или упадёт. Без Lockdown kill switch работает как раньше, только пока работает служба.
   - Пока Lockdown включён, **Kill switch** включён всегда, а входящие соединения тоже закрыты, кроме вашей сети при включённой **Локальной сети**.
   - Без подключения сам Rosetun по-прежнему может обновлять подписки и списки, проверять серверы и подключаться; другие программы нет. Имена Rosetun тогда ищет сам, своими запросами к DNS-серверам вашей сети, поэтому запросы других программ остаются закрыты. Провайдер подписки видит ваш настоящий IP-адрес, как и без Lockdown.
   - Включение и выключение требуют подтверждения; в окне включения написано, как выйти.
@@ -69,6 +70,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 - Если во время подключения через Xray сменить сеть (например, Wi-Fi на кабель), соединение может прерваться, пока Rosetun не переподключится.
 - **Lockdown новый и проверен только на Windows 11**, на чистой системе и на одном рабочем компьютере. Ещё не проверены: Windows 10, другие брандмауэры и антивирусы со своими сетевыми фильтрами, сон и гибернация с включённым Lockdown.
 - **При включённом Lockdown Wi-Fi со входом через страницу** (гостиница, кафе) не откроет свою страницу, а **Windows не сможет выставить время** без туннеля. Выключите Lockdown на время, войдите или поправьте часы, подключитесь и включите его снова.
+- **Lockdown оставляет без сети виртуальные машины Hyper-V на этом компьютере**, а скорее всего и WSL2, Docker Desktop, «Песочницу Windows» и мобильный хот-спот. Выключите Lockdown, пока они нужны.
 
 ### Установка
 
