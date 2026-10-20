@@ -1137,7 +1137,10 @@ fn a_connection_seen_in_one_poll_is_closed_by_the_next_while_the_list_is_read() 
         if !closed.is_empty() {
             break closed;
         }
-        assert!(Instant::now() < deadline, "the short connection never closed");
+        assert!(
+            Instant::now() < deadline,
+            "the short connection never closed"
+        );
         std::thread::sleep(Duration::from_millis(10));
     };
     let seen = polls.lock().expect("test polls mutex").clone();
