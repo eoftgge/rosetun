@@ -38,6 +38,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'RosetunVm.psm1') -Force
+Assert-RosetunHostLockdownOff
 
 $results = [System.Collections.Generic.List[object]]::new()
 $probeDir = Join-Path (Get-RosetunGuestDir) 'lockdown-probe'

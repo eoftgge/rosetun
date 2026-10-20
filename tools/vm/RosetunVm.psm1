@@ -1310,6 +1310,33 @@ function Get-RosetunIpv6NeighborReport {
         "Guest neighbor $($target.HostAddress) (expected $($target.HostMac)): $guestEntry."
 }
 
+function Assert-RosetunHostLockdownOff {
+    # Lockdown on the host leaves Hyper-V guests offline: the host serves the
+    # Default Switch itself (DHCP, DNS, NAT), which is inbound traffic for it,
+    # and the guest's first DHCP request comes from 0.0.0.0. Every guest check
+    # would then fail for a reason that is not the guest's. BFE keeps
+    # persistent providers under this key (both value and subkey names are
+    # checked); Lockdown's provider key is fixed
+    # (crates/rosetun-routing/src/platform/windows/lockdown.rs).
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\BFE\Parameters\Policy\Persistent\Provider'
+    $lockdownProvider = '{f12dbedd-f3c7-4a72-b0f8-20559c88b112}'
+    try {
+        $item = Get-Item -LiteralPath $key -ErrorAction Stop
+        $names = @($item.GetValueNames()) + @($item.GetSubKeyNames())
+    }
+    catch [System.Management.Automation.ItemNotFoundException] {
+        return
+    }
+    catch {
+        Write-Warning "Cannot tell whether Lockdown is on on this host: $($_.Exception.Message)"
+        return
+    }
+    if ($names | Where-Object { $_ -ieq $lockdownProvider }) {
+        throw ('Rosetun Lockdown is on on this host, so Hyper-V guests get no network. ' +
+            'Turn Lockdown off (or run rosetun reset-firewall as administrator) and start again.')
+    }
+}
+
 function Assert-RosetunIpv6Neighbor {
     # Without both pins the guest cannot reach the host over IPv6 at all, and
     # every "IPv6 blocked" check would pass without proving anything. A guest
