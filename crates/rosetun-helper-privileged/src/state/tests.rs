@@ -5,6 +5,7 @@ use rosetun_config::{
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
     EngineBackend, EngineCapabilities, EngineIntegration, RenderedConfig, RuleCapabilities,
+    TrafficSample,
 };
 use rosetun_ipc::{ExtraNode, SessionExit, TunnelDelays};
 use rosetun_routing::errors::RoutingError;
@@ -1012,8 +1013,11 @@ struct StubTrafficProbe {
 }
 
 impl TrafficProbe for StubTrafficProbe {
-    fn totals(&mut self) -> Result<TrafficTotals, EngineError> {
-        Ok(self.totals)
+    fn sample(&mut self, _connections: bool) -> Result<TrafficSample, EngineError> {
+        Ok(TrafficSample {
+            totals: self.totals,
+            connections: None,
+        })
     }
 }
 

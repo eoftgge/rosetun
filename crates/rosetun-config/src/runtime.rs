@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{EngineKind, NodeId, XrayUse};
+use crate::{EngineKind, ExitId, NodeId, XrayUse};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -88,6 +88,53 @@ pub struct Status {
     /// Lockdown's persistent block is installed (protocol 12).
     #[serde(default)]
     pub lockdown: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionNetwork {
+    Tcp,
+    Udp,
+}
+
+/// Where the engine sent a connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionRoute {
+    Proxy,
+    Direct,
+    Exit(ExitId),
+    Other,
+}
+
+/// One connection of the running session (IPC only, never persisted or logged:
+/// it is the user's browsing history).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveConnection {
+    pub start_unix_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_unix_ms: Option<u64>,
+    /// Full path of the program, when the engine found it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<String>,
+    /// The sniffed or requested domain, otherwise the IP address.
+    pub host: String,
+    pub port: u16,
+    pub network: ConnectionNetwork,
+    pub route: ConnectionRoute,
+    pub download: u64,
+    pub upload: u64,
+}
+
+impl std::fmt::Debug for LiveConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveConnection")
+            .field("closed", &self.end_unix_ms.is_some())
+            .field("network", &self.network)
+            .field("download", &self.download)
+            .field("upload", &self.upload)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]

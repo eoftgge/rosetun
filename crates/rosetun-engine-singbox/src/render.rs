@@ -5,7 +5,7 @@ use rosetun_config::{
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    ExtraOutbound, ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities, SocksProxy,
+    EngineRoute, ExtraOutbound, ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities, SocksProxy,
     exit_tag,
 };
 use serde_json::{Map, Value, json};
@@ -14,6 +14,29 @@ pub(crate) const TAG_PROXY: &str = "proxy";
 const TAG_DIRECT: &str = "direct";
 const TAG_DNS_PROXY: &str = "dns-proxy";
 const DEFAULT_FINGERPRINT: &str = "chrome";
+/// The GUI's exit-country lookup is pinned to the main node by this program name.
+const GUI_PROCESS: &str = "rosetun-gui.exe";
+
+/// The route of a connection whose outbound chain ends with `tag`.
+pub(crate) fn route_of(tag: &str) -> EngineRoute {
+    match tag {
+        TAG_PROXY => EngineRoute::Proxy,
+        TAG_DIRECT => EngineRoute::Direct,
+        _ => match tag.strip_prefix("exit-").map(str::parse::<usize>) {
+            Some(Ok(index)) if exit_tag(index) == tag => EngineRoute::Exit(tag.to_owned()),
+            _ => EngineRoute::Other,
+        },
+    }
+}
+
+/// The GUI's exit-country lookup, matched exactly as its route rule matches it.
+pub(crate) fn is_exit_trace(process: Option<&str>, ip: &str, port: u16) -> bool {
+    port == EXIT_TRACE_PORT
+        && ip == EXIT_TRACE_IP
+        && process
+            .and_then(|path| path.rsplit(['\\', '/']).next())
+            .is_some_and(|name| name.eq_ignore_ascii_case(GUI_PROCESS))
+}
 
 pub(crate) const RULE_CAPABILITIES: RuleCapabilities = RuleCapabilities {
     domain_exact: true,
@@ -385,7 +408,7 @@ fn route_section_with_lists(
             "action": "hijack-dns",
         }),
         json!({
-            "process_path_regex": [process_name_regex("rosetun-gui.exe")],
+            "process_path_regex": [process_name_regex(GUI_PROCESS)],
             "ip_cidr": [format!("{EXIT_TRACE_IP}/32")],
             "port": [EXIT_TRACE_PORT],
             "action": "route",

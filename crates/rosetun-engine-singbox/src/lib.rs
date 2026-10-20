@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+mod connections;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod console;
@@ -29,7 +30,7 @@ use readiness::Readiness;
 use rosetun_config::EngineKind;
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineCapabilities, EngineIntegration, EngineProcess,
-    ProbeRenderRequest, RenderRequest, RenderedConfig, TrafficProbe, TrafficTotals, UrlTestTarget,
+    ProbeRenderRequest, RenderRequest, RenderedConfig, TrafficProbe, TrafficSample, UrlTestTarget,
     errors::EngineError,
 };
 
@@ -278,13 +279,6 @@ struct ClashTrafficProbe {
     authorization: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Snapshot {
-    upload_total: u64,
-    download_total: u64,
-}
-
 impl ClashTrafficProbe {
     fn new(control: &ControlEndpoint) -> Self {
         let config = ureq::Agent::config_builder()
@@ -311,7 +305,7 @@ impl std::fmt::Debug for ClashTrafficProbe {
 }
 
 impl TrafficProbe for ClashTrafficProbe {
-    fn totals(&mut self) -> Result<TrafficTotals, EngineError> {
+    fn sample(&mut self, connections: bool) -> Result<TrafficSample, EngineError> {
         let mut response = self
             .agent
             .get(&self.url)
@@ -332,11 +326,19 @@ impl TrafficProbe for ClashTrafficProbe {
             .limit(16 * 1024 * 1024)
             .read_to_vec()
             .map_err(|_| EngineError::Stats("failed to read traffic response".to_owned()))?;
-        let snapshot: Snapshot = serde_json::from_slice(&body)
-            .map_err(|_| EngineError::Stats("invalid traffic response".to_owned()))?;
-        Ok(TrafficTotals {
-            up: snapshot.upload_total,
-            down: snapshot.download_total,
+        let invalid = |_| EngineError::Stats("invalid traffic response".to_owned());
+        if !connections {
+            let totals: connections::Totals = serde_json::from_slice(&body).map_err(invalid)?;
+            return Ok(TrafficSample {
+                totals: totals.totals(),
+                connections: None,
+            });
+        }
+        let snapshot: connections::WithConnections =
+            serde_json::from_slice(&body).map_err(invalid)?;
+        Ok(TrafficSample {
+            totals: snapshot.totals.totals(),
+            connections: Some(snapshot.connections()),
         })
     }
 }
@@ -520,7 +522,7 @@ mod tests {
         RuleMatcher, RuleSet, RuleSetId, RuleTarget, Settings, StreamSettings, TlsMode,
         VlessParams,
     };
-    use rosetun_engine::{PROBE_TIMEOUT, PROBE_URLS, RuleCapabilities};
+    use rosetun_engine::{PROBE_TIMEOUT, PROBE_URLS, RuleCapabilities, TrafficTotals};
     use serde_json::Value;
 
     fn node() -> Node {
@@ -961,7 +963,11 @@ mod tests {
         server.join().unwrap();
     }
 
-    fn probe_against_server(status: u16, chunked: bool) -> Result<TrafficTotals, EngineError> {
+    fn probe_against_server(
+        status: u16,
+        chunked: bool,
+        connections: bool,
+    ) -> Result<TrafficSample, EngineError> {
         use std::io::Write;
         use std::net::TcpListener;
         use std::time::Instant;
@@ -1009,7 +1015,7 @@ mod tests {
             }
             assert!(authorized, "the probe must send bearer authorization");
 
-            let body = r#"{"uploadTotal":10,"downloadTotal":20,"connections":[]}"#;
+            let body = r#"{"uploadTotal":10,"downloadTotal":20,"connections":[{"id":1}]}"#;
             let response = if chunked {
                 format!(
                     "HTTP/1.1 {status} Test\r\nTransfer-Encoding: chunked\r\n\r\n{:X}\r\n{body}\r\n0\r\n\r\n",
@@ -1032,7 +1038,7 @@ mod tests {
         let debug = format!("{probe:?}");
         assert!(!debug.contains(&control.secret));
         assert!(debug.contains("<redacted>"));
-        let result = probe.totals();
+        let result = probe.sample(connections);
         server.join().expect("test server completed");
         result
     }
@@ -1041,16 +1047,30 @@ mod tests {
     fn traffic_probe_reads_content_length_and_chunked_totals() {
         for chunked in [false, true] {
             assert_eq!(
-                probe_against_server(200, chunked).expect("traffic totals"),
-                TrafficTotals { up: 10, down: 20 }
+                probe_against_server(200, chunked, false).expect("traffic totals"),
+                TrafficSample {
+                    totals: TrafficTotals { up: 10, down: 20 },
+                    connections: None,
+                }
             );
         }
     }
 
     #[test]
+    fn traffic_probe_parses_connections_only_when_asked() {
+        assert_eq!(
+            probe_against_server(200, false, true).expect("traffic sample"),
+            TrafficSample {
+                totals: TrafficTotals { up: 10, down: 20 },
+                connections: Some(Vec::new()),
+            }
+        );
+    }
+
+    #[test]
     fn traffic_probe_reports_http_failure() {
         assert!(matches!(
-            probe_against_server(401, false),
+            probe_against_server(401, false, false),
             Err(EngineError::Stats(message)) if message.contains("401")
         ));
     }
@@ -1444,6 +1464,26 @@ mod tests {
                 target == RuleTarget::Block
             );
         }
+    }
+
+    /// sing-box looks up the program of every connection only when a route rule
+    /// matches on one; the live connection list relies on that `processPath`.
+    #[test]
+    fn process_lookup_is_on_without_process_rules() {
+        let rule_set = RuleSet {
+            rules: Vec::new(),
+            ..rules()
+        };
+        let (route, _) = render::route_section(&rule_set, render::RULE_CAPABILITIES, false);
+
+        assert!(
+            route["rules"]
+                .as_array()
+                .expect("rules")
+                .iter()
+                .any(|rule| rule.get("process_path_regex").is_some())
+        );
+        assert!(route.get("find_process").is_none());
     }
 
     #[test]

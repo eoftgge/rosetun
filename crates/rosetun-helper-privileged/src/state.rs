@@ -1360,7 +1360,7 @@ impl TrafficMonitor {
                         return;
                     }
 
-                    match probe.totals() {
+                    match probe.sample(false).map(|sample| sample.totals) {
                         Ok(totals) => {
                             if failed {
                                 tracing::info!("engine traffic polling recovered");

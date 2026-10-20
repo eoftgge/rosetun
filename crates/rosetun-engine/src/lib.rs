@@ -17,7 +17,7 @@ pub mod errors;
 pub const ENGINE_OUTPUT_TARGET: &str = "engine_output";
 
 use errors::EngineError;
-use rosetun_config::{EngineKind, ExitId, Node, RuleId, RuleSet, Settings};
+use rosetun_config::{ConnectionNetwork, EngineKind, ExitId, Node, RuleId, RuleSet, Settings};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::AtomicU64, mpsc};
@@ -75,8 +75,63 @@ pub struct TrafficTotals {
     pub down: u64,
 }
 
+/// Where the engine routed a connection, by the outbound tag it reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineRoute {
+    Proxy,
+    Direct,
+    /// An extra node's outbound, by [`exit_tag`].
+    Exit(String),
+    Other,
+}
+
+/// One connection the engine carries now. Its `Debug` shows no destination or
+/// program: the list is the user's browsing history.
+#[derive(Clone, PartialEq, Eq)]
+pub struct EngineConnection {
+    /// The engine's own identifier, stable for the connection's lifetime.
+    pub id: String,
+    pub start_unix_ms: u64,
+    pub process: Option<String>,
+    pub host: String,
+    pub port: u16,
+    pub network: ConnectionNetwork,
+    pub route: EngineRoute,
+    pub upload: u64,
+    pub download: u64,
+}
+
+impl std::fmt::Debug for EngineConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineConnection")
+            .field("network", &self.network)
+            .field("upload", &self.upload)
+            .field("download", &self.download)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One poll of the engine's statistics.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct TrafficSample {
+    pub totals: TrafficTotals,
+    /// Present only when the poll asked for connections.
+    pub connections: Option<Vec<EngineConnection>>,
+}
+
+impl std::fmt::Debug for TrafficSample {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrafficSample")
+            .field("totals", &self.totals)
+            .field("connections", &self.connections.as_ref().map(Vec::len))
+            .finish()
+    }
+}
+
 pub trait TrafficProbe: Send + std::fmt::Debug {
-    fn totals(&mut self) -> Result<TrafficTotals, EngineError>;
+    /// Reads the totals and, with `connections`, the connections the engine
+    /// carries now; without it the connection list is not parsed at all.
+    fn sample(&mut self, connections: bool) -> Result<TrafficSample, EngineError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
