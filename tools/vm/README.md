@@ -42,9 +42,7 @@ Before running, the guest must have a DHCP-assigned IPv4 address with a default 
 .\tools\vm\Invoke-LockdownMatrix.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\lockdown-matrix.txt
 ```
 
-Its `finally` runs `--reset-firewall`. If a run was killed and the guest has no network, run in the guest as administrator `C:
-osetun
-osetun-helper-privileged.exe --reset-firewall` (it stops the Rosetun service if one runs; stop a console helper with `Stop-Process -Name rosetun-helper-privileged` first, or the removal reports that the sublayer is in use), then `Unregister-ScheduledTask RosetunLockdownMatrixBootCheck -Confirm:$false`. Without the binary, `netsh wfp show filters` lists the filters of provider `f12dbedd-f3c7-4a72-b0f8-20559c88b112`, and restoring the `clean` checkpoint removes everything.
+Its `finally` runs `--reset-firewall`. If a run was killed and the guest has no network, run in the guest as administrator `C:\rosetun\rosetun-helper-privileged.exe --reset-firewall` (it stops the Rosetun service if one runs; stop a console helper with `Stop-Process -Name rosetun-helper-privileged` first, or the removal reports that the sublayer is in use), then `Unregister-ScheduledTask RosetunLockdownMatrixBootCheck -Confirm:$false`. Without the binary, `netsh wfp show filters` lists the filters of provider `f12dbedd-f3c7-4a72-b0f8-20559c88b112`, and restoring the `clean` checkpoint removes everything.
 
 `Invoke-LockdownProbe.ps1` is a study for the 0.3 Lockdown, not a matrix: it checks which WFP permits from a dynamic session beat a persistent block in another sublayer, and whether the block holds across reboots. Run it with Rosetun disconnected in the guest (the owner runs it); it reboots the guest unless `-SkipReboot` is given:
 
