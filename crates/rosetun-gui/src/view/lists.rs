@@ -404,10 +404,7 @@ pub(crate) fn add_dialog(
                 );
             }
             ui.add_space(18.0);
-            ui.horizontal(|ui| {
-                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                    actions.push(Action::CancelAddList);
-                }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if widgets::button_fill(
                     ui,
                     if busy { tr!("adding") } else { tr!("add") },
@@ -418,6 +415,9 @@ pub(crate) fn add_dialog(
                 .clicked()
                 {
                     actions.push(Action::SubmitAddList);
+                }
+                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
+                    actions.push(Action::CancelAddList);
                 }
             });
         });

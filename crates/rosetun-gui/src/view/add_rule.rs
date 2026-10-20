@@ -70,13 +70,13 @@ fn footer_buttons(
     reason: Option<&str>,
 ) -> (egui::Response, egui::Response) {
     ui.horizontal(|ui| {
-        let cancel = widgets::outline_button(ui, tr!("cancel"), can_cancel);
         let submit = widgets::button_fill(ui, label, can_submit);
         let submit = if let Some(reason) = reason {
             submit.on_disabled_hover_text(reason)
         } else {
             submit
         };
+        let cancel = widgets::outline_button(ui, tr!("cancel"), can_cancel);
         (submit, cancel)
     })
     .inner
@@ -1933,7 +1933,7 @@ mod tests {
     }
 
     #[test]
-    fn primary_action_precedes_cancel_visually() {
+    fn primary_action_is_rightmost() {
         use super::*;
 
         let ctx = egui::Context::default();
@@ -1945,7 +1945,7 @@ mod tests {
                     |_| {},
                     |ui| footer_buttons(ui, &tr!("add-rule"), true, true, None),
                 );
-                assert!(submit.rect.right() < cancel.rect.left());
+                assert!(cancel.rect.right() < submit.rect.left());
             });
         });
         output.textures_delta.clear();

@@ -34,12 +34,12 @@ pub(crate) fn confirm_modal(
             ui.heading(options.title);
             body(ui);
             ui.add_space(options.button_gap);
-            ui.horizontal(|ui| {
-                if outline_button(ui, options.cancel, !options.busy).clicked() {
-                    choice = ModalChoice::Cancel;
-                }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if button_fill(ui, options.confirm, options.confirm_enabled).clicked() {
                     choice = ModalChoice::Confirm;
+                }
+                if outline_button(ui, options.cancel, !options.busy).clicked() {
+                    choice = ModalChoice::Cancel;
                 }
             });
         });
@@ -94,12 +94,12 @@ pub(crate) fn name_modal(ctx: &egui::Context, options: NameModal<'_>) -> ModalCh
                 ui.colored_label(theme::ERROR, error);
             }
             ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                if outline_button(ui, tr!("cancel"), !options.busy).clicked() {
-                    choice = ModalChoice::Cancel;
-                }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if button_fill(ui, options.submit, valid).clicked() {
                     choice = ModalChoice::Confirm;
+                }
+                if outline_button(ui, tr!("cancel"), !options.busy).clicked() {
+                    choice = ModalChoice::Cancel;
                 }
             });
         });

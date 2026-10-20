@@ -435,12 +435,12 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
                 ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
             }
             ui.add_space(18.0);
-            ui.horizontal(|ui| {
-                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                    actions.push(Action::CancelExitDialog);
-                }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if widgets::button_fill(ui, tr!("save"), dialog.can_save(full)).clicked() {
                     actions.push(Action::SubmitExitDialog);
+                }
+                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
+                    actions.push(Action::CancelExitDialog);
                 }
             });
         });
