@@ -151,6 +151,20 @@ function Get-NetworkWaitNote {
     "last state: $stateName; reconnect_failure_kind: $kind"
 }
 
+function Format-ConnectionsNote {
+    # Under Set-StrictMode, `$rows.Route` on an empty list throws and ends the
+    # whole run; with no matching row the CLI's own lines are the evidence.
+    param($Listed, [object[]]$Rows)
+    $routes = @($Rows | ForEach-Object { $_.Route } | Sort-Object -Unique) -join ','
+    $note = "curl $($Listed.CurlExit), exit $($Listed.ExitCode), routes $routes"
+    if ($Rows.Count -eq 0) {
+        $head = @(($Listed.Output -replace "\x1b\[[0-9;]*m", '') -split '\r?\n' |
+            Where-Object { $_.Trim() } | Select-Object -First 4) -join ' | '
+        $note += "; output: $head"
+    }
+    $note
+}
+
 function Invoke-SettingsCli {
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -541,7 +555,7 @@ $connectionsHost = ([uri](Get-RosetunTunnelProbeUrl)).Host
 $listed = Invoke-RosetunConnectionsDuring -Url (Get-RosetunTunnelProbeUrl)
 $rows = @(Get-RosetunConnectionRows $listed.Output | Where-Object { $_.Destination -like "${connectionsHost}:*" })
 Test-Step 'connections' "a request to $connectionsHost is listed through the VPN" `
-    -Note "curl $($listed.CurlExit), exit $($listed.ExitCode), routes $(($rows.Route | Sort-Object -Unique) -join ',')" {
+    -Note (Format-ConnectionsNote $listed $rows) {
     $listed.CurlExit -eq 0 -and $listed.ExitCode -eq 0 -and $rows.Count -gt 0 -and
         @($rows | Where-Object Route -ne 'proxy').Count -eq 0
 }
@@ -1083,7 +1097,7 @@ $temporaryHost = ([uri]$temporaryDomainUrl).Host
 $listed = Invoke-RosetunConnectionsDuring -Url $temporaryDomainUrl -SkipRevocationCheck
 $rows = @(Get-RosetunConnectionRows $listed.Output | Where-Object { $_.Destination -like "${temporaryHost}:*" })
 Test-Step 'connections' "a request to $temporaryHost is listed as direct" `
-    -Note "curl $($listed.CurlExit), exit $($listed.ExitCode), routes $(($rows.Route | Sort-Object -Unique) -join ',')" {
+    -Note (Format-ConnectionsNote $listed $rows) {
     $listed.CurlExit -eq 0 -and $listed.ExitCode -eq 0 -and $rows.Count -gt 0 -and
         @($rows | Where-Object Route -ne 'direct').Count -eq 0
 }
