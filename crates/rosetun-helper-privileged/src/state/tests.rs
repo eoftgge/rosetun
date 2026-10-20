@@ -1303,7 +1303,10 @@ fn only_the_session_owner_closes_connections() {
     request.settings.kill_switch = false;
     helper.connect_as(&owner, &request).expect("owner connects");
 
-    for caller in [&Caller::fake(b"other", false), &Caller::fake(b"admin", true)] {
+    for caller in [
+        &Caller::fake(b"other", false),
+        &Caller::fake(b"admin", true),
+    ] {
         assert_eq!(
             helper
                 .close_connection_as(caller, "connection")

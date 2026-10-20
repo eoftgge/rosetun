@@ -517,7 +517,9 @@ impl Helper {
                 "the connected engine is unavailable",
             )
         };
-        let engine = self.with_status(|status| status.engine).ok_or_else(unavailable)?;
+        let engine = self
+            .with_status(|status| status.engine)
+            .ok_or_else(unavailable)?;
         let backend = self.engines.get_shared(engine).ok_or_else(unavailable)?;
         // Neither the id nor the destination is logged: both identify what the
         // user was doing.

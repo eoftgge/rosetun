@@ -1186,7 +1186,10 @@ mod tests {
 
     #[test]
     fn close_connection_refuses_a_bad_id_without_a_request() {
-        for id in [String::new(), "a".repeat(rosetun_engine::MAX_CONNECTION_ID_CHARS + 1)] {
+        for id in [
+            String::new(),
+            "a".repeat(rosetun_engine::MAX_CONNECTION_ID_CHARS + 1),
+        ] {
             let (result, request) = close_against_server(&id, 204);
             assert!(matches!(result, Err(EngineError::Stats(_))));
             assert_eq!(request, None);
