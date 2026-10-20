@@ -14,5 +14,7 @@ pub(crate) const URL_PLACEHOLDER: &str = "https://provider.example/subscription"
 pub(crate) const SITES_EXAMPLE: &str = "youtube.com\ninstagram.com\nchatgpt.com";
 pub(crate) const EXPAND: &str = "+";
 pub(crate) const COLLAPSE: &str = "−";
+pub(crate) const DOWN_ARROW: &str = "↓";
+pub(crate) const UP_ARROW: &str = "↑";
 pub(crate) const ENGLISH: &str = "English";
 pub(crate) const RUSSIAN: &str = "\u{420}\u{443}\u{441}\u{441}\u{43a}\u{438}\u{439}";

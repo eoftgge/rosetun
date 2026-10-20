@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId, Node, NodeId,
+    AppConfig, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId, LiveConnection, Node, NodeId,
     Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, Status, Subscription,
     SubscriptionId,
 };
@@ -182,6 +182,7 @@ pub(crate) enum WorkerEvent {
         result: Result<Vec<ProbeResult>, HelperCommandError>,
     },
     TunnelDelay(Result<TunnelDelays, HelperCommandError>),
+    Connections(Result<(Vec<LiveConnection>, Vec<LiveConnection>), HelperCommandError>),
     UpdateAll {
         subscriptions: Result<Vec<SubscriptionUpdateResult>, StoreError>,
         lists: Result<Vec<ListUpdateResult>, StoreError>,
@@ -197,6 +198,8 @@ pub(crate) enum WorkerEvent {
 #[derive(Clone)]
 pub(crate) struct WorkerDispatcher {
     publisher: ConfigPublisher,
+    /// Requests for the connection list, served over one kept pipe connection.
+    connections: Arc<Mutex<Option<Sender<()>>>>,
 }
 
 #[derive(Clone)]
@@ -392,7 +395,10 @@ pub(crate) fn start(
             }
         })
         .expect("could not spawn helper watcher");
-    WorkerDispatcher { publisher }
+    WorkerDispatcher {
+        publisher,
+        connections: Arc::default(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

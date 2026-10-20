@@ -159,6 +159,30 @@ impl WorkerDispatcher {
         );
     }
 
+    /// Asked once a second while the Traffic tab is open, so one pipe
+    /// connection is kept for it instead of a new one (and a service log line)
+    /// per request. It closes after [`CONNECTIONS_IDLE`] without requests.
+    /// Emits without reloading the configuration.
+    pub(crate) fn connections(&self) {
+        let mut sender = self
+            .connections
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(requests) = sender.as_ref()
+            && requests.send(()).is_ok()
+        {
+            return;
+        }
+        let (requests, received) = std::sync::mpsc::channel();
+        let publisher = self.publisher.clone();
+        let spawned = thread::Builder::new()
+            .name("rosetun-connections".into())
+            .spawn(move || serve_connections(&received, &publisher));
+        if spawned.is_ok() && requests.send(()).is_ok() {
+            *sender = Some(requests);
+        }
+    }
+
     pub(crate) fn lookup_exit(&self, generation: u64, route: ExitRoute) {
         self.spawn_task("rosetun-lookup-exit", move |publisher| {
             let result = rosetun_core::exit_info(Duration::from_secs(5));
@@ -209,5 +233,40 @@ mod failure_interference_tests {
             conflicting_processes(processes),
             ["GOODBYEDPI.exe", "WINWS.EXE"]
         );
+    }
+}
+
+const CONNECTIONS_IDLE: Duration = Duration::from_secs(30);
+
+fn serve_connections(requests: &std::sync::mpsc::Receiver<()>, publisher: &ConfigPublisher) {
+    let mut client: Option<HelperClient> = None;
+    loop {
+        match requests.recv_timeout(CONNECTIONS_IDLE) {
+            Ok(()) => {
+                let result = match client.take() {
+                    Some(client) => Ok(client),
+                    None => HelperClient::connect(&rosetun_ipc::default_endpoint(), CLIENT_NAME),
+                }
+                .and_then(|mut connected| {
+                    let list = connected.connections();
+                    // A transport failure may leave the pipe out of step; the next request
+                    // reconnects. A refusal from the service keeps it usable.
+                    if matches!(list, Ok(_) | Err(ClientError::Helper(_))) {
+                        client = Some(connected);
+                    }
+                    list
+                })
+                .map_err(HelperCommandError::from);
+                if !emit(
+                    &publisher.tx,
+                    &publisher.repaint,
+                    WorkerEvent::Connections(result),
+                ) {
+                    return;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => client = None,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        }
     }
 }

@@ -36,6 +36,25 @@ pub(crate) fn session_time(hours: u64, minutes: u64, seconds: u64) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
+/// `m:ss` under an hour, `h:mm:ss` from then on.
+pub(crate) fn connection_duration(seconds: u64) -> String {
+    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if hours == 0 {
+        format!("{minutes}:{seconds:02}")
+    } else {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    }
+}
+
+/// `host:port`, with an IPv6 address in brackets.
+pub(crate) fn connection_destination(host: &str, port: u16) -> String {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 pub(crate) fn plain_link(label: &str, value: &str) -> String {
     format!("{label}: {value}")
 }

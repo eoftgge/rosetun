@@ -40,7 +40,7 @@ pub(crate) use settings::{AboutFolder, SettingsSection};
 use subscriptions::SubscriptionsState;
 pub(crate) use subscriptions::{AddDialog, PingResult, UpdateOutcome, shared_auto_update_hours};
 use system_checks::SystemChecksState;
-pub(crate) use traffic::TrafficRange;
+pub(crate) use traffic::{ConnectionsNotice, ConnectionsTab, TrafficRange};
 use traffic::TrafficState;
 use updates::UpdatesState;
 
@@ -169,6 +169,8 @@ pub(crate) enum Action {
     ShowConnection,
     OpenTraffic,
     SetTrafficRange(TrafficRange),
+    SetConnectionsTab(ConnectionsTab),
+    SetConnectionsFilter(String),
     OpenSettings,
     #[cfg(windows)]
     WindowMinimized,
@@ -400,6 +402,7 @@ pub(crate) enum Job {
     FullCheck(SubscriptionId),
     FullCheckNode(SubscriptionId, NodeId),
     TunnelDelay,
+    Connections,
     LookupExit {
         generation: u64,
         route: ExitRoute,
@@ -422,6 +425,7 @@ impl State {
             self.auto_update_due(),
             self.update_check_due(now),
             self.tunnel_delay_due(),
+            self.connections_due(),
         ]
         .into_iter()
         .flatten()
@@ -467,6 +471,7 @@ impl State {
             | WorkerEvent::SetLockdown { .. }
             | WorkerEvent::TunnelDelay(_)) => self.reduce_connection(event),
             event @ WorkerEvent::TemporaryRules { .. } => self.reduce_session(event),
+            WorkerEvent::Connections(result) => self.reduce_connections(result),
             event @ (WorkerEvent::Apply(_)
             | WorkerEvent::RestoreApplied(_)
             | WorkerEvent::RestoreEdits(_)) => self.reduce_session(event),
@@ -543,7 +548,10 @@ impl State {
             | Action::RequestLockdown(_)
             | Action::CancelLockdown
             | Action::ConfirmLockdown) => return self.act_connection(action),
-            action @ (Action::OpenTraffic | Action::SetTrafficRange(_)) => {
+            action @ (Action::OpenTraffic
+            | Action::SetTrafficRange(_)
+            | Action::SetConnectionsTab(_)
+            | Action::SetConnectionsFilter(_)) => {
                 return self.act_traffic(action);
             }
             #[cfg(windows)]
