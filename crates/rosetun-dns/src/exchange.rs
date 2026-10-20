@@ -156,7 +156,12 @@ mod tests {
     use super::*;
     use crate::wire::test_support::{a, aaaa, cname, reply};
 
-    fn answer(question_name: &str, kind: u16, flags: u16, records: &[(&str, u16, Vec<u8>)]) -> Answer {
+    fn answer(
+        question_name: &str,
+        kind: u16,
+        flags: u16,
+        records: &[(&str, u16, Vec<u8>)],
+    ) -> Answer {
         let question = wire::query(1, &wire::labels(question_name).unwrap(), kind);
         wire::parse_answer(&reply(&question, flags, records), &question).unwrap()
     }
@@ -165,8 +170,18 @@ mod tests {
     fn both_families_are_combined_ipv4_first() {
         let v6 = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
         let answers = [
-            Some(Some(answer("n.example.com", TYPE_AAAA, 0x8180, &[aaaa("n.example.com", v6)]))),
-            Some(Some(answer("n.example.com", TYPE_A, 0x8180, &[a("n.example.com", [192, 0, 2, 1])]))),
+            Some(Some(answer(
+                "n.example.com",
+                TYPE_AAAA,
+                0x8180,
+                &[aaaa("n.example.com", v6)],
+            ))),
+            Some(Some(answer(
+                "n.example.com",
+                TYPE_A,
+                0x8180,
+                &[a("n.example.com", [192, 0, 2, 1])],
+            ))),
         ];
         assert_eq!(
             decide("n.example.com", &answers),
@@ -176,7 +191,12 @@ mod tests {
 
     #[test]
     fn one_family_is_enough_but_silence_is_not_an_empty_answer() {
-        let found = answer("n.example.com", TYPE_A, 0x8180, &[a("n.example.com", [192, 0, 2, 1])]);
+        let found = answer(
+            "n.example.com",
+            TYPE_A,
+            0x8180,
+            &[a("n.example.com", [192, 0, 2, 1])],
+        );
         let empty = answer("n.example.com", TYPE_AAAA, 0x8180, &[]);
         assert_eq!(
             decide("n.example.com", &[Some(Some(found)), None]),
@@ -187,7 +207,10 @@ mod tests {
             Outcome::Failed
         );
         assert_eq!(
-            decide("n.example.com", &[Some(Some(empty.clone())), Some(Some(empty))]),
+            decide(
+                "n.example.com",
+                &[Some(Some(empty.clone())), Some(Some(empty))]
+            ),
             Outcome::NoData
         );
     }

@@ -372,7 +372,8 @@ fn localized_failures_use_the_existing_action_labels() {
             assert!(!title.is_empty());
             assert!(hint.contains(&retry));
             assert!(!hint.contains("{retry}"));
-            let (_, hint) = connection_failure(FailureKind::ServerUnreachable, None, XrayUse::Auto, false);
+            let (_, hint) =
+                connection_failure(FailureKind::ServerUnreachable, None, XrayUse::Auto, false);
             assert!(hint.contains(&check_full));
             assert!(!hint.contains("{url_test}"));
             assert!(connection_stage(ConnectStage::CheckingServer, 5).contains('5'));
@@ -479,7 +480,8 @@ fn xray_warning_and_status_texts_are_localized() {
     }
     for language in [Language::English, Language::Russian] {
         in_language(language, || {
-            let start = connection_failure(FailureKind::XrayStartFailed, None, XrayUse::Auto, false);
+            let start =
+                connection_failure(FailureKind::XrayStartFailed, None, XrayUse::Auto, false);
             let stopped = connection_failure(FailureKind::XrayStopped, None, XrayUse::Auto, false);
             assert_ne!(start, stopped);
             assert!(!tr!("xray-engine").is_empty());
@@ -515,8 +517,12 @@ fn rejected_reality_node_uses_its_own_hint_and_tls_keeps_the_existing_one() {
 
     for language in [Language::English, Language::Russian] {
         in_language(language, || {
-            let (_, reality_hint) =
-                connection_failure(FailureKind::ServerRejected, Some(&reality), XrayUse::Off, false);
+            let (_, reality_hint) = connection_failure(
+                FailureKind::ServerRejected,
+                Some(&reality),
+                XrayUse::Off,
+                false,
+            );
             let (_, tls_hint) =
                 connection_failure(FailureKind::ServerRejected, Some(&tls), XrayUse::Off, false);
             assert_eq!(
@@ -529,15 +535,33 @@ fn rejected_reality_node_uses_its_own_hint_and_tls_keeps_the_existing_one() {
             );
             assert_ne!(reality_hint, tls_hint);
             assert_eq!(
-                connection_failure(FailureKind::ServerRejected, Some(&reality), XrayUse::Auto, false).1,
+                connection_failure(
+                    FailureKind::ServerRejected,
+                    Some(&reality),
+                    XrayUse::Auto,
+                    false
+                )
+                .1,
                 tls_hint
             );
             assert_eq!(
-                connection_failure(FailureKind::XrayStartFailed, Some(&reality), XrayUse::Auto, false).0,
+                connection_failure(
+                    FailureKind::XrayStartFailed,
+                    Some(&reality),
+                    XrayUse::Auto,
+                    false
+                )
+                .0,
                 tr_in(language, "error-code-xray-start-failed", &FluentArgs::new())
             );
             assert_ne!(
-                connection_failure(FailureKind::XrayStopped, Some(&reality), XrayUse::Auto, false).0,
+                connection_failure(
+                    FailureKind::XrayStopped,
+                    Some(&reality),
+                    XrayUse::Auto,
+                    false
+                )
+                .0,
                 tr_in(language, "error-code-xray-start-failed", &FluentArgs::new())
             );
             assert_eq!(

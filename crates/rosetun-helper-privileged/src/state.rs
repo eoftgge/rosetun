@@ -2677,11 +2677,7 @@ fn resolve(server: &str, port: u16, lookup: NameLookup) -> Result<Vec<IpAddr>, H
     result
 }
 
-fn resolve_quiet(
-    server: &str,
-    port: u16,
-    lookup: NameLookup,
-) -> Result<Vec<IpAddr>, HelperError> {
+fn resolve_quiet(server: &str, port: u16, lookup: NameLookup) -> Result<Vec<IpAddr>, HelperError> {
     // The status carries this message to the GUI and to reports; the
     // server's name stays in the log line of `resolve`.
     let failed = |error: &dyn std::fmt::Display| {

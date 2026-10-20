@@ -9,10 +9,10 @@
 mod exchange;
 mod hosts;
 mod servers;
-pub mod wire;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows;
+pub mod wire;
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -155,7 +155,9 @@ mod tests {
         let mut labels = Vec::new();
         while packet[offset] != 0 {
             let length = usize::from(packet[offset]);
-            labels.push(String::from_utf8_lossy(&packet[offset + 1..offset + 1 + length]).into_owned());
+            labels.push(
+                String::from_utf8_lossy(&packet[offset + 1..offset + 1 + length]).into_owned(),
+            );
             offset += 1 + length;
         }
         let kind = u16::from_be_bytes([packet[offset + 1], packet[offset + 2]]);
@@ -225,10 +227,16 @@ mod tests {
 
     fn zone(name: &str, kind: u16) -> Option<(u16, Records)> {
         match (name, kind) {
-            ("node.example.com", TYPE_A) => Some((0x8180, vec![a("node.example.com", [192, 0, 2, 7])])),
+            ("node.example.com", TYPE_A) => {
+                Some((0x8180, vec![a("node.example.com", [192, 0, 2, 7])]))
+            }
             ("node.example.com", TYPE_AAAA) => Some((0x8180, vec![aaaa("node.example.com", V6)])),
-            ("sub.example.com", _) => Some((0x8180, vec![cname("sub.example.com", "cdn.example.net")])),
-            ("cdn.example.net", TYPE_A) => Some((0x8180, vec![a("cdn.example.net", [198, 51, 100, 4])])),
+            ("sub.example.com", _) => {
+                Some((0x8180, vec![cname("sub.example.com", "cdn.example.net")]))
+            }
+            ("cdn.example.net", TYPE_A) => {
+                Some((0x8180, vec![a("cdn.example.net", [198, 51, 100, 4])]))
+            }
             ("cdn.example.net", _) => Some((0x8180, Vec::new())),
             ("empty.example.com", _) => Some((0x8180, Vec::new())),
             ("refused.example.com", _) => Some((0x8185, Vec::new())),
@@ -239,7 +247,12 @@ mod tests {
     const FAST: [Duration; 2] = [Duration::from_millis(300), Duration::from_millis(300)];
 
     fn lookup(name: &str, servers: &[SocketAddr]) -> Result<Vec<IpAddr>, ResolveError> {
-        resolve_with(name, servers, &FAST, Instant::now() + Duration::from_secs(5))
+        resolve_with(
+            name,
+            servers,
+            &FAST,
+            Instant::now() + Duration::from_secs(5),
+        )
     }
 
     #[test]
@@ -263,9 +276,18 @@ mod tests {
     #[test]
     fn missing_names_and_names_without_addresses_are_not_found() {
         let server = serve(zone, false);
-        assert_eq!(lookup("missing.example.com", &[server]), Err(ResolveError::NotFound));
-        assert_eq!(lookup("empty.example.com", &[server]), Err(ResolveError::NotFound));
-        assert_eq!(lookup("bad name.example.com", &[server]), Err(ResolveError::InvalidName));
+        assert_eq!(
+            lookup("missing.example.com", &[server]),
+            Err(ResolveError::NotFound)
+        );
+        assert_eq!(
+            lookup("empty.example.com", &[server]),
+            Err(ResolveError::NotFound)
+        );
+        assert_eq!(
+            lookup("bad name.example.com", &[server]),
+            Err(ResolveError::InvalidName)
+        );
     }
 
     #[test]
@@ -310,9 +332,20 @@ mod tests {
             Local::Addresses(addresses) => Some(addresses),
             Local::Name(_) => None,
         };
-        assert_eq!(addresses("192.0.2.1"), Some(vec![IpAddr::from([192, 0, 2, 1])]));
-        assert_eq!(addresses("[2001:db8::7]"), Some(vec!["2001:db8::7".parse().unwrap()]));
-        assert_eq!(addresses("LocalHost."), Some(vec![Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into()]));
-        assert!(matches!(local("Node.Example.com."), Local::Name(name) if name == "node.example.com"));
+        assert_eq!(
+            addresses("192.0.2.1"),
+            Some(vec![IpAddr::from([192, 0, 2, 1])])
+        );
+        assert_eq!(
+            addresses("[2001:db8::7]"),
+            Some(vec!["2001:db8::7".parse().unwrap()])
+        );
+        assert_eq!(
+            addresses("LocalHost."),
+            Some(vec![Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into()])
+        );
+        assert!(
+            matches!(local("Node.Example.com."), Local::Name(name) if name == "node.example.com")
+        );
     }
 }

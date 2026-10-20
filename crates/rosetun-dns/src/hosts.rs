@@ -22,11 +22,7 @@ pub(crate) fn lookup(name: &str) -> Vec<IpAddr> {
         return Vec::new();
     };
     let mut bytes = Vec::new();
-    if file
-        .take(MAX_HOSTS_BYTES)
-        .read_to_end(&mut bytes)
-        .is_err()
-    {
+    if file.take(MAX_HOSTS_BYTES).read_to_end(&mut bytes).is_err() {
         return Vec::new();
     }
     find(&String::from_utf8_lossy(&bytes), name)

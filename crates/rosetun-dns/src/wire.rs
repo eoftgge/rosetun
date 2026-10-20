@@ -275,7 +275,15 @@ mod tests {
             Some(vec![&b"node"[..], b"example", b"com"])
         );
         assert!(labels("_srv.example.com").is_some());
-        for name in ["", "a..b", ".a", "a.", "пример.рф", "a b.com", &"a".repeat(64)] {
+        for name in [
+            "",
+            "a..b",
+            ".a",
+            "a.",
+            "пример.рф",
+            "a b.com",
+            &"a".repeat(64),
+        ] {
             assert_eq!(labels(name), None, "{name:?}");
         }
         let long = vec!["a".repeat(63); 4].join(".");
@@ -298,10 +306,7 @@ mod tests {
         assert!(!answer.truncated);
         assert_eq!(
             follow(&answer.records, "node.example.com").0,
-            [
-                IpAddr::from([192, 0, 2, 7]),
-                IpAddr::from([192, 0, 2, 8])
-            ]
+            [IpAddr::from([192, 0, 2, 7]), IpAddr::from([192, 0, 2, 8])]
         );
 
         let question = ask("node.example.com", TYPE_AAAA);

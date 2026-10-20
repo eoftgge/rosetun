@@ -117,7 +117,10 @@ mod tests {
             ..Status::default()
         };
         assert!(!direct_for(None));
-        assert!(!direct_for(Some(&status(false, ConnectionState::Disconnected))));
+        assert!(!direct_for(Some(&status(
+            false,
+            ConnectionState::Disconnected
+        ))));
         assert!(!direct_for(Some(&status(true, ConnectionState::Connected))));
         for state in [
             ConnectionState::Disconnected,

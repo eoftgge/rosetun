@@ -13,8 +13,8 @@ use rosetun_engine_xray::SocksEndpoint;
 use rosetun_ipc::{ErrorCode, ExtraNode, HelperError};
 
 use super::{
-    NameLookup, StartMode, SuccessfulEndpoint, node_with_endpoint, normalize_server, probe::resolve_for_apply,
-    protected_endpoint, resolve_quiet, select_endpoint,
+    NameLookup, StartMode, SuccessfulEndpoint, node_with_endpoint, normalize_server,
+    probe::resolve_for_apply, protected_endpoint, resolve_quiet, select_endpoint,
 };
 
 /// The main node's Xray outbound tag.
