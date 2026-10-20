@@ -213,29 +213,6 @@ fn conflicting_processes(processes: Vec<RunningProcess>) -> Vec<String> {
     names
 }
 
-#[cfg(test)]
-mod failure_interference_tests {
-    use super::{RunningProcess, conflicting_processes};
-
-    #[test]
-    fn identifies_traffic_tools_without_process_name_case_or_duplicates() {
-        let processes = ["WINWS.EXE", "winws.exe", "GOODBYEDPI.exe", "example.exe"]
-            .into_iter()
-            .enumerate()
-            .map(|(index, name)| RunningProcess {
-                pid: index as u32 + 5,
-                name: name.into(),
-                path: None,
-                has_window: false,
-            })
-            .collect();
-        assert_eq!(
-            conflicting_processes(processes),
-            ["GOODBYEDPI.exe", "WINWS.EXE"]
-        );
-    }
-}
-
 const CONNECTIONS_IDLE: Duration = Duration::from_secs(30);
 
 fn serve_connections(requests: &std::sync::mpsc::Receiver<()>, publisher: &ConfigPublisher) {
@@ -268,5 +245,28 @@ fn serve_connections(requests: &std::sync::mpsc::Receiver<()>, publisher: &Confi
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => client = None,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod failure_interference_tests {
+    use super::{RunningProcess, conflicting_processes};
+
+    #[test]
+    fn identifies_traffic_tools_without_process_name_case_or_duplicates() {
+        let processes = ["WINWS.EXE", "winws.exe", "GOODBYEDPI.exe", "example.exe"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| RunningProcess {
+                pid: index as u32 + 5,
+                name: name.into(),
+                path: None,
+                has_window: false,
+            })
+            .collect();
+        assert_eq!(
+            conflicting_processes(processes),
+            ["GOODBYEDPI.exe", "WINWS.EXE"]
+        );
     }
 }
