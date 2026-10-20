@@ -1761,6 +1761,80 @@ function Get-RosetunHelperLog {
     } -ArgumentList $script:Config.GuestDir, $Tail
 }
 
+function Invoke-RosetunConnectionsDuring {
+    # The service collects the connection list only while it is read and keeps
+    # a closed connection only if it was read before it closed, so a poller
+    # reads the list during the whole request. Returns the last `rosetun
+    # connections` output, taken after the request ended.
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [switch]$SkipRevocationCheck
+    )
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $url, $skipRevocationCheck)
+        $cli = Join-Path $dir 'rosetun.exe'
+        $poller = Start-Job -ScriptBlock {
+            param($cli)
+            while ($true) { & $cli connections *> $null }
+        } -ArgumentList $cli
+        try {
+            Start-Sleep -Seconds 3
+            $flags = @('--max-time', '10', '--silent', '--output', 'NUL')
+            if ($skipRevocationCheck) {
+                $flags += '--ssl-no-revoke'
+            }
+            & curl.exe @flags $url 2>&1 | Out-Null
+            $curlExit = $LASTEXITCODE
+            Start-Sleep -Seconds 2
+            $output = @(& $cli connections 2>&1 | ForEach-Object { "$_" })
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            Stop-Job -Job $poller -ErrorAction SilentlyContinue
+            Remove-Job -Job $poller -Force -ErrorAction SilentlyContinue
+        }
+        $global:LASTEXITCODE = 0
+        [pscustomobject]@{ CurlExit = $curlExit; ExitCode = $exitCode; Output = ($output -join "`n") }
+    } -ArgumentList $script:Config.GuestDir, $Url, [bool]$SkipRevocationCheck
+}
+
+function Get-RosetunConnectionRows {
+    # Rows of `rosetun connections`: STATE NET ROUTE DOWN UP SECONDS DESTINATION PROGRAM.
+    param([string]$Output)
+    @($Output -split '\r?\n' | Where-Object { $_ -match '^(active|closed)\t' } | ForEach-Object {
+            $columns = $_ -split "`t"
+            [pscustomobject]@{
+                State = $columns[0]
+                Route = $columns[2]
+                Destination = $columns[6]
+                Program = $columns[7]
+            }
+        })
+}
+
+function Find-RosetunLogText {
+    # Every helper log of the guest, console runs and the service's data folder,
+    # searched for $Text as a whole host name. Returns the names of matching files.
+    param([Parameter(Mandatory)][string]$Text)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $text)
+        $pattern = '(?i)(?<![a-z0-9.-])' + [regex]::Escape($text) + '(?![a-z0-9-])'
+        $logs = @(Get-ChildItem -Path $dir -Filter 'helper*.log' -File -ErrorAction SilentlyContinue) +
+            @(Get-ChildItem -Path (Join-Path $dir 'data\logs') -File -ErrorAction SilentlyContinue)
+        foreach ($log in $logs) {
+            $stream = [IO.File]::Open($log.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+                [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+            try {
+                $content = [IO.StreamReader]::new($stream).ReadToEnd()
+            }
+            finally { $stream.Dispose() }
+            if ($content -match $pattern) {
+                $log.Name
+            }
+        }
+    } -ArgumentList $script:Config.GuestDir, $Text
+}
+
 function Test-RosetunGuestLoopback {
     # Loopback must keep working under a Lockdown block: local services use it.
     Invoke-RosetunGuest -ScriptBlock {

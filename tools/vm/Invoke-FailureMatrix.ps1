@@ -323,6 +323,7 @@ public static class RosetunOtherLogon {
             status = '"status"'
             disconnect = '"disconnect"'
             temporary = '"temporary_rules"'
+            connections = '"connections"'
             apply = '{"apply":' + $requestJson + '}'
             connect = '{"connect":' + $requestJson + '}'
         }
@@ -378,7 +379,8 @@ public static class RosetunOtherLogon {
                     }
                     else {
                         $reply = $body | ConvertTo-Json -Compress -Depth 8
-                        $succeeded = $body.PSObject.Properties.Name -contains 'temporary_rules'
+                        $succeeded = $body.PSObject.Properties.Name -contains 'temporary_rules' -or
+                            $body.PSObject.Properties.Name -contains 'connections'
                     }
                 }
                 catch {
@@ -535,6 +537,14 @@ Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
 }
 # The same check as through Xray: if it fails here too, the test or the lab is at fault.
 Test-Step 'connect' 'UDP reaches the internet through the node (NTP)' { Test-RosetunUdpInternet }
+$connectionsHost = ([uri](Get-RosetunTunnelProbeUrl)).Host
+$listed = Invoke-RosetunConnectionsDuring -Url (Get-RosetunTunnelProbeUrl)
+$rows = @(Get-RosetunConnectionRows $listed.Output | Where-Object { $_.Destination -like "${connectionsHost}:*" })
+Test-Step 'connections' "a request to $connectionsHost is listed through the VPN" `
+    -Note "curl $($listed.CurlExit), exit $($listed.ExitCode), routes $(($rows.Route | Sort-Object -Unique) -join ',')" {
+    $listed.CurlExit -eq 0 -and $listed.ExitCode -eq 0 -and $rows.Count -gt 0 -and
+        @($rows | Where-Object Route -ne 'proxy').Count -eq 0
+}
 Test-Step 'no network' 'connect succeeds after the route returns' { (Get-RosetunState) -eq 'Connected' }
 Test-Step 'no network' 'direct egress is blocked after the route returns' { -not (Test-RosetunDirectEgress) }
 
@@ -930,8 +940,8 @@ $otherPassword = New-OtherAccount -Name $otherAccountName
 try {
     $otherResults = @(Invoke-OtherAccountRequests -Name $otherAccountName -Password $otherPassword `
         -GuestDir (Get-RosetunGuestDir) -ProtocolVersion $protocolVersion `
-        -Commands @('status', 'disconnect', 'temporary', 'apply'))
-    foreach ($command in @('status', 'disconnect', 'temporary', 'apply')) {
+        -Commands @('status', 'disconnect', 'temporary', 'connections', 'apply'))
+    foreach ($command in @('status', 'disconnect', 'temporary', 'connections', 'apply')) {
         $result = $otherResults | Where-Object Command -eq $command | Select-Object -First 1
         $note = if ($result) { $result.Reply } else { 'no result' }
         if ($command -eq 'status') {
@@ -967,6 +977,15 @@ try {
     Test-Step 'other account' 'standard account can read its temporary rules' -Note $note {
         $ownerTemporary -and $ownerTemporary.Succeeded -and
             $ownerTemporary.Code -ne 'access_denied' -and $ownerTemporary.StillConnected
+    }
+    # The list is the owner's browsing history: unlike control, an
+    # administrator of another account may not read it.
+    $adminConnections = Invoke-RosetunCli -Quiet 'connections'
+    Test-Step 'other account' 'administrator cannot read the other account connections' `
+        -Note "exit $($adminConnections.ExitCode): $($adminConnections.Output)" {
+        $adminConnections.ExitCode -ne 0 -and
+            $adminConnections.Output -match 'only that account can read its connections' -and
+            (Get-RosetunConnectionRows $adminConnections.Output).Count -eq 0
     }
     $adminApply = Invoke-RosetunApply 'request.json' -Quiet
     Test-Step 'other account' 'administrator applies the other account tunnel' `
@@ -1060,6 +1079,14 @@ Test-Step 'temporary' 'rule is returned' {
 $egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 15 -SkipRevocationCheck
 # The base default is block, so this domain can pass only through the temporary direct rule.
 Test-Step 'temporary' 'domain goes direct' -Note (Format-Egress $egress) { $egress.Ok }
+$temporaryHost = ([uri]$temporaryDomainUrl).Host
+$listed = Invoke-RosetunConnectionsDuring -Url $temporaryDomainUrl -SkipRevocationCheck
+$rows = @(Get-RosetunConnectionRows $listed.Output | Where-Object { $_.Destination -like "${temporaryHost}:*" })
+Test-Step 'connections' "a request to $temporaryHost is listed as direct" `
+    -Note "curl $($listed.CurlExit), exit $($listed.ExitCode), routes $(($rows.Route | Sort-Object -Unique) -join ',')" {
+    $listed.CurlExit -eq 0 -and $listed.ExitCode -eq 0 -and $rows.Count -gt 0 -and
+        @($rows | Where-Object Route -ne 'direct').Count -eq 0
+}
 Test-Step 'temporary' 'unmatched domain is blocked' {
     -not (Test-RosetunTunnelEgress -Url $permanentDomainUrl)
 }
@@ -1496,6 +1523,12 @@ $stopLine = [regex]::Match((Get-HelperLogSince $logMark), 'sing-box (stopped gra
 Test-Step 'graceful disconnect' 'helper log shows a graceful sing-box stop' -Note $stopLine.Trim() {
     $stopLine -match 'stopped gracefully'
 }
+$afterDisconnect = Invoke-RosetunCli -Quiet 'connections'
+Test-Step 'connections' 'the list is empty after a disconnect' `
+    -Note "exit $($afterDisconnect.ExitCode): $($afterDisconnect.Output)" {
+    $afterDisconnect.Output -match 'not connected' -and
+        (Get-RosetunConnectionRows $afterDisconnect.Output).Count -eq 0
+}
 
 Write-Host 'Five immediate disconnect/reconnect cycles...'
 for ($cycle = 1; $cycle -le 5; $cycle++) {
@@ -1746,6 +1779,11 @@ Disconnect-RosetunTunnel | Out-Null
 Test-Step 'hysteria2' 'state is Disconnected' { Wait-RosetunState 'Disconnected' }
 Test-Step 'hysteria2' 'direct egress works again' { Test-RosetunDirectEgress }
 Test-Step 'hysteria2' 'IPv6 works again' { Test-RosetunIpv6Egress }
+
+$namedIn = @(Find-RosetunLogText $connectionsHost)
+Test-Step 'connections' "no service log names $connectionsHost" -Note ($namedIn -join ', ') {
+    $namedIn.Count -eq 0
+}
 
 }
 finally {
