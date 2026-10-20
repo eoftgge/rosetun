@@ -4,7 +4,7 @@ use crate::{
     ConnectRequest, Connection, Frame, HelperError, ListFormat, PROTOCOL_VERSION, ProbeRequest,
     ProbeResult, Request, Response, SessionExit, TunnelDelays,
 };
-use rosetun_config::{Rule, Status};
+use rosetun_config::{LiveConnection, Rule, Status};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -92,6 +92,16 @@ impl HelperClient {
     pub fn session_exits(&mut self) -> Result<Vec<SessionExit>, ClientError> {
         match self.request(Request::SessionExits)? {
             Response::SessionExits(exits) => Ok(exits),
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
+    /// Active and recently closed connections of the session, newest first.
+    pub fn connections(
+        &mut self,
+    ) -> Result<(Vec<LiveConnection>, Vec<LiveConnection>), ClientError> {
+        match self.request(Request::Connections)? {
+            Response::Connections { active, closed } => Ok((active, closed)),
             _ => Err(ClientError::Unexpected),
         }
     }

@@ -1,5 +1,5 @@
 use rosetun_config::{
-    AppConfig, ExitId, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId, RuleTarget, Selection,
+    AppConfig, ExitId, LiveConnection, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId, RuleTarget, Selection,
     Settings, Status, Traffic, resolve_exits,
 };
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,13 @@ pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_EXTRA_NODES: usize = 16;
 pub const MAX_LIST_CHUNK_BYTES: usize = 1024 * 1024;
 pub const MAX_LIST_PAYLOAD_BYTES: u64 = 16 * 1024 * 1024;
+/// Live connections in one answer: the newest active ones, and the most
+/// recently closed ones the helper kept while the list was being read.
+pub const MAX_ACTIVE_CONNECTIONS: usize = 500;
+pub const MAX_CLOSED_CONNECTIONS: usize = 300;
+/// Longer hosts and program paths are cut to this many characters.
+pub const MAX_CONNECTION_HOST_CHARS: usize = 253;
+pub const MAX_CONNECTION_PROCESS_CHARS: usize = 260;
 
 pub use rosetun_config::{ListRef, UploadedListFormat as ListFormat};
 
@@ -26,6 +33,8 @@ pub enum Request {
     TemporaryRules,
     SessionExits,
     DiagnosticLog,
+    /// The running session's connections, for its owner only (protocol 12).
+    Connections,
     ListStatus {
         hashes: Vec<String>,
     },
@@ -84,6 +93,7 @@ impl std::fmt::Debug for Request {
             Self::TemporaryRules => f.write_str("TemporaryRules"),
             Self::SessionExits => f.write_str("SessionExits"),
             Self::DiagnosticLog => f.write_str("DiagnosticLog"),
+            Self::Connections => f.write_str("Connections"),
             Self::TunnelDelay => f.write_str("TunnelDelay"),
             Self::Disconnect => f.write_str("Disconnect"),
             Self::SetLockdown { enabled, allow_lan } => f
@@ -385,6 +395,11 @@ pub enum Response {
     SessionExits(Vec<SessionExit>),
     DiagnosticLog {
         text: String,
+    },
+    /// Newest first.
+    Connections {
+        active: Vec<LiveConnection>,
+        closed: Vec<LiveConnection>,
     },
     ListStatus {
         missing: Vec<String>,
@@ -1068,6 +1083,35 @@ mod tests {
             assert!(debug.contains("exit"));
             assert!(!debug.contains(&node.server));
             assert!(!debug.contains("test-secret"));
+        }
+    }
+    #[test]
+    fn connections_debug_has_no_destinations_or_programs() {
+        use super::Response;
+        use rosetun_config::{ConnectionNetwork, ConnectionRoute, ExitId, LiveConnection};
+
+        let connection = LiveConnection {
+            start_unix_ms: 1,
+            end_unix_ms: Some(2),
+            process: Some(r"C:\Program Files\Example\app.exe".to_owned()),
+            host: "example.com".to_owned(),
+            port: 443,
+            network: ConnectionNetwork::Tcp,
+            route: ConnectionRoute::Exit(ExitId::new("work-exit")),
+            download: 7,
+            upload: 5,
+        };
+        let debug = format!(
+            "{:?}",
+            Response::Connections {
+                active: vec![connection.clone()],
+                closed: vec![connection],
+            }
+        );
+
+        assert!(debug.contains("download: 7"));
+        for secret in ["example.com", "Example", "443", "work-exit"] {
+            assert!(!debug.contains(secret), "{secret} in {debug}");
         }
     }
 }

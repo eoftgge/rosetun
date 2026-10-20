@@ -1,5 +1,6 @@
 #![allow(unreachable_pub)]
 
+mod connections;
 mod exits;
 mod subcommands;
 mod subscriptions;
@@ -34,6 +35,7 @@ enum Command {
     },
     Delay,
     Exits,
+    Connections,
     Select {
         subscription_id: String,
         node_id: String,
@@ -124,6 +126,7 @@ fn main() -> ExitCode {
         },
         Command::Delay => with_helper(delay),
         Command::Exits => local_result(exits::run()),
+        Command::Connections => with_helper(connections::run),
         Command::Status => with_helper(status),
         Command::Temporary => with_helper(temporary),
         Command::Disconnect => with_helper(disconnect),
@@ -686,6 +689,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         }),
         ["delay"] => Ok(Command::Delay),
         ["exits"] => Ok(Command::Exits),
+        ["connections"] => Ok(Command::Connections),
         ["select", subscription_id, node_id] => Ok(Command::Select {
             subscription_id: (*subscription_id).to_owned(),
             node_id: (*node_id).to_owned(),
@@ -709,6 +713,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["probe", ..] => Err("probe accepts zero or one request JSON path".to_owned()),
         ["delay", ..] => Err("delay does not accept arguments".to_owned()),
         ["exits", ..] => Err("exits does not accept arguments".to_owned()),
+        ["connections", ..] => Err("connections does not accept arguments".to_owned()),
         ["select", ..] => Err("select requires exactly a subscription ID and a node ID".to_owned()),
         ["config", ..] => Err("config does not accept arguments".to_owned()),
         ["xray", ..] => Err("xray requires auto, off or always".to_owned()),
@@ -742,6 +747,7 @@ Usage:
   rosetun probe [request.json]
   rosetun delay
   rosetun exits
+  rosetun connections
   rosetun select <subscription-id> <node-id>
   rosetun sub add <url> [--name <name>] [--user-agent <ua>] [--no-hwid]
   rosetun sub update [<id>]
@@ -757,6 +763,7 @@ Usage:
   rosetun shutdown
 
 Subscription and node commands are local and do not require the helper.
+connections lists the tunnel's connections for the account that connected it.
 Lockdown blocks all traffic outside the tunnel, also when disconnected and
 after a reboot. reset-firewall removes it without the service; run it as
 administrator.
@@ -1001,6 +1008,8 @@ mod tests {
     #[test]
     fn exits_takes_no_arguments() {
         assert_eq!(parse(&["exits"]), Ok(Command::Exits));
+        assert_eq!(parse(&["connections"]), Ok(Command::Connections));
+        assert!(parse(&["connections", "extra"]).is_err());
         assert_eq!(
             parse(&["exits", "extra"]),
             Err("exits does not accept arguments".to_owned())

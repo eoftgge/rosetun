@@ -1,4 +1,5 @@
 mod apply;
+mod connections;
 mod dns;
 mod exits;
 mod lockdown;
@@ -17,7 +18,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
-    ConnectionState, ExitId, ListRef, Node, Rule, RuleMatcher, RuleTarget, Status, Traffic,
+    ConnectionState, ExitId, ListRef, LiveConnection, Node, Rule, RuleMatcher, RuleTarget, Status, Traffic,
     list_tag, uses_xray,
 };
 use rosetun_engine::{
@@ -36,6 +37,7 @@ use rosetun_routing::{
 
 use crate::list_store::{ListChunk, ListStore, valid_hash, valid_tag};
 use crate::log_gate::VerboseGate;
+use connections::{ConnectionBook, Translation};
 use watchdog::{DnsWatchdog, WatchdogTiming};
 
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -121,6 +123,7 @@ impl From<PeerIdentity> for Caller {
 
 pub struct Helper {
     status: Arc<Mutex<Status>>,
+    connections: Arc<Mutex<ConnectionBook>>,
     session: Mutex<Session>,
     owner: Arc<Mutex<Option<Vec<u8>>>>,
     last_owner: Mutex<Option<Vec<u8>>>,
@@ -217,6 +220,7 @@ struct Session {
     physical_interface: fn(&str) -> Option<String>,
     control: Option<ControlEndpoint>,
     monitor: Option<TrafficMonitor>,
+    connections: Arc<Mutex<ConnectionBook>>,
     watchdog: Option<DnsWatchdog>,
     tunnel_dns: Option<SocketAddr>,
     path_addresses: Arc<Mutex<Vec<Ipv4Addr>>>,
@@ -266,9 +270,11 @@ impl Helper {
         let cancelled = Arc::new(AtomicBool::new(false));
         let owner = Arc::new(Mutex::new(None));
         let lockdown = lockdown::SharedLockdown::default();
+        let connections = Arc::new(Mutex::new(ConnectionBook::default()));
         Self {
             lockdown: Arc::clone(&lockdown),
             status: Arc::clone(&status),
+            connections: Arc::clone(&connections),
             owner: Arc::clone(&owner),
             last_owner: Mutex::new(None),
             engines: Arc::clone(&engines),
@@ -296,6 +302,7 @@ impl Helper {
                 physical_interface: test_physical_interface,
                 control: None,
                 monitor: None,
+                connections,
                 watchdog: None,
                 tunnel_dns: None,
                 path_addresses: Arc::new(Mutex::new(Vec::new())),
@@ -449,6 +456,41 @@ impl Helper {
                     .collect()
             })
             .unwrap_or_default())
+    }
+
+    /// The running session's connections. Only the account that connected the
+    /// tunnel may read them, administrators included: they are its browsing
+    /// history. Each request keeps the list collected for a few more seconds.
+    pub(crate) fn connections_as(
+        &self,
+        caller: &Caller,
+    ) -> Result<(Vec<LiveConnection>, Vec<LiveConnection>), HelperError> {
+        if !self.check_connections_owner(caller)? {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let session = self.session()?;
+        if !self.check_connections_owner(caller)? || session.monitor.is_none() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let mut book = self
+            .connections
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        book.watch(Instant::now());
+        Ok(book.snapshot())
+    }
+
+    /// `false` without a session owner, so there is nothing to show.
+    fn check_connections_owner(&self, caller: &Caller) -> Result<bool, HelperError> {
+        let owner = self.owner.lock().map_err(|_| access_denied())?;
+        match owner.as_ref() {
+            None => Ok(false),
+            Some(sid) if sid == &caller.sid => Ok(true),
+            Some(_) => Err(HelperError::new(
+                ErrorCode::AccessDenied,
+                "only the account that connected the tunnel can read its connections",
+            )),
+        }
     }
 
     #[cfg(test)]
@@ -1334,16 +1376,21 @@ struct TrafficMonitor {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     status: Arc<Mutex<Status>>,
+    connections: Arc<Mutex<ConnectionBook>>,
 }
 
 impl TrafficMonitor {
+    /// Also collects the session's connections while someone reads them.
     fn start(
         mut probe: Box<dyn TrafficProbe>,
         status: Arc<Mutex<Status>>,
+        connections: Arc<Mutex<ConnectionBook>>,
+        translation: Translation,
     ) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker_status = Arc::clone(&status);
+        let worker_connections = Arc::clone(&connections);
         let thread = thread::Builder::new()
             .name("engine-traffic".to_owned())
             .spawn(move || {
@@ -1360,8 +1407,25 @@ impl TrafficMonitor {
                         return;
                     }
 
-                    match probe.sample(false).map(|sample| sample.totals) {
-                        Ok(totals) => {
+                    let watched = worker_connections
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .watched(Instant::now());
+                    match probe.sample(watched) {
+                        Ok(sample) => {
+                            let totals = sample.totals;
+                            let mut book = worker_connections
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            match sample.connections {
+                                Some(list) if book.watched(Instant::now()) => book.record(
+                                    translation.translate(list),
+                                    connections::now_unix_ms(),
+                                ),
+                                _ if !book.is_empty() => book.forget(),
+                                _ => {}
+                            }
+                            drop(book);
                             if failed {
                                 tracing::info!("engine traffic polling recovered");
                                 failed = false;
@@ -1399,6 +1463,7 @@ impl TrafficMonitor {
             stop,
             thread: Some(thread),
             status,
+            connections,
         })
     }
 
@@ -1414,6 +1479,10 @@ impl TrafficMonitor {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .traffic = Traffic::default();
+        self.connections
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
     }
 }
 
@@ -2137,7 +2206,22 @@ impl Session {
             return;
         };
         if let Some(probe) = backend.traffic_probe(control) {
-            match TrafficMonitor::start(probe, Arc::clone(&self.status)) {
+            let mut hidden: Vec<PathBuf> = std::env::current_exe().into_iter().collect();
+            if let Some(xray) = self.xray.as_ref()
+                && let Ok(binary) = xray.binary_path()
+            {
+                hidden.push(binary);
+            }
+            let translation = Translation {
+                exit_tags: self.exit_tags.clone(),
+                hidden,
+            };
+            match TrafficMonitor::start(
+                probe,
+                Arc::clone(&self.status),
+                Arc::clone(&self.connections),
+                translation,
+            ) {
                 Ok(monitor) => self.monitor = Some(monitor),
                 Err(error) => tracing::warn!(%error, "traffic monitor is unavailable"),
             }
@@ -2324,6 +2408,10 @@ impl Session {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .traffic = Traffic::default();
+            self.connections
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clear();
         }
         if let Some(process) = self.process.as_mut() {
             process

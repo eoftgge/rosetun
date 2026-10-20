@@ -4,8 +4,8 @@ use rosetun_config::{
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    EngineBackend, EngineCapabilities, EngineIntegration, RenderedConfig, RuleCapabilities,
-    TrafficSample,
+    EngineBackend, EngineCapabilities, EngineConnection, EngineIntegration, EngineRoute,
+    RenderedConfig, RuleCapabilities, TrafficSample,
 };
 use rosetun_ipc::{ExtraNode, SessionExit, TunnelDelays};
 use rosetun_routing::errors::RoutingError;
@@ -943,6 +943,8 @@ impl EngineProcess for DnsProcess {
 struct TrafficEngine {
     totals: TrafficTotals,
     dropped: Arc<AtomicUsize>,
+    /// Polls that asked for the connection list.
+    asked: Arc<AtomicUsize>,
     controls: Arc<Mutex<Vec<ControlEndpoint>>>,
     verbose_logs: Arc<Mutex<Vec<bool>>>,
 }
@@ -994,6 +996,7 @@ impl EngineBackend for TrafficEngine {
         Some(Box::new(StubTrafficProbe {
             totals: self.totals,
             dropped: Arc::clone(&self.dropped),
+            asked: Arc::clone(&self.asked),
         }))
     }
 
@@ -1010,13 +1013,29 @@ impl EngineBackend for TrafficEngine {
 struct StubTrafficProbe {
     totals: TrafficTotals,
     dropped: Arc<AtomicUsize>,
+    asked: Arc<AtomicUsize>,
 }
 
 impl TrafficProbe for StubTrafficProbe {
-    fn sample(&mut self, _connections: bool) -> Result<TrafficSample, EngineError> {
+    fn sample(&mut self, connections: bool) -> Result<TrafficSample, EngineError> {
+        if connections {
+            self.asked.fetch_add(1, Ordering::AcqRel);
+        }
         Ok(TrafficSample {
             totals: self.totals,
-            connections: None,
+            connections: connections.then(|| {
+                vec![EngineConnection {
+                    id: "connection".to_owned(),
+                    start_unix_ms: 1,
+                    process: Some(r"C:\Program Files\Example\app.exe".to_owned()),
+                    host: "example.com".to_owned(),
+                    port: 443,
+                    network: rosetun_config::ConnectionNetwork::Tcp,
+                    route: EngineRoute::Proxy,
+                    upload: 1,
+                    download: 2,
+                }]
+            }),
         })
     }
 }
@@ -1091,6 +1110,7 @@ fn traffic_monitor_publishes_totals_and_stops_on_disconnect() {
     engines.register(Box::new(TrafficEngine {
         totals,
         dropped: Arc::clone(&dropped),
+        asked: Arc::default(),
         controls: Arc::clone(&controls),
         verbose_logs: Arc::new(Mutex::new(Vec::new())),
     }));
@@ -1109,6 +1129,82 @@ fn traffic_monitor_publishes_totals_and_stops_on_disconnect() {
     assert_eq!(dropped.load(Ordering::Acquire), 1);
 }
 
+fn connections_helper(asked: &Arc<AtomicUsize>) -> Helper {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(TrafficEngine {
+        totals: TrafficTotals { up: 1, down: 2 },
+        dropped: Arc::default(),
+        asked: Arc::clone(asked),
+        controls: Arc::default(),
+        verbose_logs: Arc::default(),
+    }));
+    Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default())
+}
+
+fn wait_for_active(helper: &Helper, caller: &Caller) -> Vec<LiveConnection> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let (active, _) = helper.connections_as(caller).expect("owner reads connections");
+        if !active.is_empty() {
+            return active;
+        }
+        assert!(Instant::now() < deadline, "connections were not collected");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn connections_are_collected_only_while_read_and_cleared_on_disconnect() {
+    let asked = Arc::new(AtomicUsize::new(0));
+    let helper = connections_helper(&asked);
+    let owner = test_caller();
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    assert_eq!(
+        helper.connections_as(&owner).expect("no session"),
+        (Vec::new(), Vec::new())
+    );
+    helper.connect(&request).expect("connect");
+    wait_for_totals(&helper, TrafficTotals { up: 1, down: 2 });
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(asked.load(Ordering::Acquire), 0, "nobody reads the list");
+
+    let active = wait_for_active(&helper, &owner);
+    assert!(asked.load(Ordering::Acquire) > 0);
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].host, "example.com");
+    assert_eq!(active[0].route, rosetun_config::ConnectionRoute::Proxy);
+
+    helper.disconnect().expect("disconnect");
+    assert!(helper.connections.lock().expect("book").is_empty());
+    assert_eq!(
+        helper.connections_as(&owner).expect("after disconnect"),
+        (Vec::new(), Vec::new())
+    );
+}
+
+#[test]
+fn only_the_session_owner_reads_connections() {
+    let asked = Arc::new(AtomicUsize::new(0));
+    let helper = connections_helper(&asked);
+    let owner = Caller::fake(b"owner", false);
+    let other = Caller::fake(b"other", false);
+    let admin = Caller::fake(b"admin", true);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect_as(&owner, &request).expect("owner connects");
+
+    for caller in [&other, &admin] {
+        assert_eq!(
+            helper.connections_as(caller).unwrap_err().code,
+            ErrorCode::AccessDenied
+        );
+    }
+    assert_eq!(asked.load(Ordering::Acquire), 0, "a denied read does not start collecting");
+    assert_eq!(wait_for_active(&helper, &owner).len(), 1);
+    helper.disconnect_as(&owner).expect("owner disconnects");
+}
+
 #[test]
 fn verbose_log_is_passed_to_engine_and_closed_on_disconnect_or_expiry() {
     let verbose_logs = Arc::new(Mutex::new(Vec::new()));
@@ -1116,6 +1212,7 @@ fn verbose_log_is_passed_to_engine_and_closed_on_disconnect_or_expiry() {
     engines.register(Box::new(TrafficEngine {
         totals: TrafficTotals::default(),
         dropped: Arc::new(AtomicUsize::new(0)),
+        asked: Arc::default(),
         controls: Arc::new(Mutex::new(Vec::new())),
         verbose_logs: Arc::clone(&verbose_logs),
     }));
@@ -3428,6 +3525,7 @@ fn protected_reconnect_replaces_the_traffic_monitor_and_control() {
     let (helper, _, _, _) = protected_helper(Box::new(TrafficEngine {
         totals,
         dropped: Arc::clone(&dropped),
+        asked: Arc::default(),
         controls: Arc::clone(&controls),
         verbose_logs: Arc::new(Mutex::new(Vec::new())),
     }));

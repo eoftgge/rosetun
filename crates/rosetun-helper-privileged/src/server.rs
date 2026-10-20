@@ -353,6 +353,10 @@ fn dispatch(
             Ok(text) => Response::DiagnosticLog { text },
             Err(error) => Response::Error(error),
         },
+        Request::Connections => match helper.connections_as(caller.expect("caller checked")) {
+            Ok((active, closed)) => Response::Connections { active, closed },
+            Err(error) => Response::Error(error),
+        },
         Request::ListStatus { hashes } => match helper.list_status(hashes) {
             Ok(missing) => Response::ListStatus { missing },
             Err(error) => Response::Error(error),
@@ -508,6 +512,7 @@ mod tests {
             Request::TemporaryRules,
             Request::SessionExits,
             Request::DiagnosticLog,
+            Request::Connections,
             Request::TunnelDelay,
             Request::Disconnect,
             Request::SetLockdown {
