@@ -680,10 +680,12 @@ fn failed_lockdown_keeps_the_dialog_and_the_state() {
     state.act(Action::ConfirmLockdown);
     state.reduce(WorkerEvent::SetLockdown {
         enabled: true,
-        result: Err(HelperCommandError::Client(ClientError::Helper(HelperError {
-            code: ErrorCode::RoutingFailed,
-            message: "test".into(),
-        }))),
+        result: Err(HelperCommandError::Client(ClientError::Helper(
+            HelperError {
+                code: ErrorCode::RoutingFailed,
+                message: "test".into(),
+            },
+        ))),
     });
     assert!(!state.operations.lockdown);
     assert_eq!(state.lockdown_confirmation, Some(true));

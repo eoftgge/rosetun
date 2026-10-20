@@ -187,7 +187,9 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
                 );
             }
             if let Some(error) = &state.operation_error {
-                ui.add(egui::Label::new(RichText::new(state.text(error)).color(theme::ERROR)).wrap());
+                ui.add(
+                    egui::Label::new(RichText::new(state.text(error)).color(theme::ERROR)).wrap(),
+                );
             }
         },
     );
