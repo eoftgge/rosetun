@@ -71,6 +71,7 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("reduce-motion"),
+                None,
                 tr!("reduce-motion-detail"),
                 &mut reduce_motion,
                 state.can_edit_settings(),
@@ -103,6 +104,7 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("start-with-windows"),
+                None,
                 tr!("start-with-windows-detail"),
                 &mut autostart,
                 editable && state.settings.screen.autostart.is_some(),
@@ -115,6 +117,7 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("keep-in-tray"),
+                None,
                 tr!("keep-in-tray-detail"),
                 &mut close_to_tray,
                 editable,
@@ -133,6 +136,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("connect-on-start"),
+                None,
                 tr!("connect-on-start-detail"),
                 &mut connect_on_start,
                 editable,
@@ -146,6 +150,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("kill-switch"),
+                None,
                 if lockdown {
                     tr!("kill-switch-lockdown")
                 } else {
@@ -165,6 +170,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("lockdown"),
+                Some(&tr!("experimental")),
                 tr!("lockdown-detail"),
                 &mut lockdown_on,
                 state.can_change_lockdown(),
@@ -177,6 +183,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("allow-lan"),
+                None,
                 tr!("allow-lan-detail"),
                 &mut allow_lan,
                 editable,
@@ -198,6 +205,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("auto-reconnect"),
+                None,
                 tr!("auto-reconnect-detail"),
                 &mut auto_reconnect,
                 editable,
@@ -210,6 +218,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("auto-update-subscriptions"),
+                None,
                 tr!("auto-update-subscriptions-detail"),
                 &mut auto_update_subscriptions,
                 editable,
@@ -670,6 +679,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("verbose-log"),
+                None,
                 &detail,
                 &mut on,
                 state.can_edit_settings(),
@@ -867,6 +877,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         if card
             .toggle(
                 tr!("check-updates"),
+                None,
                 tr!("check-updates-detail"),
                 &mut check_updates,
                 state.can_edit_settings(),

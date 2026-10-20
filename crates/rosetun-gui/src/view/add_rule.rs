@@ -219,6 +219,7 @@ pub(crate) fn show(
                     let response = widgets::toggle_row(
                         ui,
                         tr!("match-by-full-path"),
+                        None,
                         tr!("full-path-detail"),
                         &mut match_path,
                         available && !dialog.busy,
@@ -238,6 +239,7 @@ pub(crate) fn show(
                     let response = widgets::toggle_row(
                         ui,
                         tr!("temporary-only"),
+                        None,
                         tr!("temporary-dialog-hint"),
                         &mut dialog.temporary_only,
                         can_temporary && !dialog.busy,
@@ -793,6 +795,7 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     widgets::toggle_row(
         ui,
         tr!("include-subdomains"),
+        None,
         tr!("include-subdomains-detail"),
         &mut dialog.subdomains,
         !dialog.busy,

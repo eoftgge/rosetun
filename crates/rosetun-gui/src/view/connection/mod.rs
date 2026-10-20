@@ -174,8 +174,19 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
         },
         |ui| {
             ui.add_space(12.0);
+            if enabling {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr!("lockdown-experimental")).color(theme::TEXT_MUTED),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(8.0);
+            }
             ui.add(egui::Label::new(body).wrap());
             if enabling {
+                ui.add_space(8.0);
+                ui.add(egui::Label::new(tr!("lockdown-virtual-machines")).wrap());
                 ui.add_space(8.0);
                 ui.add(
                     egui::Label::new(

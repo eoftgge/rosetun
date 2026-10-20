@@ -1,5 +1,6 @@
 use eframe::egui::{self, Color32, CornerRadius, Stroke};
 
+use super::tag::title_with_tag;
 use crate::theme::{BORDER_STRONG, INPUT, RADIUS_TOGGLE, ROSE, TEXT, TEXT_DIM, TEXT_MUTED};
 
 pub(crate) const TOGGLE_SIZE: egui::Vec2 = egui::vec2(38.0, 22.0);
@@ -67,11 +68,12 @@ pub(super) fn paint_toggle(
     );
 }
 
-/// A title, a muted detail below it and a toggle on the right. The whole row
-/// flips the toggle, not only the switch.
+/// A title with an optional tag, a muted detail below it and a toggle on the
+/// right. The whole row flips the toggle, not only the switch.
 pub(crate) fn toggle_row(
     ui: &mut egui::Ui,
     title: impl AsRef<str>,
+    tag: Option<&str>,
     detail: impl AsRef<str>,
     on: &mut bool,
     enabled: bool,
@@ -84,7 +86,7 @@ pub(crate) fn toggle_row(
         let text_width = ui.available_width() - TOGGLE_SIZE.x - ui.spacing().item_spacing.x;
         ui.vertical(|ui| {
             ui.set_max_width(text_width);
-            ui.label(title);
+            title_with_tag(ui, title.into(), tag);
             ui.add(egui::Label::new(egui::RichText::new(detail).small().color(TEXT_DIM)).wrap());
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

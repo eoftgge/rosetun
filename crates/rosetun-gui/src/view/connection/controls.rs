@@ -41,6 +41,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         if widgets::toggle_row(
             ui,
             tr!("kill-switch"),
+            None,
             if lockdown {
                 tr!("kill-switch-lockdown")
             } else {
@@ -61,6 +62,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         if widgets::toggle_row(
             ui,
             tr!("lockdown"),
+            Some(&tr!("experimental")),
             tr!("lockdown-short"),
             &mut lockdown_on,
             state.can_change_lockdown(),
@@ -74,6 +76,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         if widgets::toggle_row(
             ui,
             tr!("connect-on-start"),
+            None,
             tr!("connect-on-start-detail"),
             &mut connect_on_start,
             state.can_edit_settings(),

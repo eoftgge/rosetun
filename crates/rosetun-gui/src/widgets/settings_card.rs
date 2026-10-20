@@ -1,5 +1,6 @@
 use eframe::egui::{self, Align, Layout, RichText, Stroke};
 
+use super::tag::title_with_tag;
 use super::toggle::{TOGGLE_SIZE, paint_toggle};
 use crate::theme::{BORDER, CARD, RADIUS, TEXT, TEXT_DIM};
 
@@ -32,19 +33,18 @@ impl SettingsCard<'_> {
         detail: Option<&str>,
         control: impl FnOnce(&mut egui::Ui),
     ) {
-        self.row_inner(title.as_ref(), detail, control);
+        self.row_inner(title.as_ref(), None, detail, control);
     }
 
     fn row_inner(
         &mut self,
         title: &str,
+        tag: Option<&str>,
         detail: Option<&str>,
         control: impl FnOnce(&mut egui::Ui),
     ) -> egui::Rect {
         self.row_with_title(
-            |ui| {
-                ui.add(egui::Label::new(RichText::new(title).color(TEXT)).wrap());
-            },
+            |ui| title_with_tag(ui, RichText::new(title).color(TEXT).into(), tag),
             detail,
             control,
         )
@@ -111,10 +111,12 @@ impl SettingsCard<'_> {
             .rect
     }
 
-    /// A row whose control is a toggle; the whole row is clickable.
+    /// A row whose control is a toggle, with an optional tag after the
+    /// title; the whole row is clickable.
     pub(crate) fn toggle(
         &mut self,
         title: impl AsRef<str>,
+        tag: Option<&str>,
         detail: impl AsRef<str>,
         on: &mut bool,
         enabled: bool,
@@ -124,7 +126,7 @@ impl SettingsCard<'_> {
         let enabled = enabled && self.ui.is_enabled();
         let id = self.ui.next_auto_id();
         let mut switch = egui::Rect::NOTHING;
-        let row = self.row_inner(title, Some(detail), |ui| {
+        let row = self.row_inner(title, tag, Some(detail), |ui| {
             switch = ui.allocate_exact_size(TOGGLE_SIZE, egui::Sense::hover()).0;
         });
         let mut response = self.ui.interact(
@@ -207,7 +209,7 @@ mod tests {
                                     .0;
                             },
                         ));
-                        rects.push(card.row_inner("Motion", Some("A detail"), |_| {}));
+                        rects.push(card.row_inner("Motion", None, Some("A detail"), |_| {}));
                         rects.push(card.row_with_title(
                             |ui| {
                                 ui.label("Reconnect automatically");
@@ -257,6 +259,7 @@ mod tests {
                                 settings_card(ui, |card| {
                                     rows.push(card.row_inner(
                                         "Rosetun service: not running",
+                                        None,
                                         Some("The service runs the tunnel with system rights."),
                                         |_| {},
                                     ));
@@ -266,6 +269,7 @@ mod tests {
                                 settings_card(ui, |card| {
                                     rows.push(card.row_inner(
                                         "Log",
+                                        None,
                                         Some("Useful when something breaks and you contact support."),
                                         |ui| {
                                             ui.allocate_exact_size(
@@ -276,6 +280,7 @@ mod tests {
                                     ));
                                     rows.push(card.row_inner(
                                         "Verbose log",
+                                        None,
                                         Some("Turns itself off after a day. While on, it records site addresses and applies on next connect."),
                                         |ui| {
                                             ui.allocate_exact_size(TOGGLE_SIZE, egui::Sense::hover());

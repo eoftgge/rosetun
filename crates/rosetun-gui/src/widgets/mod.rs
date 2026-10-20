@@ -7,6 +7,7 @@ mod search;
 mod segmented;
 mod settings_card;
 mod status_pill;
+mod tag;
 mod toggle;
 
 pub(crate) use buttons::{
