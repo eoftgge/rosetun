@@ -276,7 +276,11 @@ mod tests {
         // Waits for a signal that never comes; ends with the kill.
         let mut command = std::process::Command::new("waitfor.exe");
         command
-            .args(["/t", "30", &format!("RosetunStopTest{}", std::process::id())])
+            .args([
+                "/t",
+                "30",
+                &format!("RosetunStopTest{}", std::process::id()),
+            ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         command

@@ -270,10 +270,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn binary(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "rosetun-version-{name}-{}.exe",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rosetun-version-{name}-{}.exe", std::process::id()));
         std::fs::write(&path, b"sing-box").unwrap();
         path
     }
