@@ -1764,8 +1764,14 @@ function Get-RosetunHelperLog {
 function Invoke-RosetunConnectionsDuring {
     # The service collects the connection list only while it is read and keeps
     # a closed connection only if it was read before it closed, so a poller
-    # reads the list during the whole request. Returns the last `rosetun
-    # connections` output, taken after the request ended.
+    # reads the list during the whole request. The service polls the engine
+    # four times a second: a single quick request can open and close between
+    # two polls and never be seen, so curl fetches the page twelve times, two
+    # a second, at a limited rate, over one kept-alive connection that lives
+    # about six seconds. The CLI prints what it reads 1.5 s after it starts.
+    # Returns the `rosetun connections` output read in the middle of the
+    # request, where the connection is active, followed by the one read after
+    # it ended, where it is closed.
     param(
         [Parameter(Mandatory)][string]$Url,
         [switch]$SkipRevocationCheck
@@ -1777,19 +1783,37 @@ function Invoke-RosetunConnectionsDuring {
             param($cli)
             while ($true) { & $cli connections *> $null }
         } -ArgumentList $cli
+        $curl = $null
         try {
             Start-Sleep -Seconds 3
-            $flags = @('--max-time', '10', '--silent', '--output', 'NUL')
+            $flags = @('--max-time', '10', '--silent', '--rate', '2/s', '--limit-rate', '20k')
             if ($skipRevocationCheck) {
                 $flags += '--ssl-no-revoke'
             }
-            & curl.exe @flags $url 2>&1 | Out-Null
-            $curlExit = $LASTEXITCODE
+            foreach ($fetch in 1..12) {
+                $flags += @('--output', 'NUL', $url)
+            }
+            $start = [Diagnostics.ProcessStartInfo]::new((Get-Command -Name curl.exe -ErrorAction Stop).Source,
+                ($flags -join ' '))
+            $start.UseShellExecute = $false
+            $curl = [Diagnostics.Process]::Start($start)
+            Start-Sleep -Seconds 1
+            $during = @(& $cli connections 2>&1 | ForEach-Object { "$_" })
+            $duringExit = $LASTEXITCODE
+            if (-not $curl.WaitForExit(60000)) {
+                $curl.Kill()
+                $curl.WaitForExit()
+            }
+            $curlExit = $curl.ExitCode
             Start-Sleep -Seconds 2
-            $output = @(& $cli connections 2>&1 | ForEach-Object { "$_" })
-            $exitCode = $LASTEXITCODE
+            $after = @(& $cli connections 2>&1 | ForEach-Object { "$_" })
+            $exitCode = if ($duringExit -ne 0) { $duringExit } else { $LASTEXITCODE }
+            $output = $during + $after
         }
         finally {
+            if ($curl) {
+                $curl.Dispose()
+            }
             Stop-Job -Job $poller -ErrorAction SilentlyContinue
             Remove-Job -Job $poller -Force -ErrorAction SilentlyContinue
         }

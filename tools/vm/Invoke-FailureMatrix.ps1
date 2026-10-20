@@ -157,9 +157,9 @@ function Format-ConnectionsNote {
     param($Listed, [object[]]$Rows)
     $routes = @($Rows | ForEach-Object { $_.Route } | Sort-Object -Unique) -join ','
     $note = "curl $($Listed.CurlExit), exit $($Listed.ExitCode), routes $routes"
-    if ($Rows.Count -eq 0) {
-        $head = @(($Listed.Output -replace "\x1b\[[0-9;]*m", '') -split '\r?\n' |
-            Where-Object { $_.Trim() } | Select-Object -First 4) -join ' | '
+    if (@($Rows).Count -eq 0) {
+        $head = @(($Listed.Output -replace "\x1b\[[0-9;?]*[A-Za-z]", '') -split '\r?\n' |
+            Where-Object { $_.Trim() } | Select-Object -First 10) -join ' | '
         $note += "; output: $head"
     }
     $note
@@ -999,7 +999,7 @@ try {
         -Note "exit $($adminConnections.ExitCode): $($adminConnections.Output)" {
         $adminConnections.ExitCode -ne 0 -and
             $adminConnections.Output -match 'only that account can read its connections' -and
-            (Get-RosetunConnectionRows $adminConnections.Output).Count -eq 0
+            @(Get-RosetunConnectionRows $adminConnections.Output).Count -eq 0
     }
     $adminApply = Invoke-RosetunApply 'request.json' -Quiet
     Test-Step 'other account' 'administrator applies the other account tunnel' `
@@ -1541,7 +1541,7 @@ $afterDisconnect = Invoke-RosetunCli -Quiet 'connections'
 Test-Step 'connections' 'the list is empty after a disconnect' `
     -Note "exit $($afterDisconnect.ExitCode): $($afterDisconnect.Output)" {
     $afterDisconnect.Output -match 'not connected' -and
-        (Get-RosetunConnectionRows $afterDisconnect.Output).Count -eq 0
+        @(Get-RosetunConnectionRows $afterDisconnect.Output).Count -eq 0
 }
 
 Write-Host 'Five immediate disconnect/reconnect cycles...'
