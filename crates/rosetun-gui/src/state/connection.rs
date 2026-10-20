@@ -101,6 +101,41 @@ impl State {
         self.helper_available.then_some(&self.status)
     }
 
+    /// Lockdown is per machine, so only the service knows whether it is on.
+    pub(crate) fn lockdown_active(&self) -> bool {
+        self.visible_status().is_some_and(|status| status.lockdown)
+    }
+
+    pub(crate) fn can_change_lockdown(&self) -> bool {
+        self.config_ready
+            && self.helper_available
+            && self.status_received
+            && !self.operations.helper
+            && !self.operations.lockdown
+    }
+
+    /// Lockdown keeps its own LAN permits, so a saved "Local network" change
+    /// is sent to it at once.
+    pub(crate) fn take_lockdown_lan(&mut self) -> Option<Job> {
+        if !self.lockdown_lan_pending {
+            return None;
+        }
+        if !self.lockdown_active() {
+            self.lockdown_lan_pending = false;
+            return None;
+        }
+        if !self.can_change_lockdown() {
+            return None;
+        }
+        self.lockdown_lan_pending = false;
+        self.operations.lockdown = true;
+        Some(Job::SetLockdown(true))
+    }
+
+    pub(super) fn queue_lockdown_lan(&mut self) {
+        self.lockdown_lan_pending = self.lockdown_active();
+    }
+
     pub(crate) fn primary_action(&self) -> PrimaryAction {
         actions::primary_action(
             self.helper_available,
@@ -287,6 +322,8 @@ impl State {
                 self.clear_traffic_history();
                 self.helper_error = Some(error);
                 self.protection_confirmation = false;
+                self.lockdown_confirmation = None;
+                self.lockdown_lan_pending = false;
                 self.reset_failure_interference();
                 self.reset_system_failure();
                 self.cancel_in_flight = false;
@@ -455,6 +492,14 @@ impl State {
                     .err()
                     .map(|error| self.text(&errors::store(crate::i18n::language(), &error)));
             }
+            WorkerEvent::SetLockdown { enabled, result } => {
+                self.operations.lockdown = false;
+                if result.is_ok() {
+                    self.status.lockdown = enabled;
+                    self.lockdown_confirmation = None;
+                }
+                self.helper_result(result);
+            }
             WorkerEvent::TunnelDelay(result) => {
                 if !self.status_received
                     || !matches!(
@@ -575,10 +620,34 @@ impl State {
                 }
             }
             Action::SetKillSwitch(enabled) => {
-                if self.config_ready && !self.operations.kill_switch && !self.operations.helper {
+                if self.config_ready
+                    && !self.operations.kill_switch
+                    && !self.operations.helper
+                    && !self.lockdown_active()
+                {
                     self.operations.kill_switch = true;
                     self.operation_error = None;
                     return Some(Job::SetKillSwitch(enabled));
+                }
+            }
+            Action::RequestLockdown(enabled) => {
+                if self.can_change_lockdown() && enabled != self.lockdown_active() {
+                    self.operation_error = None;
+                    self.lockdown_confirmation = Some(enabled);
+                }
+            }
+            Action::CancelLockdown => {
+                if !self.operations.lockdown {
+                    self.lockdown_confirmation = None;
+                }
+            }
+            Action::ConfirmLockdown => {
+                if let Some(enabled) = self.lockdown_confirmation
+                    && self.can_change_lockdown()
+                {
+                    self.operations.lockdown = true;
+                    self.operation_error = None;
+                    return Some(Job::SetLockdown(enabled));
                 }
             }
             _ => unreachable!("only connection actions are dispatched here"),

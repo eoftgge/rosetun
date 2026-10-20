@@ -141,13 +141,21 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         {
             actions.push(Action::SetConnectOnStart(connect_on_start));
         }
-        let mut kill_switch = state.config.settings.kill_switch;
+        let lockdown = state.lockdown_active();
+        let mut kill_switch = state.config.settings.kill_switch || lockdown;
         if card
             .toggle(
                 tr!("kill-switch"),
-                tr!("kill-switch-detail"),
+                if lockdown {
+                    tr!("kill-switch-lockdown")
+                } else {
+                    tr!("kill-switch-detail")
+                },
                 &mut kill_switch,
-                state.config_ready && !state.operations.kill_switch && !state.operations.helper,
+                state.config_ready
+                    && !state.operations.kill_switch
+                    && !state.operations.helper
+                    && !lockdown,
             )
             .changed()
         {

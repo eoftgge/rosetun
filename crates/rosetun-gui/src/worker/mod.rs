@@ -148,6 +148,10 @@ pub(crate) enum WorkerEvent {
     RemoveRule(Result<(), RuleSetError>),
     RemoveRules(Result<(), RuleSetError>),
     SetKillSwitch(Result<(), StoreError>),
+    SetLockdown {
+        enabled: bool,
+        result: Result<(), HelperCommandError>,
+    },
     Add(Result<(Subscription, UpdateReport), AddFromUrlError>),
     BrowsedListFile(Option<PathBuf>),
     AddList(Result<(List, Option<usize>), ListError>),

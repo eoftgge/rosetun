@@ -33,6 +33,11 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
         |status| {
             let (label, _) = view::connection::state_style(&status.state);
             let icon = match status.state {
+                ConnectionState::Disconnected | ConnectionState::Failed { .. }
+                    if status.lockdown =>
+                {
+                    TrayState::Blocked
+                }
                 ConnectionState::Connected => TrayState::Connected,
                 ConnectionState::Disconnected => TrayState::Disconnected,
                 ConnectionState::Connecting | ConnectionState::Reconnecting => {
@@ -335,6 +340,28 @@ mod tests {
                 tray.tooltip,
                 i18n::tray_tooltip(&crate::view::connection::state_style(&connection).0, None)
             );
+        }
+    }
+
+    #[test]
+    fn lockdown_without_a_tunnel_shows_blocked() {
+        let mut state = State::default();
+        state.helper_available = true;
+        state.status.lockdown = true;
+        for (connection, expected) in [
+            (ConnectionState::Disconnected, TrayState::Blocked),
+            (
+                ConnectionState::Failed {
+                    reason: String::new(),
+                    failure_kind: None,
+                },
+                TrayState::Blocked,
+            ),
+            (ConnectionState::Connecting, TrayState::Connecting),
+            (ConnectionState::Connected, TrayState::Connected),
+        ] {
+            state.status.state = connection.clone();
+            assert_eq!(tray_view(&state).icon, expected, "{connection:?}");
         }
     }
 }

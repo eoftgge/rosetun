@@ -36,17 +36,40 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         ui.set_min_width(ui.available_width());
         ui.set_min_height((height - 34.0).max(0.0));
         ui.colored_label(theme::TEXT_DIM, tr!("protection"));
-        let mut kill_switch = state.config.settings.kill_switch;
+        let lockdown = state.lockdown_active();
+        let mut kill_switch = state.config.settings.kill_switch || lockdown;
         if widgets::toggle_row(
             ui,
             tr!("kill-switch"),
             tr!("kill-switch-detail"),
             &mut kill_switch,
-            state.config_ready && !state.operations.kill_switch && !state.operations.helper,
+            state.config_ready
+                && !state.operations.kill_switch
+                && !state.operations.helper
+                && !lockdown,
         )
         .changed()
         {
             actions.push(Action::SetKillSwitch(kill_switch));
+        }
+        if lockdown {
+            ui.label(
+                RichText::new(tr!("kill-switch-lockdown"))
+                    .small()
+                    .color(theme::ROSE_LIGHT),
+            );
+        }
+        let mut lockdown_on = lockdown;
+        if widgets::toggle_row(
+            ui,
+            tr!("lockdown"),
+            tr!("lockdown-detail"),
+            &mut lockdown_on,
+            state.can_change_lockdown(),
+        )
+        .changed()
+        {
+            actions.push(Action::RequestLockdown(lockdown_on));
         }
         let mut connect_on_start = state.config.interface.connect_on_start;
         if widgets::toggle_row(

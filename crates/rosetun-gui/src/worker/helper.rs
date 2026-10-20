@@ -127,6 +127,30 @@ impl WorkerDispatcher {
         });
     }
 
+    /// The saved "Local network" value is read here, not when the job was
+    /// queued: a LAN change sends this right after it is written.
+    pub(crate) fn set_lockdown(&self, enabled: bool) {
+        self.spawn_task("rosetun-set-lockdown", move |publisher| {
+            tracing::info!(enabled, "Lockdown command started");
+            let result = publisher
+                .store
+                .load()
+                .map_err(HelperCommandError::Store)
+                .and_then(|config| {
+                    with_helper(|client| client.set_lockdown(enabled, config.settings.allow_lan))
+                });
+            match &result {
+                Ok(()) => tracing::info!(enabled, "Lockdown command succeeded"),
+                Err(error) => tracing::warn!(%error, "Lockdown command failed"),
+            }
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::SetLockdown { enabled, result },
+            );
+        });
+    }
+
     pub(crate) fn tunnel_delay(&self) {
         self.spawn_helper(
             "rosetun-tunnel-delay",

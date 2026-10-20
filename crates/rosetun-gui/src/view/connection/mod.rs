@@ -146,6 +146,58 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
     }
 }
 
+pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
+    let enabling = state.lockdown_confirmation == Some(true);
+    let (title, confirm, body) = if enabling {
+        (
+            tr!("lockdown-on-question"),
+            tr!("lockdown-turn-on"),
+            tr!("lockdown-on-body"),
+        )
+    } else {
+        (
+            tr!("lockdown-off-question"),
+            tr!("lockdown-turn-off"),
+            tr!("lockdown-off-body"),
+        )
+    };
+    let choice = widgets::confirm_modal(
+        ctx,
+        widgets::ConfirmModal {
+            id: "lockdown",
+            title,
+            cancel: tr!("cancel"),
+            confirm,
+            busy: state.operations.lockdown,
+            confirm_enabled: state.can_change_lockdown(),
+            button_gap: 20.0,
+        },
+        |ui| {
+            ui.add_space(12.0);
+            ui.add(egui::Label::new(body).wrap());
+            if enabling {
+                ui.add_space(8.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr!("lockdown-way-out"))
+                            .small()
+                            .color(theme::TEXT_DIM),
+                    )
+                    .wrap(),
+                );
+            }
+            if let Some(error) = &state.operation_error {
+                ui.add(egui::Label::new(RichText::new(state.text(error)).color(theme::ERROR)).wrap());
+            }
+        },
+    );
+    match choice {
+        widgets::ModalChoice::Cancel => actions.push(Action::CancelLockdown),
+        widgets::ModalChoice::Confirm => actions.push(Action::ConfirmLockdown),
+        widgets::ModalChoice::None => {}
+    }
+}
+
 fn conflict_names(state: &State, names: &[String]) -> String {
     let mut visible = names
         .iter()

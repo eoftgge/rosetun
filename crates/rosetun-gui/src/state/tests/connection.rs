@@ -618,3 +618,148 @@ fn protected_disconnect_requires_explicit_confirmation() {
     state.act(Action::KeepBlocked);
     assert!(!state.protection_confirmation);
 }
+
+fn state_with_lockdown(lockdown: bool) -> State {
+    let mut state = state_for_auto_connect();
+    state.reduce(WorkerEvent::Status(Status {
+        lockdown,
+        ..Status::default()
+    }));
+    state
+}
+
+#[test]
+fn lockdown_changes_only_after_confirmation() {
+    let mut state = state_with_lockdown(false);
+    assert!(state.act(Action::RequestLockdown(true)).is_none());
+    assert_eq!(state.lockdown_confirmation, Some(true));
+    assert!(!state.operations.lockdown);
+    assert!(matches!(
+        state.act(Action::ConfirmLockdown),
+        Some(Job::SetLockdown(true))
+    ));
+    assert!(state.operations.lockdown);
+    assert!(state.act(Action::ConfirmLockdown).is_none());
+    assert!(state.act(Action::CancelLockdown).is_none());
+    assert_eq!(state.lockdown_confirmation, Some(true));
+    state.reduce(WorkerEvent::SetLockdown {
+        enabled: true,
+        result: Ok(()),
+    });
+    assert!(!state.operations.lockdown);
+    assert!(state.lockdown_confirmation.is_none());
+    assert!(state.lockdown_active());
+
+    assert!(state.act(Action::RequestLockdown(false)).is_none());
+    assert_eq!(state.lockdown_confirmation, Some(false));
+    assert!(matches!(
+        state.act(Action::ConfirmLockdown),
+        Some(Job::SetLockdown(false))
+    ));
+    state.reduce(WorkerEvent::SetLockdown {
+        enabled: false,
+        result: Ok(()),
+    });
+    assert!(!state.lockdown_active());
+}
+
+#[test]
+fn cancelled_lockdown_sends_nothing() {
+    let mut state = state_with_lockdown(false);
+    state.act(Action::RequestLockdown(true));
+    assert!(state.act(Action::CancelLockdown).is_none());
+    assert!(state.lockdown_confirmation.is_none());
+    assert!(state.act(Action::ConfirmLockdown).is_none());
+    assert!(!state.operations.lockdown);
+}
+
+#[test]
+fn failed_lockdown_keeps_the_dialog_and_the_state() {
+    let mut state = state_with_lockdown(false);
+    state.act(Action::RequestLockdown(true));
+    state.act(Action::ConfirmLockdown);
+    state.reduce(WorkerEvent::SetLockdown {
+        enabled: true,
+        result: Err(HelperCommandError::Client(ClientError::Helper(HelperError {
+            code: ErrorCode::RoutingFailed,
+            message: "test".into(),
+        }))),
+    });
+    assert!(!state.operations.lockdown);
+    assert_eq!(state.lockdown_confirmation, Some(true));
+    assert!(!state.lockdown_active());
+    assert!(state.operation_error.is_some());
+}
+
+#[test]
+fn lockdown_needs_the_service_and_no_running_operation() {
+    let mut state = state_for_auto_connect();
+    assert!(!state.can_change_lockdown());
+    assert!(state.act(Action::RequestLockdown(true)).is_none());
+    assert!(state.lockdown_confirmation.is_none());
+
+    let mut state = state_with_lockdown(false);
+    state.operations.helper = true;
+    assert!(state.act(Action::RequestLockdown(true)).is_none());
+    assert!(state.lockdown_confirmation.is_none());
+    state.operations.helper = false;
+    assert!(state.act(Action::RequestLockdown(false)).is_none());
+    assert!(state.lockdown_confirmation.is_none());
+
+    let mut state = state_with_lockdown(true);
+    state.reduce(WorkerEvent::HelperUnavailable(ClientError::Closed));
+    assert!(!state.lockdown_active());
+    assert!(!state.can_change_lockdown());
+}
+
+#[test]
+fn kill_switch_is_locked_while_lockdown_is_on() {
+    let mut state = state_with_lockdown(true);
+    assert!(state.act(Action::SetKillSwitch(false)).is_none());
+    assert!(!state.operations.kill_switch);
+
+    let mut state = state_with_lockdown(false);
+    assert!(matches!(
+        state.act(Action::SetKillSwitch(false)),
+        Some(Job::SetKillSwitch(false))
+    ));
+}
+
+#[test]
+fn local_network_change_updates_lockdown_only_while_it_is_on() {
+    for lockdown in [true, false] {
+        let mut state = state_with_lockdown(lockdown);
+        assert!(matches!(
+            state.act(Action::SetAllowLan(true)),
+            Some(Job::Setting(SettingChange::AllowLan(true)))
+        ));
+        state.reduce(WorkerEvent::Setting(SettingChange::AllowLan(true), Ok(())));
+        if lockdown {
+            assert!(matches!(
+                state.take_lockdown_lan(),
+                Some(Job::SetLockdown(true))
+            ));
+            assert!(state.operations.lockdown);
+        }
+        assert!(state.take_lockdown_lan().is_none());
+    }
+
+    let mut state = state_with_lockdown(true);
+    state.act(Action::SetAllowLan(true));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::AllowLan(true),
+        Err(rosetun_core::SettingsError::Store(StoreError::NoConfigDir)),
+    ));
+    assert!(state.take_lockdown_lan().is_none());
+
+    let mut state = state_with_lockdown(true);
+    state.act(Action::SetAllowLan(true));
+    state.operations.helper = true;
+    state.reduce(WorkerEvent::Setting(SettingChange::AllowLan(true), Ok(())));
+    assert!(state.take_lockdown_lan().is_none());
+    state.operations.helper = false;
+    assert!(matches!(
+        state.take_lockdown_lan(),
+        Some(Job::SetLockdown(true))
+    ));
+}

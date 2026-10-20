@@ -184,6 +184,9 @@ impl State {
                     self.settings.screen.xray_connect_ready = result.is_ok();
                     self.settings.screen.connect_after_xray_change = false;
                 }
+                if matches!(change, SettingChange::AllowLan(_)) && result.is_ok() {
+                    self.queue_lockdown_lan();
+                }
                 self.finish_settings(result);
             }
             WorkerEvent::SkipVersion(result) => self.finish_settings(result),

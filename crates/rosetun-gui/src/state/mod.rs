@@ -58,6 +58,7 @@ pub(crate) struct Operations {
     pub(crate) rules: bool,
     pub(crate) rules_edit: bool,
     pub(crate) kill_switch: bool,
+    pub(crate) lockdown: bool,
     pub(crate) settings: bool,
     pub(crate) updating: BTreeSet<SubscriptionId>,
     pub(crate) updating_lists: BTreeSet<ListId>,
@@ -114,6 +115,9 @@ pub(crate) struct State {
     pub(crate) settings: SettingsState,
     pub(crate) operations: Operations,
     pub(crate) protection_confirmation: bool,
+    /// The Lockdown value waiting for the user's confirmation.
+    pub(crate) lockdown_confirmation: Option<bool>,
+    lockdown_lan_pending: bool,
 }
 
 impl Default for State {
@@ -155,6 +159,8 @@ impl Default for State {
             settings: SettingsState::default(),
             operations: Operations::default(),
             protection_confirmation: false,
+            lockdown_confirmation: None,
+            lockdown_lan_pending: false,
         }
     }
 }
@@ -284,6 +290,9 @@ pub(crate) enum Action {
     MeasureDelay,
     SelectRuleSet(Option<RuleSetId>),
     SetKillSwitch(bool),
+    RequestLockdown(bool),
+    CancelLockdown,
+    ConfirmLockdown,
     ToggleExpanded(SubscriptionId),
     DropSubscription(SubscriptionId, usize),
     OpenAdd,
@@ -368,6 +377,7 @@ pub(crate) enum Job {
     RemoveRule(RuleSetId, RuleId),
     RemoveRules(RuleSetId, Vec<RuleId>),
     SetKillSwitch(bool),
+    SetLockdown(bool),
     Add {
         input: String,
         options: AddOptions,
@@ -454,6 +464,7 @@ impl State {
             | WorkerEvent::SelectNode(_)
             | WorkerEvent::SelectRuleSet(_)
             | WorkerEvent::SetKillSwitch(_)
+            | WorkerEvent::SetLockdown { .. }
             | WorkerEvent::TunnelDelay(_)) => self.reduce_connection(event),
             event @ WorkerEvent::TemporaryRules { .. } => self.reduce_session(event),
             event @ (WorkerEvent::Apply(_)
@@ -528,7 +539,10 @@ impl State {
             | Action::ToggleExitReveal
             | Action::MeasureDelay
             | Action::SelectRuleSet(_)
-            | Action::SetKillSwitch(_)) => return self.act_connection(action),
+            | Action::SetKillSwitch(_)
+            | Action::RequestLockdown(_)
+            | Action::CancelLockdown
+            | Action::ConfirmLockdown) => return self.act_connection(action),
             action @ (Action::OpenTraffic | Action::SetTrafficRange(_)) => {
                 return self.act_traffic(action);
             }

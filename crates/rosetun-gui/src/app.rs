@@ -296,6 +296,7 @@ impl App {
             Job::RemoveRule(set, rule) => self.workers.remove_rule(set, rule),
             Job::RemoveRules(set, rules) => self.workers.remove_rules(set, rules),
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
+            Job::SetLockdown(enabled) => self.workers.set_lockdown(enabled),
             Job::Add { input, options } => self.workers.add(input, options),
             Job::Update(id) => self.workers.update(id),
             Job::UpdateList(id) => self.workers.update_list(id),
@@ -409,6 +410,9 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_tunnel_delay(display::now_unix()) {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_lockdown_lan() {
             self.dispatch(job);
         }
         // A hidden window runs `logic` only, so the schedule must be requested here, not in `ui`.

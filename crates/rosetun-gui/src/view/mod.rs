@@ -138,6 +138,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     if state.protection_confirmation && state.screen == Screen::Connection {
         connection::protection_dialog(ctx, state, &mut actions);
     }
+    if state.lockdown_confirmation.is_some() {
+        connection::lockdown_dialog(ctx, state, &mut actions);
+    }
     if state.screen == Screen::Rules {
         rules::name_dialog(ctx, state, &mut actions);
         rules::delete_dialog(ctx, state, &mut actions);

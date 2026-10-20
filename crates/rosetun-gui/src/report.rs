@@ -10,6 +10,7 @@ use crate::i18n::{self, Language};
 
 pub(crate) struct ReportSnapshot {
     kill_switch: bool,
+    lockdown: Option<bool>,
     allow_lan: bool,
     xray_mode: XrayUse,
     dns_preset: Option<DnsPreset>,
@@ -84,6 +85,7 @@ impl ReportSnapshot {
         sensitive_names.sort_by_key(|name| std::cmp::Reverse(name.chars().count()));
         Self {
             kill_switch: config.settings.kill_switch,
+            lockdown: helper_available.then_some(status.lockdown),
             allow_lan: config.settings.allow_lan,
             xray_mode: config.settings.xray,
             dns_preset: DnsPreset::matching(&config.settings.dns),
@@ -176,6 +178,12 @@ impl ReportSnapshot {
             "{}: {}",
             report_label!("kill-switch"),
             switch(self.kill_switch)
+        );
+        let _ = writeln!(
+            text,
+            "{}: {}",
+            report_label!("lockdown"),
+            self.lockdown.map_or_else(|| missing.clone(), switch)
         );
         let _ = writeln!(
             text,
@@ -349,6 +357,7 @@ mod tests {
         let report = snapshot.render(None, (None, None), "", "служба недоступна");
         assert!(report.contains("[Журнал службы]\nслужба недоступна"));
         assert!(report.contains("[Версии]"));
+        assert!(report.contains("Lockdown: Недоступно\n"));
     }
 
     #[test]
@@ -360,6 +369,7 @@ mod tests {
                 reason: "could not reach 192.0.2.10".to_owned(),
                 failure_kind: Some(FailureKind::ServerUnreachable),
             },
+            lockdown: true,
             ..Status::default()
         };
         let checks = [CheckResult {
@@ -383,6 +393,7 @@ mod tests {
         assert!(report.contains("ServerUnreachable"));
         assert!(report.contains("System proxy: Warning"));
         assert!(report.contains("Windows build: 26300"));
+        assert!(report.contains("Lockdown: On\n"));
         assert!(report.contains("DNS: Custom (<url>)"));
         assert!(!report.contains("192.0.2.10"));
         assert!(!report.contains("proxy.example.com"));
