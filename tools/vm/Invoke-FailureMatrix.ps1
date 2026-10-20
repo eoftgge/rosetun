@@ -1328,7 +1328,11 @@ try {
         $apply = Invoke-SettingsCli -ConfigPath $seriesConfigPath -Action apply
         $state = Get-RosetunState
         if ($apply.ExitCode -ne 0 -or $state -ne 'Connected') {
-            $failedApplies.Add("#${round}: exit $($apply.ExitCode), $state")
+            # The CLI's last line names the helper's error; without it a
+            # failed apply leaves nothing to go on.
+            $reason = (($apply.Output -replace "\x1b\[[0-9;]*m", '') -split "`n" |
+                Where-Object { $_.Trim() } | Select-Object -Last 1)
+            $failedApplies.Add("#${round}: exit $($apply.ExitCode), $state, $reason")
         }
     }
     $watch = Stop-RosetunEgressWatch
@@ -1336,6 +1340,12 @@ try {
     Test-Step 'apply series' 'all 20 applies succeed and stay Connected' `
         -Note ($failedApplies -join '; ') { $failedApplies.Count -eq 0 }
     $seriesLog = Get-HelperLogSince $seriesLogMark
+    if ($failedApplies.Count -gt 0) {
+        $seriesLogPath = Join-Path $PSScriptRoot ("logs\apply-series-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+        New-Item -ItemType Directory -Force -Path (Split-Path $seriesLogPath) | Out-Null
+        Set-Content -Path $seriesLogPath -Value $seriesLog -Encoding UTF8
+        Write-Host "apply series helper log: $seriesLogPath"
+    }
     $retries = ([regex]::Matches($seriesLog, 'retrying the engine start')).Count
     $busy = ([regex]::Matches($seriesLog, 'already exists')).Count
     $timeoutKills = ([regex]::Matches($seriesLog, 'sing-box did not stop in time')).Count
