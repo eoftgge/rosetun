@@ -353,6 +353,7 @@ pub(crate) fn start(
                         loop {
                             match client.status() {
                                 Ok(status) => {
+                                    rosetun_core::follow_service_status(Some(&status));
                                     let wake = quiet >= QUIET_STATUS_LIMIT
                                         || status_changed(last_status.as_ref(), &status);
                                     quiet = if wake { 0 } else { quiet + 1 };
@@ -368,6 +369,7 @@ pub(crate) fn start(
                                     }
                                 }
                                 Err(error) => {
+                                    rosetun_core::follow_service_status(None);
                                     log_helper_availability(&mut available, false);
                                     if !emit(&tx, &repaint, WorkerEvent::HelperUnavailable(error)) {
                                         return;
@@ -379,6 +381,7 @@ pub(crate) fn start(
                         }
                     }
                     Err(error) => {
+                        rosetun_core::follow_service_status(None);
                         log_helper_availability(&mut available, false);
                         if !emit(&tx, &repaint, WorkerEvent::HelperUnavailable(error)) {
                             return;

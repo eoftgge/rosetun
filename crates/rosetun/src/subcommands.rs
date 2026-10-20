@@ -17,6 +17,12 @@ pub(crate) enum SubCommand {
     },
 }
 
+impl SubCommand {
+    pub(crate) fn uses_network(&self) -> bool {
+        matches!(self, Self::Add { .. } | Self::Update { .. })
+    }
+}
+
 impl fmt::Debug for SubCommand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -130,6 +136,19 @@ mod tests {
     use super::{SubCommand, parse, parse_nodes};
 
     const URL: &str = "https://sub.example.com/private-token?key=query-secret";
+
+    #[test]
+    fn only_add_and_update_go_to_the_network() {
+        for (arguments, network) in [
+            (&["add", URL][..], true),
+            (&["update"], true),
+            (&["update", "sub-1"], true),
+            (&["list"], false),
+            (&["remove", "sub-1"], false),
+        ] {
+            assert_eq!(parse(arguments).unwrap().uses_network(), network);
+        }
+    }
 
     #[test]
     fn add_defaults_are_parsed() {

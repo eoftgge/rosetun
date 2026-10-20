@@ -219,13 +219,14 @@ fn proxy_result(
 
 fn check_clock() -> CheckResult {
     let kind = CheckKind::Clock;
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(5)))
-        .max_redirects(0)
-        .https_only(false)
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent = crate::resolve::agent(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(5)))
+            .max_redirects(0)
+            .https_only(false)
+            .http_status_as_error(false)
+            .build(),
+    );
     let before = SystemTime::now();
     let response = agent.head("http://cp.cloudflare.com/").call();
     let after = SystemTime::now();

@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 rosetun-config.workspace = true
+rosetun-dns.workspace = true
 rosetun-subscription.workspace = true
 rosetun-hwid.workspace = true
 rosetun-adapters.workspace = true

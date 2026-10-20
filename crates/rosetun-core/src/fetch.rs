@@ -194,15 +194,16 @@ fn agent_for(url: &Url, timeouts: Timeouts) -> ureq::Agent {
         .root_certs(RootCerts::PlatformVerifier)
         .build();
 
-    ureq::Agent::config_builder()
-        .tls_config(tls)
-        .timeout_connect(Some(timeouts.connect))
-        .timeout_global(Some(timeouts.global))
-        .max_redirects(5)
-        .https_only(url.scheme() == "https")
-        .http_status_as_error(false)
-        .build()
-        .into()
+    crate::resolve::agent(
+        ureq::Agent::config_builder()
+            .tls_config(tls)
+            .timeout_connect(Some(timeouts.connect))
+            .timeout_global(Some(timeouts.global))
+            .max_redirects(5)
+            .https_only(url.scheme() == "https")
+            .http_status_as_error(false)
+            .build(),
+    )
 }
 
 fn classify_request_error(error: ureq::Error) -> FetchError {

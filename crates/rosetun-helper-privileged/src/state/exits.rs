@@ -13,7 +13,7 @@ use rosetun_engine_xray::SocksEndpoint;
 use rosetun_ipc::{ErrorCode, ExtraNode, HelperError};
 
 use super::{
-    StartMode, SuccessfulEndpoint, node_with_endpoint, normalize_server, probe::resolve_for_apply,
+    NameLookup, StartMode, SuccessfulEndpoint, node_with_endpoint, normalize_server, probe::resolve_for_apply,
     protected_endpoint, resolve_quiet, select_endpoint,
 };
 
@@ -27,11 +27,12 @@ pub(super) fn start_endpoints(
     extra: &[ExtraNode],
     mode: StartMode,
     remembered: &HashMap<ExitId, SuccessfulEndpoint>,
+    lookup: NameLookup,
 ) -> Vec<Option<IpAddr>> {
     extra
         .iter()
         .map(|extra| match mode {
-            StartMode::Fresh => resolve_quiet(&extra.node.server, extra.node.port)
+            StartMode::Fresh => resolve_quiet(&extra.node.server, extra.node.port, lookup)
                 .and_then(|addresses| select_endpoint(&addresses))
                 .ok(),
             StartMode::ProtectedReconnect => {

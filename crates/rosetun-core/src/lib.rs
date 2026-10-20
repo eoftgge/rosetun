@@ -5,6 +5,7 @@ mod exits;
 mod fetch;
 mod lists;
 mod ping;
+mod resolve;
 mod rules;
 mod selection;
 mod settings;
@@ -30,6 +31,7 @@ pub use lists::{
     rename_list, send_prepared, text_entry_count, update_all_lists, update_list,
 };
 pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
+pub use resolve::follow_service_status;
 pub use rosetun_subscription::{ParseError, SkipReason, Skipped, UnsupportedTransport};
 pub use rules::{
     AddedRules, AppliedSnapshot, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,

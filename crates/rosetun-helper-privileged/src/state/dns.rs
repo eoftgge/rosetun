@@ -4,6 +4,7 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
+use rosetun_dns::wire::{self, skip_name, word};
 use rosetun_engine::errors::EngineError;
 use rosetun_ipc::{ErrorCode, HelperError};
 
@@ -37,16 +38,7 @@ impl std::fmt::Display for LastResult {
 }
 
 fn query(id: u16, labels: &[&[u8]]) -> Vec<u8> {
-    let mut packet = Vec::with_capacity(50);
-    packet.extend_from_slice(&id.to_be_bytes());
-    packet.extend_from_slice(&[0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-    for label in labels {
-        packet.push(u8::try_from(label.len()).expect("DNS labels fit in a byte"));
-        packet.extend_from_slice(label);
-    }
-    packet.push(0);
-    packet.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
-    packet
+    wire::query(id, labels, wire::TYPE_A)
 }
 
 fn random_word() -> u64 {
@@ -63,51 +55,6 @@ fn local_address(server: SocketAddr) -> SocketAddr {
     } else {
         (std::net::Ipv6Addr::UNSPECIFIED, 0).into()
     }
-}
-
-fn word(packet: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_be_bytes([
-        *packet.get(offset)?,
-        *packet.get(offset + 1)?,
-    ]))
-}
-
-fn skip_name(packet: &[u8], offset: &mut usize) -> Option<()> {
-    let mut cursor = *offset;
-    let mut end = None;
-    let mut expanded_length = 0usize;
-
-    for _ in 0..packet.len() {
-        let length = *packet.get(cursor)?;
-        match length & 0xc0 {
-            0x00 => {
-                cursor += 1;
-                expanded_length += usize::from(length) + 1;
-                if expanded_length > 255 {
-                    return None;
-                }
-                if length == 0 {
-                    *offset = end.unwrap_or(cursor);
-                    return Some(());
-                }
-                cursor = cursor.checked_add(usize::from(length))?;
-                if cursor > packet.len() {
-                    return None;
-                }
-            }
-            0xc0 => {
-                let target = usize::from(word(packet, cursor)? & 0x3fff);
-                if target < 12 || target >= cursor {
-                    return None;
-                }
-                end.get_or_insert(cursor + 2);
-                cursor = target;
-            }
-            _ => return None,
-        }
-    }
-
-    None
 }
 
 fn parse_reply(packet: &[u8], id: u16) -> Option<Reply> {

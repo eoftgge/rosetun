@@ -199,14 +199,15 @@ pub fn latest_release(
     let tls = TlsConfig::builder()
         .root_certs(RootCerts::PlatformVerifier)
         .build();
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .tls_config(tls)
-        .timeout_global(Some(timeout))
-        .max_redirects(0)
-        .https_only(true)
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent = crate::resolve::agent(
+        ureq::Agent::config_builder()
+            .tls_config(tls)
+            .timeout_global(Some(timeout))
+            .max_redirects(0)
+            .https_only(true)
+            .http_status_as_error(false)
+            .build(),
+    );
 
     // ureq errors can contain the request URI; never forward them to the GUI or log.
     let mut response = agent

@@ -1,4 +1,4 @@
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,10 +18,7 @@ pub enum Ping {
 /// TCP connect time to `server:port`. The name is resolved first; its time
 /// does not count. IPv4 is preferred, as for the tunnel itself.
 pub fn tcp_ping(server: &str, port: u16, timeout: Duration) -> Ping {
-    let Ok(addresses) = (server, port).to_socket_addrs() else {
-        return Ping::NoAnswer;
-    };
-    let addresses: Vec<_> = addresses.collect();
+    let addresses = crate::resolve::socket_addresses(server, port);
     let Some(address) = addresses
         .iter()
         .find(|address| address.is_ipv4())

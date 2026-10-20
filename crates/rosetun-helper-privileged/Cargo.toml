@@ -11,6 +11,7 @@ publish.workspace = true
 base64.workspace = true
 sha2.workspace = true
 rosetun-config.workspace = true
+rosetun-dns.workspace = true
 rosetun-engine.workspace = true
 rosetun-engine-singbox.workspace = true
 rosetun-engine-xray.workspace = true

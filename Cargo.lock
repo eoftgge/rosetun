@@ -2743,6 +2743,7 @@ dependencies = [
  "idna",
  "rosetun-adapters",
  "rosetun-config",
+ "rosetun-dns",
  "rosetun-hwid",
  "rosetun-ipc",
  "rosetun-processes",
@@ -2754,6 +2755,13 @@ dependencies = [
  "tracing",
  "ureq",
  "url",
+]
+
+[[package]]
+name = "rosetun-dns"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2820,6 +2828,7 @@ version = "0.3.0-alpha.1"
 dependencies = [
  "base64",
  "rosetun-config",
+ "rosetun-dns",
  "rosetun-engine",
  "rosetun-engine-singbox",
  "rosetun-engine-xray",

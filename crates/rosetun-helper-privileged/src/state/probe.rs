@@ -19,7 +19,7 @@ use rosetun_ipc::{
 use rosetun_routing::RoutingGuard;
 
 use super::{
-    Caller, Helper, node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name,
+    Caller, Helper, NameLookup, lockdown, node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name,
     wait_for_engine_ready,
 };
 
@@ -195,7 +195,11 @@ impl Helper {
                 outcome: ProbeOutcome::Unresolved,
             })
             .collect::<Vec<_>>();
-        let endpoints = resolve_nodes(&request.nodes);
+        let lookup = NameLookup::new(
+            lockdown::read(&self.lockdown).enabled,
+            self.with_status(|status| status.state == ConnectionState::Connected),
+        );
+        let endpoints = resolve_nodes(&request.nodes, lookup);
         let nodes = request
             .nodes
             .iter()
@@ -571,9 +575,10 @@ fn probe_outcome<E>(result: Result<Duration, E>) -> ProbeOutcome {
     }
 }
 
-pub(super) fn resolve_nodes(nodes: &[Node]) -> Vec<Option<IpAddr>> {
+pub(super) fn resolve_nodes(nodes: &[Node], lookup: NameLookup) -> Vec<Option<IpAddr>> {
     resolve_with_workers(
         nodes,
+        lookup,
         RESOLVE_WORKERS,
         Instant::now() + RESOLVE_TIMEOUT,
         DnsWorkerSlot::acquire,
@@ -586,7 +591,8 @@ pub(super) fn resolve_for_apply(node: &Node) -> Option<IpAddr> {
 
 pub(super) fn resolve_for_apply_with_timeout(node: &Node, timeout: Duration) -> Option<IpAddr> {
     let deadline = Instant::now() + timeout;
-    resolve_with_workers(std::slice::from_ref(node), 1, deadline, || {
+    // Apply runs in a connected session, whose tunnel carries the system resolver.
+    resolve_with_workers(std::slice::from_ref(node), NameLookup::System, 1, deadline, || {
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -602,6 +608,7 @@ pub(super) fn resolve_for_apply_with_timeout(node: &Node, timeout: Duration) -> 
 
 fn resolve_with_workers<S: Send + 'static>(
     nodes: &[Node],
+    lookup: NameLookup,
     limit: usize,
     deadline: Instant,
     acquire: impl Fn() -> Option<S>,
@@ -634,7 +641,7 @@ fn resolve_with_workers<S: Send + 'static>(
         thread::spawn(move || {
             let _slot = slot;
             while let Some((index, server, port)) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
-                let address = resolve_quiet(server, *port)
+                let address = resolve_quiet(server, *port, lookup)
                     .and_then(|addresses| select_endpoint(&addresses))
                     .ok();
                 if tx.send((*index, address)).is_err() {

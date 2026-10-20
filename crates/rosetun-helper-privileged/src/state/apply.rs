@@ -7,7 +7,7 @@ use rosetun_engine::RenderRequest;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
-    Caller, Helper, RECONNECT_BACKOFF, Reconnect, StartMode, exits, node_with_endpoint,
+    Caller, Helper, NameLookup, RECONNECT_BACKOFF, Reconnect, StartMode, exits, node_with_endpoint,
     normalize_server, probe::resolve_for_apply, render_config, validate_request,
 };
 
@@ -141,6 +141,8 @@ impl Helper {
             &current.extra_nodes,
             StartMode::ProtectedReconnect,
             &session.last_extra_endpoints,
+            // Never used: a protected reconnect does not resolve.
+            NameLookup::System,
         );
         session.reserve_lists(request, Some(&current))?;
         tracing::info!(

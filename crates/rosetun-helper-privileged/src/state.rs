@@ -1663,19 +1663,26 @@ impl Session {
             }
         }
 
+        // A fresh start has no tunnel up: the old guard was reverted above.
+        let lookup = NameLookup::new(lockdown::read(&self.lockdown).enabled, false);
         let endpoint = if endpoint.is_some() {
             endpoint
         } else if mode == StartMode::ProtectedReconnect {
             Some(protected_endpoint(node, self.last_endpoint.as_ref())?)
         } else if settings.engine == rosetun_config::EngineKind::SingBox {
-            Some(select_endpoint(&resolve(&node.server, node.port)?)?)
+            Some(select_endpoint(&resolve(&node.server, node.port, lookup)?)?)
         } else {
             None
         };
 
         let resolved_node = endpoint.map(|address| node_with_endpoint(node, address));
         let extra_endpoints = extra_endpoints.unwrap_or_else(|| {
-            exits::start_endpoints(&request.extra_nodes, mode, &self.last_extra_endpoints)
+            exits::start_endpoints(
+                &request.extra_nodes,
+                mode,
+                &self.last_extra_endpoints,
+                lookup,
+            )
         });
         let extra = exits::ExtraNodes::new(&request.extra_nodes, &extra_endpoints, rules);
         if extra.blocked_rules() > 0 {
@@ -2635,25 +2642,61 @@ fn protected_endpoint(
         })
 }
 
-fn resolve(server: &str, port: u16) -> Result<Vec<IpAddr>, HelperError> {
-    let result = resolve_quiet(server, port);
+/// Who looks a server name up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NameLookup {
+    System,
+    /// The service's own queries to the network's DNS servers. Under Lockdown
+    /// without a tunnel the system resolver cannot get out: on Windows its
+    /// queries leave from Dnscache, which Lockdown must never permit, since
+    /// every program's lookups go through it.
+    Direct,
+}
+
+impl NameLookup {
+    /// Direct only while Lockdown is on and no tunnel carries the system
+    /// resolver's queries; through the tunnel they do not leak.
+    fn new(lockdown: bool, tunnel_up: bool) -> Self {
+        if lockdown && !tunnel_up {
+            Self::Direct
+        } else {
+            Self::System
+        }
+    }
+}
+
+/// Matches the server check's wait for the system resolver.
+const DIRECT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn resolve(server: &str, port: u16, lookup: NameLookup) -> Result<Vec<IpAddr>, HelperError> {
+    let result = resolve_quiet(server, port, lookup);
     if let Err(error) = &result {
-        tracing::warn!(%server, %error, "failed to resolve the VPN endpoint");
+        tracing::warn!(%server, %error, ?lookup, "failed to resolve the VPN endpoint");
     }
     result
 }
 
-fn resolve_quiet(server: &str, port: u16) -> Result<Vec<IpAddr>, HelperError> {
-    let addresses = (server, port)
-        .to_socket_addrs()
-        .map_err(|error| {
-            HelperError::new(
-                ErrorCode::RoutingFailed,
-                format!("failed to resolve VPN endpoint {server}: {error}"),
-            )
-        })?
-        .map(|address| address.ip())
-        .collect::<Vec<_>>();
+fn resolve_quiet(
+    server: &str,
+    port: u16,
+    lookup: NameLookup,
+) -> Result<Vec<IpAddr>, HelperError> {
+    let failed = |error: &dyn std::fmt::Display| {
+        HelperError::new(
+            ErrorCode::RoutingFailed,
+            format!("failed to resolve VPN endpoint {server}: {error}"),
+        )
+    };
+    let addresses = match lookup {
+        NameLookup::System => (server, port)
+            .to_socket_addrs()
+            .map_err(|error| failed(&error))?
+            .map(|address| address.ip())
+            .collect::<Vec<_>>(),
+        NameLookup::Direct => {
+            rosetun_dns::resolve(server, DIRECT_RESOLVE_TIMEOUT).map_err(|error| failed(&error))?
+        }
+    };
 
     if addresses.is_empty() {
         return Err(HelperError::new(

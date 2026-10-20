@@ -5986,3 +5986,18 @@ fn main_and_extra_nodes_share_one_xray_process() {
     assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 2);
     assert!(helper.status().xray);
 }
+
+#[test]
+fn names_are_resolved_directly_only_under_lockdown_without_a_tunnel() {
+    assert_eq!(NameLookup::new(false, false), NameLookup::System);
+    assert_eq!(NameLookup::new(false, true), NameLookup::System);
+    assert_eq!(NameLookup::new(true, true), NameLookup::System);
+    assert_eq!(NameLookup::new(true, false), NameLookup::Direct);
+    // An IP literal needs no server under either.
+    for lookup in [NameLookup::System, NameLookup::Direct] {
+        assert_eq!(
+            resolve_quiet("192.0.2.7", 443, lookup).unwrap(),
+            [IpAddr::from([192, 0, 2, 7])]
+        );
+    }
+}

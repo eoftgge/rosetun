@@ -84,7 +84,12 @@ fn main() -> ExitCode {
             subscription_id,
             node_id,
         } => local_result(select_node(&subscription_id, &node_id)),
-        Command::Sub(command) => local_result(subscriptions::run(command)),
+        Command::Sub(command) => {
+            if command.uses_network() {
+                follow_service_status();
+            }
+            local_result(subscriptions::run(command))
+        }
         Command::Nodes { subscription_id } => {
             local_result(subscriptions::nodes(subscription_id.as_deref()))
         }
@@ -611,6 +616,16 @@ fn update_lockdown_lan(enabled: bool) -> ExitCode {
         Ok(status) if status.lockdown => lockdown(&mut client, true, enabled),
         _ => ExitCode::SUCCESS,
     }
+}
+
+/// Under Lockdown the CLI resolves names itself (`rosetun_core::follow_service_status`).
+fn follow_service_status() {
+    let endpoint = rosetun_ipc::default_endpoint();
+    let client_name = concat!("rosetun/", env!("CARGO_PKG_VERSION"));
+    let status = HelperClient::connect(&endpoint, client_name)
+        .and_then(|mut client| client.status())
+        .ok();
+    rosetun_core::follow_service_status(status.as_ref());
 }
 
 /// `rosetun-helper-privileged --reset-firewall` from this program's folder.
