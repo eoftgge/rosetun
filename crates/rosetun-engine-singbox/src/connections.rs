@@ -207,7 +207,10 @@ mod tests {
 
     #[test]
     fn reads_a_connection_and_ignores_unknown_fields() {
-        let connections = parse(&sample(&format!("[{}]", entry("a", "example.com", "proxy"))));
+        let connections = parse(&sample(&format!(
+            "[{}]",
+            entry("a", "example.com", "proxy")
+        )));
 
         assert_eq!(
             connections,
@@ -304,9 +307,11 @@ mod tests {
         let trace = entry("trace", "", "proxy")
             .replace("192.0.2.10", rosetun_config::EXIT_TRACE_IP)
             .replace(r"Example\\app.exe", r"Rosetun\\ROSETUN-GUI.EXE");
-        let other_port = trace.replace(r#""443""#, r#""80""#).replace("trace", "port");
-        let other_program = entry("program", "", "proxy")
-            .replace("192.0.2.10", rosetun_config::EXIT_TRACE_IP);
+        let other_port = trace
+            .replace(r#""443""#, r#""80""#)
+            .replace("trace", "port");
+        let other_program =
+            entry("program", "", "proxy").replace("192.0.2.10", rosetun_config::EXIT_TRACE_IP);
         let body = sample(&format!("[{trace},{other_port},{other_program}]"));
         let ids: Vec<_> = parse(&body).into_iter().map(|c| c.id).collect();
 
@@ -324,7 +329,10 @@ mod tests {
             parse_rfc3339_ms("2026-10-20T04:00:01.5-05:00"),
             Some(1_792_486_801_500)
         );
-        assert_eq!(parse_rfc3339_ms("2024-02-29T00:00:00Z"), Some(1_709_164_800_000));
+        assert_eq!(
+            parse_rfc3339_ms("2024-02-29T00:00:00Z"),
+            Some(1_709_164_800_000)
+        );
         for bad in [
             "",
             "2026-10-20",

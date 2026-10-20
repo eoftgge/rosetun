@@ -18,8 +18,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
-    ConnectionState, ExitId, ListRef, LiveConnection, Node, Rule, RuleMatcher, RuleTarget, Status, Traffic,
-    list_tag, uses_xray,
+    ConnectionState, ExitId, ListRef, LiveConnection, Node, Rule, RuleMatcher, RuleTarget, Status,
+    Traffic, list_tag, uses_xray,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,

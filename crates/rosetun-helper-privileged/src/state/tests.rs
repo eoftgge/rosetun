@@ -1144,7 +1144,9 @@ fn connections_helper(asked: &Arc<AtomicUsize>) -> Helper {
 fn wait_for_active(helper: &Helper, caller: &Caller) -> Vec<LiveConnection> {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        let (active, _) = helper.connections_as(caller).expect("owner reads connections");
+        let (active, _) = helper
+            .connections_as(caller)
+            .expect("owner reads connections");
         if !active.is_empty() {
             return active;
         }
@@ -1200,7 +1202,11 @@ fn only_the_session_owner_reads_connections() {
             ErrorCode::AccessDenied
         );
     }
-    assert_eq!(asked.load(Ordering::Acquire), 0, "a denied read does not start collecting");
+    assert_eq!(
+        asked.load(Ordering::Acquire),
+        0,
+        "a denied read does not start collecting"
+    );
     assert_eq!(wait_for_active(&helper, &owner).len(), 1);
     helper.disconnect_as(&owner).expect("owner disconnects");
 }

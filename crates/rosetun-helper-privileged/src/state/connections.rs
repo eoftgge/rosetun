@@ -244,7 +244,10 @@ mod tests {
         let many: Vec<_> = (0..MAX_ACTIVE_CONNECTIONS as u64 + 100)
             .map(|start| (start.to_string(), start))
             .collect();
-        let many: Vec<_> = many.iter().map(|(id, start)| (id.as_str(), *start)).collect();
+        let many: Vec<_> = many
+            .iter()
+            .map(|(id, start)| (id.as_str(), *start))
+            .collect();
         book.record(entries(&many), 1_000);
 
         let (active, _) = book.snapshot();
@@ -284,10 +287,13 @@ mod tests {
                 (ExitId::new("work"), Some("exit-0".to_owned())),
                 (ExitId::new("e".repeat(65)), Some("exit-1".to_owned())),
             ],
-            hidden: vec![PathBuf::from(r"C:\Program Files\Rosetun\rosetun-helper-privileged.exe")],
+            hidden: vec![PathBuf::from(
+                r"C:\Program Files\Rosetun\rosetun-helper-privileged.exe",
+            )],
         };
         let mut service = engine("service", 1);
-        service.process = Some(r"c:\program files\rosetun\ROSETUN-HELPER-PRIVILEGED.EXE".to_owned());
+        service.process =
+            Some(r"c:\program files\rosetun\ROSETUN-HELPER-PRIVILEGED.EXE".to_owned());
         let routed = |route| EngineConnection {
             route,
             ..engine("x", 1)
@@ -346,7 +352,11 @@ mod tests {
         };
         let mut bytes = Vec::new();
         write_frame(&mut bytes, &frame).expect("frame serializes");
-        assert!((bytes.len() as u64) < MAX_FRAME_BYTES, "{} bytes", bytes.len());
+        assert!(
+            (bytes.len() as u64) < MAX_FRAME_BYTES,
+            "{} bytes",
+            bytes.len()
+        );
         let read = read_frame(&mut bytes.as_slice()).expect("frame reads back");
         assert_eq!(read, Some(frame));
     }

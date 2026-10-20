@@ -114,10 +114,7 @@ mod tests {
         let text = line("closed", &connection, 99_000);
         assert!(!text.contains('\u{1b}'));
         let columns: Vec<_> = text.split('\t').collect();
-        assert_eq!(
-            columns[..6],
-            ["closed", "udp", "exit:work", "7", "5", "5"]
-        );
+        assert_eq!(columns[..6], ["closed", "udp", "exit:work", "7", "5", "5"]);
         assert!(columns[6].starts_with("example.com"));
         assert!(columns[6].ends_with(":443"));
         assert_eq!(columns[7], "C:\\Program Files\\Example\\app.exe");
@@ -128,7 +125,10 @@ mod tests {
             route: ConnectionRoute::Direct,
             ..connection
         };
-        let columns: Vec<_> = line("active", &active, 11_000).split('\t').map(str::to_owned).collect();
+        let columns: Vec<_> = line("active", &active, 11_000)
+            .split('\t')
+            .map(str::to_owned)
+            .collect();
         assert_eq!(columns[2], "direct");
         assert_eq!(columns[5], "10");
         assert_eq!(columns[7], "-");

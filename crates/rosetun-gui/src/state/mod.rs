@@ -40,8 +40,8 @@ pub(crate) use settings::{AboutFolder, SettingsSection};
 use subscriptions::SubscriptionsState;
 pub(crate) use subscriptions::{AddDialog, PingResult, UpdateOutcome, shared_auto_update_hours};
 use system_checks::SystemChecksState;
-pub(crate) use traffic::{ConnectionsNotice, ConnectionsTab, TrafficRange};
 use traffic::TrafficState;
+pub(crate) use traffic::{ConnectionsNotice, ConnectionsTab, TrafficRange};
 use updates::UpdatesState;
 
 pub(crate) fn now_unix() -> u64 {

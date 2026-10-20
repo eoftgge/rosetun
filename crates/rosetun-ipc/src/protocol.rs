@@ -1,6 +1,6 @@
 use rosetun_config::{
-    AppConfig, ExitId, LiveConnection, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId, RuleTarget, Selection,
-    Settings, Status, Traffic, resolve_exits,
+    AppConfig, ExitId, LiveConnection, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId,
+    RuleTarget, Selection, Settings, Status, Traffic, resolve_exits,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;

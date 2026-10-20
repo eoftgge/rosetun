@@ -5,8 +5,8 @@ use rosetun_config::{
 };
 use rosetun_engine::errors::EngineError;
 use rosetun_engine::{
-    EngineRoute, ExtraOutbound, ProbeRenderRequest, RenderRequest, RenderedConfig, RuleCapabilities, SocksProxy,
-    exit_tag,
+    EngineRoute, ExtraOutbound, ProbeRenderRequest, RenderRequest, RenderedConfig,
+    RuleCapabilities, SocksProxy, exit_tag,
 };
 use serde_json::{Map, Value, json};
 

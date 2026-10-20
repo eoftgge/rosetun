@@ -79,7 +79,11 @@ fn connected_on_traffic() -> State {
     state
 }
 
-fn live(host: &str, process: Option<&str>, route: rosetun_config::ConnectionRoute) -> rosetun_config::LiveConnection {
+fn live(
+    host: &str,
+    process: Option<&str>,
+    route: rosetun_config::ConnectionRoute,
+) -> rosetun_config::LiveConnection {
     rosetun_config::LiveConnection {
         start_unix_ms: 1_000,
         end_unix_ms: None,
@@ -106,16 +110,28 @@ fn connections_are_requested_only_while_the_traffic_tab_is_open() {
     assert!(state.take_connections(100).is_none(), "another tab is open");
 
     assert!(state.act(Action::OpenTraffic).is_none());
-    assert!(matches!(state.take_connections(100), Some(Job::Connections)));
-    assert!(state.take_connections(105).is_none(), "one request at a time");
+    assert!(matches!(
+        state.take_connections(100),
+        Some(Job::Connections)
+    ));
+    assert!(
+        state.take_connections(105).is_none(),
+        "one request at a time"
+    );
     state.reduce(WorkerEvent::Connections(Ok((Vec::new(), Vec::new()))));
     assert!(state.take_connections(100).is_none(), "once a second");
     assert_eq!(state.connections_due(), Some(101));
-    assert!(matches!(state.take_connections(101), Some(Job::Connections)));
+    assert!(matches!(
+        state.take_connections(101),
+        Some(Job::Connections)
+    ));
     state.reduce(WorkerEvent::Connections(Ok((Vec::new(), Vec::new()))));
 
     state.set_window_hidden(true);
-    assert!(state.take_connections(102).is_none(), "the window is in the tray");
+    assert!(
+        state.take_connections(102).is_none(),
+        "the window is in the tray"
+    );
     assert_eq!(state.connections_due(), None);
     state.set_window_hidden(false);
 
@@ -134,14 +150,28 @@ fn connections_filter_matches_program_and_address_ignoring_case() {
     let _ = state.take_connections(100);
     state.reduce(WorkerEvent::Connections(Ok((
         vec![
-            live("Example.com", Some(r"C:\Program Files\Example\Browser.exe"), rosetun_config::ConnectionRoute::Proxy),
-            live("192.0.2.10", Some(r"C:\Games\Game.exe"), rosetun_config::ConnectionRoute::Direct),
+            live(
+                "Example.com",
+                Some(r"C:\Program Files\Example\Browser.exe"),
+                rosetun_config::ConnectionRoute::Proxy,
+            ),
+            live(
+                "192.0.2.10",
+                Some(r"C:\Games\Game.exe"),
+                rosetun_config::ConnectionRoute::Direct,
+            ),
             live("203.0.113.5", None, rosetun_config::ConnectionRoute::Proxy),
         ],
         Vec::new(),
     ))));
     let hosts = |state: &State| -> Vec<String> {
-        state.traffic.connections.visible().iter().map(|c| c.host.clone()).collect()
+        state
+            .traffic
+            .connections
+            .visible()
+            .iter()
+            .map(|c| c.host.clone())
+            .collect()
     };
     assert_eq!(hosts(&state).len(), 3);
 
@@ -152,10 +182,18 @@ fn connections_filter_matches_program_and_address_ignoring_case() {
         ("192.0.2.10:443", vec!["192.0.2.10"]),
         ("  203.0  ", vec!["203.0.113.5"]),
     ] {
-        assert!(state.act(Action::SetConnectionsFilter(filter.to_owned())).is_none());
+        assert!(
+            state
+                .act(Action::SetConnectionsFilter(filter.to_owned()))
+                .is_none()
+        );
         assert_eq!(hosts(&state), expected, "{filter}");
     }
-    assert!(state.act(Action::SetConnectionsFilter("nothing".to_owned())).is_none());
+    assert!(
+        state
+            .act(Action::SetConnectionsFilter("nothing".to_owned()))
+            .is_none()
+    );
     assert_eq!(state.connections_notice(), Some(ConnectionsNotice::NoMatch));
 }
 
@@ -165,25 +203,43 @@ fn connection_routes_name_the_exit() {
     state.config.exits.push(rosetun_config::Exit {
         id: rosetun_config::ExitId::new("work"),
         name: "Work".to_owned(),
-        target: rosetun_config::ExitTarget::Country(rosetun_config::CountryCode::parse("NL").unwrap()),
+        target: rosetun_config::ExitTarget::Country(
+            rosetun_config::CountryCode::parse("NL").unwrap(),
+        ),
     });
     let label = |route| state.connection_route_label(&route);
 
-    assert_eq!(label(rosetun_config::ConnectionRoute::Exit(rosetun_config::ExitId::new("work"))), "Work");
-    assert_eq!(label(rosetun_config::ConnectionRoute::Proxy), tr!("proxy"));
-    assert_eq!(label(rosetun_config::ConnectionRoute::Direct), tr!("direct"));
     assert_eq!(
-        label(rosetun_config::ConnectionRoute::Exit(rosetun_config::ExitId::new("gone"))),
+        label(rosetun_config::ConnectionRoute::Exit(
+            rosetun_config::ExitId::new("work")
+        )),
+        "Work"
+    );
+    assert_eq!(label(rosetun_config::ConnectionRoute::Proxy), tr!("proxy"));
+    assert_eq!(
+        label(rosetun_config::ConnectionRoute::Direct),
+        tr!("direct")
+    );
+    assert_eq!(
+        label(rosetun_config::ConnectionRoute::Exit(
+            rosetun_config::ExitId::new("gone")
+        )),
         tr!("target-exit-any")
     );
-    assert_eq!(label(rosetun_config::ConnectionRoute::Other), tr!("connections-route-other"));
+    assert_eq!(
+        label(rosetun_config::ConnectionRoute::Other),
+        tr!("connections-route-other")
+    );
 }
 
 #[test]
 fn connections_empty_states_follow_the_session_and_the_answer() {
     let mut state = State::default();
     assert!(state.act(Action::OpenTraffic).is_none());
-    assert_eq!(state.connections_notice(), Some(ConnectionsNotice::Disconnected));
+    assert_eq!(
+        state.connections_notice(),
+        Some(ConnectionsNotice::Disconnected)
+    );
 
     let mut state = connected_on_traffic();
     assert_eq!(state.connections_notice(), Some(ConnectionsNotice::Loading));
@@ -193,11 +249,19 @@ fn connections_empty_states_follow_the_session_and_the_answer() {
 
     let _ = state.take_connections(101);
     state.reduce(WorkerEvent::Connections(Ok((
-        vec![live("example.com", None, rosetun_config::ConnectionRoute::Proxy)],
+        vec![live(
+            "example.com",
+            None,
+            rosetun_config::ConnectionRoute::Proxy,
+        )],
         Vec::new(),
     ))));
     assert_eq!(state.connections_notice(), None);
-    assert!(state.act(Action::SetConnectionsTab(ConnectionsTab::Closed)).is_none());
+    assert!(
+        state
+            .act(Action::SetConnectionsTab(ConnectionsTab::Closed))
+            .is_none()
+    );
     assert_eq!(state.connections_notice(), Some(ConnectionsNotice::Empty));
 
     let _ = state.take_connections(102);
@@ -209,12 +273,22 @@ fn connections_empty_states_follow_the_session_and_the_answer() {
 
     let _ = state.take_connections(103);
     state.reduce(WorkerEvent::Connections(Ok((
-        vec![live("example.com", None, rosetun_config::ConnectionRoute::Proxy)],
+        vec![live(
+            "example.com",
+            None,
+            rosetun_config::ConnectionRoute::Proxy,
+        )],
         Vec::new(),
     ))));
     state.reduce(WorkerEvent::Status(Status::default()));
-    assert_eq!(state.connections_notice(), Some(ConnectionsNotice::Disconnected));
-    assert!(state.traffic.connections.active.is_empty(), "cleared on disconnect");
+    assert_eq!(
+        state.connections_notice(),
+        Some(ConnectionsNotice::Disconnected)
+    );
+    assert!(
+        state.traffic.connections.active.is_empty(),
+        "cleared on disconnect"
+    );
 }
 
 #[test]
@@ -222,7 +296,11 @@ fn an_old_answer_is_dropped_when_the_tab_is_opened_again() {
     let mut state = connected_on_traffic();
     let _ = state.take_connections(100);
     state.reduce(WorkerEvent::Connections(Ok((
-        vec![live("example.com", None, rosetun_config::ConnectionRoute::Proxy)],
+        vec![live(
+            "example.com",
+            None,
+            rosetun_config::ConnectionRoute::Proxy,
+        )],
         Vec::new(),
     ))));
     assert!(state.act(Action::ShowConnection).is_none());
