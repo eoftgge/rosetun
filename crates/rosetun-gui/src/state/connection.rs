@@ -86,6 +86,7 @@ fn reported_by_status(error: &HelperCommandError) -> bool {
                 | ErrorCode::XrayStartFailed
                 | ErrorCode::XrayStopped
                 | ErrorCode::RoutingFailed
+                | ErrorCode::ServerNameUnresolved
                 | ErrorCode::UnsupportedRules
                 | ErrorCode::Cancelled,
             ..

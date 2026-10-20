@@ -708,6 +708,11 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                 ErrorCode::DnsTimeout => {
                     tr_in(language, "error-code-dns-timeout", &FluentArgs::new())
                 }
+                ErrorCode::ServerNameUnresolved => tr_in(
+                    language,
+                    "error-code-server-name-unresolved",
+                    &FluentArgs::new(),
+                ),
                 ErrorCode::Cancelled => tr_in(language, "error-code-cancelled", &FluentArgs::new()),
                 ErrorCode::EngineNotReady => {
                     tr_in(language, "error-code-engine-not-ready", &FluentArgs::new())

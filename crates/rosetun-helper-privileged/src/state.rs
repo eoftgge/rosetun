@@ -2465,6 +2465,7 @@ fn failure_kind(code: ErrorCode) -> Option<rosetun_config::FailureKind> {
         ErrorCode::ServerRejected => Some(FailureKind::ServerRejected),
         ErrorCode::ServerClosed => Some(FailureKind::ServerClosed),
         ErrorCode::DnsTimeout => Some(FailureKind::DnsTimeout),
+        ErrorCode::ServerNameUnresolved => Some(FailureKind::ServerNameUnresolved),
         _ => None,
     }
 }
@@ -2681,10 +2682,12 @@ fn resolve_quiet(
     port: u16,
     lookup: NameLookup,
 ) -> Result<Vec<IpAddr>, HelperError> {
+    // The status carries this message to the GUI and to reports; the
+    // server's name stays in the log line of `resolve`.
     let failed = |error: &dyn std::fmt::Display| {
         HelperError::new(
-            ErrorCode::RoutingFailed,
-            format!("failed to resolve VPN endpoint {server}: {error}"),
+            ErrorCode::ServerNameUnresolved,
+            format!("failed to resolve the VPN server name: {error}"),
         )
     };
     let addresses = match lookup {
@@ -2700,8 +2703,8 @@ fn resolve_quiet(
 
     if addresses.is_empty() {
         return Err(HelperError::new(
-            ErrorCode::RoutingFailed,
-            format!("VPN endpoint {server} resolved to no addresses"),
+            ErrorCode::ServerNameUnresolved,
+            "the VPN server name resolved to no addresses",
         ));
     }
 

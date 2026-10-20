@@ -165,6 +165,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         *kind,
                                         state.config.active_node().map(|(_, node)| node),
                                         status.xray_use.unwrap_or(state.config.settings.xray),
+                                        state.lockdown_active(),
                                     );
                                     ui.colored_label(theme::ERROR, title)
                                         .on_hover_text(state.text(reason));

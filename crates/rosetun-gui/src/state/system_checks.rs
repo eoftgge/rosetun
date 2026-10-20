@@ -1,4 +1,4 @@
-use rosetun_config::ConnectionState;
+use rosetun_config::{ConnectionState, FailureKind};
 use rosetun_core::{CheckResult, CheckStatus};
 
 use super::{Action, Job, Screen, State, now_unix};
@@ -90,9 +90,14 @@ impl State {
     }
 }
 
+/// A failure the system checks may explain. An unresolved server name is
+/// not one: their findings (another VPN, a proxy) only mislead there.
 fn failed(state: &ConnectionState) -> bool {
-    matches!(
-        state,
-        ConnectionState::Failed { .. } | ConnectionState::FailedProtected { .. }
-    )
+    match state {
+        ConnectionState::Failed { failure_kind, .. }
+        | ConnectionState::FailedProtected { failure_kind, .. } => {
+            *failure_kind != Some(FailureKind::ServerNameUnresolved)
+        }
+        _ => false,
+    }
 }

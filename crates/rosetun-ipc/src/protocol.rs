@@ -453,6 +453,8 @@ pub enum ErrorCode {
     ServerRejected,
     ServerClosed,
     DnsTimeout,
+    /// The server's name could not be resolved before connecting (protocol 12).
+    ServerNameUnresolved,
     Cancelled,
     EngineNotReady,
     RoutingFailed,
@@ -480,6 +482,7 @@ mod tests {
             super::ErrorCode::ServerRejected,
             super::ErrorCode::ServerClosed,
             super::ErrorCode::DnsTimeout,
+            super::ErrorCode::ServerNameUnresolved,
         ] {
             let value = serde_json::to_string(&code).unwrap();
             assert_eq!(

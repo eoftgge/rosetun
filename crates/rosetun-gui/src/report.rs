@@ -267,6 +267,7 @@ impl ReportSnapshot {
                         FailureKind::ServerRejected => report_label!("report-failure-rejected"),
                         FailureKind::ServerClosed => report_label!("report-failure-closed"),
                         FailureKind::DnsTimeout => report_label!("report-failure-dns"),
+                        FailureKind::ServerNameUnresolved => report_label!("report-failure-name"),
                     }
                 }
             )

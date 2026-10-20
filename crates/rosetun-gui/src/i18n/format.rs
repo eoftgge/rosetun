@@ -274,6 +274,7 @@ pub(crate) fn connection_failure(
     kind: FailureKind,
     node: Option<&Node>,
     xray: XrayUse,
+    lockdown: bool,
 ) -> (String, String) {
     let reality_without_xray = xray == XrayUse::Off
         && node.is_some_and(|node| {
@@ -329,6 +330,19 @@ pub(crate) fn connection_failure(
                 retry = tr!("retry"),
                 url_test = tr!("check-full")
             ),
+        ),
+        // Never names the server: the text ends up in screenshots.
+        FailureKind::ServerNameUnresolved => (
+            tr!("error-code-server-name-unresolved"),
+            if lockdown {
+                format!(
+                    "{} {}",
+                    tr!("server-name-unresolved-hint"),
+                    tr!("server-name-unresolved-lockdown")
+                )
+            } else {
+                tr!("server-name-unresolved-hint")
+            },
         ),
     };
     (title, hint)

@@ -21,6 +21,7 @@ pub enum FailureKind {
     ServerRejected,
     ServerClosed,
     DnsTimeout,
+    ServerNameUnresolved,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

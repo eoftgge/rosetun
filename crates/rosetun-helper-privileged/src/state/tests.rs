@@ -2278,11 +2278,15 @@ fn kill_switch_rejects_an_unresolvable_vpn_endpoint_before_routing() {
         .connect(&request)
         .expect_err("an invalid VPN endpoint rejects the connection");
 
-    assert_eq!(error.code, ErrorCode::RoutingFailed);
-    assert!(error.message.contains("failed to resolve VPN endpoint"));
+    assert_eq!(error.code, ErrorCode::ServerNameUnresolved);
+    assert!(error.message.contains("failed to resolve the VPN server name"));
+    assert!(!error.message.contains("invalid host name"));
     assert!(matches!(
         helper.status().state,
-        ConnectionState::Failed { .. }
+        ConnectionState::Failed {
+            failure_kind: Some(rosetun_config::FailureKind::ServerNameUnresolved),
+            ..
+        }
     ));
 }
 

@@ -115,3 +115,30 @@ fn details_link_opens_the_service_settings_section() {
     assert_eq!(state.screen, Screen::Settings);
     assert_eq!(state.settings.screen.section, SettingsSection::Service);
 }
+
+#[test]
+fn an_unresolved_server_name_gets_no_system_check_hint() {
+    let mut state = State {
+        helper_available: true,
+        config_ready: true,
+        ..State::default()
+    };
+    let unresolved = Status {
+        state: ConnectionState::Failed {
+            reason: "failed to resolve the VPN server name".into(),
+            failure_kind: Some(rosetun_config::FailureKind::ServerNameUnresolved),
+        },
+        ..Status::default()
+    };
+    state.reduce(WorkerEvent::Status(unresolved));
+    assert!(state.take_system_check().is_none());
+    let Some(Job::CheckSystem { request, .. }) = state.act(Action::CheckSystem) else {
+        panic!("the button still checks");
+    };
+    state.reduce(WorkerEvent::SystemChecks {
+        request,
+        results: vec![warning()],
+    });
+    assert!(state.system_checks.failure_warning.is_none());
+    assert_eq!(state.system_checks.results.as_ref().unwrap(), &[warning()]);
+}
