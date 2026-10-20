@@ -106,6 +106,11 @@ impl HelperClient {
         }
     }
 
+    /// Closes one active connection of the session by its id.
+    pub fn close_connection(&mut self, id: &str) -> Result<(), ClientError> {
+        self.expect_ok(Request::CloseConnection { id: id.to_owned() })
+    }
+
     pub fn list_status(&mut self, hashes: Vec<String>) -> Result<Vec<String>, ClientError> {
         match self.request(Request::ListStatus { hashes })? {
             Response::ListStatus { missing } => Ok(missing),

@@ -88,6 +88,11 @@ pub enum EngineRoute {
 /// Longest connection id the helper passes on or the engine closes.
 pub const MAX_CONNECTION_ID_CHARS: usize = 64;
 
+/// Whether `id` may be sent to the engine to close a connection.
+pub fn valid_connection_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().count() <= MAX_CONNECTION_ID_CHARS
+}
+
 /// One connection the engine carries now. Its `Debug` shows no destination or
 /// program: the list is the user's browsing history.
 #[derive(Clone, PartialEq, Eq)]
@@ -246,6 +251,12 @@ pub trait EngineBackend: Send + Sync + std::fmt::Debug {
     /// Reads traffic from the control API that `render` enabled for `control`.
     fn traffic_probe(&self, _control: &ControlEndpoint) -> Option<Box<dyn TrafficProbe>> {
         None
+    }
+
+    /// Closes one connection by its [`EngineConnection::id`]. An id the engine
+    /// does not know is not an error: the connection may have closed itself.
+    fn close_connection(&self, _control: &ControlEndpoint, _id: &str) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported("closing connections".to_owned()))
     }
 
     fn spawn(

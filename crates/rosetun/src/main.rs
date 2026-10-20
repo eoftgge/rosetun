@@ -36,6 +36,9 @@ enum Command {
     Delay,
     Exits,
     Connections,
+    CloseConnection {
+        id: String,
+    },
     Select {
         subscription_id: String,
         node_id: String,
@@ -127,6 +130,7 @@ fn main() -> ExitCode {
         Command::Delay => with_helper(delay),
         Command::Exits => local_result(exits::run()),
         Command::Connections => with_helper(connections::run),
+        Command::CloseConnection { id } => with_helper(|client| connections::close(client, &id)),
         Command::Status => with_helper(status),
         Command::Temporary => with_helper(temporary),
         Command::Disconnect => with_helper(disconnect),
@@ -690,6 +694,9 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["delay"] => Ok(Command::Delay),
         ["exits"] => Ok(Command::Exits),
         ["connections"] => Ok(Command::Connections),
+        ["connections", "close", id] => Ok(Command::CloseConnection {
+            id: (*id).to_owned(),
+        }),
         ["select", subscription_id, node_id] => Ok(Command::Select {
             subscription_id: (*subscription_id).to_owned(),
             node_id: (*node_id).to_owned(),
@@ -713,7 +720,10 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["probe", ..] => Err("probe accepts zero or one request JSON path".to_owned()),
         ["delay", ..] => Err("delay does not accept arguments".to_owned()),
         ["exits", ..] => Err("exits does not accept arguments".to_owned()),
-        ["connections", ..] => Err("connections does not accept arguments".to_owned()),
+        ["connections", "close", ..] => {
+            Err("connections close requires exactly one connection ID".to_owned())
+        }
+        ["connections", ..] => Err("connections accepts only close <id>".to_owned()),
         ["select", ..] => Err("select requires exactly a subscription ID and a node ID".to_owned()),
         ["config", ..] => Err("config does not accept arguments".to_owned()),
         ["xray", ..] => Err("xray requires auto, off or always".to_owned()),
@@ -748,6 +758,7 @@ Usage:
   rosetun delay
   rosetun exits
   rosetun connections
+  rosetun connections close <id>
   rosetun select <subscription-id> <node-id>
   rosetun sub add <url> [--name <name>] [--user-agent <ua>] [--no-hwid]
   rosetun sub update [<id>]
@@ -763,7 +774,8 @@ Usage:
   rosetun shutdown
 
 Subscription and node commands are local and do not require the helper.
-connections lists the tunnel's connections for the account that connected it.
+connections lists the tunnel's connections for the account that connected it;
+close ends one of them by its ID (the 8 characters shown, or the full ID).
 Lockdown (experimental) blocks all traffic outside the tunnel, also when
 disconnected and after a reboot. reset-firewall removes it without the
 service; run it as administrator.
@@ -1010,6 +1022,14 @@ mod tests {
         assert_eq!(parse(&["exits"]), Ok(Command::Exits));
         assert_eq!(parse(&["connections"]), Ok(Command::Connections));
         assert!(parse(&["connections", "extra"]).is_err());
+        assert_eq!(
+            parse(&["connections", "close", "0d5c1f2e"]),
+            Ok(Command::CloseConnection {
+                id: "0d5c1f2e".to_owned()
+            })
+        );
+        assert!(parse(&["connections", "close"]).is_err());
+        assert!(parse(&["connections", "close", "a", "b"]).is_err());
         assert_eq!(
             parse(&["exits", "extra"]),
             Err("exits does not accept arguments".to_owned())

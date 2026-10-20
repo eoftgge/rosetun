@@ -947,6 +947,8 @@ struct TrafficEngine {
     asked: Arc<AtomicUsize>,
     controls: Arc<Mutex<Vec<ControlEndpoint>>>,
     verbose_logs: Arc<Mutex<Vec<bool>>>,
+    /// Ids the helper asked the engine to close.
+    closed: Arc<Mutex<Vec<String>>>,
 }
 
 impl EngineBackend for TrafficEngine {
@@ -998,6 +1000,14 @@ impl EngineBackend for TrafficEngine {
             dropped: Arc::clone(&self.dropped),
             asked: Arc::clone(&self.asked),
         }))
+    }
+
+    fn close_connection(&self, _control: &ControlEndpoint, id: &str) -> Result<(), EngineError> {
+        self.closed
+            .lock()
+            .expect("test closed mutex")
+            .push(id.to_owned());
+        Ok(())
     }
 
     fn spawn(
@@ -1222,6 +1232,7 @@ fn traffic_monitor_publishes_totals_and_stops_on_disconnect() {
         asked: Arc::default(),
         controls: Arc::clone(&controls),
         verbose_logs: Arc::new(Mutex::new(Vec::new())),
+        closed: Arc::default(),
     }));
     let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
     let mut request = connect_request();
@@ -1246,8 +1257,109 @@ fn connections_helper(asked: &Arc<AtomicUsize>) -> Helper {
         asked: Arc::clone(asked),
         controls: Arc::default(),
         verbose_logs: Arc::default(),
+        closed: Arc::default(),
     }));
     Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default())
+}
+
+fn closing_helper() -> (Helper, Arc<Mutex<Vec<String>>>) {
+    let closed = Arc::new(Mutex::new(Vec::new()));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(TrafficEngine {
+        totals: TrafficTotals::default(),
+        dropped: Arc::default(),
+        asked: Arc::default(),
+        controls: Arc::default(),
+        verbose_logs: Arc::default(),
+        closed: Arc::clone(&closed),
+    }));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
+    (helper, closed)
+}
+
+#[test]
+fn the_owner_closes_a_connection_and_an_unknown_id_is_not_an_error() {
+    let (helper, closed) = closing_helper();
+    let owner = Caller::fake(b"owner", false);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect_as(&owner, &request).expect("owner connects");
+
+    helper
+        .close_connection_as(&owner, "connection")
+        .expect("owner closes");
+    helper
+        .close_connection_as(&owner, "gone")
+        .expect("an id that already closed");
+    assert_eq!(*closed.lock().expect("closed"), ["connection", "gone"]);
+    helper.disconnect_as(&owner).expect("owner disconnects");
+}
+
+#[test]
+fn only_the_session_owner_closes_connections() {
+    let (helper, closed) = closing_helper();
+    let owner = Caller::fake(b"owner", false);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect_as(&owner, &request).expect("owner connects");
+
+    for caller in [&Caller::fake(b"other", false), &Caller::fake(b"admin", true)] {
+        assert_eq!(
+            helper
+                .close_connection_as(caller, "connection")
+                .unwrap_err()
+                .code,
+            ErrorCode::AccessDenied
+        );
+    }
+    assert!(closed.lock().expect("closed").is_empty());
+    helper.disconnect_as(&owner).expect("owner disconnects");
+}
+
+#[test]
+fn closing_without_a_session_reads_like_the_list_and_sends_nothing() {
+    let (helper, closed) = closing_helper();
+    let owner = test_caller();
+    assert_eq!(
+        helper.connections_as(&owner).expect("no session"),
+        (Vec::new(), Vec::new())
+    );
+    helper
+        .close_connection_as(&owner, "connection")
+        .expect("nothing to close");
+
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).expect("connect");
+    helper.disconnect().expect("disconnect");
+    helper
+        .close_connection_as(&owner, "connection")
+        .expect("nothing to close after a disconnect");
+    assert!(closed.lock().expect("closed").is_empty());
+}
+
+#[test]
+fn an_empty_or_long_connection_id_is_refused_before_the_engine() {
+    let (helper, closed) = closing_helper();
+    let owner = test_caller();
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).expect("connect");
+
+    for id in [
+        String::new(),
+        "a".repeat(rosetun_engine::MAX_CONNECTION_ID_CHARS + 1),
+    ] {
+        assert_eq!(
+            helper.close_connection_as(&owner, &id).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+    }
+    helper
+        .close_connection_as(&owner, &"a".repeat(rosetun_engine::MAX_CONNECTION_ID_CHARS))
+        .expect("the longest id is accepted");
+    assert_eq!(closed.lock().expect("closed").len(), 1);
+    helper.disconnect().expect("disconnect");
 }
 
 fn wait_for_active(helper: &Helper, caller: &Caller) -> Vec<LiveConnection> {
@@ -1331,6 +1443,7 @@ fn verbose_log_is_passed_to_engine_and_closed_on_disconnect_or_expiry() {
         asked: Arc::default(),
         controls: Arc::new(Mutex::new(Vec::new())),
         verbose_logs: Arc::clone(&verbose_logs),
+        closed: Arc::default(),
     }));
     let gate = VerboseGate::default();
     let helper = Helper::new(engines, Box::new(UnusedRouting), gate.clone());
@@ -3644,6 +3757,7 @@ fn protected_reconnect_replaces_the_traffic_monitor_and_control() {
         asked: Arc::default(),
         controls: Arc::clone(&controls),
         verbose_logs: Arc::new(Mutex::new(Vec::new())),
+        closed: Arc::default(),
     }));
     helper.connect(&protected_request()).expect("first connect");
     wait_for_totals(&helper, totals);

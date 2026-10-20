@@ -35,6 +35,11 @@ pub enum Request {
     DiagnosticLog,
     /// The running session's connections, for its owner only (protocol 12).
     Connections,
+    /// Closes one of them by [`LiveConnection::id`], for the same owner
+    /// (protocol 12). An id that is no longer active still answers `Ok`.
+    CloseConnection {
+        id: String,
+    },
     ListStatus {
         hashes: Vec<String>,
     },
@@ -94,6 +99,7 @@ impl std::fmt::Debug for Request {
             Self::SessionExits => f.write_str("SessionExits"),
             Self::DiagnosticLog => f.write_str("DiagnosticLog"),
             Self::Connections => f.write_str("Connections"),
+            Self::CloseConnection { .. } => f.write_str("CloseConnection"),
             Self::TunnelDelay => f.write_str("TunnelDelay"),
             Self::Disconnect => f.write_str("Disconnect"),
             Self::SetLockdown { enabled, allow_lan } => f
@@ -1085,6 +1091,18 @@ mod tests {
             assert!(!debug.contains("test-secret"));
         }
     }
+    #[test]
+    fn close_connection_debug_has_no_id() {
+        let request = super::Request::CloseConnection {
+            id: "0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f".to_owned(),
+        };
+        assert_eq!(format!("{request:?}"), "CloseConnection");
+        assert_eq!(
+            serde_json::to_string(&request).unwrap(),
+            r#"{"close_connection":{"id":"0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f"}}"#
+        );
+    }
+
     #[test]
     fn connections_debug_has_no_destinations_or_programs() {
         use super::Response;

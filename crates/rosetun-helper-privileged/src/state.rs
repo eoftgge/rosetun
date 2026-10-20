@@ -489,6 +489,49 @@ impl Helper {
         Ok(book.snapshot())
     }
 
+    /// Closes one connection of the running session, for the same account as
+    /// [`Self::connections_as`]. Without a session there is nothing to close,
+    /// and an id the engine no longer knows is not an error: the connection
+    /// may have closed on its own.
+    pub(crate) fn close_connection_as(&self, caller: &Caller, id: &str) -> Result<(), HelperError> {
+        if !rosetun_engine::valid_connection_id(id) {
+            return Err(HelperError::new(
+                ErrorCode::InvalidRequest,
+                "the connection id is empty or too long",
+            ));
+        }
+        if !self.check_connections_owner(caller)? {
+            return Ok(());
+        }
+        let session = self.session()?;
+        if !self.check_connections_owner(caller)? {
+            return Ok(());
+        }
+        let Some(control) = session.control.clone() else {
+            return Ok(());
+        };
+        drop(session);
+        let unavailable = || {
+            HelperError::new(
+                ErrorCode::EngineFailed,
+                "the connected engine is unavailable",
+            )
+        };
+        let engine = self.with_status(|status| status.engine).ok_or_else(unavailable)?;
+        let backend = self.engines.get_shared(engine).ok_or_else(unavailable)?;
+        // Neither the id nor the destination is logged: both identify what the
+        // user was doing.
+        if let Err(error) = backend.close_connection(&control, id) {
+            tracing::warn!(%error, "failed to close a connection on request");
+            return Err(HelperError::new(
+                ErrorCode::EngineFailed,
+                "the engine did not close the connection",
+            ));
+        }
+        tracing::info!("closed a connection on request");
+        Ok(())
+    }
+
     /// `false` without a session owner, so there is nothing to show.
     fn check_connections_owner(&self, caller: &Caller) -> Result<bool, HelperError> {
         let owner = self.owner.lock().map_err(|_| access_denied())?;

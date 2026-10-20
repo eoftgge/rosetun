@@ -13,28 +13,19 @@ use rosetun_ipc::{ClientError, ErrorCode, HelperClient};
 /// poll of the engine follows within a quarter of a second.
 const FIRST_POLL: Duration = Duration::from_millis(1500);
 
+/// Characters of the id shown in the table; `close` accepts them when they
+/// name one active connection.
+const SHORT_ID_CHARS: usize = 8;
+
 pub(crate) fn run(client: &mut HelperClient) -> ExitCode {
-    match client.status() {
-        Ok(status)
-            if matches!(
-                status.state,
-                ConnectionState::Connected | ConnectionState::Reconnecting
-            ) => {}
-        Ok(_) => {
-            eprintln!("not connected; connect to see the tunnel's connections");
-            return ExitCode::FAILURE;
-        }
-        Err(error) => return report(&error),
+    if let Err(code) = require_connected(client, "see") {
+        return code;
     }
-    let result = client.connections().and_then(|_| {
-        thread::sleep(FIRST_POLL);
-        client.connections()
-    });
-    match result {
+    match read(client) {
         Ok((active, closed)) => {
             let now = now_unix_ms();
             println!("active: {}, closed: {}", active.len(), closed.len());
-            println!("STATE\tNET\tROUTE\tDOWN\tUP\tSECONDS\tDESTINATION\tPROGRAM");
+            println!("STATE\tID\tNET\tROUTE\tDOWN\tUP\tSECONDS\tDESTINATION\tPROGRAM");
             for connection in &active {
                 println!("{}", line("active", connection, now));
             }
@@ -43,18 +34,103 @@ pub(crate) fn run(client: &mut HelperClient) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Err(error) => report(&error),
+        Err(error) => report(&error, "read"),
     }
 }
 
-fn report(error: &ClientError) -> ExitCode {
+/// `rosetun connections close <id>`: a full id goes to the service as typed,
+/// a shown short id is first matched against the active connections.
+pub(crate) fn close(client: &mut HelperClient, id: &str) -> ExitCode {
+    if id.is_empty() {
+        eprintln!("the connection ID is empty");
+        return ExitCode::FAILURE;
+    }
+    if let Err(code) = require_connected(client, "close") {
+        return code;
+    }
+    let full = if id.chars().count() > SHORT_ID_CHARS {
+        id.to_owned()
+    } else {
+        let active = match read(client) {
+            Ok((active, _)) => active,
+            Err(error) => return report(&error, "close"),
+        };
+        match matching(&active, id).as_slice() {
+            [one] => (*one).to_owned(),
+            [] => {
+                eprintln!("no active connection has the ID {}", terminal_text(id));
+                return ExitCode::FAILURE;
+            }
+            several => {
+                eprintln!("the ID {} is ambiguous; use one of:", terminal_text(id));
+                for full in several {
+                    eprintln!("  {}", terminal_text(full));
+                }
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+    match client.close_connection(&full) {
+        Ok(()) => {
+            println!("closed");
+            ExitCode::SUCCESS
+        }
+        Err(error) => report(&error, "close"),
+    }
+}
+
+fn require_connected(client: &mut HelperClient, verb: &str) -> Result<(), ExitCode> {
+    match client.status() {
+        Ok(status)
+            if matches!(
+                status.state,
+                ConnectionState::Connected | ConnectionState::Reconnecting
+            ) =>
+        {
+            Ok(())
+        }
+        Ok(_) => {
+            eprintln!("not connected; connect to {verb} the tunnel's connections");
+            Err(ExitCode::FAILURE)
+        }
+        Err(error) => Err(report(&error, verb)),
+    }
+}
+
+fn read(
+    client: &mut HelperClient,
+) -> Result<(Vec<LiveConnection>, Vec<LiveConnection>), ClientError> {
+    client.connections().and_then(|_| {
+        thread::sleep(FIRST_POLL);
+        client.connections()
+    })
+}
+
+/// Full ids of active connections that `id` names: exactly, or else as the
+/// start of each.
+fn matching<'a>(active: &'a [LiveConnection], id: &str) -> Vec<&'a str> {
+    let ids = active
+        .iter()
+        .map(|connection| connection.id.as_str())
+        .filter(|full| !full.is_empty());
+    if let Some(exact) = ids.clone().find(|full| *full == id) {
+        return vec![exact];
+    }
+    let mut found: Vec<_> = ids.filter(|full| full.starts_with(id)).collect();
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
+fn report(error: &ClientError, verb: &str) -> ExitCode {
     match error {
         ClientError::Helper(helper) if helper.code == ErrorCode::AccessDenied => eprintln!(
-            "the tunnel is connected from another Windows account; only that account can read its connections"
+            "the tunnel is connected from another Windows account; only that account can {verb} its connections"
         ),
         ClientError::Helper(helper) if helper.code == ErrorCode::Busy => {
             eprintln!("the service is busy; try again in a moment");
         }
+        _ if verb == "close" => tracing::error!(%error, "failed to close the connection"),
         _ => tracing::error!(%error, "failed to get connections"),
     }
     ExitCode::FAILURE
@@ -74,8 +150,14 @@ fn line(state: &str, connection: &LiveConnection, now_unix_ms: u64) -> String {
     let end = connection.end_unix_ms.unwrap_or(now_unix_ms);
     let seconds = end.saturating_sub(connection.start_unix_ms) / 1000;
     let program = connection.process.as_deref().unwrap_or("-");
+    let id: String = connection.id.chars().take(SHORT_ID_CHARS).collect();
+    let id = if id.is_empty() {
+        "-".to_owned()
+    } else {
+        terminal_text(&id).replace('\t', " ")
+    };
     format!(
-        "{state}\t{network}\t{route}\t{}\t{}\t{seconds}\t{}:{}\t{}",
+        "{state}\t{id}\t{network}\t{route}\t{}\t{}\t{seconds}\t{}:{}\t{}",
         connection.download,
         connection.upload,
         terminal_text(&connection.host).replace('\t', " "),
@@ -94,7 +176,7 @@ fn now_unix_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::line;
+    use super::{line, matching};
     use rosetun_config::{ConnectionNetwork, ConnectionRoute, ExitId, LiveConnection};
 
     #[test]
@@ -115,12 +197,16 @@ mod tests {
         let text = line("closed", &connection, 99_000);
         assert!(!text.contains('\u{1b}'));
         let columns: Vec<_> = text.split('\t').collect();
-        assert_eq!(columns[..6], ["closed", "udp", "exit:work", "7", "5", "5"]);
-        assert!(columns[6].starts_with("example.com"));
-        assert!(columns[6].ends_with(":443"));
-        assert_eq!(columns[7], "C:\\Program Files\\Example\\app.exe");
+        assert_eq!(
+            columns[..7],
+            ["closed", "0d5c1f2e", "udp", "exit:work", "7", "5", "5"]
+        );
+        assert!(columns[7].starts_with("example.com"));
+        assert!(columns[7].ends_with(":443"));
+        assert_eq!(columns[8], "C:\\Program Files\\Example\\app.exe");
 
         let active = LiveConnection {
+            id: String::new(),
             end_unix_ms: None,
             process: None,
             route: ConnectionRoute::Direct,
@@ -130,8 +216,40 @@ mod tests {
             .split('\t')
             .map(str::to_owned)
             .collect();
-        assert_eq!(columns[2], "direct");
-        assert_eq!(columns[5], "10");
-        assert_eq!(columns[7], "-");
+        assert_eq!(columns[1], "-");
+        assert_eq!(columns[3], "direct");
+        assert_eq!(columns[6], "10");
+        assert_eq!(columns[8], "-");
+    }
+
+    #[test]
+    fn a_short_id_closes_only_when_it_names_one_connection() {
+        let with_id = |id: &str| LiveConnection {
+            id: id.to_owned(),
+            start_unix_ms: 1,
+            end_unix_ms: None,
+            process: None,
+            host: "example.com".to_owned(),
+            port: 443,
+            network: ConnectionNetwork::Tcp,
+            route: ConnectionRoute::Proxy,
+            download: 0,
+            upload: 0,
+        };
+        let active = [
+            with_id("0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f"),
+            with_id("0d5c1f2e-0000-4c9d-8e1f-2a3b4c5d6e7f"),
+            with_id("9b1e4d2a-7a3b-4c9d-8e1f-2a3b4c5d6e7f"),
+            with_id("short"),
+            with_id("shorter"),
+            with_id(""),
+        ];
+        assert_eq!(
+            matching(&active, "9b1e4d2a"),
+            ["9b1e4d2a-7a3b-4c9d-8e1f-2a3b4c5d6e7f"]
+        );
+        assert_eq!(matching(&active, "0d5c1f2e").len(), 2);
+        assert_eq!(matching(&active, "short"), ["short"]);
+        assert!(matching(&active, "ffffffff").is_empty());
     }
 }

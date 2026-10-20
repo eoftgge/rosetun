@@ -184,6 +184,33 @@ impl EngineBackend for SingBoxBackend {
         Some(Box::new(ClashTrafficProbe::new(control)))
     }
 
+    fn close_connection(&self, control: &ControlEndpoint, id: &str) -> Result<(), EngineError> {
+        if !rosetun_engine::valid_connection_id(id) {
+            return Err(EngineError::Stats("invalid connection id".to_owned()));
+        }
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(2)))
+                .http_status_as_error(false)
+                .proxy(None)
+                .build(),
+        );
+        // sing-box answers 204 whether or not it knew the id.
+        let response = agent
+            .delete(&format!(
+                "http://{}/connections/{}",
+                control.address,
+                path_segment(id)
+            ))
+            .header("Authorization", &format!("Bearer {}", control.secret))
+            .call()
+            .map_err(|_| EngineError::Stats("local close request failed".to_owned()))?;
+        match response.status().as_u16() {
+            200 | 204 => Ok(()),
+            status => Err(EngineError::Stats(format!("close HTTP status {status}"))),
+        }
+    }
+
     fn spawn(
         &self,
         binary: &Path,
@@ -270,6 +297,20 @@ impl EngineBackend for SingBoxBackend {
             probe,
         }))
     }
+}
+
+/// Percent-encodes everything but RFC 3986 unreserved characters, so an id
+/// cannot change the request path.
+fn path_segment(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 /// Polls `GET /connections` on the sing-box Clash API.
@@ -1065,6 +1106,91 @@ mod tests {
                 connections: Some(Vec::new()),
             }
         );
+    }
+
+    /// Answers one request with `status` and returns its request line, or
+    /// `None` when no request came within a second.
+    fn close_against_server(id: &str, status: u16) -> (Result<(), EngineError>, Option<String>) {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let control = ControlEndpoint {
+            address: listener.local_addr().unwrap(),
+            secret: "test-secret".to_owned(),
+        };
+        let server = thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            let socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(_) if std::time::Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return None,
+                }
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            let mut line = String::new();
+            let mut authorized = false;
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("authorization")
+                {
+                    authorized = value.trim() == "Bearer test-secret";
+                }
+            }
+            assert!(authorized);
+            write!(
+                reader.get_mut(),
+                "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n"
+            )
+            .unwrap();
+            Some(request)
+        });
+        let result = SingBoxBackend::new("unused").close_connection(&control, id);
+        (result, server.join().unwrap())
+    }
+
+    #[test]
+    fn close_connection_deletes_by_encoded_id_and_maps_the_answer() {
+        let (result, request) = close_against_server("0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f", 204);
+        assert!(result.is_ok());
+        assert_eq!(
+            request.as_deref(),
+            Some("DELETE /connections/0d5c1f2e-7a3b-4c9d-8e1f-2a3b4c5d6e7f HTTP/1.1\r\n")
+        );
+
+        let (result, request) = close_against_server("../a b?x", 200);
+        assert!(result.is_ok());
+        assert_eq!(
+            request.as_deref(),
+            Some("DELETE /connections/..%2Fa%20b%3Fx HTTP/1.1\r\n")
+        );
+
+        let (result, _) = close_against_server("a", 401);
+        assert!(matches!(result, Err(EngineError::Stats(message)) if message.contains("401")));
+    }
+
+    #[test]
+    fn close_connection_refuses_a_bad_id_without_a_request() {
+        for id in [String::new(), "a".repeat(rosetun_engine::MAX_CONNECTION_ID_CHARS + 1)] {
+            let (result, request) = close_against_server(&id, 204);
+            assert!(matches!(result, Err(EngineError::Stats(_))));
+            assert_eq!(request, None);
+        }
     }
 
     #[test]

@@ -357,6 +357,12 @@ fn dispatch(
             Ok((active, closed)) => Response::Connections { active, closed },
             Err(error) => Response::Error(error),
         },
+        Request::CloseConnection { id } => {
+            match helper.close_connection_as(caller.expect("caller checked"), id) {
+                Ok(()) => Response::Ok,
+                Err(error) => Response::Error(error),
+            }
+        }
         Request::ListStatus { hashes } => match helper.list_status(hashes) {
             Ok(missing) => Response::ListStatus { missing },
             Err(error) => Response::Error(error),
@@ -513,6 +519,7 @@ mod tests {
             Request::SessionExits,
             Request::DiagnosticLog,
             Request::Connections,
+            Request::CloseConnection { id: "a".to_owned() },
             Request::TunnelDelay,
             Request::Disconnect,
             Request::SetLockdown {
