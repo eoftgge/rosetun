@@ -1061,6 +1061,112 @@ fn wait_for_totals(helper: &Helper, totals: TrafficTotals) {
     }
 }
 
+/// Records when it was asked and whether for connections; the first poll
+/// that asks sees one connection, every later one sees none.
+#[derive(Debug, Default)]
+struct PollRecorder {
+    polls: Arc<Polls>,
+}
+
+type Polls = Mutex<Vec<(Instant, bool)>>;
+
+impl TrafficProbe for PollRecorder {
+    fn sample(&mut self, connections: bool) -> Result<TrafficSample, EngineError> {
+        let mut polls = self.polls.lock().expect("test polls mutex");
+        polls.push((Instant::now(), connections));
+        let first = polls.iter().filter(|(_, connections)| *connections).count() == 1;
+        Ok(TrafficSample {
+            totals: TrafficTotals::default(),
+            connections: connections.then(|| {
+                first
+                    .then(|| EngineConnection {
+                        id: "short".to_owned(),
+                        start_unix_ms: 1,
+                        process: None,
+                        host: "example.com".to_owned(),
+                        port: 443,
+                        network: rosetun_config::ConnectionNetwork::Tcp,
+                        route: EngineRoute::Proxy,
+                        upload: 1,
+                        download: 2,
+                    })
+                    .into_iter()
+                    .collect()
+            }),
+        })
+    }
+}
+
+fn start_recorded_monitor(
+    book: ConnectionBook,
+) -> (TrafficMonitor, Arc<Polls>, Arc<Mutex<ConnectionBook>>) {
+    let probe = PollRecorder::default();
+    let polls = Arc::clone(&probe.polls);
+    let book = Arc::new(Mutex::new(book));
+    let monitor = TrafficMonitor::start(
+        Box::new(probe),
+        Arc::new(Mutex::new(Status::default())),
+        Arc::clone(&book),
+        Translation::default(),
+    )
+    .expect("monitor thread starts");
+    (monitor, polls, book)
+}
+
+fn wait_for_polls(polls: &Polls, count: usize) -> Vec<(Instant, bool)> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let seen = polls.lock().expect("test polls mutex").clone();
+        if seen.len() >= count {
+            return seen;
+        }
+        assert!(Instant::now() < deadline, "the engine was not polled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_connection_seen_in_one_poll_is_closed_by_the_next_while_the_list_is_read() {
+    let mut book = ConnectionBook::default();
+    book.watch(Instant::now());
+    let (monitor, polls, book) = start_recorded_monitor(book);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let closed = loop {
+        let (_, closed) = book.lock().expect("test book mutex").snapshot();
+        if !closed.is_empty() {
+            break closed;
+        }
+        assert!(Instant::now() < deadline, "the short connection never closed");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let seen = polls.lock().expect("test polls mutex").clone();
+    monitor.stop();
+
+    assert_eq!(closed.len(), 1);
+    assert_eq!(closed[0].host, "example.com");
+    assert!(seen.iter().all(|(_, connections)| *connections));
+    let gap = seen[1].0.saturating_duration_since(seen[0].0);
+    assert!(
+        gap < TRAFFIC_POLL_INTERVAL,
+        "polled {gap:?} apart while read"
+    );
+}
+
+#[test]
+fn without_a_reader_the_engine_is_polled_once_a_second() {
+    let (monitor, polls, _book) = start_recorded_monitor(ConnectionBook::default());
+    let seen = wait_for_polls(&polls, 2);
+    monitor.stop();
+
+    assert!(seen.iter().all(|(_, connections)| !*connections));
+    let gap = seen[1].0.saturating_duration_since(seen[0].0);
+    assert!(
+        gap >= TRAFFIC_POLL_INTERVAL - MONITOR_TICK,
+        "polled {gap:?} apart without a reader"
+    );
+}
+
 #[test]
 fn rates_handle_elapsed_time_resets_and_zero_interval() {
     let instant = Instant::now();

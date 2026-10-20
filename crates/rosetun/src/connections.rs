@@ -9,8 +9,8 @@ use rosetun_config::{ConnectionNetwork, ConnectionRoute, ConnectionState, LiveCo
 use rosetun_core::terminal_text;
 use rosetun_ipc::{ClientError, ErrorCode, HelperClient};
 
-/// The service collects the list only after it was asked for it, and polls the
-/// engine once a second.
+/// The service collects the list only after it was asked for it; its next
+/// poll of the engine follows within a quarter of a second.
 const FIRST_POLL: Duration = Duration::from_millis(1500);
 
 pub(crate) fn run(client: &mut HelperClient) -> ExitCode {

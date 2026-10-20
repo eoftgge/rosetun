@@ -45,6 +45,15 @@ const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(60);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
 const PATH_LOOKUP_TIMEOUT: Duration = Duration::from_secs(1);
+const TRAFFIC_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// A connection that opens and closes between two polls is never seen, so
+/// the list is polled more often while someone reads it.
+const WATCHED_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Rates span about a second whatever the poll interval, so a quicker poll
+/// does not make them jump; a little under the idle interval so that the idle
+/// poll's jitter does not skip a window.
+const RATE_WINDOW: Duration = Duration::from_millis(900);
+const MONITOR_TICK: Duration = Duration::from_millis(50);
 const SERVER_CHECK_INTERVAL: Duration = Duration::from_secs(4);
 const SERVER_CHECK_GRACE: Duration = Duration::from_secs(30);
 const SERVER_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
@@ -1371,7 +1380,7 @@ fn slept(previous: SystemTime, now: SystemTime) -> bool {
         .is_ok_and(|gap| gap > SLEEP_GAP)
 }
 
-/// Polls the engine once a second and publishes traffic into the status.
+/// Polls the engine and publishes traffic into the status.
 struct TrafficMonitor {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -1394,23 +1403,26 @@ impl TrafficMonitor {
         let thread = thread::Builder::new()
             .name("engine-traffic".to_owned())
             .spawn(move || {
-                let mut previous = None;
+                let mut previous: Option<(TrafficTotals, Instant)> = None;
                 let mut failed = false;
+                let mut polled = Instant::now();
                 loop {
-                    for _ in 0..10 {
+                    let watched = loop {
                         if worker_stop.load(Ordering::Acquire) {
                             return;
                         }
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                    if worker_stop.load(Ordering::Acquire) {
-                        return;
-                    }
+                        let now = Instant::now();
+                        let watched = worker_connections
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .watched(now);
+                        if now.saturating_duration_since(polled) >= poll_interval(watched) {
+                            break watched;
+                        }
+                        thread::sleep(MONITOR_TICK);
+                    };
+                    polled = Instant::now();
 
-                    let watched = worker_connections
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .watched(Instant::now());
                     match probe.sample(watched) {
                         Ok(sample) => {
                             let totals = sample.totals;
@@ -1431,19 +1443,22 @@ impl TrafficMonitor {
                                 failed = false;
                             }
                             let current = (totals, Instant::now());
-                            let (up_bps, down_bps) = previous
-                                .map(|previous| rates(previous, current))
-                                .unwrap_or_default();
-                            previous = Some(current);
                             let mut status = worker_status
                                 .lock()
                                 .unwrap_or_else(|error| error.into_inner());
-                            status.traffic = Traffic {
-                                up_bps,
-                                down_bps,
-                                up_total: totals.up,
-                                down_total: totals.down,
-                            };
+                            match previous {
+                                Some(start)
+                                    if current.1.saturating_duration_since(start.1)
+                                        < RATE_WINDOW => {}
+                                _ => {
+                                    (status.traffic.up_bps, status.traffic.down_bps) = previous
+                                        .map(|previous| rates(previous, current))
+                                        .unwrap_or_default();
+                                    previous = Some(current);
+                                }
+                            }
+                            status.traffic.up_total = totals.up;
+                            status.traffic.down_total = totals.down;
                         }
                         Err(error) => {
                             if !failed {
@@ -1490,6 +1505,14 @@ impl Drop for TrafficMonitor {
     fn drop(&mut self) {
         // A forgotten stop must not leave the worker polling the engine forever.
         self.stop.store(true, Ordering::Release);
+    }
+}
+
+fn poll_interval(watched: bool) -> Duration {
+    if watched {
+        WATCHED_POLL_INTERVAL
+    } else {
+        TRAFFIC_POLL_INTERVAL
     }
 }
 
