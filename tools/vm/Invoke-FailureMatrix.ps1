@@ -339,7 +339,9 @@ public static class RosetunOtherLogon {
             disconnect = '"disconnect"'
             temporary = '"temporary_rules"'
             connections = '"connections"'
-            apply = '{"apply":' + $requestJson + '}'
+            # Ownership is checked before the id is looked at, so any id will do.
+            close = '{"close_connection":{"id":"' + [guid]::NewGuid().ToString() + '"}}'
+            apply ='{"apply":' + $requestJson + '}'
             connect = '{"connect":' + $requestJson + '}'
         }
         $cli = Join-Path $dir 'rosetun.exe'
@@ -559,6 +561,20 @@ Test-Step 'connections' "a request to $connectionsHost is listed through the VPN
     -Note (Format-ConnectionsNote $listed $rows) {
     $listed.CurlExit -eq 0 -and $listed.ExitCode -eq 0 -and $rows.Count -gt 0 -and
         @($rows | Where-Object Route -ne 'proxy').Count -eq 0
+}
+$longTransferHost = ([uri](Get-RosetunLongTransferUrl)).Host
+$closing = Invoke-RosetunConnectionClose -Url (Get-RosetunLongTransferUrl)
+$closedId = $closing.Id
+$closedRows = @(Get-RosetunConnectionRows $closing.After | Where-Object { $closedId -and $_.Id -eq $closedId })
+# curl exits 28 only at --max-time, which the download reaches unless it is closed.
+Test-Step 'connections' "closing a download from $longTransferHost by its id ends it early" `
+    -Note "close exit $($closing.CloseExit): $($closing.CloseOutput); curl $($closing.CurlExit) after $($closing.CurlSeconds) s" {
+    $closedId -and $closing.CloseExit -eq 0 -and $null -ne $closing.CurlExit -and
+        $closing.CurlExit -notin @(0, 28) -and $closing.CurlSeconds -lt 30
+}
+Test-Step 'connections' 'the closed download moves to the closed list' `
+    -Note "states: $(@($closedRows | ForEach-Object { $_.State }) -join ',')" {
+    $closedRows.Count -gt 0 -and @($closedRows | Where-Object State -ne 'closed').Count -eq 0
 }
 Test-Step 'no network' 'connect succeeds after the route returns' { (Get-RosetunState) -eq 'Connected' }
 Test-Step 'no network' 'direct egress is blocked after the route returns' { -not (Test-RosetunDirectEgress) }
@@ -955,8 +971,8 @@ $otherPassword = New-OtherAccount -Name $otherAccountName
 try {
     $otherResults = @(Invoke-OtherAccountRequests -Name $otherAccountName -Password $otherPassword `
         -GuestDir (Get-RosetunGuestDir) -ProtocolVersion $protocolVersion `
-        -Commands @('status', 'disconnect', 'temporary', 'connections', 'apply'))
-    foreach ($command in @('status', 'disconnect', 'temporary', 'connections', 'apply')) {
+        -Commands @('status', 'disconnect', 'temporary', 'connections', 'close', 'apply'))
+    foreach ($command in @('status', 'disconnect', 'temporary', 'connections', 'close', 'apply')) {
         $result = $otherResults | Where-Object Command -eq $command | Select-Object -First 1
         $note = if ($result) { $result.Reply } else { 'no result' }
         if ($command -eq 'status') {
@@ -1001,6 +1017,13 @@ try {
         $adminConnections.ExitCode -ne 0 -and
             $adminConnections.Output -match 'only that account can read its connections' -and
             @(Get-RosetunConnectionRows $adminConnections.Output).Count -eq 0
+    }
+    # A full id goes to the service as typed, without reading the list first.
+    $adminClose = Invoke-RosetunCli -Quiet 'connections' 'close' ([guid]::NewGuid().ToString())
+    Test-Step 'other account' 'administrator cannot close the other account connections' `
+        -Note "exit $($adminClose.ExitCode): $($adminClose.Output)" {
+        $adminClose.ExitCode -ne 0 -and
+            $adminClose.Output -match 'only that account can close its connections'
     }
     $adminApply = Invoke-RosetunApply 'request.json' -Quiet
     Test-Step 'other account' 'administrator applies the other account tunnel' `
@@ -1798,6 +1821,17 @@ Test-Step 'hysteria2' 'IPv6 works again' { Test-RosetunIpv6Egress }
 $namedIn = @(Find-RosetunLogText $connectionsHost)
 Test-Step 'connections' "no service log names $connectionsHost" -Note ($namedIn -join ', ') {
     $namedIn.Count -eq 0
+}
+$namedIn = @(Find-RosetunLogText $longTransferHost)
+Test-Step 'connections' "no service log names the closed download's $longTransferHost" `
+    -Note ($namedIn -join ', ') {
+    $namedIn.Count -eq 0
+}
+$closeLogged = @(Find-RosetunLogText 'closed a connection on request' -Anywhere)
+$namedIn = if ($closedId) { @(Find-RosetunLogText $closedId -Anywhere) } else { @() }
+Test-Step 'connections' 'the close is logged without the connection id' `
+    -Note "logged in: $($closeLogged -join ', '); id in: $($namedIn -join ', ')" {
+    $closedId -and $closeLogged.Count -gt 0 -and $namedIn.Count -eq 0
 }
 
 }

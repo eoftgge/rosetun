@@ -29,6 +29,10 @@ $script:Config = @{
     # Routed through the second test node by an Exit rule; like TunnelProbeUrl it
     # must be reachable from the node's exit, and on another host than it.
     ExitRuleUrl = 'https://yandex.ru'
+    # Downloaded at a limited rate through the tunnel and closed midway, so it
+    # must be far larger than a minute at that rate (tens of MB) and, like
+    # TunnelProbeUrl, reachable from the node's exit.
+    LongTransferUrl = 'https://mirror.yandex.ru/debian/dists/bookworm/main/Contents-amd64.gz'
 }
 $script:Session = $null
 # Second cold starts Restart-RosetunGuest needed in this session of the module.
@@ -945,6 +949,10 @@ function Get-RosetunExitRuleUrl {
     return $script:Config.ExitRuleUrl
 }
 
+function Get-RosetunLongTransferUrl {
+    return $script:Config.LongTransferUrl
+}
+
 function Get-RosetunStatus {
     param([Parameter(Mandatory)][int]$ProtocolVersion)
 
@@ -1850,26 +1858,115 @@ function Invoke-RosetunConnectionsDuring {
 }
 
 function Get-RosetunConnectionRows {
-    # Rows of `rosetun connections`: STATE NET ROUTE DOWN UP SECONDS DESTINATION PROGRAM.
+    # Rows of `rosetun connections`: STATE ID NET ROUTE DOWN UP SECONDS DESTINATION PROGRAM.
     param([string]$Output)
     @($Output -split '\r?\n' | Where-Object { $_ -match '^(active|closed)\t' } | ForEach-Object {
             $columns = $_ -split "`t"
             [pscustomobject]@{
                 State = $columns[0]
-                Route = $columns[2]
-                Destination = $columns[6]
-                Program = $columns[7]
+                Id = $columns[1]
+                Route = $columns[3]
+                Destination = $columns[7]
+                Program = $columns[8]
             }
         })
 }
 
+function Invoke-RosetunConnectionClose {
+    # Starts one long download through the tunnel at a limited rate, finds it
+    # in `rosetun connections` by host (curl's own row when the engine named
+    # the program) and closes it with `rosetun connections close <id>`. A
+    # poller keeps the list collected the whole time, so the closed connection
+    # is kept. Without the close curl would stop only at --max-time (exit 28).
+    # Returns the id, the close command's result, curl's exit code and run
+    # time, and the list read after curl ended.
+    param([Parameter(Mandatory)][string]$Url)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $url)
+        $cli = Join-Path $dir 'rosetun.exe'
+        $hostName = ([uri]$url).Host
+        $poller = Start-Job -ScriptBlock {
+            param($cli)
+            while ($true) { & $cli connections *> $null }
+        } -ArgumentList $cli
+        $curl = $null
+        $id = ''
+        $closeExit = $null
+        $closeOutput = ''
+        $curlExit = $null
+        $seconds = $null
+        $after = @()
+        try {
+            Start-Sleep -Seconds 3
+            $flags = @('--max-time', '60', '--silent', '--limit-rate', '100k', '--output', 'NUL', $url)
+            $start = [Diagnostics.ProcessStartInfo]::new((Get-Command -Name curl.exe -ErrorAction Stop).Source,
+                ($flags -join ' '))
+            $start.UseShellExecute = $false
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            $curl = [Diagnostics.Process]::Start($start)
+            Start-Sleep -Seconds 3
+            $during = @(& $cli connections 2>&1 | ForEach-Object { "$_" })
+            $rows = @(foreach ($line in $during) {
+                    $columns = $line -split "`t"
+                    if ($columns.Count -ge 9 -and $columns[0] -eq 'active' -and
+                        $columns[7] -like "${hostName}:*" -and $columns[1] -ne '-') {
+                        [pscustomobject]@{ Id = $columns[1]; Program = $columns[8] }
+                    }
+                })
+            $row = @($rows | Where-Object { $_.Program -like '*\curl.exe' }) + $rows | Select-Object -First 1
+            if ($row) {
+                $id = $row.Id
+                $closeOutput = @(& $cli connections close $id 2>&1 | ForEach-Object { "$_" }) -join "`n"
+                $closeExit = $LASTEXITCODE
+            }
+            else {
+                $closeOutput = "no active row for ${hostName}: " + (($during | Select-Object -First 10) -join ' | ')
+            }
+            if (-not $curl.WaitForExit(90000)) {
+                $curl.Kill()
+                $curl.WaitForExit()
+            }
+            $seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1)
+            $curlExit = $curl.ExitCode
+            Start-Sleep -Seconds 2
+            $after = @(& $cli connections 2>&1 | ForEach-Object { "$_" })
+        }
+        finally {
+            if ($curl) {
+                if (-not $curl.HasExited) { $curl.Kill() }
+                $curl.Dispose()
+            }
+            Stop-Job -Job $poller -ErrorAction SilentlyContinue
+            Remove-Job -Job $poller -Force -ErrorAction SilentlyContinue
+        }
+        $global:LASTEXITCODE = 0
+        [pscustomobject]@{
+            Id = $id
+            CloseExit = $closeExit
+            CloseOutput = $closeOutput
+            CurlExit = $curlExit
+            CurlSeconds = $seconds
+            After = ($after -join "`n")
+        }
+    } -ArgumentList $script:Config.GuestDir, $Url
+}
+
 function Find-RosetunLogText {
     # Every helper log of the guest, console runs and the service's data folder,
-    # searched for $Text as a whole host name. Returns the names of matching files.
-    param([Parameter(Mandatory)][string]$Text)
+    # searched for $Text as a whole host name, or anywhere with -Anywhere (for
+    # the start of an id). Returns the names of matching files.
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [switch]$Anywhere
+    )
     Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $text)
-        $pattern = '(?i)(?<![a-z0-9.-])' + [regex]::Escape($text) + '(?![a-z0-9-])'
+        param($dir, $text, $anywhere)
+        $pattern = if ($anywhere) {
+            '(?i)' + [regex]::Escape($text)
+        }
+        else {
+            '(?i)(?<![a-z0-9.-])' + [regex]::Escape($text) + '(?![a-z0-9-])'
+        }
         $logs = @(Get-ChildItem -Path $dir -Filter 'helper*.log' -File -ErrorAction SilentlyContinue) +
             @(Get-ChildItem -Path (Join-Path $dir 'data\logs') -File -ErrorAction SilentlyContinue)
         foreach ($log in $logs) {
@@ -1883,7 +1980,7 @@ function Find-RosetunLogText {
                 $log.Name
             }
         }
-    } -ArgumentList $script:Config.GuestDir, $Text
+    } -ArgumentList $script:Config.GuestDir, $Text, [bool]$Anywhere
 }
 
 function Test-RosetunGuestLoopback {
