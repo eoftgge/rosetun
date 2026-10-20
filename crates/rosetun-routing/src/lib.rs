@@ -212,7 +212,23 @@ impl RoutingGuard {
             session: Some(Box::new(ClosureSession {
                 prepare: Box::new(prepare),
                 authorize: Box::new(authorize),
+                lockdown: Box::new(|_| Ok(())),
                 revert: Some(Box::new(revert)),
+            })),
+        }
+    }
+
+    /// A guard whose moves between the Rosetun and Lockdown sublayers are
+    /// implemented by a closure; everything else succeeds and does nothing.
+    pub fn new_with_lockdown(
+        lockdown: impl FnMut(bool) -> Result<(), RoutingError> + Send + 'static,
+    ) -> Self {
+        Self {
+            session: Some(Box::new(ClosureSession {
+                prepare: Box::new(|_, _| Ok(())),
+                authorize: Box::new(|_| Ok(())),
+                lockdown: Box::new(lockdown),
+                revert: Some(Box::new(|| Ok(()))),
             })),
         }
     }
@@ -294,6 +310,7 @@ impl Drop for RoutingGuard {
 struct ClosureSession {
     prepare: PrepareClosure,
     authorize: AuthorizeClosure,
+    lockdown: Box<dyn FnMut(bool) -> Result<(), RoutingError> + Send>,
     revert: Option<Box<dyn FnOnce() -> Result<(), RoutingError> + Send>>,
 }
 
@@ -326,8 +343,8 @@ impl ProtectionSession for ClosureSession {
         Ok(())
     }
 
-    fn set_lockdown(&mut self, _lockdown: bool) -> Result<(), RoutingError> {
-        Ok(())
+    fn set_lockdown(&mut self, lockdown: bool) -> Result<(), RoutingError> {
+        (self.lockdown)(lockdown)
     }
 
     fn teardown(&mut self) -> Result<(), RoutingError> {

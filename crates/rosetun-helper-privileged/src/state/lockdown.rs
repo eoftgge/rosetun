@@ -274,7 +274,26 @@ impl Session {
                 .set_lockdown(false)
                 .map_err(routing_failed)?;
         }
-        let removed = self.routing.disable_lockdown().map_err(routing_failed)?;
+        let removed = match self.routing.disable_lockdown() {
+            Ok(removed) => removed,
+            Err(error) => {
+                // The persistent block stays; without its permits back above
+                // it the session would be "connected" with no network.
+                if let Some(guard) = self.guard.as_ref()
+                    && let Err(restore) = guard
+                        .routing
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .set_lockdown(true)
+                {
+                    tracing::error!(
+                        error = %restore,
+                        "could not move the session back above the Lockdown block"
+                    );
+                }
+                return Err(routing_failed(error));
+            }
+        };
         write(&self.lockdown, LockdownState::default());
         tracing::info!(removed, "Lockdown turned off");
         self.release_forced_kill_switch();
@@ -405,7 +424,7 @@ mod tests {
 
     use super::protection_scope;
     use crate::log_gate::VerboseGate;
-    use crate::state::{Caller, Helper, StartMode};
+    use crate::state::{Caller, Guard, Helper, StartMode};
 
     #[test]
     fn lockdown_forces_the_all_traffic_policy() {
@@ -440,6 +459,7 @@ mod tests {
         enabled: Mutex<Vec<bool>>,
         disabled: AtomicUsize,
         installed: Mutex<Option<LockdownStatus>>,
+        fail_disable: std::sync::atomic::AtomicBool,
     }
 
     #[derive(Debug)]
@@ -484,6 +504,12 @@ mod tests {
 
         fn disable_lockdown(&self) -> Result<bool, RoutingError> {
             self.0.disabled.fetch_add(1, Ordering::AcqRel);
+            if self.0.fail_disable.load(Ordering::Acquire) {
+                return Err(RoutingError::Wfp {
+                    code: 0x8032_000A,
+                    context: "removing the Lockdown sublayer",
+                });
+            }
             Ok(self.0.installed.lock().unwrap().take().is_some())
         }
     }
@@ -532,6 +558,29 @@ mod tests {
         helper.restore_lockdown();
         assert!(!helper.status().lockdown);
         assert!(calls.enabled.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_removal_moves_the_session_back_above_the_block() {
+        let calls = Arc::new(Calls::default());
+        let helper = lockdown_helper(&calls);
+        let caller = Caller::fake(b"user", false);
+        helper.set_lockdown_as(&caller, true, false).unwrap();
+        let moves = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&moves);
+        helper.session.lock().unwrap().guard = Some(Guard {
+            routing: Arc::new(Mutex::new(RoutingGuard::new_with_lockdown(move |lockdown| {
+                recorded.lock().unwrap().push(lockdown);
+                Ok(())
+            }))),
+            scope: ProtectionScope::AllTraffic,
+        });
+        calls.fail_disable.store(true, Ordering::Release);
+
+        let error = helper.set_lockdown_as(&caller, false, false).unwrap_err();
+        assert_eq!(error.code, ErrorCode::RoutingFailed);
+        assert_eq!(*moves.lock().unwrap(), [false, true]);
+        assert!(helper.status().lockdown);
     }
 
     #[test]

@@ -136,9 +136,10 @@ mod keys {
     pub(super) const BOOT_INBOUND_DHCP: u128 = 0xa51f4fec_b63a_4ec4_8ba5_d369e8689711;
 }
 
-/// Free on a clean Windows 11, whose nearest built-in sublayers sit at 0xC000
-/// and 0xFFFF (sing-tun). BFE moves a sublayer off a taken weight, so the
-/// stored weight is read back and logged; nothing depends on its exact value.
+/// Free on a clean Windows 11, whose nearest built-in sublayer below sits at
+/// 0xC000; above it only sing-tun's dynamic sublayer at 0xFFFF, while the
+/// engine runs. BFE moves a sublayer off a taken weight, so the stored weight
+/// is read back and logged; nothing depends on its exact value.
 const REQUESTED_SUBLAYER_WEIGHT: u16 = 0xD000;
 /// Below every filter the session adds to the Lockdown sublayer.
 const BLOCK_WEIGHT: u8 = 0;
