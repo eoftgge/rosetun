@@ -129,6 +129,76 @@ fn scanline(y: f32, intersections: &mut Vec<f32>) {
 
 /// Straight-alpha RGBA of the icon, `size`×`size`.
 pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon) -> Vec<u8> {
+    let mut rgba = rasterize(size, icon);
+    if matches!(icon, RoseIcon::Tray(_)) {
+        outline(&mut rgba, size as usize);
+    }
+    rgba
+}
+
+const OUTLINE_ALPHA: u32 = 160;
+
+/// Rose petals vanish on a taskbar of a similar colour (a red Windows accent),
+/// so the tray icon gets a dark rim. The gaps between petals are channels that
+/// open to the outside; a closing (dilate, flood the outside, dilate back) keeps
+/// the rim on the silhouette's outer edge instead of filling those channels.
+fn outline(rgba: &mut [u8], size: usize) {
+    let radius = (size / 16).max(1) as isize;
+    // A margin beyond the edges, so the outside also reaches petals that touch them.
+    let pad = radius + 1;
+    let side = size as isize + 2 * pad;
+    let cell = |x: isize, y: isize| (y * side + x) as usize;
+    let near = |set: &[bool], x: isize, y: isize, reach: isize| {
+        (-reach..=reach).any(|dy| {
+            (-reach..=reach).any(|dx| {
+                let (nx, ny) = (x + dx, y + dy);
+                (0..side).contains(&nx) && (0..side).contains(&ny) && set[cell(nx, ny)]
+            })
+        })
+    };
+    let cells = (0..side).flat_map(|y| (0..side).map(move |x| (x, y)));
+    let solid: Vec<bool> = cells
+        .clone()
+        .map(|(x, y)| {
+            let (px, py) = (x - pad, y - pad);
+            (0..size as isize).contains(&px)
+                && (0..size as isize).contains(&py)
+                && rgba[(py as usize * size + px as usize) * 4 + 3] >= 128
+        })
+        .collect();
+    let grown: Vec<bool> = cells.clone().map(|(x, y)| near(&solid, x, y, radius)).collect();
+    let mut outside = vec![false; grown.len()];
+    let mut queue = vec![(0, 0)];
+    while let Some((x, y)) = queue.pop() {
+        if !(0..side).contains(&x) || !(0..side).contains(&y) {
+            continue;
+        }
+        let i = cell(x, y);
+        if grown[i] || outside[i] {
+            continue;
+        }
+        outside[i] = true;
+        queue.extend([(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]);
+    }
+    let outside: Vec<bool> = cells.map(|(x, y)| near(&outside, x, y, radius)).collect();
+    let silhouette: Vec<bool> = outside.iter().map(|outside| !outside).collect();
+    for (i, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+        let (x, y) = ((i % size) as isize + pad, (i / size) as isize + pad);
+        if solid[cell(x, y)] || !outside[cell(x, y)] || !near(&silhouette, x, y, 1) {
+            continue;
+        }
+        // The icon's own pixel is drawn over the black rim.
+        let alpha = u32::from(pixel[3]);
+        let under = OUTLINE_ALPHA * (255 - alpha) / 255;
+        let total = alpha + under;
+        for channel in &mut pixel[..3] {
+            *channel = (u32::from(*channel) * alpha / total) as u8;
+        }
+        pixel[3] = total as u8;
+    }
+}
+
+fn rasterize(size: u32, icon: RoseIcon) -> Vec<u8> {
     let scale = 48.0 / size as f32;
     let mut rgba = Vec::with_capacity(size as usize * size as usize * 4);
     let mut row = vec![[0_u32; 4]; size as usize];
@@ -174,6 +244,15 @@ pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    const TRAY_STATES: [TrayState; 6] = [
+        TrayState::Connected,
+        TrayState::Disconnected,
+        TrayState::Connecting,
+        TrayState::Blocked,
+        TrayState::Failed,
+        TrayState::ServiceUnavailable,
+    ];
+
     fn pixel(rgba: &[u8], size: usize, x: usize, y: usize) -> [u8; 4] {
         rgba[(y * size + x) * 4..(y * size + x + 1) * 4]
             .try_into()
@@ -201,18 +280,39 @@ mod tests {
         assert_eq!(rgba.len(), 256 * 256 * 4);
         eprintln!("256 px rose rasterization: {elapsed:?}");
         assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+        assert_eq!(rgba, rasterize(256, RoseIcon::Large), "no outline");
+    }
+
+    #[test]
+    fn tray_outline_rims_the_silhouette_but_not_the_gaps() {
+        let start = std::time::Instant::now();
+        for state in TRAY_STATES {
+            for size in [16, 24, 32] {
+                let icon = RoseIcon::Tray(state);
+                let plain = rasterize(size, icon);
+                let outlined = rose_icon_rgba(size, icon);
+                let mut rim = 0;
+                for (before, after) in plain.chunks_exact(4).zip(outlined.chunks_exact(4)) {
+                    if before != after {
+                        rim += 1;
+                        assert!(before[3] < 128, "{state:?} {size} px: rim over the rose");
+                        assert!(after[3] >= OUTLINE_ALPHA as u8, "{state:?} {size} px");
+                    }
+                }
+                assert!(rim >= size * 2, "{state:?} {size} px: {rim} rim pixels");
+            }
+            let rgba = rose_icon_rgba(32, RoseIcon::Tray(state));
+            assert_eq!(pixel(&rgba, 32, 3, 4), [0, 0, 0, 160], "{state:?} rim");
+            // A one-pixel channel between two petals, open to the outside.
+            assert_eq!(pixel(&rgba, 32, 14, 4), [0; 4], "{state:?} gap");
+        }
+        let elapsed = start.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
     }
 
     #[test]
     fn tray_states_have_distinct_shapes_and_expected_petal_colors() {
-        let states = [
-            TrayState::Connected,
-            TrayState::Disconnected,
-            TrayState::Connecting,
-            TrayState::Blocked,
-            TrayState::Failed,
-            TrayState::ServiceUnavailable,
-        ];
+        let states = TRAY_STATES;
         for size in [16, 32, 48] {
             let images = states.map(|state| rose_icon_rgba(size, RoseIcon::Tray(state)));
             assert_eq!(
