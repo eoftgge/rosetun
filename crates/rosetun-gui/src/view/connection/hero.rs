@@ -176,14 +176,8 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     actions.push(Action::CancelConnection);
                                 }
                             }
-                            if let ConnectionState::Failed {
-                                reason,
-                                failure_kind,
-                            }
-                            | ConnectionState::FailedProtected {
-                                reason,
-                                failure_kind,
-                            } = &status.state
+                            if let ConnectionState::Failed { failure_kind, .. }
+                            | ConnectionState::FailedProtected { failure_kind, .. } = &status.state
                             {
                                 if let Some(kind) = failure_kind {
                                     let (title, hint) = crate::i18n::connection_failure(
@@ -192,8 +186,10 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         status.xray_use.unwrap_or(state.config.settings.xray),
                                         state.lockdown_active(),
                                     );
-                                    ui.colored_label(theme::ERROR, title)
-                                        .on_hover_text(state.text(reason));
+                                    let response = ui.colored_label(theme::ERROR, title);
+                                    if let Some(details) = state.failure_details() {
+                                        response.on_hover_text(details);
+                                    }
                                     if *kind == FailureKind::NoNetwork
                                         && matches!(
                                             status.state,
@@ -208,6 +204,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         )
                                         .wrap(),
                                     );
+                                    failure_details(ui, state, actions);
                                     let reality_off = *kind == FailureKind::ServerRejected
                                         && status.xray_use.unwrap_or(state.config.settings.xray)
                                             == XrayUse::Off
@@ -289,12 +286,15 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                 } else {
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(state.text(reason))
-                                                .small()
-                                                .color(theme::ERROR),
+                                            RichText::new(
+                                                state.failure_details().unwrap_or_default(),
+                                            )
+                                            .small()
+                                            .color(theme::ERROR),
                                         )
                                         .wrap(),
                                     );
+                                    failure_details(ui, state, actions);
                                 }
                                 if let Some(warning) = &state.system_checks.failure_warning {
                                     ui.horizontal_wrapped(|ui| {
@@ -514,6 +514,46 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                 },
             );
         });
+}
+
+const COPIED_FOR: f64 = 2.0;
+
+fn failure_details(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let Some(details) = state.failure_details() else {
+        return;
+    };
+    let open = state.failure_details_open;
+    if ui
+        .link(if open {
+            tr!("hide-details")
+        } else {
+            tr!("details")
+        })
+        .clicked()
+    {
+        actions.push(Action::ToggleFailureDetails);
+    }
+    if !open {
+        return;
+    }
+    ui.add(
+        egui::Label::new(RichText::new(&details).small().color(theme::TEXT_MUTED))
+            .selectable(true)
+            .wrap(),
+    );
+    let id = egui::Id::new("failure_details_copied");
+    let now = ui.input(|input| input.time);
+    let copied = ui
+        .data(|data| data.get_temp::<f64>(id))
+        .is_some_and(|at| now - at < COPIED_FOR);
+    if widgets::outline_button(ui, if copied { tr!("copied") } else { tr!("copy") }, true)
+        .clicked()
+    {
+        ui.ctx().copy_text(details);
+        ui.data_mut(|data| data.insert_temp(id, now));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(COPIED_FOR));
+    }
 }
 
 /// What the external IP line shows: the value, its colour and the reveal link,

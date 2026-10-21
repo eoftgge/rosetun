@@ -765,3 +765,42 @@ fn local_network_change_updates_lockdown_only_while_it_is_on() {
         Some(Job::SetLockdown(true))
     ));
 }
+
+#[test]
+fn failure_details_are_scrubbed_and_fold_on_a_new_state() {
+    let mut state = State {
+        helper_available: true,
+        ..State::default()
+    };
+    assert!(state.failure_details().is_none());
+    state.act(Action::ToggleFailureDetails);
+    assert!(!state.failure_details_open);
+    for failure_kind in [None, Some(FailureKind::ServerUnreachable)] {
+        for failed in [
+            ConnectionState::Failed {
+                reason: "dial tcp 203.0.113.5:443: i/o timeout".into(),
+                failure_kind,
+            },
+            ConnectionState::FailedProtected {
+                reason: "dial tcp 203.0.113.5:443: i/o timeout".into(),
+                failure_kind,
+            },
+        ] {
+            state.reduce(WorkerEvent::Status(Status {
+                state: failed,
+                ..Status::default()
+            }));
+            let details = state.failure_details().unwrap();
+            assert!(details.contains("i/o timeout"), "{details}");
+            assert!(!details.contains("203.0.113"), "{details}");
+            assert!(!state.failure_details_open);
+            state.act(Action::ToggleFailureDetails);
+            assert!(state.failure_details_open);
+            state.reduce(WorkerEvent::Status(Status {
+                state: ConnectionState::Connecting,
+                ..Status::default()
+            }));
+            assert!(!state.failure_details_open);
+        }
+    }
+}

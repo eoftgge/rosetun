@@ -102,6 +102,19 @@ impl State {
         self.helper_available.then_some(&self.status)
     }
 
+    /// The failure's technical reason as shown and copied. Users paste it into
+    /// public issues, so it is scrubbed like a report: it may name the node
+    /// (`dial tcp <address>:443`).
+    pub(crate) fn failure_details(&self) -> Option<String> {
+        match &self.visible_status()?.state {
+            ConnectionState::Failed { reason, .. }
+            | ConnectionState::FailedProtected { reason, .. } => {
+                Some(rosetun_config::redact_report_text(&self.text(reason)))
+            }
+            _ => None,
+        }
+    }
+
     /// Lockdown is per machine, so only the service knows whether it is on.
     pub(crate) fn lockdown_active(&self) -> bool {
         self.visible_status().is_some_and(|status| status.lockdown)
@@ -367,6 +380,9 @@ impl State {
                 {
                     self.protection_confirmation = false;
                 }
+                if self.status.state != status.state {
+                    self.failure_details_open = false;
+                }
                 self.status = status;
             }
             WorkerEvent::FailureInterference { request, hints } => {
@@ -595,6 +611,11 @@ impl State {
             Action::ToggleExitReveal => {
                 if matches!(self.exit, ExitLookup::Known { .. }) {
                     self.exit_revealed = !self.exit_revealed;
+                }
+            }
+            Action::ToggleFailureDetails => {
+                if self.failure_details().is_some() {
+                    self.failure_details_open = !self.failure_details_open;
                 }
             }
             Action::MeasureDelay => {

@@ -98,6 +98,8 @@ pub(crate) struct State {
     exit_route: Option<ExitRoute>,
     exit_generation: u64,
     pub(crate) exit_revealed: bool,
+    /// The technical reason under a failure is expanded; window state only.
+    pub(crate) failure_details_open: bool,
     pub(crate) traffic: TrafficState,
     pub(crate) helper_available: bool,
     pub(crate) helper_version: Option<String>,
@@ -142,6 +144,7 @@ impl Default for State {
             exit_route: None,
             exit_generation: 0,
             exit_revealed: false,
+            failure_details_open: false,
             traffic: TrafficState::default(),
             helper_available: false,
             helper_version: None,
@@ -301,6 +304,7 @@ pub(crate) enum Action {
     RevealServer,
     RevealDone,
     ToggleExitReveal,
+    ToggleFailureDetails,
     MeasureDelay,
     SelectRuleSet(Option<RuleSetId>),
     SetKillSwitch(bool),
@@ -561,6 +565,7 @@ impl State {
             | Action::ConfirmProtectionOff
             | Action::SelectNode(_, _)
             | Action::ToggleExitReveal
+            | Action::ToggleFailureDetails
             | Action::MeasureDelay
             | Action::SelectRuleSet(_)
             | Action::SetKillSwitch(_)
