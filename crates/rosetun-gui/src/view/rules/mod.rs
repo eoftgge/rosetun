@@ -383,71 +383,54 @@ fn target_filter(
     let mut selected_exit = filter.exit.clone();
     let exit_label =
         |id: &rosetun_config::ExitId| destination_label(&RuleDestination::Exit(id.clone()), exits);
-    let response = ui
-        .scope(|ui| {
-            ui.spacing_mut().button_padding.y = 6.0;
-            ui.spacing_mut().interact_size.y = 38.0;
-            let visuals = &mut ui.visuals_mut().widgets;
-            visuals.inactive.weak_bg_fill = theme::INPUT;
-            visuals.hovered.weak_bg_fill = theme::BORDER;
-            let border = Stroke::new(1.0, theme::BORDER_STRONG);
-            visuals.inactive.bg_stroke = border;
-            visuals.hovered.bg_stroke = border;
-            visuals.open.bg_stroke = border;
-            let selected_label = match (&selected_exit, selected) {
-                (Some(id), _) => Some(exit_label(id)),
-                (None, Some(target)) => Some(target_label(target)),
-                (None, None) => None,
-            };
-            let selected_text = selected_label
-                .clone()
-                .zip(selected)
-                .map(|(label, target)| RichText::new(label).color(target_color(target)))
-                .unwrap_or_else(|| RichText::new(tr!("any-action")));
-            ui.allocate_ui(egui::vec2(TARGET_FILTER_WIDTH, 38.0), |ui| {
-                ui.set_width(TARGET_FILTER_WIDTH);
-                egui::ComboBox::from_id_salt("rule_target_filter")
-                    .width(TARGET_FILTER_WIDTH)
-                    .truncate()
-                    .selected_text(selected_text)
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_label(selected.is_none(), tr!("any-action"))
-                            .clicked()
-                        {
-                            selected = None;
-                            selected_exit = None;
-                        }
-                        for target in [
-                            RuleTarget::Proxy,
-                            RuleTarget::Direct,
-                            RuleTarget::Block,
-                            RuleTarget::Exit,
-                        ] {
-                            let picked = selected == Some(target) && selected_exit.is_none();
-                            let label =
-                                RichText::new(target_label(target)).color(target_color(target));
-                            if ui.selectable_label(picked, label).clicked() {
-                                selected = Some(target);
-                                selected_exit = None;
-                            }
-                        }
-                        for exit in exits {
-                            let picked = selected_exit.as_ref() == Some(&exit.id);
-                            let label = RichText::new(exit_label(&exit.id))
-                                .color(target_color(RuleTarget::Exit));
-                            if ui.selectable_label(picked, label).clicked() {
-                                selected = Some(RuleTarget::Exit);
-                                selected_exit = Some(exit.id.clone());
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(selected_label.unwrap_or_else(|| tr!("any-action")))
-            })
-            .inner
-        })
-        .inner;
+    let selected_label = match (&selected_exit, selected) {
+        (Some(id), _) => Some(exit_label(id)),
+        (None, Some(target)) => Some(target_label(target)),
+        (None, None) => None,
+    };
+    let selected_text = selected_label
+        .clone()
+        .zip(selected)
+        .map(|(label, target)| RichText::new(label).color(target_color(target)))
+        .unwrap_or_else(|| RichText::new(tr!("any-action")));
+    let response = widgets::filter_combo(
+        ui,
+        "rule_target_filter",
+        TARGET_FILTER_WIDTH,
+        selected_text,
+        selected_label.unwrap_or_else(|| tr!("any-action")),
+        |ui| {
+            if ui
+                .selectable_label(selected.is_none(), tr!("any-action"))
+                .clicked()
+            {
+                selected = None;
+                selected_exit = None;
+            }
+            for target in [
+                RuleTarget::Proxy,
+                RuleTarget::Direct,
+                RuleTarget::Block,
+                RuleTarget::Exit,
+            ] {
+                let picked = selected == Some(target) && selected_exit.is_none();
+                let label = RichText::new(target_label(target)).color(target_color(target));
+                if ui.selectable_label(picked, label).clicked() {
+                    selected = Some(target);
+                    selected_exit = None;
+                }
+            }
+            for exit in exits {
+                let picked = selected_exit.as_ref() == Some(&exit.id);
+                let label =
+                    RichText::new(exit_label(&exit.id)).color(target_color(RuleTarget::Exit));
+                if ui.selectable_label(picked, label).clicked() {
+                    selected = Some(RuleTarget::Exit);
+                    selected_exit = Some(exit.id.clone());
+                }
+            }
+        },
+    );
     if selected_exit != filter.exit || selected != filter.target {
         actions.push(match selected_exit {
             Some(exit) => Action::SetRuleExitFilter(exit),

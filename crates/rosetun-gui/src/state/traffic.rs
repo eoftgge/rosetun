@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use rosetun_config::{ConnectionRoute, ConnectionState, LiveConnection, Status};
+use rosetun_config::{ConnectionRoute, ConnectionState, ExitId, LiveConnection, Status};
 use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
 use super::{Action, Job, Screen, State};
@@ -36,6 +36,35 @@ pub(crate) enum ConnectionsTab {
     Closed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ConnectionsView {
+    #[default]
+    ByProgram,
+    All,
+}
+
+/// Which route the list shows.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum RouteFilter {
+    #[default]
+    Any,
+    Proxy,
+    Direct,
+    Exit(ExitId),
+}
+
+impl RouteFilter {
+    pub(crate) fn matches(&self, route: &ConnectionRoute) -> bool {
+        match (self, route) {
+            (Self::Any, _)
+            | (Self::Proxy, ConnectionRoute::Proxy)
+            | (Self::Direct, ConnectionRoute::Direct) => true,
+            (Self::Exit(id), ConnectionRoute::Exit(route)) => id == route,
+            _ => false,
+        }
+    }
+}
+
 /// Why the connections table shows no rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConnectionsNotice {
@@ -43,7 +72,29 @@ pub(crate) enum ConnectionsNotice {
     Denied,
     Loading,
     Empty,
+    NoRouteMatch,
     NoMatch,
+}
+
+/// The connections of one program.
+pub(crate) struct ProgramGroup<'a> {
+    pub(crate) path: Option<&'a str>,
+    pub(crate) connections: Vec<&'a LiveConnection>,
+    /// Each route once, in the order first met.
+    pub(crate) routes: Vec<&'a ConnectionRoute>,
+    pub(crate) down_rate: u64,
+    /// Both directions over the connections' lifetimes.
+    pub(crate) transferred: u64,
+}
+
+/// One row of the grouped list. Groups are flattened so that every row has
+/// the same height, as `ScrollArea::show_rows` needs.
+pub(crate) enum ConnectionRow<'a> {
+    Program {
+        group: ProgramGroup<'a>,
+        expanded: bool,
+    },
+    Connection(&'a LiveConnection),
 }
 
 /// Program names read from version resources, by full path. The reading
@@ -82,8 +133,12 @@ impl ProgramNames {
 /// Memory only: the list is the user's browsing history.
 #[derive(Default)]
 pub(crate) struct ConnectionsList {
+    pub(crate) view: ConnectionsView,
     pub(crate) tab: ConnectionsTab,
+    pub(crate) route: RouteFilter,
     pub(crate) filter: String,
+    /// Programs whose connections are shown under them, by path.
+    pub(crate) expanded: HashSet<Option<String>>,
     pub(crate) active: Vec<LiveConnection>,
     pub(crate) closed: Vec<LiveConnection>,
     /// The service answered since the tab was opened.
@@ -91,6 +146,11 @@ pub(crate) struct ConnectionsList {
     /// The tunnel belongs to another Windows account.
     pub(crate) denied: bool,
     pub(crate) programs: ProgramNames,
+    /// Bytes a second down and up by connection id, from the last two answers.
+    rates: HashMap<String, (u64, u64)>,
+    /// The last answer's byte counts by id and when it was asked for.
+    last_bytes: HashMap<String, (u64, u64)>,
+    last_answer: Option<u64>,
     pending: bool,
     last_request: Option<u64>,
 }
@@ -101,23 +161,70 @@ impl ConnectionsList {
         self.closed = Vec::new();
         self.received = false;
         self.denied = false;
+        self.rates = HashMap::new();
+        self.last_bytes = HashMap::new();
+        self.last_answer = None;
+    }
+
+    /// Rates from the byte counts of the same ids in the previous answer; a
+    /// connection seen for the first time has none yet.
+    fn measure(&mut self, active: &[LiveConnection], now: Option<u64>) {
+        let elapsed = now
+            .zip(self.last_answer)
+            .map(|(now, previous)| now.saturating_sub(previous))
+            .filter(|elapsed| *elapsed > 0);
+        self.rates = HashMap::new();
+        let mut bytes = HashMap::with_capacity(active.len());
+        for connection in active.iter().filter(|c| !c.id.is_empty()) {
+            if let Some(elapsed) = elapsed
+                && let Some(&(down, up)) = self.last_bytes.get(&connection.id)
+            {
+                self.rates.insert(
+                    connection.id.clone(),
+                    (
+                        connection.download.saturating_sub(down) / elapsed,
+                        connection.upload.saturating_sub(up) / elapsed,
+                    ),
+                );
+            }
+            bytes.insert(
+                connection.id.clone(),
+                (connection.download, connection.upload),
+            );
+        }
+        self.last_bytes = bytes;
+        self.last_answer = now;
+    }
+
+    /// Down and up bytes a second, once the connection was in two answers.
+    pub(crate) fn rate(&self, connection: &LiveConnection) -> Option<(u64, u64)> {
+        if connection.id.is_empty() {
+            return None;
+        }
+        self.rates.get(&connection.id).copied()
+    }
+
+    fn tab_list(&self) -> &[LiveConnection] {
+        match self.tab {
+            ConnectionsTab::Active => &self.active,
+            ConnectionsTab::Closed => &self.closed,
+        }
     }
 
     /// The tunnel went away: the names go with the list.
     fn clear(&mut self) {
         self.forget();
         self.programs = ProgramNames::default();
+        self.expanded = HashSet::new();
     }
 
-    /// The selected tab's connections that match the filter by program path,
-    /// program name or address, ignoring letter case.
+    /// The selected tab's connections on the selected route that match the
+    /// filter by program path, program name or address, ignoring letter case.
     pub(crate) fn visible(&self) -> Vec<&LiveConnection> {
-        let list = match self.tab {
-            ConnectionsTab::Active => &self.active,
-            ConnectionsTab::Closed => &self.closed,
-        };
         let filter = self.filter.trim().to_lowercase();
-        list.iter()
+        self.tab_list()
+            .iter()
+            .filter(|connection| self.route.matches(&connection.route))
             .filter(|connection| {
                 filter.is_empty()
                     || connection.host.to_lowercase().contains(&filter)
@@ -135,6 +242,55 @@ impl ConnectionsList {
                         .contains(&filter)
             })
             .collect()
+    }
+
+    /// The visible connections by program, the fastest download first, then
+    /// the most transferred.
+    pub(crate) fn groups(&self) -> Vec<ProgramGroup<'_>> {
+        let mut groups: Vec<ProgramGroup<'_>> = Vec::new();
+        let mut index = HashMap::new();
+        for connection in self.visible() {
+            let path = connection.process.as_deref();
+            let slot = *index.entry(path).or_insert_with(|| {
+                groups.push(ProgramGroup {
+                    path,
+                    connections: Vec::new(),
+                    routes: Vec::new(),
+                    down_rate: 0,
+                    transferred: 0,
+                });
+                groups.len() - 1
+            });
+            let group = &mut groups[slot];
+            if !group.routes.contains(&&connection.route) {
+                group.routes.push(&connection.route);
+            }
+            group.down_rate += self.rate(connection).map_or(0, |(down, _)| down);
+            group.transferred += connection.download.saturating_add(connection.upload);
+            group.connections.push(connection);
+        }
+        groups.sort_by(|left, right| {
+            right
+                .down_rate
+                .cmp(&left.down_rate)
+                .then(right.transferred.cmp(&left.transferred))
+        });
+        groups
+    }
+
+    pub(crate) fn rows(&self) -> Vec<ConnectionRow<'_>> {
+        let mut rows = Vec::new();
+        for group in self.groups() {
+            let expanded = self.expanded.contains(&group.path.map(str::to_owned));
+            let connections = if expanded {
+                group.connections.clone()
+            } else {
+                Vec::new()
+            };
+            rows.push(ConnectionRow::Program { group, expanded });
+            rows.extend(connections.into_iter().map(ConnectionRow::Connection));
+        }
+        rows
     }
 }
 
@@ -235,6 +391,8 @@ impl State {
             Ok((active, closed)) => {
                 list.programs.queue(&active);
                 list.programs.queue(&closed);
+                let asked = list.last_request;
+                list.measure(&active, asked);
                 list.active = active;
                 list.closed = closed;
                 list.received = true;
@@ -277,11 +435,14 @@ impl State {
             Some(ConnectionsNotice::Denied)
         } else if !list.received {
             Some(ConnectionsNotice::Loading)
-        } else if match list.tab {
-            ConnectionsTab::Active => list.active.is_empty(),
-            ConnectionsTab::Closed => list.closed.is_empty(),
-        } {
+        } else if list.tab_list().is_empty() {
             Some(ConnectionsNotice::Empty)
+        } else if !list
+            .tab_list()
+            .iter()
+            .any(|connection| list.route.matches(&connection.route))
+        {
+            Some(ConnectionsNotice::NoRouteMatch)
         } else if list.visible().is_empty() {
             Some(ConnectionsNotice::NoMatch)
         } else {
@@ -320,6 +481,21 @@ impl State {
             }
             Action::SetConnectionsFilter(filter) => {
                 self.traffic.connections.filter = filter;
+                None
+            }
+            Action::SetConnectionsView(view) => {
+                self.traffic.connections.view = view;
+                None
+            }
+            Action::SetConnectionsRoute(route) => {
+                self.traffic.connections.route = route;
+                None
+            }
+            Action::ToggleProgramGroup(path) => {
+                let expanded = &mut self.traffic.connections.expanded;
+                if !expanded.remove(&path) {
+                    expanded.insert(path);
+                }
                 None
             }
             _ => unreachable!("only traffic actions are dispatched here"),

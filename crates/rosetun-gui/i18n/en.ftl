@@ -471,11 +471,20 @@ connections-destination = Destination
 connections-route = Route
 connections-duration = Time
 connections-route-other = Other
+connections-route-any = Any route
+connections-by-program = By program
+connections-all = All connections
+connections-speed = Speed
+connections-count = { $count ->
+    [one] { $n } connection
+   *[other] { $n } connections
+}
 connections-system-program = System and other
 connections-disconnected = Connect to see connections
 connections-empty = No connections yet
 connections-closed-empty = No connection has closed since the tab was opened
 connections-no-match = No connection matches the filter
+connections-no-route-match = No connections with this route
 connections-loading = Loading…
 connections-denied = The tunnel is connected from another Windows account. Only that account sees its connections.
 connections-note = The list is kept in memory only and is cleared when you disconnect. Connections blocked by rules are not shown. Closed ones are visible while the tab is open. Very short connections may not make it into the list.

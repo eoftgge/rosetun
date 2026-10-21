@@ -41,7 +41,10 @@ use subscriptions::SubscriptionsState;
 pub(crate) use subscriptions::{AddDialog, PingResult, UpdateOutcome, shared_auto_update_hours};
 use system_checks::SystemChecksState;
 use traffic::TrafficState;
-pub(crate) use traffic::{ConnectionsNotice, ConnectionsTab, TrafficRange};
+pub(crate) use traffic::{
+    ConnectionRow, ConnectionsNotice, ConnectionsTab, ConnectionsView, ProgramGroup, RouteFilter,
+    TrafficRange,
+};
 use updates::UpdatesState;
 
 pub(crate) fn now_unix() -> u64 {
@@ -171,6 +174,10 @@ pub(crate) enum Action {
     SetTrafficRange(TrafficRange),
     SetConnectionsTab(ConnectionsTab),
     SetConnectionsFilter(String),
+    SetConnectionsView(ConnectionsView),
+    SetConnectionsRoute(RouteFilter),
+    /// Show or hide a program's connections under it, by path.
+    ToggleProgramGroup(Option<String>),
     OpenSettings,
     #[cfg(windows)]
     WindowMinimized,
@@ -553,7 +560,10 @@ impl State {
             action @ (Action::OpenTraffic
             | Action::SetTrafficRange(_)
             | Action::SetConnectionsTab(_)
-            | Action::SetConnectionsFilter(_)) => {
+            | Action::SetConnectionsFilter(_)
+            | Action::SetConnectionsView(_)
+            | Action::SetConnectionsRoute(_)
+            | Action::ToggleProgramGroup(_)) => {
                 return self.act_traffic(action);
             }
             #[cfg(windows)]

@@ -1,6 +1,7 @@
 pub(crate) mod add_rule;
 pub(crate) mod add_subscription;
 pub(crate) mod connection;
+mod connections;
 pub(crate) mod exits;
 pub(crate) mod header;
 pub(crate) mod lists;

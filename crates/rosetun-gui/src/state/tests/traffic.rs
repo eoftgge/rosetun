@@ -369,3 +369,268 @@ fn program_names_are_read_once_per_path_and_cleared_on_disconnect() {
     )]));
     assert_eq!(state.traffic.connections.programs.name(Some(game)), "Game");
 }
+
+fn answer(state: &mut State, now: u64, active: Vec<rosetun_config::LiveConnection>) {
+    assert!(matches!(state.take_connections(now), Some(Job::Connections)));
+    state.reduce(WorkerEvent::Connections(Ok((active, Vec::new()))));
+}
+
+fn with_bytes(
+    mut connection: rosetun_config::LiveConnection,
+    download: u64,
+    upload: u64,
+) -> rosetun_config::LiveConnection {
+    connection.download = download;
+    connection.upload = upload;
+    connection
+}
+
+#[test]
+fn connections_group_by_program_with_one_group_for_no_program() {
+    use rosetun_config::ConnectionRoute;
+    let browser = r"C:\Program Files\Example\browser.exe";
+    let mut state = connected_on_traffic();
+    assert_eq!(state.traffic.connections.view, ConnectionsView::ByProgram);
+    answer(
+        &mut state,
+        100,
+        vec![
+            live("example.com", Some(browser), ConnectionRoute::Proxy),
+            live("203.0.113.5", None, ConnectionRoute::Direct),
+            live("example.net", Some(browser), ConnectionRoute::Direct),
+            live("example.org", Some(browser), ConnectionRoute::Proxy),
+            live("198.51.100.7", None, ConnectionRoute::Direct),
+        ],
+    );
+    let list = &state.traffic.connections;
+    let groups = list.groups();
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].path, Some(browser));
+    assert_eq!(groups[0].connections.len(), 3);
+    assert_eq!(
+        groups[0].routes,
+        [&ConnectionRoute::Proxy, &ConnectionRoute::Direct],
+        "each route once"
+    );
+    assert_eq!(groups[0].transferred, 9);
+    assert_eq!(groups[1].path, None);
+    assert_eq!(groups[1].connections.len(), 2);
+    assert_eq!(
+        list.programs.name(groups[1].path),
+        tr!("connections-system-program")
+    );
+
+    assert!(
+        state
+            .act(Action::SetConnectionsView(ConnectionsView::All))
+            .is_none()
+    );
+    assert_eq!(state.traffic.connections.view, ConnectionsView::All);
+    assert_eq!(state.traffic.connections.visible().len(), 5);
+}
+
+#[test]
+fn connections_filter_by_route_and_by_exit() {
+    use rosetun_config::{ConnectionRoute, ExitId};
+    let mut state = connected_on_traffic();
+    answer(
+        &mut state,
+        100,
+        vec![
+            live("example.com", None, ConnectionRoute::Proxy),
+            live("example.net", None, ConnectionRoute::Direct),
+            live("example.org", None, ConnectionRoute::Exit(ExitId::new("work"))),
+            live("example.edu", None, ConnectionRoute::Exit(ExitId::new("home"))),
+        ],
+    );
+    let hosts = |state: &State| -> Vec<String> {
+        state
+            .traffic
+            .connections
+            .visible()
+            .iter()
+            .map(|c| c.host.clone())
+            .collect()
+    };
+    for (filter, expected) in [
+        (RouteFilter::Proxy, vec!["example.com"]),
+        (RouteFilter::Direct, vec!["example.net"]),
+        (RouteFilter::Exit(ExitId::new("work")), vec!["example.org"]),
+        (
+            RouteFilter::Any,
+            vec!["example.com", "example.net", "example.org", "example.edu"],
+        ),
+    ] {
+        assert!(
+            state
+                .act(Action::SetConnectionsRoute(filter.clone()))
+                .is_none()
+        );
+        assert_eq!(hosts(&state), expected, "{filter:?}");
+    }
+
+    assert!(
+        state
+            .act(Action::SetConnectionsRoute(RouteFilter::Exit(ExitId::new(
+                "gone"
+            ))))
+            .is_none()
+    );
+    assert_eq!(
+        state.connections_notice(),
+        Some(ConnectionsNotice::NoRouteMatch)
+    );
+    assert!(
+        state
+            .act(Action::SetConnectionsRoute(RouteFilter::Direct))
+            .is_none()
+    );
+    assert!(
+        state
+            .act(Action::SetConnectionsFilter("example.com".to_owned()))
+            .is_none()
+    );
+    assert_eq!(state.connections_notice(), Some(ConnectionsNotice::NoMatch));
+}
+
+#[test]
+fn connection_speed_comes_from_the_same_id_in_two_answers() {
+    use rosetun_config::ConnectionRoute;
+    let mut state = connected_on_traffic();
+    let first = live("example.com", None, ConnectionRoute::Proxy);
+    let mut unnamed = live("example.net", None, ConnectionRoute::Proxy);
+    unnamed.id = String::new();
+    answer(
+        &mut state,
+        100,
+        vec![with_bytes(first.clone(), 1_000, 100), unnamed.clone()],
+    );
+    let list = &state.traffic.connections;
+    assert_eq!(
+        list.rate(&list.active[0]),
+        None,
+        "the first answer has no speed"
+    );
+
+    let mut other = live("example.org", None, ConnectionRoute::Proxy);
+    other.id = "example.com-id-2".to_owned();
+    answer(
+        &mut state,
+        102,
+        vec![
+            with_bytes(first.clone(), 5_000, 300),
+            with_bytes(unnamed, 9_000, 9_000),
+            other,
+        ],
+    );
+    let list = &state.traffic.connections;
+    assert_eq!(list.rate(&list.active[0]), Some((2_000, 100)));
+    assert_eq!(list.rate(&list.active[1]), None, "no id, no speed");
+    assert_eq!(list.rate(&list.active[2]), None, "a new id starts again");
+
+    answer(&mut state, 103, vec![with_bytes(first, 4_000, 300)]);
+    let list = &state.traffic.connections;
+    assert_eq!(list.rate(&list.active[0]), Some((0, 0)), "never negative");
+}
+
+#[test]
+fn program_groups_sort_by_speed_then_by_volume() {
+    use rosetun_config::ConnectionRoute;
+    let (slow, fast, big) = (r"C:\slow.exe", r"C:\fast.exe", r"C:\big.exe");
+    let mut state = connected_on_traffic();
+    let connections = |slow_bytes, fast_bytes| {
+        vec![
+            with_bytes(
+                live("slow.example", Some(slow), ConnectionRoute::Proxy),
+                slow_bytes,
+                0,
+            ),
+            with_bytes(
+                live("big.example", Some(big), ConnectionRoute::Proxy),
+                50_000,
+                0,
+            ),
+            with_bytes(
+                live("fast.example", Some(fast), ConnectionRoute::Proxy),
+                fast_bytes,
+                0,
+            ),
+        ]
+    };
+    answer(&mut state, 100, connections(10, 0));
+    let order = |state: &State| -> Vec<Option<String>> {
+        state
+            .traffic
+            .connections
+            .groups()
+            .iter()
+            .map(|group| group.path.map(str::to_owned))
+            .collect()
+    };
+    assert_eq!(
+        order(&state),
+        [
+            Some(big.to_owned()),
+            Some(slow.to_owned()),
+            Some(fast.to_owned())
+        ],
+        "without speed, by volume"
+    );
+    answer(&mut state, 101, connections(1_010, 9_000));
+    assert_eq!(
+        order(&state),
+        [
+            Some(fast.to_owned()),
+            Some(slow.to_owned()),
+            Some(big.to_owned())
+        ]
+    );
+    assert_eq!(state.traffic.connections.groups()[0].down_rate, 9_000);
+}
+
+#[test]
+fn expanded_programs_stay_open_across_answers() {
+    use rosetun_config::ConnectionRoute;
+    let browser = r"C:\Program Files\Example\browser.exe";
+    let mut state = connected_on_traffic();
+    let connections = || {
+        vec![
+            live("example.com", Some(browser), ConnectionRoute::Proxy),
+            live("example.net", Some(browser), ConnectionRoute::Proxy),
+            live("203.0.113.5", None, ConnectionRoute::Direct),
+        ]
+    };
+    answer(&mut state, 100, connections());
+    assert_eq!(state.traffic.connections.rows().len(), 2, "collapsed");
+    assert!(
+        state
+            .act(Action::ToggleProgramGroup(Some(browser.to_owned())))
+            .is_none()
+    );
+    assert!(state.act(Action::ToggleProgramGroup(None)).is_none());
+
+    answer(&mut state, 101, connections());
+    let shape: Vec<_> = state
+        .traffic
+        .connections
+        .rows()
+        .iter()
+        .map(|row| match row {
+            ConnectionRow::Program { expanded, .. } => format!("program {expanded}"),
+            ConnectionRow::Connection(connection) => connection.host.clone(),
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            "program true",
+            "example.com",
+            "example.net",
+            "program true",
+            "203.0.113.5"
+        ]
+    );
+
+    assert!(state.act(Action::ToggleProgramGroup(None)).is_none());
+    assert_eq!(state.traffic.connections.rows().len(), 4);
+}

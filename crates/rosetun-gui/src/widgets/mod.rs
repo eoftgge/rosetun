@@ -1,5 +1,6 @@
 mod buttons;
 mod choice_card;
+mod combo;
 mod dialogs;
 mod frames;
 mod menu;
@@ -14,6 +15,7 @@ pub(crate) use buttons::{
     button_fill, button_fill_compact, link, outline_button, outline_button_compact,
 };
 pub(crate) use choice_card::choice_card;
+pub(crate) use combo::filter_combo;
 pub(crate) use dialogs::{ConfirmModal, ModalChoice, NameModal, confirm_modal, name_modal};
 pub(crate) use frames::{
     card_frame, dismissible_error, dismissible_error_with_action, modal_frame,

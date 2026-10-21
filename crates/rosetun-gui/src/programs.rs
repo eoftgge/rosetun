@@ -3,9 +3,14 @@
 /// A longer description is a sentence, not a name.
 const MAX_NAME_CHARS: usize = 64;
 
-/// The file name without `.exe`, for a Windows or Unix path.
+/// The last part of a Windows or Unix path.
+pub(crate) fn file_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+/// The file name without `.exe`.
 pub(crate) fn file_stem(path: &str) -> &str {
-    let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    let name = file_name(path);
     match name.len().checked_sub(4) {
         Some(end) if name.is_char_boundary(end) && name[end..].eq_ignore_ascii_case(".exe") => {
             &name[..end]

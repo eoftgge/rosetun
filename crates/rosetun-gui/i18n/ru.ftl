@@ -484,11 +484,22 @@ connections-destination = Куда
 connections-route = Маршрут
 connections-duration = Время
 connections-route-other = Другое
+connections-route-any = Любой маршрут
+connections-by-program = По приложениям
+connections-all = Все соединения
+connections-speed = Скорость
+connections-count = { $count ->
+    [one] { $n } соединение
+    [few] { $n } соединения
+    [many] { $n } соединений
+   *[other] { $n } соединения
+}
 connections-system-program = Система и прочее
 connections-disconnected = Подключитесь, чтобы увидеть соединения
 connections-empty = Соединений пока нет
 connections-closed-empty = С открытия вкладки ни одно соединение не закрылось
 connections-no-match = Под фильтр не подходит ни одно соединение
+connections-no-route-match = Нет соединений с этим маршрутом
 connections-loading = Загрузка…
 connections-denied = Туннель подключён из другой учётной записи Windows. Его соединения видны только ей.
 connections-note = Список хранится только в памяти и очищается при отключении. Заблокированные правилами соединения не показываются. Закрытые видны, пока открыта вкладка. Очень короткие соединения могут не попасть в список.
