@@ -189,6 +189,10 @@ pub(crate) enum WorkerEvent {
     },
     /// Program path and its name.
     ProgramNames(Vec<(String, String)>),
+    SessionLists {
+        request: u64,
+        result: Result<rosetun_core::SessionLists, StoreError>,
+    },
     CloseConnection(Result<(), HelperCommandError>),
     UpdateAll {
         subscriptions: Result<Vec<SubscriptionUpdateResult>, StoreError>,

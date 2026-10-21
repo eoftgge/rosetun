@@ -18,6 +18,7 @@ use crate::worker::{ConfigWorkerError, FailureInterference, WorkerEvent};
 mod connection;
 mod exits;
 mod lists;
+mod route_reason;
 mod rules;
 mod session;
 mod settings;
@@ -420,6 +421,10 @@ pub(crate) enum Job {
     TunnelDelay,
     Connections,
     ProgramNames(Vec<String>),
+    SessionLists {
+        request: u64,
+        session: Box<ConnectRequest>,
+    },
     CloseConnection(String),
     LookupExit {
         generation: u64,
@@ -494,6 +499,9 @@ impl State {
                 received_ms,
             } => self.reduce_connections(result, received_ms),
             WorkerEvent::ProgramNames(names) => self.reduce_program_names(names),
+            WorkerEvent::SessionLists { request, result } => {
+                self.reduce_session_lists(request, result);
+            }
             WorkerEvent::CloseConnection(result) => self.reduce_close_connection(result),
             event @ (WorkerEvent::Apply(_)
             | WorkerEvent::RestoreApplied(_)

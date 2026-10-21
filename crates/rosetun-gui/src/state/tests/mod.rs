@@ -196,6 +196,7 @@ fn complete_applied_restore(state: &mut State) -> AppliedSnapshot {
 mod connection;
 mod exits;
 mod lists;
+mod route_reason;
 mod rules;
 mod schedule;
 mod session;

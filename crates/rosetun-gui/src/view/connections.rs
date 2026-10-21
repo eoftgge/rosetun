@@ -76,6 +76,29 @@ fn details(
                         .color(route_color(&connection.route)),
                 );
             });
+            let reason = state.route_reason(connection);
+            detail_row(ui, &tr!("connections-why"), |ui| {
+                let text = ui.add(egui::Label::new(RichText::new(&reason.text).color(theme::TEXT)).wrap());
+                if let Some(hint) = &reason.hint {
+                    text.on_hover_text(hint);
+                }
+                for note in [
+                    reason.nameless.then(|| tr!("connections-why-nameless")),
+                    reason.changed.then(|| tr!("connections-why-changed")),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    ui.add(egui::Label::new(RichText::new(note).small().color(theme::TEXT_DIM)).wrap());
+                }
+                if let Some(rule) = &reason.edit
+                    && widgets::link(ui, &tr!("connections-why-edit"), state.can_edit_rules())
+                        .clicked()
+                {
+                    actions.push(Action::OpenActiveRules);
+                    actions.push(Action::OpenEditRule(rule.clone()));
+                }
+            });
             detail_row(ui, &tr!("connections-network"), |ui| {
                 ui.label(RichText::new(network_label(connection.network)).color(theme::TEXT));
             });

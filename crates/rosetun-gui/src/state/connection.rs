@@ -436,6 +436,7 @@ impl State {
                         self.session.session_request = Some(request);
                         self.refresh_cached_request();
                         self.session.lists_changed_since_apply = false;
+                        self.traffic.lists.forget();
                         self.clear_delayed_list_updates();
                         self.session.applied_snapshot = snapshot.or_else(|| {
                             self.config_ready
@@ -467,6 +468,7 @@ impl State {
                         self.session.session_request = Some(request);
                         self.refresh_cached_request();
                         self.session.lists_changed_since_apply = false;
+                        self.traffic.lists.forget();
                         self.session.applied_snapshot =
                             self.session.deferred_snapshot.take().or_else(|| {
                                 self.config_ready

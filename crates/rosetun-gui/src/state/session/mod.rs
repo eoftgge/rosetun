@@ -719,6 +719,7 @@ impl State {
                         self.session.session_request = Some(request);
                         self.refresh_cached_request();
                         self.session.lists_changed_since_apply = false;
+                        self.traffic.lists.forget();
                         self.clear_delayed_list_updates();
                         self.session.applied_snapshot = candidate;
                         self.session.recovery = ApplyRecovery::default();

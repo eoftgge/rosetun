@@ -329,6 +329,8 @@ pub(crate) struct TrafficState {
     pub(crate) traffic_history: VecDeque<(u64, u64)>,
     pub(crate) traffic_range: TrafficRange,
     pub(crate) connections: ConnectionsList,
+    /// The running session's lists for explaining routes.
+    pub(super) lists: super::route_reason::SessionListsCache,
     /// The window is hidden in the tray, so nobody sees the list.
     window_hidden: bool,
 }
@@ -350,12 +352,14 @@ impl State {
         } else {
             self.traffic.traffic_history.clear();
             self.traffic.connections.clear();
+            self.traffic.lists.forget();
         }
     }
 
     pub(super) fn clear_traffic_history(&mut self) {
         self.traffic.traffic_history.clear();
         self.traffic.connections.clear();
+        self.traffic.lists.forget();
     }
 
     pub(crate) fn set_window_hidden(&mut self, hidden: bool) {
