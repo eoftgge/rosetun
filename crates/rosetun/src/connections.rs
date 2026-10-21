@@ -38,7 +38,11 @@ pub(crate) fn run(client: &mut HelperClient) -> ExitCode {
                 .map(|connection| ("active", connection))
                 .chain(closed.iter().map(|connection| ("closed", connection)))
             {
-                println!("{}\t{}", line(state, connection, now), rules.rule(connection));
+                println!(
+                    "{}\t{}",
+                    line(state, connection, now),
+                    rules.rule(connection)
+                );
             }
             ExitCode::SUCCESS
         }
@@ -114,9 +118,10 @@ impl SessionRules {
     /// `temporary`, `rule 3`, `template youtube`, `list`, `lan`, `default`
     /// or `unknown`.
     fn rule(&self, connection: &LiveConnection) -> String {
-        let explanation = self.request.as_ref().and_then(|request| {
-            rosetun_core::explain_connection(request, &self.lists, connection)
-        });
+        let explanation = self
+            .request
+            .as_ref()
+            .and_then(|request| rosetun_core::explain_connection(request, &self.lists, connection));
         let Some(Explanation::Routed { reason, .. }) = explanation else {
             return "unknown".to_owned();
         };
@@ -376,8 +381,7 @@ mod tests {
     fn the_rule_column_names_what_routed_the_connection() {
         use rosetun_config::{
             DomainMatch, Node, NodeId, Outbound, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSet,
-            RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId,
-            TrojanParams,
+            RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, SubscriptionId, TrojanParams,
         };
         use rosetun_ipc::ConnectRequest;
 

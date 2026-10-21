@@ -78,7 +78,8 @@ fn details(
             });
             let reason = state.route_reason(connection);
             detail_row(ui, &tr!("connections-why"), |ui| {
-                let text = ui.add(egui::Label::new(RichText::new(&reason.text).color(theme::TEXT)).wrap());
+                let text =
+                    ui.add(egui::Label::new(RichText::new(&reason.text).color(theme::TEXT)).wrap());
                 if let Some(hint) = &reason.hint {
                     text.on_hover_text(hint);
                 }
@@ -89,7 +90,9 @@ fn details(
                 .into_iter()
                 .flatten()
                 {
-                    ui.add(egui::Label::new(RichText::new(note).small().color(theme::TEXT_DIM)).wrap());
+                    ui.add(
+                        egui::Label::new(RichText::new(note).small().color(theme::TEXT_DIM)).wrap(),
+                    );
                 }
                 if let Some(rule) = &reason.edit
                     && widgets::link(ui, &tr!("connections-why-edit"), state.can_edit_rules())

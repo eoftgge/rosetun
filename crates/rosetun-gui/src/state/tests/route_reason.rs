@@ -123,7 +123,10 @@ fn every_kind_of_answer_has_its_line() {
             tr!(
                 "connections-why-rule",
                 number = "2".to_owned(),
-                condition = tr!("connections-why-subdomains", site = "example.net".to_owned())
+                condition = tr!(
+                    "connections-why-subdomains",
+                    site = "example.net".to_owned()
+                )
             ),
             Some("suffix")
         )

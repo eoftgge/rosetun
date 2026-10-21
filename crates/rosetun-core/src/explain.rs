@@ -220,9 +220,10 @@ pub fn explain(
         }
         let temporary = index < temporary_count;
         if rule.target == RuleTarget::Exit
-            && !rule.exit.as_ref().is_some_and(|exit| {
-                request.extra_nodes.iter().any(|extra| extra.exit == *exit)
-            })
+            && !rule
+                .exit
+                .as_ref()
+                .is_some_and(|exit| request.extra_nodes.iter().any(|extra| extra.exit == *exit))
         {
             // The renderer refuses it and the service never starts the session.
             continue;
@@ -395,7 +396,9 @@ impl Cidr {
     fn contains(self, ip: IpAddr) -> bool {
         match (self.network, ip) {
             (IpAddr::V4(network), IpAddr::V4(ip)) => {
-                let mask = u32::MAX.checked_shl(32 - u32::from(self.prefix)).unwrap_or(0);
+                let mask = u32::MAX
+                    .checked_shl(32 - u32::from(self.prefix))
+                    .unwrap_or(0);
                 u32::from(network) & mask == u32::from(ip) & mask
             }
             (IpAddr::V6(network), IpAddr::V6(ip)) => {
@@ -435,7 +438,10 @@ impl SourceRule {
         let address = !self.has_address()
             || target.domain.is_some_and(|domain| {
                 self.domains.contains(domain)
-                    || self.suffixes.iter().any(|suffix| has_suffix(domain, suffix))
+                    || self
+                        .suffixes
+                        .iter()
+                        .any(|suffix| has_suffix(domain, suffix))
                     || self.keywords.iter().any(|keyword| domain.contains(keyword))
                     || self.regexes.iter().any(|regex| regex.is_match(domain))
             })

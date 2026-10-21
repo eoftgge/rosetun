@@ -165,7 +165,9 @@ fn a_temporary_rule_comes_before_the_set_and_says_so() {
         panic!("routed");
     };
     assert_eq!(route, ExplainedRoute::Direct);
-    assert!(matches!(reason, Reason::Rule { temporary: true, ref id, .. } if id.as_str() == "temporary"));
+    assert!(
+        matches!(reason, Reason::Rule { temporary: true, ref id, .. } if id.as_str() == "temporary")
+    );
 
     let Explanation::Routed { reason, route } =
         explain(&request, &SessionLists::default(), &site("www.example.com"))
@@ -173,7 +175,13 @@ fn a_temporary_rule_comes_before_the_set_and_says_so() {
         panic!("routed");
     };
     assert_eq!(route, ExplainedRoute::Block);
-    assert!(matches!(reason, Reason::Rule { temporary: false, .. }));
+    assert!(matches!(
+        reason,
+        Reason::Rule {
+            temporary: false,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -227,7 +235,10 @@ fn an_unreadable_list_stops_the_answer_and_a_left_out_one_is_passed() {
 
     let without_binary = {
         let mut request = request.clone();
-        request.rule_set.rules.retain(|rule| rule.id.as_str() != "binary");
+        request
+            .rule_set
+            .rules
+            .retain(|rule| rule.id.as_str() != "binary");
         request
     };
     assert_eq!(

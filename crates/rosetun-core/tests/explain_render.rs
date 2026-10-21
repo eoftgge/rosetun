@@ -22,8 +22,7 @@ use serde_json::{Value, json};
 /// Every input goes to this port.
 const PORT: u16 = 443;
 
-const LIST_SOURCE: &str =
-    r#"{"version":3,"rules":[{"domain_suffix":["list.example.com"],"ip_cidr":["203.0.113.0/24"]}]}"#;
+const LIST_SOURCE: &str = r#"{"version":3,"rules":[{"domain_suffix":["list.example.com"],"ip_cidr":["203.0.113.0/24"]}]}"#;
 
 fn rule(id: &str, matcher: RuleMatcher, target: RuleTarget) -> Rule {
     Rule {
@@ -223,7 +222,11 @@ fn evaluate(route: &Value, sources: &HashMap<String, Value>, input: &Input) -> E
 }
 
 fn strings(value: &Value) -> impl Iterator<Item = &str> {
-    value.as_array().unwrap().iter().map(|v| v.as_str().unwrap())
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
 }
 
 fn contains(cidr: &str, ip: IpAddr) -> bool {
@@ -275,9 +278,9 @@ fn matches(rule: &Value, sources: &HashMap<String, Value>, input: &Input) -> boo
                     .as_deref()
                     .is_some_and(|domain| strings(value).any(|entry| domain.contains(entry))),
             ),
-            "ip_cidr" => any_address(
-                ip.is_some_and(|ip| strings(value).any(|cidr| contains(cidr, ip))),
-            ),
+            "ip_cidr" => {
+                any_address(ip.is_some_and(|ip| strings(value).any(|cidr| contains(cidr, ip))))
+            }
             // The documentation addresses are public; only loopback stands for
             // a local one here.
             "ip_is_private" => any_address(ip.is_some_and(|ip| ip.is_loopback())),
@@ -370,7 +373,10 @@ fn the_explainer_agrees_with_the_rendered_route() {
                 ExplainedRoute::Block => None,
                 ExplainedRoute::Exit(_) => panic!("{label}: no exits here"),
             };
-            assert_eq!(outbound, evaluated.outbound, "{label}, allow_lan {allow_lan}");
+            assert_eq!(
+                outbound, evaluated.outbound,
+                "{label}, allow_lan {allow_lan}"
+            );
             match (reason, evaluated.index) {
                 (Reason::Rule { id, temporary, .. }, Some(index)) => {
                     let matched = enabled[index - first_user_rule];
