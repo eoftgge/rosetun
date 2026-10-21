@@ -573,9 +573,17 @@ fn connection_speed_comes_from_when_the_answers_arrived() {
         "the first answer has no speed"
     );
 
-    arrive_at(&mut state, 10_900, vec![with_bytes(first.clone(), 1_800, 450)]);
+    arrive_at(
+        &mut state,
+        10_900,
+        vec![with_bytes(first.clone(), 1_800, 450)],
+    );
     let list = &state.traffic.connections;
-    assert_eq!(list.rate(&list.active[0]), Some((2_000, 500)), "after 0.9 s");
+    assert_eq!(
+        list.rate(&list.active[0]),
+        Some((2_000, 500)),
+        "after 0.9 s"
+    );
 
     let mut other = live("example.org", None, ConnectionRoute::Proxy);
     other.id = "example.com-id-2".to_owned();
@@ -589,7 +597,11 @@ fn connection_speed_comes_from_when_the_answers_arrived() {
         ],
     );
     let list = &state.traffic.connections;
-    assert_eq!(list.rate(&list.active[0]), Some((2_000, 500)), "after 1.9 s");
+    assert_eq!(
+        list.rate(&list.active[0]),
+        Some((2_000, 500)),
+        "after 1.9 s"
+    );
     assert_eq!(list.rate(&list.active[1]), None, "no id, no speed");
     assert_eq!(list.rate(&list.active[2]), None, "a new id starts again");
 }
@@ -599,9 +611,21 @@ fn an_answer_soon_after_the_last_keeps_the_speed() {
     use rosetun_config::ConnectionRoute;
     let mut state = connected_on_traffic();
     let connection = live("example.com", None, ConnectionRoute::Proxy);
-    arrive_at(&mut state, 10_000, vec![with_bytes(connection.clone(), 0, 0)]);
-    arrive_at(&mut state, 11_000, vec![with_bytes(connection.clone(), 3_000, 300)]);
-    arrive_at(&mut state, 11_100, vec![with_bytes(connection.clone(), 9_000, 900)]);
+    arrive_at(
+        &mut state,
+        10_000,
+        vec![with_bytes(connection.clone(), 0, 0)],
+    );
+    arrive_at(
+        &mut state,
+        11_000,
+        vec![with_bytes(connection.clone(), 3_000, 300)],
+    );
+    arrive_at(
+        &mut state,
+        11_100,
+        vec![with_bytes(connection.clone(), 9_000, 900)],
+    );
     let list = &state.traffic.connections;
     assert_eq!(
         list.rate(&list.active[0]),
@@ -626,7 +650,11 @@ fn the_window_smooths_one_uneven_answer() {
             vec![with_bytes(connection.clone(), second * 1_000, 0)],
         );
     }
-    arrive_at(&mut state, 4_000, vec![with_bytes(connection.clone(), 7_000, 0)]);
+    arrive_at(
+        &mut state,
+        4_000,
+        vec![with_bytes(connection.clone(), 7_000, 0)],
+    );
     let list = &state.traffic.connections;
     assert_eq!(
         list.rate(&list.active[0]),
@@ -644,8 +672,16 @@ fn a_connection_gone_from_the_answer_is_forgotten() {
     use rosetun_config::ConnectionRoute;
     let mut state = connected_on_traffic();
     let connection = live("example.com", None, ConnectionRoute::Proxy);
-    arrive_at(&mut state, 10_000, vec![with_bytes(connection.clone(), 0, 0)]);
-    arrive_at(&mut state, 11_000, vec![with_bytes(connection.clone(), 1_000, 0)]);
+    arrive_at(
+        &mut state,
+        10_000,
+        vec![with_bytes(connection.clone(), 0, 0)],
+    );
+    arrive_at(
+        &mut state,
+        11_000,
+        vec![with_bytes(connection.clone(), 1_000, 0)],
+    );
     arrive_at(&mut state, 12_000, Vec::new());
     arrive_at(&mut state, 13_000, vec![with_bytes(connection, 9_000, 0)]);
     let list = &state.traffic.connections;

@@ -187,8 +187,7 @@ impl ConnectionsList {
                 .is_none_or(|&(at, _, _)| received_ms >= at.saturating_add(RATE_MIN_STEP_MS))
             {
                 points.push_back((received_ms, connection.download, connection.upload));
-                while points.len() > 2
-                    && points[1].0.saturating_add(RATE_WINDOW_MS) <= received_ms
+                while points.len() > 2 && points[1].0.saturating_add(RATE_WINDOW_MS) <= received_ms
                 {
                     points.pop_front();
                 }

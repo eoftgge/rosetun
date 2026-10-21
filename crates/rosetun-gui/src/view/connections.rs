@@ -123,10 +123,7 @@ fn details(
                 let speed = list.rate(connection).map_or_else(
                     || "·".to_owned(),
                     |(down, up)| {
-                        crate::i18n::traffic_rates(
-                            &crate::i18n::rate(down),
-                            &crate::i18n::rate(up),
-                        )
+                        crate::i18n::traffic_rates(&crate::i18n::rate(down), &crate::i18n::rate(up))
                     },
                 );
                 ui.add(
