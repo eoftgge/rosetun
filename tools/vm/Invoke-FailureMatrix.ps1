@@ -217,7 +217,7 @@ function Test-RosetunAddressesUnlogged {
         [string[]]$Addresses
     )
     $addresses = @($Addresses)
-    $foundIn = @($addresses | ForEach-Object { Find-RosetunLogText $_ -WithLine } | Sort-Object -Unique)
+    $foundIn = @($addresses | ForEach-Object { Find-RosetunLogText $_ -WithLine -SinceUtcTicks $runStartedUtcTicks } | Sort-Object -Unique)
     Test-Step 'connections' "no service log names an address of $HostName" `
         -Note "addresses $($addresses -join ', '); found at: $($foundIn -join ', ')" {
         $addresses.Count -gt 0 -and $foundIn.Count -eq 0
@@ -548,6 +548,9 @@ if (-not ($protocolSource -match 'pub const PROTOCOL_VERSION: u32 = (\d+);')) {
     throw 'Could not read PROTOCOL_VERSION from rosetun-ipc.'
 }
 $protocolVersion = [int]$Matches[1]
+# Without a checkpoint restore the guest keeps logs of earlier runs, whose
+# leaks this run's log checks must not report.
+$runStartedUtcTicks = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow.Ticks }
 
 # Proves the probe itself works. Without it, every "blocked" check below would
 # pass even if the probe were broken or the probe URL unreachable.
@@ -1892,21 +1895,21 @@ Test-Step 'hysteria2' 'state is Disconnected' { Wait-RosetunState 'Disconnected'
 Test-Step 'hysteria2' 'direct egress works again' { Test-RosetunDirectEgress }
 Test-Step 'hysteria2' 'IPv6 works again' { Test-RosetunIpv6Egress }
 
-$namedIn = @(Find-RosetunLogText $connectionsHost)
+$namedIn = @(Find-RosetunLogText $connectionsHost -SinceUtcTicks $runStartedUtcTicks)
 Test-Step 'connections' "no service log names $connectionsHost" -Note ($namedIn -join ', ') {
     $namedIn.Count -eq 0
 }
 Test-RosetunAddressesUnlogged $connectionsHost $connectionsAddresses
-$namedIn = @(Find-RosetunLogText $longTransferHost)
+$namedIn = @(Find-RosetunLogText $longTransferHost -SinceUtcTicks $runStartedUtcTicks)
 Test-Step 'connections' "no service log names the closed download's $longTransferHost" `
     -Note ($namedIn -join ', ') {
     $namedIn.Count -eq 0
 }
 Test-RosetunAddressesUnlogged $longTransferHost $longTransferAddresses
 Test-RosetunAddressesUnlogged $temporaryHost $temporaryAddresses
-$closeLogged = @(Find-RosetunLogText 'closed a connection on request' -Anywhere)
+$closeLogged = @(Find-RosetunLogText 'closed a connection on request' -Anywhere -SinceUtcTicks $runStartedUtcTicks)
 # An if statement unrolls an empty array to $null; wrap the whole statement.
-$namedIn = @(if ($closedId) { Find-RosetunLogText $closedId -Anywhere })
+$namedIn = @(if ($closedId) { Find-RosetunLogText $closedId -Anywhere -SinceUtcTicks $runStartedUtcTicks })
 Test-Step 'connections' 'the close is logged without the connection id' `
     -Note "logged in: $($closeLogged -join ', '); id in: $($namedIn -join ', ')" {
     $closedId -and $closeLogged.Count -gt 0 -and $namedIn.Count -eq 0

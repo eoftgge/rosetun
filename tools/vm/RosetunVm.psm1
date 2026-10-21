@@ -1979,13 +1979,15 @@ function Find-RosetunLogText {
     # searched for $Text as a whole host name, or anywhere with -Anywhere (for
     # the start of an id). Returns the names of matching files, with -WithLine
     # as name:line of the first match (never the line itself, which may be the leak).
+    # -SinceUtcTicks (guest clock) skips logs last written before it, such as earlier runs'.
     param(
         [Parameter(Mandatory)][string]$Text,
         [switch]$Anywhere,
-        [switch]$WithLine
+        [switch]$WithLine,
+        [Nullable[long]]$SinceUtcTicks
     )
     Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $text, $anywhere, $withLine)
+        param($dir, $text, $anywhere, $withLine, $sinceUtcTicks)
         $pattern = if ($anywhere) {
             '(?i)' + [regex]::Escape($text)
         }
@@ -1995,6 +1997,9 @@ function Find-RosetunLogText {
         $logs = @(Get-ChildItem -Path $dir -Filter 'helper*.log' -File -ErrorAction SilentlyContinue) +
             @(Get-ChildItem -Path (Join-Path $dir 'data\logs') -File -ErrorAction SilentlyContinue)
         foreach ($log in $logs) {
+            if ($sinceUtcTicks -and $log.LastWriteTimeUtc.Ticks -lt $sinceUtcTicks) {
+                continue
+            }
             $stream = [IO.File]::Open($log.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read,
                 [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
             try {
@@ -2013,7 +2018,7 @@ function Find-RosetunLogText {
                 $log.Name
             }
         }
-    } -ArgumentList $script:Config.GuestDir, $Text, [bool]$Anywhere, [bool]$WithLine
+    } -ArgumentList $script:Config.GuestDir, $Text, [bool]$Anywhere, [bool]$WithLine, $SinceUtcTicks
 }
 
 function Test-RosetunGuestLoopback {
