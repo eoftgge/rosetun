@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use rosetun_config::{ConnectionRoute, ConnectionState, LiveConnection, Status};
 use rosetun_ipc::{ClientError, ErrorCode, HelperError};
@@ -46,6 +46,38 @@ pub(crate) enum ConnectionsNotice {
     NoMatch,
 }
 
+/// Program names read from version resources, by full path. The reading
+/// happens on a worker; until then a program shows its file name. Memory only,
+/// cleared with the list when the tunnel goes away.
+#[derive(Default)]
+pub(crate) struct ProgramNames {
+    names: HashMap<String, String>,
+    requested: HashSet<String>,
+    queued: Vec<String>,
+}
+
+impl ProgramNames {
+    fn queue(&mut self, connections: &[LiveConnection]) {
+        for path in connections.iter().filter_map(|c| c.process.as_deref()) {
+            if self.requested.insert(path.to_owned()) {
+                self.queued.push(path.to_owned());
+            }
+        }
+    }
+
+    /// "System and other" for a connection without a program.
+    pub(crate) fn name(&self, path: Option<&str>) -> String {
+        match path {
+            Some(path) => self
+                .names
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| crate::programs::file_stem(path).to_owned()),
+            None => tr!("connections-system-program"),
+        }
+    }
+}
+
 /// The session's connections as the service last answered, newest first.
 /// Memory only: the list is the user's browsing history.
 #[derive(Default)]
@@ -58,6 +90,7 @@ pub(crate) struct ConnectionsList {
     pub(crate) received: bool,
     /// The tunnel belongs to another Windows account.
     pub(crate) denied: bool,
+    pub(crate) programs: ProgramNames,
     pending: bool,
     last_request: Option<u64>,
 }
@@ -70,8 +103,14 @@ impl ConnectionsList {
         self.denied = false;
     }
 
-    /// The selected tab's connections that match the filter by program or
-    /// address, ignoring letter case.
+    /// The tunnel went away: the names go with the list.
+    fn clear(&mut self) {
+        self.forget();
+        self.programs = ProgramNames::default();
+    }
+
+    /// The selected tab's connections that match the filter by program path,
+    /// program name or address, ignoring letter case.
     pub(crate) fn visible(&self) -> Vec<&LiveConnection> {
         let list = match self.tab {
             ConnectionsTab::Active => &self.active,
@@ -89,6 +128,11 @@ impl ConnectionsList {
                         .process
                         .as_deref()
                         .is_some_and(|process| process.to_lowercase().contains(&filter))
+                    || self
+                        .programs
+                        .name(connection.process.as_deref())
+                        .to_lowercase()
+                        .contains(&filter)
             })
             .collect()
     }
@@ -120,13 +164,13 @@ impl State {
             }
         } else {
             self.traffic.traffic_history.clear();
-            self.traffic.connections.forget();
+            self.traffic.connections.clear();
         }
     }
 
     pub(super) fn clear_traffic_history(&mut self) {
         self.traffic.traffic_history.clear();
-        self.traffic.connections.forget();
+        self.traffic.connections.clear();
     }
 
     pub(crate) fn set_window_hidden(&mut self, hidden: bool) {
@@ -183,12 +227,14 @@ impl State {
     ) {
         self.traffic.connections.pending = false;
         if !self.connections_available() {
-            self.traffic.connections.forget();
+            self.traffic.connections.clear();
             return;
         }
         let list = &mut self.traffic.connections;
         match result {
             Ok((active, closed)) => {
+                list.programs.queue(&active);
+                list.programs.queue(&closed);
                 list.active = active;
                 list.closed = closed;
                 list.received = true;
@@ -203,6 +249,22 @@ impl State {
             }
             // A busy service or a lost pipe keeps the last answer until the next second.
             Err(_) => {}
+        }
+    }
+
+    /// Paths seen since the last call, each once per session.
+    pub(crate) fn take_program_names(&mut self) -> Option<Job> {
+        let queued = std::mem::take(&mut self.traffic.connections.programs.queued);
+        (!queued.is_empty()).then_some(Job::ProgramNames(queued))
+    }
+
+    pub(super) fn reduce_program_names(&mut self, names: Vec<(String, String)>) {
+        let programs = &mut self.traffic.connections.programs;
+        for (path, name) in names {
+            // A path read before a disconnect belongs to the old session.
+            if programs.requested.contains(&path) {
+                programs.names.insert(path, name);
+            }
         }
     }
 

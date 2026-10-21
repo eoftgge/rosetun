@@ -272,13 +272,14 @@ fn connection_row(
     widths: &[f32; 6],
     now_ms: u64,
 ) {
-    let (program, path) = match connection.process.as_deref() {
-        Some(path) => (
-            crate::display::safe_text(path.rsplit(['\\', '/']).next().unwrap_or(path)),
-            Some(crate::display::safe_text(path)),
-        ),
-        None => (tr!("connections-unknown-program"), None),
-    };
+    let program = crate::display::safe_text(
+        &state
+            .traffic
+            .connections
+            .programs
+            .name(connection.process.as_deref()),
+    );
+    let path = connection.process.as_deref().map(crate::display::safe_text);
     let destination = crate::display::safe_text(&crate::i18n::connection_destination(
         &connection.host,
         connection.port,

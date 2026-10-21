@@ -403,6 +403,7 @@ pub(crate) enum Job {
     FullCheckNode(SubscriptionId, NodeId),
     TunnelDelay,
     Connections,
+    ProgramNames(Vec<String>),
     LookupExit {
         generation: u64,
         route: ExitRoute,
@@ -472,6 +473,7 @@ impl State {
             | WorkerEvent::TunnelDelay(_)) => self.reduce_connection(event),
             event @ WorkerEvent::TemporaryRules { .. } => self.reduce_session(event),
             WorkerEvent::Connections(result) => self.reduce_connections(result),
+            WorkerEvent::ProgramNames(names) => self.reduce_program_names(names),
             event @ (WorkerEvent::Apply(_)
             | WorkerEvent::RestoreApplied(_)
             | WorkerEvent::RestoreEdits(_)) => self.reduce_session(event),

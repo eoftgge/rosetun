@@ -183,6 +183,8 @@ pub(crate) enum WorkerEvent {
     },
     TunnelDelay(Result<TunnelDelays, HelperCommandError>),
     Connections(Result<(Vec<LiveConnection>, Vec<LiveConnection>), HelperCommandError>),
+    /// Program path and its name.
+    ProgramNames(Vec<(String, String)>),
     UpdateAll {
         subscriptions: Result<Vec<SubscriptionUpdateResult>, StoreError>,
         lists: Result<Vec<ListUpdateResult>, StoreError>,
@@ -212,6 +214,7 @@ struct ConfigPublisher {
 
 mod helper;
 mod lists;
+mod programs;
 #[cfg(windows)]
 mod report;
 mod rules;

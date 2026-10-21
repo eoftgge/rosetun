@@ -4,7 +4,7 @@
 #[allow(unsafe_code)]
 mod windows;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunningProcess {
@@ -28,6 +28,19 @@ pub fn running_processes() -> Result<Vec<RunningProcess>, ProcessListError> {
 #[cfg(not(windows))]
 pub fn running_processes() -> Result<Vec<RunningProcess>, ProcessListError> {
     Ok(Vec::new())
+}
+
+/// The `FileDescription` of the executable's version resource, as written
+/// there. Only local drive paths are read: a network path would make Windows
+/// connect to that server.
+#[cfg(windows)]
+pub fn file_description(path: &Path) -> Option<String> {
+    windows::file_description(path)
+}
+
+#[cfg(not(windows))]
+pub fn file_description(_path: &Path) -> Option<String> {
+    None
 }
 
 #[cfg(test)]
@@ -55,6 +68,19 @@ mod tests {
                 .to_lowercase(),
             expected.to_lowercase()
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn system_programs_have_a_description_and_network_paths_are_not_read() {
+        let windows = std::env::var_os("SystemRoot").unwrap();
+        let notepad = Path::new(&windows).join(r"System32\notepad.exe");
+        assert!(file_description(&notepad).is_some_and(|text| !text.trim().is_empty()));
+        assert_eq!(
+            file_description(Path::new(r"\\server.invalid\share\app.exe")),
+            None
+        );
+        assert_eq!(file_description(Path::new("app.exe")), None);
     }
 
     #[cfg(not(windows))]

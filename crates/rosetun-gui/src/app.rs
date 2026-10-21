@@ -317,6 +317,7 @@ impl App {
             Job::FullCheckNode(id, node) => self.workers.full_check(id, Some(node)),
             Job::TunnelDelay => self.workers.tunnel_delay(),
             Job::Connections => self.workers.connections(),
+            Job::ProgramNames(paths) => self.workers.program_names(paths),
             Job::LookupExit { generation, route } => self.workers.lookup_exit(generation, route),
             Job::UpdateAll => self.workers.update_all(),
             Job::Remove(id) => self.workers.remove(id),
@@ -415,6 +416,9 @@ impl eframe::App for App {
         }
         self.state.set_window_hidden(self.window_hidden());
         if let Some(job) = self.state.take_connections(display::now_unix()) {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_program_names() {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_lockdown_lan() {

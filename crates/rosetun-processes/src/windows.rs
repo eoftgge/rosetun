@@ -2,12 +2,15 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io;
 use std::mem::size_of;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Foundation::{HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+use windows_sys::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -133,4 +136,76 @@ fn process_path(pid: u32, buffer: &mut [u16]) -> Option<PathBuf> {
     Some(PathBuf::from(OsString::from_wide(
         &buffer[..length as usize],
     )))
+}
+
+/// Version resources are a few kilobytes; a larger one is not read.
+const MAX_VERSION_INFO: u32 = 1 << 20;
+
+pub(super) fn file_description(path: &Path) -> Option<String> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let local_drive = wide.len() > 3
+        && wide[1] == u16::from(b':')
+        && matches!(wide[2], 0x5c | 0x2f)
+        && char::from_u32(u32::from(wide[0])).is_some_and(|letter| letter.is_ascii_alphabetic());
+    if !local_drive || wide.contains(&0) {
+        return None;
+    }
+    let wide: Vec<u16> = wide.into_iter().chain(std::iter::once(0)).collect();
+    let mut ignored = 0;
+    // SAFETY: wide is a NUL-terminated UTF-16 path that outlives the call, and
+    // ignored is writable; the Windows ABI call retains neither pointer.
+    let size = unsafe { GetFileVersionInfoSizeW(wide.as_ptr(), &raw mut ignored) };
+    if size == 0 || size > MAX_VERSION_INFO {
+        return None;
+    }
+    // u32 elements keep the block aligned for the WORD and DWORD values in it.
+    let mut block = vec![0_u32; (size as usize).div_ceil(4)];
+    // SAFETY: block is writable for at least size bytes and both buffers stay
+    // alive for the call; Windows copies the resource into block and keeps no pointer.
+    if unsafe { GetFileVersionInfoW(wide.as_ptr(), 0, size, block.as_mut_ptr().cast()) } == 0 {
+        return None;
+    }
+    let mut languages: Vec<(u16, u16)> = query(&block, r"\VarFileInfo\Translation", 2)
+        .map(|units| units.chunks_exact(2).map(|pair| (pair[0], pair[1])).collect())
+        .unwrap_or_default();
+    // US English in Unicode and in Windows-1252: the usual blocks of a file
+    // without a translation table.
+    languages.extend([(0x0409, 0x04b0), (0x0409, 0x04e4)]);
+    languages.into_iter().find_map(|(language, codepage)| {
+        let units = query(
+            &block,
+            &format!(r"\StringFileInfo\{language:04x}{codepage:04x}\FileDescription"),
+            1,
+        )?;
+        let end = units.iter().position(|unit| *unit == 0).unwrap_or(units.len());
+        Some(String::from_utf16_lossy(&units[..end])).filter(|text| !text.is_empty())
+    })
+}
+
+/// The value at `sub_block` as UTF-16 units, borrowed from `block`. The
+/// reported length counts UTF-16 units for strings and bytes for binary
+/// values, so `unit_bytes` is 1 or 2.
+fn query<'a>(block: &'a [u32], sub_block: &str, unit_bytes: usize) -> Option<&'a [u16]> {
+    let name: Vec<u16> = sub_block.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut value = std::ptr::null_mut();
+    let mut length = 0_u32;
+    // SAFETY: block holds the data GetFileVersionInfoW wrote, name is
+    // NUL-terminated, and value and length are writable for the call. On
+    // success value points inside block (not a new allocation).
+    if unsafe { VerQueryValueW(block.as_ptr().cast(), name.as_ptr(), &raw mut value, &raw mut length) }
+        == 0
+        || value.is_null()
+    {
+        return None;
+    }
+    let start = value as usize;
+    let block_start = block.as_ptr() as usize;
+    let block_end = block_start + std::mem::size_of_val(block);
+    if start < block_start || start >= block_end || !start.is_multiple_of(2) {
+        return None;
+    }
+    let units = (length as usize / unit_bytes).min((block_end - start) / 2);
+    // SAFETY: the range starts inside block, is 2-byte aligned and was just
+    // clamped to end within it; the slice borrows block for its lifetime.
+    Some(unsafe { std::slice::from_raw_parts(value as *const u16, units) })
 }

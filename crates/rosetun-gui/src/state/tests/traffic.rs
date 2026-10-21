@@ -309,3 +309,63 @@ fn an_old_answer_is_dropped_when_the_tab_is_opened_again() {
     assert!(state.take_connections(200).is_some());
     assert_eq!(state.connections_notice(), Some(ConnectionsNotice::Loading));
 }
+
+#[test]
+fn program_names_are_read_once_per_path_and_cleared_on_disconnect() {
+    let browser = r"C:\Program Files\Example\browser.exe";
+    let game = r"C:\Games\Game.EXE";
+    let mut state = connected_on_traffic();
+    let _ = state.take_connections(100);
+    state.reduce(WorkerEvent::Connections(Ok((
+        vec![
+            live("example.com", Some(browser), rosetun_config::ConnectionRoute::Proxy),
+            live("example.net", Some(browser), rosetun_config::ConnectionRoute::Proxy),
+            live("203.0.113.5", None, rosetun_config::ConnectionRoute::Direct),
+        ],
+        vec![live("192.0.2.10", Some(game), rosetun_config::ConnectionRoute::Direct)],
+    ))));
+    let Some(Job::ProgramNames(paths)) = state.take_program_names() else {
+        panic!("new paths are read");
+    };
+    assert_eq!(paths, [browser, game]);
+    assert!(state.take_program_names().is_none());
+
+    let programs = &state.traffic.connections.programs;
+    assert_eq!(programs.name(Some(browser)), "browser", "the file name until read");
+    assert_eq!(programs.name(Some(game)), "Game");
+    assert_eq!(programs.name(None), tr!("connections-system-program"));
+
+    state.reduce(WorkerEvent::ProgramNames(vec![(
+        browser.to_owned(),
+        "Example Browser".to_owned(),
+    )]));
+    assert_eq!(
+        state.traffic.connections.programs.name(Some(browser)),
+        "Example Browser"
+    );
+    assert!(
+        state
+            .act(Action::SetConnectionsFilter("example browser".to_owned()))
+            .is_none()
+    );
+    assert_eq!(state.traffic.connections.visible().len(), 2);
+
+    let _ = state.take_connections(101);
+    state.reduce(WorkerEvent::Connections(Ok((
+        vec![live("example.com", Some(browser), rosetun_config::ConnectionRoute::Proxy)],
+        Vec::new(),
+    ))));
+    assert!(state.take_program_names().is_none(), "a read path is not read again");
+
+    state.reduce(WorkerEvent::Status(Status::default()));
+    assert_eq!(
+        state.traffic.connections.programs.name(Some(browser)),
+        "browser",
+        "cleared on disconnect"
+    );
+    state.reduce(WorkerEvent::ProgramNames(vec![(
+        game.to_owned(),
+        "Late Game".to_owned(),
+    )]));
+    assert_eq!(state.traffic.connections.programs.name(Some(game)), "Game");
+}
