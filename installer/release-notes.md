@@ -1,6 +1,6 @@
 # Rosetun {{version}}
 
-An early test build of Rosetun 0.3. Its main feature, **Lockdown**, is ready to try: no internet without the tunnel, also while disconnected, after a restart and if the Rosetun service stops. This is an alpha for testing; **0.2.0 stays the supported release**, and Rosetun 0.2.0 does not offer this build as an update.
+An early test build of Rosetun 0.3. Its two main features are ready to try: **Lockdown**, no internet without the tunnel, also while disconnected, after a restart and if the Rosetun service stops; and the **Traffic** tab with the live list of connections, where each one goes and why. This is an alpha for testing; **0.2.0 stays the supported release**, and Rosetun 0.2.0 does not offer this build as an update.
 
 Settings keep their format, so nothing is converted. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
@@ -15,6 +15,17 @@ Settings keep their format, so nothing is converted. Please report what breaks i
   - **The way out:** turn Lockdown off in Rosetun. If Rosetun does not open or work, run `rosetun reset-firewall` in a terminal as administrator. Uninstalling Rosetun removes Lockdown; if it cannot, the uninstaller stops and keeps Rosetun, so you are never left offline without a way back. Updating Rosetun keeps Lockdown on.
   - From the command line: `rosetun lockdown on`, `rosetun lockdown off`, `rosetun reset-firewall`.
   - The tray shows "blocked" while Lockdown keeps a disconnected computer offline, and **Collect report** includes whether Lockdown is on.
+- **Connections on the Traffic tab.** While you are connected, the tab lists what your programs connect to right now and what closed while the tab was open.
+  - **By program** (named as the program names itself, for example "Google Chrome") or **all connections**; a filter by route (through the VPN, direct, or one of your exits) and a search by program or address.
+  - Select a connection for its details: route, **why it took that route** (which rule, template or list matched, or that no rule did and the default applied), address, program, start time, data and speed.
+  - From there: **create a rule** for that site or program in one click, or **close the connection** (the program usually opens it again at once).
+  - The list is kept only in memory, only for the Windows account that connected, and is cleared when you disconnect. It is never written to disk or to the log and is not part of **Collect report**. Connections that rules block are not shown, and very short ones can be missed.
+  - From the command line: `rosetun connections` and `rosetun connections close <id>`.
+- **Failure details.** Under a connection error, **Details** shows the technical reason with a **Copy** button. Server and site addresses are removed from it, so it is safe to paste into an issue.
+- **Clearer states.** "Connecting…" and "Reconnecting…" show that Rosetun is waiting. When the Rosetun service is not running, the connection screen says "Connection unavailable" in red instead of a grey "State unknown".
+- **The tray rose** has a thin dark outline, so it stays visible on a red or light taskbar, and is drawn at the taskbar's own size, so it is sharp at any display scale. In the taskbar, Start and Alt+Tab the rose sits on a dark plate.
+- **Privacy fixes.** Some sing-box error lines put site addresses into the Rosetun service log even with the detailed log off; now every public address is hidden there. **Collect report** now also hides an address that is followed by a colon, as in error messages.
+- **sing-box {{sing_box_version}} and Xray {{xray_version}}.** The Xray project withdrew the release that 0.3.0-alpha.1 included.
 - **Disconnecting removes the tunnel adapter at once.** Rosetun now stops sing-box gracefully instead of killing it, so Windows no longer has to clean up a leftover adapter, and the next connection does not wait for it.
 - **The first connection after starting Windows** no longer fails when Windows Defender is slow to check sing-box.
 - **"Server name not found"** instead of "could not set up routing" when the server's address cannot be looked up; it no longer suggests turning off another VPN.
@@ -45,7 +56,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-Ранняя тестовая сборка Rosetun 0.3. Её главную функцию, **Lockdown**, уже можно попробовать: без туннеля интернета нет, и без подключения, и после перезагрузки, и если служба Rosetun остановится. Это альфа для тестирования; **поддерживаемый выпуск по-прежнему 0.2.0**, и Rosetun 0.2.0 не предлагает эту сборку как обновление.
+Ранняя тестовая сборка Rosetun 0.3. Две её главные функции уже можно попробовать. **Lockdown**: без туннеля интернета нет, и без подключения, и после перезагрузки, и если служба Rosetun остановится. Вкладка **Трафик** с живым списком соединений: куда идёт каждое и почему. Это альфа для тестирования; **поддерживаемый выпуск по-прежнему 0.2.0**, и Rosetun 0.2.0 не предлагает эту сборку как обновление.
 
 Формат настроек не изменился, ничего не преобразуется. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
@@ -60,6 +71,17 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
   - **Как выйти:** выключите Lockdown в Rosetun. Если Rosetun не открывается или не работает, выполните `rosetun reset-firewall` в терминале от имени администратора. Удаление Rosetun снимает Lockdown; если снять не удалось, удаление останавливается и оставляет Rosetun, так что вы не останетесь без сети и без выхода. Обновление Rosetun Lockdown не снимает.
   - Из командной строки: `rosetun lockdown on`, `rosetun lockdown off`, `rosetun reset-firewall`.
   - Значок в трее показывает «заблокировано», пока Lockdown держит отключённый компьютер без сети, а **Собрать отчёт** указывает, включён ли Lockdown.
+- **Соединения на вкладке «Трафик».** Пока вы подключены, вкладка показывает, куда сейчас подключаются ваши программы и что закрылось, пока вкладка была открыта.
+  - **По приложениям** (с именем, как программа называет себя сама, например «Google Chrome») или **все соединения**; фильтр по маршруту (через VPN, напрямую или одно из ваших направлений) и поиск по программе или адресу.
+  - Нажмите на соединение, чтобы увидеть подробности: маршрут, **почему он такой** (какое правило, шаблон или список подошёл, или что не подошло ни одно и сработало правило по умолчанию), адрес, программа, время начала, объём и скорость.
+  - Оттуда же: **создать правило** для этого сайта или программы в одно нажатие или **закрыть соединение** (программа обычно сразу открывает его заново).
+  - Список хранится только в памяти, только для учётной записи Windows, которая подключилась, и очищается при отключении. Он не пишется ни на диск, ни в журнал и не входит в **Собрать отчёт**. Соединения, заблокированные правилами, не показываются, а очень короткие могут не попасть в список.
+  - Из командной строки: `rosetun connections` и `rosetun connections close <id>`.
+- **Подробности ошибки.** Под ошибкой подключения **Подробнее** показывает технический текст с кнопкой **Копировать**. Адреса серверов и сайтов из него убраны, его можно вставлять в issue.
+- **Понятнее состояния.** «Подключение…» и «Переподключение…» показывают, что Rosetun ждёт. Когда служба Rosetun не запущена, экран подключения пишет красное «Подключение недоступно» вместо серого «Состояние неизвестно».
+- **Роза в трее** получила тонкий тёмный контур, чтобы её было видно на красной и светлой панели задач, и рисуется в размере самой панели, поэтому чёткая при любом масштабе. На панели задач, в «Пуске» и в Alt+Tab роза лежит на тёмной подложке.
+- **Исправления приватности.** Некоторые строки ошибок sing-box попадали в журнал службы Rosetun с адресами сайтов даже при выключенном подробном журнале; теперь там скрыт любой публичный адрес. **Собрать отчёт** теперь скрывает и адрес, за которым идёт двоеточие, как в текстах ошибок.
+- **sing-box {{sing_box_version}} и Xray {{xray_version}}.** Проект Xray отозвал выпуск, который был в 0.3.0-alpha.1.
 - **Отключение сразу убирает адаптер туннеля.** Теперь Rosetun останавливает sing-box штатно, а не убивает его, поэтому Windows не приходится убирать оставшийся адаптер, и следующее подключение его не ждёт.
 - **Первое подключение после запуска Windows** больше не срывается, когда Защитник Windows долго проверяет sing-box.
 - **«Не удалось найти адрес сервера»** вместо «не удалось настроить маршрутизацию», когда адрес сервера не находится; совета выключить другой VPN при этом больше нет.
