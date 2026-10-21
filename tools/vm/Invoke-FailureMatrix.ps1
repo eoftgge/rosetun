@@ -157,13 +157,56 @@ function Format-ConnectionsNote {
     # whole run; with no matching row the CLI's own lines are the evidence.
     param($Listed, [object[]]$Rows)
     $routes = @($Rows | ForEach-Object { $_.Route } | Sort-Object -Unique) -join ','
-    $note = "curl $($Listed.CurlExit), exit $($Listed.ExitCode), routes $routes"
+    $rules = @($Rows | ForEach-Object { $_.Rule } | Sort-Object -Unique) -join ','
+    $note = "curl $($Listed.CurlExit), exit $($Listed.ExitCode), routes $routes, rules $rules"
     if (@($Rows).Count -eq 0) {
         $head = @(($Listed.Output -replace "\x1b\[[0-9;?]*[A-Za-z]", '') -split '\r?\n' |
             Where-Object { $_.Trim() } | Select-Object -First 10) -join ' | '
         $note += "; output: $head"
     }
     $note
+}
+
+function Set-RuleColumnConfig {
+    # A configuration with the request's node and rule set, so the RULE column
+    # of `rosetun connections` explains routes by the rules the session runs.
+    # Returns its guest path.
+    param([Parameter(Mandatory)][string]$RequestName)
+    $configPath = Join-Path (Get-RosetunGuestDir) 'rule-column\config.json'
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $requestName, $configPath)
+        New-Item -Path (Split-Path -Parent $configPath) -ItemType Directory -Force | Out-Null
+        $request = Get-Content -Path (Join-Path $dir $requestName) -Raw | ConvertFrom-Json
+        $config = @{
+            version = 3
+            settings = $request.settings
+            subscriptions = @(@{
+                id = $request.selection.subscription
+                name = 'Test node'
+                url = 'https://example.invalid/subscription'
+                nodes = @($request.node)
+            })
+            active = $request.selection
+            active_rule_set = $request.rule_set.id
+            rule_sets = @($request.rule_set)
+        }
+        [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 30))
+    } -ArgumentList (Get-RosetunGuestDir), $RequestName, $configPath
+    $configPath
+}
+
+function Get-RosetunGuestAddresses {
+    # The addresses a name resolves to in the guest, through the tunnel's DNS.
+    param([Parameter(Mandatory)][string]$HostName)
+    @(Invoke-RosetunGuest -ScriptBlock {
+            param($hostName)
+            try {
+                @([Net.Dns]::GetHostAddresses($hostName) | ForEach-Object { $_.IPAddressToString })
+            }
+            catch {
+                @()
+            }
+        } -ArgumentList $HostName)
 }
 
 function Invoke-SettingsCli {
@@ -555,13 +598,21 @@ Test-Step 'connect' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
 # The same check as through Xray: if it fails here too, the test or the lab is at fault.
 Test-Step 'connect' 'UDP reaches the internet through the node (NTP)' { Test-RosetunUdpInternet }
 $connectionsHost = ([uri](Get-RosetunTunnelProbeUrl)).Host
-$listed = Invoke-RosetunConnectionsDuring -Url (Get-RosetunTunnelProbeUrl)
+$listed = Invoke-RosetunConnectionsDuring -Url (Get-RosetunTunnelProbeUrl) `
+    -ConfigPath (Set-RuleColumnConfig 'request.json')
 $rows = @(Get-RosetunConnectionRows $listed.Output | Where-Object { $_.Destination -like "${connectionsHost}:*" })
 Test-Step 'connections' "a request to $connectionsHost is listed through the VPN" `
     -Note (Format-ConnectionsNote $listed $rows) {
     $listed.CurlExit -eq 0 -and $listed.ExitCode -eq 0 -and $rows.Count -gt 0 -and
         @($rows | Where-Object Route -ne 'proxy').Count -eq 0
 }
+# No rule of request.json names the probe host, so the default sends it through the VPN.
+Test-Step 'connections' "the rule shown for $connectionsHost is the default" `
+    -Note (Format-ConnectionsNote $listed $rows) {
+    $rows.Count -gt 0 -and
+        @($rows | Where-Object { $_.Rule -ne 'default' -or $_.Route -ne 'proxy' }).Count -eq 0
+}
+$connectionsAddresses = Get-RosetunGuestAddresses $connectionsHost
 $longTransferHost = ([uri](Get-RosetunLongTransferUrl)).Host
 $closing = Invoke-RosetunConnectionClose -Url (Get-RosetunLongTransferUrl)
 $closedId = $closing.Id
@@ -1118,12 +1169,18 @@ $egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 15 -
 # The base default is block, so this domain can pass only through the temporary direct rule.
 Test-Step 'temporary' 'domain goes direct' -Note (Format-Egress $egress) { $egress.Ok }
 $temporaryHost = ([uri]$temporaryDomainUrl).Host
-$listed = Invoke-RosetunConnectionsDuring -Url $temporaryDomainUrl -SkipRevocationCheck
+$listed = Invoke-RosetunConnectionsDuring -Url $temporaryDomainUrl -SkipRevocationCheck `
+    -ConfigPath (Set-RuleColumnConfig 'request-temporary.json')
 $rows = @(Get-RosetunConnectionRows $listed.Output | Where-Object { $_.Destination -like "${temporaryHost}:*" })
 Test-Step 'connections' "a request to $temporaryHost is listed as direct" `
     -Note (Format-ConnectionsNote $listed $rows) {
     $listed.CurlExit -eq 0 -and $listed.ExitCode -eq 0 -and $rows.Count -gt 0 -and
         @($rows | Where-Object Route -ne 'direct').Count -eq 0
+}
+Test-Step 'connections' "the rule shown for $temporaryHost is the temporary direct rule" `
+    -Note (Format-ConnectionsNote $listed $rows) {
+    $rows.Count -gt 0 -and
+        @($rows | Where-Object { $_.Rule -ne 'temporary' -or $_.Route -ne 'direct' }).Count -eq 0
 }
 Test-Step 'temporary' 'unmatched domain is blocked' {
     -not (Test-RosetunTunnelEgress -Url $permanentDomainUrl)
@@ -1821,6 +1878,11 @@ Test-Step 'hysteria2' 'IPv6 works again' { Test-RosetunIpv6Egress }
 $namedIn = @(Find-RosetunLogText $connectionsHost)
 Test-Step 'connections' "no service log names $connectionsHost" -Note ($namedIn -join ', ') {
     $namedIn.Count -eq 0
+}
+$addressesIn = @($connectionsAddresses | ForEach-Object { Find-RosetunLogText $_ } | Sort-Object -Unique)
+Test-Step 'connections' "no service log names an address of $connectionsHost" `
+    -Note "addresses $($connectionsAddresses -join ', '); named in: $($addressesIn -join ', ')" {
+    $connectionsAddresses.Count -gt 0 -and $addressesIn.Count -eq 0
 }
 $namedIn = @(Find-RosetunLogText $longTransferHost)
 Test-Step 'connections' "no service log names the closed download's $longTransferHost" `

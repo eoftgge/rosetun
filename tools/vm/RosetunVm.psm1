@@ -1821,13 +1821,19 @@ function Invoke-RosetunConnectionsDuring {
     # about six seconds. The CLI prints what it reads 1.5 s after it starts.
     # Returns the `rosetun connections` output read in the middle of the
     # request, where the connection is active, followed by the one read after
-    # it ended, where it is closed.
+    # it ended, where it is closed. -ConfigPath is the configuration the CLI
+    # explains routes with (its RULE column).
     param(
         [Parameter(Mandatory)][string]$Url,
-        [switch]$SkipRevocationCheck
+        [switch]$SkipRevocationCheck,
+        [string]$ConfigPath
     )
     Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $url, $skipRevocationCheck)
+        param($dir, $url, $skipRevocationCheck, $configPath)
+        # Set before the poller starts, so its process inherits it too.
+        if ($configPath) {
+            $env:ROSETUN_CONFIG = $configPath
+        }
         $cli = Join-Path $dir 'rosetun.exe'
         $poller = Start-Job -ScriptBlock {
             param($cli)
@@ -1866,14 +1872,15 @@ function Invoke-RosetunConnectionsDuring {
             }
             Stop-Job -Job $poller -ErrorAction SilentlyContinue
             Remove-Job -Job $poller -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:ROSETUN_CONFIG -ErrorAction SilentlyContinue
         }
         $global:LASTEXITCODE = 0
         [pscustomobject]@{ CurlExit = $curlExit; ExitCode = $exitCode; Output = ($output -join "`n") }
-    } -ArgumentList $script:Config.GuestDir, $Url, [bool]$SkipRevocationCheck
+    } -ArgumentList $script:Config.GuestDir, $Url, [bool]$SkipRevocationCheck, $ConfigPath
 }
 
 function Get-RosetunConnectionRows {
-    # Rows of `rosetun connections`: STATE ID NET ROUTE DOWN UP SECONDS DESTINATION PROGRAM.
+    # Rows of `rosetun connections`: STATE ID NET ROUTE DOWN UP SECONDS DESTINATION PROGRAM RULE.
     param([string]$Output)
     @($Output -split '\r?\n' | Where-Object { $_ -match '^(active|closed)\t' } | ForEach-Object {
             $columns = $_ -split "`t"
@@ -1883,6 +1890,7 @@ function Get-RosetunConnectionRows {
                 Route = $columns[3]
                 Destination = $columns[7]
                 Program = $columns[8]
+                Rule = if ($columns.Count -gt 9) { $columns[9] } else { $null }
             }
         })
 }
