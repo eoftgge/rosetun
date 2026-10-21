@@ -248,10 +248,14 @@ fn serve_connections(requests: &std::sync::mpsc::Receiver<()>, publisher: &Confi
                     list
                 })
                 .map_err(HelperCommandError::from);
+                let received_ms = crate::display::monotonic_ms();
                 if !emit(
                     &publisher.tx,
                     &publisher.repaint,
-                    WorkerEvent::Connections(result),
+                    WorkerEvent::Connections {
+                        result,
+                        received_ms,
+                    },
                 ) {
                     return;
                 }

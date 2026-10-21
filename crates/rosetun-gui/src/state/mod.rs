@@ -485,7 +485,10 @@ impl State {
             | WorkerEvent::SetLockdown { .. }
             | WorkerEvent::TunnelDelay(_)) => self.reduce_connection(event),
             event @ WorkerEvent::TemporaryRules { .. } => self.reduce_session(event),
-            WorkerEvent::Connections(result) => self.reduce_connections(result),
+            WorkerEvent::Connections {
+                result,
+                received_ms,
+            } => self.reduce_connections(result, received_ms),
             WorkerEvent::ProgramNames(names) => self.reduce_program_names(names),
             WorkerEvent::CloseConnection(result) => self.reduce_close_connection(result),
             event @ (WorkerEvent::Apply(_)

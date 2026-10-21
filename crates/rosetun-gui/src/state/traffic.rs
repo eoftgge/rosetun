@@ -13,6 +13,12 @@ pub(super) const TRAFFIC_HISTORY: usize = 900;
 
 /// An answer older than this is from an earlier visit to the tab and is not shown.
 const CONNECTIONS_STALE_SECS: u64 = 3;
+/// A connection's speed is its bytes over about this much time, so one late
+/// or early answer does not swing it.
+const RATE_WINDOW_MS: u64 = 3_000;
+/// An answer this soon after the last measured one leaves the speed as it is:
+/// its bytes may be as old as the previous ones.
+const RATE_MIN_STEP_MS: u64 = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum TrafficRange {
@@ -153,11 +159,9 @@ pub(crate) struct ConnectionsList {
     /// The tunnel belongs to another Windows account.
     pub(crate) denied: bool,
     pub(crate) programs: ProgramNames,
-    /// Bytes a second down and up by connection id, from the last two answers.
-    rates: HashMap<String, (u64, u64)>,
-    /// The last answer's byte counts by id and when it was asked for.
-    last_bytes: HashMap<String, (u64, u64)>,
-    last_answer: Option<u64>,
+    /// Arrival time in milliseconds and bytes down and up by connection id,
+    /// oldest first, reaching back about `RATE_WINDOW_MS`.
+    samples: HashMap<String, VecDeque<(u64, u64, u64)>>,
     pending: bool,
     last_request: Option<u64>,
 }
@@ -169,47 +173,49 @@ impl ConnectionsList {
         self.received = false;
         self.denied = false;
         self.selected = None;
-        self.rates = HashMap::new();
-        self.last_bytes = HashMap::new();
-        self.last_answer = None;
+        self.samples = HashMap::new();
     }
 
-    /// Rates from the byte counts of the same ids in the previous answer; a
-    /// connection seen for the first time has none yet.
-    fn measure(&mut self, active: &[LiveConnection], now: Option<u64>) {
-        let elapsed = now
-            .zip(self.last_answer)
-            .map(|(now, previous)| now.saturating_sub(previous))
-            .filter(|elapsed| *elapsed > 0);
-        self.rates = HashMap::new();
-        let mut bytes = HashMap::with_capacity(active.len());
+    /// Adds each active connection's bytes at `received_ms` and forgets the
+    /// connections no longer in the answer.
+    fn measure(&mut self, active: &[LiveConnection], received_ms: u64) {
+        let mut samples = HashMap::with_capacity(active.len());
         for connection in active.iter().filter(|c| !c.id.is_empty()) {
-            if let Some(elapsed) = elapsed
-                && let Some(&(down, up)) = self.last_bytes.get(&connection.id)
+            let mut points = self.samples.remove(&connection.id).unwrap_or_default();
+            if points
+                .back()
+                .is_none_or(|&(at, _, _)| received_ms >= at.saturating_add(RATE_MIN_STEP_MS))
             {
-                self.rates.insert(
-                    connection.id.clone(),
-                    (
-                        connection.download.saturating_sub(down) / elapsed,
-                        connection.upload.saturating_sub(up) / elapsed,
-                    ),
-                );
+                points.push_back((received_ms, connection.download, connection.upload));
+                while points.len() > 2
+                    && points[1].0.saturating_add(RATE_WINDOW_MS) <= received_ms
+                {
+                    points.pop_front();
+                }
             }
-            bytes.insert(
-                connection.id.clone(),
-                (connection.download, connection.upload),
-            );
+            samples.insert(connection.id.clone(), points);
         }
-        self.last_bytes = bytes;
-        self.last_answer = now;
+        self.samples = samples;
     }
 
-    /// Down and up bytes a second, once the connection was in two answers.
+    /// Down and up bytes a second, once the connection was in two answers
+    /// far enough apart.
     pub(crate) fn rate(&self, connection: &LiveConnection) -> Option<(u64, u64)> {
         if connection.id.is_empty() {
             return None;
         }
-        self.rates.get(&connection.id).copied()
+        let points = self.samples.get(&connection.id)?;
+        let (&(first_ms, first_down, first_up), &(last_ms, last_down, last_up)) =
+            (points.front()?, points.back()?);
+        let elapsed = last_ms.checked_sub(first_ms).filter(|ms| *ms > 0)?;
+        let per_second = |from: u64, to: u64| {
+            u64::try_from(u128::from(to.saturating_sub(from)) * 1_000 / u128::from(elapsed))
+                .unwrap_or(u64::MAX)
+        };
+        Some((
+            per_second(first_down, last_down),
+            per_second(first_up, last_up),
+        ))
     }
 
     /// Still open, so the service can close it.
@@ -404,6 +410,7 @@ impl State {
     pub(super) fn reduce_connections(
         &mut self,
         result: Result<(Vec<LiveConnection>, Vec<LiveConnection>), HelperCommandError>,
+        received_ms: u64,
     ) {
         self.traffic.connections.pending = false;
         if !self.connections_available() {
@@ -415,8 +422,7 @@ impl State {
             Ok((active, closed)) => {
                 list.programs.queue(&active);
                 list.programs.queue(&closed);
-                let asked = list.last_request;
-                list.measure(&active, asked);
+                list.measure(&active, received_ms);
                 if let Some(id) = &list.selected
                     && !active.iter().chain(&closed).any(|c| &c.id == id)
                 {

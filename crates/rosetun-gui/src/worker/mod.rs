@@ -182,7 +182,11 @@ pub(crate) enum WorkerEvent {
         result: Result<Vec<ProbeResult>, HelperCommandError>,
     },
     TunnelDelay(Result<TunnelDelays, HelperCommandError>),
-    Connections(Result<(Vec<LiveConnection>, Vec<LiveConnection>), HelperCommandError>),
+    Connections {
+        result: Result<(Vec<LiveConnection>, Vec<LiveConnection>), HelperCommandError>,
+        /// When the answer arrived, by `display::monotonic_ms`.
+        received_ms: u64,
+    },
     /// Program path and its name.
     ProgramNames(Vec<(String, String)>),
     CloseConnection(Result<(), HelperCommandError>),

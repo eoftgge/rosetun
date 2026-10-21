@@ -1,6 +1,22 @@
 use super::super::traffic::TRAFFIC_HISTORY;
 use super::*;
 
+/// A connections answer whose arrival time does not matter to the test.
+fn arrived(
+    result: Result<
+        (
+            Vec<rosetun_config::LiveConnection>,
+            Vec<rosetun_config::LiveConnection>,
+        ),
+        crate::worker::HelperCommandError,
+    >,
+) -> WorkerEvent {
+    WorkerEvent::Connections {
+        result,
+        received_ms: 0,
+    }
+}
+
 #[test]
 fn traffic_history_tracks_15_minutes_and_clears_when_tunnel_or_helper_stops() {
     let mut state = State {
@@ -119,14 +135,14 @@ fn connections_are_requested_only_while_the_traffic_tab_is_open() {
         state.take_connections(105).is_none(),
         "one request at a time"
     );
-    state.reduce(WorkerEvent::Connections(Ok((Vec::new(), Vec::new()))));
+    state.reduce(arrived(Ok((Vec::new(), Vec::new()))));
     assert!(state.take_connections(100).is_none(), "once a second");
     assert_eq!(state.connections_due(), Some(101));
     assert!(matches!(
         state.take_connections(101),
         Some(Job::Connections)
     ));
-    state.reduce(WorkerEvent::Connections(Ok((Vec::new(), Vec::new()))));
+    state.reduce(arrived(Ok((Vec::new(), Vec::new()))));
 
     state.set_window_hidden(true);
     assert!(
@@ -149,7 +165,7 @@ fn connections_are_requested_only_while_the_traffic_tab_is_open() {
 fn connections_filter_matches_program_and_address_ignoring_case() {
     let mut state = connected_on_traffic();
     let _ = state.take_connections(100);
-    state.reduce(WorkerEvent::Connections(Ok((
+    state.reduce(arrived(Ok((
         vec![
             live(
                 "Example.com",
@@ -245,11 +261,11 @@ fn connections_empty_states_follow_the_session_and_the_answer() {
     let mut state = connected_on_traffic();
     assert_eq!(state.connections_notice(), Some(ConnectionsNotice::Loading));
     let _ = state.take_connections(100);
-    state.reduce(WorkerEvent::Connections(Ok((Vec::new(), Vec::new()))));
+    state.reduce(arrived(Ok((Vec::new(), Vec::new()))));
     assert_eq!(state.connections_notice(), Some(ConnectionsNotice::Empty));
 
     let _ = state.take_connections(101);
-    state.reduce(WorkerEvent::Connections(Ok((
+    state.reduce(arrived(Ok((
         vec![live(
             "example.com",
             None,
@@ -266,14 +282,14 @@ fn connections_empty_states_follow_the_session_and_the_answer() {
     assert_eq!(state.connections_notice(), Some(ConnectionsNotice::Empty));
 
     let _ = state.take_connections(102);
-    state.reduce(WorkerEvent::Connections(Err(HelperCommandError::Client(
+    state.reduce(arrived(Err(HelperCommandError::Client(
         ClientError::Helper(HelperError::new(ErrorCode::AccessDenied, "another account")),
     ))));
     assert_eq!(state.connections_notice(), Some(ConnectionsNotice::Denied));
     assert!(state.traffic.connections.active.is_empty());
 
     let _ = state.take_connections(103);
-    state.reduce(WorkerEvent::Connections(Ok((
+    state.reduce(arrived(Ok((
         vec![live(
             "example.com",
             None,
@@ -296,7 +312,7 @@ fn connections_empty_states_follow_the_session_and_the_answer() {
 fn an_old_answer_is_dropped_when_the_tab_is_opened_again() {
     let mut state = connected_on_traffic();
     let _ = state.take_connections(100);
-    state.reduce(WorkerEvent::Connections(Ok((
+    state.reduce(arrived(Ok((
         vec![live(
             "example.com",
             None,
@@ -316,7 +332,7 @@ fn program_names_are_read_once_per_path_and_cleared_on_disconnect() {
     let game = r"C:\Games\Game.EXE";
     let mut state = connected_on_traffic();
     let _ = state.take_connections(100);
-    state.reduce(WorkerEvent::Connections(Ok((
+    state.reduce(arrived(Ok((
         vec![
             live(
                 "example.com",
@@ -367,7 +383,7 @@ fn program_names_are_read_once_per_path_and_cleared_on_disconnect() {
     assert_eq!(state.traffic.connections.visible().len(), 2);
 
     let _ = state.take_connections(101);
-    state.reduce(WorkerEvent::Connections(Ok((
+    state.reduce(arrived(Ok((
         vec![live(
             "example.com",
             Some(browser),
@@ -398,7 +414,18 @@ fn answer(state: &mut State, now: u64, active: Vec<rosetun_config::LiveConnectio
         state.take_connections(now),
         Some(Job::Connections)
     ));
-    state.reduce(WorkerEvent::Connections(Ok((active, Vec::new()))));
+    state.reduce(WorkerEvent::Connections {
+        result: Ok((active, Vec::new())),
+        received_ms: now * 1_000,
+    });
+}
+
+/// An answer that arrived at `received_ms`, between the once-a-second requests.
+fn arrive_at(state: &mut State, received_ms: u64, active: Vec<rosetun_config::LiveConnection>) {
+    state.reduce(WorkerEvent::Connections {
+        result: Ok((active, Vec::new())),
+        received_ms,
+    });
 }
 
 fn with_bytes(
@@ -528,16 +555,16 @@ fn connections_filter_by_route_and_by_exit() {
 }
 
 #[test]
-fn connection_speed_comes_from_the_same_id_in_two_answers() {
+fn connection_speed_comes_from_when_the_answers_arrived() {
     use rosetun_config::ConnectionRoute;
     let mut state = connected_on_traffic();
     let first = live("example.com", None, ConnectionRoute::Proxy);
     let mut unnamed = live("example.net", None, ConnectionRoute::Proxy);
     unnamed.id = String::new();
-    answer(
+    arrive_at(
         &mut state,
-        100,
-        vec![with_bytes(first.clone(), 1_000, 100), unnamed.clone()],
+        10_000,
+        vec![with_bytes(first.clone(), 0, 0), unnamed.clone()],
     );
     let list = &state.traffic.connections;
     assert_eq!(
@@ -546,25 +573,87 @@ fn connection_speed_comes_from_the_same_id_in_two_answers() {
         "the first answer has no speed"
     );
 
+    arrive_at(&mut state, 10_900, vec![with_bytes(first.clone(), 1_800, 450)]);
+    let list = &state.traffic.connections;
+    assert_eq!(list.rate(&list.active[0]), Some((2_000, 500)), "after 0.9 s");
+
     let mut other = live("example.org", None, ConnectionRoute::Proxy);
     other.id = "example.com-id-2".to_owned();
-    answer(
+    arrive_at(
         &mut state,
-        102,
+        12_800,
         vec![
-            with_bytes(first.clone(), 5_000, 300),
+            with_bytes(first, 5_600, 1_400),
             with_bytes(unnamed, 9_000, 9_000),
             other,
         ],
     );
     let list = &state.traffic.connections;
-    assert_eq!(list.rate(&list.active[0]), Some((2_000, 100)));
+    assert_eq!(list.rate(&list.active[0]), Some((2_000, 500)), "after 1.9 s");
     assert_eq!(list.rate(&list.active[1]), None, "no id, no speed");
     assert_eq!(list.rate(&list.active[2]), None, "a new id starts again");
+}
 
-    answer(&mut state, 103, vec![with_bytes(first, 4_000, 300)]);
+#[test]
+fn an_answer_soon_after_the_last_keeps_the_speed() {
+    use rosetun_config::ConnectionRoute;
+    let mut state = connected_on_traffic();
+    let connection = live("example.com", None, ConnectionRoute::Proxy);
+    arrive_at(&mut state, 10_000, vec![with_bytes(connection.clone(), 0, 0)]);
+    arrive_at(&mut state, 11_000, vec![with_bytes(connection.clone(), 3_000, 300)]);
+    arrive_at(&mut state, 11_100, vec![with_bytes(connection.clone(), 9_000, 900)]);
+    let list = &state.traffic.connections;
+    assert_eq!(
+        list.rate(&list.active[0]),
+        Some((3_000, 300)),
+        "neither changed nor cleared"
+    );
+
+    arrive_at(&mut state, 12_000, vec![with_bytes(connection, 6_000, 600)]);
+    let list = &state.traffic.connections;
+    assert_eq!(list.rate(&list.active[0]), Some((3_000, 300)));
+}
+
+#[test]
+fn the_window_smooths_one_uneven_answer() {
+    use rosetun_config::ConnectionRoute;
+    let mut state = connected_on_traffic();
+    let connection = live("example.com", None, ConnectionRoute::Proxy);
+    for second in 0..4 {
+        arrive_at(
+            &mut state,
+            second * 1_000,
+            vec![with_bytes(connection.clone(), second * 1_000, 0)],
+        );
+    }
+    arrive_at(&mut state, 4_000, vec![with_bytes(connection.clone(), 7_000, 0)]);
+    let list = &state.traffic.connections;
+    assert_eq!(
+        list.rate(&list.active[0]),
+        Some((2_000, 0)),
+        "over the last 3 s, not 4 000 from the last second alone"
+    );
+
+    arrive_at(&mut state, 5_000, vec![with_bytes(connection, 0, 0)]);
     let list = &state.traffic.connections;
     assert_eq!(list.rate(&list.active[0]), Some((0, 0)), "never negative");
+}
+
+#[test]
+fn a_connection_gone_from_the_answer_is_forgotten() {
+    use rosetun_config::ConnectionRoute;
+    let mut state = connected_on_traffic();
+    let connection = live("example.com", None, ConnectionRoute::Proxy);
+    arrive_at(&mut state, 10_000, vec![with_bytes(connection.clone(), 0, 0)]);
+    arrive_at(&mut state, 11_000, vec![with_bytes(connection.clone(), 1_000, 0)]);
+    arrive_at(&mut state, 12_000, Vec::new());
+    arrive_at(&mut state, 13_000, vec![with_bytes(connection, 9_000, 0)]);
+    let list = &state.traffic.connections;
+    assert_eq!(
+        list.rate(&list.active[0]),
+        None,
+        "its earlier bytes are gone with it"
+    );
 }
 
 #[test]
@@ -733,7 +822,7 @@ fn selection_follows_the_id_stays_when_closed_and_clears_when_gone() {
         state.take_connections(102),
         Some(Job::Connections)
     ));
-    state.reduce(WorkerEvent::Connections(Ok((Vec::new(), vec![closed]))));
+    state.reduce(arrived(Ok((Vec::new(), vec![closed]))));
     assert!(
         state.traffic.connections.selected_connection().is_some(),
         "a closed connection stays selected"
@@ -820,7 +909,7 @@ fn closing_sends_the_id_once_and_only_for_an_active_connection() {
         state.take_connections(100),
         Some(Job::Connections)
     ));
-    state.reduce(WorkerEvent::Connections(Ok((
+    state.reduce(arrived(Ok((
         vec![live("example.com", None, ConnectionRoute::Proxy)],
         vec![closed],
     ))));

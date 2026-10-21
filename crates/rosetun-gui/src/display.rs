@@ -1,4 +1,5 @@
-use std::time::{Duration, UNIX_EPOCH};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_core::{provider_text, terminal_text};
@@ -109,6 +110,12 @@ pub(crate) fn now_unix() -> u64 {
         .elapsed()
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
+}
+
+/// Milliseconds since the first call, on a clock that never goes back.
+pub(crate) fn monotonic_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    u64::try_from(START.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(crate) fn safe_web_url(value: &str) -> Option<String> {
