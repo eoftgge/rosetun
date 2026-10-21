@@ -94,17 +94,26 @@ impl AddRuleDialog {
     }
 
     pub(in crate::state) fn for_rule(set: RuleSetId, rule: &Rule) -> Option<Self> {
-        let mut dialog = Self::new(set);
+        let mut dialog = Self::new(set).with_matcher(&rule.matcher)?;
         dialog.editing = Some(rule.id.clone());
         dialog.target = RuleDestination::of(rule);
-        match &rule.matcher {
+        if let RuleMatcher::Domain(domain) = &rule.matcher {
+            dialog.original_domain = Some(domain.clone());
+        }
+        Some(dialog)
+    }
+
+    /// The condition filled from `matcher`, or `None` for a kind the dialog
+    /// does not edit. The action stays the default.
+    pub(in crate::state) fn with_matcher(mut self, matcher: &RuleMatcher) -> Option<Self> {
+        let dialog = &mut self;
+        match matcher {
             RuleMatcher::Domain(domain) => {
                 dialog.kind = RuleInputKind::Domain;
                 dialog.subdomains = matches!(domain, DomainMatch::Suffix(_));
-                dialog.domains = rosetun_core::rule_value_text(&rule.matcher)
+                dialog.domains = rosetun_core::rule_value_text(matcher)
                     .trim_start_matches("*.")
                     .to_owned();
-                dialog.original_domain = Some(domain.clone());
             }
             RuleMatcher::List { list, category } => {
                 dialog.kind = RuleInputKind::List;
@@ -116,7 +125,7 @@ impl AddRuleDialog {
                 dialog.ips = cidr.clone();
             }
             RuleMatcher::Process(process) => {
-                dialog.process = rosetun_core::rule_value_text(&rule.matcher);
+                dialog.process = rosetun_core::rule_value_text(matcher);
                 match process {
                     ProcessMatch::Name(name) => dialog.process_filter = name.clone(),
                     ProcessMatch::Path(path) => {
@@ -135,7 +144,7 @@ impl AddRuleDialog {
             }
             _ => return None,
         }
-        Some(dialog)
+        Some(self)
     }
 
     pub(crate) fn unchanged_domain(&self) -> Option<DomainMatch> {
@@ -352,6 +361,18 @@ impl State {
                     self.rules.screen.add = Some(AddRuleDialog::new(set.id.clone()));
                     return self.load_processes();
                 }
+            }
+            Action::OpenAddRuleFor(matcher) => {
+                let leave = self.act_rules(Action::OpenActiveRules);
+                if self.can_edit_rules()
+                    && self.rules.screen.add.is_none()
+                    && let Some(set) = self.selected_rules()
+                    && let Some(dialog) = AddRuleDialog::new(set.id.clone()).with_matcher(&matcher)
+                {
+                    self.rules.screen.add = Some(dialog);
+                    return self.load_processes().or(leave);
+                }
+                return leave;
             }
             Action::OpenEditRule(id) => {
                 if self.can_edit_rules()

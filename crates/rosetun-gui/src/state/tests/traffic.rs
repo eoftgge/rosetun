@@ -634,3 +634,189 @@ fn expanded_programs_stay_open_across_answers() {
     assert!(state.act(Action::ToggleProgramGroup(None)).is_none());
     assert_eq!(state.traffic.connections.rows().len(), 4);
 }
+
+#[test]
+fn selection_follows_the_id_and_clears_when_the_connection_is_gone() {
+    use rosetun_config::ConnectionRoute;
+    let mut state = connected_on_traffic();
+    let mut unnamed = live("example.net", None, ConnectionRoute::Proxy);
+    unnamed.id = String::new();
+    answer(
+        &mut state,
+        100,
+        vec![live("example.com", None, ConnectionRoute::Proxy), unnamed],
+    );
+    assert!(
+        state
+            .act(Action::SelectConnection(Some("example.com-id".to_owned())))
+            .is_none()
+    );
+    assert_eq!(
+        state
+            .traffic
+            .connections
+            .selected_connection()
+            .map(|c| c.host.as_str()),
+        Some("example.com")
+    );
+    assert!(
+        state
+            .act(Action::SelectConnection(Some(String::new())))
+            .is_none()
+    );
+    assert_eq!(
+        state.traffic.connections.selected, None,
+        "a connection without an id cannot be selected"
+    );
+    assert!(
+        state
+            .act(Action::SelectConnection(Some("example.com-id".to_owned())))
+            .is_none()
+    );
+
+    let mut moved = live("example.com", None, ConnectionRoute::Proxy);
+    moved.download = 900;
+    answer(
+        &mut state,
+        101,
+        vec![live("example.org", None, ConnectionRoute::Proxy), moved],
+    );
+    assert_eq!(
+        state
+            .traffic
+            .connections
+            .selected_connection()
+            .map(|c| c.download),
+        Some(900),
+        "kept by id, not by position"
+    );
+
+    let mut closed = live("example.com", None, ConnectionRoute::Proxy);
+    closed.end_unix_ms = Some(2_000);
+    assert!(matches!(state.take_connections(102), Some(Job::Connections)));
+    state.reduce(WorkerEvent::Connections(Ok((Vec::new(), vec![closed]))));
+    assert!(
+        state.traffic.connections.selected_connection().is_some(),
+        "a closed connection stays selected"
+    );
+
+    answer(&mut state, 103, Vec::new());
+    assert_eq!(state.traffic.connections.selected, None);
+    assert!(state.traffic.connections.selected_connection().is_none());
+}
+
+#[test]
+fn rule_conditions_for_a_site_an_address_and_a_program() {
+    use rosetun_config::{DomainMatch, ProcessMatch};
+    assert_eq!(
+        crate::state::site_rule("www.example.com"),
+        RuleMatcher::Domain(DomainMatch::Suffix("www.example.com".into()))
+    );
+    assert_eq!(
+        crate::state::site_rule("192.0.2.10"),
+        RuleMatcher::IpCidr("192.0.2.10/32".into())
+    );
+    assert_eq!(
+        crate::state::site_rule("2001:db8::1"),
+        RuleMatcher::IpCidr("2001:db8::1/128".into())
+    );
+    let path = r"C:\Program Files\Example\browser.exe";
+    assert_eq!(
+        crate::state::program_rule(path),
+        RuleMatcher::Process(ProcessMatch::Path(path.into()))
+    );
+}
+
+#[test]
+fn creating_a_rule_from_a_connection_opens_the_filled_dialog() {
+    let path = r"C:\Program Files\Example\browser.exe";
+    let open = |matcher: RuleMatcher| {
+        let mut state = state_with_rules();
+        assert!(state.act(Action::OpenTraffic).is_none());
+        let job = state.act(Action::OpenAddRuleFor(matcher));
+        assert_eq!(state.screen, Screen::Rules);
+        assert_eq!(
+            state.rules.screen.selected_set,
+            Some(RuleSetId::new("2")),
+            "the active set"
+        );
+        (state, job)
+    };
+
+    let (state, job) = open(crate::state::site_rule("www.example.com"));
+    assert!(job.is_none());
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    assert_eq!(dialog.kind, RuleInputKind::Domain);
+    assert_eq!(dialog.domains, "www.example.com");
+    assert!(dialog.subdomains);
+    assert_eq!(dialog.editing, None);
+    assert_eq!(dialog.target, rosetun_core::RuleDestination::Proxy);
+
+    let (state, _) = open(crate::state::site_rule("192.0.2.10"));
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    assert_eq!(dialog.kind, RuleInputKind::Ip);
+    assert_eq!(dialog.ips, "192.0.2.10/32");
+
+    let (state, job) = open(crate::state::program_rule(path));
+    assert!(matches!(job, Some(Job::LoadProcesses(_))));
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    assert_eq!(dialog.kind, RuleInputKind::Process);
+    assert_eq!(dialog.process, path);
+    assert_eq!(dialog.match_mode, ProcessMatchMode::Path);
+    assert_eq!(dialog.editing, None);
+}
+
+#[test]
+fn closing_sends_the_id_once_and_only_for_an_active_connection() {
+    use rosetun_config::ConnectionRoute;
+    let mut state = connected_on_traffic();
+    let mut closed = live("example.net", None, ConnectionRoute::Proxy);
+    closed.end_unix_ms = Some(2_000);
+    assert!(matches!(state.take_connections(100), Some(Job::Connections)));
+    state.reduce(WorkerEvent::Connections(Ok((
+        vec![live("example.com", None, ConnectionRoute::Proxy)],
+        vec![closed],
+    ))));
+
+    assert!(
+        state
+            .act(Action::CloseConnection("example.net-id".to_owned()))
+            .is_none(),
+        "a closed connection cannot be closed"
+    );
+    assert!(
+        state
+            .act(Action::CloseConnection("unknown".to_owned()))
+            .is_none()
+    );
+    let Some(Job::CloseConnection(id)) =
+        state.act(Action::CloseConnection("example.com-id".to_owned()))
+    else {
+        panic!("an active connection is closed through the worker");
+    };
+    assert_eq!(id, "example.com-id");
+    assert_eq!(
+        state.traffic.connections.closing.as_deref(),
+        Some("example.com-id")
+    );
+    assert!(
+        state
+            .act(Action::CloseConnection("example.com-id".to_owned()))
+            .is_none(),
+        "one request at a time"
+    );
+
+    state.reduce(WorkerEvent::CloseConnection(Err(HelperCommandError::Client(
+        ClientError::Closed,
+    ))));
+    assert_eq!(state.traffic.connections.closing, None);
+    assert!(state.operation_error.is_some(), "shown as other errors are");
+
+    assert!(matches!(
+        state.act(Action::CloseConnection("example.com-id".to_owned())),
+        Some(Job::CloseConnection(_))
+    ));
+    state.reduce(WorkerEvent::CloseConnection(Ok(())));
+    assert_eq!(state.traffic.connections.closing, None);
+    assert_eq!(state.operation_error, None);
+}

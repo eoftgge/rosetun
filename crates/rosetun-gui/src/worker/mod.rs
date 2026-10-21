@@ -185,6 +185,7 @@ pub(crate) enum WorkerEvent {
     Connections(Result<(Vec<LiveConnection>, Vec<LiveConnection>), HelperCommandError>),
     /// Program path and its name.
     ProgramNames(Vec<(String, String)>),
+    CloseConnection(Result<(), HelperCommandError>),
     UpdateAll {
         subscriptions: Result<Vec<SubscriptionUpdateResult>, StoreError>,
         lists: Result<Vec<ListUpdateResult>, StoreError>,

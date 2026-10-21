@@ -475,6 +475,17 @@ connections-route-any = Any route
 connections-by-program = By program
 connections-all = All connections
 connections-speed = Speed
+connections-network = Network
+connections-address = Address
+connections-started = Started
+connections-transferred = Transferred
+connections-details-close = Close details (Esc)
+connections-create-rule = Create a rule
+connections-rule-site = For site { $host }
+connections-rule-program = For program { $name }
+connections-close = Close connection
+connections-closing = Closing…
+connections-close-note = The program may open the connection again at once.
 connections-count = { $count ->
     [one] { $n } connection
    *[other] { $n } connections

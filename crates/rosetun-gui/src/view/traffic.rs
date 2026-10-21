@@ -131,7 +131,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         );
     });
     ui.add_space(16.0);
-    super::connections::card(ui, state, actions);
+    super::connections::section(ui, state, actions);
 }
 
 fn traffic_row(ui: &mut egui::Ui, color: Color32, label: &str, rate: u64, connected: bool) {

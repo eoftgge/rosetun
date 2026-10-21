@@ -318,6 +318,7 @@ impl App {
             Job::TunnelDelay => self.workers.tunnel_delay(),
             Job::Connections => self.workers.connections(),
             Job::ProgramNames(paths) => self.workers.program_names(paths),
+            Job::CloseConnection(id) => self.workers.close_connection(id),
             Job::LookupExit { generation, route } => self.workers.lookup_exit(generation, route),
             Job::UpdateAll => self.workers.update_all(),
             Job::Remove(id) => self.workers.remove(id),

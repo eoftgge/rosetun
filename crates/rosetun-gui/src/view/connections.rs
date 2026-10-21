@@ -20,8 +20,252 @@ const PROGRAM_LEAD: f32 = 16.0 + GAP + 24.0 + GAP;
 const ROUTE_FILTER_WIDTH: f32 = 180.0;
 const SEARCH_WIDTH: f32 = 240.0;
 const LIST_HEIGHT: f32 = 360.0;
+const DETAILS_WIDTH: f32 = 300.0;
+/// Narrower content puts the details under the list, so that the list keeps
+/// its columns at their least width.
+const DETAILS_BESIDE_FROM: f32 = 1040.0;
+const DETAIL_LABEL_WIDTH: f32 = 88.0;
+/// Longer hosts and names are cut in the rule buttons; the full text is on hover.
+const BUTTON_TEXT_CHARS: usize = 28;
 
-pub(super) fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+/// The list, and the selected connection's details beside it or under it.
+pub(super) fn section(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let Some(connection) = state.traffic.connections.selected_connection() else {
+        card(ui, state, actions);
+        return;
+    };
+    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        actions.push(Action::SelectConnection(None));
+    }
+    let available = ui.available_width();
+    if available > DETAILS_BESIDE_FROM {
+        let list_width = available - DETAILS_WIDTH - theme::SECTION_GAP;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = theme::SECTION_GAP;
+            ui.allocate_ui_with_layout(
+                egui::vec2(list_width, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(list_width);
+                    card(ui, state, actions);
+                },
+            );
+            ui.allocate_ui_with_layout(
+                egui::vec2(DETAILS_WIDTH, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(DETAILS_WIDTH);
+                    details(ui, state, connection, actions);
+                },
+            );
+        });
+    } else {
+        card(ui, state, actions);
+        ui.add_space(theme::SECTION_GAP);
+        details(ui, state, connection, actions);
+    }
+}
+
+fn details(
+    ui: &mut egui::Ui,
+    state: &State,
+    connection: &LiveConnection,
+    actions: &mut Vec<Action>,
+) {
+    let list = &state.traffic.connections;
+    let name = crate::display::safe_text(&list.programs.name(connection.process.as_deref()));
+    let path = connection.process.as_deref().map(crate::display::safe_text);
+    let host = crate::display::safe_text(&connection.host);
+    let destination = crate::display::safe_text(&crate::i18n::connection_destination(
+        &connection.host,
+        connection.port,
+    ));
+    widgets::card_frame().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let close = 22.0;
+            ui.add_sized(
+                egui::vec2((ui.available_width() - close - GAP).max(0.0), close),
+                egui::Label::new(RichText::new(&destination).strong()).truncate(),
+            )
+            .on_hover_text(&destination);
+            if close_button(ui, close)
+                .on_hover_text(tr!("connections-details-close"))
+                .clicked()
+            {
+                actions.push(Action::SelectConnection(None));
+            }
+        });
+        ui.add_space(10.0);
+        detail_row(ui, &tr!("connections-route"), |ui| {
+            ui.label(
+                RichText::new(state.connection_route_label(&connection.route))
+                    .color(route_color(&connection.route)),
+            );
+        });
+        detail_row(ui, &tr!("connections-network"), |ui| {
+            ui.label(RichText::new(network_label(connection.network)).color(theme::TEXT));
+        });
+        detail_row(ui, &tr!("connections-address"), |ui| {
+            ui.add(
+                egui::Label::new(RichText::new(&destination).monospace().color(theme::TEXT))
+                    .selectable(true)
+                    .wrap(),
+            );
+        });
+        detail_row(ui, &tr!("connections-program"), |ui| {
+            ui.add(egui::Label::new(RichText::new(&name).color(theme::TEXT)).wrap());
+            if let Some(path) = &path {
+                ui.add(
+                    egui::Label::new(RichText::new(path).small().color(theme::TEXT_DIM))
+                        .selectable(true)
+                        .wrap(),
+                );
+            }
+        });
+        let now = crate::display::now_unix();
+        detail_row(ui, &tr!("connections-started"), |ui| {
+            ui.label(
+                RichText::new(crate::i18n::updated_ago(
+                    connection.start_unix_ms / 1000,
+                    now,
+                ))
+                .color(theme::TEXT),
+            );
+        });
+        detail_row(ui, &tr!("connections-transferred"), |ui| {
+            ui.label(
+                RichText::new(crate::i18n::traffic_rates(
+                    &crate::i18n::bytes(connection.download),
+                    &crate::i18n::bytes(connection.upload),
+                ))
+                .monospace()
+                .color(theme::TEXT),
+            );
+        });
+        detail_row(ui, &tr!("connections-speed"), |ui| {
+            let speed = list.rate(connection).map_or_else(
+                || "·".to_owned(),
+                |(down, up)| {
+                    crate::i18n::traffic_rates(&crate::i18n::rate(down), &crate::i18n::rate(up))
+                },
+            );
+            ui.label(RichText::new(speed).monospace().color(theme::TEXT));
+        });
+
+        ui.add_space(6.0);
+        divider(ui);
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new(tr!("connections-create-rule"))
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+        ui.add_space(6.0);
+        let can_add = state.can_edit_rules();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+            let site = tr!("connections-rule-site", host = shortened(&host));
+            if widgets::outline_button_compact(ui, &site, can_add)
+                .on_hover_text(&host)
+                .clicked()
+            {
+                actions.push(Action::OpenAddRuleFor(crate::state::site_rule(
+                    &connection.host,
+                )));
+            }
+            if let Some(process) = connection.process.as_deref() {
+                let program = tr!("connections-rule-program", name = shortened(&name));
+                if widgets::outline_button_compact(ui, &program, can_add)
+                    .on_hover_text(path.as_deref().unwrap_or_default())
+                    .clicked()
+                {
+                    actions.push(Action::OpenAddRuleFor(crate::state::program_rule(process)));
+                }
+            }
+        });
+
+        if connection.end_unix_ms.is_none() {
+            ui.add_space(12.0);
+            let closing = list.closing.as_deref() == Some(connection.id.as_str());
+            let label = if closing {
+                tr!("connections-closing")
+            } else {
+                tr!("connections-close")
+            };
+            let enabled = list.closing.is_none()
+                && !connection.id.is_empty()
+                && state.connections_available();
+            if widgets::outline_button(ui, label, enabled).clicked() {
+                actions.push(Action::CloseConnection(connection.id.clone()));
+            }
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(tr!("connections-close-note"))
+                    .small()
+                    .color(theme::TEXT_DIM),
+            );
+        }
+    });
+}
+
+fn detail_row(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(DETAIL_LABEL_WIDTH, 18.0),
+            egui::Layout::left_to_right(egui::Align::Min),
+            |ui| {
+                ui.set_width(DETAIL_LABEL_WIDTH);
+                ui.add(
+                    egui::Label::new(RichText::new(label).small().color(theme::TEXT_DIM))
+                        .truncate(),
+                );
+            },
+        );
+        ui.vertical(|ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 2.0;
+            value(ui);
+        });
+    });
+    ui.add_space(6.0);
+}
+
+fn close_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, theme::RADIUS_INNER, theme::INPUT);
+    }
+    let color = if response.hovered() {
+        theme::TEXT
+    } else {
+        theme::TEXT_DIM
+    };
+    let half = 4.5;
+    let center = rect.center();
+    for (from, to) in [
+        (egui::vec2(-half, -half), egui::vec2(half, half)),
+        (egui::vec2(-half, half), egui::vec2(half, -half)),
+    ] {
+        ui.painter().line_segment(
+            [center + from, center + to],
+            egui::Stroke::new(1.5, color),
+        );
+    }
+    response
+}
+
+fn shortened(text: &str) -> String {
+    if text.chars().count() <= BUTTON_TEXT_CHARS {
+        return text.to_owned();
+    }
+    let mut short: String = text.chars().take(BUTTON_TEXT_CHARS - 1).collect();
+    short.push('…');
+    short
+}
+
+fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let list = &state.traffic.connections;
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
@@ -55,7 +299,7 @@ pub(super) fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             let now_ms = crate::display::now_unix().saturating_mul(1000);
             match list.view {
                 ConnectionsView::ByProgram => program_list(ui, state, now_ms, actions),
-                ConnectionsView::All => table(ui, state, &widths, now_ms),
+                ConnectionsView::All => table(ui, state, &widths, now_ms, actions),
             }
         }
         ui.add_space(10.0);
@@ -201,7 +445,7 @@ fn program_list(ui: &mut egui::Ui, state: &State, now_ms: u64, actions: &mut Vec
                         program_row(ui, state, group, *expanded, actions);
                     }
                     ConnectionRow::Connection(connection) => {
-                        program_connection_row(ui, state, connection, now_ms);
+                        program_connection_row(ui, state, connection, now_ms, actions);
                     }
                 }
             }
@@ -330,13 +574,14 @@ fn program_connection_row(
     state: &State,
     connection: &LiveConnection,
     now_ms: u64,
+    actions: &mut Vec<Action>,
 ) {
     let list = &state.traffic.connections;
     let destination = crate::display::safe_text(&crate::i18n::connection_destination(
         &connection.host,
         connection.port,
     ));
-    row_frame(ui, PROGRAM_ROW_HEIGHT, false, |ui| {
+    let response = row_frame(ui, PROGRAM_ROW_HEIGHT, is_selected(state, connection), |ui| {
         ui.add_space(PROGRAM_LEAD);
         cell(
             ui,
@@ -373,6 +618,22 @@ fn program_connection_row(
             None,
         );
     });
+    select_on_click(&response, connection, actions);
+}
+
+fn is_selected(state: &State, connection: &LiveConnection) -> bool {
+    !connection.id.is_empty()
+        && state.traffic.connections.selected.as_deref() == Some(connection.id.as_str())
+}
+
+fn select_on_click(
+    response: &egui::Response,
+    connection: &LiveConnection,
+    actions: &mut Vec<Action>,
+) {
+    if response.clicked() && !connection.id.is_empty() {
+        actions.push(Action::SelectConnection(Some(connection.id.clone())));
+    }
 }
 
 fn letter_tile(ui: &mut egui::Ui, name: &str) {
@@ -490,7 +751,13 @@ fn table_header(ui: &mut egui::Ui, widths: &[f32; 7]) {
     });
 }
 
-fn table(ui: &mut egui::Ui, state: &State, widths: &[f32; 7], now_ms: u64) {
+fn table(
+    ui: &mut egui::Ui,
+    state: &State,
+    widths: &[f32; 7],
+    now_ms: u64,
+    actions: &mut Vec<Action>,
+) {
     let visible = state.traffic.connections.visible();
     egui::ScrollArea::vertical()
         .id_salt("connections_rows")
@@ -498,7 +765,7 @@ fn table(ui: &mut egui::Ui, state: &State, widths: &[f32; 7], now_ms: u64) {
         .auto_shrink([false, true])
         .show_rows(ui, TABLE_ROW_HEIGHT, visible.len(), |ui, rows| {
             for index in rows {
-                table_row(ui, state, visible[index], widths, now_ms);
+                table_row(ui, state, visible[index], widths, now_ms, actions);
             }
         });
 }
@@ -509,6 +776,7 @@ fn table_row(
     connection: &LiveConnection,
     widths: &[f32; 7],
     now_ms: u64,
+    actions: &mut Vec<Action>,
 ) {
     let list = &state.traffic.connections;
     let program = crate::display::safe_text(&list.programs.name(connection.process.as_deref()));
@@ -518,9 +786,7 @@ fn table_row(
         connection.port,
     ));
     let route = state.connection_route_label(&connection.route);
-    ui.horizontal(|ui| {
-        ui.set_height(TABLE_ROW_HEIGHT);
-        ui.spacing_mut().item_spacing.x = GAP;
+    let response = row_frame(ui, TABLE_ROW_HEIGHT, is_selected(state, connection), |ui| {
         cell(
             ui,
             widths[0],
@@ -571,6 +837,7 @@ fn table_row(
             None,
         );
     });
+    select_on_click(&response, connection, actions);
 }
 
 fn cell(ui: &mut egui::Ui, width: f32, height: f32, text: RichText, hover: Option<&str>) {

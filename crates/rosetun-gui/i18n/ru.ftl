@@ -488,6 +488,17 @@ connections-route-any = Любой маршрут
 connections-by-program = По приложениям
 connections-all = Все соединения
 connections-speed = Скорость
+connections-network = Сеть
+connections-address = Адрес
+connections-started = Начато
+connections-transferred = Передано
+connections-details-close = Закрыть подробности (Esc)
+connections-create-rule = Создать правило
+connections-rule-site = Для сайта { $host }
+connections-rule-program = Для программы { $name }
+connections-close = Закрыть соединение
+connections-closing = Закрываю…
+connections-close-note = Программа может сразу открыть соединение заново.
 connections-count = { $count ->
     [one] { $n } соединение
     [few] { $n } соединения

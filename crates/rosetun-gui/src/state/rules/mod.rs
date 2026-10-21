@@ -508,7 +508,7 @@ impl State {
                     return self.start_rule_edit(Job::RemoveRule(set.id.clone(), rule.id.clone()));
                 }
             }
-            action @ (Action::OpenAddRule | Action::OpenEditRule(_) | Action::CancelAddRule
+            action @ (Action::OpenAddRule | Action::OpenAddRuleFor(_) | Action::OpenEditRule(_) | Action::CancelAddRule
             | Action::SelectRuleInput(_) | Action::CorrectRuleIps | Action::RefreshProcesses
             | Action::SubmitAddRule) => {
                 return self.act_rule_dialog(action);

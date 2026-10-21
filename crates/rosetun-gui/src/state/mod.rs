@@ -43,7 +43,7 @@ use system_checks::SystemChecksState;
 use traffic::TrafficState;
 pub(crate) use traffic::{
     ConnectionRow, ConnectionsNotice, ConnectionsTab, ConnectionsView, ProgramGroup, RouteFilter,
-    TrafficRange,
+    TrafficRange, program_rule, site_rule,
 };
 use updates::UpdatesState;
 
@@ -178,6 +178,9 @@ pub(crate) enum Action {
     SetConnectionsRoute(RouteFilter),
     /// Show or hide a program's connections under it, by path.
     ToggleProgramGroup(Option<String>),
+    /// By the engine's connection id; `None` closes the details.
+    SelectConnection(Option<String>),
+    CloseConnection(String),
     OpenSettings,
     #[cfg(windows)]
     WindowMinimized,
@@ -267,6 +270,8 @@ pub(crate) enum Action {
     AddTemplate(RuleTemplate),
     RemoveTemplate(RuleTemplate),
     OpenAddRule,
+    /// From the Traffic tab: the add-rule dialog of the active set with this condition.
+    OpenAddRuleFor(RuleMatcher),
     OpenEditRule(RuleId),
     CancelAddRule,
     SelectRuleInput(RuleInputKind),
@@ -411,6 +416,7 @@ pub(crate) enum Job {
     TunnelDelay,
     Connections,
     ProgramNames(Vec<String>),
+    CloseConnection(String),
     LookupExit {
         generation: u64,
         route: ExitRoute,
@@ -481,6 +487,7 @@ impl State {
             event @ WorkerEvent::TemporaryRules { .. } => self.reduce_session(event),
             WorkerEvent::Connections(result) => self.reduce_connections(result),
             WorkerEvent::ProgramNames(names) => self.reduce_program_names(names),
+            WorkerEvent::CloseConnection(result) => self.reduce_close_connection(result),
             event @ (WorkerEvent::Apply(_)
             | WorkerEvent::RestoreApplied(_)
             | WorkerEvent::RestoreEdits(_)) => self.reduce_session(event),
@@ -563,7 +570,9 @@ impl State {
             | Action::SetConnectionsFilter(_)
             | Action::SetConnectionsView(_)
             | Action::SetConnectionsRoute(_)
-            | Action::ToggleProgramGroup(_)) => {
+            | Action::ToggleProgramGroup(_)
+            | Action::SelectConnection(_)
+            | Action::CloseConnection(_)) => {
                 return self.act_traffic(action);
             }
             #[cfg(windows)]
@@ -648,6 +657,7 @@ impl State {
             | Action::AddTemplate(_)
             | Action::RemoveTemplate(_)
             | Action::OpenAddRule
+            | Action::OpenAddRuleFor(_)
             | Action::OpenEditRule(_)
             | Action::CancelAddRule
             | Action::SelectRuleInput(_)

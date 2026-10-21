@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use rosetun_config::{ConnectionRoute, ConnectionState, ExitId, LiveConnection, Status};
+use rosetun_config::{
+    ConnectionRoute, ConnectionState, DomainMatch, ExitId, LiveConnection, ProcessMatch,
+    RuleMatcher, Status,
+};
 use rosetun_ipc::{ClientError, ErrorCode, HelperError};
 
 use super::{Action, Job, Screen, State};
@@ -139,6 +142,10 @@ pub(crate) struct ConnectionsList {
     pub(crate) filter: String,
     /// Programs whose connections are shown under them, by path.
     pub(crate) expanded: HashSet<Option<String>>,
+    /// The connection whose details are open, by id.
+    pub(crate) selected: Option<String>,
+    /// The id being closed by the service.
+    pub(crate) closing: Option<String>,
     pub(crate) active: Vec<LiveConnection>,
     pub(crate) closed: Vec<LiveConnection>,
     /// The service answered since the tab was opened.
@@ -161,6 +168,7 @@ impl ConnectionsList {
         self.closed = Vec::new();
         self.received = false;
         self.denied = false;
+        self.selected = None;
         self.rates = HashMap::new();
         self.last_bytes = HashMap::new();
         self.last_answer = None;
@@ -202,6 +210,15 @@ impl ConnectionsList {
             return None;
         }
         self.rates.get(&connection.id).copied()
+    }
+
+    /// The selected connection, in either tab.
+    pub(crate) fn selected_connection(&self) -> Option<&LiveConnection> {
+        let id = self.selected.as_deref()?;
+        self.active
+            .iter()
+            .chain(&self.closed)
+            .find(|connection| connection.id == id)
     }
 
     fn tab_list(&self) -> &[LiveConnection] {
@@ -393,6 +410,11 @@ impl State {
                 list.programs.queue(&closed);
                 let asked = list.last_request;
                 list.measure(&active, asked);
+                if let Some(id) = &list.selected
+                    && !active.iter().chain(&closed).any(|c| &c.id == id)
+                {
+                    list.selected = None;
+                }
                 list.active = active;
                 list.closed = closed;
                 list.received = true;
@@ -424,6 +446,11 @@ impl State {
                 programs.names.insert(path, name);
             }
         }
+    }
+
+    pub(super) fn reduce_close_connection(&mut self, result: Result<(), HelperCommandError>) {
+        self.traffic.connections.closing = None;
+        self.helper_result(result);
     }
 
     /// What to show instead of the table, or `None` when it has rows.
@@ -491,6 +518,30 @@ impl State {
                 self.traffic.connections.route = route;
                 None
             }
+            Action::SelectConnection(id) => {
+                let list = &mut self.traffic.connections;
+                list.selected = id.filter(|id| {
+                    !id.is_empty()
+                        && list
+                            .active
+                            .iter()
+                            .chain(&list.closed)
+                            .any(|connection| &connection.id == id)
+                });
+                None
+            }
+            Action::CloseConnection(id) => {
+                let list = &mut self.traffic.connections;
+                if !self.helper_available
+                    || list.closing.is_some()
+                    || id.is_empty()
+                    || !list.active.iter().any(|connection| connection.id == id)
+                {
+                    return None;
+                }
+                list.closing = Some(id.clone());
+                Some(Job::CloseConnection(id))
+            }
             Action::ToggleProgramGroup(path) => {
                 let expanded = &mut self.traffic.connections.expanded;
                 if !expanded.remove(&path) {
@@ -501,4 +552,18 @@ impl State {
             _ => unreachable!("only traffic actions are dispatched here"),
         }
     }
+}
+
+/// A rule condition for a connection's site: its domain with subdomains, or
+/// its address when the engine saw no name.
+pub(crate) fn site_rule(host: &str) -> RuleMatcher {
+    match rosetun_core::parse_ip_cidr(host) {
+        Ok(address) => RuleMatcher::IpCidr(address),
+        Err(_) => RuleMatcher::Domain(DomainMatch::Suffix(host.to_owned())),
+    }
+}
+
+/// A rule condition for a connection's program by its full path.
+pub(crate) fn program_rule(path: &str) -> RuleMatcher {
+    RuleMatcher::Process(ProcessMatch::Path(path.into()))
 }

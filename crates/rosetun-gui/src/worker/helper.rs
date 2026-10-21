@@ -183,6 +183,20 @@ impl WorkerDispatcher {
         }
     }
 
+    pub(crate) fn close_connection(&self, id: String) {
+        self.spawn_helper(
+            "rosetun-close-connection",
+            move |client| client.close_connection(&id),
+            |publisher, result| {
+                emit(
+                    &publisher.tx,
+                    &publisher.repaint,
+                    WorkerEvent::CloseConnection(result),
+                );
+            },
+        );
+    }
+
     pub(crate) fn lookup_exit(&self, generation: u64, route: ExitRoute) {
         self.spawn_task("rosetun-lookup-exit", move |publisher| {
             let result = rosetun_core::exit_info(Duration::from_secs(5));
