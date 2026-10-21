@@ -325,7 +325,11 @@ mod tests {
                     }
                 }
                 let size = size as usize;
-                assert_eq!(pixel(&backed, size, 0, 0), [0; 4], "{icon:?} {size} px corner");
+                assert_eq!(
+                    pixel(&backed, size, 0, 0),
+                    [0; 4],
+                    "{icon:?} {size} px corner"
+                );
             }
             let rgba = rose_icon_rgba(32, icon);
             assert_eq!(pixel(&rgba, 32, 3, 4), [0, 0, 0, 160], "{icon:?} rim");
