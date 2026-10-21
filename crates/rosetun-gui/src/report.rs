@@ -390,7 +390,7 @@ mod tests {
             Language::English,
             0,
         );
-        let report = snapshot.render(Some(26300), (Some("1.14.3"), Some("26.10.10")), "", "");
+        let report = snapshot.render(Some(26300), (Some("1.14.3"), Some("26.10.21")), "", "");
         assert!(report.contains("ServerUnreachable"));
         assert!(report.contains("System proxy: Warning"));
         assert!(report.contains("Windows build: 26300"));

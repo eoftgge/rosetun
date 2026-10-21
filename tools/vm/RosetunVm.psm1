@@ -80,8 +80,8 @@ function Install-RosetunSingBox {
 }
 
 function Install-RosetunXray {
-    $version = '26.10.10'
-    $expectedHash = 'BFEFCE8E9804E53B7D75B7C49D958B34E89890D9D5E672329089D1B3111647AF'
+    $version = '26.10.21'
+    $expectedHash = 'FC58C39EE2F2717B4C54D28D374362389E5319B20AE44AEA76EA45A5243EC827'
     $installer = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\installer\build.ps1') -Raw
     if ($installer -notmatch ('(?m)^\$xrayVersion = ''{0}''\r?$' -f $version) -or
         $installer -notmatch ('(?m)^\$xrayArchiveHash = ''{0}''\r?$' -f $expectedHash)) {

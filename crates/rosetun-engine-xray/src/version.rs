@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use rosetun_engine::errors::EngineError;
 
-pub const SUPPORTED_XRAY_VERSION: &str = "26.10.10";
+pub const SUPPORTED_XRAY_VERSION: &str = "26.10.21";
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OUTPUT: u64 = 16 * 1024;
@@ -110,12 +110,12 @@ mod tests {
     fn only_the_pinned_version_header_matches() {
         assert_eq!(
             parse_version(
-                "Xray 26.10.10 (Xray, Penetrates Everything.) Custom (go1.26 windows/amd64)\n"
+                "Xray 26.10.21 (Xray, Penetrates Everything.) Custom (go1.26 windows/amd64)\n"
             ),
             Some(SUPPORTED_XRAY_VERSION)
         );
         assert_eq!(parse_version("Xray 26.9.8 (Xray)\n"), Some("26.9.8"));
-        assert_eq!(parse_version("Xray 26.10.10\n"), None);
-        assert_eq!(parse_version("prefix Xray 26.10.10 (Xray)\n"), None);
+        assert_eq!(parse_version("Xray 26.10.21\n"), None);
+        assert_eq!(parse_version("prefix Xray 26.10.21 (Xray)\n"), None);
     }
 }
