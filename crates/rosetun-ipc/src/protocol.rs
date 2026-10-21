@@ -1,6 +1,6 @@
 use rosetun_config::{
-    AppConfig, ExitId, LiveConnection, LogLevel, Node, NodeId, Rule, RuleSet, RuleSetId,
-    RuleTarget, Selection, Settings, Status, Traffic, resolve_exits,
+    AppConfig, ExitId, LiveConnection, LogLevel, Node, NodeId, Rule, RuleId, RuleSet, RuleSetId,
+    RuleTarget, RuleTemplate, Selection, Settings, Status, Traffic, resolve_exits,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
@@ -157,6 +157,10 @@ pub struct ConnectRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lists: Vec<ListRef>,
     pub settings: Settings,
+    /// The template each expanded rule id came from. The client's own record
+    /// for explaining routes; the service never receives it.
+    #[serde(skip)]
+    pub rule_templates: Vec<(RuleId, RuleTemplate)>,
 }
 
 impl std::fmt::Debug for ConnectRequest {
@@ -204,12 +208,15 @@ impl ConnectRequest {
             .active_node()
             .ok_or(ConnectRequestError::NodeNotFound)?;
 
-        let rule_set = match &config.active_rule_set {
+        let (rule_set, rule_templates) = match &config.active_rule_set {
             Some(_) => config
                 .active_rules()
-                .map(RuleSet::with_templates_expanded)
+                .map(RuleSet::expand_templates)
                 .ok_or(ConnectRequestError::RuleSetNotFound)?,
-            None => RuleSet::new(RuleSetId::new("default"), "Default", RuleTarget::Proxy),
+            None => (
+                RuleSet::new(RuleSetId::new("default"), "Default", RuleTarget::Proxy),
+                Vec::new(),
+            ),
         };
         let mut request = Self {
             selection: selection.clone(),
@@ -219,6 +226,7 @@ impl ConnectRequest {
             temporary_rules,
             lists: Vec::new(),
             settings: config.settings.clone(),
+            rule_templates,
         };
         let referenced = |id: &ExitId| {
             request

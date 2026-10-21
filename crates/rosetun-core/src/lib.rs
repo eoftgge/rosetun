@@ -2,6 +2,7 @@
 
 mod exit;
 mod exits;
+mod explain;
 mod fetch;
 mod lists;
 mod ping;
@@ -18,6 +19,10 @@ mod update;
 mod updates;
 
 pub use exit::{ExitInfo, ExitInfoError, exit_info};
+pub use explain::{
+    Destination, ExplainedRoute, Explanation, Reason, RuleSource, SessionLists, explain,
+    explain_connection, read_session_lists,
+};
 pub use exits::{
     ExitError, NewExit, change_exit_target, create_exit, delete_exit, exit_for_country,
     exit_for_node, exit_rule_count, rename_exit, resolve_exits,

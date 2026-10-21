@@ -4294,6 +4294,7 @@ fn connect_request() -> ConnectRequest {
         temporary_rules: Vec::new(),
         lists: Vec::new(),
         settings: Settings::default(),
+        rule_templates: Vec::new(),
     }
 }
 

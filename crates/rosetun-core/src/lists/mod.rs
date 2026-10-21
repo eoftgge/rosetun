@@ -20,6 +20,7 @@ use crate::{FetchError, Store, StoreError, Timeouts};
 
 pub use availability::{MissingListCategory, inspect_missing_categories};
 pub use formats::{ListParseError, ListPayload, PayloadFormat, TextErrorKind, TextLineError};
+pub(crate) use prepare::{Chosen, choose_payload};
 pub use prepare::{
     ListOperation, ListPreparationError, PreparedConnection, PreparedListPayload, prepare_lists,
     send_prepared,

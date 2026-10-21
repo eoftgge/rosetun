@@ -3,7 +3,7 @@ use std::fmt;
 
 use base64::Engine as _;
 use rosetun_config::{
-    ListCategoryError, ListFormat as StoredFormat, ListId, ListRef, RuleId, RuleMatcher,
+    AppConfig, ListCategoryError, ListFormat as StoredFormat, ListId, ListRef, RuleId, RuleMatcher,
     UploadedListFormat, digest_hex, list_tag,
 };
 use rosetun_ipc::{
@@ -12,7 +12,7 @@ use rosetun_ipc::{
 };
 use sha2::{Digest, Sha256};
 
-use super::{ListError, ListParseError, PayloadFormat, last_good, list_payload};
+use super::{ListError, ListParseError, ListPayload, PayloadFormat, last_good, list_payload};
 use crate::{Store, StoreError};
 
 const MAX_PREPARED_BYTES: u64 = 128 * 1024 * 1024;
@@ -79,6 +79,42 @@ impl fmt::Debug for ListPreparationError {
     }
 }
 
+/// What the engine gets for one list rule.
+pub(crate) struct Chosen {
+    /// `None` when the rule is left out of the request.
+    pub(crate) payload: Option<ListPayload>,
+    /// The `.dat` category vanished and the last good payload stands in.
+    pub(crate) missing: bool,
+    dat: bool,
+}
+
+/// The payload of one list rule: the current one, or the last good one of a
+/// `.dat` category that vanished.
+pub(crate) fn choose_payload(
+    store: &Store,
+    config: &AppConfig,
+    list: &ListId,
+    category: Option<&str>,
+) -> Result<Chosen, ListError> {
+    let dat = config.lists.iter().any(|item| {
+        item.id == *list && matches!(item.format, StoredFormat::GeoSite | StoredFormat::GeoIp)
+    });
+    let last_good = || last_good::load(store, &list_tag(list, category));
+    let (payload, missing) = match list_payload(store, list, category) {
+        Ok(payload) => (Some(payload), false),
+        Err(ListError::Category(ListCategoryError::Unknown)) if dat => (last_good()?, true),
+        Err(ListError::Parse(ListParseError::EmptyResult)) if dat && category.is_some() => {
+            (last_good()?, true)
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(Chosen {
+        payload,
+        missing,
+        dat,
+    })
+}
+
 pub fn prepare_lists(
     store: &Store,
     mut request: ConnectRequest,
@@ -117,21 +153,12 @@ pub fn prepare_lists(
         let value = if let Some(cached) = selected.get(&key) {
             *cached
         } else {
-            let dat = config.lists.iter().any(|item| {
-                item.id == *list
-                    && matches!(item.format, StoredFormat::GeoSite | StoredFormat::GeoIp)
-            });
             let tag = list_tag(list, category.as_deref());
-            let (payload, missing) = match list_payload(store, list, category.as_deref()) {
-                Ok(payload) => (Some(payload), false),
-                Err(ListError::Category(ListCategoryError::Unknown)) if dat => {
-                    (last_good::load(store, &tag)?, true)
-                }
-                Err(ListError::Parse(ListParseError::EmptyResult)) if dat && category.is_some() => {
-                    (last_good::load(store, &tag)?, true)
-                }
-                Err(error) => return Err(error.into()),
-            };
+            let Chosen {
+                payload,
+                missing,
+                dat,
+            } = choose_payload(store, &config, list, category.as_deref())?;
             let value = if let Some(payload) = payload {
                 let format = match payload.format {
                     PayloadFormat::Binary => UploadedListFormat::Binary,

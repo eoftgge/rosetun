@@ -19,10 +19,15 @@ base64.workspace = true
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier", "gzip"] }
 url.workspace = true
 idna = "1"
+regex-automata = "0.4"
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+rosetun-engine.workspace = true
+rosetun-engine-singbox.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 rosetun-shell.workspace = true

@@ -2741,9 +2741,12 @@ version = "0.3.0-alpha.1"
 dependencies = [
  "base64",
  "idna",
+ "regex-automata",
  "rosetun-adapters",
  "rosetun-config",
  "rosetun-dns",
+ "rosetun-engine",
+ "rosetun-engine-singbox",
  "rosetun-hwid",
  "rosetun-ipc",
  "rosetun-processes",

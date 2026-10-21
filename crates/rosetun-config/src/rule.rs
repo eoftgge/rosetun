@@ -204,23 +204,33 @@ impl RuleSet {
     /// matchers. Each expanded rule keeps the template rule's id, enabled flag
     /// and target, so an engine refusing one names the template.
     pub fn with_templates_expanded(&self) -> RuleSet {
+        self.expand_templates().0
+    }
+
+    /// [`Self::with_templates_expanded`], plus which template each expanded
+    /// rule id came from: the expanded rules no longer say it.
+    pub fn expand_templates(&self) -> (RuleSet, Vec<(RuleId, RuleTemplate)>) {
         let mut expanded = self.clone();
+        let mut origins = Vec::new();
         expanded.rules = self
             .rules
             .iter()
             .flat_map(|rule| match &rule.matcher {
-                RuleMatcher::Template(template) => template
-                    .matchers()
-                    .into_iter()
-                    .map(|matcher| Rule {
-                        matcher,
-                        ..rule.clone()
-                    })
-                    .collect(),
+                RuleMatcher::Template(template) => {
+                    origins.push((rule.id.clone(), *template));
+                    template
+                        .matchers()
+                        .into_iter()
+                        .map(|matcher| Rule {
+                            matcher,
+                            ..rule.clone()
+                        })
+                        .collect()
+                }
                 _ => vec![rule.clone()],
             })
             .collect();
-        expanded
+        (expanded, origins)
     }
 }
 
@@ -271,6 +281,10 @@ mod tests {
             assert_eq!(rule.matcher, matcher);
         }
         assert_eq!(set.rules[1], template);
+        assert_eq!(
+            set.expand_templates().1,
+            [(template.id.clone(), RuleTemplate::Torrents)]
+        );
     }
 
     #[test]
