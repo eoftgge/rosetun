@@ -1977,13 +1977,15 @@ function Invoke-RosetunConnectionClose {
 function Find-RosetunLogText {
     # Every helper log of the guest, console runs and the service's data folder,
     # searched for $Text as a whole host name, or anywhere with -Anywhere (for
-    # the start of an id). Returns the names of matching files.
+    # the start of an id). Returns the names of matching files, with -WithLine
+    # as name:line of the first match (never the line itself, which may be the leak).
     param(
         [Parameter(Mandatory)][string]$Text,
-        [switch]$Anywhere
+        [switch]$Anywhere,
+        [switch]$WithLine
     )
     Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $text, $anywhere)
+        param($dir, $text, $anywhere, $withLine)
         $pattern = if ($anywhere) {
             '(?i)' + [regex]::Escape($text)
         }
@@ -1999,11 +2001,19 @@ function Find-RosetunLogText {
                 $content = [IO.StreamReader]::new($stream).ReadToEnd()
             }
             finally { $stream.Dispose() }
-            if ($content -match $pattern) {
+            $match = [regex]::Match($content, $pattern)
+            if (-not $match.Success) {
+                continue
+            }
+            if ($withLine) {
+                $line = [regex]::Matches($content.Substring(0, $match.Index), "`n").Count + 1
+                "$($log.Name):$line"
+            }
+            else {
                 $log.Name
             }
         }
-    } -ArgumentList $script:Config.GuestDir, $Text, [bool]$Anywhere
+    } -ArgumentList $script:Config.GuestDir, $Text, [bool]$Anywhere, [bool]$WithLine
 }
 
 function Test-RosetunGuestLoopback {

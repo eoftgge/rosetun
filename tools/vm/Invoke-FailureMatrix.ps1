@@ -209,6 +209,21 @@ function Get-RosetunGuestAddresses {
         } -ArgumentList $HostName)
 }
 
+function Test-RosetunAddressesUnlogged {
+    # Engine socket errors name a site by address alone, so its name being
+    # absent from the logs is not enough.
+    param(
+        [Parameter(Mandatory)][string]$HostName,
+        [string[]]$Addresses
+    )
+    $addresses = @($Addresses)
+    $foundIn = @($addresses | ForEach-Object { Find-RosetunLogText $_ -WithLine } | Sort-Object -Unique)
+    Test-Step 'connections' "no service log names an address of $HostName" `
+        -Note "addresses $($addresses -join ', '); found at: $($foundIn -join ', ')" {
+        $addresses.Count -gt 0 -and $foundIn.Count -eq 0
+    }
+}
+
 function Invoke-SettingsCli {
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -614,6 +629,7 @@ Test-Step 'connections' "the rule shown for $connectionsHost is the default" `
 }
 $connectionsAddresses = Get-RosetunGuestAddresses $connectionsHost
 $longTransferHost = ([uri](Get-RosetunLongTransferUrl)).Host
+$longTransferAddresses = Get-RosetunGuestAddresses $longTransferHost
 $closing = Invoke-RosetunConnectionClose -Url (Get-RosetunLongTransferUrl)
 $closedId = $closing.Id
 $closedRows = @(Get-RosetunConnectionRows $closing.After | Where-Object { $closedId -and $_.Id -eq $closedId })
@@ -1169,6 +1185,7 @@ $egress = Wait-RosetunTunnelEgress -Url $temporaryDomainUrl -TimeoutSeconds 15 -
 # The base default is block, so this domain can pass only through the temporary direct rule.
 Test-Step 'temporary' 'domain goes direct' -Note (Format-Egress $egress) { $egress.Ok }
 $temporaryHost = ([uri]$temporaryDomainUrl).Host
+$temporaryAddresses = Get-RosetunGuestAddresses $temporaryHost
 $listed = Invoke-RosetunConnectionsDuring -Url $temporaryDomainUrl -SkipRevocationCheck `
     -ConfigPath (Set-RuleColumnConfig 'request-temporary.json')
 $rows = @(Get-RosetunConnectionRows $listed.Output | Where-Object { $_.Destination -like "${temporaryHost}:*" })
@@ -1879,16 +1896,14 @@ $namedIn = @(Find-RosetunLogText $connectionsHost)
 Test-Step 'connections' "no service log names $connectionsHost" -Note ($namedIn -join ', ') {
     $namedIn.Count -eq 0
 }
-$addressesIn = @($connectionsAddresses | ForEach-Object { Find-RosetunLogText $_ } | Sort-Object -Unique)
-Test-Step 'connections' "no service log names an address of $connectionsHost" `
-    -Note "addresses $($connectionsAddresses -join ', '); named in: $($addressesIn -join ', ')" {
-    $connectionsAddresses.Count -gt 0 -and $addressesIn.Count -eq 0
-}
+Test-RosetunAddressesUnlogged $connectionsHost $connectionsAddresses
 $namedIn = @(Find-RosetunLogText $longTransferHost)
 Test-Step 'connections' "no service log names the closed download's $longTransferHost" `
     -Note ($namedIn -join ', ') {
     $namedIn.Count -eq 0
 }
+Test-RosetunAddressesUnlogged $longTransferHost $longTransferAddresses
+Test-RosetunAddressesUnlogged $temporaryHost $temporaryAddresses
 $closeLogged = @(Find-RosetunLogText 'closed a connection on request' -Anywhere)
 # An if statement unrolls an empty array to $null; wrap the whole statement.
 $namedIn = @(if ($closedId) { Find-RosetunLogText $closedId -Anywhere })
