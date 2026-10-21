@@ -1114,6 +1114,7 @@ mod tests {
             end_unix_ms: Some(2),
             process: Some(r"C:\Program Files\Example\app.exe".to_owned()),
             host: "example.com".to_owned(),
+            ip: Some("192.0.2.10".to_owned()),
             port: 443,
             network: ConnectionNetwork::Tcp,
             route: ConnectionRoute::Exit(ExitId::new("work-exit")),
@@ -1129,7 +1130,14 @@ mod tests {
         );
 
         assert!(debug.contains("download: 7"));
-        for secret in ["example.com", "Example", "443", "work-exit", "0d5c1f2e"] {
+        for secret in [
+            "example.com",
+            "192.0.2",
+            "Example",
+            "443",
+            "work-exit",
+            "0d5c1f2e",
+        ] {
             assert!(!debug.contains(secret), "{secret} in {debug}");
         }
     }

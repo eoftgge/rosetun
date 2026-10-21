@@ -160,6 +160,9 @@ impl Translation {
                         .process
                         .map(|process| bounded(&process, MAX_CONNECTION_PROCESS_CHARS)),
                     host: bounded(&connection.host, MAX_CONNECTION_HOST_CHARS),
+                    ip: connection
+                        .ip
+                        .filter(|ip| ip.parse::<std::net::IpAddr>().is_ok()),
                     port: connection.port,
                     network: connection.network,
                     route,
@@ -216,6 +219,7 @@ mod tests {
             start_unix_ms: start,
             process: Some(r"C:\Program Files\Example\app.exe".to_owned()),
             host: "example.com".to_owned(),
+            ip: Some("192.0.2.10".to_owned()),
             port: 443,
             network: ConnectionNetwork::Tcp,
             route: EngineRoute::Proxy,
@@ -350,6 +354,29 @@ mod tests {
     }
 
     #[test]
+    fn the_address_of_a_name_is_passed_on_and_anything_else_dropped() {
+        let mut odd = engine("odd", 1);
+        odd.ip = Some("not an address".to_owned());
+        let mut literal = engine("literal", 2);
+        literal.host = "198.51.100.7".to_owned();
+        literal.ip = None;
+        let addresses: Vec<_> = Translation::default()
+            .translate(vec![engine("named", 3), odd, literal])
+            .into_iter()
+            .map(|(_, connection)| (connection.host, connection.ip))
+            .collect();
+
+        assert_eq!(
+            addresses,
+            [
+                ("example.com".to_owned(), Some("192.0.2.10".to_owned())),
+                ("example.com".to_owned(), None),
+                ("198.51.100.7".to_owned(), None),
+            ]
+        );
+    }
+
+    #[test]
     fn hosts_and_programs_are_bounded_and_the_frame_fits() {
         // Four-byte characters and escaped quotes are the worst case for JSON size.
         let mut connection = engine("a", 1);
@@ -367,6 +394,7 @@ mod tests {
         let mut largest = entry.clone();
         largest.id = "\u{10348}".repeat(MAX_CONNECTION_ID_CHARS);
         largest.route = ConnectionRoute::Exit(ExitId::new("e".repeat(MAX_EXIT_ID_BYTES)));
+        largest.ip = Some("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255".to_owned());
         largest.start_unix_ms = u64::MAX;
         largest.end_unix_ms = Some(u64::MAX);
         largest.download = u64::MAX;

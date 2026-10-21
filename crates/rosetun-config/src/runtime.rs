@@ -123,6 +123,9 @@ pub struct LiveConnection {
     pub process: Option<String>,
     /// The sniffed or requested domain, otherwise the IP address.
     pub host: String,
+    /// The destination address when `host` is a name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
     pub port: u16,
     pub network: ConnectionNetwork,
     pub route: ConnectionRoute,

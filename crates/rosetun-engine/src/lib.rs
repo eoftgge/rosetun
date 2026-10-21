@@ -102,6 +102,8 @@ pub struct EngineConnection {
     pub start_unix_ms: u64,
     pub process: Option<String>,
     pub host: String,
+    /// The destination address when `host` is a name.
+    pub ip: Option<String>,
     pub port: u16,
     pub network: ConnectionNetwork,
     pub route: EngineRoute,

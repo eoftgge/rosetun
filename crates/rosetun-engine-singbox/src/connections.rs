@@ -4,6 +4,8 @@
 //! The list is the user's browsing history: nothing here logs an entry, and a
 //! parse error never quotes the body.
 
+use std::net::IpAddr;
+
 use rosetun_config::ConnectionNetwork;
 use rosetun_engine::{EngineConnection, TrafficTotals};
 use serde::Deserialize;
@@ -84,6 +86,9 @@ impl Raw {
         if render::is_exit_trace(process.as_deref(), &self.metadata.destination_ip, port) {
             return None;
         }
+        let named = !self.metadata.host.is_empty() && self.metadata.host.parse::<IpAddr>().is_err();
+        let ip = Some(self.metadata.destination_ip.clone())
+            .filter(|ip| named && ip.parse::<IpAddr>().is_ok());
         let host = if self.metadata.host.is_empty() {
             self.metadata.destination_ip
         } else {
@@ -99,6 +104,7 @@ impl Raw {
             start_unix_ms: parse_rfc3339_ms(&self.start)?,
             process,
             host,
+            ip,
             port,
             network,
             route,
@@ -219,6 +225,7 @@ mod tests {
                 start_unix_ms: 1_792_486_801_250,
                 process: Some(r"C:\Program Files\Example\app.exe".to_owned()),
                 host: "example.com".to_owned(),
+                ip: Some("192.0.2.10".to_owned()),
                 port: 443,
                 network: ConnectionNetwork::Tcp,
                 route: EngineRoute::Proxy,
@@ -273,6 +280,28 @@ mod tests {
         let connections = parse(&sample(&format!("[{}]", entry("a", "", "direct"))));
 
         assert_eq!(connections[0].host, "192.0.2.10");
+        assert_eq!(connections[0].ip, None);
+    }
+
+    #[test]
+    fn a_name_brings_its_address_and_an_address_host_does_not() {
+        let body = sample(&format!(
+            "[{},{}]",
+            entry("named", "example.com", "proxy"),
+            entry("literal", "198.51.100.7", "proxy"),
+        ));
+        let addresses: Vec<_> = parse(&body)
+            .into_iter()
+            .map(|connection| (connection.host, connection.ip))
+            .collect();
+
+        assert_eq!(
+            addresses,
+            [
+                ("example.com".to_owned(), Some("192.0.2.10".to_owned())),
+                ("198.51.100.7".to_owned(), None),
+            ]
+        );
     }
 
     #[test]

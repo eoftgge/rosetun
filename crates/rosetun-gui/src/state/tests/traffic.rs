@@ -106,6 +106,7 @@ fn live(
         end_unix_ms: None,
         process: process.map(str::to_owned),
         host: host.to_owned(),
+        ip: None,
         port: 443,
         network: rosetun_config::ConnectionNetwork::Tcp,
         route,
