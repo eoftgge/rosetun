@@ -24,7 +24,7 @@ use std::sync::{Arc, atomic::AtomicU64, mpsc};
 use std::thread;
 use std::time::Duration;
 
-/// sing-box 1.14.1 discards HTTP URLs in its Clash delay API and substitutes
+/// sing-box 1.14.3 discards HTTP URLs in its Clash delay API and substitutes
 /// its Google default instead, so both test URLs use HTTPS.
 pub const PROBE_URLS: [&str; 2] = [
     "https://cp.cloudflare.com/generate_204",

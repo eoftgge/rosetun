@@ -1,5 +1,5 @@
 //! The `GET /connections` answer of the sing-box Clash API
-//! (`experimental/clashapi/connections.go` in 1.14.1).
+//! (`experimental/clashapi/connections.go` in 1.14.3).
 //!
 //! The list is the user's browsing history: nothing here logs an entry, and a
 //! parse error never quotes the body.

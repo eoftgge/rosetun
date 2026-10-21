@@ -44,7 +44,7 @@ The installer is not signed yet, so SmartScreen may warn when it starts: choose 
 
 ## Bundled Wintun license and version updates
 
-The official sing-box 1.14.1 executable embeds the prebuilt Wintun 0.14.1 amd64 DLL. After verifying either the cached or downloaded sing-box executable, the build scans its bytes for `MZ` and hashes exactly 427552 bytes at each eligible offset. Packaging stops unless a candidate matches SHA-256 `E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE`. The executable remains unchanged; no DLL is extracted.
+The official sing-box 1.14.3 executable embeds the prebuilt Wintun 0.14.1 amd64 DLL. After verifying either the cached or downloaded sing-box executable, the build scans its bytes for `MZ` and hashes exactly 427552 bytes at each eligible offset. Packaging stops unless a candidate matches SHA-256 `E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE`. The executable remains unchanged; no DLL is extracted.
 
 The installer includes `licenses/wintun.txt` and the unchanged `licenses/wintun-prebuilt-binaries-license.txt`. The latter comes from [the upstream 0.14.1 tag](https://git.zx2c4.com/wintun/plain/prebuilt-binaries-license.txt?h=0.14.1), with SHA-256 `9aaf948856ce8845a762121306039ef09d0eeb4d9e4f4c355647d4081e818087`.
 

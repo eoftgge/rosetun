@@ -26,8 +26,8 @@ if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "carg
 }
 
 # Update these together with Install-RosetunSingBox and SUPPORTED_SING_BOX_VERSION.
-$singBoxVersion = '1.14.1'
-$expectedHash = 'B838DE45BD0B2E6DDBED1977E4745622F7DFFAB3B293807FF4C6B1B640FED909'
+$singBoxVersion = '1.14.3'
+$expectedHash = '5C19BB3F8C12D4E85B3D47FE63123A7624B314B58DD7A8E32F51004F1C4D2FAF'
 $xrayVersion = '26.10.10'
 $xrayArchiveHash = 'BFEFCE8E9804E53B7D75B7C49D958B34E89890D9D5E672329089D1B3111647AF'
 $wintunVersion = '0.14.1'

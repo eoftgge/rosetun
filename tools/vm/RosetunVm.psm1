@@ -44,8 +44,8 @@ function Install-RosetunSingBox {
     # with SUPPORTED_SING_BOX_VERSION in rosetun-engine-singbox.
     param([string]$Destination = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\sing-box.exe')))
 
-    $version = '1.14.1'
-    $expectedHash = 'B838DE45BD0B2E6DDBED1977E4745622F7DFFAB3B293807FF4C6B1B640FED909'
+    $version = '1.14.3'
+    $expectedHash = '5C19BB3F8C12D4E85B3D47FE63123A7624B314B58DD7A8E32F51004F1C4D2FAF'
 
     if ((Test-Path -Path $Destination) -and
         (Get-FileHash -Path $Destination -Algorithm SHA256).Hash -eq $expectedHash) {

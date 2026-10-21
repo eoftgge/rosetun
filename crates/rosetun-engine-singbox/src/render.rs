@@ -214,7 +214,7 @@ fn socks_outbound(socks: SocksProxy<'_>, tag: &str) -> Value {
         "server_port": socks.address.port(),
         "username": socks.username,
         "password": socks.password,
-        // In 1.14.1 this disables auto_detect_interface for this outbound:
+        // In 1.14.3 this disables auto_detect_interface for this outbound:
         // the local connection must not bind to the physical adapter.
         "inet4_bind_address": "127.0.0.1",
     })

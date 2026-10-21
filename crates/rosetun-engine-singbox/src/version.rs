@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_engine::errors::EngineError;
 
-pub const SUPPORTED_SING_BOX_VERSION: &str = "1.14.1";
+pub const SUPPORTED_SING_BOX_VERSION: &str = "1.14.3";
 
 /// The first run after a boot can wait that long for Defender to scan the file.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
@@ -305,10 +305,10 @@ mod tests {
     fn a_changed_binary_is_checked_again_and_failures_are_remembered() {
         let cache = Cache::default();
         let path = binary("changed");
-        let wrong = |binary: &Path| Err(failure(binary, "expected 1.14.1, found 1.13.0"));
+        let wrong = |binary: &Path| Err(failure(binary, "expected 1.14.3, found 1.13.0"));
         assert!(cache.check(&path, wrong).is_err());
         assert!(cache.check(&path, |_| panic!("remembered")).is_err());
-        std::fs::write(&path, b"sing-box 1.14.1").unwrap();
+        std::fs::write(&path, b"sing-box 1.14.3").unwrap();
         let runs = AtomicUsize::new(0);
         cache
             .check(&path, |_| {
@@ -343,8 +343,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_observed_windows_1_14_1_version_output() {
-        let output = include_str!("../tests/fixtures/version-1.14.1-windows.txt");
+    fn parses_observed_windows_1_14_3_version_output() {
+        let output = include_str!("../tests/fixtures/version-1.14.3-windows.txt");
 
         assert_eq!(
             parse_version(output),
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn parses_multiline_output() {
         assert_eq!(
-            parse_version("sing-box version 1.14.1\n\nEnvironment: go1.x windows/amd64\n"),
+            parse_version("sing-box version 1.14.3\n\nEnvironment: go1.x windows/amd64\n"),
             Some(SUPPORTED_SING_BOX_VERSION)
         );
     }
@@ -364,8 +364,8 @@ mod tests {
     #[test]
     fn preserves_prerelease_suffix() {
         assert_eq!(
-            parse_version("sing-box version 1.14.1-beta.1"),
-            Some("1.14.1-beta.1")
+            parse_version("sing-box version 1.14.3-beta.1"),
+            Some("1.14.3-beta.1")
         );
     }
 
@@ -374,8 +374,8 @@ mod tests {
         for output in [
             "",
             "sing-box version",
-            "sing-box version 1.14.1 extra",
-            "sing-box version 1.14.1\nsing-box version 1.14.1",
+            "sing-box version 1.14.3 extra",
+            "sing-box version 1.14.3\nsing-box version 1.14.3",
         ] {
             assert_eq!(parse_version(output), None, "{output:?}");
         }

@@ -33,7 +33,7 @@ impl Drop for TestDirectory {
 }
 
 #[test]
-#[ignore = "requires the pinned sing-box 1.14.1 binary"]
+#[ignore = "requires the pinned sing-box 1.14.3 binary"]
 fn sing_box_check_validates_local_rule_set_config() {
     let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/installer/sing-box")
@@ -48,7 +48,7 @@ fn sing_box_check_validates_local_rule_set_config() {
     }
     let version = Command::new(&binary).arg("version").output().unwrap();
     assert!(version.status.success());
-    assert!(String::from_utf8_lossy(&version.stdout).contains("1.14.1"));
+    assert!(String::from_utf8_lossy(&version.stdout).contains("1.14.3"));
 
     let directory = TestDirectory::new();
     let list = ListId::new("example-list");
