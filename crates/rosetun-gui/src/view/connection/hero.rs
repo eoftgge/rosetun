@@ -9,9 +9,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hero_title_tells_an_unavailable_service_from_one_not_answered_yet() {
+        let mut state = State::default();
+        assert_eq!(
+            hero_title(&state),
+            (tr!("checking"), theme::DISCONNECTED)
+        );
+        state.helper_error = Some(rosetun_ipc::ClientError::Closed);
+        assert_eq!(
+            hero_title(&state),
+            (tr!("connection-unavailable"), theme::ERROR)
+        );
+        state.helper_available = true;
+        state.helper_error = None;
+        assert_eq!(hero_title(&state), state_style(&state.status.state));
+    }
+
+    #[test]
     fn missing_network_does_not_offer_a_server_check() {
         assert!(!server_check_available(FailureKind::NoNetwork));
         assert!(server_check_available(FailureKind::ServerUnreachable));
+    }
+}
+
+/// Without a status the service either has not answered yet (start-up) or
+/// is unreachable; only the second is an error.
+fn hero_title(state: &State) -> (String, Color32) {
+    let Some(status) = state.visible_status() else {
+        return if state.helper_error.is_some() {
+            (tr!("connection-unavailable"), theme::ERROR)
+        } else {
+            (tr!("checking"), theme::DISCONNECTED)
+        };
+    };
+    if matches!(status.state, ConnectionState::Reconnecting)
+        && status.reconnect_failure_kind == Some(FailureKind::NoNetwork)
+    {
+        (tr!("error-code-no-network"), theme::ERROR)
+    } else if status.xray_stopped && matches!(status.state, ConnectionState::Reconnecting) {
+        (tr!("xray-reconnecting-title"), theme::ERROR)
+    } else {
+        state_style(&status.state)
     }
 }
 
@@ -22,20 +60,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             let visible_status = state.visible_status();
-            let (label, color) =
-                visible_status.map_or((tr!("status-unknown"), theme::DISCONNECTED), |status| {
-                    if matches!(status.state, ConnectionState::Reconnecting)
-                        && status.reconnect_failure_kind == Some(FailureKind::NoNetwork)
-                    {
-                        (tr!("error-code-no-network"), theme::ERROR)
-                    } else if status.xray_stopped
-                        && matches!(status.state, ConnectionState::Reconnecting)
-                    {
-                        (tr!("xray-reconnecting-title"), theme::ERROR)
-                    } else {
-                        state_style(&status.state)
-                    }
-                });
+            let (label, color) = hero_title(state);
             let server_pending = state.pending_reconnect(SessionPart::Server);
             let selection_changed =
                 visible_status.filter(|status| {
