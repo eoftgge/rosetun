@@ -184,7 +184,7 @@ pub(crate) fn paint_emblem(painter: &egui::Painter, rect: Rect) {
     let ctx = painter.ctx();
     let size = emblem_pixel_size(rect.width(), ctx.pixels_per_point());
     let texture = emblem_texture(ctx, size, |size| {
-        rose_icon::rose_icon_rgba(size, RoseIcon::Large)
+        rose_icon::rose_icon_rgba(size, RoseIcon::Emblem)
     });
     painter.image(
         texture.id(),
@@ -252,7 +252,7 @@ mod tests {
         let make_texture = |size| {
             emblem_texture(&ctx, size, |size| {
                 rasterizations.set(rasterizations.get() + 1);
-                rose_icon::rose_icon_rgba(size, RoseIcon::Large)
+                rose_icon::rose_icon_rgba(size, RoseIcon::Emblem)
             })
         };
         let size = emblem_pixel_size(40.0, 1.0);

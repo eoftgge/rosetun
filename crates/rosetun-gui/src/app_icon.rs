@@ -12,7 +12,7 @@ fn app_icon() -> Vec<u8> {
 
     let mut images = Vec::new();
     for size in SIZES {
-        let rgba = rose_icon::rose_icon_rgba(size, RoseIcon::Large);
+        let rgba = rose_icon::rose_icon_rgba(size, RoseIcon::App);
         let image = dib(&rgba, size);
         let offset = (6 + 16 * SIZES.len() + images.len()) as u32;
         ico.extend_from_slice(&[size as u8, size as u8, 0, 0]);

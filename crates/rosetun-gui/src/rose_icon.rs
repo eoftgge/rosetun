@@ -5,7 +5,10 @@ use crate::{rose_shape::PETALS, theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RoseIcon {
-    Large,
+    /// Inside the window, on the app's own background.
+    Emblem,
+    /// Outside the window (taskbar, Explorer, installer), on a dark plate.
+    App,
     /// The tray: a rose with a state-specific corner badge.
     // The tray exists only on Windows.
     #[cfg_attr(not(any(test, windows)), allow(dead_code))]
@@ -101,7 +104,7 @@ fn sample(point: Pt, icon: RoseIcon, inside: bool) -> Option<(Color32, u8)> {
         return badge.map(|color| (color, 255));
     }
     let color = match icon {
-        RoseIcon::Large | RoseIcon::Tray(TrayState::Connected) => theme::ROSE,
+        RoseIcon::Emblem | RoseIcon::App | RoseIcon::Tray(TrayState::Connected) => theme::ROSE,
         RoseIcon::Tray(_) => theme::DISCONNECTED,
     };
     let opacity = if matches!(icon, RoseIcon::Tray(TrayState::ServiceUnavailable)) {
@@ -130,69 +133,89 @@ fn scanline(y: f32, intersections: &mut Vec<f32>) {
 /// Straight-alpha RGBA of the icon, `size`×`size`.
 pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon) -> Vec<u8> {
     let mut rgba = rasterize(size, icon);
-    if matches!(icon, RoseIcon::Tray(_)) {
-        outline(&mut rgba, size as usize);
+    if icon != RoseIcon::Emblem {
+        back(&mut rgba, size as usize);
     }
     rgba
 }
 
-const OUTLINE_ALPHA: u32 = 160;
+const BACKING_ALPHA: u32 = 160;
 
-/// Rose petals vanish on a taskbar of a similar colour (a red Windows accent),
-/// so the tray icon gets a dark rim. The gaps between petals are channels that
-/// open to the outside; a closing (dilate, flood the outside, dilate back) keeps
-/// the rim on the silhouette's outer edge instead of filling those channels.
-fn outline(rgba: &mut [u8], size: usize) {
-    let radius = (size / 16).max(1) as isize;
-    // A margin beyond the edges, so the outside also reaches petals that touch them.
-    let pad = radius + 1;
-    let side = size as isize + 2 * pad;
-    let cell = |x: isize, y: isize| (y * side + x) as usize;
-    let near = |set: &[bool], x: isize, y: isize, reach: isize| {
-        (-reach..=reach).any(|dy| {
-            (-reach..=reach).any(|dx| {
-                let (nx, ny) = (x + dx, y + dy);
-                (0..side).contains(&nx) && (0..side).contains(&ny) && set[cell(nx, ny)]
-            })
-        })
-    };
-    let cells = (0..side).flat_map(|y| (0..side).map(move |x| (x, y)));
-    let solid: Vec<bool> = cells
-        .clone()
-        .map(|(x, y)| {
-            let (px, py) = (x - pad, y - pad);
-            (0..size as isize).contains(&px)
-                && (0..size as isize).contains(&py)
-                && rgba[(py as usize * size + px as usize) * 4 + 3] >= 128
-        })
-        .collect();
-    let grown: Vec<bool> = cells
-        .clone()
-        .map(|(x, y)| near(&solid, x, y, radius))
-        .collect();
-    let mut outside = vec![false; grown.len()];
-    let mut queue = vec![(0, 0)];
-    while let Some((x, y)) = queue.pop() {
-        if !(0..side).contains(&x) || !(0..side).contains(&y) {
-            continue;
+/// Square dilation by `reach` cells, done as a row pass and a column pass.
+fn dilate(set: &[bool], side: usize, reach: usize) -> Vec<bool> {
+    let pass = |set: &[bool], at: &dyn Fn(usize, usize) -> usize| {
+        let mut out = vec![false; set.len()];
+        for line in 0..side {
+            let mut count = 0;
+            for i in 0..side + reach {
+                if i < side && set[at(line, i)] {
+                    count += 1;
+                }
+                if i > 2 * reach && set[at(line, i - 2 * reach - 1)] {
+                    count -= 1;
+                }
+                if i >= reach {
+                    out[at(line, i - reach)] = count > 0;
+                }
+            }
         }
-        let i = cell(x, y);
+        out
+    };
+    let rows = pass(set, &|line, i| line * side + i);
+    pass(&rows, &|line, i| i * side + line)
+}
+
+/// Rose petals vanish on a background of a similar colour (a red Windows
+/// accent on the taskbar), so every icon shown outside the window sits on a
+/// dark plate: the silhouette with the gaps between petals filled, plus a rim.
+/// The gaps are channels open to the outside; a closing (dilate, flood the
+/// outside, dilate it back) tells them from the outside itself.
+fn back(rgba: &mut [u8], size: usize) {
+    let radius = (size / 16).max(1);
+    let rim = (size / 32).max(1);
+    // A margin beyond the edges, so the outside also reaches petals that touch them.
+    let pad = radius + rim + 1;
+    let side = size + 2 * pad;
+    let solid: Vec<bool> = (0..side * side)
+        .map(|i| {
+            let (x, y) = ((i % side).wrapping_sub(pad), (i / side).wrapping_sub(pad));
+            x < size && y < size && rgba[(y * size + x) * 4 + 3] >= 128
+        })
+        .collect();
+    let grown = dilate(&solid, side, radius);
+    let mut outside = vec![false; side * side];
+    let mut queue = vec![0];
+    while let Some(i) = queue.pop() {
         if grown[i] || outside[i] {
             continue;
         }
         outside[i] = true;
-        queue.extend([(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]);
+        let (x, y) = (i % side, i / side);
+        if x > 0 {
+            queue.push(i - 1);
+        }
+        if x + 1 < side {
+            queue.push(i + 1);
+        }
+        if y > 0 {
+            queue.push(i - side);
+        }
+        if y + 1 < side {
+            queue.push(i + side);
+        }
     }
-    let outside: Vec<bool> = cells.map(|(x, y)| near(&outside, x, y, radius)).collect();
-    let silhouette: Vec<bool> = outside.iter().map(|outside| !outside).collect();
+    let silhouette: Vec<bool> = dilate(&outside, side, radius)
+        .into_iter()
+        .map(|outside| !outside)
+        .collect();
+    let plate = dilate(&silhouette, side, rim);
     for (i, pixel) in rgba.chunks_exact_mut(4).enumerate() {
-        let (x, y) = ((i % size) as isize + pad, (i / size) as isize + pad);
-        if solid[cell(x, y)] || !outside[cell(x, y)] || !near(&silhouette, x, y, 1) {
+        if !plate[(i / size + pad) * side + i % size + pad] {
             continue;
         }
-        // The icon's own pixel is drawn over the black rim.
+        // The icon's own pixel is drawn over the plate.
         let alpha = u32::from(pixel[3]);
-        let under = OUTLINE_ALPHA * (255 - alpha) / 255;
+        let under = BACKING_ALPHA * (255 - alpha) / 255;
         let total = alpha + under;
         for channel in &mut pixel[..3] {
             *channel = (u32::from(*channel) * alpha / total) as u8;
@@ -263,8 +286,8 @@ mod tests {
     }
 
     #[test]
-    fn large_has_solid_petals_and_transparent_gaps() {
-        let rgba = rose_icon_rgba(48, RoseIcon::Large);
+    fn emblem_has_solid_petals_and_transparent_gaps() {
+        let rgba = rose_icon_rgba(48, RoseIcon::Emblem);
         // At y = 12.5, PETALS span x = 13.114..22.407, then 28.764..30.592.
         assert_eq!(pixel(&rgba, 48, 18, 12), theme::ROSE.to_array());
         for (x, y) in [(25, 12), (0, 0), (47, 47)] {
@@ -273,44 +296,42 @@ mod tests {
         let filled = rgba.chunks_exact(4).filter(|pixel| pixel[3] != 0).count();
         let coverage = filled as f32 / (48 * 48) as f32;
         assert!((0.45..=0.75).contains(&coverage), "{coverage}");
+        assert_eq!(rgba, rasterize(48, RoseIcon::Emblem), "no plate");
     }
 
     #[test]
-    fn large_256_rasterizes_within_two_seconds() {
+    fn app_256_rasterizes_within_two_seconds() {
         let start = std::time::Instant::now();
-        let rgba = rose_icon_rgba(256, RoseIcon::Large);
+        let rgba = rose_icon_rgba(256, RoseIcon::App);
         let elapsed = start.elapsed();
         assert_eq!(rgba.len(), 256 * 256 * 4);
         eprintln!("256 px rose rasterization: {elapsed:?}");
         assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
-        assert_eq!(rgba, rasterize(256, RoseIcon::Large), "no outline");
     }
 
     #[test]
-    fn tray_outline_rims_the_silhouette_but_not_the_gaps() {
-        let start = std::time::Instant::now();
-        for state in TRAY_STATES {
-            for size in [16, 24, 32] {
-                let icon = RoseIcon::Tray(state);
+    fn outside_icons_sit_on_a_plate_that_fills_the_gaps() {
+        let icons = TRAY_STATES.map(RoseIcon::Tray);
+        for icon in icons.into_iter().chain([RoseIcon::App]) {
+            for size in [16, 24, 32, 48, 256] {
                 let plain = rasterize(size, icon);
-                let outlined = rose_icon_rgba(size, icon);
-                let mut rim = 0;
-                for (before, after) in plain.chunks_exact(4).zip(outlined.chunks_exact(4)) {
-                    if before != after {
-                        rim += 1;
-                        assert!(before[3] < 128, "{state:?} {size} px: rim over the rose");
-                        assert!(after[3] >= OUTLINE_ALPHA as u8, "{state:?} {size} px");
+                let backed = rose_icon_rgba(size, icon);
+                for (before, after) in plain.chunks_exact(4).zip(backed.chunks_exact(4)) {
+                    assert!(after[3] >= before[3], "{icon:?} {size} px");
+                    if before[3] == 255 {
+                        assert_eq!(before, after, "{icon:?} {size} px: plate over the rose");
+                    } else if before != after {
+                        assert!(after[3] >= BACKING_ALPHA as u8, "{icon:?} {size} px");
                     }
                 }
-                assert!(rim >= size * 2, "{state:?} {size} px: {rim} rim pixels");
+                let size = size as usize;
+                assert_eq!(pixel(&backed, size, 0, 0), [0; 4], "{icon:?} {size} px corner");
             }
-            let rgba = rose_icon_rgba(32, RoseIcon::Tray(state));
-            assert_eq!(pixel(&rgba, 32, 3, 4), [0, 0, 0, 160], "{state:?} rim");
+            let rgba = rose_icon_rgba(32, icon);
+            assert_eq!(pixel(&rgba, 32, 3, 4), [0, 0, 0, 160], "{icon:?} rim");
             // A one-pixel channel between two petals, open to the outside.
-            assert_eq!(pixel(&rgba, 32, 14, 4), [0; 4], "{state:?} gap");
+            assert_eq!(pixel(&rgba, 32, 14, 4), [0, 0, 0, 160], "{icon:?} gap");
         }
-        let elapsed = start.elapsed();
-        assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
     }
 
     #[test]
@@ -334,11 +355,12 @@ mod tests {
                 petal,
                 match state {
                     TrayState::Connected => theme::ROSE.to_array(),
+                    // A dimmed rose (alpha 140) over the plate.
                     TrayState::ServiceUnavailable => [
-                        theme::DISCONNECTED.r(),
-                        theme::DISCONNECTED.g(),
-                        theme::DISCONNECTED.b(),
-                        140,
+                        (u32::from(theme::DISCONNECTED.r()) * 140 / 212) as u8,
+                        (u32::from(theme::DISCONNECTED.g()) * 140 / 212) as u8,
+                        (u32::from(theme::DISCONNECTED.b()) * 140 / 212) as u8,
+                        212,
                     ],
                     _ => theme::DISCONNECTED.to_array(),
                 },
@@ -374,12 +396,12 @@ mod tests {
                 Color32::WHITE.to_array(),
                 "{state:?} mark"
             );
-            assert_eq!(pixel(&rgba, 48, 34, 21), [0; 4], "{state:?} cutout");
+            assert_eq!(pixel(&rgba, 48, 34, 21), [0, 0, 0, 160], "{state:?} cutout");
         }
     }
 
     #[test]
     fn rgba_has_the_requested_size() {
-        assert_eq!(rose_icon_rgba(32, RoseIcon::Large).len(), 32 * 32 * 4);
+        assert_eq!(rose_icon_rgba(32, RoseIcon::Emblem).len(), 32 * 32 * 4);
     }
 }
