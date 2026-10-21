@@ -212,7 +212,8 @@ fn redact_addresses(text: &str) -> String {
                         .map(|ip| (ip, core.len()))
                 })
                 .or_else(|| {
-                    address.rsplit_once(':').and_then(|(head, _)| {
+                    // Go errors put a colon after the port: `dial tcp <ip>:443: i/o timeout`.
+                    address.trim_end_matches(['.', ':']).rsplit_once(':').and_then(|(head, _)| {
                         head.parse::<std::net::Ipv4Addr>()
                             .ok()
                             .map(|ip| (IpAddr::V4(ip), head.len()))
@@ -273,6 +274,10 @@ mod tests {
         assert_eq!(
             redact_report_text(input),
             "<ip>:443 [<ip>]:8443 <ip> <ip> <ip>:https 127.0.0.1 ::1 0.0.0.0"
+        );
+        assert_eq!(
+            redact_report_text("dial tcp 203.0.113.5:443: i/o timeout"),
+            "dial tcp <ip>:443: i/o timeout"
         );
     }
 
