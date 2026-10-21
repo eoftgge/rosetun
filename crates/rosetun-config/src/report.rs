@@ -239,9 +239,8 @@ fn redact_addresses(text: &str) -> String {
 /// ports and the colon Go puts after a port stay outside the range; an IPv6
 /// zone stays inside.
 pub fn ip_literals(text: &str) -> impl Iterator<Item = (IpAddr, Range<usize>)> + '_ {
-    address_words(text).filter_map(|(start, word)| {
-        leading_ip(word).map(|(ip, end)| (ip, start..start + end))
-    })
+    address_words(text)
+        .filter_map(|(start, word)| leading_ip(word).map(|(ip, end)| (ip, start..start + end)))
 }
 
 fn address_words(text: &str) -> impl Iterator<Item = (usize, &str)> {
