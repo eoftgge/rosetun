@@ -25,7 +25,7 @@ pub use node::{
     Hysteria2Params, Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
     TlsParams, Transport, TrojanParams, VlessParams, VmessParams, node_country, uses_xray,
 };
-pub use report::redact_report_text;
+pub use report::{ip_literals, redact_report_text};
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{
     ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind, LiveConnection,

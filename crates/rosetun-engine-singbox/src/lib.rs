@@ -591,13 +591,14 @@ mod tests {
 
     #[test]
     fn engine_output_masks_destinations_after_verbose_log_expires() {
-        let line = "ERROR connection: open connection to 198.51.100.20:443 using outbound/vless[proxy]: dial tcp 203.0.113.10:443: i/o timeout";
+        let line = "ERROR connection: connection download closed: close tcp 172.19.0.1:54626->198.51.100.7:443: endpoint not connected";
         let deadline = std::sync::atomic::AtomicU64::new(100);
         assert_eq!(super::safe_output_line(line, &deadline, 99), line);
-        assert!(!super::safe_output_line(line, &deadline, 100).contains("198.51.100.20"));
+        assert!(!super::safe_output_line(line, &deadline, 100).contains("198.51.100.7"));
         deadline.store(0, std::sync::atomic::Ordering::Release);
-        assert!(!super::safe_output_line(line, &deadline, 99).contains("198.51.100.20"));
-        assert!(super::safe_output_line(line, &deadline, 99).contains("203.0.113.10:443"));
+        let hidden = super::safe_output_line(line, &deadline, 99);
+        assert!(!hidden.contains("198.51.100.7"));
+        assert!(hidden.contains("172.19.0.1:54626->[hidden]:443: endpoint not connected"));
     }
 
     #[test]
@@ -609,7 +610,8 @@ mod tests {
         let safe = super::safe_output_line(line, &deadline, 100);
         assert_eq!(failures.snapshot().unreachable, 1);
         assert!(!safe.contains("198.51.100.20"));
-        assert!(safe.contains("dial tcp 203.0.113.10:443: i/o timeout"));
+        assert!(!safe.contains("203.0.113.10"));
+        assert!(safe.contains("dial tcp [hidden]:443: i/o timeout"));
     }
 
     #[test]

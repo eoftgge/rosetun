@@ -1,5 +1,6 @@
 use crate::readiness::strip_ansi_csi;
 use rosetun_engine::{OutboundFailure, OutboundFailures};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Default)]
@@ -87,7 +88,8 @@ pub(super) fn classify_failure(line: &str) -> Option<OutboundFailure> {
     None
 }
 
-/// Keep the server dial target and the cause, but not destinations visited through the tunnel.
+/// Hides the sites and the node a line names, keeping the failure cause and
+/// the local and tunnel addresses it needs to be read.
 pub(super) fn hide_destinations(line: &str) -> String {
     let mut hidden = line.to_owned();
     replace_between(&mut hidden, "open connection to ", " using");
@@ -99,7 +101,42 @@ pub(super) fn hide_destinations(line: &str) -> String {
     ] {
         replace_token(&mut hidden, marker);
     }
+    hide_public_addresses(&hidden)
+}
+
+/// Go socket errors name both ends wherever they occur, as in
+/// `close tcp 172.19.0.1:54626->198.51.100.7:443: endpoint not connected`,
+/// so addresses are found by what they are, not by the words before them.
+fn hide_public_addresses(line: &str) -> String {
+    let mut hidden = String::with_capacity(line.len());
+    let mut copied = 0;
+    for (ip, mut range) in rosetun_config::ip_literals(line) {
+        if !is_public(ip) {
+            continue;
+        }
+        if line[..range.start].ends_with('[') && line[range.end..].starts_with(']') {
+            range = range.start - 1..range.end + 1;
+        }
+        hidden.push_str(&line[copied..range.start]);
+        hidden.push_str("[hidden]");
+        copied = range.end;
+    }
+    hidden.push_str(&line[copied..]);
     hidden
+}
+
+fn is_public(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(ip) => {
+            !(ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified())
+        }
+        IpAddr::V6(ip) => {
+            !(ip.is_unique_local()
+                || ip.is_loopback()
+                || ip.is_unicast_link_local()
+                || ip.is_unspecified())
+        }
+    }
 }
 
 fn replace_between(line: &mut String, marker: &str, delimiter: &str) {
@@ -200,12 +237,12 @@ mod tests {
     use super::{LineLevel, is_adapter_busy_message, line_level};
 
     #[test]
-    fn hides_destinations_but_not_the_server_or_failure_cause() {
+    fn hides_destinations_and_the_server_but_not_the_failure_cause() {
         let line = "ERROR [123 5.0s] connection: open connection to 198.51.100.20:443 using outbound/vless[proxy]: dial tcp 203.0.113.10:443: i/o timeout";
         let hidden = super::hide_destinations(line);
         assert_eq!(
             hidden,
-            "ERROR [123 5.0s] connection: open connection to [hidden] using outbound/vless[proxy]: dial tcp 203.0.113.10:443: i/o timeout"
+            "ERROR [123 5.0s] connection: open connection to [hidden] using outbound/vless[proxy]: dial tcp [hidden]:443: i/o timeout"
         );
         assert_eq!(super::hide_destinations(&hidden), hidden);
     }
@@ -231,10 +268,60 @@ mod tests {
             ),
             (
                 "+0900 2026-10-10 01:15:47 ERROR connection: open connection to [2001:db8::20]:443 using outbound/vless[proxy]: dial tcp 203.0.113.10:443: EOF",
-                "+0900 2026-10-10 01:15:47 ERROR connection: open connection to [hidden] using outbound/vless[proxy]: dial tcp 203.0.113.10:443: EOF",
+                "+0900 2026-10-10 01:15:47 ERROR connection: open connection to [hidden] using outbound/vless[proxy]: dial tcp [hidden]:443: EOF",
             ),
         ] {
             assert_eq!(super::hide_destinations(line), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn hides_public_addresses_wherever_a_socket_error_puts_them() {
+        for (line, expected) in [
+            (
+                "ERROR engine_output: +0300 2026-10-21 22:08:32 ERROR [1184364709 1.84s] connection: connection download closed: close tcp 172.19.0.1:54626->198.51.100.7:443: endpoint not connected stream=\"stderr\"",
+                "ERROR engine_output: +0300 2026-10-21 22:08:32 ERROR [1184364709 1.84s] connection: connection download closed: close tcp 172.19.0.1:54626->[hidden]:443: endpoint not connected stream=\"stderr\"",
+            ),
+            (
+                "ERROR [77 3.1s] connection: connection upload closed: read tcp 172.19.0.1:50112->192.0.2.44:443: wsarecv: An existing connection was forcibly closed by the remote host.",
+                "ERROR [77 3.1s] connection: connection upload closed: read tcp 172.19.0.1:50112->[hidden]:443: wsarecv: An existing connection was forcibly closed by the remote host.",
+            ),
+            (
+                "ERROR [78 9.0s] connection: packet connection closed: read udp 172.19.0.1:61000->198.51.100.53:53: i/o timeout",
+                "ERROR [78 9.0s] connection: packet connection closed: read udp 172.19.0.1:61000->[hidden]:53: i/o timeout",
+            ),
+            (
+                "ERROR [79 0.4s] connection: connection download closed: write tcp [fdfe:dcba:9876::1]:50113->[2001:db8::7]:443: broken pipe",
+                "ERROR [79 0.4s] connection: connection download closed: write tcp [fdfe:dcba:9876::1]:50113->[hidden]:443: broken pipe",
+            ),
+            (
+                "ERROR outbound/vless[proxy]: dial tcp 203.0.113.10:443: i/o timeout",
+                "ERROR outbound/vless[proxy]: dial tcp [hidden]:443: i/o timeout",
+            ),
+            (
+                "ERROR dns: raw-read udp [::ffff:192.0.2.9]:53 from 2001:db8::1: refused",
+                "ERROR dns: raw-read udp [hidden]:53 from [hidden]: refused",
+            ),
+            (
+                "INFO inbound/tun[tun-in]: 127.0.0.1:9090 10.0.0.2 192.168.1.1:53 169.254.10.1 [::1]:9090 fe80::1%7 0.0.0.0",
+                "INFO inbound/tun[tun-in]: 127.0.0.1:9090 10.0.0.2 192.168.1.1:53 169.254.10.1 [::1]:9090 fe80::1%7 0.0.0.0",
+            ),
+        ] {
+            let hidden = super::hide_destinations(line);
+            assert_eq!(hidden, expected, "{line}");
+            assert_eq!(super::hide_destinations(&hidden), hidden);
+        }
+    }
+
+    #[test]
+    fn lines_without_addresses_are_unchanged() {
+        for line in [
+            "+0300 2026-10-21 22:08:32 INFO [1184364709 1.84s] sing-box started (1.84s)",
+            "WARN[0000] inbound/tun[tun-in]: open interface take too much time to finish!",
+            "FATAL[0015] start service: create adapter: Cannot create a file when that file already exists.",
+            "",
+        ] {
+            assert_eq!(super::hide_destinations(line), line);
         }
     }
 
