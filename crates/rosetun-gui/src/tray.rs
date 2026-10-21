@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::sync::mpsc::Sender;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use rosetun_config::ConnectionState;
@@ -15,6 +17,9 @@ const OPEN_ID: &str = "rosetun.tray.open";
 const HIDE_ID: &str = "rosetun.tray.hide";
 const PRIMARY_ID: &str = "rosetun.tray.primary";
 const QUIT_ID: &str = "rosetun.tray.quit";
+/// The taskbar's icon size changes with its monitor's scale; reading it on
+/// every frame would cost a window lookup per frame.
+const SIZE_CHECK: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TrayView {
@@ -88,6 +93,73 @@ fn fit_tooltip(text: &str) -> String {
     fitted
 }
 
+fn icon_size(metric: i32) -> u32 {
+    if metric <= 0 {
+        return 32;
+    }
+    metric.clamp(16, 64) as u32
+}
+
+/// The taskbar's own icon size: Windows scales any other size with a plain
+/// filter, which blurs the petals.
+fn taskbar_icon_size() -> u32 {
+    icon_size(rosetun_shell::taskbar_small_icon_size())
+}
+
+/// The tray icon shown, the taskbar size it was drawn for, and every icon
+/// drawn so far, so switching back to a state does not rasterize it again.
+struct IconSlot<I> {
+    size: u32,
+    checked: Instant,
+    shown: Option<(TrayState, u32)>,
+    icons: HashMap<(TrayState, u32), I>,
+}
+
+impl<I: Clone> IconSlot<I> {
+    fn new(size: u32, now: Instant) -> Self {
+        Self {
+            size,
+            checked: now,
+            shown: None,
+            icons: HashMap::new(),
+        }
+    }
+
+    /// The icon to set for `state`, or `None` when it is already shown.
+    fn update<E>(
+        &mut self,
+        state: TrayState,
+        now: Instant,
+        probe: impl FnOnce() -> u32,
+        build: impl FnOnce(TrayState, u32) -> Result<I, E>,
+    ) -> Result<Option<I>, E> {
+        if now.saturating_duration_since(self.checked) >= SIZE_CHECK {
+            self.checked = now;
+            self.size = probe();
+        }
+        let key = (state, self.size);
+        if self.shown == Some(key) {
+            return Ok(None);
+        }
+        // Marked before building, so a failed build is not retried every frame.
+        self.shown = Some(key);
+        if let Some(icon) = self.icons.get(&key) {
+            return Ok(Some(icon.clone()));
+        }
+        let icon = build(state, self.size)?;
+        self.icons.insert(key, icon.clone());
+        Ok(Some(icon))
+    }
+}
+
+fn rose(state: TrayState, size: u32) -> Result<Icon, tray_icon::BadIcon> {
+    Icon::from_rgba(
+        rose_icon::rose_icon_rgba(size, RoseIcon::Tray(state)),
+        size,
+        size,
+    )
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TrayError {
     #[error(transparent)]
@@ -105,6 +177,7 @@ pub(crate) struct Tray {
     hide: MenuItem,
     quit: MenuItem,
     shown: Option<TrayView>,
+    slot: IconSlot<Icon>,
 }
 
 impl Tray {
@@ -121,11 +194,11 @@ impl Tray {
             &PredefinedMenuItem::separator(),
             &quit,
         ])?;
-        let initial_icon = Icon::from_rgba(
-            rose_icon::rose_icon_rgba(32, RoseIcon::Tray(TrayState::Disconnected)),
-            32,
-            32,
-        )?;
+        let now = Instant::now();
+        let mut slot = IconSlot::new(taskbar_icon_size(), now);
+        let initial_icon = slot
+            .update(TrayState::Disconnected, now, || 32, rose)?
+            .expect("a new slot shows nothing yet");
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
@@ -168,30 +241,25 @@ impl Tray {
             hide,
             quit,
             shown: None,
+            slot,
         })
     }
 
     pub(crate) fn sync(&mut self, view: &TrayView) {
+        match self
+            .slot
+            .update(view.icon, Instant::now(), taskbar_icon_size, rose)
+        {
+            Ok(Some(icon)) => {
+                if let Err(error) = self.icon.set_icon(Some(icon)) {
+                    tracing::warn!(%error, "Could not update tray icon");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, "Could not create tray icon"),
+        }
         if self.shown.as_ref() == Some(view) {
             return;
-        }
-        if self
-            .shown
-            .as_ref()
-            .is_none_or(|shown| shown.icon != view.icon)
-        {
-            match Icon::from_rgba(
-                rose_icon::rose_icon_rgba(32, RoseIcon::Tray(view.icon)),
-                32,
-                32,
-            ) {
-                Ok(icon) => {
-                    if let Err(error) = self.icon.set_icon(Some(icon)) {
-                        tracing::warn!(%error, "Could not update tray icon");
-                    }
-                }
-                Err(error) => tracing::warn!(%error, "Could not create tray icon"),
-            }
         }
         if self
             .shown
@@ -242,13 +310,79 @@ impl Tray {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_tooltip, tray_view};
+    use super::{IconSlot, SIZE_CHECK, fit_tooltip, icon_size, rose, tray_view};
     use crate::i18n;
     use crate::rose_icon::TrayState;
     use crate::state::State;
     use rosetun_config::{ConnectionState, Status};
     use rosetun_core::Store;
     use std::fs;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn icon_size_stays_within_16_to_64() {
+        for (metric, size) in [(16, 16), (20, 20), (24, 24), (8, 16), (200, 64)] {
+            assert_eq!(icon_size(metric), size, "{metric}");
+        }
+        assert_eq!(icon_size(0), 32, "a failed lookup");
+        assert_eq!(icon_size(-1), 32);
+    }
+
+    #[test]
+    fn rose_is_drawn_at_the_requested_size() {
+        for size in [16, 20, 24] {
+            assert!(rose(TrayState::Connected, size).is_ok(), "{size} px");
+        }
+    }
+
+    #[test]
+    fn icon_is_rebuilt_only_for_a_new_state_or_size() {
+        let start = Instant::now();
+        let mut slot = IconSlot::new(20, start);
+        let mut built = Vec::new();
+        let mut update = |slot: &mut IconSlot<(TrayState, u32)>, state, now, size| {
+            slot.update(
+                state,
+                now,
+                || size,
+                |state, size| {
+                    built.push((state, size));
+                    Ok::<_, ()>((state, size))
+                },
+            )
+            .unwrap()
+        };
+        let connected = TrayState::Connected;
+        assert_eq!(
+            update(&mut slot, connected, start, 20),
+            Some((connected, 20))
+        );
+        assert_eq!(update(&mut slot, connected, start, 24), None);
+        // A changed size is noticed only once the check interval has passed.
+        let later = start + Duration::from_millis(500);
+        assert_eq!(update(&mut slot, connected, later, 24), None);
+        let later = start + SIZE_CHECK;
+        assert_eq!(
+            update(&mut slot, connected, later, 24),
+            Some((connected, 24))
+        );
+        assert_eq!(update(&mut slot, connected, later, 24), None);
+        let later = later + SIZE_CHECK;
+        assert_eq!(update(&mut slot, connected, later, 24), None);
+        // Back to an icon drawn before: it comes from the cache.
+        let later = later + SIZE_CHECK;
+        assert_eq!(
+            update(&mut slot, connected, later, 20),
+            Some((connected, 20))
+        );
+        let failed = TrayState::Failed;
+        assert_eq!(update(&mut slot, failed, later, 20), Some((failed, 20)));
+        assert_eq!(
+            update(&mut slot, connected, later, 20),
+            Some((connected, 20))
+        );
+        assert_eq!(built, [(connected, 20), (connected, 24), (failed, 20)]);
+    }
 
     #[test]
     fn tooltip_fits_windows_utf16_limit() {

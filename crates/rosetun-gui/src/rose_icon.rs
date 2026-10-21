@@ -15,7 +15,7 @@ pub(crate) enum RoseIcon {
     Tray(TrayState),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(not(any(test, windows)), allow(dead_code))]
 pub(crate) enum TrayState {
     Connected,
@@ -52,54 +52,83 @@ fn badge_color(state: TrayState) -> Option<Color32> {
     }
 }
 
-fn badge_mark(point: Pt, state: TrayState) -> bool {
+/// The badge's place in a raster of one size, in design units.
+#[derive(Debug, Clone, Copy)]
+struct BadgeGrid {
+    /// How far the badge moves from the 48 px design so that the edge of its
+    /// disc lies on a pixel boundary; a disc between pixels blurs on all sides.
+    shift: f32,
+    /// One pixel.
+    pixel: f32,
+}
+
+impl BadgeGrid {
+    fn new(size: u32) -> Self {
+        let pixel = 48.0 / size as f32;
+        // The disc (x 23..47) is half the icon wide; keep it inside the icon.
+        let left = (23.0 / pixel).round().min(size as f32 / 2.0);
+        Self {
+            shift: left * pixel - 23.0,
+            pixel,
+        }
+    }
+}
+
+fn badge_mark(point: Pt, state: TrayState, pixel: f32) -> bool {
     let (x, y) = point;
+    // Below about a pixel a stroke turns into a grey smear on the disc.
+    let half = |width: f32| width.max(pixel);
     match state {
         TrayState::Connecting => {
             let dx = x - 35.0;
             let dy = y - 35.0;
             let angle =
                 (dy.atan2(dx) + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
-            ((dx * dx + dy * dy).sqrt() - 7.5).abs() <= 1.7
+            ((dx * dx + dy * dy).sqrt() - 7.5).abs() <= half(1.7)
                 && angle <= 3.0 * std::f32::consts::FRAC_PI_2
         }
         TrayState::Blocked => {
             (29.5..=40.5).contains(&x) && (34.0..=42.5).contains(&y)
-                || segment_distance_squared(point, (31.8, 34.0), (31.8, 31.6)) <= 1.3 * 1.3
-                || segment_distance_squared(point, (38.2, 31.6), (38.2, 34.0)) <= 1.3 * 1.3
-                || (y <= 31.6 && ((x - 35.0).hypot(y - 31.6) - 3.2).abs() <= 1.3)
+                || segment_distance_squared(point, (31.8, 34.0), (31.8, 31.6)) <= half(1.3).powi(2)
+                || segment_distance_squared(point, (38.2, 31.6), (38.2, 34.0)) <= half(1.3).powi(2)
+                || (y <= 31.6 && ((x - 35.0).hypot(y - 31.6) - 3.2).abs() <= half(1.3))
         }
         TrayState::Failed => {
-            segment_distance_squared(point, (35.0, 28.5), (35.0, 36.2)) <= 1.9 * 1.9
-                || (x - 35.0).hypot(y - 41.0) <= 2.1
+            let dot = 2.1_f32.max(pixel);
+            // Thicker strokes would close the gap between the bar and the dot.
+            let bottom = (41.0 - dot - pixel - half(1.9)).min(36.2);
+            segment_distance_squared(point, (35.0, 28.5), (35.0, bottom)) <= half(1.9).powi(2)
+                || (x - 35.0).hypot(y - 41.0) <= dot
         }
         TrayState::ServiceUnavailable => {
-            segment_distance_squared(point, (30.8, 30.8), (39.2, 39.2)) <= 1.8 * 1.8
-                || segment_distance_squared(point, (39.2, 30.8), (30.8, 39.2)) <= 1.8 * 1.8
+            segment_distance_squared(point, (30.8, 30.8), (39.2, 39.2)) <= half(1.8).powi(2)
+                || segment_distance_squared(point, (39.2, 30.8), (30.8, 39.2)) <= half(1.8).powi(2)
         }
         TrayState::Connected | TrayState::Disconnected => false,
     }
 }
 
-fn sample_badge(point: Pt, state: TrayState) -> Option<Option<Color32>> {
+fn sample_badge(point: Pt, state: TrayState, grid: BadgeGrid) -> Option<Option<Color32>> {
     let color = badge_color(state)?;
+    let point = (point.0 - grid.shift, point.1 - grid.shift);
     let distance = (point.0 - 35.0).hypot(point.1 - 35.0);
-    if distance > 14.5 {
+    // The cutout must stay at least a pixel wide, or the badge merges with the petals.
+    if distance > 12.0 + grid.pixel.max(2.5) {
         return None;
     }
     if distance > 12.0 {
         return Some(None);
     }
-    Some(Some(if badge_mark(point, state) {
+    Some(Some(if badge_mark(point, state, grid.pixel) {
         Color32::WHITE
     } else {
         color
     }))
 }
 
-fn sample(point: Pt, icon: RoseIcon, inside: bool) -> Option<(Color32, u8)> {
+fn sample(point: Pt, icon: RoseIcon, inside: bool, grid: BadgeGrid) -> Option<(Color32, u8)> {
     if let RoseIcon::Tray(state) = icon
-        && let Some(badge) = sample_badge(point, state)
+        && let Some(badge) = sample_badge(point, state, grid)
     {
         return badge.map(|color| (color, 255));
     }
@@ -226,6 +255,7 @@ fn back(rgba: &mut [u8], size: usize) {
 
 fn rasterize(size: u32, icon: RoseIcon) -> Vec<u8> {
     let scale = 48.0 / size as f32;
+    let grid = BadgeGrid::new(size);
     let mut rgba = Vec::with_capacity(size as usize * size as usize * 4);
     let mut row = vec![[0_u32; 4]; size as usize];
     let mut intersections = Vec::new();
@@ -242,7 +272,7 @@ fn rasterize(size: u32, icon: RoseIcon) -> Vec<u8> {
                         crossing += 1;
                     }
                     if let Some((color, opacity)) =
-                        sample((sample_x, sample_y), icon, crossing % 2 == 1)
+                        sample((sample_x, sample_y), icon, crossing % 2 == 1, grid)
                     {
                         let opacity = u32::from(opacity);
                         pixel[0] += u32::from(color.r()) * opacity;
@@ -402,6 +432,54 @@ mod tests {
             );
             assert_eq!(pixel(&rgba, 48, 34, 21), [0, 0, 0, 160], "{state:?} cutout");
         }
+    }
+
+    #[test]
+    fn tray_icons_at_taskbar_sizes_keep_the_badge_mark_and_the_outline() {
+        for size in [16, 20, 24] {
+            for state in TRAY_STATES {
+                let rgba = rose_icon_rgba(size, RoseIcon::Tray(state));
+                assert_eq!(
+                    rgba.len(),
+                    (size * size * 4) as usize,
+                    "{state:?} {size} px"
+                );
+                let count = |wanted: &dyn Fn(&[u8]) -> bool| {
+                    rgba.chunks_exact(4).filter(|pixel| wanted(pixel)).count()
+                };
+                assert!(
+                    count(&|pixel| pixel == [0, 0, 0, 160]) >= 4,
+                    "{state:?} {size} px outline"
+                );
+                let Some(color) = badge_color(state) else {
+                    continue;
+                };
+                assert!(
+                    count(&|pixel| pixel == color.to_array()) >= 8,
+                    "{state:?} {size} px disc"
+                );
+                assert!(
+                    count(&|pixel| pixel[3] == 255 && pixel[..3].iter().all(|&c| c >= 230)) >= 3,
+                    "{state:?} {size} px mark"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn badge_disc_edge_lies_on_the_pixel_grid() {
+        for size in 16..=64 {
+            let grid = BadgeGrid::new(size);
+            let left = (23.0 + grid.shift) / grid.pixel;
+            assert!((left - left.round()).abs() < 1e-3, "{size} px: {left}");
+            assert!(left + size as f32 / 2.0 <= size as f32 + 1e-3, "{size} px");
+        }
+        assert_eq!(BadgeGrid::new(48).shift, 0.0);
+        // At 20 px the disc covers columns 10..20: column 9 has no disc colour.
+        let rgba = rose_icon_rgba(20, RoseIcon::Tray(TrayState::Failed));
+        assert_eq!(pixel(&rgba, 20, 15, 10)[..3], theme::ERROR.to_array()[..3]);
+        assert_ne!(pixel(&rgba, 20, 9, 15), theme::ERROR.to_array());
+        assert_eq!(pixel(&rgba, 20, 10, 15), theme::ERROR.to_array());
     }
 
     #[test]

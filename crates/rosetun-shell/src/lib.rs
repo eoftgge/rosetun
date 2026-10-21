@@ -33,4 +33,4 @@ pub use system_checks::{proxy_settings, windivert_running};
 #[cfg(windows)]
 pub use system_info::{local_report_timestamp, windows_build};
 #[cfg(windows)]
-pub use window::{SavedWindow, place_window, saved_window};
+pub use window::{SavedWindow, place_window, saved_window, taskbar_small_icon_size};

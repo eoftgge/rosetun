@@ -5,11 +5,13 @@ use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
     MonitorFromPoint, MonitorFromWindow,
 };
-use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows_sys::Win32::UI::HiDpi::{
+    GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetWindowPlacement, IsIconic, IsWindowVisible, IsZoomed, SW_HIDE, SW_SHOWNOACTIVATE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT,
-    WPF_RESTORETOMAXIMIZED,
+    FindWindowW, GetWindowPlacement, IsIconic, IsWindowVisible, IsZoomed, SM_CXSMICON, SW_HIDE,
+    SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetWindowPlacement, SetWindowPos,
+    WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
 };
 
 use crate::first_start::{ScreenRect, first_start_rect};
@@ -160,6 +162,29 @@ pub fn place_window(hwnd: isize, saved: Option<SavedWindow>) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The small-icon width at the DPI of the taskbar's monitor, falling back to
+/// the system DPI; 0 when Windows cannot tell. Tray icons are drawn at this size.
+pub fn taskbar_small_icon_size() -> i32 {
+    let class: Vec<u16> = "Shell_TrayWnd".encode_utf16().chain([0]).collect();
+    // SAFETY: class is a NUL-terminated UTF-16 string that outlives the call, and a null
+    // window name matches any; the returned window is borrowed, never owned or closed.
+    let taskbar = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+    let dpi = if taskbar.is_null() {
+        0
+    } else {
+        // SAFETY: taskbar is borrowed for this ABI call; a window that has gone away gives 0.
+        unsafe { GetDpiForWindow(taskbar) }
+    };
+    let dpi = if dpi == 0 {
+        // SAFETY: no arguments; reads process-wide state.
+        unsafe { GetDpiForSystem() }
+    } else {
+        dpi
+    };
+    // SAFETY: plain value arguments; returns 0 on failure.
+    unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) }
 }
 
 #[cfg(test)]
