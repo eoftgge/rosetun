@@ -318,11 +318,23 @@ fn program_names_are_read_once_per_path_and_cleared_on_disconnect() {
     let _ = state.take_connections(100);
     state.reduce(WorkerEvent::Connections(Ok((
         vec![
-            live("example.com", Some(browser), rosetun_config::ConnectionRoute::Proxy),
-            live("example.net", Some(browser), rosetun_config::ConnectionRoute::Proxy),
+            live(
+                "example.com",
+                Some(browser),
+                rosetun_config::ConnectionRoute::Proxy,
+            ),
+            live(
+                "example.net",
+                Some(browser),
+                rosetun_config::ConnectionRoute::Proxy,
+            ),
             live("203.0.113.5", None, rosetun_config::ConnectionRoute::Direct),
         ],
-        vec![live("192.0.2.10", Some(game), rosetun_config::ConnectionRoute::Direct)],
+        vec![live(
+            "192.0.2.10",
+            Some(game),
+            rosetun_config::ConnectionRoute::Direct,
+        )],
     ))));
     let Some(Job::ProgramNames(paths)) = state.take_program_names() else {
         panic!("new paths are read");
@@ -331,7 +343,11 @@ fn program_names_are_read_once_per_path_and_cleared_on_disconnect() {
     assert!(state.take_program_names().is_none());
 
     let programs = &state.traffic.connections.programs;
-    assert_eq!(programs.name(Some(browser)), "browser", "the file name until read");
+    assert_eq!(
+        programs.name(Some(browser)),
+        "browser",
+        "the file name until read"
+    );
     assert_eq!(programs.name(Some(game)), "Game");
     assert_eq!(programs.name(None), tr!("connections-system-program"));
 
@@ -352,10 +368,17 @@ fn program_names_are_read_once_per_path_and_cleared_on_disconnect() {
 
     let _ = state.take_connections(101);
     state.reduce(WorkerEvent::Connections(Ok((
-        vec![live("example.com", Some(browser), rosetun_config::ConnectionRoute::Proxy)],
+        vec![live(
+            "example.com",
+            Some(browser),
+            rosetun_config::ConnectionRoute::Proxy,
+        )],
         Vec::new(),
     ))));
-    assert!(state.take_program_names().is_none(), "a read path is not read again");
+    assert!(
+        state.take_program_names().is_none(),
+        "a read path is not read again"
+    );
 
     state.reduce(WorkerEvent::Status(Status::default()));
     assert_eq!(
@@ -371,7 +394,10 @@ fn program_names_are_read_once_per_path_and_cleared_on_disconnect() {
 }
 
 fn answer(state: &mut State, now: u64, active: Vec<rosetun_config::LiveConnection>) {
-    assert!(matches!(state.take_connections(now), Some(Job::Connections)));
+    assert!(matches!(
+        state.take_connections(now),
+        Some(Job::Connections)
+    ));
     state.reduce(WorkerEvent::Connections(Ok((active, Vec::new()))));
 }
 
@@ -439,8 +465,16 @@ fn connections_filter_by_route_and_by_exit() {
         vec![
             live("example.com", None, ConnectionRoute::Proxy),
             live("example.net", None, ConnectionRoute::Direct),
-            live("example.org", None, ConnectionRoute::Exit(ExitId::new("work"))),
-            live("example.edu", None, ConnectionRoute::Exit(ExitId::new("home"))),
+            live(
+                "example.org",
+                None,
+                ConnectionRoute::Exit(ExitId::new("work")),
+            ),
+            live(
+                "example.edu",
+                None,
+                ConnectionRoute::Exit(ExitId::new("home")),
+            ),
         ],
     );
     let hosts = |state: &State| -> Vec<String> {
@@ -693,7 +727,10 @@ fn selection_follows_the_id_and_clears_when_the_connection_is_gone() {
 
     let mut closed = live("example.com", None, ConnectionRoute::Proxy);
     closed.end_unix_ms = Some(2_000);
-    assert!(matches!(state.take_connections(102), Some(Job::Connections)));
+    assert!(matches!(
+        state.take_connections(102),
+        Some(Job::Connections)
+    ));
     state.reduce(WorkerEvent::Connections(Ok((Vec::new(), vec![closed]))));
     assert!(
         state.traffic.connections.selected_connection().is_some(),
@@ -772,7 +809,10 @@ fn closing_sends_the_id_once_and_only_for_an_active_connection() {
     let mut state = connected_on_traffic();
     let mut closed = live("example.net", None, ConnectionRoute::Proxy);
     closed.end_unix_ms = Some(2_000);
-    assert!(matches!(state.take_connections(100), Some(Job::Connections)));
+    assert!(matches!(
+        state.take_connections(100),
+        Some(Job::Connections)
+    ));
     state.reduce(WorkerEvent::Connections(Ok((
         vec![live("example.com", None, ConnectionRoute::Proxy)],
         vec![closed],
@@ -806,9 +846,9 @@ fn closing_sends_the_id_once_and_only_for_an_active_connection() {
         "one request at a time"
     );
 
-    state.reduce(WorkerEvent::CloseConnection(Err(HelperCommandError::Client(
-        ClientError::Closed,
-    ))));
+    state.reduce(WorkerEvent::CloseConnection(Err(
+        HelperCommandError::Client(ClientError::Closed),
+    )));
     assert_eq!(state.traffic.connections.closing, None);
     assert!(state.operation_error.is_some(), "shown as other errors are");
 

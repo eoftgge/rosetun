@@ -248,10 +248,8 @@ fn close_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
         (egui::vec2(-half, -half), egui::vec2(half, half)),
         (egui::vec2(-half, half), egui::vec2(half, -half)),
     ] {
-        ui.painter().line_segment(
-            [center + from, center + to],
-            egui::Stroke::new(1.5, color),
-        );
+        ui.painter()
+            .line_segment([center + from, center + to], egui::Stroke::new(1.5, color));
     }
     response
 }
@@ -391,7 +389,10 @@ fn route_filter(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         .map(|exit| RouteFilter::Exit(exit.id.clone())),
                 );
             for option in options {
-                if ui.selectable_label(&option == selected, text(&option)).clicked() {
+                if ui
+                    .selectable_label(&option == selected, text(&option))
+                    .clicked()
+                {
                     choice = Some(option);
                 }
             }
@@ -459,31 +460,26 @@ fn row_frame(
     selected: bool,
     add: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
-    ui.scope_builder(
-        egui::UiBuilder::new().sense(egui::Sense::click()),
-        |ui| {
-            ui.style_mut().interaction.selectable_labels = false;
-            let rect = egui::Rect::from_min_size(
-                ui.cursor().min,
-                egui::vec2(ui.available_width(), height),
-            );
-            let fill = if selected {
-                Some(theme::BORDER)
-            } else if ui.response().hovered() {
-                Some(theme::INPUT)
-            } else {
-                None
-            };
-            if let Some(fill) = fill {
-                ui.painter().rect_filled(rect, theme::RADIUS_INNER, fill);
-            }
-            ui.horizontal(|ui| {
-                ui.set_height(height);
-                ui.spacing_mut().item_spacing.x = GAP;
-                add(ui);
-            });
-        },
-    )
+    ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+        ui.style_mut().interaction.selectable_labels = false;
+        let rect =
+            egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height));
+        let fill = if selected {
+            Some(theme::BORDER)
+        } else if ui.response().hovered() {
+            Some(theme::INPUT)
+        } else {
+            None
+        };
+        if let Some(fill) = fill {
+            ui.painter().rect_filled(rect, theme::RADIUS_INNER, fill);
+        }
+        ui.horizontal(|ui| {
+            ui.set_height(height);
+            ui.spacing_mut().item_spacing.x = GAP;
+            add(ui);
+        });
+    })
     .response
 }
 
@@ -543,9 +539,13 @@ fn program_row(
             ui,
             PROGRAM_COLUMNS[0],
             PROGRAM_ROW_HEIGHT,
-            RichText::new(tr!("connections-count", count = count, n = count.to_string()))
-                .small()
-                .color(theme::TEXT_MUTED),
+            RichText::new(tr!(
+                "connections-count",
+                count = count,
+                n = count.to_string()
+            ))
+            .small()
+            .color(theme::TEXT_MUTED),
             None,
         );
         route_dots(ui, state, &group.routes);
@@ -581,43 +581,48 @@ fn program_connection_row(
         &connection.host,
         connection.port,
     ));
-    let response = row_frame(ui, PROGRAM_ROW_HEIGHT, is_selected(state, connection), |ui| {
-        ui.add_space(PROGRAM_LEAD);
-        cell(
-            ui,
-            program_name_width(ui),
-            PROGRAM_ROW_HEIGHT,
-            RichText::new(&destination)
-                .small()
-                .monospace()
-                .color(theme::TEXT),
-            Some(&destination),
-        );
-        cell(
-            ui,
-            PROGRAM_COLUMNS[0],
-            PROGRAM_ROW_HEIGHT,
-            RichText::new(network_label(connection.network))
-                .small()
-                .color(theme::TEXT_MUTED),
-            None,
-        );
-        route_dots(ui, state, &[&connection.route]);
-        cell(
-            ui,
-            PROGRAM_COLUMNS[2],
-            PROGRAM_ROW_HEIGHT,
-            mono(&speed_text(list.rate(connection).map(|(down, _)| down))),
-            None,
-        );
-        cell(
-            ui,
-            PROGRAM_COLUMNS[3],
-            PROGRAM_ROW_HEIGHT,
-            mono(&duration(connection, now_ms)),
-            None,
-        );
-    });
+    let response = row_frame(
+        ui,
+        PROGRAM_ROW_HEIGHT,
+        is_selected(state, connection),
+        |ui| {
+            ui.add_space(PROGRAM_LEAD);
+            cell(
+                ui,
+                program_name_width(ui),
+                PROGRAM_ROW_HEIGHT,
+                RichText::new(&destination)
+                    .small()
+                    .monospace()
+                    .color(theme::TEXT),
+                Some(&destination),
+            );
+            cell(
+                ui,
+                PROGRAM_COLUMNS[0],
+                PROGRAM_ROW_HEIGHT,
+                RichText::new(network_label(connection.network))
+                    .small()
+                    .color(theme::TEXT_MUTED),
+                None,
+            );
+            route_dots(ui, state, &[&connection.route]);
+            cell(
+                ui,
+                PROGRAM_COLUMNS[2],
+                PROGRAM_ROW_HEIGHT,
+                mono(&speed_text(list.rate(connection).map(|(down, _)| down))),
+                None,
+            );
+            cell(
+                ui,
+                PROGRAM_COLUMNS[3],
+                PROGRAM_ROW_HEIGHT,
+                mono(&duration(connection, now_ms)),
+                None,
+            );
+        },
+    );
     select_on_click(&response, connection, actions);
 }
 

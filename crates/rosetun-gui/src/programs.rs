@@ -35,7 +35,10 @@ mod tests {
 
     #[test]
     fn file_stem_drops_the_folder_and_exe_in_any_case() {
-        assert_eq!(file_stem(r"C:\Program Files\Example\Browser.EXE"), "Browser");
+        assert_eq!(
+            file_stem(r"C:\Program Files\Example\Browser.EXE"),
+            "Browser"
+        );
         assert_eq!(file_stem("/usr/bin/example"), "example");
         assert_eq!(file_stem(r"C:\Tools\tool.exe.bak"), "tool.exe.bak");
         assert_eq!(file_stem(".exe"), "");
@@ -45,7 +48,10 @@ mod tests {
     #[test]
     fn display_name_falls_back_to_the_file_name() {
         let path = r"C:\Program Files\Example\browser.exe";
-        assert_eq!(display_name(path, Some("  Example Browser ")), "Example Browser");
+        assert_eq!(
+            display_name(path, Some("  Example Browser ")),
+            "Example Browser"
+        );
         assert_eq!(display_name(path, None), "browser");
         assert_eq!(display_name(path, Some("")), "browser");
         assert_eq!(display_name(path, Some(" \t ")), "browser");

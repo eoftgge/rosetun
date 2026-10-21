@@ -166,7 +166,12 @@ pub(super) fn file_description(path: &Path) -> Option<String> {
         return None;
     }
     let mut languages: Vec<(u16, u16)> = query(&block, r"\VarFileInfo\Translation", 2)
-        .map(|units| units.chunks_exact(2).map(|pair| (pair[0], pair[1])).collect())
+        .map(|units| {
+            units
+                .chunks_exact(2)
+                .map(|pair| (pair[0], pair[1]))
+                .collect()
+        })
         .unwrap_or_default();
     // US English in Unicode and in Windows-1252: the usual blocks of a file
     // without a translation table.
@@ -177,7 +182,10 @@ pub(super) fn file_description(path: &Path) -> Option<String> {
             &format!(r"\StringFileInfo\{language:04x}{codepage:04x}\FileDescription"),
             1,
         )?;
-        let end = units.iter().position(|unit| *unit == 0).unwrap_or(units.len());
+        let end = units
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(units.len());
         Some(String::from_utf16_lossy(&units[..end])).filter(|text| !text.is_empty())
     })
 }
@@ -192,8 +200,14 @@ fn query<'a>(block: &'a [u32], sub_block: &str, unit_bytes: usize) -> Option<&'a
     // SAFETY: block holds the data GetFileVersionInfoW wrote, name is
     // NUL-terminated, and value and length are writable for the call. On
     // success value points inside block (not a new allocation).
-    if unsafe { VerQueryValueW(block.as_ptr().cast(), name.as_ptr(), &raw mut value, &raw mut length) }
-        == 0
+    if unsafe {
+        VerQueryValueW(
+            block.as_ptr().cast(),
+            name.as_ptr(),
+            &raw mut value,
+            &raw mut length,
+        )
+    } == 0
         || value.is_null()
     {
         return None;
