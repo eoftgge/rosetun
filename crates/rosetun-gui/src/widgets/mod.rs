@@ -13,6 +13,7 @@ mod toggle;
 
 pub(crate) use buttons::{
     button_fill, button_fill_compact, link, outline_button, outline_button_compact,
+    outline_button_full,
 };
 pub(crate) use choice_card::choice_card;
 pub(crate) use combo::filter_combo;

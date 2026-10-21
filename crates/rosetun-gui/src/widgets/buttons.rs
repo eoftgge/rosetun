@@ -44,7 +44,7 @@ pub(crate) fn outline_button(
 }
 
 pub(crate) fn button_fill_compact(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
-    compact_button(ui, text, enabled, false)
+    compact_button(ui, text, enabled, false, false)
 }
 
 pub(crate) fn outline_button_compact(
@@ -52,13 +52,31 @@ pub(crate) fn outline_button_compact(
     text: &str,
     enabled: bool,
 ) -> egui::Response {
-    compact_button(ui, text, enabled, true)
+    compact_button(ui, text, enabled, true, false)
 }
 
-fn compact_button(ui: &mut egui::Ui, text: &str, enabled: bool, outlined: bool) -> egui::Response {
+/// A compact outlined button as wide as the space; a longer text ends in `…`.
+pub(crate) fn outline_button_full(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    compact_button(ui, text, enabled, true, true)
+}
+
+fn compact_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    enabled: bool,
+    outlined: bool,
+    full_width: bool,
+) -> egui::Response {
     let font = egui::FontId::new(12.0, egui::FontFamily::Name(theme::UI_SEMIBOLD.into()));
     let button =
         egui::Button::new(egui::RichText::new(text).font(font)).min_size(egui::vec2(0.0, 28.0));
+    let button = if full_width {
+        button
+            .min_size(egui::vec2(ui.available_width(), 28.0))
+            .truncate()
+    } else {
+        button
+    };
     let button = if outlined {
         button.fill(Color32::TRANSPARENT).stroke(Stroke::new(
             1.0,

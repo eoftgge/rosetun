@@ -670,7 +670,7 @@ fn expanded_programs_stay_open_across_answers() {
 }
 
 #[test]
-fn selection_follows_the_id_and_clears_when_the_connection_is_gone() {
+fn selection_follows_the_id_stays_when_closed_and_clears_when_gone() {
     use rosetun_config::ConnectionRoute;
     let mut state = connected_on_traffic();
     let mut unnamed = live("example.net", None, ConnectionRoute::Proxy);
@@ -724,6 +724,8 @@ fn selection_follows_the_id_and_clears_when_the_connection_is_gone() {
         Some(900),
         "kept by id, not by position"
     );
+    let list = &state.traffic.connections;
+    assert!(list.can_close(list.selected_connection().unwrap()));
 
     let mut closed = live("example.com", None, ConnectionRoute::Proxy);
     closed.end_unix_ms = Some(2_000);
@@ -735,6 +737,11 @@ fn selection_follows_the_id_and_clears_when_the_connection_is_gone() {
     assert!(
         state.traffic.connections.selected_connection().is_some(),
         "a closed connection stays selected"
+    );
+    let list = &state.traffic.connections;
+    assert!(
+        !list.can_close(list.selected_connection().unwrap()),
+        "a closed connection has nothing to close"
     );
 
     answer(&mut state, 103, Vec::new());

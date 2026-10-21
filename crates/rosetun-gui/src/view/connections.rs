@@ -20,54 +20,19 @@ const PROGRAM_LEAD: f32 = 16.0 + GAP + 24.0 + GAP;
 const ROUTE_FILTER_WIDTH: f32 = 180.0;
 const SEARCH_WIDTH: f32 = 240.0;
 const LIST_HEIGHT: f32 = 360.0;
-const DETAILS_WIDTH: f32 = 300.0;
-/// Narrower content puts the details under the list, so that the list keeps
-/// its columns at their least width.
-const DETAILS_BESIDE_FROM: f32 = 1040.0;
+const DETAILS_WIDTH: f32 = 480.0;
 const DETAIL_LABEL_WIDTH: f32 = 88.0;
-/// Longer hosts and names are cut in the rule buttons; the full text is on hover.
-const BUTTON_TEXT_CHARS: usize = 28;
 
-/// The list, and the selected connection's details beside it or under it.
+/// The list, and the selected connection's details in a dialog over it.
 pub(super) fn section(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
-    let Some(connection) = state.traffic.connections.selected_connection() else {
-        card(ui, state, actions);
-        return;
-    };
-    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-        actions.push(Action::SelectConnection(None));
-    }
-    let available = ui.available_width();
-    if available > DETAILS_BESIDE_FROM {
-        let list_width = available - DETAILS_WIDTH - theme::SECTION_GAP;
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = theme::SECTION_GAP;
-            ui.allocate_ui_with_layout(
-                egui::vec2(list_width, 0.0),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.set_width(list_width);
-                    card(ui, state, actions);
-                },
-            );
-            ui.allocate_ui_with_layout(
-                egui::vec2(DETAILS_WIDTH, 0.0),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.set_width(DETAILS_WIDTH);
-                    details(ui, state, connection, actions);
-                },
-            );
-        });
-    } else {
-        card(ui, state, actions);
-        ui.add_space(theme::SECTION_GAP);
-        details(ui, state, connection, actions);
+    card(ui, state, actions);
+    if let Some(connection) = state.traffic.connections.selected_connection() {
+        details(ui.ctx(), state, connection, actions);
     }
 }
 
 fn details(
-    ui: &mut egui::Ui,
+    ctx: &egui::Context,
     state: &State,
     connection: &LiveConnection,
     actions: &mut Vec<Action>,
@@ -80,93 +45,108 @@ fn details(
         &connection.host,
         connection.port,
     ));
-    widgets::card_frame().show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        ui.horizontal(|ui| {
-            let close = 22.0;
-            ui.add_sized(
-                egui::vec2((ui.available_width() - close - GAP).max(0.0), close),
-                egui::Label::new(RichText::new(&destination).strong()).truncate(),
-            )
-            .on_hover_text(&destination);
-            if close_button(ui, close)
-                .on_hover_text(tr!("connections-details-close"))
-                .clicked()
-            {
-                actions.push(Action::SelectConnection(None));
+    let mut dismissed = false;
+    let response = egui::Modal::new(egui::Id::new("connection_details"))
+        .frame(widgets::modal_frame())
+        .show(ctx, |ui| {
+            ui.set_width(DETAILS_WIDTH);
+            ui.horizontal(|ui| {
+                let close = 22.0;
+                ui.add_sized(
+                    egui::vec2((ui.available_width() - close - GAP).max(0.0), close),
+                    egui::Label::new(RichText::new(&destination).monospace().strong()).truncate(),
+                )
+                .on_hover_text(&destination);
+                if close_button(ui, close)
+                    .on_hover_text(tr!("connections-details-close"))
+                    .clicked()
+                {
+                    dismissed = true;
+                }
+            });
+            ui.add_space(12.0);
+            if connection.end_unix_ms.is_some() {
+                detail_row(ui, &tr!("connections-state"), |ui| {
+                    ui.label(RichText::new(tr!("connections-state-closed")).color(theme::TEXT));
+                });
             }
-        });
-        ui.add_space(10.0);
-        detail_row(ui, &tr!("connections-route"), |ui| {
-            ui.label(
-                RichText::new(state.connection_route_label(&connection.route))
-                    .color(route_color(&connection.route)),
-            );
-        });
-        detail_row(ui, &tr!("connections-network"), |ui| {
-            ui.label(RichText::new(network_label(connection.network)).color(theme::TEXT));
-        });
-        detail_row(ui, &tr!("connections-address"), |ui| {
-            ui.add(
-                egui::Label::new(RichText::new(&destination).monospace().color(theme::TEXT))
-                    .selectable(true)
-                    .wrap(),
-            );
-        });
-        detail_row(ui, &tr!("connections-program"), |ui| {
-            ui.add(egui::Label::new(RichText::new(&name).color(theme::TEXT)).wrap());
-            if let Some(path) = &path {
+            detail_row(ui, &tr!("connections-route"), |ui| {
+                ui.label(
+                    RichText::new(state.connection_route_label(&connection.route))
+                        .color(route_color(&connection.route)),
+                );
+            });
+            detail_row(ui, &tr!("connections-network"), |ui| {
+                ui.label(RichText::new(network_label(connection.network)).color(theme::TEXT));
+            });
+            detail_row(ui, &tr!("connections-address"), |ui| {
                 ui.add(
-                    egui::Label::new(RichText::new(path).small().color(theme::TEXT_DIM))
+                    egui::Label::new(RichText::new(&destination).monospace().color(theme::TEXT))
                         .selectable(true)
                         .wrap(),
                 );
-            }
-        });
-        let now = crate::display::now_unix();
-        detail_row(ui, &tr!("connections-started"), |ui| {
-            ui.label(
-                RichText::new(crate::i18n::updated_ago(
-                    connection.start_unix_ms / 1000,
-                    now,
-                ))
-                .color(theme::TEXT),
-            );
-        });
-        detail_row(ui, &tr!("connections-transferred"), |ui| {
-            ui.label(
-                RichText::new(crate::i18n::traffic_rates(
-                    &crate::i18n::bytes(connection.download),
-                    &crate::i18n::bytes(connection.upload),
-                ))
-                .monospace()
-                .color(theme::TEXT),
-            );
-        });
-        detail_row(ui, &tr!("connections-speed"), |ui| {
-            let speed = list.rate(connection).map_or_else(
-                || "·".to_owned(),
-                |(down, up)| {
-                    crate::i18n::traffic_rates(&crate::i18n::rate(down), &crate::i18n::rate(up))
-                },
-            );
-            ui.label(RichText::new(speed).monospace().color(theme::TEXT));
-        });
+            });
+            detail_row(ui, &tr!("connections-program"), |ui| {
+                ui.add(egui::Label::new(RichText::new(&name).color(theme::TEXT)).wrap());
+                if let Some(path) = &path {
+                    ui.add(
+                        egui::Label::new(RichText::new(path).small().color(theme::TEXT_DIM))
+                            .selectable(true)
+                            .wrap(),
+                    );
+                }
+            });
+            let now = crate::display::now_unix();
+            detail_row(ui, &tr!("connections-started"), |ui| {
+                ui.label(
+                    RichText::new(crate::i18n::updated_ago(
+                        connection.start_unix_ms / 1000,
+                        now,
+                    ))
+                    .color(theme::TEXT),
+                );
+            });
+            detail_row(ui, &tr!("connections-transferred"), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(crate::i18n::traffic_rates(
+                            &crate::i18n::bytes(connection.download),
+                            &crate::i18n::bytes(connection.upload),
+                        ))
+                        .monospace()
+                        .color(theme::TEXT),
+                    )
+                    .extend(),
+                );
+            });
+            detail_row(ui, &tr!("connections-speed"), |ui| {
+                let speed = list.rate(connection).map_or_else(
+                    || "·".to_owned(),
+                    |(down, up)| {
+                        crate::i18n::traffic_rates(
+                            &crate::i18n::rate(down),
+                            &crate::i18n::rate(up),
+                        )
+                    },
+                );
+                ui.add(
+                    egui::Label::new(RichText::new(speed).monospace().color(theme::TEXT)).extend(),
+                );
+            });
 
-        ui.add_space(6.0);
-        divider(ui);
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(tr!("connections-create-rule"))
-                .small()
-                .color(theme::TEXT_DIM),
-        );
-        ui.add_space(6.0);
-        let can_add = state.can_edit_rules();
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
-            let site = tr!("connections-rule-site", host = shortened(&host));
-            if widgets::outline_button_compact(ui, &site, can_add)
+            ui.add_space(6.0);
+            divider(ui);
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new(tr!("connections-create-rule"))
+                    .small()
+                    .color(theme::TEXT_DIM),
+            );
+            ui.add_space(6.0);
+            let can_add = state.can_edit_rules();
+            ui.spacing_mut().item_spacing.y = GAP;
+            let site = tr!("connections-rule-site", host = host.as_str());
+            if widgets::outline_button_full(ui, &site, can_add)
                 .on_hover_text(&host)
                 .clicked()
             {
@@ -175,38 +155,40 @@ fn details(
                 )));
             }
             if let Some(process) = connection.process.as_deref() {
-                let program = tr!("connections-rule-program", name = shortened(&name));
-                if widgets::outline_button_compact(ui, &program, can_add)
+                let program = tr!("connections-rule-program", name = name.as_str());
+                if widgets::outline_button_full(ui, &program, can_add)
                     .on_hover_text(path.as_deref().unwrap_or_default())
                     .clicked()
                 {
                     actions.push(Action::OpenAddRuleFor(crate::state::program_rule(process)));
                 }
             }
-        });
 
-        if connection.end_unix_ms.is_none() {
-            ui.add_space(12.0);
-            let closing = list.closing.as_deref() == Some(connection.id.as_str());
-            let label = if closing {
-                tr!("connections-closing")
-            } else {
-                tr!("connections-close")
-            };
-            let enabled = list.closing.is_none()
-                && !connection.id.is_empty()
-                && state.connections_available();
-            if widgets::outline_button(ui, label, enabled).clicked() {
-                actions.push(Action::CloseConnection(connection.id.clone()));
+            if list.can_close(connection) {
+                ui.add_space(12.0);
+                divider(ui);
+                ui.add_space(12.0);
+                let closing = list.closing.as_deref() == Some(connection.id.as_str());
+                let label = if closing {
+                    tr!("connections-closing")
+                } else {
+                    tr!("connections-close")
+                };
+                let enabled = list.closing.is_none() && state.connections_available();
+                if widgets::outline_button(ui, label, enabled).clicked() {
+                    actions.push(Action::CloseConnection(connection.id.clone()));
+                }
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.label(
+                    RichText::new(tr!("connections-close-note"))
+                        .small()
+                        .color(theme::TEXT_DIM),
+                );
             }
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(tr!("connections-close-note"))
-                    .small()
-                    .color(theme::TEXT_DIM),
-            );
-        }
-    });
+        });
+    if dismissed || response.should_close() {
+        actions.push(Action::SelectConnection(None));
+    }
 }
 
 fn detail_row(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui)) {
@@ -252,15 +234,6 @@ fn close_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
             .line_segment([center + from, center + to], egui::Stroke::new(1.5, color));
     }
     response
-}
-
-fn shortened(text: &str) -> String {
-    if text.chars().count() <= BUTTON_TEXT_CHARS {
-        return text.to_owned();
-    }
-    let mut short: String = text.chars().take(BUTTON_TEXT_CHARS - 1).collect();
-    short.push('…');
-    short
 }
 
 fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -311,6 +284,7 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 
 fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let list = &state.traffic.connections;
+    let mut beside = false;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
         if let Some(view) = widgets::segmented(
@@ -346,12 +320,27 @@ fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetConnectionsTab(tab));
         }
         route_filter(ui, state, actions);
-        let mut filter = list.filter.clone();
-        widgets::search_field(ui, &mut filter, &tr!("connections-filter"), SEARCH_WIDTH);
-        if filter != list.filter {
-            actions.push(Action::SetConnectionsFilter(filter));
+        // On the same row only when the whole field fits; otherwise it takes the next one.
+        if ui.available_size_before_wrap().x >= SEARCH_WIDTH + GAP {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                search(ui, state, SEARCH_WIDTH, actions);
+            });
+            beside = true;
         }
     });
+    if !beside {
+        ui.add_space(GAP);
+        search(ui, state, ui.available_width(), actions);
+    }
+}
+
+fn search(ui: &mut egui::Ui, state: &State, width: f32, actions: &mut Vec<Action>) {
+    let list = &state.traffic.connections;
+    let mut filter = list.filter.clone();
+    widgets::search_field(ui, &mut filter, &tr!("connections-filter"), width);
+    if filter != list.filter {
+        actions.push(Action::SetConnectionsFilter(filter));
+    }
 }
 
 fn route_filter(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {

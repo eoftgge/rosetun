@@ -212,6 +212,13 @@ impl ConnectionsList {
         self.rates.get(&connection.id).copied()
     }
 
+    /// Still open, so the service can close it.
+    pub(crate) fn can_close(&self, connection: &LiveConnection) -> bool {
+        !connection.id.is_empty()
+            && connection.end_unix_ms.is_none()
+            && self.active.iter().any(|active| active.id == connection.id)
+    }
+
     /// The selected connection, in either tab.
     pub(crate) fn selected_connection(&self) -> Option<&LiveConnection> {
         let id = self.selected.as_deref()?;
