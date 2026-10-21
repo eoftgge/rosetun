@@ -11,10 +11,7 @@ mod tests {
     #[test]
     fn hero_title_tells_an_unavailable_service_from_one_not_answered_yet() {
         let mut state = State::default();
-        assert_eq!(
-            hero_title(&state),
-            (tr!("checking"), theme::DISCONNECTED)
-        );
+        assert_eq!(hero_title(&state), (tr!("checking"), theme::DISCONNECTED));
         state.helper_error = Some(rosetun_ipc::ClientError::Closed);
         assert_eq!(
             hero_title(&state),
@@ -177,7 +174,8 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                 }
                             }
                             if let ConnectionState::Failed { failure_kind, .. }
-                            | ConnectionState::FailedProtected { failure_kind, .. } = &status.state
+                            | ConnectionState::FailedProtected { failure_kind, .. } =
+                                &status.state
                             {
                                 if let Some(kind) = failure_kind {
                                     let (title, hint) = crate::i18n::connection_failure(
@@ -546,8 +544,7 @@ fn failure_details(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     let copied = ui
         .data(|data| data.get_temp::<f64>(id))
         .is_some_and(|at| now - at < COPIED_FOR);
-    if widgets::outline_button(ui, if copied { tr!("copied") } else { tr!("copy") }, true)
-        .clicked()
+    if widgets::outline_button(ui, if copied { tr!("copied") } else { tr!("copy") }, true).clicked()
     {
         ui.ctx().copy_text(details);
         ui.data_mut(|data| data.insert_temp(id, now));

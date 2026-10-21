@@ -166,7 +166,10 @@ fn outline(rgba: &mut [u8], size: usize) {
                 && rgba[(py as usize * size + px as usize) * 4 + 3] >= 128
         })
         .collect();
-    let grown: Vec<bool> = cells.clone().map(|(x, y)| near(&solid, x, y, radius)).collect();
+    let grown: Vec<bool> = cells
+        .clone()
+        .map(|(x, y)| near(&solid, x, y, radius))
+        .collect();
     let mut outside = vec![false; grown.len()];
     let mut queue = vec![(0, 0)];
     while let Some((x, y)) = queue.pop() {

@@ -213,11 +213,14 @@ fn redact_addresses(text: &str) -> String {
                 })
                 .or_else(|| {
                     // Go errors put a colon after the port: `dial tcp <ip>:443: i/o timeout`.
-                    address.trim_end_matches(['.', ':']).rsplit_once(':').and_then(|(head, _)| {
-                        head.parse::<std::net::Ipv4Addr>()
-                            .ok()
-                            .map(|ip| (IpAddr::V4(ip), head.len()))
-                    })
+                    address
+                        .trim_end_matches(['.', ':'])
+                        .rsplit_once(':')
+                        .and_then(|(head, _)| {
+                            head.parse::<std::net::Ipv4Addr>()
+                                .ok()
+                                .map(|ip| (IpAddr::V4(ip), head.len()))
+                        })
                 });
             let safe_ip = ip.is_some_and(|(ip, _)| {
                 matches!(ip.to_string().as_str(), "127.0.0.1" | "::1" | "0.0.0.0")
