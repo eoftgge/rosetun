@@ -1978,7 +1978,12 @@ Test-Step 'hysteria2' 'tunnel carries traffic' -Note (Format-Egress $egress) { $
 Test-Step 'hysteria2' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
 Test-Step 'hysteria2' 'IPv6 outside the tunnel is blocked' { -not (Test-RosetunIpv6Egress) }
 $probe = Invoke-RosetunProbe 'request-hysteria2.json'
-Test-Step 'hysteria2' 'server check works under protection' -Note "exit $($probe.ExitCode)" {
+# The helper answers some refusals (busy, no physical interface, no control
+# port) without a log line, so the CLI's own words are the only trace.
+$probeLines = @(($probe.Output -replace "\x1b\[[0-9;?]*[A-Za-z]", '') -split '\r?\n' |
+    Where-Object { $_.Trim() } | Select-Object -Last 3)
+Test-Step 'hysteria2' 'server check works under protection' `
+    -Note ("exit {0}: {1}" -f $probe.ExitCode, ($probeLines -join ' | ')) {
     $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
 }
 Disconnect-RosetunTunnel | Out-Null
