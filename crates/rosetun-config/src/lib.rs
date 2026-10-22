@@ -23,7 +23,8 @@ pub use list_validation::{
 };
 pub use node::{
     Hysteria2Params, Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
-    TlsParams, Transport, TrojanParams, VlessParams, VmessParams, node_country, uses_xray,
+    TlsParams, Transport, TrojanParams, VlessParams, VmessParams, XhttpExtra, XhttpMode,
+    XhttpRange, XhttpXmux, node_country, uses_xray,
 };
 pub use report::{ip_literals, redact_report_text};
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
@@ -40,7 +41,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 5;
+pub const CONFIG_VERSION: u32 = 6;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -241,6 +242,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             2 => migrate_2_to_3(config),
             3 => migrate_3_to_4(config),
             4 => migrate_4_to_5(config),
+            5 => migrate_5_to_6(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -275,6 +277,10 @@ fn migrate_3_to_4(config: &mut Map<String, Value>) {
 
 fn migrate_4_to_5(config: &mut Map<String, Value>) {
     config.insert("exits".to_owned(), Value::Array(Vec::new()));
+}
+
+fn migrate_5_to_6(_config: &mut Map<String, Value>) {
+    // Format 6 adds the XHTTP transport; an older release would drop such nodes on save.
 }
 
 impl AppConfig {

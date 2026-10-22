@@ -3,8 +3,9 @@ mod support;
 use rosetun_config::{
     AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId, ExitTarget,
     FormatError, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId, Outbound,
-    Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings, SubscriptionId, TlsMode,
-    TlsParams, Transport, from_json,
+    RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
+    SubscriptionId, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode,
+    XhttpRange, XhttpXmux, from_json,
 };
 use serde_json::{Value, json};
 
@@ -15,6 +16,7 @@ const V2: &[u8] = include_bytes!("fixtures/v2.json");
 const V3: &[u8] = include_bytes!("fixtures/v3.json");
 const V4: &[u8] = include_bytes!("fixtures/v4.json");
 const V5: &[u8] = include_bytes!("fixtures/v5.json");
+const V6: &[u8] = include_bytes!("fixtures/v6.json");
 
 fn current_config() -> AppConfig {
     let mut config = support::legacy_config();
@@ -111,6 +113,56 @@ fn format_five_config() -> AppConfig {
     config
 }
 
+fn range(from: u32, to: u32) -> Option<XhttpRange> {
+    Some(XhttpRange { from, to })
+}
+
+fn format_six_config() -> AppConfig {
+    let mut config = format_five_config();
+    config.subscriptions[1].nodes.push(Node {
+        id: NodeId::new("vless-xhttp"),
+        name: "VLESS XHTTP".to_owned(),
+        server: "192.0.2.30".to_owned(),
+        port: 443,
+        outbound: Outbound::Vless(VlessParams {
+            uuid: "00000000-0000-4000-8000-000000000030".to_owned(),
+            flow: None,
+        }),
+        stream: StreamSettings {
+            transport: Transport::Xhttp {
+                path: "/example-xhttp".to_owned(),
+                host: Some("xhttp.example.com".to_owned()),
+                mode: XhttpMode::StreamOne,
+                extra: XhttpExtra {
+                    headers: [("X-Example".to_owned(), "example-value".to_owned())].into(),
+                    x_padding_bytes: range(100, 1000),
+                    no_grpc_header: true,
+                    no_sse_header: true,
+                    sc_max_each_post_bytes: range(1_000_000, 1_000_000),
+                    sc_min_posts_interval_ms: range(10, 50),
+                    sc_max_buffered_posts: Some(30),
+                    xmux: Some(XhttpXmux {
+                        max_concurrency: range(16, 32),
+                        max_connections: None,
+                        c_max_reuse_times: range(0, 0),
+                        h_max_request_times: range(600, 900),
+                        h_max_reusable_secs: range(1800, 3000),
+                        h_keep_alive_period: Some(0),
+                    }),
+                },
+            },
+            tls: TlsMode::Reality(RealityParams {
+                sni: Some("example.com".to_owned()),
+                public_key: "test-public-key".to_owned(),
+                short_id: Some("0123abcd".to_owned()),
+                fingerprint: Some("chrome".to_owned()),
+            }),
+        },
+        raw: None,
+    });
+    config
+}
+
 fn expected_migrated_legacy_config() -> AppConfig {
     let mut config = support::legacy_config();
     config.version = CONFIG_VERSION;
@@ -125,8 +177,8 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 5,
-        "released fixtures require format version five"
+        CONFIG_VERSION, 6,
+        "released fixtures require format version six"
     );
     let expected = expected_migrated_legacy_config();
 
@@ -149,8 +201,8 @@ fn released_configurations_migrate_to_the_expected_configuration() {
 
 #[test]
 fn current_configuration_fixture_guards_the_serialized_format() {
-    let expected = format_five_config();
-    let (loaded, migrated_from) = from_json(V5).expect("current fixture should load");
+    let expected = format_six_config();
+    let (loaded, migrated_from) = from_json(V6).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
@@ -181,8 +233,46 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V5),
-        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v5.json"
+        value(V6),
+        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v6.json"
+    );
+}
+
+#[test]
+fn version_five_loads_and_saves_as_version_six() {
+    let (config, migrated_from) = from_json(V5).expect("version five should migrate");
+    assert_eq!(migrated_from, Some(5));
+    assert_eq!(config, format_five_config());
+
+    let mut expected = value(V5);
+    expected["version"] = json!(6);
+    assert_eq!(
+        serde_json::to_value(&config).expect("serialize migrated configuration"),
+        expected
+    );
+}
+
+#[test]
+fn xhttp_without_extra_omits_it_and_reads_defaults() {
+    let mut input = value(V6);
+    let nodes = &mut input["subscriptions"][1]["nodes"];
+    let last = nodes.as_array().unwrap().len() - 1;
+    nodes[last]["stream"]["transport"] = json!({ "xhttp": { "path": "/example-xhttp" } });
+
+    let (config, _) = from_json(&serde_json::to_vec(&input).unwrap()).expect("minimal XHTTP");
+    let node = config.subscriptions[1].nodes.last().unwrap();
+    assert_eq!(
+        node.stream.transport,
+        Transport::Xhttp {
+            path: "/example-xhttp".to_owned(),
+            host: None,
+            mode: XhttpMode::Auto,
+            extra: XhttpExtra::default(),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&node.stream.transport).unwrap(),
+        json!({ "xhttp": { "path": "/example-xhttp", "mode": "auto" } })
     );
 }
 

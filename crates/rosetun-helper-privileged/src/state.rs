@@ -2893,7 +2893,9 @@ fn node_with_endpoint(node: &Node, endpoint: IpAddr) -> Node {
         }
 
         match &mut prepared.stream.transport {
-            Transport::Ws { host, .. } | Transport::HttpUpgrade { host, .. } => {
+            Transport::Ws { host, .. }
+            | Transport::HttpUpgrade { host, .. }
+            | Transport::Xhttp { host, .. } => {
                 host.get_or_insert_with(|| node.server.clone());
             }
             Transport::Tcp | Transport::Grpc { .. } => {}

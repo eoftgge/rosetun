@@ -143,6 +143,7 @@ pub fn node_transport(node: &Node) -> &'static str {
         Transport::Ws { .. } => "ws",
         Transport::Grpc { .. } => "grpc",
         Transport::HttpUpgrade { .. } => "httpupgrade",
+        Transport::Xhttp { .. } => "xhttp",
     }
 }
 

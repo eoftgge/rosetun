@@ -333,6 +333,9 @@ pub(crate) fn stable_id(node: &Node) -> String {
             host.as_deref().unwrap_or(""),
             "",
         ),
+        Transport::Xhttp { path, host, .. } => {
+            ("xhttp", path.as_str(), host.as_deref().unwrap_or(""), "")
+        }
     };
     let (security, sni) = match &node.stream.tls {
         TlsMode::Plain => ("none", ""),

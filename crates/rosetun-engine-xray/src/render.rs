@@ -184,6 +184,9 @@ fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, Engi
             }
             stream["httpupgradeSettings"] = options;
         }
+        Transport::Xhttp { .. } => {
+            return Err(EngineError::Unsupported("XHTTP is not rendered yet".into()));
+        }
     }
     match &node.stream.tls {
         TlsMode::Plain => {}

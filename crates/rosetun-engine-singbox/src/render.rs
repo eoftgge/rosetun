@@ -304,7 +304,7 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
     ) {
         outbound.insert("tls".into(), tls);
     }
-    if let Some(transport) = transport_section(&node.stream.transport) {
+    if let Some(transport) = transport_section(&node.stream.transport)? {
         outbound.insert("transport".into(), transport);
     }
 
@@ -359,8 +359,8 @@ fn tls_section(mode: &TlsMode, use_utls: bool) -> Option<Value> {
     }
 }
 
-fn transport_section(transport: &Transport) -> Option<Value> {
-    match transport {
+fn transport_section(transport: &Transport) -> Result<Option<Value>, EngineError> {
+    Ok(match transport {
         Transport::Tcp => None,
         Transport::Ws { path, host } => {
             let mut value = json!({ "type": "ws", "path": path });
@@ -379,7 +379,12 @@ fn transport_section(transport: &Transport) -> Option<Value> {
             }
             Some(value)
         }
-    }
+        Transport::Xhttp { .. } => {
+            return Err(EngineError::Unsupported(
+                "XHTTP is not supported by the sing box backend".into(),
+            ));
+        }
+    })
 }
 
 #[cfg(test)]

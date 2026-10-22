@@ -2,7 +2,7 @@
 
 An early test build of Rosetun 0.3. Its two main features are ready to try: **Lockdown**, no internet without the tunnel, also while disconnected, after a restart and if the Rosetun service stops; and the **Traffic** tab with the live list of connections, where each one goes and why. This is an alpha for testing; **0.2.0 stays the supported release**, and Rosetun 0.2.0 does not offer this build as an update.
 
-Settings keep their format, so nothing is converted. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Settings move to a new format on first start (see What's new). Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
 **Turn Lockdown off before going back to 0.2.0.** 0.2.0 does not know Lockdown: it can neither remove it nor connect while it is on, and the computer stays offline. If you already went back, install this build again and turn Lockdown off, or run `rosetun reset-firewall` from it as administrator. Uninstalling this build removes Lockdown too.
 
@@ -30,6 +30,7 @@ Settings keep their format, so nothing is converted. Please report what breaks i
 - **The first connection after starting Windows** no longer fails when Windows Defender is slow to check sing-box.
 - **"Server name not found"** instead of "could not set up routing" when the server's address cannot be looked up; it no longer suggests turning off another VPN.
 - **Dialog buttons are on the right**, the main one last, in every dialog.
+- **Settings format 6.** Settings are converted on first start; an older Rosetun, 0.2.0 included, then refuses to read them with "UnsupportedVersion" and does not overwrite them.
 
 ## Known issues
 
@@ -58,7 +59,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 Ранняя тестовая сборка Rosetun 0.3. Две её главные функции уже можно попробовать. **Lockdown**: без туннеля интернета нет, и без подключения, и после перезагрузки, и если служба Rosetun остановится. Вкладка **Трафик** с живым списком соединений: куда идёт каждое и почему. Это альфа для тестирования; **поддерживаемый выпуск по-прежнему 0.2.0**, и Rosetun 0.2.0 не предлагает эту сборку как обновление.
 
-Формат настроек не изменился, ничего не преобразуется. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Настройки при первом запуске переходят на новый формат (см. «Что нового»). Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
 **Перед возвратом на 0.2.0 выключите Lockdown.** 0.2.0 не знает про Lockdown: она не может ни снять его, ни подключиться, пока он включён, и компьютер остаётся без сети. Если вы уже вернулись, установите эту сборку снова и выключите Lockdown или выполните её `rosetun reset-firewall` от имени администратора. Удаление этой сборки тоже снимает Lockdown.
 
@@ -86,6 +87,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 - **Первое подключение после запуска Windows** больше не срывается, когда Защитник Windows долго проверяет sing-box.
 - **«Не удалось найти адрес сервера»** вместо «не удалось настроить маршрутизацию», когда адрес сервера не находится; совета выключить другой VPN при этом больше нет.
 - **Кнопки окон справа**, основная крайняя, во всех окнах.
+- **Формат настроек 6.** Настройки преобразуются при первом запуске; более старый Rosetun, в том числе 0.2.0, после этого откажется их читать с ошибкой «UnsupportedVersion» и не перезапишет их.
 
 ### Известные проблемы
 
