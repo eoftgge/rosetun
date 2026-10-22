@@ -2,7 +2,8 @@ use eframe::egui::{self, RichText};
 use rosetun_config::AppConfig;
 
 use crate::errors;
-use crate::state::{Action, AddDialog, redact};
+use crate::icons::{self, Icon};
+use crate::state::{Action, AddDialog, QrSource, QrStage, redact};
 use crate::{constants, display, theme, widgets};
 
 pub(crate) fn show(
@@ -19,13 +20,14 @@ pub(crate) fn show(
             ui.colored_label(theme::TEXT_MUTED, tr!("add-subtitle"));
             ui.add_space(18.0);
             ui.label(tr!("subscription-url"));
+            let editable = !dialog.busy && !dialog.qr.busy();
             ui.horizontal(|ui| {
                 let input = ui.add_enabled(
-                    !dialog.busy,
+                    editable,
                     egui::TextEdit::singleline(&mut dialog.url)
                         .id(egui::Id::new("subscription_url_input"))
                         .hint_text(constants::URL_PLACEHOLDER)
-                        .desired_width((ui.available_width() - 90.0).max(120.0)),
+                        .desired_width((ui.available_width() - 210.0).max(120.0)),
                 );
                 if dialog.focus_url {
                     input.request_focus();
@@ -33,12 +35,15 @@ pub(crate) fn show(
                 }
                 if input.changed() {
                     dialog.error = None;
+                    dialog.qr.error = None;
                 }
-                if widgets::outline_button(ui, tr!("paste"), !dialog.busy).clicked() {
+                if widgets::outline_button(ui, tr!("paste"), editable).clicked() {
                     input.request_focus();
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                 }
+                qr_menu(ui, dialog, editable, actions);
             });
+            qr_status(ui, dialog, actions);
             ui.add(egui::Label::new(RichText::new(tr!("url-help")).color(theme::TEXT_DIM)).wrap());
             let normalized = rosetun_core::normalize_subscription_url(&dialog.url);
             if !dialog.url.trim().is_empty() {
@@ -120,7 +125,7 @@ pub(crate) fn show(
                     } else {
                         tr!("add")
                     },
-                    !dialog.busy && normalized.is_ok(),
+                    editable && normalized.is_ok(),
                 )
                 .clicked()
                 {
@@ -134,6 +139,94 @@ pub(crate) fn show(
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAdd);
     }
+}
+
+fn qr_menu(ui: &mut egui::Ui, dialog: &AddDialog, enabled: bool, actions: &mut Vec<Action>) {
+    let reading = dialog.qr.stage == QrStage::Reading;
+    let label = if reading {
+        tr!("qr-reading")
+    } else {
+        // Room for the chevron painted over the button's right edge.
+        format!("{}     ", tr!("qr-code"))
+    };
+    let response = widgets::outline_button(ui, label, enabled);
+    if !reading {
+        icons::paint(
+            ui.painter(),
+            egui::pos2(response.rect.right() - 14.0, response.rect.center().y),
+            Icon::Chevron { open: true },
+            if enabled {
+                theme::TEXT_DIM
+            } else {
+                theme::BORDER_STRONG
+            },
+        );
+    }
+    let mut sources = vec![
+        (tr!("qr-from-file"), QrSource::File),
+        (tr!("qr-from-clipboard"), QrSource::Clipboard),
+    ];
+    if cfg!(windows) {
+        sources.push((tr!("qr-from-screen"), QrSource::ScreenClip));
+    }
+    widgets::menu_popup(&response).show(|ui| {
+        ui.set_width(230.0);
+        for (label, source) in sources {
+            if widgets::menu_item(
+                ui,
+                widgets::MenuItem {
+                    label: &label,
+                    enabled,
+                    selected: false,
+                    danger: false,
+                    note: None,
+                },
+            )
+            .clicked()
+            {
+                actions.push(Action::ReadQr(source));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// The screen clip wait, the links to choose from and a QR error, right under the link field.
+fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
+    if matches!(dialog.qr.stage, QrStage::ScreenClip(_)) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.colored_label(theme::TEXT_MUTED, tr!("qr-select-region"));
+            if widgets::outline_button(ui, tr!("cancel"), true).clicked() {
+                actions.push(Action::CancelQr);
+            }
+        });
+    }
+    if let Some(error) = dialog.qr.error {
+        ui.add(
+            egui::Label::new(
+                RichText::new(errors::qr(crate::i18n::language(), error)).color(theme::ERROR),
+            )
+            .wrap(),
+        );
+    }
+    if !dialog.qr.choices.is_empty() {
+        ui.add_space(6.0);
+        ui.colored_label(theme::TEXT_MUTED, tr!("qr-choose-link"));
+        for (index, link) in dialog.qr.choices.iter().enumerate() {
+            if widgets::outline_button(ui, choice_label(index, link), !dialog.busy).clicked() {
+                actions.push(Action::ChooseQrLink(index));
+            }
+        }
+    }
+}
+
+/// The host only: the path and query carry the subscription token.
+fn choice_label(index: usize, link: &str) -> String {
+    let host = rosetun_core::normalize_subscription_url(link)
+        .map(|url| rosetun_core::redacted_subscription_url(&url))
+        .unwrap_or_else(|_| "…".into());
+    format!("{}. {host}", index + 1)
 }
 
 fn uses_plain_http(normalized: &str) -> bool {
@@ -162,6 +255,14 @@ fn form_error(config: &AppConfig, dialog: &AddDialog, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qr_choices_show_the_host_and_hide_the_token() {
+        let label = choice_label(1, "happ://add/https://sub.example.com/private-token?key=secret");
+        assert_eq!(label, "2. https://sub.example.com/…");
+        let label = choice_label(0, "sub.example.com/private-token");
+        assert_eq!(label, "1. https://sub.example.com/…");
+    }
 
     #[test]
     fn http_warning_uses_the_normalized_import_url() {

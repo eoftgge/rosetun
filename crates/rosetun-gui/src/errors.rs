@@ -10,6 +10,7 @@ use rosetun_ipc::{ClientError, ConnectRequestError, ErrorCode};
 use rosetun_processes::ProcessListError;
 
 use crate::display;
+use crate::qr::QrError;
 use crate::i18n::{Language, tr_in};
 use crate::worker::{ConfigWorkerError, HelperCommandError};
 use fluent_bundle::FluentArgs;
@@ -557,6 +558,21 @@ pub(crate) fn skip_reason(language: Language, reason: &SkipReason) -> String {
         SkipReason::ServiceRecord => {
             tr_in(language, "error-skip-service-record", &FluentArgs::new())
         }
+    }
+}
+
+pub(crate) fn qr(language: Language, error: QrError) -> String {
+    let args = FluentArgs::new();
+    match error {
+        QrError::Unreadable => tr_in(language, "error-qr-unreadable", &args),
+        QrError::NotImage => tr_in(language, "error-qr-not-image", &args),
+        QrError::TooLarge => tr_in(language, "error-qr-too-large", &args),
+        QrError::NotFound => tr_in(language, "error-qr-not-found", &args),
+        QrError::NotSubscription => tr_in(language, "error-qr-not-subscription", &args),
+        QrError::NoClipboardImage => tr_in(language, "error-qr-no-clipboard-image", &args),
+        QrError::Clipboard => tr_in(language, "error-qr-clipboard", &args),
+        QrError::ScreenClipUnavailable => tr_in(language, "error-qr-screen-clip-unavailable", &args),
+        QrError::ScreenClipTimedOut => tr_in(language, "error-qr-screen-clip-timed-out", &args),
     }
 }
 

@@ -14,6 +14,9 @@ mod instance;
 mod language;
 #[cfg(windows)]
 #[allow(unsafe_code)]
+mod screen_clip;
+#[cfg(windows)]
+#[allow(unsafe_code)]
 mod system_checks;
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -28,6 +31,8 @@ pub use autostart::{autostart_enabled, disable_autostart, enable_autostart};
 pub use instance::{Activation, Instance, acquire};
 #[cfg(windows)]
 pub use language::user_language_is_russian;
+#[cfg(windows)]
+pub use screen_clip::{clipboard_sequence, start_screen_clip};
 #[cfg(windows)]
 pub use system_checks::{proxy_settings, windivert_running};
 #[cfg(windows)]

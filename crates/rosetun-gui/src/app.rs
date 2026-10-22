@@ -298,6 +298,10 @@ impl App {
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
             Job::SetLockdown(enabled) => self.workers.set_lockdown(enabled),
             Job::Add { input, options } => self.workers.add(input, options),
+            Job::ReadQr { request, source } => self.workers.read_qr(request, source),
+            Job::PollScreenClip { request, sequence } => {
+                self.workers.poll_screen_clip(request, sequence);
+            }
             Job::Update(id) => self.workers.update(id),
             Job::UpdateList(id) => self.workers.update_list(id),
             Job::UpdateListManual(id) => self.workers.update_list_manual(id),
@@ -427,6 +431,9 @@ impl eframe::App for App {
             self.dispatch(job);
         }
         if let Some(job) = self.state.take_lockdown_lan() {
+            self.dispatch(job);
+        }
+        if let Some(job) = self.state.take_screen_clip_poll(display::now_unix()) {
             self.dispatch(job);
         }
         // A hidden window runs `logic` only, so the schedule must be requested here, not in `ui`.

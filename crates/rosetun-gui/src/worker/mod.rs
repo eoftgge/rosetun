@@ -33,6 +33,7 @@ use rosetun_ipc::{
 };
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
+use crate::qr::QrError;
 use crate::state::{ExitInputs, ExitRoute};
 
 const CLIENT_NAME: &str = concat!("rosetun-gui/", env!("CARGO_PKG_VERSION"));
@@ -153,6 +154,16 @@ pub(crate) enum WorkerEvent {
         result: Result<(), HelperCommandError>,
     },
     Add(Result<(Subscription, UpdateReport), AddFromUrlError>),
+    /// `None` when the file dialog was closed without a choice.
+    Qr {
+        request: u64,
+        result: Option<Result<Vec<String>, QrError>>,
+    },
+    /// The screen clip has not reached the clipboard yet; `sequence` is the number to wait past.
+    QrScreenClip {
+        request: u64,
+        sequence: u32,
+    },
     BrowsedListFile(Option<PathBuf>),
     AddList(Result<(List, Option<usize>), ListError>),
     ListAvailability {
@@ -224,6 +235,7 @@ struct ConfigPublisher {
 mod helper;
 mod lists;
 mod programs;
+mod qr;
 #[cfg(windows)]
 mod report;
 mod rules;

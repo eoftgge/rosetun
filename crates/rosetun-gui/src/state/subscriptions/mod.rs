@@ -12,8 +12,12 @@ use crate::reorder::drop_target;
 use crate::worker::WorkerEvent;
 
 mod checks;
+mod qr;
 
 pub(crate) use checks::PingResult;
+#[cfg(test)]
+pub(in crate::state) use qr::SCREEN_CLIP_TIMEOUT;
+pub(crate) use qr::{QrImport, QrSource, QrStage};
 
 /// Default refresh interval when the provider names none.
 const AUTO_UPDATE_HOURS: u64 = 12;
@@ -69,6 +73,7 @@ pub(crate) struct AddDialog {
     pub(crate) busy: bool,
     pub(crate) error: Option<AddFromUrlError>,
     pub(crate) focus_url: bool,
+    pub(crate) qr: QrImport,
 }
 
 impl Default for AddDialog {
@@ -80,6 +85,7 @@ impl Default for AddDialog {
             busy: false,
             error: None,
             focus_url: true,
+            qr: QrImport::default(),
         }
     }
 }
@@ -113,6 +119,8 @@ pub(crate) struct SubscriptionsState {
     pub(crate) outcomes: BTreeMap<SubscriptionId, UpdateOutcome>,
     pub(crate) pings: HashMap<(SubscriptionId, NodeId), PingResult>,
     pub(crate) add: Option<AddDialog>,
+    /// Numbers each QR read, so an answer for a cancelled or closed one is dropped.
+    qr_request: u64,
     pub(crate) remove: Option<RemoveDialog>,
     pub(crate) rename: Option<RenameDialog>,
 }
@@ -427,6 +435,7 @@ impl State {
             Action::SubmitAdd => {
                 if let Some(dialog) = &mut self.subscriptions.add
                     && !dialog.busy
+                    && !dialog.qr.busy()
                 {
                     match rosetun_core::normalize_subscription_url(&dialog.url) {
                         Ok(input) => {

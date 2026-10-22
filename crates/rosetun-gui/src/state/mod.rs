@@ -39,7 +39,9 @@ pub(crate) use session::{ExitInputs, SessionPart};
 use settings::SettingsState;
 pub(crate) use settings::{AboutFolder, SettingsSection};
 use subscriptions::SubscriptionsState;
-pub(crate) use subscriptions::{AddDialog, PingResult, UpdateOutcome, shared_auto_update_hours};
+pub(crate) use subscriptions::{
+    AddDialog, PingResult, QrSource, QrStage, UpdateOutcome, shared_auto_update_hours,
+};
 use system_checks::SystemChecksState;
 use traffic::TrafficState;
 pub(crate) use traffic::{
@@ -317,6 +319,9 @@ pub(crate) enum Action {
     OpenAdd,
     CancelAdd,
     SubmitAdd,
+    ReadQr(QrSource),
+    CancelQr,
+    ChooseQrLink(usize),
     Update(SubscriptionId),
     Ping(SubscriptionId),
     PingNode(SubscriptionId, NodeId),
@@ -401,6 +406,14 @@ pub(crate) enum Job {
         input: String,
         options: AddOptions,
     },
+    ReadQr {
+        request: u64,
+        source: QrSource,
+    },
+    PollScreenClip {
+        request: u64,
+        sequence: u32,
+    },
     Update(SubscriptionId),
     UpdateList(ListId),
     UpdateListManual(ListId),
@@ -449,6 +462,7 @@ impl State {
             self.update_check_due(now),
             self.tunnel_delay_due(),
             self.connections_due(),
+            self.screen_clip_due(),
         ]
         .into_iter()
         .flatten()
@@ -540,6 +554,9 @@ impl State {
             | WorkerEvent::OpenFolder(_)) => self.reduce_settings(event),
             WorkerEvent::UpdateCheck { checked_at, result } => {
                 self.reduce_updates(result, checked_at);
+            }
+            event @ (WorkerEvent::Qr { .. } | WorkerEvent::QrScreenClip { .. }) => {
+                self.reduce_qr(event);
             }
             event @ (WorkerEvent::Add(_)
             | WorkerEvent::Update { .. }
@@ -694,6 +711,9 @@ impl State {
             | Action::MoveSelectedRulesToEnd) => return self.act_rules(action),
             action @ (Action::Apply | Action::RestoreMyEdits) => {
                 return self.act_session(action);
+            }
+            action @ (Action::ReadQr(_) | Action::CancelQr | Action::ChooseQrLink(_)) => {
+                return self.act_qr(action);
             }
             action @ (Action::RevealServer | Action::RevealDone) => {
                 return self.act_subscriptions(action);
