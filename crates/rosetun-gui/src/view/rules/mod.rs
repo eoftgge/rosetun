@@ -25,8 +25,6 @@ const HANDLE_GAP: f32 = 10.0;
 const ICON_GAP: f32 = 12.0;
 const TARGET_GAP: f32 = 16.0;
 const MENU_GAP: f32 = 12.0;
-const SEARCH_WIDTH: f32 = 260.0;
-const MIN_SEARCH_WIDTH: f32 = 120.0;
 const TARGET_FILTER_WIDTH: f32 = 166.0;
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -289,7 +287,7 @@ fn filter_controls(
         + 2.0 * ui.spacing().button_padding.x
         + 16.0;
     let available = ui.available_width();
-    let two_rows = SEARCH_WIDTH
+    let two_rows = widgets::SEARCH_WIDTH
         + widgets::segmented_width(ui, &options)
         + TARGET_FILTER_WIDTH
         + add_width
@@ -297,7 +295,7 @@ fn filter_controls(
         > available;
     let plain_labels;
     let options = if two_rows
-        && widgets::segmented_width(ui, &options) + MIN_SEARCH_WIDTH + gap > available
+        && widgets::segmented_width(ui, &options) + widgets::MIN_SEARCH_WIDTH + gap > available
     {
         plain_labels = labels
             .iter()
@@ -347,8 +345,7 @@ fn filter_controls(
             .rect;
     };
     if two_rows {
-        let search_width = (available - widgets::segmented_width(ui, &options) - gap)
-            .clamp(MIN_SEARCH_WIDTH, SEARCH_WIDTH);
+        let search_width = widgets::search_width_beside(ui, widgets::segmented_width(ui, &options));
         ui.horizontal(|ui| primary(ui, search_width, filter, &mut rects, actions));
         ui.horizontal(|ui| {
             rects.filter = target_filter(ui, filter, exits, actions).rect;
@@ -360,7 +357,7 @@ fn filter_controls(
         });
     } else {
         ui.horizontal(|ui| {
-            primary(ui, SEARCH_WIDTH, filter, &mut rects, actions);
+            primary(ui, widgets::SEARCH_WIDTH, filter, &mut rects, actions);
             rects.filter = target_filter(ui, filter, exits, actions).rect;
             let response = widgets::button_fill(ui, add_label, can_add);
             rects.add = response.rect;

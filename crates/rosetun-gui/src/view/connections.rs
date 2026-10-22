@@ -18,7 +18,6 @@ const PROGRAM_COLUMNS: [f32; 4] = [96.0, 56.0, 92.0, 76.0];
 /// Chevron and letter tile with their gaps; connection rows start after it.
 const PROGRAM_LEAD: f32 = 16.0 + GAP + 24.0 + GAP;
 const ROUTE_FILTER_WIDTH: f32 = 180.0;
-const SEARCH_WIDTH: f32 = 240.0;
 const LIST_HEIGHT: f32 = 360.0;
 const DETAILS_WIDTH: f32 = 480.0;
 const DETAIL_LABEL_WIDTH: f32 = 88.0;
@@ -305,68 +304,117 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
 }
 
-fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
-    let list = &state.traffic.connections;
-    let mut beside = false;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
-        if let Some(view) = widgets::segmented(
-            ui,
-            "connections_view",
-            list.view,
-            &[
-                (ConnectionsView::ByProgram, tr!("connections-by-program")),
-                (ConnectionsView::All, tr!("connections-all")),
-            ],
-            false,
-            true,
-        ) {
-            actions.push(Action::SetConnectionsView(view));
-        }
-        if let Some(tab) = widgets::segmented(
-            ui,
-            "connections_tab",
-            list.tab,
-            &[
-                (
-                    ConnectionsTab::Active,
-                    tr!("connections-active", n = list.active.len().to_string()),
-                ),
-                (
-                    ConnectionsTab::Closed,
-                    tr!("connections-closed", n = list.closed.len().to_string()),
-                ),
-            ],
-            false,
-            state.connections_available(),
-        ) {
-            actions.push(Action::SetConnectionsTab(tab));
-        }
-        route_filter(ui, state, actions);
-        // On the same row only when the whole field fits; otherwise it takes the next one.
-        if ui.available_size_before_wrap().x >= SEARCH_WIDTH + GAP {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                search(ui, state, SEARCH_WIDTH, actions);
-            });
-            beside = true;
-        }
-    });
-    if !beside {
-        ui.add_space(GAP);
-        search(ui, state, ui.available_width(), actions);
-    }
+#[cfg_attr(not(test), allow(dead_code))]
+struct ToolbarRects {
+    search: egui::Rect,
+    view: egui::Rect,
+    tabs: egui::Rect,
+    route: egui::Rect,
+    two_rows: bool,
 }
 
-fn search(ui: &mut egui::Ui, state: &State, width: f32, actions: &mut Vec<Action>) {
+/// Search first, as on the Rules tab; a narrow window moves the tabs and the
+/// route filter to a second row.
+fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> ToolbarRects {
+    let list = &state.traffic.connections;
+    let views = [
+        (ConnectionsView::ByProgram, tr!("connections-by-program")),
+        (ConnectionsView::All, tr!("connections-all")),
+    ];
+    let tab_labels = |active: usize, closed: usize| {
+        [
+            (
+                ConnectionsTab::Active,
+                tr!("connections-active", n = active.to_string()),
+            ),
+            (
+                ConnectionsTab::Closed,
+                tr!("connections-closed", n = closed.to_string()),
+            ),
+        ]
+    };
+    let tabs = tab_labels(list.active.len(), list.closed.len());
+    let mut rects = ToolbarRects {
+        search: egui::Rect::NOTHING,
+        view: egui::Rect::NOTHING,
+        tabs: egui::Rect::NOTHING,
+        route: egui::Rect::NOTHING,
+        two_rows: false,
+    };
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+        let view_width = widgets::segmented_width(ui, &views);
+        // Measured with the largest counts the service sends, so a changing
+        // count never moves the break between one and two rows.
+        let tabs_width = widgets::segmented_width(
+            ui,
+            &tab_labels(
+                rosetun_ipc::MAX_ACTIVE_CONNECTIONS,
+                rosetun_ipc::MAX_CLOSED_CONNECTIONS,
+            ),
+        );
+        rects.two_rows =
+            widgets::SEARCH_WIDTH + view_width + tabs_width + ROUTE_FILTER_WIDTH + 3.0 * GAP
+                > ui.available_width();
+        let primary = |ui: &mut egui::Ui,
+                       search_width: f32,
+                       rects: &mut ToolbarRects,
+                       actions: &mut Vec<Action>| {
+            rects.search = search(ui, state, search_width, actions);
+            rects.view = ui
+                .scope(|ui| {
+                    if let Some(view) =
+                        widgets::segmented(ui, "connections_view", list.view, &views, false, true)
+                    {
+                        actions.push(Action::SetConnectionsView(view));
+                    }
+                })
+                .response
+                .rect;
+        };
+        let secondary = |ui: &mut egui::Ui, rects: &mut ToolbarRects, actions: &mut Vec<Action>| {
+            rects.tabs = ui
+                .scope(|ui| {
+                    if let Some(tab) = widgets::segmented(
+                        ui,
+                        "connections_tab",
+                        list.tab,
+                        &tabs,
+                        false,
+                        state.connections_available(),
+                    ) {
+                        actions.push(Action::SetConnectionsTab(tab));
+                    }
+                })
+                .response
+                .rect;
+            rects.route = route_filter(ui, state, actions);
+        };
+        if rects.two_rows {
+            let search_width = widgets::search_width_beside(ui, view_width);
+            ui.horizontal(|ui| primary(ui, search_width, &mut rects, actions));
+            ui.horizontal(|ui| secondary(ui, &mut rects, actions));
+        } else {
+            ui.horizontal(|ui| {
+                primary(ui, widgets::SEARCH_WIDTH, &mut rects, actions);
+                secondary(ui, &mut rects, actions);
+            });
+        }
+    });
+    rects
+}
+
+fn search(ui: &mut egui::Ui, state: &State, width: f32, actions: &mut Vec<Action>) -> egui::Rect {
     let list = &state.traffic.connections;
     let mut filter = list.filter.clone();
-    widgets::search_field(ui, &mut filter, &tr!("connections-filter"), width);
+    let rect = widgets::search_field(ui, &mut filter, &tr!("connections-filter"), width).rect;
     if filter != list.filter {
         actions.push(Action::SetConnectionsFilter(filter));
     }
+    rect
 }
 
-fn route_filter(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+fn route_filter(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> egui::Rect {
     let selected = &state.traffic.connections.route;
     let label = |filter: &RouteFilter| match filter {
         RouteFilter::Any => tr!("connections-route-any"),
@@ -384,7 +432,7 @@ fn route_filter(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         }
     };
     let mut choice = None;
-    widgets::filter_combo(
+    let rect = widgets::filter_combo(
         ui,
         "connections_route_filter",
         ROUTE_FILTER_WIDTH,
@@ -409,12 +457,14 @@ fn route_filter(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 }
             }
         },
-    );
+    )
+    .rect;
     if let Some(choice) = choice
         && &choice != selected
     {
         actions.push(Action::SetConnectionsRoute(choice));
     }
+    rect
 }
 
 pub(super) fn route_color(route: &ConnectionRoute) -> Color32 {
@@ -869,4 +919,81 @@ fn cell(ui: &mut egui::Ui, width: f32, height: f32, text: RichText, hover: Optio
             }
         },
     );
+}
+
+#[cfg(test)]
+mod toolbar_tests {
+    use super::*;
+
+    fn connection(index: usize) -> LiveConnection {
+        LiveConnection {
+            id: index.to_string(),
+            start_unix_ms: 0,
+            end_unix_ms: None,
+            process: None,
+            host: "example.com".to_owned(),
+            ip: None,
+            port: 443,
+            network: ConnectionNetwork::Tcp,
+            route: ConnectionRoute::Proxy,
+            download: 0,
+            upload: 0,
+        }
+    }
+
+    fn layout(state: &State, width: f32, scale: f32) -> ToolbarRects {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut rects = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width / scale, 640.0 / scale),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().inner_margin(36.0))
+                    .show(ctx, |ui| rects = Some(toolbar(ui, state, &mut Vec::new())));
+            },
+        );
+        output.textures_delta.clear();
+        rects.unwrap()
+    }
+
+    #[test]
+    fn toolbar_controls_do_not_overlap_or_move_with_the_counts() {
+        let few = State::default();
+        let mut many = State::default();
+        many.traffic.connections.active = (0..rosetun_ipc::MAX_ACTIVE_CONNECTIONS)
+            .map(connection)
+            .collect();
+        many.traffic.connections.closed = (0..rosetun_ipc::MAX_CLOSED_CONNECTIONS)
+            .map(connection)
+            .collect();
+        for (width, scale) in [(960.0, 1.0), (960.0, 1.25), (960.0, 1.5), (1920.0, 1.0)] {
+            let rects = layout(&few, width, scale);
+            let moved = layout(&many, width, scale);
+            let right = width / scale - 36.0;
+            for rects in [&rects, &moved] {
+                assert!(rects.search.right() <= rects.view.left(), "{width} {scale}");
+                assert!(rects.tabs.right() <= rects.route.left(), "{width} {scale}");
+                assert!(rects.view.right() <= right, "{width} {scale}");
+                assert!(rects.route.right() <= right, "{width} {scale}");
+                if rects.two_rows {
+                    assert!(rects.search.bottom() <= rects.tabs.top(), "{width} {scale}");
+                    assert!(rects.view.bottom() <= rects.route.top(), "{width} {scale}");
+                } else {
+                    assert!(rects.view.right() <= rects.tabs.left(), "{width} {scale}");
+                }
+            }
+            assert_eq!(rects.two_rows, moved.two_rows, "{width} {scale}");
+            assert_eq!(rects.search, moved.search, "{width} {scale}");
+            assert_eq!(rects.view, moved.view, "{width} {scale}");
+            assert_eq!(rects.tabs.left(), moved.tabs.left(), "{width} {scale}");
+        }
+        assert!(!layout(&few, 1920.0, 1.0).two_rows);
+    }
 }

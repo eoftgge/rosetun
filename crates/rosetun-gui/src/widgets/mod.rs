@@ -22,7 +22,9 @@ pub(crate) use frames::{
     card_frame, dismissible_error, dismissible_error_with_action, modal_frame,
 };
 pub(crate) use menu::{MenuItem, context_menu_popup, menu_item, menu_popup};
-pub(crate) use search::{search_field, search_field_with_suffix};
+pub(crate) use search::{
+    MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix, search_width_beside,
+};
 pub(crate) use segmented::{segmented, segmented_width};
 pub(crate) use settings_card::settings_card;
 pub(crate) use status_pill::{status_pill, status_pill_width};

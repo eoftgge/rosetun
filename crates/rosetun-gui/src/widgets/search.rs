@@ -3,6 +3,17 @@ use eframe::egui;
 use crate::icons::{self, Icon};
 use crate::theme;
 
+/// Search fields over the rules and connections lists share these widths.
+pub(crate) const SEARCH_WIDTH: f32 = 260.0;
+pub(crate) const MIN_SEARCH_WIDTH: f32 = 120.0;
+
+/// The search field's width on the first row of a two-row toolbar, next to
+/// controls `beside` wide.
+pub(crate) fn search_width_beside(ui: &egui::Ui, beside: f32) -> f32 {
+    (ui.available_width() - beside - ui.spacing().item_spacing.x)
+        .clamp(MIN_SEARCH_WIDTH, SEARCH_WIDTH)
+}
+
 pub(crate) fn search_field(
     ui: &mut egui::Ui,
     text: &mut String,
