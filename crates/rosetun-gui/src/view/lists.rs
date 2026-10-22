@@ -114,14 +114,13 @@ fn list_card(
     let busy = state.operations.update_all || state.operations.updating_lists.contains(&list.id);
     let used = used_by(&state.config, &list.id);
     let source = source_name(&list.source);
-    let updated = list
-        .updated_at
-        .map(|time| i18n::last_updated(&i18n::updated_ago(time, display::now_unix())))
-        .unwrap_or_else(|| tr!("never-updated"));
+    let updated = list.updated_at.map_or_else(
+        || tr!("never-updated"),
+        |time| i18n::last_updated(&i18n::updated_ago(time, display::now_unix())),
+    );
     let size = list
         .size
-        .map(i18n::bytes)
-        .unwrap_or_else(|| tr!("list-size-unknown"));
+        .map_or_else(|| tr!("list-size-unknown"), i18n::bytes);
     let detail = if list.format.has_categories() {
         tr!(
             "list-row-detail-categories",

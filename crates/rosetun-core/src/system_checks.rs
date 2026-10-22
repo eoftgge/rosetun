@@ -111,9 +111,10 @@ pub fn check_system(own_alias: &str, guarded: bool) -> Vec<CheckResult> {
 fn check_local(own_alias: &str) -> Vec<CheckResult> {
     let clock = check_clock();
     #[cfg(windows)]
-    let proxy = rosetun_shell::proxy_settings()
-        .map(|(enabled, server, auto_config)| proxy_result(enabled, server, auto_config))
-        .unwrap_or_else(|_| CheckResult::unavailable(CheckKind::Proxy));
+    let proxy = rosetun_shell::proxy_settings().map_or_else(
+        |_| CheckResult::unavailable(CheckKind::Proxy),
+        |(enabled, server, auto_config)| proxy_result(enabled, server, auto_config),
+    );
     #[cfg(not(windows))]
     let proxy = CheckResult::unavailable(CheckKind::Proxy);
 

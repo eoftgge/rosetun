@@ -938,11 +938,10 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 if response.clicked() && !dialog.busy {
                     #[cfg(windows)]
                     let chosen = if dialog.match_mode == ProcessMatchMode::Path {
-                        dialog
-                            .browsed
-                            .as_ref()
-                            .map(|path| path.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| typed.to_owned())
+                        dialog.browsed.as_ref().map_or_else(
+                            || typed.to_owned(),
+                            |path| path.to_string_lossy().into_owned(),
+                        )
                     } else {
                         typed.to_owned()
                     };

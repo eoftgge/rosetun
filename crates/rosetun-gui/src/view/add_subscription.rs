@@ -223,9 +223,10 @@ fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
 
 /// The host only: the path and query carry the subscription token.
 fn choice_label(index: usize, link: &str) -> String {
-    let host = rosetun_core::normalize_subscription_url(link)
-        .map(|url| rosetun_core::redacted_subscription_url(&url))
-        .unwrap_or_else(|_| "…".into());
+    let host = rosetun_core::normalize_subscription_url(link).map_or_else(
+        |_| "…".into(),
+        |url| rosetun_core::redacted_subscription_url(&url),
+    );
     format!("{}. {host}", index + 1)
 }
 

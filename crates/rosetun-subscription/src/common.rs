@@ -41,7 +41,7 @@ pub(crate) fn clean(value: &str, limit: usize) -> String {
 }
 
 pub(crate) fn field<'a>(fields: &'a Fields, key: &str) -> &'a str {
-    fields.get(key).map(String::as_str).unwrap_or("")
+    fields.get(key).map_or("", String::as_str)
 }
 
 pub(crate) fn optional(fields: &Fields, key: &str) -> Option<String> {
@@ -259,12 +259,13 @@ fn transport(fields: &Fields) -> Result<Transport, SkipReason> {
 }
 
 fn tls(protocol: &str, fields: &Fields) -> Result<TlsMode, SkipReason> {
-    let security = fields.get("security").map(String::as_str).unwrap_or(
+    let security = fields.get("security").map_or(
         if matches!(protocol, "trojan" | "hysteria2") {
             "tls"
         } else {
             ""
         },
+        String::as_str,
     );
 
     match security {

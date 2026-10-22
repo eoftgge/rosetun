@@ -146,7 +146,7 @@ fn xray(config: &Value) -> Record {
         put(&mut fields, "public_key", key);
     }
 
-    match fields.get("transport").map(String::as_str).unwrap_or("tcp") {
+    match fields.get("transport").map_or("tcp", String::as_str) {
         "tcp" => put(
             &mut fields,
             "header",

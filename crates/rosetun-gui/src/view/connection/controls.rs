@@ -242,11 +242,10 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
 }
 
 fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
-    let name = state
-        .config
-        .active_rules()
-        .map(|rules| state.text(&rules.name))
-        .unwrap_or_else(|| tr!("default-rules").to_owned());
+    let name = state.config.active_rules().map_or_else(
+        || tr!("default-rules").to_owned(),
+        |rules| state.text(&rules.name),
+    );
     let font = egui::FontId::new(
         egui::TextStyle::Body.resolve(ui.style()).size,
         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),

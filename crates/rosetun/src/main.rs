@@ -302,7 +302,7 @@ fn status(client: &mut HelperClient) -> ExitCode {
             println!("lockdown: {}", if status.lockdown { "on" } else { "off" });
             println!(
                 "node: {}",
-                terminal_text(status.node.as_ref().map(NodeId::as_str).unwrap_or("none"))
+                terminal_text(status.node.as_ref().map_or("none", NodeId::as_str))
             );
             println!("engine:      {:?}", status.engine);
             println!(
@@ -457,9 +457,7 @@ fn prepare_list_request(request_path: Option<&str>) -> Result<PreparedCliRequest
 
 fn prepare_apply_request(client: &mut HelperClient) -> Result<PreparedCliRequest, String> {
     let helper_error = |error: ClientError| {
-        access_denied_message(&error)
-            .map(str::to_owned)
-            .unwrap_or_else(|| error.to_string())
+        access_denied_message(&error).map_or_else(|| error.to_string(), str::to_owned)
     };
     let temporary = client.temporary_rules().map_err(helper_error)?;
     let session = client.session_exits().map_err(helper_error)?;

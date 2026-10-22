@@ -32,8 +32,9 @@ pub(in crate::state) const AUTO_UPDATE_CHECK: u64 = 60;
 fn auto_update_hours(subscription: &Subscription) -> u64 {
     subscription
         .update_interval_hours
-        .map(|hours| hours.clamp(*AUTO_UPDATE_RANGE.start(), *AUTO_UPDATE_RANGE.end()))
-        .unwrap_or(AUTO_UPDATE_HOURS)
+        .map_or(AUTO_UPDATE_HOURS, |hours| {
+            hours.clamp(*AUTO_UPDATE_RANGE.start(), *AUTO_UPDATE_RANGE.end())
+        })
 }
 
 /// The interval the panel footer names: one value when every subscription shares it.

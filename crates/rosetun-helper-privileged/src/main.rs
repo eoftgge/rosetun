@@ -80,10 +80,10 @@ fn main() -> std::process::ExitCode {
             .copied()
             .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
             .unwrap_or("non-string panic payload");
-        let location = info
-            .location()
-            .map(|location| format!("{}:{}", location.file(), location.line()))
-            .unwrap_or_else(|| "unknown".to_owned());
+        let location = info.location().map_or_else(
+            || "unknown".to_owned(),
+            |location| format!("{}:{}", location.file(), location.line()),
+        );
         tracing::error!(%location, message, "helper panicked");
         default_hook(info);
     }));
@@ -249,8 +249,7 @@ fn run_service() -> std::process::ExitCode {
         Ok(parent
             .to_str()
             .and_then(|path| path.strip_prefix(r"\\?\"))
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| parent.to_owned()))
+            .map_or_else(|| parent.to_owned(), std::path::PathBuf::from))
     });
     match install_dir {
         Ok(dir) => {

@@ -81,8 +81,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         && !state.config.subscriptions.is_empty()
                     {
                         let text = shared_auto_update_hours(&state.config.subscriptions)
-                            .map(|hours| tr!("auto-update-every", hours = hours.to_string()))
-                            .unwrap_or_else(|| tr!("auto-update-on"));
+                            .map_or_else(
+                                || tr!("auto-update-on"),
+                                |hours| tr!("auto-update-every", hours = hours.to_string()),
+                            );
                         ui.add(
                             egui::Label::new(RichText::new(text).small().color(theme::TEXT_DIM))
                                 .truncate(),

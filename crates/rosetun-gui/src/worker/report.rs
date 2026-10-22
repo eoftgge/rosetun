@@ -37,14 +37,15 @@ impl WorkerDispatcher {
                         snapshot.set_checks(&results);
                         new_checks = Some(results);
                     }
-                    let log = read_client_log(publisher.store.path())
-                        .map(|text| redact_report_text(&text))
-                        .unwrap_or_else(|_| {
+                    let log = read_client_log(publisher.store.path()).map_or_else(
+                        |_| {
                             report_label!(
                                 "report-client-log-unavailable",
                                 snapshot.language_for_report
                             )
-                        });
+                        },
+                        |text| redact_report_text(&text),
+                    );
                     let (helper_version, engine_versions, helper_log) = helper_details(&snapshot);
                     if let Some(version) = helper_version {
                         snapshot.helper_version = Some(version);

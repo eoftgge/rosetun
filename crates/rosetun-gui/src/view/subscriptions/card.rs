@@ -18,10 +18,10 @@ pub(super) fn subscription_card(
         .as_ref()
         .is_some_and(|selection| selection.subscription == subscription.id);
     let now = display::now_unix();
-    let updated = subscription
-        .updated_at_unix
-        .map(|timestamp| crate::i18n::last_updated(&crate::i18n::updated_ago(timestamp, now)))
-        .unwrap_or_else(|| tr!("never-updated").to_owned());
+    let updated = subscription.updated_at_unix.map_or_else(
+        || tr!("never-updated").to_owned(),
+        |timestamp| crate::i18n::last_updated(&crate::i18n::updated_ago(timestamp, now)),
+    );
     let mut frame = widgets::card_frame()
         .inner_margin(12)
         .stroke(Stroke::new(1.0, theme::BORDER));

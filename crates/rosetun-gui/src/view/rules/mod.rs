@@ -391,11 +391,10 @@ fn target_filter(
         (None, Some(target)) => Some(target_label(target)),
         (None, None) => None,
     };
-    let selected_text = selected_label
-        .clone()
-        .zip(selected)
-        .map(|(label, target)| RichText::new(label).color(target_color(target)))
-        .unwrap_or_else(|| RichText::new(tr!("any-action")));
+    let selected_text = selected_label.clone().zip(selected).map_or_else(
+        || RichText::new(tr!("any-action")),
+        |(label, target)| RichText::new(label).color(target_color(target)),
+    );
     let response = widgets::filter_combo(
         ui,
         "rule_target_filter",
