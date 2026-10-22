@@ -4,13 +4,14 @@ use super::*;
 use crate::state::SessionExitRow;
 use crate::view::exits::exit_title;
 
-/// "Rules through other servers": one row per exit of the running session.
-/// Returns whether the card was shown.
+/// "Rules through other servers", with the gap above it: one row per exit of
+/// the running session. Returns whether the card was shown.
 pub(super) fn exits_card(ui: &mut egui::Ui, state: &State) -> bool {
     let rows = state.session_exit_rows();
     if rows.is_empty() {
         return false;
     }
+    ui.add_space(theme::SECTION_GAP);
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.colored_label(theme::TEXT_DIM, tr!("connection-exits"));

@@ -29,10 +29,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }
     hero_card(ui, state, actions);
     ui.add_space(theme::SECTION_GAP);
-    if exits_card(ui, state) {
-        ui.add_space(theme::SECTION_GAP);
-    }
+    // Protection right under the hero, so a 960 px window shows it without
+    // scrolling; the exits card only reports and comes last.
     control_cards(ui, state, actions);
+    exits_card(ui, state);
 }
 
 fn service_banner(ui: &mut egui::Ui, state: &State) {
