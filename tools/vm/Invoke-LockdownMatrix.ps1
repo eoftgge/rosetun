@@ -645,7 +645,16 @@ try {
 
     # 8. Off while connected and while disconnected: no FWP_E_IN_USE.
     Invoke-Lockdown on | Out-Null
-    Connect-RosetunTunnel | Out-Null
+    # The first connect after the power cuts has twice timed out on sing-box
+    # readiness; helper.log is rewritten by later helper starts, so keep the
+    # lines of a failed connect on the host before they are gone.
+    $connectMark = Get-HelperLogLength
+    $connect = Connect-RosetunTunnel
+    if ($connect.ExitCode -ne 0) {
+        $kept = Join-Path $PSScriptRoot ("logs\lockdown-first-connect-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+        Get-HelperLogSince $connectMark | Set-Content -LiteralPath $kept -Encoding UTF8
+        Add-Info '8 off, connected' 'the first connect after the power cuts failed; helper log kept' -Note $kept
+    }
     $mark = Get-HelperLogLength
     $off = Invoke-Lockdown off
     Test-Step '8 off, connected' 'rosetun lockdown off succeeds' { $off.ExitCode -eq 0 } -Note $off.Output
