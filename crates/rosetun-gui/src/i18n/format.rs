@@ -279,7 +279,7 @@ pub(crate) fn rate(bytes_per_second: u64) -> String {
 pub(crate) fn connection_stage(stage: ConnectStage, seconds: u64) -> String {
     let label = match stage {
         ConnectStage::WaitingForAdapter => tr!("stage-waiting"),
-        ConnectStage::StartingEngine => tr!("stage-starting"),
+        ConnectStage::CheckingEngine | ConnectStage::StartingEngine => tr!("stage-starting"),
         ConnectStage::CheckingServer => tr!("stage-checking"),
     };
     tr!(

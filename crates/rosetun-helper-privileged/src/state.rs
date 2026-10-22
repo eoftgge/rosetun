@@ -41,6 +41,7 @@ use connections::{ConnectionBook, Translation};
 use watchdog::{DnsWatchdog, WatchdogTiming};
 
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const SLOW_START_READY_TIMEOUT: Duration = Duration::from_secs(45);
 const TUNNEL_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TUNNEL_DNS_TIMEOUT: Duration = Duration::from_secs(60);
 const TUNNEL_DNS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
@@ -260,6 +261,11 @@ struct Session {
     /// The engine binaries the current protection permits, for changing its
     /// scope when Lockdown is turned on or off.
     protected_binaries: Vec<PathBuf>,
+    /// No engine has been started since the service started. After a power
+    /// cut an antivirus may scan the engine again on its first run, so that
+    /// start gets the slow-start deadline. Cleared by the first start,
+    /// whether it succeeds or not.
+    cold_start: bool,
 }
 
 impl std::fmt::Debug for Helper {
@@ -336,6 +342,7 @@ impl Helper {
                 list_run_dir: None,
                 lockdown,
                 protected_binaries: Vec::new(),
+                cold_start: true,
                 #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
                 #[cfg(test)]
@@ -1872,9 +1879,11 @@ impl Session {
 
         self.stage_lists(lists)?;
 
+        self.stage(rosetun_config::ConnectStage::CheckingEngine)?;
         let binary = backend
             .locate_binary()
             .map_err(|error| HelperError::new(ErrorCode::EngineFailed, error.to_string()))?;
+        self.stage(rosetun_config::ConnectStage::StartingEngine)?;
 
         tracing::debug!(
             engine = %backend.kind().as_str(),
@@ -1959,14 +1968,17 @@ impl Session {
         }
         // Without a guard there is no filter to authorize on the tunnel.
         let tunnel = tunnel.filter(|_| self.guard.is_some());
+        let cold_start = self.cold_start;
 
         if chain {
             let xray = self.xray.as_ref().ok_or_else(|| {
                 HelperError::new(ErrorCode::XrayStartFailed, "Xray helper is unavailable")
             })?;
+            self.stage(rosetun_config::ConnectStage::CheckingEngine)?;
             let xray_binary = xray
                 .locate_binary()
                 .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))?;
+            self.stage(rosetun_config::ConnectStage::StartingEngine)?;
             let interface = (self.physical_interface)(&settings.tun.name).ok_or_else(|| {
                 HelperError::new(
                     ErrorCode::XrayStartFailed,
@@ -1982,6 +1994,7 @@ impl Session {
             )?;
             tracing::info!(extra_nodes = extra.len(), "engine chain: sing-box + xray");
             check_cancelled(&self.cancelled)?;
+            self.cold_start = false;
             let spawned_at = Instant::now();
             self.xray_process = Some(
                 xray.spawn(
@@ -1998,6 +2011,7 @@ impl Session {
                     .expect("Xray process stored before readiness")
                     .as_mut(),
                 spawned_at,
+                cold_start,
                 &self.cancelled,
             )
             .map_err(|error| {
@@ -2013,9 +2027,17 @@ impl Session {
 
         let mut attempt = 1;
         let spawned_at = loop {
-            tracing::info!(engine = %backend.kind().as_str(), attempt, "spawning tunnel engine");
+            // A retry starts a binary that has just run, so it is no longer cold.
+            let cold_start = cold_start && attempt == 1;
+            tracing::info!(
+                engine = %backend.kind().as_str(),
+                attempt,
+                cold_start,
+                "spawning tunnel engine"
+            );
             let spawned_at = Instant::now();
             check_cancelled(&self.cancelled)?;
+            self.cold_start = false;
             self.process = Some(
                 backend
                     .spawn_with_log_gate(&binary, &config, self.gate.deadline())
@@ -2027,11 +2049,15 @@ impl Session {
                 .process
                 .as_mut()
                 .expect("engine process was stored before readiness");
-            let error =
-                match wait_for_engine_ready_from(process.as_mut(), spawned_at, &self.cancelled) {
-                    Ok(()) => break spawned_at,
-                    Err(error) => error,
-                };
+            let error = match wait_for_engine_ready_from(
+                process.as_mut(),
+                spawned_at,
+                cold_start,
+                &self.cancelled,
+            ) {
+                Ok(()) => break spawned_at,
+                Err(error) => error,
+            };
             let adapter_busy = error.code == ErrorCode::EngineFailed
                 && process.startup_hints().adapter_still_removing;
             if !adapter_busy || attempt > ADAPTER_BUSY_RETRIES {
@@ -2713,21 +2739,22 @@ fn server_check_grace_deadline(
     .then_some(ready_at + grace)
 }
 
-fn startup_timeout(hints: rosetun_engine::StartupHints) -> Duration {
-    if hints.slow_tunnel_creation {
-        Duration::from_secs(45)
+fn startup_timeout(hints: rosetun_engine::StartupHints, cold_start: bool) -> Duration {
+    if hints.slow_tunnel_creation || cold_start {
+        SLOW_START_READY_TIMEOUT
     } else {
         TUNNEL_READY_TIMEOUT
     }
 }
 
 fn wait_for_engine_ready(process: &mut dyn EngineProcess) -> Result<(), HelperError> {
-    wait_for_engine_ready_from(process, Instant::now(), &AtomicBool::new(false))
+    wait_for_engine_ready_from(process, Instant::now(), false, &AtomicBool::new(false))
 }
 
 fn wait_for_engine_ready_from(
     process: &mut dyn EngineProcess,
     spawned_at: Instant,
+    cold_start: bool,
     cancelled: &AtomicBool,
 ) -> Result<(), HelperError> {
     loop {
@@ -2756,7 +2783,7 @@ fn wait_for_engine_ready_from(
             }
             return Ok(());
         }
-        let timeout = startup_timeout(process.startup_hints());
+        let timeout = startup_timeout(process.startup_hints(), cold_start);
         if Instant::now() >= spawned_at + timeout {
             return Err(HelperError::new(
                 ErrorCode::EngineNotReady,

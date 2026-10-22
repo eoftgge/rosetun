@@ -55,16 +55,71 @@ fn set_route_script(down_ticks: usize) {
 #[test]
 fn startup_hint_extends_only_slow_tunnel_deadline() {
     assert_eq!(
-        startup_timeout(rosetun_engine::StartupHints::default()),
+        startup_timeout(rosetun_engine::StartupHints::default(), false),
         Duration::from_secs(15)
     );
     assert_eq!(
-        startup_timeout(rosetun_engine::StartupHints {
-            slow_tunnel_creation: true,
-            ..Default::default()
-        }),
+        startup_timeout(
+            rosetun_engine::StartupHints {
+                slow_tunnel_creation: true,
+                ..Default::default()
+            },
+            false
+        ),
         Duration::from_secs(45)
     );
+}
+
+#[test]
+fn a_cold_start_gets_the_slow_start_deadline() {
+    assert_eq!(
+        startup_timeout(rosetun_engine::StartupHints::default(), true),
+        Duration::from_secs(45)
+    );
+}
+
+#[test]
+fn the_first_engine_start_is_cold_and_clears_it_on_success() {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(StubEngine));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
+    assert!(helper.session().unwrap().cold_start);
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+
+    helper.connect(&request).expect("connect succeeds");
+    assert!(!helper.session().unwrap().cold_start);
+
+    helper.disconnect().unwrap();
+    helper.connect(&request).expect("connect succeeds again");
+    assert!(!helper.session().unwrap().cold_start);
+    helper.disconnect().unwrap();
+}
+
+#[test]
+fn a_failed_first_engine_start_clears_the_cold_start_too() {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ExitedEngine));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+
+    helper
+        .connect(&request)
+        .expect_err("an exited process cannot complete startup readiness");
+    assert!(!helper.session().unwrap().cold_start);
+}
+
+#[test]
+fn a_connect_refused_before_the_engine_starts_stays_cold() {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(UnsupportedRuleEngine));
+    let helper = Helper::new(engines, Box::new(UnusedRouting), VerboseGate::default());
+
+    helper
+        .connect(&connect_request())
+        .expect_err("unsupported rules reject the connection");
+    assert!(helper.session().unwrap().cold_start);
 }
 
 #[test]
@@ -6346,4 +6401,67 @@ fn names_are_resolved_directly_only_under_lockdown_without_a_tunnel() {
             [IpAddr::from([192, 0, 2, 7])]
         );
     }
+}
+
+#[derive(Debug)]
+struct SlowCheckEngine {
+    checked: Arc<AtomicBool>,
+}
+
+impl EngineBackend for SlowCheckEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::SingBox
+    }
+    fn integration(&self) -> EngineIntegration {
+        EngineIntegration::EngineManagedTun
+    }
+    fn capabilities(&self) -> EngineCapabilities {
+        StubEngine.capabilities()
+    }
+    fn tunnel_dns_server(&self, _: &rosetun_config::TunSettings) -> Option<SocketAddr> {
+        None
+    }
+    fn locate_binary(&self) -> Result<PathBuf, EngineError> {
+        while !self.checked.load(Ordering::Acquire) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        StubEngine.locate_binary()
+    }
+    fn render(&self, request: &RenderRequest<'_>) -> Result<RenderedConfig, EngineError> {
+        StubEngine.render(request)
+    }
+    fn spawn(
+        &self,
+        binary: &Path,
+        config: &RenderedConfig,
+    ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        StubEngine.spawn(binary, config)
+    }
+}
+
+#[test]
+fn status_shows_the_engine_check_while_a_connect_waits_for_it() {
+    let checked = Arc::new(AtomicBool::new(false));
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(SlowCheckEngine {
+        checked: Arc::clone(&checked),
+    }));
+    let helper = Arc::new(Helper::new(
+        engines,
+        Box::new(UnusedRouting),
+        VerboseGate::default(),
+    ));
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    let worker = {
+        let helper = Arc::clone(&helper);
+        thread::spawn(move || helper.connect(&request))
+    };
+
+    wait_for_stage(&helper, rosetun_config::ConnectStage::CheckingEngine);
+    assert!(helper.status().state.is_transitional());
+    checked.store(true, Ordering::Release);
+    worker.join().unwrap().expect("connect succeeds after the check");
+    assert_eq!(helper.status().connect_stage, None);
+    helper.disconnect().unwrap();
 }

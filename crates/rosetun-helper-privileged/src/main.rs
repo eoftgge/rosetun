@@ -18,6 +18,7 @@ mod state;
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use rosetun_engine::{EngineBackend, EngineRegistry};
 use rosetun_engine_singbox::SingBoxBackend;
@@ -259,6 +260,20 @@ fn run_service() -> std::process::ExitCode {
     service::run(gate)
 }
 
+/// A connect waits for this check, so a slow one explains a slow first
+/// connect after boot.
+const SLOW_ENGINE_CHECK: Duration = Duration::from_secs(5);
+
+fn note_slow_engine_check(engine: &str, elapsed: Duration) {
+    if elapsed > SLOW_ENGINE_CHECK {
+        tracing::info!(
+            engine,
+            elapsed_ms = elapsed.as_millis(),
+            "engine check was slow; an antivirus may be scanning the binary"
+        );
+    }
+}
+
 #[derive(Debug)]
 struct StartError(String);
 
@@ -284,14 +299,31 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
     std::thread::Builder::new()
         .name("engine-warmup".to_owned())
         .spawn(move || {
-            match warmup.locate_binary() {
-                Ok(binary) => tracing::info!(binary = %binary.display(), "sing-box is ready"),
+            let started = Instant::now();
+            let result = warmup.locate_binary();
+            let elapsed = started.elapsed();
+            match result {
+                Ok(binary) => tracing::info!(
+                    binary = %binary.display(),
+                    elapsed_ms = elapsed.as_millis(),
+                    "sing-box is ready"
+                ),
                 Err(error) => tracing::warn!(%error, "sing-box check at start failed"),
             }
-            match xray_warmup.locate_binary() {
-                Ok(binary) => tracing::info!(binary = %binary.display(), "Xray is ready"),
+            note_slow_engine_check("sing-box", elapsed);
+
+            let started = Instant::now();
+            let result = xray_warmup.locate_binary();
+            let elapsed = started.elapsed();
+            match result {
+                Ok(binary) => tracing::info!(
+                    binary = %binary.display(),
+                    elapsed_ms = elapsed.as_millis(),
+                    "Xray is ready"
+                ),
                 Err(error) => tracing::warn!(%error, "Xray check at start failed"),
             }
+            note_slow_engine_check("Xray", elapsed);
         })
         .map_err(|error| StartError(format!("failed to start engine warmup thread: {error}")))?;
     engines.register(Box::new(singbox));

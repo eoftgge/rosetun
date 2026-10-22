@@ -6,8 +6,29 @@ use crate::{EngineKind, ExitId, NodeId, XrayUse};
 #[serde(rename_all = "snake_case")]
 pub enum ConnectStage {
     WaitingForAdapter,
+    /// Waiting for the engine's version check, which an antivirus can hold up
+    /// for half a minute after a cold boot.
+    CheckingEngine,
     StartingEngine,
     CheckingServer,
+}
+
+/// A stage this build does not know reads as none, so a newer service never
+/// makes the whole status unreadable.
+fn known_stage<'de, D>(deserializer: D) -> Result<Option<ConnectStage>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stage {
+        Known(ConnectStage),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Option::<Stage>::deserialize(deserializer)? {
+        Some(Stage::Known(stage)) => Some(stage),
+        Some(Stage::Unknown(_)) | None => None,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,7 +88,11 @@ pub struct Status {
     pub state: ConnectionState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reconnect_failure_kind: Option<FailureKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "known_stage"
+    )]
     pub connect_stage: Option<ConnectStage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage_since_unix: Option<u64>,
@@ -146,7 +171,32 @@ impl std::fmt::Debug for LiveConnection {
 
 #[cfg(test)]
 mod failure_tests {
-    use super::{ConnectionState, FailureKind, Status};
+    use super::{ConnectStage, ConnectionState, FailureKind, Status};
+
+    #[test]
+    fn an_unknown_connect_stage_reads_as_none_and_keeps_the_status() {
+        let status: Status = serde_json::from_str(
+            r#"{"state":"connecting","connect_stage":"a_later_stage","stage_since_unix":5}"#,
+        )
+        .unwrap();
+        assert_eq!(status.state, ConnectionState::Connecting);
+        assert_eq!(status.connect_stage, None);
+        assert_eq!(status.stage_since_unix, Some(5));
+
+        let checking = Status {
+            connect_stage: Some(ConnectStage::CheckingEngine),
+            ..Status::default()
+        };
+        let encoded = serde_json::to_value(&checking).unwrap();
+        assert_eq!(encoded["connect_stage"], "checking_engine");
+        assert_eq!(serde_json::from_value::<Status>(encoded).unwrap(), checking);
+        assert_eq!(
+            serde_json::from_str::<Status>(r#"{"state":"connecting","connect_stage":null}"#)
+                .unwrap()
+                .connect_stage,
+            None
+        );
+    }
 
     #[test]
     fn failure_kind_is_optional_and_does_not_change_other_status_fields() {
