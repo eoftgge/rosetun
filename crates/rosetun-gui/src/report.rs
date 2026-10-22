@@ -526,7 +526,7 @@ mod tests {
         assert!(text.contains("<ip>"));
         assert!(text.contains("C:\\Users\\<user>"));
         assert!(text.contains("Subscriptions: 1"));
-        assert!(text.contains("Nodes: 7"));
+        assert!(text.contains("Servers: 7"));
         assert!(text.contains(
             "2026-10-15T15:02:03Z ErrorCode::DnsTimeout 1 DE NL <redacted> Amsterdamer <redacted> Default"
         ));

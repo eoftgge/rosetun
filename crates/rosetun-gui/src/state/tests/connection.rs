@@ -582,7 +582,7 @@ fn busy_connect_and_failed_disconnect_still_show_errors() {
     assert_eq!(
         state.operation_error.as_deref(),
         Some(
-            "the engine did not start. Try again; if it keeps happening, save a report under Settings › Service and log"
+            "the engine did not start; try again or save a report for support"
         )
     );
 }

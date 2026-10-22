@@ -277,7 +277,7 @@ fn verbose_log_details_pluralize_remaining_hours() {
         assert_eq!(
             in_language(Language::English, || verbose_log_on_detail(hours)),
             format!(
-                "Turns itself off in {expected}. While on, it records site addresses. Applies on next connect."
+                "Records site addresses. Turns itself off in {expected}."
             )
         );
     }
@@ -439,7 +439,7 @@ fn no_network_text_distinguishes_retry_from_automatic_wait() {
             "No network connection",
             "Check the cable or Wi-Fi.",
             "Rosetun will reconnect when the network returns.",
-            "Network lost · the kill switch blocks internet access until it returns.",
+            "Network lost · internet stays blocked until it returns.",
         ),
         (
             Language::Russian,

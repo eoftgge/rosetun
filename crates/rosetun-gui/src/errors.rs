@@ -1155,7 +1155,7 @@ mod tests {
         let error = ClientError::Helper(HelperError::new(ErrorCode::EngineFailed, detail));
         assert_eq!(
             client(Language::English, &error),
-            "the engine did not start. Try again; if it keeps happening, save a report under Settings › Service and log"
+            "the engine did not start; try again or save a report for support"
         );
         assert_eq!(
             client(Language::Russian, &error),
