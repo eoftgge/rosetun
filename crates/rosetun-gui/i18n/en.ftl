@@ -355,6 +355,7 @@ system-check-dns = DNS substitution
 system-check-dns-ok = Not detected
 system-check-dns-found = The network replaces DNS answers: queries to { $server } over UDP do not reach it. While Rosetun is connected this does not matter: DNS goes through the tunnel. Without a connection, subscription updates and finding the server address may fail, and setting 8.8.8.8 or 1.1.1.1 by hand does not help.
 system-check-offline-only = Checked only without a connection
+system-check-dns-hint = The network seems to replace DNS, see the system check.
 reset-settings = Reset settings
 reset-settings-detail = Subscriptions and rules stay; only the options on this screen go back to defaults.
 reset-settings-question = Reset settings?

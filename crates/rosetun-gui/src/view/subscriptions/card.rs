@@ -233,6 +233,9 @@ pub(super) fn subscription_card(
                 {
                     actions.push(Action::DismissOutcome(subscription.id.clone()));
                 }
+                if state.dns_hint_for_update(&subscription.id) {
+                    crate::view::settings::dns_hint(ui, actions);
+                }
                 if !expanded {
                     return;
                 }

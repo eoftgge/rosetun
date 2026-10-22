@@ -1,5 +1,5 @@
-use rosetun_config::{ConnectionState, FailureKind};
-use rosetun_core::{CheckKind, CheckResult, CheckStatus};
+use rosetun_config::{ConnectionState, FailureKind, SubscriptionId};
+use rosetun_core::{CheckKind, CheckResult, CheckStatus, FetchError, UpdateSubscriptionError};
 
 use super::{Action, Job, Screen, State, now_unix};
 
@@ -106,6 +106,38 @@ impl State {
 }
 
 impl State {
+    fn dns_substituted(&self) -> bool {
+        self.system_checks
+            .last_dns
+            .as_ref()
+            .is_some_and(|result| result.status == CheckStatus::Warning)
+    }
+
+    /// The connection failed to find the server's address on a network
+    /// the last check found replacing DNS.
+    pub(crate) fn dns_hint_for_failure(&self) -> bool {
+        let failure_kind = match &self.status.state {
+            ConnectionState::Failed { failure_kind, .. }
+            | ConnectionState::FailedProtected { failure_kind, .. } => *failure_kind,
+            _ => None,
+        };
+        failure_kind == Some(FailureKind::ServerNameUnresolved) && self.dns_substituted()
+    }
+
+    /// The subscription update failed to find its server's address on a
+    /// network the last check found replacing DNS.
+    pub(crate) fn dns_hint_for_update(&self, id: &SubscriptionId) -> bool {
+        matches!(
+            self.subscriptions.outcomes.get(id),
+            Some(super::subscriptions::UpdateOutcome::Error(
+                UpdateSubscriptionError::Fetch {
+                    source: FetchError::HostNotFound,
+                    ..
+                }
+            ))
+        ) && self.dns_substituted()
+    }
+
     /// A tunnel or the kill switch holds the traffic, so a DNS check would
     /// test the tunnel or be blocked instead of testing the network.
     pub(crate) fn traffic_guarded(&self) -> bool {

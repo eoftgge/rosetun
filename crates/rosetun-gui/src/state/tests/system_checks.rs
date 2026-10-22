@@ -148,3 +148,154 @@ fn an_unresolved_server_name_gets_no_system_check_hint() {
     assert!(state.system_checks.failure_warning.is_none());
     assert_eq!(state.system_checks.results.as_ref().unwrap(), &[warning()]);
 }
+
+fn dns(status: CheckStatus) -> CheckResult {
+    CheckResult {
+        kind: CheckKind::DnsSubstitution,
+        status,
+        detail: if status == CheckStatus::Warning {
+            CheckDetail::DnsSubstitution {
+                server: "192.0.2.53".into(),
+            }
+        } else {
+            CheckDetail::None
+        },
+    }
+}
+
+fn run_check(state: &mut State, results: Vec<CheckResult>) -> bool {
+    let Some(Job::CheckSystem {
+        request, guarded, ..
+    }) = state.act(Action::CheckSystem)
+    else {
+        panic!("expected a system check job");
+    };
+    state.reduce(WorkerEvent::SystemChecks { request, results });
+    guarded
+}
+
+#[test]
+fn dns_row_reads_differently_in_each_state() {
+    let detail = |status| crate::i18n::check_detail(&dns(status));
+    assert_eq!(detail(CheckStatus::Ok), tr!("system-check-dns-ok"));
+    assert_eq!(detail(CheckStatus::Skipped), tr!("system-check-offline-only"));
+    assert_eq!(
+        detail(CheckStatus::Unavailable),
+        tr!("system-check-unavailable")
+    );
+    let found = detail(CheckStatus::Warning);
+    assert!(found.contains("192.0.2.53"), "{found}");
+    assert_ne!(found, tr!("system-check-unavailable"));
+}
+
+#[test]
+fn dns_check_is_guarded_under_a_tunnel_or_protection_only() {
+    for (connection, expected) in [
+        (ConnectionState::Disconnected, false),
+        (failure().state, false),
+        (ConnectionState::Connecting, true),
+        (ConnectionState::Connected, true),
+        (ConnectionState::Reconnecting, true),
+        (
+            ConnectionState::FailedProtected {
+                reason: "no reply from 192.0.2.1".into(),
+                failure_kind: None,
+            },
+            true,
+        ),
+    ] {
+        let mut state = State::default();
+        state.reduce(WorkerEvent::Status(Status {
+            state: connection.clone(),
+            ..Status::default()
+        }));
+        assert_eq!(run_check(&mut state, Vec::new()), expected, "{connection:?}");
+    }
+}
+
+#[test]
+fn a_skipped_dns_check_keeps_the_last_verdict_and_gives_no_failure_hint() {
+    let mut state = State {
+        helper_available: true,
+        config_ready: true,
+        ..State::default()
+    };
+    run_check(&mut state, vec![dns(CheckStatus::Warning)]);
+    run_check(&mut state, vec![dns(CheckStatus::Skipped)]);
+    assert_eq!(
+        state.system_checks.last_dns,
+        Some(dns(CheckStatus::Warning))
+    );
+    assert_eq!(
+        state.system_checks.results.as_deref(),
+        Some(&[dns(CheckStatus::Skipped)][..])
+    );
+
+    state.reduce(WorkerEvent::Status(failure()));
+    let Some(Job::CheckSystem { request, .. }) = state.take_system_check() else {
+        panic!("expected an automatic check");
+    };
+    state.reduce(WorkerEvent::SystemChecks {
+        request,
+        results: vec![dns(CheckStatus::Warning)],
+    });
+    assert!(state.system_checks.failure_warning.is_none());
+}
+
+#[test]
+fn name_lookup_failures_get_the_dns_hint_only_after_substitution_was_found() {
+    let id = rosetun_config::SubscriptionId::new("test-subscription");
+    let unresolved = |protected| Status {
+        state: if protected {
+            ConnectionState::FailedProtected {
+                reason: "failed to resolve the VPN server name".into(),
+                failure_kind: Some(rosetun_config::FailureKind::ServerNameUnresolved),
+            }
+        } else {
+            ConnectionState::Failed {
+                reason: "failed to resolve the VPN server name".into(),
+                failure_kind: Some(rosetun_config::FailureKind::ServerNameUnresolved),
+            }
+        },
+        ..Status::default()
+    };
+    let host_not_found = || {
+        UpdateOutcome::Error(rosetun_core::UpdateSubscriptionError::Fetch {
+            source: rosetun_core::FetchError::HostNotFound,
+            message: "subscription server name could not be resolved".into(),
+        })
+    };
+
+    for last in [
+        None,
+        Some(CheckStatus::Ok),
+        Some(CheckStatus::Unavailable),
+        Some(CheckStatus::Warning),
+    ] {
+        let mut state = State::default();
+        if let Some(status) = last {
+            run_check(&mut state, vec![dns(status)]);
+        }
+        let expected = last == Some(CheckStatus::Warning);
+        for protected in [false, true] {
+            state.status = unresolved(protected);
+            assert_eq!(state.dns_hint_for_failure(), expected, "{last:?}");
+        }
+        state.subscriptions.outcomes.insert(id.clone(), host_not_found());
+        assert_eq!(state.dns_hint_for_update(&id), expected, "{last:?}");
+    }
+
+    // Other failures never get it, even with substitution found.
+    let mut state = State::default();
+    run_check(&mut state, vec![dns(CheckStatus::Warning)]);
+    state.status = failure();
+    assert!(!state.dns_hint_for_failure());
+    state.subscriptions.outcomes.insert(
+        id.clone(),
+        UpdateOutcome::Error(rosetun_core::UpdateSubscriptionError::Fetch {
+            source: rosetun_core::FetchError::Timeout,
+            message: "timed out".into(),
+        }),
+    );
+    assert!(!state.dns_hint_for_update(&id));
+}

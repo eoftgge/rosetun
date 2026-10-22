@@ -327,6 +327,9 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         }
                                     });
                                 }
+                                if state.dns_hint_for_failure() {
+                                    crate::view::settings::dns_hint(ui, actions);
+                                }
                             }
                             if protection_action(status, state.operations.helper)
                                 == ProtectionAction::ConfirmDisconnect

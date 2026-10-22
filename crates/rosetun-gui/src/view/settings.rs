@@ -723,6 +723,16 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
 }
 
+/// One line under a failed lookup that points to the DNS check.
+pub(crate) fn dns_hint(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    ui.horizontal_wrapped(|ui| {
+        ui.colored_label(theme::WARNING, tr!("system-check-dns-hint"));
+        if ui.link(tr!("system-check-more")).clicked() {
+            actions.push(Action::ShowSystemChecks);
+        }
+    });
+}
+
 pub(crate) fn reset_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
     let choice = widgets::confirm_modal(
         ctx,
