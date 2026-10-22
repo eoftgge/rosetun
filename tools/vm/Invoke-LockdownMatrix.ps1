@@ -171,10 +171,17 @@ function Invoke-GuestHelperMode {
     param([Parameter(Mandatory)][string]$Mode)
     Invoke-RosetunGuest -ScriptBlock {
         param($dir, $mode)
-        $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') $mode 2>&1 | ForEach-Object { "$_" }
-        $exitCode = $LASTEXITCODE
-        $global:LASTEXITCODE = 0
-        [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
+        try {
+            $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') $mode 2>&1 | ForEach-Object { "$_" }
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
+        }
+        finally {
+            [Console]::OutputEncoding = $encoding
+        }
     } -ArgumentList $guestDir, $Mode
 }
 

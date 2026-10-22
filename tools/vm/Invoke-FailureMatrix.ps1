@@ -232,6 +232,8 @@ function Invoke-SettingsCli {
     Invoke-RosetunGuest -ScriptBlock {
         param($dir, $configPath, $action)
         $env:ROSETUN_CONFIG = $configPath
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
         try {
             $output = & "$dir\rosetun.exe" $action 2>&1 | ForEach-Object { "$_" }
             $exitCode = $LASTEXITCODE
@@ -240,6 +242,7 @@ function Invoke-SettingsCli {
         }
         finally {
             Remove-Item Env:ROSETUN_CONFIG -ErrorAction SilentlyContinue
+            [Console]::OutputEncoding = $encoding
         }
     } -ArgumentList (Get-RosetunGuestDir), $ConfigPath, $Action
 }
@@ -250,6 +253,8 @@ function Invoke-XraySetting {
     Invoke-RosetunGuest -ScriptBlock {
         param($dir, $setting)
         $env:ROSETUN_CONFIG = Join-Path $dir 'matrix-xray-settings.json'
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
         try {
             $output = & "$dir\rosetun.exe" xray $setting 2>&1 | ForEach-Object { "$_" }
             $exitCode = $LASTEXITCODE
@@ -258,6 +263,7 @@ function Invoke-XraySetting {
         }
         finally {
             Remove-Item Env:ROSETUN_CONFIG -ErrorAction SilentlyContinue
+            [Console]::OutputEncoding = $encoding
         }
     } -ArgumentList (Get-RosetunGuestDir), $Setting
 }
@@ -276,7 +282,14 @@ function Install-OtherAccountService {
     param([string]$GuestDir)
     Invoke-RosetunGuest -ScriptBlock {
         param($dir)
-        $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') --install-service 2>&1
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
+        try {
+            $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') --install-service 2>&1
+        }
+        finally {
+            [Console]::OutputEncoding = $encoding
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "Could not start the test service: $($output -join ' ')"
         }
@@ -296,7 +309,14 @@ function Remove-OtherAccountService {
     param([string]$GuestDir)
     Invoke-RosetunGuest -ScriptBlock {
         param($dir)
-        $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') --uninstall-service 2>&1
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
+        try {
+            $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') --uninstall-service 2>&1
+        }
+        finally {
+            [Console]::OutputEncoding = $encoding
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "Could not remove the test service: $($output -join ' ')"
         }
@@ -411,6 +431,8 @@ public static class RosetunOtherLogon {
             $identity = [System.Security.Principal.WindowsIdentity]::new($token)
         }
         catch { $logonError = "logon as the test account failed: $($_.Exception.Message)" }
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
         try {
             foreach ($command in $commands) {
                 $reply = $null
@@ -482,6 +504,7 @@ public static class RosetunOtherLogon {
             }
         }
         finally {
+            [Console]::OutputEncoding = $encoding
             if ($identity) { $identity.Dispose() }
             if ($token -ne [IntPtr]::Zero) { [RosetunOtherLogon]::CloseHandle($token) | Out-Null }
         }
@@ -1807,6 +1830,8 @@ $cancel = Invoke-RosetunGuest -ScriptBlock {
         if ($exitCode -eq 0 -and $output -match '(?m)^state: (\w+)') { return $Matches[1] }
         return 'unknown'
     }
+    $encoding = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
     $process = Start-Process -FilePath $cli -ArgumentList @('connect', "`"$request`"") `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
     try {
@@ -1836,6 +1861,7 @@ $cancel = Invoke-RosetunGuest -ScriptBlock {
         }
     }
     finally {
+        [Console]::OutputEncoding = $encoding
         if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
         Remove-Item $stdout, $stderr -Force -ErrorAction SilentlyContinue
     }

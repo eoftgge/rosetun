@@ -50,6 +50,8 @@ function Invoke-ListCli {
     Invoke-RosetunGuest -ScriptBlock {
         param($dir, $configPath, $action)
         $env:ROSETUN_CONFIG = $configPath
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
         try {
             $output = & "$dir\rosetun.exe" $action 2>&1 | ForEach-Object { "$_" }
             $exitCode = $LASTEXITCODE
@@ -58,6 +60,7 @@ function Invoke-ListCli {
         }
         finally {
             Remove-Item Env:ROSETUN_CONFIG -ErrorAction SilentlyContinue
+            [Console]::OutputEncoding = $encoding
         }
     } -ArgumentList (Get-RosetunGuestDir), $ConfigPath, $Action
 }

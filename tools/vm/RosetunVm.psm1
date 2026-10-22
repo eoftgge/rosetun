@@ -931,10 +931,19 @@ function Invoke-RosetunCli {
     )
     $result = Invoke-RosetunGuest -ScriptBlock {
         param($dir, [string[]]$cliArgs)
-        $output = & "$dir\rosetun.exe" @cliArgs 2>&1 | ForEach-Object { "$_" }
-        $exitCode = $LASTEXITCODE
-        $global:LASTEXITCODE = 0
-        [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
+        # The CLI writes UTF-8; read in the guest console's code page, anything
+        # outside ASCII comes back garbled.
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
+        try {
+            $output = & "$dir\rosetun.exe" @cliArgs 2>&1 | ForEach-Object { "$_" }
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
+        }
+        finally {
+            [Console]::OutputEncoding = $encoding
+        }
     } -ArgumentList $script:Config.GuestDir, $Arguments
 
     # Callers usually discard the result, so a failure must be visible here.
@@ -1881,6 +1890,8 @@ function Invoke-RosetunConnectionsDuring {
             while ($true) { & $cli connections *> $null }
         } -ArgumentList $cli
         $curl = $null
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
         try {
             Start-Sleep -Seconds 3
             $flags = @('--max-time', '10', '--silent', '--rate', '2/s', '--limit-rate', '20k')
@@ -1914,6 +1925,7 @@ function Invoke-RosetunConnectionsDuring {
             Stop-Job -Job $poller -ErrorAction SilentlyContinue
             Remove-Job -Job $poller -Force -ErrorAction SilentlyContinue
             Remove-Item Env:ROSETUN_CONFIG -ErrorAction SilentlyContinue
+            [Console]::OutputEncoding = $encoding
         }
         $global:LASTEXITCODE = 0
         [pscustomobject]@{ CurlExit = $curlExit; ExitCode = $exitCode; Output = ($output -join "`n") }
@@ -1960,6 +1972,8 @@ function Invoke-RosetunConnectionClose {
         $curlExit = $null
         $seconds = $null
         $after = @()
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
         try {
             Start-Sleep -Seconds 3
             $flags = @('--max-time', '60', '--silent', '--limit-rate', '100k', '--output', 'NUL', $url)
@@ -2002,6 +2016,7 @@ function Invoke-RosetunConnectionClose {
             }
             Stop-Job -Job $poller -ErrorAction SilentlyContinue
             Remove-Job -Job $poller -Force -ErrorAction SilentlyContinue
+            [Console]::OutputEncoding = $encoding
         }
         $global:LASTEXITCODE = 0
         [pscustomobject]@{
