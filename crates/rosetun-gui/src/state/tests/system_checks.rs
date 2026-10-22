@@ -178,7 +178,10 @@ fn run_check(state: &mut State, results: Vec<CheckResult>) -> bool {
 fn dns_row_reads_differently_in_each_state() {
     let detail = |status| crate::i18n::check_detail(&dns(status));
     assert_eq!(detail(CheckStatus::Ok), tr!("system-check-dns-ok"));
-    assert_eq!(detail(CheckStatus::Skipped), tr!("system-check-offline-only"));
+    assert_eq!(
+        detail(CheckStatus::Skipped),
+        tr!("system-check-offline-only")
+    );
     assert_eq!(
         detail(CheckStatus::Unavailable),
         tr!("system-check-unavailable")
@@ -209,7 +212,11 @@ fn dns_check_is_guarded_under_a_tunnel_or_protection_only() {
             state: connection.clone(),
             ..Status::default()
         }));
-        assert_eq!(run_check(&mut state, Vec::new()), expected, "{connection:?}");
+        assert_eq!(
+            run_check(&mut state, Vec::new()),
+            expected,
+            "{connection:?}"
+        );
     }
 }
 
@@ -281,7 +288,10 @@ fn name_lookup_failures_get_the_dns_hint_only_after_substitution_was_found() {
             state.status = unresolved(protected);
             assert_eq!(state.dns_hint_for_failure(), expected, "{last:?}");
         }
-        state.subscriptions.outcomes.insert(id.clone(), host_not_found());
+        state
+            .subscriptions
+            .outcomes
+            .insert(id.clone(), host_not_found());
         assert_eq!(state.dns_hint_for_update(&id), expected, "{last:?}");
     }
 

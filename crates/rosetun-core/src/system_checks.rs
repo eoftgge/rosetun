@@ -594,11 +594,18 @@ mod tests {
             (Err(AskError::Truncated), real()),
             (real(), Err(AskError::NoReply)),
             (Err(AskError::NoReply), Err(AskError::NoReply)),
-            (reply(rosetun_dns::wire::RCODE_REFUSED, &[]), reply(rosetun_dns::wire::RCODE_REFUSED, &[])),
+            (
+                reply(rosetun_dns::wire::RCODE_REFUSED, &[]),
+                reply(rosetun_dns::wire::RCODE_REFUSED, &[]),
+            ),
             (reply(2, &[]), reply(2, &[])),
             (real(), reply(0, &[])),
         ] {
-            assert_eq!(dns(udp.clone(), tcp.clone()), unavailable, "{udp:?} {tcp:?}");
+            assert_eq!(
+                dns(udp.clone(), tcp.clone()),
+                unavailable,
+                "{udp:?} {tcp:?}"
+            );
         }
     }
 }

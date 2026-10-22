@@ -253,10 +253,7 @@ mod tests {
     #[test]
     fn a_truncated_reply_is_reported() {
         let server = udp_server(|question| vec![txt_reply(question, 0x8600, &[])]);
-        assert_eq!(
-            ask_ch(server, Transport::Udp),
-            Err(AskError::Truncated)
-        );
+        assert_eq!(ask_ch(server, Transport::Udp), Err(AskError::Truncated));
     }
 
     #[test]
@@ -295,7 +292,11 @@ mod tests {
                 TYPE_TXT,
                 CLASS_CH,
             );
-            vec![txt_reply(&other, 0x8400, &[("other.example", CLASS_CH, &["x"])])]
+            vec![txt_reply(
+                &other,
+                0x8400,
+                &[("other.example", CLASS_CH, &["x"])],
+            )]
         }
         fn other_class(question: &[u8]) -> Vec<Vec<u8>> {
             let mut in_class = question.to_vec();
