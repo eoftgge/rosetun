@@ -279,7 +279,7 @@ fn matches(rule: &Value, sources: &HashMap<String, Value>, input: &Input) -> boo
                     .is_some_and(|domain| strings(value).any(|entry| domain.contains(entry))),
             ),
             "ip_cidr" => {
-                any_address(ip.is_some_and(|ip| strings(value).any(|cidr| contains(cidr, ip))))
+                any_address(ip.is_some_and(|ip| strings(value).any(|cidr| contains(cidr, ip))));
             }
             // The documentation addresses are public; only loopback stands for
             // a local one here.

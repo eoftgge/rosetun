@@ -494,7 +494,7 @@ impl State {
             }
             WorkerEvent::ConfigError(error) => self.config_error = Some(error),
             WorkerEvent::SystemChecks { request, results } => {
-                self.reduce_system_checks(request, results)
+                self.reduce_system_checks(request, results);
             }
             event @ (WorkerEvent::HelperAvailable { .. }
             | WorkerEvent::HelperUnavailable(_)

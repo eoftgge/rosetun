@@ -135,7 +135,7 @@ impl<'a> ExtraNodes<'a> {
         for (index, extra) in extra.iter().enumerate() {
             match endpoints.get(index).copied().flatten() {
                 Some(address) => {
-                    nodes.push((&extra.exit, node_with_endpoint(&extra.node, address)))
+                    nodes.push((&extra.exit, node_with_endpoint(&extra.node, address)));
                 }
                 None => {
                     unresolved.insert(&extra.exit);

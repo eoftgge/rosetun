@@ -1563,7 +1563,7 @@ mod tests {
                         can_temporary,
                         0,
                         &mut Vec::new(),
-                    )
+                    );
                 },
             );
             output.textures_delta.clear();
@@ -1621,7 +1621,7 @@ mod tests {
                     true,
                     0,
                     &mut Vec::new(),
-                )
+                );
             },
         );
         output.textures_delta.clear();
@@ -1659,7 +1659,7 @@ mod tests {
                         true,
                         0,
                         &mut Vec::new(),
-                    )
+                    );
                 },
             );
             output.textures_delta.clear();
@@ -1713,7 +1713,7 @@ mod tests {
             };
             let run = |dialog: &mut AddRuleDialog| {
                 let mut output = ctx.run_ui(input(), |ctx| {
-                    show(ctx, dialog, &config, false, 0, &mut Vec::new())
+                    show(ctx, dialog, &config, false, 0, &mut Vec::new());
                 });
                 output.textures_delta.clear();
             };
@@ -1761,7 +1761,7 @@ mod tests {
                 ..egui::RawInput::default()
             };
             let mut output = ctx.run_ui(input, |ctx| {
-                show(ctx, dialog, &config, false, 0, &mut Vec::new())
+                show(ctx, dialog, &config, false, 0, &mut Vec::new());
             });
             output.textures_delta.clear();
             output.shapes
@@ -1839,7 +1839,7 @@ mod tests {
                         false,
                         0,
                         &mut Vec::new(),
-                    )
+                    );
                 },
             );
             output.textures_delta.clear();

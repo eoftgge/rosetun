@@ -238,7 +238,7 @@ impl State {
                         self.rules.screen.name = None;
                     }
                     Err(error) => {
-                        self.name_error(errors::rule_set(crate::i18n::language(), &error))
+                        self.name_error(errors::rule_set(crate::i18n::language(), &error));
                     }
                 }
             }
@@ -247,7 +247,7 @@ impl State {
                 match result {
                     Ok(()) => self.rules.screen.name = None,
                     Err(error) => {
-                        self.name_error(errors::rule_set(crate::i18n::language(), &error))
+                        self.name_error(errors::rule_set(crate::i18n::language(), &error));
                     }
                 }
             }

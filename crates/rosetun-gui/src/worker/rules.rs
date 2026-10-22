@@ -36,7 +36,7 @@ impl WorkerDispatcher {
             let result = running_processes();
             match &result {
                 Ok(processes) => {
-                    tracing::info!(count = processes.len(), "Loaded running processes")
+                    tracing::info!(count = processes.len(), "Loaded running processes");
                 }
                 Err(error) => tracing::warn!(%error, "Could not load running processes"),
             }

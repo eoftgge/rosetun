@@ -244,7 +244,7 @@ impl App {
                 guarded,
             } => self.workers.check_system(request, own_alias, guarded),
             Job::CheckFailureInterference { request, own_alias } => {
-                self.workers.check_failure_interference(request, own_alias)
+                self.workers.check_failure_interference(request, own_alias);
             }
             Job::Apply(request) => self.workers.apply(request),
             Job::RestoreApplied(snapshot) => self.workers.restore_applied(snapshot),
@@ -282,10 +282,10 @@ impl App {
             Job::AddRule(set, matcher, target) => self.workers.add_rule(set, matcher, target),
             Job::AddRules(set, matchers, target) => self.workers.add_rules(set, matchers, target),
             Job::UpdateRule(set, rule, matcher, target) => {
-                self.workers.update_rule(set, rule, matcher, target)
+                self.workers.update_rule(set, rule, matcher, target);
             }
             Job::SetRuleTarget(set, rule, target) => {
-                self.workers.set_rule_target(set, rule, target)
+                self.workers.set_rule_target(set, rule, target);
             }
             Job::CreateExit(exit) => self.workers.create_exit(exit),
             Job::SaveExit { id, name, target } => self.workers.save_exit(id, name, target),

@@ -180,7 +180,7 @@ impl DnsWatchdog {
                     let warned = health.signaled || health.path_down;
                     match health.observe(dns_ok, path_ok) {
                         Verdict::DnsFailing => {
-                            tracing::debug!("DNS probe through the tunnel failed")
+                            tracing::debug!("DNS probe through the tunnel failed");
                         }
                         Verdict::DnsRecovered => {
                             worker_stalled.store(false, Ordering::Release);
