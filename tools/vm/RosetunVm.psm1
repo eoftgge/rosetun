@@ -2276,6 +2276,64 @@ function Save-RosetunGuestScreenshot {
     finally { $bitmap.Dispose() }
 }
 
+function Suspend-RosetunGuest {
+    # Sleep as Hyper-V can model it: the VM is saved, left for $Seconds and
+    # started again. Returns how long it was saved, the guest clock's inferred
+    # jump and a stopwatch started at Start-VM, once PowerShell Direct answers.
+    # The session closes before Save-VM, so nothing may live in it.
+    param([int]$Seconds = 40)
+    $guestBefore = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow }
+    $hostBefore = [DateTime]::UtcNow
+    Disconnect-RosetunVm
+    $vmName = $script:Config.VmName
+    $resumeWatch = $null
+    try {
+        Save-VM -Name $vmName | Out-Null
+        if ((Get-VM -Name $vmName).State -ne 'Saved') {
+            throw 'The VM did not enter the Saved state.'
+        }
+        $savedAt = [DateTime]::UtcNow
+        Start-Sleep -Seconds $Seconds
+    }
+    finally {
+        if ((Get-VM -Name $vmName).State -eq 'Saved') {
+            $resumeAt = [DateTime]::UtcNow
+            $resumeWatch = [Diagnostics.Stopwatch]::StartNew()
+            Start-VM -Name $vmName | Out-Null
+        }
+    }
+    $deadline = (Get-Date).AddSeconds(45)
+    while ($true) {
+        try {
+            Connect-RosetunVm | Out-Null
+            break
+        }
+        catch {
+            if ((Get-Date) -gt $deadline) {
+                throw "The saved guest did not accept PowerShell Direct within 45 seconds: $_"
+            }
+            Start-Sleep -Seconds 2
+        }
+    }
+    $guestAfter = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow }
+    $hostAfter = [DateTime]::UtcNow
+    $savedSeconds = ($resumeAt - $savedAt).TotalSeconds
+    $runningSeconds = ($hostAfter - $hostBefore).TotalSeconds - $savedSeconds
+    [pscustomobject]@{
+        SavedSeconds = $savedSeconds
+        ClockJump = ($guestAfter - $guestBefore).TotalSeconds - $runningSeconds
+        ResumeWatch = $resumeWatch
+    }
+}
+
+function Get-RosetunEgressWatchProbes {
+    # Probes the running egress watch has made so far.
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        [int]((Get-Content -Path (Join-Path $dir 'rosetun-egress-watch.txt')) -split ' ')[0]
+    } -ArgumentList $script:Config.GuestDir
+}
+
 function Wait-RosetunGuest {
     # Drops a session that may have died with the guest, starts a VM that is
     # off and waits until the guest answers again.

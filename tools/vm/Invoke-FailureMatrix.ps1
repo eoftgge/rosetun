@@ -1345,53 +1345,14 @@ Start-RosetunEgressWatch
 $egressWatchActive = $true
 $watch = $null
 try {
-    $beforeProbes = Invoke-RosetunGuest -ScriptBlock {
-        param($dir)
-        [int]((Get-Content -Path (Join-Path $dir 'rosetun-egress-watch.txt')) -split ' ')[0]
-    } -ArgumentList (Get-RosetunGuestDir)
-    $guestBefore = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow }
-    $hostBefore = [DateTime]::UtcNow
-    Disconnect-RosetunVm
-    $vmName = Get-RosetunVmName
+    $beforeProbes = Get-RosetunEgressWatchProbes
     $sleepWatch = [Diagnostics.Stopwatch]::StartNew()
-    $resumeWatch = $null
-    try {
-        Save-VM -Name $vmName | Out-Null
-        if ((Get-VM -Name $vmName).State -ne 'Saved') {
-            throw 'The VM did not enter the Saved state.'
-        }
-        $savedAt = [DateTime]::UtcNow
-        Start-Sleep -Seconds 40
-    }
-    finally {
-        if ((Get-VM -Name $vmName).State -eq 'Saved') {
-            $resumeAt = [DateTime]::UtcNow
-            $resumeWatch = [Diagnostics.Stopwatch]::StartNew()
-            Start-VM -Name $vmName | Out-Null
-        }
-    }
-    $deadline = (Get-Date).AddSeconds(45)
-    while ($true) {
-        try {
-            Connect-RosetunVm | Out-Null
-            break
-        }
-        catch {
-            if ((Get-Date) -gt $deadline) {
-                throw "The saved guest did not accept PowerShell Direct within 45 seconds: $_"
-            }
-            Start-Sleep -Seconds 2
-        }
-    }
-    $guestAfter = Invoke-RosetunGuest -ScriptBlock { [DateTime]::UtcNow }
-    $hostAfter = [DateTime]::UtcNow
-    $savedSeconds = ($resumeAt - $savedAt).TotalSeconds
-    $runningSeconds = ($hostAfter - $hostBefore).TotalSeconds - $savedSeconds
-    $clockJump = ($guestAfter - $guestBefore).TotalSeconds - $runningSeconds
+    $sleep = Suspend-RosetunGuest -Seconds 40
+    $resumeWatch = $sleep.ResumeWatch
     Test-Step 'sleep' 'guest clock jumped by more than 30 s while saved' `
         -Note ("saved {0:N1} s, inferred jump {1:N1} s; check Hyper-V time synchronization if it did not jump" -f `
-            $savedSeconds, $clockJump) {
-        $savedSeconds -gt 30 -and $clockJump -gt 30
+            $sleep.SavedSeconds, $sleep.ClockJump) {
+        $sleep.SavedSeconds -gt 30 -and $sleep.ClockJump -gt 30
     }
     $connected = Wait-RosetunState 'Connected' -TimeoutSeconds 30
     $connectedAt = $resumeWatch.Elapsed.TotalSeconds

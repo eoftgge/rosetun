@@ -245,6 +245,21 @@ function Test-InboundFromHost {
     finally { $client.Dispose() }
 }
 
+function Test-LockdownErrorFree {
+    # The service's errors about Lockdown or the kill switch it forces.
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Log)
+    -not ($Log -split "`n" | Where-Object { $_ -match '\bERROR\b' -and $_ -match '(?i)lockdown|kill switch' })
+}
+
+function Test-SleepClockJump {
+    param([Parameter(Mandatory)][string]$Scenario, [Parameter(Mandatory)]$Sleep)
+    Test-Step $Scenario 'guest clock jumped by more than 30 s while saved' `
+        -Note ("saved {0:N1} s, inferred jump {1:N1} s; check Hyper-V time synchronization if it did not jump" -f `
+            $Sleep.SavedSeconds, $Sleep.ClockJump) {
+        $Sleep.SavedSeconds -gt 30 -and $Sleep.ClockJump -gt 30
+    }
+}
+
 function Get-GuestGateway {
     Invoke-RosetunGuest -ScriptBlock {
         (Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object -Property RouteMetric | Select-Object -First 1).NextHop
@@ -353,6 +368,7 @@ $ipv6Neighbors = [System.Collections.Generic.List[object]]::new()
 $zone = $null
 $guestResolver = $null
 $subscriptionId = $null
+$egressWatchActive = $false
 try {
     if ($Build) {
         Write-Host 'Building...'
@@ -503,6 +519,76 @@ try {
     Stop-RosetunHelper
     Test-Step '5 killed, off' 'fails open as before Lockdown: direct egress works' { Test-RosetunDirectEgress }
     Start-RosetunHelper
+
+    # 5b. Sleep and resume under Lockdown (a saved VM), disconnected and
+    # connected. The listener lives in the PowerShell Direct session, which
+    # closes before Save-VM.
+    $on = Invoke-Lockdown on
+    Test-Step '5b sleep' 'rosetun lockdown on succeeds' { $on.ExitCode -eq 0 } -Note $on.Output
+    $mark = Get-HelperLogLength
+    Stop-GuestListener
+    $guestListenerPort = $null
+    $sleep = Suspend-RosetunGuest -Seconds 40
+    $guestListenerPort = Start-GuestListener
+    Test-SleepClockJump '5b sleep, disconnected' $sleep
+    Test-Step '5b sleep, disconnected' 'objects present' { Test-LockdownInstalled } -Note (Format-Objects (Get-LockdownObjects))
+    Test-Step '5b sleep, disconnected' 'status: lockdown on' { (Get-LockdownStatusLine) -eq 'on' }
+    Test-Step '5b sleep, disconnected' 'direct egress closed' { -not (Test-RosetunDirectEgress) }
+    Test-Step '5b sleep, disconnected' 'IPv6 to the host closed' { -not (Test-RosetunIpv6Open -Neighbors $ipv6Neighbors) }
+    Test-Step '5b sleep, disconnected' 'the host cannot reach a guest listener' { -not (Test-InboundFromHost $guestListenerPort) }
+    $connect = Connect-RosetunTunnel -Quiet
+    $tunnel = Wait-RosetunTunnelEgress -SkipRevocationCheck
+    Test-Step '5b sleep, disconnected' 'connect opens the tunnel' {
+        $connect.ExitCode -eq 0 -and $tunnel.Ok
+    } -Note "$($connect.Output) $($tunnel.Error)"
+
+    Start-RosetunEgressWatch
+    $egressWatchActive = $true
+    $watch = $null
+    $beforeProbes = 0
+    try {
+        $beforeProbes = Get-RosetunEgressWatchProbes
+        Stop-GuestListener
+        $guestListenerPort = $null
+        $sleep = Suspend-RosetunGuest -Seconds 40
+        $guestListenerPort = Start-GuestListener
+        Test-SleepClockJump '5b sleep, connected' $sleep
+        $connected = Wait-RosetunState 'Connected' -TimeoutSeconds 30
+        $connectedAt = $sleep.ResumeWatch.Elapsed.TotalSeconds
+        Test-Step '5b sleep, connected' 'state is Connected within 30 s of Start-VM' `
+            -Note ("{0} after {1:N1} s" -f (Get-RosetunState), $connectedAt) {
+            $connected -and $connectedAt -le 30
+        }
+        $tunnel = Wait-RosetunTunnelEgress -TimeoutSeconds 30 -SkipRevocationCheck
+        $sleep.ResumeWatch.Stop()
+        Test-Step '5b sleep, connected' 'tunnel carries traffic within 30 s of Start-VM' `
+            -Note ("{0} s; {1}; after {2:N1} s" -f $tunnel.Seconds, $tunnel.Error, $sleep.ResumeWatch.Elapsed.TotalSeconds) {
+            $tunnel.Ok -and $sleep.ResumeWatch.Elapsed.TotalSeconds -le 30
+        }
+        Test-Step '5b sleep, connected' 'objects present' { Test-LockdownInstalled } -Note (Format-Objects (Get-LockdownObjects))
+    }
+    finally {
+        try {
+            $watch = Stop-RosetunEgressWatch
+            $egressWatchActive = $false
+        }
+        catch {
+            Test-Step '5b sleep, connected' 'egress watch stopped' -Note "$_" { $false }
+        }
+    }
+    $probeCount = if ($watch) { $watch.Probes } else { 0 }
+    $leakCount = if ($watch) { $watch.Leaks } else { 'unknown' }
+    Test-Step '5b sleep, connected' "no direct leak across the sleep ($probeCount probes)" `
+        -Note "before save: $beforeProbes probes; leaks: $leakCount" {
+        $watch -and $probeCount -gt $beforeProbes -and $leakCount -eq 0
+    }
+    Disconnect-RosetunTunnel | Out-Null
+    $sleepLog = Get-HelperLogSince $mark
+    Test-Step '5b sleep' 'no FWP_E_IN_USE in helper.log' { Test-InUseFree $sleepLog }
+    Test-Step '5b sleep' 'no Lockdown errors in helper.log' { Test-LockdownErrorFree $sleepLog } -Note (
+        ($sleepLog -split "`n" | Where-Object { $_ -match '\bERROR\b' } | Select-Object -First 3) -join ' | ')
+    $off = Invoke-Lockdown off
+    Test-Step '5b sleep' 'rosetun lockdown off succeeds' { $off.ExitCode -eq 0 } -Note $off.Output
 
     # 6. Reboot under Lockdown. The helper task has no trigger, so after the
     # boot nothing of Rosetun runs until it is started: Lockdown alone holds.
@@ -657,6 +743,9 @@ finally {
     if ($bootRecovery) {
         try { Restore-RosetunBootRecovery -Saved $bootRecovery }
         catch { Write-Warning "Could not restore the guest's boot recovery settings: $_" }
+    }
+    if ($egressWatchActive) {
+        try { Stop-RosetunEgressWatch | Out-Null } catch { Write-Warning "Could not stop the egress watch: $_" }
     }
     try { Disconnect-RosetunTunnel | Out-Null } catch { }
     try { Stop-GuestListener } catch { Write-Warning "Could not stop the guest listener: $_" }
