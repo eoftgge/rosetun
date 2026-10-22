@@ -1,3 +1,14 @@
+# LF in the repository and in every checkout, whatever core.autocrlf says.
+* text=auto eol=lf
+
+# Never diff or convert these, even if Git guesses they are text.
+*.dat binary
+*.exe binary
+*.ico binary
+*.png binary
+*.srs binary
+*.ttf binary
+
 # Preserve the upstream license bytes, including line endings.
 installer/third-party/wintun-prebuilt-binaries-license.txt -text
 
