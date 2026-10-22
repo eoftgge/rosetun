@@ -1943,7 +1943,7 @@ mod tests {
         theme::apply(&ctx);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let (_, (submit, cancel)) = egui::Sides::new().show(
+                let ((), (submit, cancel)) = egui::Sides::new().show(
                     ui,
                     |_| {},
                     |ui| footer_buttons(ui, &tr!("add-rule"), true, true, None),
