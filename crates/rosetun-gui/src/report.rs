@@ -316,7 +316,7 @@ impl ReportSnapshot {
                 let _ = writeln!(text, "{title}: {result}");
             }
         } else {
-            let _ = writeln!(text, "{}", missing);
+            let _ = writeln!(text, "{missing}");
         }
 
         let _ = writeln!(text, "\n[{}]", report_label!("report-client-log"));
