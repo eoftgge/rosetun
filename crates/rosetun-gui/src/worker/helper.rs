@@ -3,7 +3,7 @@ use super::*;
 impl WorkerDispatcher {
     pub(crate) fn connect(&self, inputs: ExitInputs) {
         self.spawn_task("rosetun-connect", move |publisher| {
-            tracing::info!("Connect command started");
+            tracing::info!("connect command started");
             let result = publisher
                 .store
                 .load()
@@ -20,7 +20,7 @@ impl WorkerDispatcher {
                 });
             let result = match result {
                 Ok((request, snapshot)) => {
-                    tracing::info!("Connect command succeeded");
+                    tracing::info!("connect command succeeded");
                     emit(
                         &publisher.tx,
                         &publisher.repaint,
@@ -29,7 +29,7 @@ impl WorkerDispatcher {
                     Ok(request)
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "Connect command failed");
+                    tracing::warn!(%error, "connect command failed");
                     Err(error)
                 }
             };
@@ -39,7 +39,7 @@ impl WorkerDispatcher {
 
     pub(crate) fn apply(&self, request: Box<ConnectRequest>) {
         self.spawn_task("rosetun-apply", move |publisher| {
-            tracing::info!("Apply command started");
+            tracing::info!("apply command started");
             let result = rosetun_core::prepare_lists(&publisher.store, request.as_ref().clone())
                 .map_err(HelperCommandError::from)
                 .and_then(|prepared| {
@@ -49,8 +49,8 @@ impl WorkerDispatcher {
                 })
                 .map(|()| *request);
             match &result {
-                Ok(_) => tracing::info!("Apply command succeeded"),
-                Err(error) => tracing::warn!(%error, "Apply command failed"),
+                Ok(_) => tracing::info!("apply command succeeded"),
+                Err(error) => tracing::warn!(%error, "apply command failed"),
             }
             emit(
                 &publisher.tx,
@@ -88,11 +88,11 @@ impl WorkerDispatcher {
 
     pub(crate) fn disconnect(&self) {
         self.spawn_task("rosetun-disconnect", move |publisher| {
-            tracing::info!("Disconnect command started");
+            tracing::info!("disconnect command started");
             let result = with_helper(rosetun_ipc::HelperClient::disconnect_tunnel);
             match &result {
-                Ok(()) => tracing::info!("Disconnect command succeeded"),
-                Err(error) => tracing::warn!(%error, "Disconnect command failed"),
+                Ok(()) => tracing::info!("disconnect command succeeded"),
+                Err(error) => tracing::warn!(%error, "disconnect command failed"),
             }
             emit(
                 &publisher.tx,
@@ -107,7 +107,7 @@ impl WorkerDispatcher {
             let adapters = rosetun_adapters::other_tunnels(&own_alias);
             let processes = running_processes();
             if adapters.is_err() || processes.is_err() {
-                tracing::warn!("Could not inspect possible connection conflicts");
+                tracing::warn!("could not inspect possible connection conflicts");
             }
             let hints = FailureInterference {
                 other_vpns: adapters.unwrap_or_default(),

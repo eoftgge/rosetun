@@ -8,7 +8,7 @@ impl WorkerDispatcher {
             let checked_at = crate::state::now_unix();
             if result.is_ok() {
                 if rosetun_core::record_update_check(&publisher.store, checked_at).is_err() {
-                    tracing::warn!("Could not save update check time");
+                    tracing::warn!("could not save update check time");
                 } else {
                     publisher.publish();
                 }

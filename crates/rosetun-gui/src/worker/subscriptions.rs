@@ -199,12 +199,12 @@ fn ping_targets<'a>(nodes: &[&'a Node]) -> (Vec<&'a Node>, Vec<&'a Node>) {
 
 fn log_subscription_error(operation: &str, error: &impl std::fmt::Display) {
     let message = without_urls(&error.to_string());
-    tracing::warn!(operation, error = %message, "Subscription operation failed");
+    tracing::warn!(operation, error = %message, "subscription operation failed");
 }
 
 pub(super) fn log_list_error(operation: &str, error: &impl std::fmt::Display) {
     let message = without_urls(&error.to_string());
-    tracing::warn!(operation, error = %message, "List operation failed");
+    tracing::warn!(operation, error = %message, "list operation failed");
 }
 
 fn without_urls(message: &str) -> String {

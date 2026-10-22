@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(windows)]
     let activation = activation
-        .inspect_err(|error| tracing::warn!(%error, "Single-instance check failed"))
+        .inspect_err(|error| tracing::warn!(%error, "single-instance check failed"))
         .ok();
 
     let mut viewport = eframe::egui::ViewportBuilder::default()

@@ -21,12 +21,12 @@ impl WindowMemory {
             Ok(window) => match window.as_raw() {
                 RawWindowHandle::Win32(handle) => handle.hwnd.get(),
                 _ => {
-                    tracing::warn!("Main window does not have a Win32 handle");
+                    tracing::warn!("main window does not have a Win32 handle");
                     return None;
                 }
             },
             Err(error) => {
-                tracing::warn!(%error, "Could not get the main window handle");
+                tracing::warn!(%error, "could not get the main window handle");
                 return None;
             }
         };
@@ -43,22 +43,22 @@ impl WindowMemory {
             Ok(bytes) => match serde_json::from_slice::<SavedWindow>(&bytes) {
                 Ok(saved) if saved.is_valid() => Some(saved),
                 Ok(_) => {
-                    tracing::warn!("Saved window placement has invalid dimensions");
+                    tracing::warn!("saved window placement has invalid dimensions");
                     None
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "Could not parse saved window placement");
+                    tracing::warn!(%error, "could not parse saved window placement");
                     None
                 }
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => {
-                tracing::warn!(%error, "Could not read saved window placement");
+                tracing::warn!(%error, "could not read saved window placement");
                 None
             }
         };
         if let Err(error) = rosetun_shell::place_window(self.hwnd, saved) {
-            tracing::warn!(%error, "Could not place the main window");
+            tracing::warn!(%error, "could not place the main window");
         }
         self.shown = true;
         saved.is_some_and(|window| window.maximized)
@@ -69,17 +69,17 @@ impl WindowMemory {
             return;
         }
         let Some(saved) = rosetun_shell::saved_window(self.hwnd) else {
-            tracing::warn!("Could not read the main window placement");
+            tracing::warn!("could not read the main window placement");
             return;
         };
         if !saved.is_valid() {
-            tracing::warn!("Main window placement has invalid dimensions");
+            tracing::warn!("main window placement has invalid dimensions");
             return;
         }
         let bytes = match serde_json::to_vec(&saved) {
             Ok(bytes) => bytes,
             Err(error) => {
-                tracing::warn!(%error, "Could not serialize the main window placement");
+                tracing::warn!(%error, "could not serialize the main window placement");
                 return;
             }
         };
@@ -87,7 +87,7 @@ impl WindowMemory {
         if let Err(error) =
             fs::write(&temporary, bytes).and_then(|()| fs::rename(&temporary, &self.file))
         {
-            tracing::warn!(%error, "Could not save the main window placement");
+            tracing::warn!(%error, "could not save the main window placement");
         }
     }
 }

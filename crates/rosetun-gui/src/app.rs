@@ -139,7 +139,7 @@ impl App {
         self.tray = match tray::Tray::new(sender.clone(), ctx.clone()) {
             Ok(tray) => Some(tray),
             Err(error) => {
-                tracing::warn!(%error, "Could not create tray icon");
+                tracing::warn!(%error, "could not create tray icon");
                 None
             }
         };
@@ -160,7 +160,7 @@ impl App {
             std::thread::spawn(move || {
                 loop {
                     if let Err(error) = activation.wait() {
-                        tracing::warn!(%error, "Could not wait for GUI activation");
+                        tracing::warn!(%error, "could not wait for GUI activation");
                         break;
                     }
                     if sender.send(ShellEvent::Show).is_err() {

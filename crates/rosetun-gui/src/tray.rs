@@ -252,11 +252,11 @@ impl Tray {
         {
             Ok(Some(icon)) => {
                 if let Err(error) = self.icon.set_icon(Some(icon)) {
-                    tracing::warn!(%error, "Could not update tray icon");
+                    tracing::warn!(%error, "could not update tray icon");
                 }
             }
             Ok(None) => {}
-            Err(error) => tracing::warn!(%error, "Could not create tray icon"),
+            Err(error) => tracing::warn!(%error, "could not create tray icon"),
         }
         if self.shown.as_ref() == Some(view) {
             return;
@@ -267,7 +267,7 @@ impl Tray {
             .is_none_or(|shown| shown.tooltip != view.tooltip)
             && let Err(error) = self.icon.set_tooltip(Some(&view.tooltip))
         {
-            tracing::warn!(%error, "Could not update tray tooltip");
+            tracing::warn!(%error, "could not update tray tooltip");
         }
         if self
             .shown

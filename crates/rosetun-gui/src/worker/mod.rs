@@ -454,9 +454,9 @@ fn log_helper_availability(previous: &mut Option<bool>, available: bool) {
         return;
     }
     if available {
-        tracing::info!("Helper available");
+        tracing::info!("helper available");
     } else {
-        tracing::warn!("Helper unavailable");
+        tracing::warn!("helper unavailable");
     }
 }
 
