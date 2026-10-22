@@ -21,11 +21,11 @@ pub(crate) enum Outcome {
     Failed,
 }
 
-fn random_id() -> u16 {
+pub(crate) fn random_id() -> u16 {
     RandomState::new().build_hasher().finish() as u16
 }
 
-fn local_address(server: SocketAddr) -> SocketAddr {
+pub(crate) fn local_address(server: SocketAddr) -> SocketAddr {
     if server.is_ipv4() {
         (Ipv4Addr::UNSPECIFIED, 0).into()
     } else {

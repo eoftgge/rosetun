@@ -5,10 +5,17 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 pub const TYPE_A: u16 = 1;
 pub const TYPE_CNAME: u16 = 5;
+pub const TYPE_TXT: u16 = 16;
 pub const TYPE_AAAA: u16 = 28;
-const CLASS_IN: u16 = 1;
+pub const CLASS_IN: u16 = 1;
+pub const CLASS_CH: u16 = 3;
 
 pub const RCODE_NXDOMAIN: u8 = 3;
+pub const RCODE_NOTIMP: u8 = 4;
+pub const RCODE_REFUSED: u8 = 5;
+
+/// TXT strings kept from one reply; a check needs one or two.
+pub const MAX_TEXTS: usize = 16;
 
 /// A recursive query for one name. `labels` must already be valid: 1 to 63
 /// bytes each, see `labels`.
@@ -208,6 +215,85 @@ pub fn follow(records: &[Record], name: &str) -> (Vec<IpAddr>, String) {
         })
         .collect();
     (addresses, current)
+}
+
+/// `query` in another class.
+pub fn query_in_class(id: u16, labels: &[&[u8]], kind: u16, class: u16) -> Vec<u8> {
+    let mut packet = query(id, labels, kind);
+    let end = packet.len();
+    packet[end - 2..].copy_from_slice(&class.to_be_bytes());
+    packet
+}
+
+/// A reply read for its TXT strings rather than its addresses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextAnswer {
+    pub rcode: u8,
+    pub truncated: bool,
+    /// The TXT strings of answer records owned by the asked name in the
+    /// asked class, at most `MAX_TEXTS`.
+    pub texts: Vec<String>,
+}
+
+/// Parses the reply to a TXT `question` built by `query_in_class`, or
+/// `None` if it is not one, as in `parse_answer`.
+pub fn parse_text_answer(packet: &[u8], question: &[u8]) -> Option<TextAnswer> {
+    if packet.len() < 12 || word(packet, 0)? != word(question, 0)? || word(packet, 4)? != 1 {
+        return None;
+    }
+    let flags = word(packet, 2)?;
+    if flags & 0x8000 == 0 || flags & 0x7800 != 0 {
+        return None;
+    }
+
+    let mut offset = 12;
+    let mut name_end = offset;
+    let name = read_name(question, &mut name_end)?;
+    let class = word(question, name_end + 2)?;
+    skip_name(packet, &mut offset)?;
+    offset = offset.checked_add(4)?;
+    if !packet
+        .get(12..offset)?
+        .eq_ignore_ascii_case(question.get(12..)?)
+    {
+        return None;
+    }
+    let rcode = (flags & 0x000f) as u8;
+    let truncated = flags & 0x0200 != 0;
+    let mut texts = Vec::new();
+    if truncated {
+        return Some(TextAnswer {
+            rcode,
+            truncated,
+            texts,
+        });
+    }
+
+    for _ in 0..word(packet, 6)? {
+        let owner = read_name(packet, &mut offset)?;
+        let kind = word(packet, offset)?;
+        let record_class = word(packet, offset + 2)?;
+        let data_length = usize::from(word(packet, offset + 8)?);
+        offset = offset.checked_add(10)?;
+        let data_end = offset.checked_add(data_length)?;
+        let mut data = packet.get(offset..data_end)?;
+        if kind == TYPE_TXT && record_class == class && owner == name {
+            while let Some((&length, rest)) = data.split_first() {
+                let text = rest.get(..usize::from(length))?;
+                if texts.len() < MAX_TEXTS {
+                    texts.push(String::from_utf8_lossy(text).into_owned());
+                }
+                data = &rest[usize::from(length)..];
+            }
+        }
+        offset = data_end;
+    }
+
+    Some(TextAnswer {
+        rcode,
+        truncated,
+        texts,
+    })
 }
 
 #[cfg(test)]

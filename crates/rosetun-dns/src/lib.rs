@@ -8,6 +8,7 @@
 
 mod exchange;
 mod hosts;
+mod probe;
 mod servers;
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -19,6 +20,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use exchange::Outcome;
+pub use probe::{AskError, Reply, Transport, ask};
 
 /// Each round asks every server in turn, waiting this long for each.
 const ROUNDS: [Duration; 2] = [Duration::from_millis(1500), Duration::from_secs(3)];
