@@ -1,7 +1,7 @@
 #![deny(unsafe_code)]
 
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod registry;
 
 use rosetun_config::digest_hex;

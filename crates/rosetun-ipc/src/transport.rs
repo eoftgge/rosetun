@@ -273,7 +273,7 @@ mod platform {
 }
 
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod platform {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
@@ -1031,7 +1031,7 @@ mod security_descriptor_tests {
 }
 
 #[cfg(all(test, windows))]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "the tests read the pipe security descriptor through Win32")]
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};

@@ -1,28 +1,28 @@
 #![deny(unsafe_code)]
 
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod autostart;
 #[cfg(any(windows, test))]
 mod first_start;
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod instance;
 
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod language;
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod screen_clip;
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod system_checks;
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod system_info;
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod window;
 
 #[cfg(windows)]

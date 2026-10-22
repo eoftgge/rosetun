@@ -11,7 +11,7 @@ mod hosts;
 mod probe;
 mod servers;
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
 mod windows;
 pub mod wire;
 

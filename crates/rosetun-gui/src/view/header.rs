@@ -31,7 +31,7 @@ enum TabIcon {
     Settings,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(test), expect(dead_code, reason = "some rectangles are read only by the layout tests"))]
 struct HeaderRects {
     brand: Rect,
     tabs: [Rect; 4],

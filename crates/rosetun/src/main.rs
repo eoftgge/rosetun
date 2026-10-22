@@ -1,5 +1,3 @@
-#![allow(unreachable_pub)]
-
 mod connections;
 mod exits;
 mod subcommands;

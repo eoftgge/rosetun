@@ -304,7 +304,6 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 struct ToolbarRects {
     search: egui::Rect,
     view: egui::Rect,
