@@ -467,12 +467,9 @@ impl ListStore {
             ));
         };
         let missing = || HelperError::new(ErrorCode::ListMissing, "a required list is invalid");
-        let before = match fingerprint(&path) {
-            Ok(fingerprint) => fingerprint,
-            Err(_) => {
-                object.verified = None;
-                return Err(missing());
-            }
+        let Ok(before) = fingerprint(&path) else {
+            object.verified = None;
+            return Err(missing());
         };
         if before.as_ref().is_some_and(|file| file.size != object.size)
             || before

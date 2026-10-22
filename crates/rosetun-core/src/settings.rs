@@ -99,9 +99,8 @@ pub fn parse_dns_input(
         .trim()
         .parse::<IpAddr>()
         .map_err(|_| DnsInputError::InvalidServer)?;
-    let server_name = match Host::parse(server_name.trim()) {
-        Ok(Host::Domain(name)) => name,
-        _ => return Err(DnsInputError::InvalidServerName),
+    let Ok(Host::Domain(server_name)) = Host::parse(server_name.trim()) else {
+        return Err(DnsInputError::InvalidServerName);
     };
     let port = match port.trim() {
         "" => None,

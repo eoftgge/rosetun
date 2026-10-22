@@ -43,12 +43,11 @@ pub(crate) fn ask(server: SocketAddr, name: &str, labels: &[&[u8]], timeout: Dur
     let mut answers: [Option<Option<Answer>>; 2] = [None, None];
 
     // A connected socket takes replies from this server only.
-    let socket = match UdpSocket::bind(local_address(server)).and_then(|socket| {
+    let Ok(socket) = UdpSocket::bind(local_address(server)).and_then(|socket| {
         socket.connect(server)?;
         Ok(socket)
-    }) {
-        Ok(socket) => socket,
-        Err(_) => return Outcome::Failed,
+    }) else {
+        return Outcome::Failed;
     };
     for question in &questions {
         if socket.send(question).is_err() {

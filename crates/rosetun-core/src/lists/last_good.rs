@@ -63,12 +63,9 @@ pub(super) fn load(store: &Store, tag: &str) -> Result<Option<ListPayload>, List
         discard_corrupt(tag, &[&selected])?;
         return Ok(None);
     }
-    let payload = match formats::payload(&bytes, format, None) {
-        Ok(payload) => payload,
-        Err(_) => {
-            discard_corrupt(tag, &[&selected])?;
-            return Ok(None);
-        }
+    let Ok(payload) = formats::payload(&bytes, format, None) else {
+        discard_corrupt(tag, &[&selected])?;
+        return Ok(None);
     };
     if payload.bytes != bytes {
         discard_corrupt(tag, &[&selected])?;
