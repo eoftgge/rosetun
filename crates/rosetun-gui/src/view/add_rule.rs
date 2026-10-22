@@ -48,9 +48,7 @@ fn has_advanced(dialog: &AddRuleDialog) -> bool {
 }
 
 fn advanced_height(dialog: &AddRuleDialog) -> f32 {
-    if !has_advanced(dialog) {
-        0.0
-    } else {
+    if has_advanced(dialog) {
         ADVANCED_HEADER_HEIGHT
             + if dialog.advanced {
                 ADVANCED_ROW_HEIGHT
@@ -59,6 +57,8 @@ fn advanced_height(dialog: &AddRuleDialog) -> f32 {
             } else {
                 0.0
             }
+    } else {
+        0.0
     }
 }
 

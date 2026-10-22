@@ -635,12 +635,12 @@ pub fn parse_ip_cidr(value: &str) -> Result<String, IpCidrError> {
         _ => return Err(IpCidrError::Invalid),
     };
     let canonical = format!("{network}/{prefix}");
-    if network != ip {
+    if network == ip {
+        Ok(canonical)
+    } else {
         Err(IpCidrError::HostBits {
             corrected: canonical,
         })
-    } else {
-        Ok(canonical)
     }
 }
 

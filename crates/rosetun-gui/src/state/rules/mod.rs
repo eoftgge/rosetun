@@ -104,15 +104,15 @@ impl State {
             );
             self.rules.screen.selection_anchor = Some(visible[anchor].clone());
         } else if additive {
-            if !selection.insert(rule.clone()) {
+            if selection.insert(rule.clone()) {
+                self.rules.screen.selection_anchor = Some(rule);
+            } else {
                 selection.remove(&rule);
                 self.rules.screen.selection_anchor = visible
                     .iter()
                     .rev()
                     .find(|id| selection.contains(*id))
                     .cloned();
-            } else {
-                self.rules.screen.selection_anchor = Some(rule);
             }
         } else {
             selection.clear();
@@ -140,9 +140,7 @@ impl State {
         if self.rules.screen.opened && self.selected_rules().is_none() {
             self.rules.screen.selected_set = self.preferred_set();
         }
-        if self.rules.screen.selected_set != previous {
-            self.rules.screen.clear_selection();
-        } else {
+        if self.rules.screen.selected_set == previous {
             let existing: BTreeSet<_> = self
                 .selected_rules()
                 .into_iter()
@@ -161,6 +159,8 @@ impl State {
             {
                 self.rules.screen.selection_anchor = None;
             }
+        } else {
+            self.rules.screen.clear_selection();
         }
         if self
             .rules
