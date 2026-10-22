@@ -61,7 +61,7 @@ fn write_lock_for(path: &Path) -> Arc<Mutex<()>> {
     let key = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
     let mut locks = WRITE_LOCKS
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     locks.retain(|_, lock| lock.strong_count() > 0);
     if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
         return lock;
@@ -155,7 +155,7 @@ impl Store {
         let _write = self
             .write_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _file_lock = lock_config(&self.path).map_err(E::from)?;
         let LoadedConfig {
             mut config,
@@ -208,7 +208,7 @@ impl Store {
         let _write = self
             .write_lock
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let config = load(&self.path).map_err(E::from)?;
         action(&config)
     }

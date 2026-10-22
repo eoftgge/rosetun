@@ -27,7 +27,13 @@ const TARGET_GAP: f32 = 16.0;
 const MENU_GAP: f32 = 12.0;
 const TARGET_FILTER_WIDTH: f32 = 166.0;
 
-#[cfg_attr(not(test), expect(dead_code, reason = "some rectangles are read only by the layout tests"))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "some rectangles are read only by the layout tests"
+    )
+)]
 struct ToolbarRects {
     search: egui::Rect,
     tabs: egui::Rect,

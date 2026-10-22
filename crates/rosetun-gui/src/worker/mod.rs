@@ -290,7 +290,7 @@ impl ConfigPublisher {
         let mut generation = self
             .generation
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let event = match self.store.load() {
             Ok(config) => {
                 if reconcile_on_start && let Err(error) = reconcile_lists(&self.store) {

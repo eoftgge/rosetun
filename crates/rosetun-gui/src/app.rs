@@ -90,7 +90,8 @@ impl App {
             .set_zoom_factor(f32::from(applied_scale) / 100.0);
         let (tx, events) = mpsc::channel();
         let mut state = State::default();
-        state.settings.screen.config_folder = store.path().parent().map(|path| path.to_owned());
+        state.settings.screen.config_folder =
+            store.path().parent().map(std::borrow::ToOwned::to_owned);
         state.settings.screen.licenses_folder = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(|dir| dir.join("licenses")))

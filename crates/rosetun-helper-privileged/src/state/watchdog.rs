@@ -125,7 +125,7 @@ impl DnsWatchdog {
             move |stopped| {
                 let targets = path_addresses
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .iter()
                     .map(|address| SocketAddr::from((*address, 80)))
                     .collect::<Vec<_>>();
@@ -153,7 +153,9 @@ impl DnsWatchdog {
                         return;
                     }
                     let connected = {
-                        let status = status.lock().unwrap_or_else(|error| error.into_inner());
+                        let status = status
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         matches!(status.state, ConnectionState::Connected)
                     };
                     if !connected {

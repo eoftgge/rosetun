@@ -105,7 +105,7 @@ pub(crate) fn tr_in(language: Language, key: &str, args: &FluentArgs<'_>) -> Str
     let warned = WARNED.get_or_init(|| Mutex::new(HashSet::new()));
     if warned
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(key.to_owned())
     {
         tracing::warn!(key, "Could not format interface text");

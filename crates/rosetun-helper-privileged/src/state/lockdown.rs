@@ -22,11 +22,15 @@ pub(super) struct LockdownState {
 pub(super) type SharedLockdown = Arc<Mutex<LockdownState>>;
 
 pub(super) fn read(shared: &SharedLockdown) -> LockdownState {
-    *shared.lock().unwrap_or_else(|poison| poison.into_inner())
+    *shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn write(shared: &SharedLockdown, state: LockdownState) {
-    *shared.lock().unwrap_or_else(|poison| poison.into_inner()) = state;
+    *shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = state;
     shared.clear_poison();
 }
 
@@ -115,7 +119,7 @@ impl Helper {
         let session = self
             .session
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let status = match session.routing.lockdown_status() {
             Ok(status) => status,
             Err(error) => {
@@ -286,7 +290,7 @@ impl Session {
                     && let Err(restore) = guard
                         .routing
                         .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .set_lockdown(true)
                 {
                     tracing::error!(
@@ -328,7 +332,7 @@ impl Session {
                 && let Err(error) = guard
                     .routing
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .revert_in_place()
             {
                 tracing::error!(%error, "failed to remove the forced kill switch");

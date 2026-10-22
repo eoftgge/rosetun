@@ -491,7 +491,7 @@ impl Helper {
         let mut book = self
             .connections
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         book.watch(Instant::now());
         Ok(book.snapshot())
     }
@@ -1083,7 +1083,8 @@ impl Helper {
                         *self
                             .owner
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner()) = previous_owner.clone();
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            previous_owner.clone();
                         self.owner.clear_poison();
                     }
                 }) {
@@ -1155,7 +1156,7 @@ impl Helper {
         let mut session = self
             .session
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         session.stopping = true;
         session.request = None;
         session.reconnect = None;
@@ -1163,7 +1164,10 @@ impl Helper {
         self.with_status(|status| *status = Status::default());
         drop(session);
         // The service must not exit with a live probe process or its secret config.
-        let _probe = self.probe.lock().unwrap_or_else(|error| error.into_inner());
+        let _probe = self
+            .probe
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         tracing::info!("helper session teardown completed");
     }
 
@@ -1196,7 +1200,7 @@ impl Helper {
         let mut status = self
             .status
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = connection_state_name(&status.state);
         let result = apply(&mut status);
         let current = connection_state_name(&status.state);
@@ -1466,7 +1470,7 @@ impl TrafficMonitor {
                         let now = Instant::now();
                         let watched = worker_connections
                             .lock()
-                            .unwrap_or_else(|error| error.into_inner())
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .watched(now);
                         if now.saturating_duration_since(polled) >= poll_interval(watched) {
                             break watched;
@@ -1480,7 +1484,7 @@ impl TrafficMonitor {
                             let totals = sample.totals;
                             let mut book = worker_connections
                                 .lock()
-                                .unwrap_or_else(|error| error.into_inner());
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             match sample.connections {
                                 Some(list) if book.watched(Instant::now()) => book.record(
                                     translation.translate(list),
@@ -1497,7 +1501,7 @@ impl TrafficMonitor {
                             let current = (totals, Instant::now());
                             let mut status = worker_status
                                 .lock()
-                                .unwrap_or_else(|error| error.into_inner());
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             match previous {
                                 Some(start)
                                     if current.1.saturating_duration_since(start.1)
@@ -1519,7 +1523,7 @@ impl TrafficMonitor {
                             }
                             let mut status = worker_status
                                 .lock()
-                                .unwrap_or_else(|error| error.into_inner());
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             status.traffic.up_bps = 0;
                             status.traffic.down_bps = 0;
                         }
@@ -1544,11 +1548,11 @@ impl TrafficMonitor {
         }
         self.status
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .traffic = Traffic::default();
         self.connections
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
     }
 }
@@ -1606,7 +1610,7 @@ impl Session {
         let mut status = self
             .status
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         check_cancelled(&self.cancelled)?;
         status.connect_stage = Some(stage);
         status.stage_since_unix = Some(now_unix());
@@ -1783,7 +1787,7 @@ impl Session {
             && let Err(error) = guard
                 .routing
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .revert_in_place()
         {
             tracing::error!(%error, "failed to roll back stale routing protection");
@@ -2117,7 +2121,7 @@ impl Session {
                         && let Err(error) = guard
                             .routing
                             .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .revert_in_place()
                     {
                         tracing::error!(%error, "failed to roll back DNS lock");
@@ -2335,7 +2339,7 @@ impl Session {
         *self
             .path_addresses
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) = addresses;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = addresses;
     }
 
     fn start_watchdog(&mut self) {
@@ -2493,18 +2497,18 @@ impl Session {
         }
         self.path_addresses
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
         if let Some(monitor) = self.monitor.take() {
             monitor.stop();
         } else {
             self.status
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .traffic = Traffic::default();
             self.connections
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clear();
         }
         if let Some(process) = self.process.as_mut() {
@@ -2537,12 +2541,15 @@ impl Session {
             && let Err(error) = guard
                 .routing
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .revert_in_place()
         {
             tracing::error!(%error, "failed to roll back routes");
         }
-        *self.owner.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        *self
+            .owner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.owner.clear_poison();
     }
 }

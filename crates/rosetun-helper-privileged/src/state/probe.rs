@@ -93,7 +93,7 @@ impl Drop for ProbeBinaryPermit {
         let mut guard = self
             .routing
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Err(error) = guard.remove_probe_binary(&self.binary) {
             tracing::error!(%error, "failed to remove temporary Xray probe authorization");
         }

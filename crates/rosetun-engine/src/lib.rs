@@ -538,7 +538,7 @@ impl EngineRegistry {
         self.backends
             .iter()
             .find(|backend| backend.kind() == kind)
-            .map(|backend| backend.as_ref())
+            .map(std::convert::AsRef::as_ref)
     }
 
     pub fn get_shared(&self, kind: EngineKind) -> Option<Arc<dyn EngineBackend>> {

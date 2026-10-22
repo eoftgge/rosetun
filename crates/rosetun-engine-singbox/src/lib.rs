@@ -2,7 +2,10 @@
 
 mod connections;
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod console;
 mod output;
 mod readiness;

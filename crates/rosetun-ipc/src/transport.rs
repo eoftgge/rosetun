@@ -273,7 +273,10 @@ mod platform {
 }
 
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod platform {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
@@ -366,7 +369,9 @@ mod platform {
                 .name("rosetun-ipc-read-watch".to_owned())
                 .spawn(move || {
                     let (lock, wake) = &*watcher_state;
-                    let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+                    let mut state = lock
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     while !state.stopped {
                         if let Some(deadline) = state.deadline {
                             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -381,18 +386,18 @@ mod platform {
                                 };
                                 state = wake
                                     .wait_timeout(state, Duration::from_millis(1))
-                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                                     .0;
                             } else {
                                 state = wake
                                     .wait_timeout(state, remaining)
-                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                                     .0;
                             }
                         } else {
                             state = wake
                                 .wait(state)
-                                .unwrap_or_else(|poison| poison.into_inner());
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                         }
                     }
                 })?;
@@ -404,7 +409,9 @@ mod platform {
 
         pub(super) fn arm(&self, deadline: Instant) {
             let (lock, wake) = &*self.state;
-            let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut state = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.deadline = Some(deadline);
             state.timed_out = false;
             wake.notify_one();
@@ -412,7 +419,9 @@ mod platform {
 
         pub(super) fn disarm(&self) -> bool {
             let (lock, wake) = &*self.state;
-            let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut state = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.deadline = None;
             wake.notify_one();
             state.timed_out
@@ -422,7 +431,9 @@ mod platform {
     impl Drop for ReadWatch {
         fn drop(&mut self) {
             let (lock, wake) = &*self.state;
-            let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut state = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.stopped = true;
             wake.notify_one();
             drop(state);
@@ -912,7 +923,7 @@ mod platform {
                 let mut slot = self
                     .pending
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
 
                 match slot.take() {
                     Some(pending) => pending,
@@ -925,7 +936,7 @@ mod platform {
                 let mut slot = self
                     .pending
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
 
                 match replacement {
                     Ok(replacement) => *slot = Some(replacement),
@@ -944,7 +955,7 @@ mod platform {
             let mut slot = self
                 .pending
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             match replacement {
                 Ok(replacement) => *slot = Some(replacement),
@@ -1031,7 +1042,10 @@ mod security_descriptor_tests {
 }
 
 #[cfg(all(test, windows))]
-#[expect(unsafe_code, reason = "the tests read the pipe security descriptor through Win32")]
+#[expect(
+    unsafe_code,
+    reason = "the tests read the pipe security descriptor through Win32"
+)]
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};

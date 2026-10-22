@@ -4688,7 +4688,7 @@ fn temporary_rules_end_when_reconnect_attempts_are_exhausted() {
 fn apply_new_ip_and_named_node_updates_status_without_releasing_protection() {
     let _dns_slots = DNS_SLOTS
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (helper, controls, prepared, reverted) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -4728,7 +4728,7 @@ fn apply_new_ip_and_named_node_updates_status_without_releasing_protection() {
 fn apply_waits_for_a_busy_resolver_slot() {
     let _dns_slots = DNS_SLOTS
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (ready_tx, ready_rx) = channel();
     let holder = std::thread::spawn(move || {
         let _slot = reserve_apply_worker();
@@ -4748,7 +4748,7 @@ fn apply_waits_for_a_busy_resolver_slot() {
 fn apply_resolver_slot_wait_respects_the_deadline() {
     let _dns_slots = DNS_SLOTS
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (ready_tx, ready_rx) = channel();
     let (release_tx, release_rx) = channel();
     let holder = std::thread::spawn(move || {
@@ -4781,7 +4781,7 @@ fn apply_resolver_slot_wait_respects_the_deadline() {
 fn apply_resolves_named_node_when_server_check_workers_are_full() {
     let _dns_slots = DNS_SLOTS
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (helper, controls, _, _) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -4867,7 +4867,7 @@ fn apply_dns_lock_reuses_guard() {
 fn apply_unresolvable_node_leaves_the_running_session_intact() {
     let _dns_slots = DNS_SLOTS
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (helper, controls, prepared, reverted) = supervised_helper(true);
     let mut request = connect_request();
     request.settings.kill_switch = true;
@@ -5439,7 +5439,7 @@ fn probe_fixture_with_counter(
 fn probe_mixes_plain_and_reality_nodes_in_one_xray_process() {
     let _dns_slots = DNS_SLOTS
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (helper, stopped, dir) = probe_fixture(true, None);
     let runner = Arc::new(FakeXrayRunner {
         controls: Arc::new(EngineControls::default()),
@@ -5486,7 +5486,7 @@ fn probe_request() -> rosetun_ipc::ProbeRequest {
 fn probe_results_keep_request_order_and_cleanup_secrets() {
     let _dns_slots = DNS_SLOTS
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     use rosetun_ipc::ProbeOutcome;
 
     let (helper, stopped, dir) = probe_fixture(true, None);

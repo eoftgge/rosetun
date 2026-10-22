@@ -1,28 +1,49 @@
 #![deny(unsafe_code)]
 
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod autostart;
 #[cfg(any(windows, test))]
 mod first_start;
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod instance;
 
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod language;
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod screen_clip;
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod system_checks;
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod system_info;
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "Win32 FFI; every unsafe block carries a SAFETY comment")]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod window;
 
 #[cfg(windows)]

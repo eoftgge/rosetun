@@ -1,4 +1,7 @@
-#![expect(unreachable_pub, reason = "a binary has no public API; `pub` only shares items between its modules")]
+#![expect(
+    unreachable_pub,
+    reason = "a binary has no public API; `pub` only shares items between its modules"
+)]
 
 #[cfg(windows)]
 mod data_dir;

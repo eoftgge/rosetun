@@ -75,7 +75,7 @@ impl WorkerDispatcher {
     pub(crate) fn load_temporary_rules(&self, request: u64) {
         self.spawn_helper(
             "rosetun-load-temporary-rules",
-            |client| client.temporary_rules(),
+            rosetun_ipc::HelperClient::temporary_rules,
             move |publisher, result| {
                 emit(
                     &publisher.tx,
@@ -89,7 +89,7 @@ impl WorkerDispatcher {
     pub(crate) fn disconnect(&self) {
         self.spawn_task("rosetun-disconnect", move |publisher| {
             tracing::info!("Disconnect command started");
-            let result = with_helper(|client| client.disconnect_tunnel());
+            let result = with_helper(rosetun_ipc::HelperClient::disconnect_tunnel);
             match &result {
                 Ok(()) => tracing::info!("Disconnect command succeeded"),
                 Err(error) => tracing::warn!(%error, "Disconnect command failed"),
@@ -154,7 +154,7 @@ impl WorkerDispatcher {
     pub(crate) fn tunnel_delay(&self) {
         self.spawn_helper(
             "rosetun-tunnel-delay",
-            |client| client.tunnel_delay(),
+            rosetun_ipc::HelperClient::tunnel_delay,
             |publisher, result| publisher.complete(WorkerEvent::TunnelDelay(result)),
         );
     }
@@ -167,7 +167,7 @@ impl WorkerDispatcher {
         let mut sender = self
             .connections
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(requests) = sender.as_ref()
             && requests.send(()).is_ok()
         {

@@ -197,7 +197,7 @@ impl ShutdownHandle {
 fn warn_read_timeout(last_warning: &Mutex<Option<Instant>>) {
     let mut last = last_warning
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let now = Instant::now();
     if last.is_none_or(|previous| now.duration_since(previous) >= Duration::from_secs(60)) {
         tracing::warn!("helper pipe client read timed out");
