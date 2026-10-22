@@ -77,12 +77,45 @@ function Get-Readiness {
     [pscustomobject]@{ Seconds = $seconds; Attempts = $spawns.Count }
 }
 
+function Get-Stages {
+    # Seconds from the service's start of the connect to each step it logs,
+    # so a long connect shows where the time went. ConnectSeconds minus
+    # ServiceSeconds is spent outside the service (CLI start, PowerShell Direct).
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Log)
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    $marks = [ordered]@{
+        start      = 'starting tunnel connection'
+        spawn      = 'spawning tunnel engine'
+        ready      = 'engine startup readiness confirmed'
+        authorized = 'tunnel readiness authorization completed'
+        dns        = 'DNS through the tunnel answered'
+        connected  = 'current="connected"'
+    }
+    $times = [ordered]@{}
+    foreach ($name in $marks.Keys) {
+        # \W* skips a colour code's leftover escape before the time.
+        $match = [regex]::Match($Log, '(?m)^\W*(\d{4}-\d\d-\d\dT[\d:.]+Z).*' + [regex]::Escape($marks[$name]))
+        if ($match.Success) { $times[$name] = [DateTimeOffset]::Parse($match.Groups[1].Value, $culture) }
+    }
+    if (-not $times.Contains('start')) {
+        return [pscustomobject]@{ ServiceSeconds = $null; Stages = 'no connect start in the log' }
+    }
+    $start = $times['start']
+    $parts = foreach ($name in $times.Keys) {
+        if ($name -ne 'start') { '{0} +{1:N1}' -f $name, ($times[$name] - $start).TotalSeconds }
+    }
+    $service = if ($times.Contains('connected')) {
+        [math]::Round(($times['connected'] - $start).TotalSeconds, 2)
+    }
+    [pscustomobject]@{ ServiceSeconds = $service; Stages = $parts -join ', ' }
+}
+
 function Invoke-Pass {
     param([Parameter(Mandatory)][string]$Mode, [Parameter(Mandatory)][int]$Pass)
     $lockdownOn = $false
     $row = [pscustomobject]@{
-        Lockdown = $Mode; Pass = $Pass; Result = 'FAIL'; ConnectSeconds = $null; ReadySeconds = $null
-        Attempts = 0; AfterBoot = ''; Note = ''
+        Lockdown = $Mode; Pass = $Pass; Result = 'FAIL'; ConnectSeconds = $null; ServiceSeconds = $null
+        ReadySeconds = $null; Attempts = 0; AfterBoot = ''; Stages = ''; Note = ''
     }
     try {
         if ($Mode -eq 'On') {
@@ -104,12 +137,16 @@ function Invoke-Pass {
         $readiness = Get-Readiness $log
         $row.ReadySeconds = $readiness.Seconds
         $row.Attempts = $readiness.Attempts
+        $stages = Get-Stages $log
+        $row.ServiceSeconds = $stages.ServiceSeconds
+        $row.Stages = $stages.Stages
+        # Every pass, not only a failed one: a slow pass needs its log too.
+        $kept = Join-Path $PSScriptRoot ("logs\power-cut-probe-{0:yyyyMMdd-HHmmss}-{1}-{2}.log" -f (Get-Date), $Mode, $Pass)
+        [IO.File]::WriteAllText($kept, $log)
         if ($connected) {
             $row.Result = 'PASS'
         }
         else {
-            $kept = Join-Path $PSScriptRoot ("logs\power-cut-probe-{0:yyyyMMdd-HHmmss}-{1}.log" -f (Get-Date), $Pass)
-            [IO.File]::WriteAllText($kept, $log)
             $engineLines = @($log -split "`r?`n" | Where-Object { $_ -match 'engine_output' } | Select-Object -First 20)
             $row.Note = (@("exit $($connect.ExitCode): $($connect.Output)", "log: $kept") + $engineLines) -join "`n"
         }
@@ -210,7 +247,7 @@ finally {
 }
 
 # Result first, so a long note cannot push it off the screen.
-$results | Format-Table Result, Lockdown, Pass, ConnectSeconds, ReadySeconds, Attempts, AfterBoot, Note -AutoSize -Wrap
+$results | Format-Table Result, Lockdown, Pass, ConnectSeconds, ServiceSeconds, ReadySeconds, Attempts, AfterBoot, Stages, Note -AutoSize -Wrap
 
 Write-Host "sing-box $version, $PowerCutDelaySeconds s from lockdown on to the cut"
 foreach ($mode in $modes) {
