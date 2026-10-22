@@ -376,7 +376,7 @@ fn localized_failures_use_the_existing_action_labels() {
                 connection_failure(FailureKind::ServerUnreachable, None, XrayUse::Auto, false);
             assert!(hint.contains(&check_full));
             assert!(!hint.contains("{url_test}"));
-            assert!(connection_stage(ConnectStage::CheckingServer, 5).contains('5'));
+            assert!(connection_stage(ConnectStage::CheckingServer, false, 5).contains('5'));
             for kind in [
                 FailureKind::ServerRejected,
                 FailureKind::ServerClosed,

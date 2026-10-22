@@ -276,15 +276,21 @@ pub(crate) fn rate(bytes_per_second: u64) -> String {
     tr!("rate-format", bytes = bytes(bytes_per_second))
 }
 
-pub(crate) fn connection_stage(stage: ConnectStage, seconds: u64) -> String {
-    let label = match stage {
+/// `xray`: the session also runs Xray, whose binary is checked too.
+pub(crate) fn stage_label(stage: ConnectStage, xray: bool) -> String {
+    match stage {
         ConnectStage::WaitingForAdapter => tr!("stage-waiting"),
-        ConnectStage::CheckingEngine | ConnectStage::StartingEngine => tr!("stage-starting"),
+        ConnectStage::CheckingEngine if xray => tr!("stage-checking-engines"),
+        ConnectStage::CheckingEngine => tr!("stage-checking-engine"),
+        ConnectStage::StartingEngine => tr!("stage-starting"),
         ConnectStage::CheckingServer => tr!("stage-checking"),
-    };
+    }
+}
+
+pub(crate) fn connection_stage(stage: ConnectStage, xray: bool, seconds: u64) -> String {
     tr!(
         "stage-elapsed",
-        stage = label,
+        stage = stage_label(stage, xray),
         seconds = seconds.to_string()
     )
 }

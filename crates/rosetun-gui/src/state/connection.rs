@@ -1,4 +1,4 @@
-use rosetun_config::{ConnectionState, Exit, FailureKind, Status, Transport, XrayUse};
+use rosetun_config::{ConnectStage, ConnectionState, Exit, FailureKind, Status, Transport, XrayUse};
 use rosetun_core::AppliedSnapshot;
 use rosetun_ipc::{ClientError, ErrorCode, ExitOutcome, HelperError, ProbeOutcome, TunnelDelays};
 
@@ -6,6 +6,17 @@ use super::{Action, Job, Screen, State};
 use crate::actions::{self, PrimaryAction};
 use crate::errors;
 use crate::worker::{HelperCommandError, WorkerEvent};
+
+/// The engine check after a cold boot can wait for an antivirus; past this
+/// the connection screen says why.
+const ENGINE_CHECK_HINT_AFTER_SECS: u64 = 10;
+
+/// The connect stage under the hero title, and a hint below it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StageLine {
+    pub(crate) text: String,
+    pub(crate) hint: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TunnelDelay {
@@ -100,6 +111,30 @@ impl State {
     /// taken the engine and the kill-switch filters with it.
     pub(crate) fn visible_status(&self) -> Option<&Status> {
         self.helper_available.then_some(&self.status)
+    }
+
+    pub(crate) fn stage_line(&self, now_unix: u64) -> Option<StageLine> {
+        let status = self
+            .visible_status()
+            .filter(|status| status.state.is_transitional())?;
+        let stage = status.connect_stage?;
+        let seconds = now_unix.saturating_sub(status.stage_since_unix.unwrap_or(now_unix));
+        Some(StageLine {
+            text: crate::i18n::connection_stage(stage, status.xray, seconds),
+            hint: (stage == ConnectStage::CheckingEngine
+                && seconds > ENGINE_CHECK_HINT_AFTER_SECS)
+                .then(|| tr!("stage-checking-engine-hint")),
+        })
+    }
+
+    /// The tray says what a connect waits for only while it checks the
+    /// engine, the one stage that can take a minute without a fault.
+    pub(crate) fn tray_stage_label(&self) -> Option<String> {
+        let status = self
+            .visible_status()
+            .filter(|status| status.state.is_transitional())?;
+        (status.connect_stage == Some(ConnectStage::CheckingEngine))
+            .then(|| crate::i18n::stage_label(ConnectStage::CheckingEngine, status.xray))
     }
 
     /// The failure's technical reason as shown and copied. Users paste it into

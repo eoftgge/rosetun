@@ -27,7 +27,7 @@ Settings move to a new format (see What's new); 0.2.0 cannot read the new one. P
 - **Privacy fixes.** Some sing-box error lines put site addresses into the Rosetun service log even with the detailed log off; now every public address is hidden there. **Collect report** now also hides an address that is followed by a colon, as in error messages.
 - **sing-box {{sing_box_version}} and Xray {{xray_version}}.** The Xray project withdrew the release that 0.3.0-alpha.1 included.
 - **Disconnecting removes the tunnel adapter at once.** Rosetun now stops sing-box gracefully instead of killing it, so Windows no longer has to clean up a leftover adapter, and the next connection does not wait for it.
-- **The first connection after starting Windows** no longer fails when Windows Defender is slow to check sing-box.
+- **The first connection after starting Windows** no longer fails when Windows Defender is slow to check sing-box, also after a power loss. While Rosetun waits for that check, the connection screen and the tray say so.
 - **"Server name not found"** instead of "could not set up routing" when the server's address cannot be looked up; it no longer suggests turning off another VPN.
 - **Dialog buttons are on the right**, the main one last, in every dialog.
 - **XHTTP servers** (also known as SplitHTTP) connect through Xray, also for server checks; with "Connection through Xray" set to "Without Xray", Rosetun says before connecting that such a server needs Xray and offers **Connect through Xray**. Servers with a separate download server are still skipped and named in the subscription report.

@@ -804,3 +804,56 @@ fn failure_details_are_scrubbed_and_fold_on_a_new_state() {
         }
     }
 }
+
+fn checking_engine(xray: bool, since: u64) -> State {
+    let mut state = State {
+        helper_available: true,
+        ..State::default()
+    };
+    state.status = Status {
+        state: ConnectionState::Connecting,
+        connect_stage: Some(rosetun_config::ConnectStage::CheckingEngine),
+        stage_since_unix: Some(since),
+        xray,
+        ..Status::default()
+    };
+    state
+}
+
+#[test]
+fn the_engine_check_names_sing_box_or_both_engines() {
+    use rosetun_config::ConnectStage;
+    let line = checking_engine(false, 100).stage_line(103).unwrap();
+    assert_eq!(line.text, crate::i18n::connection_stage(ConnectStage::CheckingEngine, false, 3));
+    assert_ne!(
+        crate::i18n::stage_label(ConnectStage::CheckingEngine, false),
+        crate::i18n::stage_label(ConnectStage::CheckingEngine, true)
+    );
+    let line = checking_engine(true, 100).stage_line(100).unwrap();
+    assert!(line.text.contains(&tr!("stage-checking-engines")));
+
+    assert_eq!(
+        checking_engine(true, 100).tray_stage_label(),
+        Some(tr!("stage-checking-engines"))
+    );
+    let mut starting = checking_engine(false, 100);
+    starting.status.connect_stage = Some(ConnectStage::StartingEngine);
+    assert_eq!(starting.tray_stage_label(), None);
+    assert!(starting.stage_line(130).unwrap().hint.is_none());
+}
+
+#[test]
+fn the_engine_check_hint_appears_after_ten_seconds_and_not_before() {
+    let state = checking_engine(false, 100);
+    assert_eq!(state.stage_line(100).unwrap().hint, None);
+    assert_eq!(state.stage_line(110).unwrap().hint, None);
+    assert_eq!(
+        state.stage_line(111).unwrap().hint,
+        Some(tr!("stage-checking-engine-hint"))
+    );
+
+    let mut connected = checking_engine(false, 100);
+    connected.status.state = ConnectionState::Connected;
+    assert_eq!(connected.stage_line(200), None);
+    assert_eq!(connected.tray_stage_label(), None);
+}

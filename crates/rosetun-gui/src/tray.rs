@@ -51,7 +51,7 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
                 ConnectionState::FailedProtected { .. } => TrayState::Blocked,
                 ConnectionState::Failed { .. } => TrayState::Failed,
             };
-            (label, icon)
+            (state.tray_stage_label().unwrap_or(label), icon)
         },
     );
     let server = state

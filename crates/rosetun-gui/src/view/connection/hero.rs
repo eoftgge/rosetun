@@ -164,17 +164,22 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                 );
                             }
                             if status.state.is_transitional() {
-                                if let Some(stage) = status.connect_stage {
-                                    let seconds = display::now_unix().saturating_sub(
-                                        status.stage_since_unix.unwrap_or_else(display::now_unix),
-                                    );
+                                if let Some(stage) = state.stage_line(display::now_unix()) {
                                     ui.label(
-                                        RichText::new(crate::i18n::connection_stage(
-                                            stage, seconds,
-                                        ))
-                                        .small()
-                                        .color(theme::TEXT_MUTED),
+                                        RichText::new(stage.text)
+                                            .small()
+                                            .color(theme::TEXT_MUTED),
                                     );
+                                    if let Some(hint) = stage.hint {
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(hint)
+                                                    .small()
+                                                    .color(theme::TEXT_MUTED),
+                                            )
+                                            .wrap(),
+                                        );
+                                    }
                                     ui.ctx()
                                         .request_repaint_after(std::time::Duration::from_secs(1));
                                 }
