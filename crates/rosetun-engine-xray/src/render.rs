@@ -1,4 +1,4 @@
-use rosetun_config::{LogLevel, Node, Outbound, TlsMode, Transport};
+use rosetun_config::{LogLevel, Node, Outbound, TlsMode, Transport, XhttpExtra, XhttpRange};
 use rosetun_engine::{RenderedConfig, errors::EngineError};
 use serde_json::{Value, json};
 
@@ -123,7 +123,12 @@ fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, Engi
                 "id": params.uuid,
                 "encryption": "none",
             });
-            if let Some(flow) = &params.flow {
+            // Xray accepts Vision on XHTTP but then fails every TCP connection with
+            // "XTLS only supports TLS and REALITY directly", and the server refuses
+            // Vision on XHTTP the same way, so the flow is left out.
+            if let Some(flow) = &params.flow
+                && !matches!(node.stream.transport, Transport::Xhttp { .. })
+            {
                 settings["flow"] = flow.clone().into();
             }
             ("vless", settings)
@@ -184,8 +189,21 @@ fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, Engi
             }
             stream["httpupgradeSettings"] = options;
         }
-        Transport::Xhttp { .. } => {
-            return Err(EngineError::Unsupported("XHTTP is not rendered yet".into()));
+        Transport::Xhttp {
+            path,
+            host,
+            mode,
+            extra,
+        } => {
+            stream["network"] = "xhttp".into();
+            let mut options = json!({ "path": path, "mode": mode.as_str() });
+            if let Some(host) = host {
+                options["host"] = host.clone().into();
+            }
+            if !extra.is_empty() {
+                options["extra"] = xhttp_extra(extra);
+            }
+            stream["xhttpSettings"] = options;
         }
     }
     match &node.stream.tls {
@@ -207,10 +225,10 @@ fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, Engi
         TlsMode::Reality(params) => {
             if !matches!(
                 node.stream.transport,
-                Transport::Tcp | Transport::Grpc { .. }
+                Transport::Tcp | Transport::Grpc { .. } | Transport::Xhttp { .. }
             ) {
                 return Err(EngineError::Unsupported(
-                    "Xray REALITY requires TCP or gRPC transport".into(),
+                    "Xray REALITY requires TCP, gRPC or XHTTP transport".into(),
                 ));
             }
             stream["security"] = "reality".into();
@@ -234,9 +252,56 @@ fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, Engi
     }))
 }
 
+fn xhttp_extra(extra: &XhttpExtra) -> Value {
+    fn range(value: XhttpRange) -> Value {
+        if value.from == value.to {
+            value.from.into()
+        } else {
+            format!("{}-{}", value.from, value.to).into()
+        }
+    }
+    fn put_range(object: &mut Value, key: &str, value: Option<XhttpRange>) {
+        if let Some(value) = value {
+            object[key] = range(value);
+        }
+    }
+
+    let mut options = json!({});
+    if !extra.headers.is_empty() {
+        options["headers"] = json!(extra.headers);
+    }
+    put_range(&mut options, "xPaddingBytes", extra.x_padding_bytes);
+    if extra.no_grpc_header {
+        options["noGRPCHeader"] = true.into();
+    }
+    if extra.no_sse_header {
+        options["noSSEHeader"] = true.into();
+    }
+    put_range(&mut options, "scMaxEachPostBytes", extra.sc_max_each_post_bytes);
+    put_range(&mut options, "scMinPostsIntervalMs", extra.sc_min_posts_interval_ms);
+    if let Some(posts) = extra.sc_max_buffered_posts {
+        options["scMaxBufferedPosts"] = posts.into();
+    }
+    if let Some(xmux) = &extra.xmux {
+        let mut value = json!({});
+        put_range(&mut value, "maxConcurrency", xmux.max_concurrency);
+        put_range(&mut value, "maxConnections", xmux.max_connections);
+        put_range(&mut value, "cMaxReuseTimes", xmux.c_max_reuse_times);
+        put_range(&mut value, "hMaxRequestTimes", xmux.h_max_request_times);
+        put_range(&mut value, "hMaxReusableSecs", xmux.h_max_reusable_secs);
+        if let Some(period) = xmux.h_keep_alive_period {
+            value["hKeepAlivePeriod"] = period.into();
+        }
+        options["xmux"] = value;
+    }
+    options
+}
+
 #[cfg(test)]
 mod tests {
-    use rosetun_config::{NodeId, RealityParams, StreamSettings, VlessParams};
+    use rosetun_config::{
+        NodeId, RealityParams, StreamSettings, TlsParams, VlessParams, XhttpMode, XhttpXmux,
+    };
 
     use super::*;
 
@@ -355,5 +420,119 @@ mod tests {
             json!(["probe-1-in"])
         );
         assert_eq!(value["routing"]["rules"][1]["outboundTag"], "probe-1");
+    }
+
+    fn xhttp_node(tls: TlsMode, extra: XhttpExtra) -> Node {
+        let mut node = reality_node();
+        node.stream = StreamSettings {
+            transport: Transport::Xhttp {
+                path: "/example".into(),
+                host: Some("xhttp.example.com".into()),
+                mode: XhttpMode::StreamOne,
+                extra,
+            },
+            tls,
+        };
+        node
+    }
+
+    fn stream_of(node: &Node) -> Value {
+        let socks = SocksEndpoint::local().unwrap();
+        let rendered = render(&[("proxy", node, &socks)], "Ethernet", false, LogLevel::Info)
+            .unwrap();
+        let mut value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        value["outbounds"][0].take()
+    }
+
+    #[test]
+    fn xhttp_with_reality_renders_without_vision() {
+        let node = xhttp_node(reality_node().stream.tls, XhttpExtra::default());
+        let outbound = stream_of(&node);
+        assert!(outbound["settings"].get("flow").is_none());
+        let stream = &outbound["streamSettings"];
+        assert_eq!(stream["network"], "xhttp");
+        assert_eq!(stream["security"], "reality");
+        assert_eq!(
+            stream["xhttpSettings"],
+            json!({ "path": "/example", "host": "xhttp.example.com", "mode": "stream-one" })
+        );
+        assert_eq!(stream["realitySettings"]["serverName"], "example.com");
+    }
+
+    #[test]
+    fn xhttp_with_tls_and_without_tls() {
+        let tls = TlsMode::Tls(TlsParams {
+            sni: Some("example.com".into()),
+            alpn: vec!["h2".into()],
+            allow_insecure: false,
+            fingerprint: None,
+        });
+        let stream = stream_of(&xhttp_node(tls, XhttpExtra::default()))["streamSettings"].take();
+        assert_eq!(stream["network"], "xhttp");
+        assert_eq!(stream["security"], "tls");
+        assert_eq!(stream["tlsSettings"]["serverName"], "example.com");
+
+        let stream =
+            stream_of(&xhttp_node(TlsMode::Plain, XhttpExtra::default()))["streamSettings"].take();
+        assert_eq!(stream["network"], "xhttp");
+        assert!(stream.get("security").is_none());
+        assert_eq!(stream["xhttpSettings"]["path"], "/example");
+    }
+
+    #[test]
+    fn xhttp_extra_is_rendered_completely_and_nothing_else() {
+        let range = |from, to| Some(XhttpRange { from, to });
+        let extra = XhttpExtra {
+            headers: [("X-Example".to_owned(), "example-value".to_owned())].into(),
+            x_padding_bytes: range(100, 1000),
+            no_grpc_header: true,
+            no_sse_header: true,
+            sc_max_each_post_bytes: range(1_000_000, 1_000_000),
+            sc_min_posts_interval_ms: range(10, 50),
+            sc_max_buffered_posts: Some(30),
+            xmux: Some(XhttpXmux {
+                max_concurrency: range(16, 32),
+                max_connections: None,
+                c_max_reuse_times: range(0, 8),
+                h_max_request_times: range(600, 900),
+                h_max_reusable_secs: range(1800, 3000),
+                h_keep_alive_period: Some(15),
+            }),
+        };
+        let stream = stream_of(&xhttp_node(TlsMode::Plain, extra))["streamSettings"].take();
+        assert_eq!(
+            stream["xhttpSettings"],
+            json!({
+                "path": "/example",
+                "host": "xhttp.example.com",
+                "mode": "stream-one",
+                "extra": {
+                    "headers": { "X-Example": "example-value" },
+                    "xPaddingBytes": "100-1000",
+                    "noGRPCHeader": true,
+                    "noSSEHeader": true,
+                    "scMaxEachPostBytes": 1_000_000,
+                    "scMinPostsIntervalMs": "10-50",
+                    "scMaxBufferedPosts": 30,
+                    "xmux": {
+                        "maxConcurrency": "16-32",
+                        "cMaxReuseTimes": "0-8",
+                        "hMaxRequestTimes": "600-900",
+                        "hMaxReusableSecs": "1800-3000",
+                        "hKeepAlivePeriod": 15,
+                    },
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn xhttp_probe_uses_the_same_outbound() {
+        let node = xhttp_node(reality_node().stream.tls, XhttpExtra::default());
+        let nodes = [("probe-0".to_owned(), node, SocksEndpoint::local().unwrap())];
+        let rendered = render_probe(&nodes, "Ethernet").unwrap();
+        assert!(rendered.unsupported.is_empty());
+        let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        assert_eq!(value["outbounds"][0]["streamSettings"]["network"], "xhttp");
     }
 }

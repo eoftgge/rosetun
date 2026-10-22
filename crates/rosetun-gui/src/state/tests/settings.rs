@@ -758,3 +758,39 @@ fn reality_rejection_button_persists_auto_before_connect() {
     assert!(matches!(state.take_xray_connect(), Some(Job::Connect(_))));
     assert!(state.take_xray_connect().is_none());
 }
+
+#[test]
+fn xhttp_without_xray_blocks_connect_and_offers_xray_first() {
+    let mut state = state_for_auto_connect();
+    state.config.subscriptions[0].nodes[0].stream.transport = rosetun_config::Transport::Xhttp {
+        path: "/example".into(),
+        host: None,
+        mode: rosetun_config::XhttpMode::Auto,
+        extra: rosetun_config::XhttpExtra::default(),
+    };
+    state.config.settings.xray = XrayUse::Auto;
+    assert!(!state.xhttp_without_xray());
+    assert_eq!(state.primary_action(), PrimaryAction::Connect);
+
+    state.config.settings.xray = XrayUse::Off;
+    state.status.state = ConnectionState::Disconnected;
+    assert!(state.xhttp_without_xray());
+    assert_eq!(state.primary_action(), PrimaryAction::Disabled);
+    assert!(state.act(Action::Primary).is_none());
+
+    assert!(matches!(
+        state.act(Action::EnableXrayAutoAndConnect),
+        Some(Job::Setting(SettingChange::Xray(XrayUse::Auto)))
+    ));
+    let mut saved = state.config.clone();
+    saved.settings.xray = XrayUse::Auto;
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config: saved,
+    });
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::Xray(XrayUse::Auto),
+        Ok(()),
+    ));
+    assert!(matches!(state.take_xray_connect(), Some(Job::Connect(_))));
+}

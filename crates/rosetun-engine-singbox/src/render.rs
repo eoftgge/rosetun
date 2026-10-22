@@ -607,6 +607,33 @@ mod tests {
     }
 
     #[test]
+    fn xhttp_is_refused_with_a_typed_error() {
+        let node = Node {
+            id: NodeId::new("example-xhttp"),
+            name: "Example".into(),
+            server: "203.0.113.10".into(),
+            port: 443,
+            outbound: Outbound::Trojan(rosetun_config::TrojanParams {
+                password: "test-secret".into(),
+            }),
+            stream: StreamSettings {
+                transport: Transport::Xhttp {
+                    path: "/example".into(),
+                    host: None,
+                    mode: rosetun_config::XhttpMode::Auto,
+                    extra: rosetun_config::XhttpExtra::default(),
+                },
+                tls: TlsMode::Plain,
+            },
+            raw: None,
+        };
+        assert!(matches!(
+            proxy_outbound(&node, "proxy"),
+            Err(EngineError::Unsupported(message)) if message.contains("XHTTP")
+        ));
+    }
+
+    #[test]
     fn full_rendered_config_matches_golden() {
         use rosetun_config::ShadowsocksParams;
 

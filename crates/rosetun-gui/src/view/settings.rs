@@ -514,6 +514,14 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 // and this screen ends up in screenshots.
                 let current = if status.xray {
                     match node {
+                        Some(node)
+                            if matches!(
+                                &node.stream.transport,
+                                rosetun_config::Transport::Xhttp { .. }
+                            ) =>
+                        {
+                            tr!("xray-current-xhttp")
+                        }
                         Some(node) if matches!(&node.stream.tls, TlsMode::Reality(_)) => {
                             tr!("xray-current-reality")
                         }

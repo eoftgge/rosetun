@@ -30,6 +30,7 @@ Settings move to a new format on first start (see What's new). Please report wha
 - **The first connection after starting Windows** no longer fails when Windows Defender is slow to check sing-box.
 - **"Server name not found"** instead of "could not set up routing" when the server's address cannot be looked up; it no longer suggests turning off another VPN.
 - **Dialog buttons are on the right**, the main one last, in every dialog.
+- **XHTTP servers** (also known as SplitHTTP) connect through Xray, also for server checks; with "Connection through Xray" set to "Without Xray", Rosetun says before connecting that such a server needs Xray and offers **Connect through Xray**. Servers with a separate download server are still skipped and named in the subscription report.
 - **Settings format 6.** Settings are converted on first start; an older Rosetun, 0.2.0 included, then refuses to read them with "UnsupportedVersion" and does not overwrite them.
 
 ## Known issues
@@ -87,6 +88,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 - **Первое подключение после запуска Windows** больше не срывается, когда Защитник Windows долго проверяет sing-box.
 - **«Не удалось найти адрес сервера»** вместо «не удалось настроить маршрутизацию», когда адрес сервера не находится; совета выключить другой VPN при этом больше нет.
 - **Кнопки окон справа**, основная крайняя, во всех окнах.
+- **Серверы XHTTP** (он же SplitHTTP) подключаются через Xray, проверка серверов тоже; при «Без Xray» в «Подключение через Xray» Rosetun ещё до подключения говорит, что такому серверу нужен Xray, и предлагает **Подключить через Xray**. Серверы с отдельным сервером загрузки пока пропускаются и называются в отчёте о подписке.
 - **Формат настроек 6.** Настройки преобразуются при первом запуске; более старый Rosetun, в том числе 0.2.0, после этого откажется их читать с ошибкой «UnsupportedVersion» и не перезапишет их.
 
 ### Известные проблемы

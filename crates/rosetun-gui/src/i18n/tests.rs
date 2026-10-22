@@ -475,8 +475,12 @@ fn xray_warning_and_status_texts_are_localized() {
             .starts_with("Subscriptions include 1 REALITY server.")
     );
     for language in [Language::English, Language::Russian] {
-        let current = in_language(language, || tr!("xray-current-reality"));
-        assert!(!current.contains('{') && !current.contains("xray-"));
+        for current in [
+            in_language(language, || tr!("xray-current-reality")),
+            in_language(language, || tr!("xray-current-xhttp")),
+        ] {
+            assert!(!current.contains('{') && !current.contains("xray-"));
+        }
     }
     for language in [Language::English, Language::Russian] {
         in_language(language, || {

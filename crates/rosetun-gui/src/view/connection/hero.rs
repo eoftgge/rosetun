@@ -117,6 +117,25 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                 i18n::plain_link(&tr!("session"), &session),
                             );
                         });
+                        if state.xhttp_without_xray() {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(tr!("xhttp-needs-xray")).color(theme::ERROR),
+                                )
+                                .wrap(),
+                            );
+                            if widgets::button_fill(
+                                ui,
+                                tr!("xhttp-connect-through-xray"),
+                                state.can_edit_settings()
+                                    && state.helper_available
+                                    && !state.operations.helper,
+                            )
+                            .clicked()
+                            {
+                                actions.push(Action::EnableXrayAutoAndConnect);
+                            }
+                        }
                         if let Some(status) = visible_status {
                             if matches!(status.state, ConnectionState::Reconnecting)
                                 && status.reconnect_failure_kind == Some(FailureKind::NoNetwork)

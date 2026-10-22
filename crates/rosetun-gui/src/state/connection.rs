@@ -1,4 +1,4 @@
-use rosetun_config::{ConnectionState, Exit, FailureKind, Status};
+use rosetun_config::{ConnectionState, Exit, FailureKind, Status, Transport, XrayUse};
 use rosetun_core::AppliedSnapshot;
 use rosetun_ipc::{ClientError, ErrorCode, ExitOutcome, HelperError, ProbeOutcome, TunnelDelays};
 
@@ -151,12 +151,28 @@ impl State {
     }
 
     pub(crate) fn primary_action(&self) -> PrimaryAction {
-        actions::primary_action(
+        let action = actions::primary_action(
             self.helper_available,
             &self.status,
             self.config.active_node().is_some(),
             self.operations.helper,
-        )
+        );
+        match action {
+            PrimaryAction::Connect | PrimaryAction::Retry | PrimaryAction::Reconnect
+                if self.xhttp_without_xray() =>
+            {
+                PrimaryAction::Disabled
+            }
+            action => action,
+        }
+    }
+
+    /// sing-box has no XHTTP, so with Xray turned off such a server cannot connect.
+    pub(crate) fn xhttp_without_xray(&self) -> bool {
+        self.config.settings.xray == XrayUse::Off
+            && self.config.active_node().is_some_and(|(_, node)| {
+                matches!(node.stream.transport, Transport::Xhttp { .. })
+            })
     }
 
     /// Connects once after start when the user asked for it.

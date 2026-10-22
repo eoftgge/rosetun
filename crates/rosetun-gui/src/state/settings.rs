@@ -116,7 +116,9 @@ impl State {
             || !self.helper_available
             || !matches!(
                 self.status.state,
-                ConnectionState::Failed { .. } | ConnectionState::FailedProtected { .. }
+                ConnectionState::Disconnected
+                    | ConnectionState::Failed { .. }
+                    | ConnectionState::FailedProtected { .. }
             )
         {
             return None;
@@ -344,11 +346,17 @@ impl State {
                     matches!(&node.outbound, Outbound::Vless(_))
                         && matches!(&node.stream.tls, TlsMode::Reality(_))
                 });
+                let xhttp = self.xhttp_without_xray()
+                    && matches!(
+                        self.status.state,
+                        ConnectionState::Disconnected
+                            | ConnectionState::Failed { .. }
+                            | ConnectionState::FailedProtected { .. }
+                    );
                 if self.can_edit_settings()
                     && self.helper_available
                     && !self.operations.helper
-                    && rejected
-                    && reality
+                    && ((rejected && reality) || xhttp)
                     && self.config.settings.xray == XrayUse::Off
                 {
                     self.settings.screen.connect_after_xray_change = true;
