@@ -4,6 +4,7 @@ mod common;
 mod json;
 mod links;
 mod meta;
+mod xhttp;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -69,8 +70,6 @@ pub struct Skipped {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnsupportedTransport {
-    Xhttp,
-    SplitHttp,
     Kcp,
     Quic,
     H2,
@@ -81,8 +80,6 @@ pub enum UnsupportedTransport {
 impl fmt::Display for UnsupportedTransport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Xhttp => "xhttp",
-            Self::SplitHttp => "splithttp",
             Self::Kcp => "kcp",
             Self::Quic => "quic",
             Self::H2 => "h2",
@@ -104,6 +101,9 @@ pub enum SkipReason {
     UnsupportedTransport(UnsupportedTransport),
     UnsupportedTcpHeader,
     UnsupportedGrpcMultiMode,
+    UnsupportedXhttpMode,
+    InvalidXhttpExtra,
+    XhttpDownloadSettings,
     UnsupportedEncryption,
     UnsupportedFlow,
     UnsupportedSecurity,
@@ -136,6 +136,11 @@ impl fmt::Display for SkipReason {
                 f.write_str("TCP HTTP header camouflage is not supported")
             }
             Self::UnsupportedGrpcMultiMode => f.write_str("gRPC multi mode is not supported"),
+            Self::UnsupportedXhttpMode => f.write_str("XHTTP mode is not supported"),
+            Self::InvalidXhttpExtra => f.write_str("XHTTP extra options are invalid"),
+            Self::XhttpDownloadSettings => {
+                f.write_str("XHTTP with a separate download server is not supported yet")
+            }
             Self::UnsupportedEncryption => f.write_str("VLESS encryption is not supported"),
             Self::UnsupportedFlow => f.write_str("flow is not supported"),
             Self::UnsupportedSecurity => f.write_str("security mode is not supported"),

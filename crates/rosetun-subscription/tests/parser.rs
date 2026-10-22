@@ -1,6 +1,6 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
-use rosetun_config::{Outbound, TlsMode, Transport};
+use rosetun_config::{Outbound, TlsMode, Transport, XhttpExtra, XhttpMode, XhttpRange};
 use rosetun_subscription::{Format, ParseError, Parsed, SkipReason, UnsupportedTransport, parse};
 
 const UUID: &str = "11111111-1111-1111-1111-111111111111";
@@ -237,9 +237,10 @@ fn hysteria2_rejects_unsupported_or_incomplete_security_without_leaking_secrets(
 #[test]
 fn unsupported_options_have_typed_reasons() {
     let cases = [
+        ("type=xhttp&mode=test-mode", SkipReason::UnsupportedXhttpMode),
         (
-            "type=xhttp",
-            SkipReason::UnsupportedTransport(UnsupportedTransport::Xhttp),
+            "type=xhttp&extra=%7Bnot-json",
+            SkipReason::InvalidXhttpExtra,
         ),
         (
             "type=kcp",
@@ -725,7 +726,7 @@ fn unicode_link_hosts_are_normalized_to_punycode() {
 fn xray_3x_ui_flat_outbounds_and_info_record() {
     let result = parsed(include_str!("fixtures/xray-3x-ui.json"));
     assert_eq!(result.format, Format::XrayJson);
-    assert_eq!(result.nodes.len(), 4);
+    assert_eq!(result.nodes.len(), 5);
 
     let reality = &result.nodes[0];
     assert_eq!(reality.name, "🇩🇪 Reality-test@example.com");
@@ -790,6 +791,19 @@ fn xray_3x_ui_flat_outbounds_and_info_record() {
     );
     assert_eq!(shadowsocks.stream.tls, TlsMode::Plain);
 
+    let xhttp = &result.nodes[4];
+    assert_eq!(xhttp.server, "xhttp.example.com");
+    assert_eq!(
+        xhttp.stream.transport,
+        Transport::Xhttp {
+            path: "/xhttp".to_owned(),
+            host: None,
+            mode: XhttpMode::Auto,
+            extra: XhttpExtra::default(),
+        }
+    );
+    assert!(matches!(xhttp.stream.tls, TlsMode::Reality(_)));
+
     let reasons: Vec<_> = result
         .skipped
         .iter()
@@ -799,10 +813,6 @@ fn xray_3x_ui_flat_outbounds_and_info_record() {
         reasons,
         [
             (1, SkipReason::ServiceRecord),
-            (
-                6,
-                SkipReason::UnsupportedTransport(UnsupportedTransport::Xhttp)
-            ),
             (7, SkipReason::UnsupportedEncryption),
         ]
     );
@@ -865,5 +875,156 @@ fn hwid_limit_header_does_not_imply_max_devices() {
             assert!(not_supported);
         }
         other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+const XHTTP_EXTRA: &str = r#"{"headers":{"X-Example":"example-value"},"xPaddingBytes":"100-1000","noSSEHeader":true,"xmux":{"maxConcurrency":"16-32","hMaxReusableSecs":1800},"unknownOption":1}"#;
+
+fn encoded(value: &str) -> String {
+    percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
+}
+
+#[test]
+fn xhttp_links_keep_every_field() {
+    let link = vless(
+        &format!(
+            "type=xhttp&security=reality&pbk=test-public-key&sni=example.com&path=%2Fexample&host=xhttp.example.com&mode=stream-up&extra={}",
+            encoded(XHTTP_EXTRA)
+        ),
+        "XHTTP",
+    );
+    let result = parsed(&link);
+    let Transport::Xhttp {
+        path,
+        host,
+        mode,
+        extra,
+    } = &result.nodes[0].stream.transport
+    else {
+        panic!("expected XHTTP");
+    };
+    assert_eq!(path, "/example");
+    assert_eq!(host.as_deref(), Some("xhttp.example.com"));
+    assert_eq!(*mode, XhttpMode::StreamUp);
+    assert_eq!(
+        extra.headers.get("X-Example").map(String::as_str),
+        Some("example-value")
+    );
+    assert_eq!(
+        extra.x_padding_bytes,
+        Some(XhttpRange {
+            from: 100,
+            to: 1000
+        })
+    );
+    assert!(extra.no_sse_header);
+    let xmux = extra.xmux.as_ref().unwrap();
+    assert_eq!(xmux.max_concurrency, Some(XhttpRange { from: 16, to: 32 }));
+    assert_eq!(
+        xmux.h_max_reusable_secs,
+        Some(XhttpRange {
+            from: 1800,
+            to: 1800
+        })
+    );
+
+    let old_name = parsed(&vless("type=splithttp&path=%2Fexample", "SplitHTTP"));
+    assert!(matches!(
+        &old_name.nodes[0].stream.transport,
+        Transport::Xhttp { path, mode: XhttpMode::Auto, extra, .. }
+            if path == "/example" && extra.is_empty()
+    ));
+}
+
+#[test]
+fn xhttp_download_settings_and_broken_extra_skip_only_that_node() {
+    let download = encoded(r#"{"downloadSettings":{"address":"192.0.2.5","port":443}}"#);
+    let broken = encoded(r#"{"xmux":{"maxConcurrency":"many"}}"#);
+    let body = [
+        vless(&format!("type=xhttp&extra={download}"), "Download"),
+        vless(&format!("type=xhttp&extra={broken}"), "Broken"),
+        vless("type=xhttp&path=%2Fok", "Good"),
+    ]
+    .join("\n");
+    let result = parsed(&body);
+    assert_eq!(result.nodes.len(), 1);
+    assert_eq!(result.nodes[0].name, "Good");
+    let reasons: Vec<_> = result
+        .skipped
+        .iter()
+        .map(|skipped| skipped.reason.clone())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            SkipReason::XhttpDownloadSettings,
+            SkipReason::InvalidXhttpExtra
+        ]
+    );
+}
+
+#[test]
+fn xray_json_xhttp_reads_extra_or_the_settings_themselves() {
+    let config = |settings: &str| {
+        format!(
+            r#"{{"remarks":"XHTTP","outbounds":[{{"protocol":"vless","tag":"proxy","settings":{{"address":"192.0.2.40","port":443,"id":"00000000-0000-4000-8000-000000000040","encryption":"none"}},"streamSettings":{{"network":"xhttp","security":"tls","xhttpSettings":{settings}}}}}]}}"#
+        )
+    };
+    let extra = |settings: &str| match &parsed(&config(settings)).nodes[0].stream.transport {
+        Transport::Xhttp { extra, .. } => extra.clone(),
+        other => panic!("expected XHTTP, got {other:?}"),
+    };
+
+    let direct = extra(r#"{"path":"/x","mode":"packet-up","noGRPCHeader":true}"#);
+    assert!(direct.no_grpc_header);
+
+    // With `extra` present Xray ignores the options next to it.
+    let nested = extra(
+        r#"{"path":"/x","noGRPCHeader":true,"extra":{"scMaxBufferedPosts":30}}"#,
+    );
+    assert!(!nested.no_grpc_header);
+    assert_eq!(nested.sc_max_buffered_posts, Some(30));
+
+    let split = config(r#"{"path":"/x"}"#)
+        .replace(r#""network":"xhttp""#, r#""network":"splithttp""#)
+        .replace("xhttpSettings", "splithttpSettings");
+    assert!(matches!(
+        &parsed(&split).nodes[0].stream.transport,
+        Transport::Xhttp { path, .. } if path == "/x"
+    ));
+
+    for (settings, reason) in [
+        (
+            r#"{"path":"/x","downloadSettings":{"address":"192.0.2.5"}}"#,
+            SkipReason::XhttpDownloadSettings,
+        ),
+        (
+            r#"{"path":"/x","extra":{"downloadSettings":{"address":"192.0.2.5"}}}"#,
+            SkipReason::XhttpDownloadSettings,
+        ),
+        (r#"{"path":"/x","extra":"text"}"#, SkipReason::InvalidXhttpExtra),
+        (r#"{"path":"/x","mode":"test-mode"}"#, SkipReason::UnsupportedXhttpMode),
+    ] {
+        match parse(config(settings).as_bytes(), &no_headers) {
+            Err(ParseError::NoUsableNodes { skipped, .. }) => {
+                assert_eq!(skipped[0].reason, reason, "{settings}");
+            }
+            _ => panic!("{settings} should be skipped"),
+        }
+    }
+}
+
+#[test]
+fn xhttp_debug_and_errors_hide_path_host_and_headers() {
+    let link = vless(
+        &format!(
+            "type=xhttp&path=%2Fsecret-path&host=secret-host.example.com&extra={}",
+            encoded(r#"{"headers":{"X-Secret":"secret-value"}}"#)
+        ),
+        "XHTTP",
+    );
+    let debug = format!("{:?}", parsed(&link).nodes[0].stream);
+    for secret in ["secret-path", "secret-host", "X-Secret", "secret-value"] {
+        assert!(!debug.contains(secret), "{secret} leaked: {debug}");
     }
 }

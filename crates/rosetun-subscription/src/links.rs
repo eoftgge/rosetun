@@ -93,6 +93,7 @@ fn ordinary(line: &str, protocol: &str) -> Result<rosetun_config::Node, SkipReas
         ("host", "host"),
         ("serviceName", "service"),
         ("mode", "mode"),
+        ("extra", "extra"),
         ("sni", "sni"),
         ("alpn", "alpn"),
         ("fp", "fingerprint"),
@@ -234,13 +235,22 @@ fn vmess(rest: &str) -> Result<rosetun_config::Node, SkipReason> {
     if let Some(value) = scalar(value.get("allowInsecure")) {
         fields.insert("insecure".to_owned(), value);
     }
-    if fields.get("transport").is_some_and(|value| value == "grpc") {
-        if let Some(path) = fields.get("path").cloned() {
-            fields.insert("service".to_owned(), path);
+    match fields.get("transport").map(String::as_str) {
+        Some("grpc") => {
+            if let Some(path) = fields.get("path").cloned() {
+                fields.insert("service".to_owned(), path);
+            }
+            if let Some(mode) = fields.get("header").cloned() {
+                fields.insert("mode".to_owned(), mode);
+            }
         }
-        if let Some(mode) = fields.get("header").cloned() {
-            fields.insert("mode".to_owned(), mode);
+        // v2rayN keeps the XHTTP mode in the header type field.
+        Some("xhttp" | "splithttp") => {
+            if let Some(mode) = fields.remove("header") {
+                fields.insert("mode".to_owned(), mode);
+            }
         }
+        _ => {}
     }
     build("vmess", &fields)
 }

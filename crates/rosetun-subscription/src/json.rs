@@ -176,6 +176,26 @@ fn xray(config: &Value) -> Record {
             put(&mut fields, "path", upgrade.get("path"));
             put(&mut fields, "host", upgrade.get("host"));
         }
+        network @ ("xhttp" | "splithttp") => {
+            let settings = stream
+                .get(format!("{network}Settings"))
+                .or_else(|| stream.get("xhttpSettings"))
+                .or_else(|| stream.get("splithttpSettings"))
+                .unwrap_or(&Value::Null);
+            put(&mut fields, "path", settings.get("path"));
+            put(&mut fields, "host", settings.get("host"));
+            put(&mut fields, "mode", settings.get("mode"));
+            // Xray reads the options from `extra` when it is present and from the
+            // settings themselves otherwise; it never merges the two.
+            let options = match settings.get("extra") {
+                Some(extra) if !extra.is_null() => extra,
+                _ if settings.is_null() => &Value::Null,
+                _ => settings,
+            };
+            if !options.is_null() {
+                fields.insert("extra".to_owned(), options.to_string());
+            }
+        }
         _ => {}
     }
 

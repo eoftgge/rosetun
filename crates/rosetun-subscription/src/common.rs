@@ -5,10 +5,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use rosetun_config::{
     Hysteria2Params, Node, NodeId, Outbound, RealityParams, ShadowsocksParams, StreamSettings,
-    TlsMode, TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
+    TlsMode, TlsParams, Transport, TrojanParams, VlessParams, VmessParams, XhttpMode,
 };
 
-use crate::{SkipReason, UnsupportedTransport};
+use crate::{SkipReason, UnsupportedTransport, xhttp};
 
 pub(crate) type Fields = BTreeMap<String, String>;
 
@@ -240,9 +240,15 @@ fn transport(fields: &Fields) -> Result<Transport, SkipReason> {
             path: field(fields, "path").to_owned(),
             host: optional(fields, "host"),
         }),
+        // splithttp is the transport's former name.
+        "xhttp" | "splithttp" => Ok(Transport::Xhttp {
+            path: field(fields, "path").to_owned(),
+            host: optional(fields, "host"),
+            mode: XhttpMode::parse(field(fields, "mode"))
+                .ok_or(SkipReason::UnsupportedXhttpMode)?,
+            extra: xhttp::parse_text(field(fields, "extra"))?,
+        }),
         value => Err(SkipReason::UnsupportedTransport(match value {
-            "xhttp" => UnsupportedTransport::Xhttp,
-            "splithttp" => UnsupportedTransport::SplitHttp,
             "kcp" => UnsupportedTransport::Kcp,
             "quic" => UnsupportedTransport::Quic,
             "h2" => UnsupportedTransport::H2,

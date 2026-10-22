@@ -504,9 +504,7 @@ pub(crate) fn skip_reason(language: Language, reason: &SkipReason) -> String {
             tr_in(language, "error-skip-unknown-transport", &FluentArgs::new())
         }
         SkipReason::UnsupportedTransport(
-            transport @ (UnsupportedTransport::Xhttp
-            | UnsupportedTransport::SplitHttp
-            | UnsupportedTransport::Kcp
+            transport @ (UnsupportedTransport::Kcp
             | UnsupportedTransport::Quic
             | UnsupportedTransport::H2
             | UnsupportedTransport::Http),
@@ -520,6 +518,15 @@ pub(crate) fn skip_reason(language: Language, reason: &SkipReason) -> String {
         }
         SkipReason::UnsupportedGrpcMultiMode => {
             tr_in(language, "error-skip-grpc-multi-mode", &FluentArgs::new())
+        }
+        SkipReason::UnsupportedXhttpMode => {
+            tr_in(language, "error-skip-xhttp-mode", &FluentArgs::new())
+        }
+        SkipReason::InvalidXhttpExtra => {
+            tr_in(language, "error-skip-xhttp-extra", &FluentArgs::new())
+        }
+        SkipReason::XhttpDownloadSettings => {
+            tr_in(language, "error-skip-xhttp-download", &FluentArgs::new())
         }
         SkipReason::UnsupportedEncryption => {
             tr_in(language, "error-skip-encryption", &FluentArgs::new())
@@ -817,6 +824,9 @@ mod tests {
             SkipReason::UnsupportedVmessFormat,
             SkipReason::UnsupportedTcpHeader,
             SkipReason::UnsupportedGrpcMultiMode,
+            SkipReason::UnsupportedXhttpMode,
+            SkipReason::InvalidXhttpExtra,
+            SkipReason::XhttpDownloadSettings,
             SkipReason::UnsupportedEncryption,
             SkipReason::UnsupportedFlow,
             SkipReason::UnsupportedSecurity,
@@ -830,8 +840,6 @@ mod tests {
             assert_eq!(skip_reason(Language::English, &reason), reason.to_string());
         }
         for transport in [
-            UnsupportedTransport::Xhttp,
-            UnsupportedTransport::SplitHttp,
             UnsupportedTransport::Kcp,
             UnsupportedTransport::Quic,
             UnsupportedTransport::H2,
@@ -978,18 +986,18 @@ mod tests {
                 Skipped {
                     index: 3,
                     scheme: Some("vless".into()),
-                    reason: SkipReason::UnsupportedTransport(UnsupportedTransport::Xhttp),
+                    reason: SkipReason::UnsupportedTransport(UnsupportedTransport::Kcp),
                 },
             ],
             notices: vec!["Subscription expired".into()],
         });
         assert_eq!(
             fetch(Language::Russian, &error),
-            "в подписке нет подходящих серверов\nуведомление провайдера: Subscription expired\nПропущено 1: транспорт xhttp не поддерживается\nПропущено 2: запись содержит уведомление провайдера"
+            "в подписке нет подходящих серверов\nуведомление провайдера: Subscription expired\nПропущено 1: транспорт kcp не поддерживается\nПропущено 2: запись содержит уведомление провайдера"
         );
         assert_eq!(
             fetch(Language::English, &error),
-            "subscription contains no usable nodes\nnotice: Subscription expired\nSkipped 1: xhttp transport is not supported\nSkipped 2: record contains a provider notice"
+            "subscription contains no usable nodes\nnotice: Subscription expired\nSkipped 1: kcp transport is not supported\nSkipped 2: record contains a provider notice"
         );
     }
 
