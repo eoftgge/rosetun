@@ -1861,6 +1861,49 @@ function Get-RosetunHelperLog {
     } -ArgumentList $script:Config.GuestDir, $Tail
 }
 
+# A mark in helper.log, so a step reads only the lines it caused.
+function Get-RosetunHelperLogLength {
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir)
+        $item = Get-Item -Path "$dir\helper.log" -ErrorAction SilentlyContinue
+        if ($item) { $item.Length } else { 0 }
+    } -ArgumentList $script:Config.GuestDir
+}
+
+function Get-RosetunHelperLogSince {
+    param([Parameter(Mandatory)][long]$Offset)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $offset)
+        $stream = [IO.File]::Open("$dir\helper.log", 'Open', 'Read', 'ReadWrite, Delete')
+        try {
+            # A rotated log is shorter than the mark: read it whole.
+            if ($offset -le $stream.Length) { $stream.Position = $offset }
+            # The console helper colours its log; the codes split `name=value`.
+            [IO.StreamReader]::new($stream).ReadToEnd() -replace "\[[0-9;]*m", ''
+        }
+        finally { $stream.Dispose() }
+    } -ArgumentList $script:Config.GuestDir, $Offset
+}
+
+function Invoke-RosetunHelperMode {
+    # Runs the service binary in one of its install modes, as the installer does.
+    param([Parameter(Mandatory)][string]$Mode)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $mode)
+        $encoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
+        try {
+            $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') $mode 2>&1 | ForEach-Object { "$_" }
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
+        }
+        finally {
+            [Console]::OutputEncoding = $encoding
+        }
+    } -ArgumentList $script:Config.GuestDir, $Mode
+}
+
 function Invoke-RosetunConnectionsDuring {
     # The service collects the connection list only while it is read and keeps
     # a closed connection only if it was read before it closed, so a poller

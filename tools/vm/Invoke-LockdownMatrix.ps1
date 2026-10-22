@@ -81,29 +81,6 @@ function Add-Info {
     $results.Add([pscustomobject]@{ Result = 'INFO'; Scenario = $Scenario; Check = $Check; Note = $Note })
 }
 
-# A mark in helper.log, so a step reads only the lines it caused.
-function Get-HelperLogLength {
-    Invoke-RosetunGuest -ScriptBlock {
-        param($dir)
-        $item = Get-Item -Path "$dir\helper.log" -ErrorAction SilentlyContinue
-        if ($item) { $item.Length } else { 0 }
-    } -ArgumentList $guestDir
-}
-
-function Get-HelperLogSince {
-    param([Parameter(Mandatory)][long]$Offset)
-    Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $offset)
-        $stream = [IO.File]::Open("$dir\helper.log", 'Open', 'Read', 'ReadWrite, Delete')
-        try {
-            if ($offset -le $stream.Length) { $stream.Position = $offset }
-            # The console helper colours its log; the codes split `name=value`.
-            [IO.StreamReader]::new($stream).ReadToEnd() -replace "\x1b\[[0-9;]*m", ''
-        }
-        finally { $stream.Dispose() }
-    } -ArgumentList $guestDir, $Offset
-}
-
 function Test-InUseFree {
     # FWP_E_IN_USE, as the helper prints it (decimal) or as netsh does.
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Log)
@@ -164,25 +141,6 @@ function Invoke-Lockdown {
     # `rosetun lockdown on|off`; returns the CLI result for the caller to test.
     param([Parameter(Mandatory)][ValidateSet('on', 'off')][string]$State)
     Invoke-RosetunCli -Quiet 'lockdown' $State
-}
-
-function Invoke-GuestHelperMode {
-    # Runs the service binary in one of its install modes, as the installer does.
-    param([Parameter(Mandatory)][string]$Mode)
-    Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $mode)
-        $encoding = [Console]::OutputEncoding
-        [Console]::OutputEncoding = [Text.Encoding]::UTF8
-        try {
-            $output = & (Join-Path $dir 'rosetun-helper-privileged.exe') $mode 2>&1 | ForEach-Object { "$_" }
-            $exitCode = $LASTEXITCODE
-            $global:LASTEXITCODE = 0
-            [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
-        }
-        finally {
-            [Console]::OutputEncoding = $encoding
-        }
-    } -ArgumentList $guestDir, $Mode
 }
 
 function Test-CliPathEgress {
@@ -269,7 +227,7 @@ function Get-GuestGateway {
 function Install-TestService {
     # The real service, so `--reset-firewall` has an SCM service to stop.
     Stop-RosetunHelper
-    $install = Invoke-GuestHelperMode '--install-service'
+    $install = Invoke-RosetunHelperMode '--install-service'
     if ($install.ExitCode -ne 0) {
         throw "Could not install the test service: $($install.Output)"
     }
@@ -291,7 +249,7 @@ function Get-ServiceState {
 }
 
 function Remove-TestService {
-    $remove = Invoke-GuestHelperMode '--uninstall-service'
+    $remove = Invoke-RosetunHelperMode '--uninstall-service'
     if ($remove.ExitCode -ne 0) {
         throw "Could not remove the test service: $($remove.Output)"
     }
@@ -320,7 +278,7 @@ function Test-ByName {
         [Parameter(Mandatory)][string]$RequestName,
         [switch]$Lockdown
     )
-    $mark = Get-HelperLogLength
+    $mark = Get-RosetunHelperLogLength
     $connect = Connect-RosetunTunnel -RequestName $RequestName -Quiet
     Test-Step $Scenario 'connect to node.rosetun.test succeeds' { $connect.ExitCode -eq 0 } -Note $connect.Output
     Disconnect-RosetunTunnel | Out-Null
@@ -336,7 +294,7 @@ function Test-ByName {
         Test-Step $Scenario 'direct egress still closed' { -not (Test-RosetunDirectEgress) }
     }
     Test-Step $Scenario "no 'failed to resolve the VPN endpoint' in helper.log" {
-        (Get-HelperLogSince $mark) -notmatch 'failed to resolve the VPN endpoint'
+        (Get-RosetunHelperLogSince $mark) -notmatch 'failed to resolve the VPN endpoint'
     }
 }
 
@@ -394,7 +352,7 @@ try {
     Stop-RosetunHelper
     Publish-Rosetun -BuildDir $BuildDir -SingBoxPath $SingBoxPath -RequestPath $RequestPath -UseHostNode:$UseHostNode
     # A Lockdown left by an interrupted run would turn the baseline into a block.
-    $reset = Invoke-GuestHelperMode '--reset-firewall'
+    $reset = Invoke-RosetunHelperMode '--reset-firewall'
     if ($reset.ExitCode -ne 0) { throw "Initial --reset-firewall failed: $($reset.Output)" }
     Register-RosetunHelper
     Start-RosetunHelper
@@ -508,7 +466,7 @@ try {
     Test-Step '5 killed, on' 'the dynamic session is gone' { -not (Test-RosetunGuestWfpKey $rosetunProviderKey) }
     Test-Step '5 killed, on' 'objects still present' { Test-LockdownInstalled }
     Start-RosetunHelper
-    $startLog = Get-HelperLogSince 0
+    $startLog = Get-RosetunHelperLogSince 0
     Test-Step '5 restarted, on' 'the service finds Lockdown complete' {
         $startLog -match 'Lockdown is on.*\bcomplete=true'
     } -Note (($startLog -split "`n" | Select-String -Pattern 'Lockdown') -join ' | ')
@@ -525,7 +483,7 @@ try {
     # closes before Save-VM.
     $on = Invoke-Lockdown on
     Test-Step '5b sleep' 'rosetun lockdown on succeeds' { $on.ExitCode -eq 0 } -Note $on.Output
-    $mark = Get-HelperLogLength
+    $mark = Get-RosetunHelperLogLength
     Stop-GuestListener
     $guestListenerPort = $null
     $sleep = Suspend-RosetunGuest -Seconds 40
@@ -583,7 +541,7 @@ try {
         $watch -and $probeCount -gt $beforeProbes -and $leakCount -eq 0
     }
     Disconnect-RosetunTunnel | Out-Null
-    $sleepLog = Get-HelperLogSince $mark
+    $sleepLog = Get-RosetunHelperLogSince $mark
     Test-Step '5b sleep' 'no FWP_E_IN_USE in helper.log' { Test-InUseFree $sleepLog }
     Test-Step '5b sleep' 'no Lockdown errors in helper.log' { Test-LockdownErrorFree $sleepLog } -Note (
         ($sleepLog -split "`n" | Where-Object { $_ -match '\bERROR\b' } | Select-Object -First 3) -join ' | ')
@@ -648,21 +606,21 @@ try {
     # The first connect after the power cuts has twice timed out on sing-box
     # readiness; helper.log is rewritten by later helper starts, so keep the
     # lines of a failed connect on the host before they are gone.
-    $connectMark = Get-HelperLogLength
+    $connectMark = Get-RosetunHelperLogLength
     $connect = Connect-RosetunTunnel
     if ($connect.ExitCode -ne 0) {
         $kept = Join-Path $PSScriptRoot ("logs\lockdown-first-connect-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
-        Get-HelperLogSince $connectMark | Set-Content -LiteralPath $kept -Encoding UTF8
+        Get-RosetunHelperLogSince $connectMark | Set-Content -LiteralPath $kept -Encoding UTF8
         Add-Info '8 off, connected' 'the first connect after the power cuts failed; helper log kept' -Note $kept
     }
-    $mark = Get-HelperLogLength
+    $mark = Get-RosetunHelperLogLength
     $off = Invoke-Lockdown off
     Test-Step '8 off, connected' 'rosetun lockdown off succeeds' { $off.ExitCode -eq 0 } -Note $off.Output
     Test-Step '8 off, connected' 'no objects' { Test-LockdownAbsent } -Note (Format-Objects (Get-LockdownObjects))
     $tunnel = Wait-RosetunTunnelEgress -SkipRevocationCheck
     Test-Step '8 off, connected' 'the tunnel still carries traffic' { $tunnel.Ok } -Note $tunnel.Error
     Test-Step '8 off, connected' 'the kill switch of the request stays: direct egress closed' { -not (Test-RosetunDirectEgress) }
-    Test-Step '8 off, connected' 'no FWP_E_IN_USE in helper.log' { Test-InUseFree (Get-HelperLogSince $mark) }
+    Test-Step '8 off, connected' 'no FWP_E_IN_USE in helper.log' { Test-InUseFree (Get-RosetunHelperLogSince $mark) }
     Disconnect-RosetunTunnel | Out-Null
 
     Invoke-Lockdown on | Out-Null
@@ -675,7 +633,7 @@ try {
     Disconnect-RosetunTunnel | Out-Null
 
     Invoke-Lockdown on | Out-Null
-    $mark = Get-HelperLogLength
+    $mark = Get-RosetunHelperLogLength
     $off = Invoke-Lockdown off
     Test-Step '8 off, disconnected' 'rosetun lockdown off succeeds' { $off.ExitCode -eq 0 } -Note $off.Output
     Test-Step '8 off, disconnected' 'no objects' { Test-LockdownAbsent }
@@ -684,7 +642,7 @@ try {
     Test-Step '8 off, disconnected' 'the host reaches a guest listener' { Test-InboundFromHost $guestListenerPort }
     $again = Invoke-Lockdown off
     Test-Step '8 off, disconnected' 'a second off succeeds' { $again.ExitCode -eq 0 } -Note $again.Output
-    Test-Step '8 off, disconnected' 'no FWP_E_IN_USE in helper.log' { Test-InUseFree (Get-HelperLogSince $mark) }
+    Test-Step '8 off, disconnected' 'no FWP_E_IN_USE in helper.log' { Test-InUseFree (Get-RosetunHelperLogSince $mark) }
 
     # 9. reset-firewall with the real SCM service, running and connected, then stopped.
     $serviceInstalled = $true
@@ -692,7 +650,7 @@ try {
     Invoke-Lockdown on | Out-Null
     $connect = Connect-RosetunTunnel -Quiet
     Test-Step '9 reset, running' 'connected through the service' { $connect.ExitCode -eq 0 } -Note $connect.Output
-    $reset = Invoke-GuestHelperMode '--reset-firewall'
+    $reset = Invoke-RosetunHelperMode '--reset-firewall'
     Test-Step '9 reset, running' '--reset-firewall succeeds' {
         $reset.ExitCode -eq 0 -and $reset.Output -match 'Lockdown removed'
     } -Note $reset.Output
@@ -718,9 +676,9 @@ try {
     # 10. Uninstall under Lockdown, as rosetun.iss runs it: --uninstall-service, then --reset-firewall.
     Invoke-Lockdown on | Out-Null
     Connect-RosetunTunnel | Out-Null
-    $uninstall = Invoke-GuestHelperMode '--uninstall-service'
+    $uninstall = Invoke-RosetunHelperMode '--uninstall-service'
     $serviceInstalled = $uninstall.ExitCode -ne 0
-    $reset = Invoke-GuestHelperMode '--reset-firewall'
+    $reset = Invoke-RosetunHelperMode '--reset-firewall'
     Test-Step '10 uninstall' 'both installer steps succeed' {
         $uninstall.ExitCode -eq 0 -and $reset.ExitCode -eq 0
     } -Note "$($uninstall.Output) | $($reset.Output)"
@@ -768,7 +726,7 @@ finally {
     }
     $lockdownRemoved = $false
     try {
-        $reset = Invoke-GuestHelperMode '--reset-firewall'
+        $reset = Invoke-RosetunHelperMode '--reset-firewall'
         if ($reset.ExitCode -ne 0 -or -not (Test-LockdownAbsent)) { throw $reset.Output }
         $lockdownRemoved = $true
     }

@@ -56,29 +56,6 @@ function Add-Info {
     $results.Add([pscustomobject]@{ Result = 'INFO'; Scenario = $Scenario; Check = $Check; Note = $Note })
 }
 
-# A mark in helper.log, so a step reads only the lines it caused.
-function Get-HelperLogLength {
-    Invoke-RosetunGuest -ScriptBlock {
-        param($dir)
-        $item = Get-Item -Path "$dir\helper.log" -ErrorAction SilentlyContinue
-        if ($item) { $item.Length } else { 0 }
-    } -ArgumentList (Get-RosetunGuestDir)
-}
-
-function Get-HelperLogSince {
-    param([Parameter(Mandatory)][long]$Offset)
-    Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $offset)
-        $stream = [IO.File]::Open("$dir\helper.log", 'Open', 'Read', 'ReadWrite, Delete')
-        try {
-            # A rotated log is shorter than the mark: read it whole.
-            if ($offset -le $stream.Length) { $stream.Position = $offset }
-            [IO.StreamReader]::new($stream).ReadToEnd()
-        }
-        finally { $stream.Dispose() }
-    } -ArgumentList (Get-RosetunGuestDir), $Offset
-}
-
 function Format-Egress {
     param([Parameter(Mandatory)]$Egress)
     if ($Egress.Ok) {
@@ -1521,7 +1498,7 @@ try {
         [bool]$request.settings.kill_switch
     } -ArgumentList (Get-RosetunGuestDir), $seriesConfigPath
 
-    $seriesLogMark = Get-HelperLogLength
+    $seriesLogMark = Get-RosetunHelperLogLength
     $connect = Invoke-SettingsCli -ConfigPath $seriesConfigPath -Action connect
     Test-Step 'apply series' 'connect uses the isolated config' -Note "exit $($connect.ExitCode)" {
         $connect.ExitCode -eq 0 -and (Wait-RosetunState 'Connected')
@@ -1556,7 +1533,7 @@ try {
     $seriesWatchActive = $false
     Test-Step 'apply series' 'all 20 applies succeed and stay Connected' `
         -Note ($failedApplies -join '; ') { $failedApplies.Count -eq 0 }
-    $seriesLog = Get-HelperLogSince $seriesLogMark
+    $seriesLog = Get-RosetunHelperLogSince $seriesLogMark
     if ($failedApplies.Count -gt 0) {
         $seriesLogPath = Join-Path $PSScriptRoot ("logs\apply-series-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
         New-Item -ItemType Directory -Force -Path (Split-Path $seriesLogPath) | Out-Null
@@ -1695,7 +1672,7 @@ $attempt = Connect-RosetunTunnel -Quiet
 Test-Step 'graceful disconnect' 'connects' -Note "exit $($attempt.ExitCode)" {
     $attempt.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
 }
-$logMark = Get-HelperLogLength
+$logMark = Get-RosetunHelperLogLength
 Disconnect-RosetunTunnel | Out-Null
 # Measured from when the disconnect call returned, inside the guest.
 $adapterGoneMs = Invoke-RosetunGuest -ScriptBlock {
@@ -1709,7 +1686,7 @@ $adapterGoneMs = Invoke-RosetunGuest -ScriptBlock {
 Test-Step 'graceful disconnect' 'adapter rosetun0 is gone within 2 s' -Note "$adapterGoneMs ms" {
     $null -ne $adapterGoneMs
 }
-$stopLine = [regex]::Match((Get-HelperLogSince $logMark), 'sing-box (stopped gracefully|did not stop in time|killed).*').Value
+$stopLine = [regex]::Match((Get-RosetunHelperLogSince $logMark), 'sing-box (stopped gracefully|did not stop in time|killed).*').Value
 Test-Step 'graceful disconnect' 'helper log shows a graceful sing-box stop' -Note $stopLine.Trim() {
     $stopLine -match 'stopped gracefully'
 }
