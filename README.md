@@ -39,7 +39,7 @@ Rosetun is a Windows VPN client powered by sing-box, which runs the tunnel, rule
 
 ## Install
 
-Download the installer from [Releases](https://github.com/eoftgge/rosetun/releases). Windows 10 or 11, x64, is required. The installer is not code-signed yet; if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
+Download the installer from [Releases](https://github.com/eoftgge/rosetun/releases). Windows 11, x64, is required; Windows 10 is not tested. The installer is not code-signed yet; if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
 
 Rosetun plans to apply again to [SignPath Foundation](https://signpath.org) for free code signing once the project is better known; see the [code signing policy](CODE_SIGNING_POLICY.md) for the planned process. Current releases remain unsigned.
 

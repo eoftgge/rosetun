@@ -1,10 +1,10 @@
 # Rosetun {{version}}
 
-The public beta of Rosetun 0.3. Its main features: **Lockdown**, no internet without the tunnel, also while disconnected, after a restart and if the Rosetun service stops; the **Traffic** tab with the live list of connections, where each one goes and why; **XHTTP** servers; adding a subscription from a **QR code**. **0.2.0 stays the supported release** until 0.3.0, and Rosetun 0.2.0 does not offer this beta as an update: install it from this page.
+Rosetun 0.3. Its main features: **Lockdown**, no internet without the tunnel, also while disconnected, after a restart and if the Rosetun service stops; the **Traffic** tab with the live list of connections, where each one goes and why; **XHTTP** servers; adding a subscription from a **QR code**. Rosetun 0.2.0 offers this release as an update.
 
 Settings move to a new format (see What's new); 0.2.0 cannot read the new one. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-**Going back to 0.2.0.** Turn Lockdown off first: 0.2.0 does not know Lockdown, can neither remove it nor connect while it is on, and the computer stays offline. If you already went back, install this beta again and turn Lockdown off, or run `rosetun reset-firewall` from it as administrator; uninstalling the beta removes Lockdown too. 0.2.0 also cannot read settings saved by this beta. The previous file is kept as `%APPDATA%\Rosetun\config.v5.json`; close Rosetun and rename it to `config.json` (changes made in the beta are lost).
+**Going back to 0.2.0.** Turn Lockdown off first: 0.2.0 does not know Lockdown, can neither remove it nor connect while it is on, and the computer stays offline. If you already went back, install 0.3 again and turn Lockdown off, or run `rosetun reset-firewall` from it as administrator; uninstalling 0.3 removes Lockdown too. 0.2.0 also cannot read settings saved by 0.3. The previous file is kept as `%APPDATA%\Rosetun\config.v5.json`; close Rosetun and rename it to `config.json` (changes made in 0.3 are lost).
 
 ## What's new in 0.3
 
@@ -31,11 +31,11 @@ Settings move to a new format (see What's new); 0.2.0 cannot read the new one. P
 - **The tray rose** has a thin dark outline, so it stays visible on a red or light taskbar, and is drawn at the taskbar's own size, so it is sharp at any display scale. In the taskbar, Start and Alt+Tab the rose sits on a dark plate. Dialog buttons are on the right, the main one last, in every dialog.
 - **Privacy fixes.** Some sing-box error lines put site addresses into the Rosetun service log even with the detailed log off; now every public address is hidden there. **Collect report** also hides an address that is followed by a colon, as in error messages.
 - **sing-box {{sing_box_version}} and Xray {{xray_version}}.**
-- **Settings format 6.** Settings are converted when this beta first saves them, and the previous file stays as `config.v5.json`; an older Rosetun, 0.2.0 included, refuses to read the new format and does not overwrite it.
+- **Settings format 6.** Settings are converted when 0.3 first saves them, and the previous file stays as `config.v5.json`; an older Rosetun, 0.2.0 included, refuses to read the new format and does not overwrite it.
 
 ## Known issues
 
-- **0.3 has not been tested on Windows 10 yet**, only on Windows 11. If something does not work on Windows 10, please report it.
+- **Windows 10 has not been tested**, only Windows 11. Rosetun may work on Windows 10; if something does not, please report it.
 - If you switch between networks (for example Wi-Fi and cable) while connected through Xray, the connection may stop until Rosetun reconnects.
 - **Lockdown is experimental**: tested on Windows 11 only, on a clean system and on one everyday computer, with restarts, power cuts and sleep in a virtual machine. Not tested yet: other firewalls or antivirus programs with their own network filters, hibernation and sleep on real hardware.
 - **With Lockdown on, Wi-Fi with a sign-in page** (a hotel or a café) cannot open its page, and **Windows cannot set the clock** without the tunnel. Turn Lockdown off for a moment, sign in or correct the clock, connect, and turn it on again.
@@ -43,7 +43,7 @@ Settings move to a new format (see What's new); 0.2.0 cannot read the new one. P
 
 ## Install
 
-Windows 10 or 11, x64. Download `{{setup}}` from this release. [Code signing policy](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md): the installer is not code-signed yet; if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
+Windows 11, x64 (Windows 10 is not tested). Download `{{setup}}` from this release. [Code signing policy](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md): the installer is not code-signed yet; if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
 
 ## Verify
 
@@ -59,11 +59,11 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-Публичная бета Rosetun 0.3. Главное в ней: **Lockdown** (без туннеля интернета нет, и без подключения, и после перезагрузки, и если служба Rosetun остановится); вкладка **Трафик** с живым списком соединений: куда идёт каждое и почему; серверы **XHTTP**; добавление подписки по **QR-коду**. **Поддерживаемым выпуском остаётся 0.2.0** до выхода 0.3.0, и Rosetun 0.2.0 не предлагает эту бету как обновление: установите её с этой страницы.
+Rosetun 0.3. Главное в нём: **Lockdown** (без туннеля интернета нет, и без подключения, и после перезагрузки, и если служба Rosetun остановится); вкладка **Трафик** с живым списком соединений: куда идёт каждое и почему; серверы **XHTTP**; добавление подписки по **QR-коду**. Rosetun 0.2.0 предложит этот выпуск как обновление.
 
 Настройки переходят на новый формат (см. «Что нового»); 0.2.0 его прочитать не сможет. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-**Возврат на 0.2.0.** Сначала выключите Lockdown: 0.2.0 не знает про него, не может ни снять его, ни подключиться, пока он включён, и компьютер остаётся без сети. Если вы уже вернулись, установите бету снова и выключите Lockdown или выполните её `rosetun reset-firewall` от имени администратора; удаление беты тоже снимает Lockdown. Кроме того, 0.2.0 не читает настройки, сохранённые бетой. Прежний файл лежит как `%APPDATA%\Rosetun\config.v5.json`; закройте Rosetun и переименуйте его в `config.json` (изменения, сделанные в бете, пропадут).
+**Возврат на 0.2.0.** Сначала выключите Lockdown: 0.2.0 не знает про него, не может ни снять его, ни подключиться, пока он включён, и компьютер остаётся без сети. Если вы уже вернулись, установите 0.3 снова и выключите Lockdown или выполните её `rosetun reset-firewall` от имени администратора; удаление 0.3 тоже снимает Lockdown. Кроме того, 0.2.0 не читает настройки, сохранённые 0.3. Прежний файл лежит как `%APPDATA%\Rosetun\config.v5.json`; закройте Rosetun и переименуйте его в `config.json` (изменения, сделанные в 0.3, пропадут).
 
 ### Что нового в 0.3
 
@@ -90,11 +90,11 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 - **Роза в трее** получила тонкий тёмный контур, чтобы её было видно на красной и светлой панели задач, и рисуется в размере самой панели, поэтому чёткая при любом масштабе. На панели задач, в «Пуске» и в Alt+Tab роза лежит на тёмной подложке. Кнопки окон справа, основная крайняя, во всех окнах.
 - **Исправления приватности.** Некоторые строки ошибок sing-box попадали в журнал службы Rosetun с адресами сайтов даже при выключенном подробном журнале; теперь там скрыт любой публичный адрес. **Собрать отчёт** скрывает и адрес, за которым идёт двоеточие, как в текстах ошибок.
 - **sing-box {{sing_box_version}} и Xray {{xray_version}}.**
-- **Формат настроек 6.** Настройки преобразуются, когда бета впервые их сохраняет, а прежний файл остаётся как `config.v5.json`; более старый Rosetun, в том числе 0.2.0, новый формат читать откажется и не перезапишет его.
+- **Формат настроек 6.** Настройки преобразуются, когда 0.3 впервые их сохраняет, а прежний файл остаётся как `config.v5.json`; более старый Rosetun, в том числе 0.2.0, новый формат читать откажется и не перезапишет его.
 
 ### Известные проблемы
 
-- **0.3 ещё не проверялась на Windows 10**, только на Windows 11. Если на Windows 10 что-то не работает, сообщите, пожалуйста.
+- **Windows 10 не проверялась**, только Windows 11. Rosetun может работать и на Windows 10; если что-то не работает, сообщите, пожалуйста.
 - Если во время подключения через Xray сменить сеть (например, Wi-Fi на кабель), соединение может прерваться, пока Rosetun не переподключится.
 - **Lockdown экспериментальный**: проверен только на Windows 11, на чистой системе и на одном рабочем компьютере, с перезагрузками, отключениями питания и сном в виртуальной машине. Ещё не проверены: другие брандмауэры и антивирусы со своими сетевыми фильтрами, гибернация и сон на настоящем компьютере.
 - **При включённом Lockdown Wi-Fi со входом через страницу** (гостиница, кафе) не откроет свою страницу, а **Windows не сможет выставить время** без туннеля. Выключите Lockdown на время, войдите или поправьте часы, подключитесь и включите его снова.
@@ -102,7 +102,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ### Установка
 
-Windows 10 или 11, x64. Скачайте `{{setup}}` из этого релиза. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md) (Code signing policy): установщик пока не подписан; если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
+Windows 11, x64 (Windows 10 не проверялась). Скачайте `{{setup}}` из этого релиза. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md) (Code signing policy): установщик пока не подписан; если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
 
 ### Проверка
 

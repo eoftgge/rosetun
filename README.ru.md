@@ -39,7 +39,7 @@ Rosetun: VPN-клиент для Windows на базе sing-box, который 
 
 ## Установка
 
-Скачайте установщик на странице [Releases](https://github.com/eoftgge/rosetun/releases). Нужна Windows 10 или 11, x64. Установщик пока не подписан: если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
+Скачайте установщик на странице [Releases](https://github.com/eoftgge/rosetun/releases). Нужна Windows 11, x64; Windows 10 не проверялась. Установщик пока не подписан: если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
 
 Rosetun снова подаст заявку в [SignPath Foundation](https://signpath.org) на бесплатную подпись кода, когда проект станет известнее; планируемый порядок подписи описан в [политике подписи кода](CODE_SIGNING_POLICY.md) (на английском). Текущие релизы остаются неподписанными.
 
