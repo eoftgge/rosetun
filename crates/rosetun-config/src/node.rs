@@ -251,19 +251,19 @@ impl fmt::Debug for Transport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Tcp => f.write_str("Tcp"),
-            Self::Ws { path, host } => f
+            Self::Ws { path: _, host } => f
                 .debug_struct("Ws")
-                .field("path", path)
-                .field("host", host)
+                .field("path", &"[redacted]")
+                .field("host", &host.as_ref().map(|_| "[redacted]"))
                 .finish(),
-            Self::Grpc { service_name } => f
+            Self::Grpc { service_name: _ } => f
                 .debug_struct("Grpc")
-                .field("service_name", service_name)
+                .field("service_name", &"[redacted]")
                 .finish(),
-            Self::HttpUpgrade { path, host } => f
+            Self::HttpUpgrade { path: _, host } => f
                 .debug_struct("HttpUpgrade")
-                .field("path", path)
-                .field("host", host)
+                .field("path", &"[redacted]")
+                .field("host", &host.as_ref().map(|_| "[redacted]"))
                 .finish(),
             Self::Xhttp {
                 path: _,
@@ -616,6 +616,30 @@ mod tests {
             "secret-value",
         ] {
             assert!(!debug.contains(secret), "{secret} leaked: {debug}");
+        }
+    }
+
+    #[test]
+    fn transport_debug_hides_paths_hosts_and_service_names() {
+        for transport in [
+            Transport::Tcp,
+            Transport::Ws {
+                path: "/secret-path".into(),
+                host: Some("secret-host.example.com".into()),
+            },
+            Transport::Grpc {
+                service_name: "secret-service".into(),
+            },
+            Transport::HttpUpgrade {
+                path: "/secret-path".into(),
+                host: Some("secret-host.example.com".into()),
+            },
+            xhttp(),
+        ] {
+            let debug = format!("{transport:?}");
+            for secret in ["secret-path", "secret-host", "secret-service"] {
+                assert!(!debug.contains(secret), "{secret} leaked: {debug}");
+            }
         }
     }
 
