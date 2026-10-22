@@ -24,7 +24,7 @@ mod tests;
 #[cfg(test)]
 mod validation;
 pub(crate) use format::*;
-pub(crate) use system_checks::{check_detail, check_issue};
+pub(crate) use system_checks::{check_detail, check_hint, check_issue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Language {

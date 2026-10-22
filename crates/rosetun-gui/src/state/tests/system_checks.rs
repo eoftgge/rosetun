@@ -186,9 +186,16 @@ fn dns_row_reads_differently_in_each_state() {
         detail(CheckStatus::Unavailable),
         tr!("system-check-unavailable")
     );
-    let found = detail(CheckStatus::Warning);
-    assert!(found.contains("192.0.2.53"), "{found}");
-    assert_ne!(found, tr!("system-check-unavailable"));
+    assert_eq!(detail(CheckStatus::Warning), tr!("system-check-dns-found"));
+    let hint = crate::i18n::check_hint(&dns(CheckStatus::Warning)).unwrap();
+    assert!(hint.contains("192.0.2.53"), "{hint}");
+    for status in [
+        CheckStatus::Ok,
+        CheckStatus::Skipped,
+        CheckStatus::Unavailable,
+    ] {
+        assert_eq!(crate::i18n::check_hint(&dns(status)), None);
+    }
 }
 
 #[test]

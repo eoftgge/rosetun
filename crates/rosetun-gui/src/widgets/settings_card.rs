@@ -111,6 +111,14 @@ impl SettingsCard<'_> {
             .rect
     }
 
+    /// Shows `hint` while the pointer rests anywhere on the row at `rect`.
+    pub(crate) fn hover_hint(&mut self, rect: egui::Rect, hint: &str) {
+        let id = self.ui.id().with(("row-hint", self.rows));
+        self.ui
+            .interact(rect, id, egui::Sense::hover())
+            .on_hover_text(hint);
+    }
+
     /// A row whose control is a toggle, with an optional tag after the
     /// title; the whole row is clickable.
     pub(crate) fn toggle(

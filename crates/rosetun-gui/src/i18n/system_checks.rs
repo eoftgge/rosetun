@@ -75,11 +75,21 @@ pub(crate) fn check_issue(result: &CheckResult) -> String {
                 names = parts.join(&tr!("system-check-separator"))
             )
         }
-        CheckDetail::DnsSubstitution { server } => tr!(
-            "system-check-dns-found",
-            server = display::safe_text(server)
-        ),
+        CheckDetail::DnsSubstitution { .. } => tr!("system-check-dns-found"),
         CheckDetail::None => tr!("system-check-unavailable"),
+    }
+}
+
+/// The explanation shown on hover, for a result whose row holds only a status word.
+pub(crate) fn check_hint(result: &CheckResult) -> Option<String> {
+    match &result.detail {
+        CheckDetail::DnsSubstitution { server } if result.status == CheckStatus::Warning => Some(
+            tr!(
+                "system-check-dns-found-hint",
+                server = display::safe_text(server)
+            ),
+        ),
+        _ => None,
     }
 }
 
@@ -95,7 +105,7 @@ pub(crate) fn check_detail(result: &CheckResult) -> String {
                 CheckKind::Proxy => tr!("system-check-proxy-advice"),
                 CheckKind::PacketInterceptor => tr!("system-check-packet-advice"),
                 CheckKind::OtherVpn => tr!("system-check-vpn-advice"),
-                // One sentence with its own advice.
+                // A status word; the explanation is in the hint.
                 CheckKind::DnsSubstitution => return check_issue(result),
             };
             tr!(

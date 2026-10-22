@@ -619,7 +619,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     }
                 };
                 let detail = i18n::check_detail(result);
-                card.row_with_title(
+                let rect = card.row_with_title(
                     |ui| {
                         ui.horizontal(|ui| {
                             let size = ui.text_style_height(&egui::TextStyle::Body);
@@ -634,6 +634,9 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     Some(&detail),
                     |_| {},
                 );
+                if let Some(hint) = i18n::check_hint(result) {
+                    card.hover_hint(rect, &hint);
+                }
             }
         } else {
             card.row(tr!("system-check-intro"), None, |_| {});
