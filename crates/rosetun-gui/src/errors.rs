@@ -886,7 +886,10 @@ mod tests {
         }
         // The TLS detail is internal; the interface names the likely fix instead.
         assert_eq!(
-            fetch(Language::English, &FetchError::Tls("bad certificate".to_owned())),
+            fetch(
+                Language::English,
+                &FetchError::Tls("bad certificate".to_owned())
+            ),
             "could not set up a secure connection; check the system clock"
         );
         for error in [

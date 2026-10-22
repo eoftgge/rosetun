@@ -581,9 +581,7 @@ fn busy_connect_and_failed_disconnect_still_show_errors() {
     assert!(!state.operations.helper);
     assert_eq!(
         state.operation_error.as_deref(),
-        Some(
-            "the engine did not start; try again or save a report for support"
-        )
+        Some("the engine did not start; try again or save a report for support")
     );
 }
 

@@ -83,12 +83,12 @@ pub(crate) fn check_issue(result: &CheckResult) -> String {
 /// The explanation shown on hover, for a result whose row holds only a status word.
 pub(crate) fn check_hint(result: &CheckResult) -> Option<String> {
     match &result.detail {
-        CheckDetail::DnsSubstitution { server } if result.status == CheckStatus::Warning => Some(
-            tr!(
+        CheckDetail::DnsSubstitution { server } if result.status == CheckStatus::Warning => {
+            Some(tr!(
                 "system-check-dns-found-hint",
                 server = display::safe_text(server)
-            ),
-        ),
+            ))
+        }
         _ => None,
     }
 }

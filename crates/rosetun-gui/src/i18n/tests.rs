@@ -268,17 +268,13 @@ fn verbose_log_details_pluralize_remaining_hours() {
     ] {
         assert_eq!(
             in_language(Language::Russian, || verbose_log_on_detail(hours)),
-            format!(
-                "Записывает адреса сайтов. Выключится сам через {expected}."
-            )
+            format!("Записывает адреса сайтов. Выключится сам через {expected}.")
         );
     }
     for (hours, expected) in [(1, "1 hour"), (24, "24 hours")] {
         assert_eq!(
             in_language(Language::English, || verbose_log_on_detail(hours)),
-            format!(
-                "Records site addresses. Turns itself off in {expected}."
-            )
+            format!("Records site addresses. Turns itself off in {expected}.")
         );
     }
 }
