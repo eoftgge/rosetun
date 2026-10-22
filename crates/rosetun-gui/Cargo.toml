@@ -11,14 +11,17 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+arboard.workspace = true
 eframe.workspace = true
 fluent-bundle.workspace = true
+image.workspace = true
 unic-langid.workspace = true
 rosetun-adapters.workspace = true
 rosetun-config.workspace = true
 rosetun-core.workspace = true
 rosetun-ipc.workspace = true
 rosetun-processes.workspace = true
+rqrr.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -26,6 +29,7 @@ url.workspace = true
 
 [dev-dependencies]
 fluent-syntax.workspace = true
+qrcode.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle.workspace = true

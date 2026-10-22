@@ -18,6 +18,7 @@ mod display;
 mod errors;
 mod icons;
 mod programs;
+mod qr;
 mod reorder;
 #[cfg(windows)]
 mod report;
