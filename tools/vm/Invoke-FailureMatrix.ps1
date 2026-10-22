@@ -1003,6 +1003,97 @@ if ($UseHostNode) {
     }
     Disconnect-RosetunTunnel | Out-Null
 
+    Write-Host 'Connect to the XHTTP + REALITY server in automatic mode...'
+    $xhttpConnect = Connect-RosetunTunnel -RequestName 'request-xhttp.json' -Quiet
+    Test-Step 'XHTTP auto' 'connect succeeds' -Note "exit $($xhttpConnect.ExitCode)" {
+        $xhttpConnect.ExitCode -eq 0
+    }
+    Test-Step 'XHTTP auto' 'state is Connected' { Wait-RosetunState 'Connected' }
+    $xhttpStatus = Get-RosetunStatus -ProtocolVersion $protocolVersion
+    Test-Step 'XHTTP auto' 'Xray is active in automatic mode' {
+        $xhttpStatus.xray -and $xhttpStatus.xray_use -eq 'auto' -and (Test-RosetunXrayRunning)
+    }
+    $egress = Wait-RosetunTunnelEgress
+    Test-Step 'XHTTP auto' 'tunnel carries traffic and resolves DNS' -Note (Format-Egress $egress) {
+        $egress.Ok
+    }
+    Test-Step 'XHTTP auto' 'UDP DNS resolves inside the tunnel' { Test-RealityTunnelDns }
+    Test-Step 'XHTTP auto' 'direct egress is blocked' { -not (Test-RosetunDirectEgress) }
+    Test-Step 'XHTTP auto' 'direct UDP DNS is blocked' { -not (Test-RosetunDirectDns) }
+    $probe = Invoke-RosetunProbe 'request-xhttp.json'
+    Test-Step 'XHTTP auto' 'server check works' -Note "exit $($probe.ExitCode)" {
+        $probe.ExitCode -eq 0 -and $probe.Output -match '(?m)^works \d+ ms$'
+    }
+    $delay = Invoke-RosetunCli -Quiet 'delay'
+    Test-Step 'XHTTP auto' 'tunnel delay works' -Note "exit $($delay.ExitCode)" {
+        $delay.ExitCode -eq 0 -and $delay.Output -match '(?m)^works \d+ ms$'
+    }
+    Disconnect-RosetunTunnel | Out-Null
+
+    Write-Host 'The same XHTTP server without Xray...'
+    try {
+        $setting = Invoke-XraySetting -Setting off
+        Test-Step 'XHTTP off' 'rosetun xray off succeeds' -Note "exit $($setting.ExitCode)" {
+            $setting.ExitCode -eq 0
+        }
+        # sing-box has no XHTTP: the helper refuses while rendering, before protection or spawn.
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        $refused = Connect-RosetunTunnel -RequestName 'request-xhttp-xray-off.json' -Quiet
+        $timer.Stop()
+        Test-Step 'XHTTP off' 'connect is refused within 10 s and names XHTTP' `
+            -Note "exit $($refused.ExitCode) after $([int]$timer.Elapsed.TotalSeconds) s" {
+            $refused.ExitCode -ne 0 -and $timer.Elapsed.TotalSeconds -le 10 -and
+                $refused.Output -match 'XHTTP'
+        }
+        Test-Step 'XHTTP off' 'no tunnel is up' {
+            (Get-RosetunState) -ne 'Connected' -and -not (Test-RosetunTunAdapter) -and
+                -not (Test-RosetunEngineRunning) -and -not (Test-RosetunXrayRunning)
+        }
+        Test-Step 'XHTTP off' 'direct egress works' { Test-RosetunDirectEgress }
+    }
+    finally {
+        $setting = Invoke-XraySetting -Setting auto
+        Test-Step 'XHTTP off' 'rosetun xray auto restores the setting' -Note "exit $($setting.ExitCode)" {
+            $setting.ExitCode -eq 0
+        }
+        Invoke-RosetunGuest -ScriptBlock {
+            param($dir)
+            Remove-Item -LiteralPath (Join-Path $dir 'matrix-xray-settings.json') -Force -ErrorAction SilentlyContinue
+        } -ArgumentList (Get-RosetunGuestDir)
+    }
+    Disconnect-RosetunTunnel | Out-Null
+
+    Write-Host 'Apply Shadowsocks to XHTTP and back under protection...'
+    Connect-RosetunTunnel -RequestName 'request-reality-apply-back.json' | Out-Null
+    Start-RosetunEgressWatch
+    $egressWatchActive = $true
+    try {
+        $apply = Invoke-RosetunApply 'request-xhttp.json' -Quiet
+        Test-Step 'XHTTP apply' 'Shadowsocks to XHTTP succeeds' -Note "exit $($apply.ExitCode)" {
+            $apply.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+        }
+        $egress = Wait-RosetunTunnelEgress
+        Test-Step 'XHTTP apply' 'XHTTP carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
+        Test-Step 'XHTTP apply' 'direct egress is blocked on XHTTP' { -not (Test-RosetunDirectEgress) }
+        $apply = Invoke-RosetunApply 'request-reality-apply-back.json' -Quiet
+        Test-Step 'XHTTP apply' 'XHTTP to Shadowsocks succeeds' -Note "exit $($apply.ExitCode)" {
+            $apply.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
+        }
+        $egress = Wait-RosetunTunnelEgress
+        Test-Step 'XHTTP apply' 'Shadowsocks carries traffic again' -Note (Format-Egress $egress) {
+            $egress.Ok
+        }
+        Test-Step 'XHTTP apply' 'direct egress stays blocked' { -not (Test-RosetunDirectEgress) }
+    }
+    finally {
+        $watch = Stop-RosetunEgressWatch
+        $egressWatchActive = $false
+    }
+    Test-Step 'XHTTP apply' "no direct leak ($($watch.Probes) probes)" {
+        $watch.Probes -gt 0 -and $watch.Leaks -eq 0
+    }
+    Disconnect-RosetunTunnel | Out-Null
+
     Write-Host 'Kill the helper during a REALITY session...'
     Connect-RosetunTunnel -RequestName 'request-reality.json' | Out-Null
     Test-Step 'REALITY helper killed' 'both children run before the kill' {

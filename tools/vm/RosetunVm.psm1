@@ -131,8 +131,13 @@ function Start-RosetunXrayTestNode {
     }
     $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-node.json') -Raw | ConvertFrom-Json
     $port = [int](($config.inbounds | Where-Object { $_.type -eq 'shadowsocks' }).listen_port) + 2
-    if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
-        throw "TCP $port is already in use; refusing to start the REALITY test node."
+    # The exit node takes the port in between.
+    $xhttpPort = $port + 2
+    $xhttpPath = '/rosetun-xhttp'
+    foreach ($listenPort in @($port, $xhttpPort)) {
+        if (Get-NetTCPConnection -LocalPort $listenPort -State Listen -ErrorAction SilentlyContinue) {
+            throw "TCP $listenPort is already in use; refusing to start the REALITY test node."
+        }
     }
     $hostIp = (Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4).IPAddress
     $installation = Install-RosetunXray
@@ -151,24 +156,40 @@ function Start-RosetunXrayTestNode {
         try { $random.GetBytes($shortIdBytes) }
         finally { $random.Dispose() }
         $shortId = [BitConverter]::ToString($shortIdBytes).Replace('-', '').ToLowerInvariant()
+        $realitySettings = @{
+            dest = "${CoverSite}:443"
+            serverNames = @($CoverSite)
+            privateKey = $private
+            shortIds = @($shortId)
+        }
         $server = @{
             log = @{ loglevel = 'warning' }
-            inbounds = @(@{
-                listen = $hostIp
-                port = $port
-                protocol = 'vless'
-                settings = @{ clients = @(@{ id = 'dd963d73-4229-4d4b-86af-c21d38dc3c25'; flow = 'xtls-rprx-vision' }); decryption = 'none' }
-                streamSettings = @{
-                    network = 'tcp'
-                    security = 'reality'
-                    realitySettings = @{
-                        dest = "${CoverSite}:443"
-                        serverNames = @($CoverSite)
-                        privateKey = $private
-                        shortIds = @($shortId)
+            inbounds = @(
+                @{
+                    listen = $hostIp
+                    port = $port
+                    protocol = 'vless'
+                    settings = @{ clients = @(@{ id = 'dd963d73-4229-4d4b-86af-c21d38dc3c25'; flow = 'xtls-rprx-vision' }); decryption = 'none' }
+                    streamSettings = @{
+                        network = 'tcp'
+                        security = 'reality'
+                        realitySettings = $realitySettings
+                    }
+                },
+                # Vision does not run over XHTTP, so this client has no flow.
+                @{
+                    listen = $hostIp
+                    port = $xhttpPort
+                    protocol = 'vless'
+                    settings = @{ clients = @(@{ id = 'dd963d73-4229-4d4b-86af-c21d38dc3c25' }); decryption = 'none' }
+                    streamSettings = @{
+                        network = 'xhttp'
+                        xhttpSettings = @{ path = $xhttpPath; mode = 'auto' }
+                        security = 'reality'
+                        realitySettings = $realitySettings
                     }
                 }
-            })
+            )
             outbounds = @(@{ protocol = 'freedom' })
         }
         if ($BindInterface) {
@@ -179,21 +200,25 @@ function Start-RosetunXrayTestNode {
             -WindowStyle Hidden -PassThru
         $deadline = (Get-Date).AddSeconds(15)
         do {
-            $listeners = @(Get-NetTCPConnection -LocalAddress $hostIp -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
-            if (-not $node.HasExited -and $listeners.Count -gt 0 -and
-                -not ($listeners | Where-Object { $_.OwningProcess -ne $node.Id })) { break }
+            $ready = @($port, $xhttpPort | Where-Object {
+                $listeners = @(Get-NetTCPConnection -LocalAddress $hostIp -LocalPort $_ -State Listen -ErrorAction SilentlyContinue)
+                $listeners.Count -gt 0 -and -not ($listeners | Where-Object { $_.OwningProcess -ne $node.Id })
+            })
+            if (-not $node.HasExited -and $ready.Count -eq 2) { break }
             if ($node.HasExited -or (Get-Date) -gt $deadline) {
-                throw "The REALITY test node did not start on TCP $port."
+                throw "The REALITY test node did not start on TCP $port and $xhttpPort."
             }
             Start-Sleep -Milliseconds 200
         } while ($true)
         Remove-Item -LiteralPath $configPath -Force
-        Write-Host "REALITY test node listening on TCP $port"
+        Write-Host "REALITY test node listening on TCP $port, XHTTP + REALITY on TCP $xhttpPort"
         return [pscustomobject]@{
             Process = $node
             Binary = $installation.Binary
             Directory = $installation.Directory
             Port = $port
+            XhttpPort = $xhttpPort
+            XhttpPath = $xhttpPath
             PublicKey = $public
             ShortId = $shortId
             CoverSite = $CoverSite
@@ -631,6 +656,22 @@ function Publish-Rosetun {
         $realityOff.settings.xray = 'off'
         $realityOff.settings.auto_reconnect = $false
         $derived['request-reality-xray-off.json'] = $realityOff
+
+        $xhttp = $reality | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $xhttp.node.id = 'home-xhttp'
+        $xhttp.node.name = 'XHTTP test node'
+        $xhttp.node.port = $XrayNode.XhttpPort
+        $xhttp.node.outbound.vless.PSObject.Properties.Remove('flow')
+        $xhttp.node.stream.transport = [pscustomobject]@{
+            xhttp = [pscustomobject]@{ path = $XrayNode.XhttpPath; mode = 'auto' }
+        }
+        $xhttp.selection.node = $xhttp.node.id
+        $derived['request-xhttp.json'] = $xhttp
+
+        $xhttpOff = $xhttp | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $xhttpOff.settings.xray = 'off'
+        $xhttpOff.settings.auto_reconnect = $false
+        $derived['request-xhttp-xray-off.json'] = $xhttpOff
 
         $applyFromReality = $request | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         $applyFromReality.settings.kill_switch = $true
