@@ -68,7 +68,11 @@ pub(crate) fn links_in_bytes(bytes: &[u8]) -> Result<Vec<String>, QrError> {
 }
 
 /// As [`links_in_file`], for clipboard pixels: 8-bit RGBA rows, top to bottom.
-pub(crate) fn links_in_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<String>, QrError> {
+pub(crate) fn links_in_rgba(
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+) -> Result<Vec<String>, QrError> {
     if width == 0 || height == 0 {
         return Err(QrError::NotFound);
     }
@@ -232,7 +236,8 @@ pub(crate) mod tests {
             let (dx, dy) = (x as f32 - center, y as f32 - center);
             let sx = cos * dx + sin * dy + cx;
             let sy = -sin * dx + cos * dy + cy;
-            if sx >= 0.0 && sy >= 0.0 && (sx as u32) < image.width() && (sy as u32) < image.height() {
+            if sx >= 0.0 && sy >= 0.0 && (sx as u32) < image.width() && (sy as u32) < image.height()
+            {
                 *image.get_pixel(sx as u32, sy as u32)
             } else {
                 Luma([255])
@@ -242,14 +247,23 @@ pub(crate) mod tests {
 
     #[test]
     fn one_code_yields_its_link() {
-        assert_eq!(links_in_bytes(&png(&code(LINK, 4))), Ok(vec![LINK.to_owned()]));
-        assert_eq!(links_in_bytes(&png(&code(HAPP, 4))), Ok(vec![HAPP.to_owned()]));
+        assert_eq!(
+            links_in_bytes(&png(&code(LINK, 4))),
+            Ok(vec![LINK.to_owned()])
+        );
+        assert_eq!(
+            links_in_bytes(&png(&code(HAPP, 4))),
+            Ok(vec![HAPP.to_owned()])
+        );
     }
 
     #[test]
     fn a_link_without_a_scheme_is_kept_as_written() {
         let text = "sub.example.com/private-token";
-        assert_eq!(links_in_bytes(&png(&code(text, 4))), Ok(vec![text.to_owned()]));
+        assert_eq!(
+            links_in_bytes(&png(&code(text, 4))),
+            Ok(vec![text.to_owned()])
+        );
     }
 
     #[test]
@@ -259,7 +273,11 @@ pub(crate) mod tests {
         let image = canvas(
             first.width() * 3,
             first.height() * 2,
-            &[(&first, 0, 0), (&second, first.width() * 2, 0), (&first, first.width(), first.height())],
+            &[
+                (&first, 0, 0),
+                (&second, first.width() * 2, 0),
+                (&first, first.width(), first.height()),
+            ],
         );
         let mut links = links_in_bytes(&png(&image)).unwrap();
         links.sort();
@@ -274,7 +292,11 @@ pub(crate) mod tests {
         );
         let link = code(LINK, 4);
         let text = code("Meeting at noon", 4);
-        let both = canvas(link.width() * 2, link.height(), &[(&link, 0, 0), (&text, link.width(), 0)]);
+        let both = canvas(
+            link.width() * 2,
+            link.height(),
+            &[(&link, 0, 0), (&text, link.width(), 0)],
+        );
         assert_eq!(links_in_bytes(&png(&both)), Ok(vec![LINK.to_owned()]));
     }
 
@@ -314,13 +336,19 @@ pub(crate) mod tests {
 
     #[test]
     fn an_empty_image_has_no_code() {
-        assert_eq!(links_in_bytes(&png(&canvas(64, 64, &[]))), Err(QrError::NotFound));
+        assert_eq!(
+            links_in_bytes(&png(&canvas(64, 64, &[]))),
+            Err(QrError::NotFound)
+        );
         assert_eq!(links_in_rgba(0, 0, &[]), Err(QrError::NotFound));
     }
 
     #[test]
     fn a_broken_file_is_not_an_image() {
-        assert_eq!(links_in_bytes(b"not an image at all"), Err(QrError::NotImage));
+        assert_eq!(
+            links_in_bytes(b"not an image at all"),
+            Err(QrError::NotImage)
+        );
         let mut truncated = png(&code(LINK, 4));
         truncated.truncate(truncated.len() / 2);
         assert_eq!(links_in_bytes(&truncated), Err(QrError::NotImage));
@@ -331,12 +359,20 @@ pub(crate) mod tests {
         let wide = GrayImage::from_pixel(MAX_SIDE + 1, 1, Luma([255]));
         assert_eq!(links_in_bytes(&png(&wide)), Err(QrError::TooLarge));
         assert_eq!(
-            links_in_rgba(MAX_SIDE as usize + 1, 1, &vec![255; (MAX_SIDE as usize + 1) * 4]),
+            links_in_rgba(
+                MAX_SIDE as usize + 1,
+                1,
+                &vec![255; (MAX_SIDE as usize + 1) * 4]
+            ),
             Err(QrError::TooLarge)
         );
 
-        let path = std::env::temp_dir().join(format!("rosetun-qr-large-{}.png", std::process::id()));
-        File::create(&path).unwrap().set_len(MAX_FILE_BYTES + 1).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("rosetun-qr-large-{}.png", std::process::id()));
+        File::create(&path)
+            .unwrap()
+            .set_len(MAX_FILE_BYTES + 1)
+            .unwrap();
         let result = links_in_file(&path);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(result, Err(QrError::TooLarge));
@@ -350,7 +386,11 @@ pub(crate) mod tests {
             .pixels()
             .flat_map(|pixel| {
                 // Light modules transparent, as a copied PNG often has them.
-                if pixel.0[0] == 0 { [0, 0, 0, 255] } else { [0, 0, 0, 0] }
+                if pixel.0[0] == 0 {
+                    [0, 0, 0, 255]
+                } else {
+                    [0, 0, 0, 0]
+                }
             })
             .collect();
         assert_eq!(
@@ -359,4 +399,3 @@ pub(crate) mod tests {
         );
     }
 }
-

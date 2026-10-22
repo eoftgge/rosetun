@@ -61,7 +61,10 @@ fn pick_image() -> Option<PathBuf> {
     #[cfg(windows)]
     return rfd::FileDialog::new()
         .set_title(tr!("choose-qr-image"))
-        .add_filter(tr!("qr-image-files"), &["png", "jpg", "jpeg", "bmp", "webp"])
+        .add_filter(
+            tr!("qr-image-files"),
+            &["png", "jpg", "jpeg", "bmp", "webp"],
+        )
         .pick_file();
     #[cfg(not(windows))]
     None

@@ -10,8 +10,8 @@ use rosetun_ipc::{ClientError, ConnectRequestError, ErrorCode};
 use rosetun_processes::ProcessListError;
 
 use crate::display;
-use crate::qr::QrError;
 use crate::i18n::{Language, tr_in};
+use crate::qr::QrError;
 use crate::worker::{ConfigWorkerError, HelperCommandError};
 use fluent_bundle::FluentArgs;
 
@@ -571,7 +571,9 @@ pub(crate) fn qr(language: Language, error: QrError) -> String {
         QrError::NotSubscription => tr_in(language, "error-qr-not-subscription", &args),
         QrError::NoClipboardImage => tr_in(language, "error-qr-no-clipboard-image", &args),
         QrError::Clipboard => tr_in(language, "error-qr-clipboard", &args),
-        QrError::ScreenClipUnavailable => tr_in(language, "error-qr-screen-clip-unavailable", &args),
+        QrError::ScreenClipUnavailable => {
+            tr_in(language, "error-qr-screen-clip-unavailable", &args)
+        }
         QrError::ScreenClipTimedOut => tr_in(language, "error-qr-screen-clip-timed-out", &args),
     }
 }

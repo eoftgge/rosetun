@@ -21,7 +21,10 @@ fn dialog(state: &State) -> &AddDialog {
 
 fn read(state: &mut State, source: QrSource) -> u64 {
     match state.act(Action::ReadQr(source)) {
-        Some(Job::ReadQr { request, source: sent }) if sent == source => request,
+        Some(Job::ReadQr {
+            request,
+            source: sent,
+        }) if sent == source => request,
         _ => panic!("no QR read job"),
     }
 }
@@ -29,7 +32,10 @@ fn read(state: &mut State, source: QrSource) -> u64 {
 fn start_screen_clip(state: &mut State, now: u64) -> u64 {
     let request = read(state, QrSource::ScreenClip);
     assert!(matches!(dialog(state).qr.stage, QrStage::ScreenClip(_)));
-    assert!(state.take_screen_clip_poll(now).is_none(), "no poll before the overlay opened");
+    assert!(
+        state.take_screen_clip_poll(now).is_none(),
+        "no poll before the overlay opened"
+    );
     state.reduce(WorkerEvent::QrScreenClip {
         request,
         sequence: 7,
@@ -135,12 +141,18 @@ fn errors_and_a_closed_file_dialog_leave_the_field_alone() {
     assert!(!errors::qr(crate::i18n::Language::English, QrError::NoClipboardImage).is_empty());
 
     read(&mut state, QrSource::File);
-    assert!(dialog(&state).qr.error.is_none(), "a new read clears the old error");
+    assert!(
+        dialog(&state).qr.error.is_none(),
+        "a new read clears the old error"
+    );
     assert!(
         state.act(Action::ReadQr(QrSource::Clipboard)).is_none(),
         "one read at a time"
     );
-    assert!(state.act(Action::SubmitAdd).is_none(), "no add while a read may replace the link");
+    assert!(
+        state.act(Action::SubmitAdd).is_none(),
+        "no add while a read may replace the link"
+    );
 }
 
 #[test]
@@ -152,7 +164,10 @@ fn the_screen_clip_is_polled_once_a_second() {
         state.take_screen_clip_poll(1_000),
         Some(Job::PollScreenClip { request: sent, sequence: 7 }) if sent == request
     ));
-    assert!(state.take_screen_clip_poll(1_000).is_none(), "one poll in flight");
+    assert!(
+        state.take_screen_clip_poll(1_000).is_none(),
+        "one poll in flight"
+    );
     // Something other than an image was copied: wait past the new number.
     state.reduce(WorkerEvent::QrScreenClip {
         request,
@@ -225,7 +240,11 @@ fn the_screen_clip_wait_ends_after_a_minute() {
         request,
         result: Some(Ok(vec![LINK.into()])),
     });
-    assert_eq!(dialog(&state).url, "", "a clip after the timeout is dropped");
+    assert_eq!(
+        dialog(&state).url,
+        "",
+        "a clip after the timeout is dropped"
+    );
 }
 
 #[derive(Clone, Default)]

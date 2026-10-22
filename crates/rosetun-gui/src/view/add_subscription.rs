@@ -258,7 +258,10 @@ mod tests {
 
     #[test]
     fn qr_choices_show_the_host_and_hide_the_token() {
-        let label = choice_label(1, "happ://add/https://sub.example.com/private-token?key=secret");
+        let label = choice_label(
+            1,
+            "happ://add/https://sub.example.com/private-token?key=secret",
+        );
         assert_eq!(label, "2. https://sub.example.com/…");
         let label = choice_label(0, "sub.example.com/private-token");
         assert_eq!(label, "1. https://sub.example.com/…");
