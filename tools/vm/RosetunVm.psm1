@@ -8,9 +8,17 @@ Set-StrictMode -Version Latest
 # would fail with a misleading error instead.
 $ErrorActionPreference = 'Stop'
 
+# ROSETUN_VM_NAME picks another prepared guest (for example a Windows 10
+# one); each guest keeps its own saved credential.
+$vmName = if ($env:ROSETUN_VM_NAME) { $env:ROSETUN_VM_NAME } else { 'rosetun-test' }
 $script:Config = @{
-    VmName   = 'rosetun-test'
-    CredPath = Join-Path $env:USERPROFILE '.rosetun-vm-credential.xml'
+    VmName   = $vmName
+    CredPath = Join-Path $env:USERPROFILE $(if ($vmName -eq 'rosetun-test') {
+            '.rosetun-vm-credential.xml'
+        }
+        else {
+            ".rosetun-vm-credential-$vmName.xml"
+        })
     GuestDir = 'C:\rosetun'
     TaskName = 'RosetunHelper'
     TunAlias = 'rosetun0'
