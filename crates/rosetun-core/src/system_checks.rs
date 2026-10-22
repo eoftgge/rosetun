@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -295,7 +295,7 @@ fn dns_substitution_result(
         _ => return CheckResult::unavailable(kind),
     };
     match udp {
-        Ok(reply) if reply == real => CheckResult::ok(kind),
+        Ok(reply) if same_client(reply, real) => CheckResult::ok(kind),
         Ok(_) => CheckResult::warning(
             kind,
             CheckDetail::DnsSubstitution {
@@ -303,6 +303,27 @@ fn dns_substitution_result(
             },
         ),
         Err(_) => CheckResult::unavailable(kind),
+    }
+}
+
+/// Both answers name the same client. A carrier-grade NAT can send UDP and
+/// TCP out from neighbouring addresses of its pool, so one /16 (IPv4) or
+/// /48 (IPv6) counts as the same; a resolver the query was redirected to
+/// answers with a refusal or with its own, distant address.
+fn same_client(udp: &Reply, tcp: &Reply) -> bool {
+    if udp == tcp {
+        return true;
+    }
+    let address = |reply: &Reply| match reply.texts.as_slice() {
+        [text] if reply.rcode == 0 => text.trim().parse::<IpAddr>().ok(),
+        _ => None,
+    };
+    match (address(udp), address(tcp)) {
+        (Some(IpAddr::V4(udp)), Some(IpAddr::V4(tcp))) => udp.octets()[..2] == tcp.octets()[..2],
+        (Some(IpAddr::V6(udp)), Some(IpAddr::V6(tcp))) => {
+            udp.segments()[..3] == tcp.segments()[..3]
+        }
+        _ => false,
     }
 }
 
@@ -561,6 +582,24 @@ mod tests {
         assert_eq!(
             dns(reply(0, &["192.0.2.1"]), reply(0, &["192.0.2.1"])),
             CheckResult::ok(CheckKind::DnsSubstitution)
+        );
+    }
+
+    #[test]
+    fn neighbouring_nat_addresses_are_the_same_client() {
+        for (udp, tcp) in [
+            ("192.0.2.1", "192.0.200.7"),
+            ("2001:db8:1:2::1", "2001:db8:1:ff::9"),
+        ] {
+            assert_eq!(
+                dns(reply(0, &[udp]), reply(0, &[tcp])),
+                CheckResult::ok(CheckKind::DnsSubstitution),
+                "{udp} {tcp}"
+            );
+        }
+        assert_eq!(
+            dns(reply(0, &["2001:db8:2::1"]), reply(0, &["2001:db8:1::1"])).status,
+            CheckStatus::Warning
         );
     }
 
