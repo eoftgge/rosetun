@@ -269,7 +269,7 @@ fn verbose_log_details_pluralize_remaining_hours() {
         assert_eq!(
             in_language(Language::Russian, || verbose_log_on_detail(hours)),
             format!(
-                "Выключится сам через {expected}. Пока включён, записывает адреса сайтов. Применится при следующем подключении."
+                "Записывает адреса сайтов. Выключится сам через {expected}."
             )
         );
     }
@@ -446,7 +446,7 @@ fn no_network_text_distinguishes_retry_from_automatic_wait() {
             "Нет подключения к сети",
             "Проверьте кабель или Wi-Fi.",
             "Rosetun подключится, когда сеть появится.",
-            "Сеть пропала · интернет закрыт защитой, пока она не вернётся.",
+            "Сеть пропала · интернет закрыт, пока она не вернётся.",
         ),
     ] {
         in_language(language, || {
@@ -464,11 +464,11 @@ fn no_network_text_distinguishes_retry_from_automatic_wait() {
 fn xray_warning_and_status_texts_are_localized() {
     assert_eq!(
         in_language(Language::Russian, || xray_off_warning(3)),
-        "В подписках 3 сервера REALITY. Если на сервере Xray 26.9.8 или новее, без Xray подключиться к нему не получится."
+        "В подписках 3 сервера REALITY. Без Xray они могут не подключиться."
     );
     assert_eq!(
         in_language(Language::Russian, || xray_off_warning(5)),
-        "В подписках 5 серверов REALITY. Если на сервере Xray 26.9.8 или новее, без Xray подключиться к нему не получится."
+        "В подписках 5 серверов REALITY. Без Xray они могут не подключиться."
     );
     assert!(
         in_language(Language::English, || xray_off_warning(1))

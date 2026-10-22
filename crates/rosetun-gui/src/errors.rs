@@ -382,11 +382,7 @@ pub(crate) fn fetch(language: Language, error: &FetchError) -> String {
             "error-fetch-insecure-redirect",
             &FluentArgs::new(),
         ),
-        FetchError::Tls(detail) => tr_in(
-            language,
-            "error-fetch-tls",
-            &arguments(&[("detail", detail)]),
-        ),
+        FetchError::Tls(_) => tr_in(language, "error-fetch-tls", &FluentArgs::new()),
         FetchError::ResponseTooLarge => {
             tr_in(language, "error-fetch-too-large", &FluentArgs::new())
         }
@@ -881,7 +877,6 @@ mod tests {
             FetchError::ConnectionFailed,
             FetchError::TooManyRedirects,
             FetchError::InsecureRedirect,
-            FetchError::Tls("bad certificate".to_owned()),
             FetchError::ResponseTooLarge,
             FetchError::BodyReadFailed,
             FetchError::AccessDenied,
@@ -889,6 +884,11 @@ mod tests {
         ] {
             assert_eq!(fetch(Language::English, &error), error.to_string());
         }
+        // The TLS detail is internal; the interface names the likely fix instead.
+        assert_eq!(
+            fetch(Language::English, &FetchError::Tls("bad certificate".to_owned())),
+            "could not set up a secure connection; check the system clock"
+        );
         for error in [
             ParseError::Empty,
             ParseError::WebPage,
@@ -918,18 +918,18 @@ mod tests {
                 Language::Russian,
                 &FetchError::NotFound { sent_hwid: false }
             ),
-            "подписка не найдена; панели с лимитом устройств отвечают так же, если ID устройства не отправлен; включите «Отправлять ID устройства» и добавьте подписку снова"
+            "подписка не найдена; если провайдер ограничивает число устройств, включите «Отправлять ID устройства» и добавьте подписку снова"
         );
         assert_eq!(
             fetch(Language::Russian, &FetchError::NotFound { sent_hwid: true }),
-            "подписка не найдена; панели с лимитом устройств отвечают так же, если ID устройства не отправлен"
+            "подписка не найдена; проверьте адрес"
         );
         assert_eq!(
             fetch(
                 Language::Russian,
                 &FetchError::Tls("bad certificate".into())
             ),
-            "ошибка TLS: bad certificate; так бывает, если антивирус проверяет HTTPS-трафик или на компьютере неверное время"
+            "не удалось установить защищённое соединение; проверьте время на компьютере"
         );
         assert_eq!(
             subscription_url(Language::Russian, &SubscriptionUrlError::UnsupportedScheme),
@@ -1048,7 +1048,7 @@ mod tests {
     fn russian_input_errors_use_plain_wording() {
         assert_eq!(
             rule_input(Language::Russian, &RuleInputError::SingleLabel),
-            "введите полный домен, например example.com; для зоны целиком используйте *.ru"
+            "введите полный домен, например example.com, или зону целиком: *.ru"
         );
         assert_eq!(
             dns_input(Language::Russian, &DnsInputError::InvalidPort),
@@ -1159,7 +1159,7 @@ mod tests {
         );
         assert_eq!(
             client(Language::Russian, &error),
-            "ядро не запустилось. Попробуйте ещё раз; если повторяется, соберите отчёт в Настройки › Служба и журнал"
+            "ядро не запустилось; попробуйте ещё раз или соберите отчёт для поддержки"
         );
         for language in [Language::English, Language::Russian] {
             let message = client(language, &error);
