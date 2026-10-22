@@ -34,7 +34,10 @@ pub(crate) fn parse_text(text: &str) -> Result<XhttpExtra, SkipReason> {
 
 pub(crate) fn parse(value: &Value) -> Result<XhttpExtra, SkipReason> {
     let object = value.as_object().ok_or(SkipReason::InvalidXhttpExtra)?;
-    if object.get("downloadSettings").is_some_and(|value| !value.is_null()) {
+    if object
+        .get("downloadSettings")
+        .is_some_and(|value| !value.is_null())
+    {
         return Err(SkipReason::XhttpDownloadSettings);
     }
 
@@ -146,7 +149,9 @@ fn range(
                 .ok_or(SkipReason::InvalidXhttpExtra)?;
             (value, value)
         }
-        Some(Value::String(text)) => range_text(text.trim()).ok_or(SkipReason::InvalidXhttpExtra)?,
+        Some(Value::String(text)) => {
+            range_text(text.trim()).ok_or(SkipReason::InvalidXhttpExtra)?
+        }
         Some(_) => return Err(SkipReason::InvalidXhttpExtra),
     };
     if left == 0 && right == 0 {
@@ -224,7 +229,13 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(extra.headers.len(), 1);
-        assert_eq!(extra.x_padding_bytes, Some(XhttpRange { from: 100, to: 1000 }));
+        assert_eq!(
+            extra.x_padding_bytes,
+            Some(XhttpRange {
+                from: 100,
+                to: 1000
+            })
+        );
         assert!(extra.no_grpc_header);
         assert!(!extra.no_sse_header);
         assert_eq!(extra.sc_max_buffered_posts, Some(30));
@@ -240,15 +251,42 @@ mod tests {
             .collect();
         for (input, reason) in [
             (json!([]), SkipReason::InvalidXhttpExtra),
-            (json!({ "headers": { "Host": "example.com" } }), SkipReason::InvalidXhttpExtra),
-            (json!({ "headers": { "X-Bad": "a\r\nb" } }), SkipReason::InvalidXhttpExtra),
-            (json!({ "headers": { "Bad Name": "value" } }), SkipReason::InvalidXhttpExtra),
-            (json!({ "headers": { "X-Long": "a".repeat(257) } }), SkipReason::InvalidXhttpExtra),
-            (json!({ "headers": too_many }), SkipReason::InvalidXhttpExtra),
-            (json!({ "headers": { "X-Number": 1 } }), SkipReason::InvalidXhttpExtra),
-            (json!({ "noSSEHeader": "true" }), SkipReason::InvalidXhttpExtra),
-            (json!({ "xPaddingBytes": "0-100" }), SkipReason::InvalidXhttpExtra),
-            (json!({ "scMaxBufferedPosts": -1 }), SkipReason::InvalidXhttpExtra),
+            (
+                json!({ "headers": { "Host": "example.com" } }),
+                SkipReason::InvalidXhttpExtra,
+            ),
+            (
+                json!({ "headers": { "X-Bad": "a\r\nb" } }),
+                SkipReason::InvalidXhttpExtra,
+            ),
+            (
+                json!({ "headers": { "Bad Name": "value" } }),
+                SkipReason::InvalidXhttpExtra,
+            ),
+            (
+                json!({ "headers": { "X-Long": "a".repeat(257) } }),
+                SkipReason::InvalidXhttpExtra,
+            ),
+            (
+                json!({ "headers": too_many }),
+                SkipReason::InvalidXhttpExtra,
+            ),
+            (
+                json!({ "headers": { "X-Number": 1 } }),
+                SkipReason::InvalidXhttpExtra,
+            ),
+            (
+                json!({ "noSSEHeader": "true" }),
+                SkipReason::InvalidXhttpExtra,
+            ),
+            (
+                json!({ "xPaddingBytes": "0-100" }),
+                SkipReason::InvalidXhttpExtra,
+            ),
+            (
+                json!({ "scMaxBufferedPosts": -1 }),
+                SkipReason::InvalidXhttpExtra,
+            ),
             (json!({ "xmux": "16" }), SkipReason::InvalidXhttpExtra),
             (
                 json!({ "xmux": { "maxConcurrency": 8, "maxConnections": 4 } }),

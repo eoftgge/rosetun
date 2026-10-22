@@ -237,7 +237,10 @@ fn hysteria2_rejects_unsupported_or_incomplete_security_without_leaking_secrets(
 #[test]
 fn unsupported_options_have_typed_reasons() {
     let cases = [
-        ("type=xhttp&mode=test-mode", SkipReason::UnsupportedXhttpMode),
+        (
+            "type=xhttp&mode=test-mode",
+            SkipReason::UnsupportedXhttpMode,
+        ),
         (
             "type=xhttp&extra=%7Bnot-json",
             SkipReason::InvalidXhttpExtra,
@@ -979,9 +982,7 @@ fn xray_json_xhttp_reads_extra_or_the_settings_themselves() {
     assert!(direct.no_grpc_header);
 
     // With `extra` present Xray ignores the options next to it.
-    let nested = extra(
-        r#"{"path":"/x","noGRPCHeader":true,"extra":{"scMaxBufferedPosts":30}}"#,
-    );
+    let nested = extra(r#"{"path":"/x","noGRPCHeader":true,"extra":{"scMaxBufferedPosts":30}}"#);
     assert!(!nested.no_grpc_header);
     assert_eq!(nested.sc_max_buffered_posts, Some(30));
 
@@ -1002,8 +1003,14 @@ fn xray_json_xhttp_reads_extra_or_the_settings_themselves() {
             r#"{"path":"/x","extra":{"downloadSettings":{"address":"192.0.2.5"}}}"#,
             SkipReason::XhttpDownloadSettings,
         ),
-        (r#"{"path":"/x","extra":"text"}"#, SkipReason::InvalidXhttpExtra),
-        (r#"{"path":"/x","mode":"test-mode"}"#, SkipReason::UnsupportedXhttpMode),
+        (
+            r#"{"path":"/x","extra":"text"}"#,
+            SkipReason::InvalidXhttpExtra,
+        ),
+        (
+            r#"{"path":"/x","mode":"test-mode"}"#,
+            SkipReason::UnsupportedXhttpMode,
+        ),
     ] {
         match parse(config(settings).as_bytes(), &no_headers) {
             Err(ParseError::NoUsableNodes { skipped, .. }) => {

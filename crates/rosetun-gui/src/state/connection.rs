@@ -170,9 +170,10 @@ impl State {
     /// sing-box has no XHTTP, so with Xray turned off such a server cannot connect.
     pub(crate) fn xhttp_without_xray(&self) -> bool {
         self.config.settings.xray == XrayUse::Off
-            && self.config.active_node().is_some_and(|(_, node)| {
-                matches!(node.stream.transport, Transport::Xhttp { .. })
-            })
+            && self
+                .config
+                .active_node()
+                .is_some_and(|(_, node)| matches!(node.stream.transport, Transport::Xhttp { .. }))
     }
 
     /// Connects once after start when the user asked for it.

@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use rosetun_config::{
-    LogLevel, Node, NodeId, Outbound, RealityParams, StreamSettings, TlsMode, TlsParams,
-    Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
+    LogLevel, Node, NodeId, Outbound, RealityParams, StreamSettings, TlsMode, TlsParams, Transport,
+    VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
 };
 use rosetun_engine_xray::{SUPPORTED_XRAY_VERSION, SocksEndpoint, render};
 
@@ -75,11 +75,20 @@ fn xray_test_accepts_rendered_xhttp_configs() {
         allow_insecure: false,
         fingerprint: None,
     });
-    for (name, tls) in [("reality", reality), ("tls", tls), ("plain", TlsMode::Plain)] {
+    for (name, tls) in [
+        ("reality", reality),
+        ("tls", tls),
+        ("plain", TlsMode::Plain),
+    ] {
         let node = xhttp_node(tls);
         let socks = SocksEndpoint::local().unwrap();
-        let config = render(&[("proxy", &node, &socks)], "Ethernet", false, LogLevel::Info)
-            .unwrap();
+        let config = render(
+            &[("proxy", &node, &socks)],
+            "Ethernet",
+            false,
+            LogLevel::Info,
+        )
+        .unwrap();
         let path = directory.join(format!("xhttp-{name}.json"));
         std::fs::write(&path, config.body).unwrap();
         let output = Command::new(&binary)

@@ -595,7 +595,10 @@ mod tests {
             mode: XhttpMode::PacketUp,
             extra: XhttpExtra {
                 headers: [("X-Secret-Name".into(), "secret-value".into())].into(),
-                x_padding_bytes: Some(XhttpRange { from: 100, to: 1000 }),
+                x_padding_bytes: Some(XhttpRange {
+                    from: 100,
+                    to: 1000,
+                }),
                 ..XhttpExtra::default()
             },
         }
@@ -606,7 +609,12 @@ mod tests {
         let debug = format!("{:?}", xhttp());
         assert!(debug.contains("PacketUp"));
         assert!(debug.contains("headers_count: 1"));
-        for secret in ["secret-path", "secret-host", "X-Secret-Name", "secret-value"] {
+        for secret in [
+            "secret-path",
+            "secret-host",
+            "X-Secret-Name",
+            "secret-value",
+        ] {
             assert!(!debug.contains(secret), "{secret} leaked: {debug}");
         }
     }

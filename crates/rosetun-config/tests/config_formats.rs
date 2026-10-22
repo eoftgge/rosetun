@@ -4,8 +4,8 @@ use rosetun_config::{
     AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId, ExitTarget,
     FormatError, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId, Outbound,
     RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
-    SubscriptionId, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode,
-    XhttpRange, XhttpXmux, from_json,
+    SubscriptionId, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange,
+    XhttpXmux, from_json,
 };
 use serde_json::{Value, json};
 

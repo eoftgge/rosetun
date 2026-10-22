@@ -277,8 +277,16 @@ fn xhttp_extra(extra: &XhttpExtra) -> Value {
     if extra.no_sse_header {
         options["noSSEHeader"] = true.into();
     }
-    put_range(&mut options, "scMaxEachPostBytes", extra.sc_max_each_post_bytes);
-    put_range(&mut options, "scMinPostsIntervalMs", extra.sc_min_posts_interval_ms);
+    put_range(
+        &mut options,
+        "scMaxEachPostBytes",
+        extra.sc_max_each_post_bytes,
+    );
+    put_range(
+        &mut options,
+        "scMinPostsIntervalMs",
+        extra.sc_min_posts_interval_ms,
+    );
     if let Some(posts) = extra.sc_max_buffered_posts {
         options["scMaxBufferedPosts"] = posts.into();
     }
@@ -438,8 +446,13 @@ mod tests {
 
     fn stream_of(node: &Node) -> Value {
         let socks = SocksEndpoint::local().unwrap();
-        let rendered = render(&[("proxy", node, &socks)], "Ethernet", false, LogLevel::Info)
-            .unwrap();
+        let rendered = render(
+            &[("proxy", node, &socks)],
+            "Ethernet",
+            false,
+            LogLevel::Info,
+        )
+        .unwrap();
         let mut value: Value = serde_json::from_slice(&rendered.body).unwrap();
         value["outbounds"][0].take()
     }
