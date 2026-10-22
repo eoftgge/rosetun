@@ -25,10 +25,16 @@ fn failure() -> Status {
 #[test]
 fn button_starts_one_check_and_the_result_reaches_the_card() {
     let mut state = State::default();
-    let Some(Job::CheckSystem { request, own_alias }) = state.act(Action::CheckSystem) else {
+    let Some(Job::CheckSystem {
+        request,
+        own_alias,
+        guarded,
+    }) = state.act(Action::CheckSystem)
+    else {
         panic!("expected a system check job");
     };
     assert_eq!(own_alias, state.config.settings.tun.name);
+    assert!(!guarded);
     assert!(state.system_checks.checking);
     assert!(state.act(Action::CheckSystem).is_none());
     state.reduce(WorkerEvent::SystemChecks {

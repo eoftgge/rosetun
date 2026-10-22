@@ -430,15 +430,18 @@ impl State {
                     self.settings.screen.report_saved = None;
                     self.operation_error = None;
                     return Some(Job::SaveReport {
-                        snapshot: Box::new(crate::report::ReportSnapshot::new(
-                            &self.config,
-                            &self.status,
-                            self.helper_available,
-                            self.system_checks.results.as_deref(),
-                            self.helper_version.as_deref(),
-                            crate::i18n::language(),
-                            now_unix(),
-                        )),
+                        snapshot: Box::new(
+                            crate::report::ReportSnapshot::new(
+                                &self.config,
+                                &self.status,
+                                self.helper_available,
+                                self.system_checks.results.as_deref(),
+                                self.helper_version.as_deref(),
+                                crate::i18n::language(),
+                                now_unix(),
+                            )
+                            .with_last_dns(self.system_checks.last_dns.as_ref()),
+                        ),
                         own_alias: self.config.settings.tun.name.clone(),
                     });
                 }

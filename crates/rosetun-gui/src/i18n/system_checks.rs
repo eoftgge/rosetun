@@ -75,20 +75,28 @@ pub(crate) fn check_issue(result: &CheckResult) -> String {
                 names = parts.join(&tr!("system-check-separator"))
             )
         }
+        CheckDetail::DnsSubstitution { server } => tr!(
+            "system-check-dns-found",
+            server = display::safe_text(server)
+        ),
         CheckDetail::None => tr!("system-check-unavailable"),
     }
 }
 
 pub(crate) fn check_detail(result: &CheckResult) -> String {
     match result.status {
+        CheckStatus::Ok if result.kind == CheckKind::DnsSubstitution => tr!("system-check-dns-ok"),
         CheckStatus::Ok => tr!("system-check-ok"),
         CheckStatus::Unavailable => tr!("system-check-unavailable"),
+        CheckStatus::Skipped => tr!("system-check-offline-only"),
         CheckStatus::Warning => {
             let advice = match result.kind {
                 CheckKind::Clock => tr!("system-check-clock-advice"),
                 CheckKind::Proxy => tr!("system-check-proxy-advice"),
                 CheckKind::PacketInterceptor => tr!("system-check-packet-advice"),
                 CheckKind::OtherVpn => tr!("system-check-vpn-advice"),
+                // One sentence with its own advice.
+                CheckKind::DnsSubstitution => return check_issue(result),
             };
             tr!(
                 "system-check-with-advice",

@@ -1,6 +1,8 @@
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use rosetun_dns::{AskError, Reply, Transport};
 use rosetun_processes::RunningProcess;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +11,7 @@ pub enum CheckKind {
     Proxy,
     PacketInterceptor,
     OtherVpn,
+    DnsSubstitution,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +19,9 @@ pub enum CheckStatus {
     Ok,
     Warning,
     Unavailable,
+    /// Not run: the check would say nothing true at this moment, such as
+    /// a DNS check while the tunnel or its protection carries the traffic.
+    Skipped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +43,11 @@ pub enum CheckDetail {
         processes: Vec<String>,
         adapters: Vec<String>,
     },
+    /// The resolver whose UDP answers come from someone else. Never the
+    /// answers themselves: they hold the user's address.
+    DnsSubstitution {
+        server: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +62,14 @@ impl CheckResult {
         Self {
             kind,
             status: CheckStatus::Ok,
+            detail: CheckDetail::None,
+        }
+    }
+
+    pub fn skipped(kind: CheckKind) -> Self {
+        Self {
+            kind,
+            status: CheckStatus::Skipped,
             detail: CheckDetail::None,
         }
     }
@@ -72,8 +91,24 @@ impl CheckResult {
     }
 }
 
-/// Runs four independent, read-only checks on the caller's worker thread.
-pub fn check_system(own_alias: &str) -> Vec<CheckResult> {
+/// Runs five independent, read-only checks on the caller's worker thread.
+/// With `guarded` (a tunnel is up or protection holds the traffic) the DNS
+/// check sends nothing and is skipped.
+pub fn check_system(own_alias: &str, guarded: bool) -> Vec<CheckResult> {
+    std::thread::scope(|scope| {
+        let dns = (!guarded).then(|| scope.spawn(check_dns_substitution));
+        let mut results = check_local(own_alias);
+        results.push(match dns {
+            Some(dns) => dns
+                .join()
+                .unwrap_or_else(|_| CheckResult::unavailable(CheckKind::DnsSubstitution)),
+            None => CheckResult::skipped(CheckKind::DnsSubstitution),
+        });
+        results
+    })
+}
+
+fn check_local(own_alias: &str) -> Vec<CheckResult> {
     let clock = check_clock();
     #[cfg(windows)]
     let proxy = rosetun_shell::proxy_settings()
@@ -214,6 +249,60 @@ fn proxy_result(
                 auto_config,
             },
         )
+    }
+}
+
+const DNS_CHECK_SERVER: SocketAddr =
+    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(1, 1, 1, 1), 53));
+/// Cloudflare's resolver answers this CHAOS name itself with the address
+/// the query came from, so it never leaves 1.1.1.1 and no blocked name is
+/// asked. A resolver the query was redirected to does not know it.
+const DNS_CHECK_NAME: &str = "whoami.cloudflare";
+const DNS_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The same question over UDP and TCP at once. Only the verdict leaves this
+/// function: the answers carry the user's address and are never logged.
+fn check_dns_substitution() -> CheckResult {
+    let ask = |transport| {
+        rosetun_dns::ask(
+            DNS_CHECK_SERVER,
+            transport,
+            DNS_CHECK_NAME,
+            rosetun_dns::wire::TYPE_TXT,
+            rosetun_dns::wire::CLASS_CH,
+            DNS_CHECK_TIMEOUT,
+        )
+    };
+    let (udp, tcp) = std::thread::scope(|scope| {
+        let udp = scope.spawn(|| ask(Transport::Udp));
+        let tcp = ask(Transport::Tcp);
+        (udp.join().unwrap_or(Err(AskError::NoReply)), tcp)
+    });
+    dns_substitution_result(&udp, &tcp, &DNS_CHECK_SERVER.ip().to_string())
+}
+
+/// Substitution only on a clear mismatch: TCP gets the real answer and UDP
+/// gets another one, a refusal or an empty answer. Anything less certain
+/// (TCP without an answer, UDP silent or truncated) is not an alarm.
+fn dns_substitution_result(
+    udp: &Result<Reply, AskError>,
+    tcp: &Result<Reply, AskError>,
+    server: &str,
+) -> CheckResult {
+    let kind = CheckKind::DnsSubstitution;
+    let real = match tcp {
+        Ok(reply) if reply.rcode == 0 && !reply.texts.is_empty() => reply,
+        _ => return CheckResult::unavailable(kind),
+    };
+    match udp {
+        Ok(reply) if reply == real => CheckResult::ok(kind),
+        Ok(_) => CheckResult::warning(
+            kind,
+            CheckDetail::DnsSubstitution {
+                server: server.to_owned(),
+            },
+        ),
+        Err(_) => CheckResult::unavailable(kind),
     }
 }
 
@@ -454,5 +543,62 @@ mod tests {
             other_vpn_result(&[], vec!["Example WireGuard".into()], exe).status,
             CheckStatus::Warning
         );
+    }
+
+    fn reply(rcode: u8, texts: &[&str]) -> Result<Reply, AskError> {
+        Ok(Reply {
+            rcode,
+            texts: texts.iter().map(|text| (*text).to_owned()).collect(),
+        })
+    }
+
+    fn dns(udp: Result<Reply, AskError>, tcp: Result<Reply, AskError>) -> CheckResult {
+        dns_substitution_result(&udp, &tcp, "192.0.2.53")
+    }
+
+    #[test]
+    fn dns_answers_alike_over_udp_and_tcp_are_not_substituted() {
+        assert_eq!(
+            dns(reply(0, &["192.0.2.1"]), reply(0, &["192.0.2.1"])),
+            CheckResult::ok(CheckKind::DnsSubstitution)
+        );
+    }
+
+    #[test]
+    fn a_clear_udp_mismatch_is_substitution_of_that_server() {
+        let substituted = CheckResult::warning(
+            CheckKind::DnsSubstitution,
+            CheckDetail::DnsSubstitution {
+                server: "192.0.2.53".into(),
+            },
+        );
+        let real = || reply(0, &["192.0.2.1"]);
+        for udp in [
+            reply(0, &["198.51.100.1"]),
+            reply(rosetun_dns::wire::RCODE_REFUSED, &[]),
+            reply(rosetun_dns::wire::RCODE_NOTIMP, &[]),
+            reply(2, &[]),
+            reply(rosetun_dns::wire::RCODE_NXDOMAIN, &[]),
+            reply(0, &[]),
+        ] {
+            assert_eq!(dns(udp.clone(), real()), substituted, "{udp:?}");
+        }
+    }
+
+    #[test]
+    fn anything_doubtful_is_unavailable_not_an_alarm() {
+        let unavailable = CheckResult::unavailable(CheckKind::DnsSubstitution);
+        let real = || reply(0, &["192.0.2.1"]);
+        for (udp, tcp) in [
+            (Err(AskError::NoReply), real()),
+            (Err(AskError::Truncated), real()),
+            (real(), Err(AskError::NoReply)),
+            (Err(AskError::NoReply), Err(AskError::NoReply)),
+            (reply(rosetun_dns::wire::RCODE_REFUSED, &[]), reply(rosetun_dns::wire::RCODE_REFUSED, &[])),
+            (reply(2, &[]), reply(2, &[])),
+            (real(), reply(0, &[])),
+        ] {
+            assert_eq!(dns(udp.clone(), tcp.clone()), unavailable, "{udp:?} {tcp:?}");
+        }
     }
 }

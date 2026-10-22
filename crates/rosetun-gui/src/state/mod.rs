@@ -345,6 +345,8 @@ pub(crate) enum Job {
     CheckSystem {
         request: u64,
         own_alias: String,
+        /// A tunnel or its protection carries the traffic: no DNS check.
+        guarded: bool,
     },
     CheckFailureInterference {
         request: u64,

@@ -1,5 +1,5 @@
 use rosetun_config::{ConnectionState, FailureKind};
-use rosetun_core::{CheckResult, CheckStatus};
+use rosetun_core::{CheckKind, CheckResult, CheckStatus};
 
 use super::{Action, Job, Screen, State, now_unix};
 
@@ -9,6 +9,9 @@ pub(crate) struct SystemChecksState {
     pub(crate) checked_at: Option<u64>,
     pub(crate) checking: bool,
     pub(crate) failure_warning: Option<CheckResult>,
+    /// The last DNS substitution check that actually ran, kept while later
+    /// checks skip it under a tunnel.
+    pub(crate) last_dns: Option<CheckResult>,
     request: u64,
     failure_request: Option<u64>,
     auto_checked: bool,
@@ -41,6 +44,7 @@ impl State {
         Some(Job::CheckSystem {
             request: checks.request,
             own_alias: self.config.settings.tun.name.clone(),
+            guarded: self.traffic_guarded(),
         })
     }
 
@@ -60,6 +64,7 @@ impl State {
                 Some(Job::CheckSystem {
                     request: checks.request,
                     own_alias: self.config.settings.tun.name.clone(),
+                    guarded: self.traffic_guarded(),
                 })
             }
             Action::ShowSystemChecks => {
@@ -80,13 +85,37 @@ impl State {
         checks.checking = false;
         checks.checked_at = Some(now_unix());
         if checks.failure_request == Some(request) && failed(&self.status.state) {
+            // A replaced DNS does not explain a failure that came after
+            // the server's address was found.
             checks.failure_warning = results
                 .iter()
-                .find(|result| result.status == CheckStatus::Warning)
+                .find(|result| {
+                    result.status == CheckStatus::Warning
+                        && result.kind != CheckKind::DnsSubstitution
+                })
                 .cloned();
         }
         checks.failure_request = None;
+        if let Some(dns) = results.iter().find(|result| {
+            result.kind == CheckKind::DnsSubstitution && result.status != CheckStatus::Skipped
+        }) {
+            checks.last_dns = Some(dns.clone());
+        }
         checks.results = Some(results);
+    }
+}
+
+impl State {
+    /// A tunnel or the kill switch holds the traffic, so a DNS check would
+    /// test the tunnel or be blocked instead of testing the network.
+    pub(crate) fn traffic_guarded(&self) -> bool {
+        matches!(
+            self.status.state,
+            ConnectionState::Connecting
+                | ConnectionState::Connected
+                | ConnectionState::Reconnecting
+                | ConnectionState::FailedProtected { .. }
+        )
     }
 }
 

@@ -237,9 +237,11 @@ impl App {
     fn dispatch(&self, job: Job) {
         match job {
             Job::Connect(inputs) => self.workers.connect(inputs),
-            Job::CheckSystem { request, own_alias } => {
-                self.workers.check_system(request, own_alias)
-            }
+            Job::CheckSystem {
+                request,
+                own_alias,
+                guarded,
+            } => self.workers.check_system(request, own_alias, guarded),
             Job::CheckFailureInterference { request, own_alias } => {
                 self.workers.check_failure_interference(request, own_alias)
             }

@@ -26,6 +26,8 @@ pub(crate) struct ReportSnapshot {
     engine: EngineKind,
     xray: bool,
     pub(crate) checks: Option<Vec<(CheckKind, CheckStatus)>>,
+    /// The verdict of the last DNS check that ran; the report never runs it.
+    last_dns: CheckStatus,
     pub(crate) helper_version: Option<String>,
     pub(crate) language_for_report: Language,
 }
@@ -105,9 +107,15 @@ impl ReportSnapshot {
             engine: status.engine.unwrap_or(config.settings.engine),
             xray: helper_available && status.xray,
             checks: checks.map(check_statuses),
+            last_dns: CheckStatus::Skipped,
             helper_version: helper_version.map(str::to_owned),
             language_for_report,
         }
+    }
+
+    pub(crate) fn with_last_dns(mut self, last: Option<&CheckResult>) -> Self {
+        self.last_dns = last.map_or(CheckStatus::Skipped, |result| result.status);
+        self
     }
 
     pub(crate) fn set_checks(&mut self, checks: &[CheckResult]) {
@@ -293,11 +301,17 @@ impl ReportSnapshot {
                     CheckKind::Proxy => report_label!("system-check-proxy"),
                     CheckKind::PacketInterceptor => report_label!("system-check-packet"),
                     CheckKind::OtherVpn => report_label!("system-check-vpn"),
+                    CheckKind::DnsSubstitution => report_label!("system-check-dns"),
+                };
+                let status = match kind {
+                    CheckKind::DnsSubstitution => self.last_dns,
+                    _ => *status,
                 };
                 let result = match status {
                     CheckStatus::Ok => report_label!("system-check-ok"),
                     CheckStatus::Warning => report_label!("report-warning"),
                     CheckStatus::Unavailable => report_label!("system-check-unavailable"),
+                    CheckStatus::Skipped => report_label!("report-not-checked"),
                 };
                 let _ = writeln!(text, "{title}: {result}");
             }
@@ -398,6 +412,35 @@ mod tests {
         assert!(report.contains("DNS: Custom (<url>)"));
         assert!(!report.contains("192.0.2.10"));
         assert!(!report.contains("proxy.example.com"));
+    }
+
+    #[test]
+    fn dns_row_shows_the_last_verdict_that_ran_without_its_server() {
+        let substituted = CheckResult {
+            kind: CheckKind::DnsSubstitution,
+            status: CheckStatus::Warning,
+            detail: rosetun_core::CheckDetail::DnsSubstitution {
+                server: "192.0.2.53".to_owned(),
+            },
+        };
+        let skipped = [CheckResult::skipped(CheckKind::DnsSubstitution)];
+        let snapshot = |last: Option<&CheckResult>| {
+            ReportSnapshot::new(
+                &AppConfig::default(),
+                &Status::default(),
+                true,
+                Some(&skipped),
+                None,
+                Language::English,
+                0,
+            )
+            .with_last_dns(last)
+            .render(None, (None, None), "", "")
+        };
+        let report = snapshot(Some(&substituted));
+        assert!(report.contains("DNS substitution: Warning"));
+        assert!(!report.contains("192.0.2.53"));
+        assert!(snapshot(None).contains("DNS substitution: Not checked"));
     }
 
     #[test]

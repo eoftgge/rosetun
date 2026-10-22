@@ -609,11 +609,14 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     CheckKind::Proxy => tr!("system-check-proxy"),
                     CheckKind::PacketInterceptor => tr!("system-check-packet"),
                     CheckKind::OtherVpn => tr!("system-check-vpn"),
+                    CheckKind::DnsSubstitution => tr!("system-check-dns"),
                 };
                 let (icon, color) = match result.status {
                     CheckStatus::Ok => (Icon::Check, theme::CONNECTED),
                     CheckStatus::Warning => (Icon::Warning, theme::WARNING),
-                    CheckStatus::Unavailable => (Icon::Unknown, theme::TEXT_DIM),
+                    CheckStatus::Unavailable | CheckStatus::Skipped => {
+                        (Icon::Unknown, theme::TEXT_DIM)
+                    }
                 };
                 let detail = i18n::check_detail(result);
                 card.row_with_title(
