@@ -166,9 +166,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             if status.state.is_transitional() {
                                 if let Some(stage) = state.stage_line(display::now_unix()) {
                                     ui.label(
-                                        RichText::new(stage.text)
-                                            .small()
-                                            .color(theme::TEXT_MUTED),
+                                        RichText::new(stage.text).small().color(theme::TEXT_MUTED),
                                     );
                                     if let Some(hint) = stage.hint {
                                         ui.add(

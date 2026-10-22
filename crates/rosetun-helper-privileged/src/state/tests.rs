@@ -6461,7 +6461,10 @@ fn status_shows_the_engine_check_while_a_connect_waits_for_it() {
     wait_for_stage(&helper, rosetun_config::ConnectStage::CheckingEngine);
     assert!(helper.status().state.is_transitional());
     checked.store(true, Ordering::Release);
-    worker.join().unwrap().expect("connect succeeds after the check");
+    worker
+        .join()
+        .unwrap()
+        .expect("connect succeeds after the check");
     assert_eq!(helper.status().connect_stage, None);
     helper.disconnect().unwrap();
 }

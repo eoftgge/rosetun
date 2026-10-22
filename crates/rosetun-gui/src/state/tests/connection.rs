@@ -824,7 +824,10 @@ fn checking_engine(xray: bool, since: u64) -> State {
 fn the_engine_check_names_sing_box_or_both_engines() {
     use rosetun_config::ConnectStage;
     let line = checking_engine(false, 100).stage_line(103).unwrap();
-    assert_eq!(line.text, crate::i18n::connection_stage(ConnectStage::CheckingEngine, false, 3));
+    assert_eq!(
+        line.text,
+        crate::i18n::connection_stage(ConnectStage::CheckingEngine, false, 3)
+    );
     assert_ne!(
         crate::i18n::stage_label(ConnectStage::CheckingEngine, false),
         crate::i18n::stage_label(ConnectStage::CheckingEngine, true)

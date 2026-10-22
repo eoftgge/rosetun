@@ -1,4 +1,6 @@
-use rosetun_config::{ConnectStage, ConnectionState, Exit, FailureKind, Status, Transport, XrayUse};
+use rosetun_config::{
+    ConnectStage, ConnectionState, Exit, FailureKind, Status, Transport, XrayUse,
+};
 use rosetun_core::AppliedSnapshot;
 use rosetun_ipc::{ClientError, ErrorCode, ExitOutcome, HelperError, ProbeOutcome, TunnelDelays};
 
@@ -121,8 +123,7 @@ impl State {
         let seconds = now_unix.saturating_sub(status.stage_since_unix.unwrap_or(now_unix));
         Some(StageLine {
             text: crate::i18n::connection_stage(stage, status.xray, seconds),
-            hint: (stage == ConnectStage::CheckingEngine
-                && seconds > ENGINE_CHECK_HINT_AFTER_SECS)
+            hint: (stage == ConnectStage::CheckingEngine && seconds > ENGINE_CHECK_HINT_AFTER_SECS)
                 .then(|| tr!("stage-checking-engine-hint")),
         })
     }
