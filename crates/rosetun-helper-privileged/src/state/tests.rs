@@ -5484,11 +5484,11 @@ fn probe_request() -> rosetun_ipc::ProbeRequest {
 
 #[test]
 fn probe_results_keep_request_order_and_cleanup_secrets() {
+    use rosetun_ipc::ProbeOutcome;
+
     let _dns_slots = DNS_SLOTS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    use rosetun_ipc::ProbeOutcome;
-
     let (helper, stopped, dir) = probe_fixture(true, None);
     let mut request = probe_request();
     let mut failed = request.nodes[0].clone();

@@ -144,6 +144,11 @@ impl EngineBackend for SingBoxBackend {
         url: &str,
         timeout: Duration,
     ) -> Result<Duration, EngineError> {
+        #[derive(Deserialize)]
+        struct Delay {
+            delay: u64,
+        }
+
         let tag = match target {
             UrlTestTarget::Session => render::TAG_PROXY,
             UrlTestTarget::SessionExit(tag) | UrlTestTarget::Probe(tag) => tag,
@@ -174,10 +179,6 @@ impl EngineBackend for SingBoxBackend {
             .limit(1024)
             .read_to_vec()
             .map_err(|_| EngineError::Stats("failed to read URL test response".to_owned()))?;
-        #[derive(Deserialize)]
-        struct Delay {
-            delay: u64,
-        }
         let delay: Delay = serde_json::from_slice(&body)
             .map_err(|_| EngineError::Stats("invalid URL test response".to_owned()))?;
         Ok(Duration::from_millis(delay.delay))

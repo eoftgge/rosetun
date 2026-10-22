@@ -511,6 +511,8 @@ fn expiry_color(expire: u64, now: u64) -> Color32 {
 /// How much of the plan is used up, 0.0..=1.0: traffic against the limit, or
 /// without a limit, the last 30 days before expiry.
 fn quota_fraction(info: &SubscriptionInfo, now: u64) -> Option<f32> {
+    const THIRTY_DAYS: u64 = 30 * 86_400;
+
     if let Some(total) = info.total {
         let used = info.upload.saturating_add(info.download);
         return Some(if total == 0 {
@@ -519,7 +521,6 @@ fn quota_fraction(info: &SubscriptionInfo, now: u64) -> Option<f32> {
             (used as f64 / total as f64).clamp(0.0, 1.0) as f32
         });
     }
-    const THIRTY_DAYS: u64 = 30 * 86_400;
     info.expire_unix
         .map(|expire| 1.0 - expire.saturating_sub(now).min(THIRTY_DAYS) as f32 / THIRTY_DAYS as f32)
 }
