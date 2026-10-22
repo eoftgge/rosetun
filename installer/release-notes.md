@@ -2,9 +2,9 @@
 
 An early test build of Rosetun 0.3. Its two main features are ready to try: **Lockdown**, no internet without the tunnel, also while disconnected, after a restart and if the Rosetun service stops; and the **Traffic** tab with the live list of connections, where each one goes and why. This is an alpha for testing; **0.2.0 stays the supported release**, and Rosetun 0.2.0 does not offer this build as an update.
 
-Settings move to a new format on first start (see What's new). Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Settings move to a new format (see What's new); 0.2.0 cannot read the new one. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-**Turn Lockdown off before going back to 0.2.0.** 0.2.0 does not know Lockdown: it can neither remove it nor connect while it is on, and the computer stays offline. If you already went back, install this build again and turn Lockdown off, or run `rosetun reset-firewall` from it as administrator. Uninstalling this build removes Lockdown too.
+**Turn Lockdown off before going back to 0.2.0.** 0.2.0 does not know Lockdown: it can neither remove it nor connect while it is on, and the computer stays offline. If you already went back, install this build again and turn Lockdown off, or run `rosetun reset-firewall` from it as administrator. Uninstalling this build removes Lockdown too. **Your settings:** 0.2.0 cannot read settings saved by this build. The previous file is kept next to them as `%APPDATA%\Rosetun\config.v5.json`; to go back, close Rosetun and rename it to `config.json` (changes made in this build are lost).
 
 ## What's new in 0.3 so far
 
@@ -31,7 +31,7 @@ Settings move to a new format on first start (see What's new). Please report wha
 - **"Server name not found"** instead of "could not set up routing" when the server's address cannot be looked up; it no longer suggests turning off another VPN.
 - **Dialog buttons are on the right**, the main one last, in every dialog.
 - **XHTTP servers** (also known as SplitHTTP) connect through Xray, also for server checks; with "Connection through Xray" set to "Without Xray", Rosetun says before connecting that such a server needs Xray and offers **Connect through Xray**. Servers with a separate download server are still skipped and named in the subscription report.
-- **Settings format 6.** Settings are converted on first start; an older Rosetun, 0.2.0 included, then refuses to read them with "UnsupportedVersion" and does not overwrite them.
+- **Settings format 6.** Settings are converted when this build first saves them, and the previous file stays as `config.v5.json`; an older Rosetun, 0.2.0 included, refuses to read the new format and does not overwrite it.
 
 ## Known issues
 
@@ -60,9 +60,9 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 Ранняя тестовая сборка Rosetun 0.3. Две её главные функции уже можно попробовать. **Lockdown**: без туннеля интернета нет, и без подключения, и после перезагрузки, и если служба Rosetun остановится. Вкладка **Трафик** с живым списком соединений: куда идёт каждое и почему. Это альфа для тестирования; **поддерживаемый выпуск по-прежнему 0.2.0**, и Rosetun 0.2.0 не предлагает эту сборку как обновление.
 
-Настройки при первом запуске переходят на новый формат (см. «Что нового»). Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Настройки переходят на новый формат (см. «Что нового»); 0.2.0 его прочитать не сможет. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-**Перед возвратом на 0.2.0 выключите Lockdown.** 0.2.0 не знает про Lockdown: она не может ни снять его, ни подключиться, пока он включён, и компьютер остаётся без сети. Если вы уже вернулись, установите эту сборку снова и выключите Lockdown или выполните её `rosetun reset-firewall` от имени администратора. Удаление этой сборки тоже снимает Lockdown.
+**Перед возвратом на 0.2.0 выключите Lockdown.** 0.2.0 не знает про Lockdown: она не может ни снять его, ни подключиться, пока он включён, и компьютер остаётся без сети. Если вы уже вернулись, установите эту сборку снова и выключите Lockdown или выполните её `rosetun reset-firewall` от имени администратора. Удаление этой сборки тоже снимает Lockdown. **Настройки:** 0.2.0 не читает настройки, сохранённые этой сборкой. Прежний файл лежит рядом как `%APPDATA%\Rosetun\config.v5.json`; чтобы вернуться, закройте Rosetun и переименуйте его в `config.json` (изменения, сделанные в этой сборке, пропадут).
 
 ### Что нового в 0.3 на сейчас
 
@@ -89,7 +89,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 - **«Не удалось найти адрес сервера»** вместо «не удалось настроить маршрутизацию», когда адрес сервера не находится; совета выключить другой VPN при этом больше нет.
 - **Кнопки окон справа**, основная крайняя, во всех окнах.
 - **Серверы XHTTP** (он же SplitHTTP) подключаются через Xray, проверка серверов тоже; при «Без Xray» в «Подключение через Xray» Rosetun ещё до подключения говорит, что такому серверу нужен Xray, и предлагает **Подключить через Xray**. Серверы с отдельным сервером загрузки пока пропускаются и называются в отчёте о подписке.
-- **Формат настроек 6.** Настройки преобразуются при первом запуске; более старый Rosetun, в том числе 0.2.0, после этого откажется их читать с ошибкой «UnsupportedVersion» и не перезапишет их.
+- **Формат настроек 6.** Настройки преобразуются, когда эта сборка впервые их сохраняет, а прежний файл остаётся как `config.v5.json`; более старый Rosetun, в том числе 0.2.0, новый формат читать откажется и не перезапишет его.
 
 ### Известные проблемы
 
