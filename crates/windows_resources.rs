@@ -270,16 +270,16 @@ mod tests {
     }
 
     #[test]
-    fn committed_icon_has_eight_group_entries() {
+    fn committed_icon_has_eleven_group_entries() {
         let res = icon_res(include_bytes!("rosetun-gui/assets/rosetun.ico")).unwrap();
-        let group_length = 6 + 8 * 14;
+        let group_length = 6 + 11 * 14;
         let padding = (4 - group_length % 4) % 4;
         let group_start = res.len() - group_length - padding;
         assert_eq!(u32_at(&res, group_start - 32), group_length as u32);
         assert_eq!(u16_at(&res, group_start - 22), 14);
         let group = &res[group_start..group_start + group_length];
-        assert_eq!(&group[..6], &[0, 0, 1, 0, 8, 0]);
-        assert_eq!(u16_at(group, 6 + 7 * 14 + 12), 8);
+        assert_eq!(&group[..6], &[0, 0, 1, 0, 11, 0]);
+        assert_eq!(u16_at(group, 6 + 10 * 14 + 12), 11);
     }
 
     #[test]

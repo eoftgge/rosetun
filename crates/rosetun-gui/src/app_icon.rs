@@ -1,7 +1,7 @@
 use crate::rose_icon::{self, RoseIcon};
 
-/// Sizes Explorer, the Start menu and the taskbar ask for at 100–200 % scaling.
-const SIZES: [u32; 8] = [16, 20, 24, 32, 40, 48, 64, 256];
+/// Desktop sizes Windows asks for at 100, 125, 150 and 200 % scaling.
+const SIZES: [u32; 11] = [16, 20, 24, 32, 40, 48, 64, 72, 96, 128, 256];
 
 /// The `.ico` embedded in the executable: the icon at every size.
 fn app_icon() -> Vec<u8> {
