@@ -159,121 +159,202 @@ fn scanline(y: f32, intersections: &mut Vec<f32>) {
     intersections.sort_unstable_by(f32::total_cmp);
 }
 
+const SAMPLES_PER_AXIS: usize = 4;
+const DISTANCE_INFINITY: u32 = u32::MAX / 4;
+
 /// Straight-alpha RGBA of the icon, `size`×`size`.
 pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon) -> Vec<u8> {
-    let mut rgba = rasterize(size, icon);
-    if icon != RoseIcon::Emblem {
-        back(&mut rgba, size as usize);
-    }
-    rgba
+    let plate = (icon != RoseIcon::Emblem).then(|| back(size as usize));
+    rasterize(size, icon, plate.as_deref())
 }
 
-const BACKING_ALPHA: u32 = 160;
-
-/// Square dilation by `reach` cells, done as a row pass and a column pass.
-fn dilate(set: &[bool], side: usize, reach: usize) -> Vec<bool> {
-    let pass = |set: &[bool], at: &dyn Fn(usize, usize) -> usize| {
-        let mut out = vec![false; set.len()];
-        for line in 0..side {
-            let mut count = 0;
-            for i in 0..side + reach {
-                if i < side && set[at(line, i)] {
-                    count += 1;
-                }
-                if i > 2 * reach && set[at(line, i - 2 * reach - 1)] {
-                    count -= 1;
-                }
-                if i >= reach {
-                    out[at(line, i - reach)] = count > 0;
-                }
+fn petal_mask(side: usize) -> Vec<bool> {
+    let scale = 48.0 / side as f32;
+    let mut mask = vec![false; side * side];
+    let mut intersections = Vec::new();
+    for y in 0..side {
+        scanline((y as f32 + 0.5) * scale, &mut intersections);
+        let mut crossing = 0;
+        for x in 0..side {
+            let sample_x = (x as f32 + 0.5) * scale;
+            while crossing < intersections.len() && intersections[crossing] <= sample_x {
+                crossing += 1;
             }
+            mask[y * side + x] = crossing % 2 == 1;
         }
-        out
+    }
+    mask
+}
+
+/// Squared Euclidean distance to the nearest `true` cell.
+fn distance_transform(seeds: &[bool], side: usize) -> Vec<u32> {
+    let mut rows = vec![DISTANCE_INFINITY; seeds.len()];
+    let mut distances = vec![DISTANCE_INFINITY; seeds.len()];
+    let mut input = vec![DISTANCE_INFINITY; side];
+    let mut output = vec![DISTANCE_INFINITY; side];
+    let mut sites = vec![0; side];
+    let mut boundaries = vec![0.0; side + 1];
+    let mut transform_line = |input: &[u32], output: &mut [u32]| {
+        let mut count = 0;
+        for q in 0..side {
+            if input[q] == DISTANCE_INFINITY {
+                continue;
+            }
+            if count == 0 {
+                sites[0] = q;
+                boundaries[0] = f64::NEG_INFINITY;
+                boundaries[1] = f64::INFINITY;
+                count = 1;
+                continue;
+            }
+            let mut k = count - 1;
+            let intersection = |q: usize, p: usize| {
+                ((f64::from(input[q]) + (q * q) as f64)
+                    - (f64::from(input[p]) + (p * p) as f64))
+                    / (2 * (q - p)) as f64
+            };
+            let mut boundary = intersection(q, sites[k]);
+            while k > 0 && boundary <= boundaries[k] {
+                k -= 1;
+                boundary = intersection(q, sites[k]);
+            }
+            count = k + 1;
+            sites[count] = q;
+            boundaries[count] = boundary;
+            boundaries[count + 1] = f64::INFINITY;
+            count += 1;
+        }
+        if count == 0 {
+            output.fill(DISTANCE_INFINITY);
+            return;
+        }
+        let mut k = 0;
+        for (q, distance) in output.iter_mut().enumerate() {
+            while k + 1 < count && boundaries[k + 1] < q as f64 {
+                k += 1;
+            }
+            let offset = q.abs_diff(sites[k]) as u32;
+            *distance = input[sites[k]] + offset * offset;
+        }
     };
-    let rows = pass(set, &|line, i| line * side + i);
-    pass(&rows, &|line, i| i * side + line)
+    for (row, output_row) in seeds.chunks_exact(side).zip(rows.chunks_exact_mut(side)) {
+        for (value, seed) in input.iter_mut().zip(row) {
+            *value = if *seed { 0 } else { DISTANCE_INFINITY };
+        }
+        transform_line(&input, output_row);
+    }
+    for x in 0..side {
+        for y in 0..side {
+            input[y] = rows[y * side + x];
+        }
+        transform_line(&input, &mut output);
+        for (y, distance) in output.iter().enumerate() {
+            distances[y * side + x] = *distance;
+        }
+    }
+    distances
 }
 
 /// Rose petals vanish on a background of a similar colour (a red Windows
 /// accent on the taskbar), so every icon shown outside the window sits on a
 /// dark plate: the silhouette with the gaps between petals filled, plus a rim.
-/// The gaps are channels open to the outside; a closing (dilate, flood the
-/// outside, dilate it back) tells them from the outside itself.
-fn back(rgba: &mut [u8], size: usize) {
-    let radius = (size / 16).max(1);
-    let rim = (size / 32).max(1);
-    // A margin beyond the edges, so the outside also reaches petals that touch them.
+/// The gaps are channels open to the outside; a closing (grow, flood the
+/// outside, grow it back) tells them from the outside itself.
+fn back(size: usize) -> Vec<bool> {
+    let sample_side = size * SAMPLES_PER_AXIS;
+    let radius = (size / 16).max(1) * SAMPLES_PER_AXIS;
+    let rim = (size / 32).max(1) * SAMPLES_PER_AXIS;
+    // A margin beyond the edges ensures the flood can reach every exterior cell.
     let pad = radius + rim + 1;
-    let side = size + 2 * pad;
-    let solid: Vec<bool> = (0..side * side)
-        .map(|i| {
-            let (x, y) = ((i % side).wrapping_sub(pad), (i / side).wrapping_sub(pad));
-            x < size && y < size && rgba[(y * size + x) * 4 + 3] >= 128
-        })
+    let side = sample_side + 2 * pad;
+    let mut solid = vec![false; side * side];
+    for (y, row) in petal_mask(sample_side).chunks_exact(sample_side).enumerate() {
+        let start = (y + pad) * side + pad;
+        solid[start..start + sample_side].copy_from_slice(row);
+    }
+
+    let radius_squared = (radius * radius) as u32;
+    let rim_squared = (rim * rim) as u32;
+    let grown: Vec<bool> = distance_transform(&solid, side)
+        .into_iter()
+        .map(|distance| distance <= radius_squared)
         .collect();
-    let grown = dilate(&solid, side, radius);
     let mut outside = vec![false; side * side];
     let mut queue = vec![0];
-    while let Some(i) = queue.pop() {
-        if grown[i] || outside[i] {
-            continue;
-        }
-        outside[i] = true;
-        let (x, y) = (i % side, i / side);
-        if x > 0 {
-            queue.push(i - 1);
-        }
-        if x + 1 < side {
-            queue.push(i + 1);
-        }
-        if y > 0 {
-            queue.push(i - side);
-        }
-        if y + 1 < side {
-            queue.push(i + side);
-        }
-    }
-    let silhouette: Vec<bool> = dilate(&outside, side, radius)
+    outside[0] = true;
+    while let Some(index) = queue.pop() {
+        let (x, y) = (index % side, index / side);
+        for neighbor in [
+            x.checked_sub(1).map(|_| index - 1),
+            (x + 1 < side).then_some(index + 1),
+            y.checked_sub(1).map(|_| index - side),
+            (y + 1 < side).then_some(index + side),
+        ]
         .into_iter()
-        .map(|outside| !outside)
-        .collect();
-    let plate = dilate(&silhouette, side, rim);
-    for (i, pixel) in rgba.chunks_exact_mut(4).enumerate() {
-        if !plate[(i / size + pad) * side + i % size + pad] {
-            continue;
+        .flatten()
+        {
+            if !grown[neighbor] && !outside[neighbor] {
+                outside[neighbor] = true;
+                queue.push(neighbor);
+            }
         }
-        // The icon's own pixel is drawn over the plate.
-        let alpha = u32::from(pixel[3]);
-        let under = BACKING_ALPHA * (255 - alpha) / 255;
-        let total = alpha + under;
-        for channel in &mut pixel[..3] {
-            *channel = (u32::from(*channel) * alpha / total) as u8;
-        }
-        pixel[3] = total as u8;
     }
+    let silhouette: Vec<bool> = distance_transform(&outside, side)
+        .into_iter()
+        .map(|distance| distance > radius_squared)
+        .collect();
+    let plate = distance_transform(&silhouette, side);
+    let mut cropped = Vec::with_capacity(sample_side * sample_side);
+    for row in plate.chunks_exact(side).skip(pad).take(sample_side) {
+        cropped.extend(
+            row[pad..pad + sample_side]
+                .iter()
+                .map(|distance| *distance <= rim_squared),
+        );
+    }
+    cropped
 }
 
-fn rasterize(size: u32, icon: RoseIcon) -> Vec<u8> {
+fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>) -> Vec<u8> {
     let scale = 48.0 / size as f32;
+    let sample_side = size as usize * SAMPLES_PER_AXIS;
     let grid = BadgeGrid::new(size);
     let mut rgba = Vec::with_capacity(size as usize * size as usize * 4);
     let mut row = vec![[0_u32; 4]; size as usize];
     let mut intersections = Vec::new();
     for y in 0..size {
         row.fill([0; 4]);
-        for j in 0..4 {
-            let sample_y = (y as f32 + (j as f32 + 0.5) / 4.0) * scale;
+        for j in 0..SAMPLES_PER_AXIS {
+            let sample_y = (y as f32 + (j as f32 + 0.5) / SAMPLES_PER_AXIS as f32) * scale;
             scanline(sample_y, &mut intersections);
             let mut crossing = 0;
             for (x, pixel) in row.iter_mut().enumerate() {
-                for i in 0..4 {
-                    let sample_x = (x as f32 + (i as f32 + 0.5) / 4.0) * scale;
+                for i in 0..SAMPLES_PER_AXIS {
+                    let sample_x =
+                        (x as f32 + (i as f32 + 0.5) / SAMPLES_PER_AXIS as f32) * scale;
                     while crossing < intersections.len() && intersections[crossing] <= sample_x {
                         crossing += 1;
                     }
-                    if let Some((color, opacity)) =
-                        sample((sample_x, sample_y), icon, crossing % 2 == 1, grid)
-                    {
+                    let foreground = sample((sample_x, sample_y), icon, crossing % 2 == 1, grid);
+                    let backed = plate.is_some_and(|plate| {
+                        plate[(y as usize * SAMPLES_PER_AXIS + j) * sample_side
+                            + x * SAMPLES_PER_AXIS
+                            + i]
+                    });
+                    if backed {
+                        let background = theme::BG;
+                        let opacity = foreground.map_or(0, |(_, opacity)| u32::from(opacity));
+                        let color = foreground.map_or(background, |(color, _)| color);
+                        for (total, (foreground, background)) in pixel[..3].iter_mut().zip(
+                            [color.r(), color.g(), color.b()]
+                                .into_iter()
+                                .zip([background.r(), background.g(), background.b()]),
+                        ) {
+                            *total += u32::from(foreground) * opacity
+                                + u32::from(background) * (255 - opacity);
+                        }
+                        pixel[3] += 255;
+                    } else if let Some((color, opacity)) = foreground {
                         let opacity = u32::from(opacity);
                         pixel[0] += u32::from(color.r()) * opacity;
                         pixel[1] += u32::from(color.g()) * opacity;
@@ -289,7 +370,7 @@ fn rasterize(size: u32, icon: RoseIcon) -> Vec<u8> {
                 (red / divisor) as u8,
                 (green / divisor) as u8,
                 (blue / divisor) as u8,
-                (alpha / 16) as u8,
+                (alpha / (SAMPLES_PER_AXIS * SAMPLES_PER_AXIS) as u32) as u8,
             ]);
         }
     }
@@ -326,7 +407,17 @@ mod tests {
         let filled = rgba.chunks_exact(4).filter(|pixel| pixel[3] != 0).count();
         let coverage = filled as f32 / (48 * 48) as f32;
         assert!((0.45..=0.75).contains(&coverage), "{coverage}");
-        assert_eq!(rgba, rasterize(48, RoseIcon::Emblem), "no plate");
+        assert_eq!(rgba, rasterize(48, RoseIcon::Emblem, None), "no plate");
+    }
+
+    #[test]
+    fn distance_transform_uses_squared_euclidean_distance() {
+        let mut seeds = vec![false; 16];
+        seeds[0] = true;
+        assert_eq!(
+            distance_transform(&seeds, 4),
+            vec![0, 1, 4, 9, 1, 2, 5, 10, 4, 5, 8, 13, 9, 10, 13, 18]
+        );
     }
 
     #[test]
@@ -340,18 +431,18 @@ mod tests {
     }
 
     #[test]
-    fn outside_icons_sit_on_a_plate_that_fills_the_gaps() {
+    fn outside_icons_sit_on_an_antialiased_plate_that_fills_the_gaps() {
         let icons = TRAY_STATES.map(RoseIcon::Tray);
         for icon in icons.into_iter().chain([RoseIcon::App]) {
             for size in [16, 24, 32, 48, 256] {
-                let plain = rasterize(size, icon);
+                let plain = rasterize(size, icon, None);
                 let backed = rose_icon_rgba(size, icon);
                 for (before, after) in plain.chunks_exact(4).zip(backed.chunks_exact(4)) {
                     assert!(after[3] >= before[3], "{icon:?} {size} px");
                     if before[3] == 255 {
                         assert_eq!(before, after, "{icon:?} {size} px: plate over the rose");
                     } else if before != after {
-                        assert!(after[3] >= BACKING_ALPHA as u8, "{icon:?} {size} px");
+                        assert!(after[3] > before[3], "{icon:?} {size} px");
                     }
                 }
                 let size = size as usize;
@@ -361,11 +452,19 @@ mod tests {
                     "{icon:?} {size} px corner"
                 );
             }
-            let rgba = rose_icon_rgba(32, icon);
-            assert_eq!(pixel(&rgba, 32, 3, 4), [0, 0, 0, 160], "{icon:?} rim");
-            // A one-pixel channel between two petals, open to the outside.
-            assert_eq!(pixel(&rgba, 32, 14, 4), [0, 0, 0, 160], "{icon:?} gap");
+            let plain = rasterize(32, icon, None);
+            let backed = rose_icon_rgba(32, icon);
+            assert_eq!(pixel(&plain, 32, 14, 4), [0; 4], "{icon:?} gap before plate");
+            assert_eq!(
+                pixel(&backed, 32, 14, 4),
+                theme::BG.to_array(),
+                "{icon:?} closed gap"
+            );
         }
+        let rgba = rose_icon_rgba(256, RoseIcon::App);
+        assert!(rgba.chunks_exact(4).any(|pixel| {
+            pixel[..3] == theme::BG.to_array()[..3] && (1..255).contains(&pixel[3])
+        }));
     }
 
     #[test]
@@ -389,12 +488,17 @@ mod tests {
                 petal,
                 match state {
                     TrayState::Connected => theme::ROSE.to_array(),
-                    // A dimmed rose (alpha 140) over the plate.
                     TrayState::ServiceUnavailable => [
-                        (u32::from(theme::DISCONNECTED.r()) * 140 / 212) as u8,
-                        (u32::from(theme::DISCONNECTED.g()) * 140 / 212) as u8,
-                        (u32::from(theme::DISCONNECTED.b()) * 140 / 212) as u8,
-                        212,
+                        ((u32::from(theme::DISCONNECTED.r()) * 140
+                            + u32::from(theme::BG.r()) * 115)
+                            / 255) as u8,
+                        ((u32::from(theme::DISCONNECTED.g()) * 140
+                            + u32::from(theme::BG.g()) * 115)
+                            / 255) as u8,
+                        ((u32::from(theme::DISCONNECTED.b()) * 140
+                            + u32::from(theme::BG.b()) * 115)
+                            / 255) as u8,
+                        255,
                     ],
                     _ => theme::DISCONNECTED.to_array(),
                 },
@@ -430,7 +534,11 @@ mod tests {
                 Color32::WHITE.to_array(),
                 "{state:?} mark"
             );
-            assert_eq!(pixel(&rgba, 48, 34, 21), [0, 0, 0, 160], "{state:?} cutout");
+            assert_eq!(
+                pixel(&rgba, 48, 34, 21),
+                theme::BG.to_array(),
+                "{state:?} cutout"
+            );
         }
     }
 
@@ -448,7 +556,7 @@ mod tests {
                     rgba.chunks_exact(4).filter(|pixel| wanted(pixel)).count()
                 };
                 assert!(
-                    count(&|pixel| pixel == [0, 0, 0, 160]) >= 4,
+                    count(&|pixel| pixel == theme::BG.to_array()) >= 4,
                     "{state:?} {size} px outline"
                 );
                 let Some(color) = badge_color(state) else {
