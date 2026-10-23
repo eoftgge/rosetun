@@ -209,8 +209,7 @@ fn distance_transform(seeds: &[bool], side: usize) -> Vec<u32> {
             }
             let mut k = count - 1;
             let intersection = |q: usize, p: usize| {
-                ((f64::from(input[q]) + (q * q) as f64)
-                    - (f64::from(input[p]) + (p * p) as f64))
+                ((f64::from(input[q]) + (q * q) as f64) - (f64::from(input[p]) + (p * p) as f64))
                     / (2 * (q - p)) as f64
             };
             let mut boundary = intersection(q, sites[k]);
@@ -268,7 +267,10 @@ fn back(size: usize) -> Vec<bool> {
     let pad = radius + rim + 1;
     let side = sample_side + 2 * pad;
     let mut solid = vec![false; side * side];
-    for (y, row) in petal_mask(sample_side).chunks_exact(sample_side).enumerate() {
+    for (y, row) in petal_mask(sample_side)
+        .chunks_exact(sample_side)
+        .enumerate()
+    {
         let start = (y + pad) * side + pad;
         solid[start..start + sample_side].copy_from_slice(row);
     }
@@ -330,8 +332,7 @@ fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>) -> Vec<u8> {
             let mut crossing = 0;
             for (x, pixel) in row.iter_mut().enumerate() {
                 for i in 0..SAMPLES_PER_AXIS {
-                    let sample_x =
-                        (x as f32 + (i as f32 + 0.5) / SAMPLES_PER_AXIS as f32) * scale;
+                    let sample_x = (x as f32 + (i as f32 + 0.5) / SAMPLES_PER_AXIS as f32) * scale;
                     while crossing < intersections.len() && intersections[crossing] <= sample_x {
                         crossing += 1;
                     }
@@ -346,9 +347,11 @@ fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>) -> Vec<u8> {
                         let opacity = foreground.map_or(0, |(_, opacity)| u32::from(opacity));
                         let color = foreground.map_or(background, |(color, _)| color);
                         for (total, (foreground, background)) in pixel[..3].iter_mut().zip(
-                            [color.r(), color.g(), color.b()]
-                                .into_iter()
-                                .zip([background.r(), background.g(), background.b()]),
+                            [color.r(), color.g(), color.b()].into_iter().zip([
+                                background.r(),
+                                background.g(),
+                                background.b(),
+                            ]),
                         ) {
                             *total += u32::from(foreground) * opacity
                                 + u32::from(background) * (255 - opacity);
@@ -454,7 +457,11 @@ mod tests {
             }
             let plain = rasterize(32, icon, None);
             let backed = rose_icon_rgba(32, icon);
-            assert_eq!(pixel(&plain, 32, 14, 4), [0; 4], "{icon:?} gap before plate");
+            assert_eq!(
+                pixel(&plain, 32, 14, 4),
+                [0; 4],
+                "{icon:?} gap before plate"
+            );
             assert_eq!(
                 pixel(&backed, 32, 14, 4),
                 theme::BG.to_array(),
