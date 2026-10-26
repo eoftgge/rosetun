@@ -57,6 +57,8 @@ pub(crate) const ROSE_DARK: Color32 = Color32::from_rgb(0x8C, 0x23, 0x38);
 pub(crate) const ROSE: Color32 = Color32::from_rgb(0xC2, 0x37, 0x4F);
 pub(crate) const ROSE_BRIGHT: Color32 = Color32::from_rgb(0xD9, 0x47, 0x5F);
 pub(crate) const ROSE_LIGHT: Color32 = Color32::from_rgb(0xE8, 0x6A, 0x80);
+/// The light core of the bloomed rose on the connect button.
+pub(crate) const ROSE_PALE: Color32 = Color32::from_rgb(0xF4, 0xB6, 0xC1);
 pub(crate) const CONNECTED: Color32 = Color32::from_rgb(0xE0, 0x70, 0x5B);
 pub(crate) const DISCONNECTED: Color32 = Color32::from_rgb(0x8C, 0x81, 0x89);
 pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x2A);

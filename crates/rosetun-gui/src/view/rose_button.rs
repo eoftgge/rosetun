@@ -507,21 +507,12 @@ pub(crate) fn rose_button(
                 ));
             }
         }
+        // One plain core over the point where all fifteen petal outlines meet.
         if visible.stamen_alpha > 0.0 {
-            let scale = visible.stamen_scale;
-            let color = theme::TEXT.gamma_multiply(0.85 * visible.stamen_alpha);
-            for index in 0..5 {
-                let (sin, cos) = (72.0 * index as f32 + 18.0).to_radians().sin_cos();
-                painter.circle_filled(
-                    center + egui::vec2(5.0 * sin * scale, -5.0 * cos * scale),
-                    1.8 * scale,
-                    color,
-                );
-            }
             painter.circle_filled(
                 center,
-                2.6 * scale,
-                theme::TEXT.gamma_multiply(0.90 * visible.stamen_alpha),
+                3.6 * visible.stamen_scale,
+                theme::ROSE_PALE.gamma_multiply(visible.stamen_alpha),
             );
         }
         painter.galley(label_rect.min, galley, visible.label);
