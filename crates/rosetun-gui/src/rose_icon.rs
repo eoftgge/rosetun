@@ -434,12 +434,14 @@ mod tests {
     }
 
     #[test]
-    fn app_256_rasterizes_within_two_seconds() {
+    fn window_icon_rasterizes_within_two_seconds() {
+        // `main` draws the window icon at 128 px on every start; the larger
+        // sizes go only into the committed `.ico`, drawn ahead of time.
         let start = std::time::Instant::now();
-        let rgba = rose_icon_rgba(256, RoseIcon::App);
+        let rgba = rose_icon_rgba(128, RoseIcon::App);
         let elapsed = start.elapsed();
-        assert_eq!(rgba.len(), 256 * 256 * 4);
-        eprintln!("256 px rose rasterization: {elapsed:?}");
+        assert_eq!(rgba.len(), 128 * 128 * 4);
+        eprintln!("128 px rose rasterization: {elapsed:?}");
         assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
     }
 
