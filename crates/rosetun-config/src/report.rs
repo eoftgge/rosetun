@@ -243,6 +243,45 @@ pub fn ip_literals(text: &str) -> impl Iterator<Item = (IpAddr, Range<usize>)> +
         .filter_map(|(start, word)| leading_ip(word).map(|(ip, end)| (ip, start..start + end)))
 }
 
+/// Replaces every public IP literal in an engine line with `[hidden]`, keeping
+/// private, loopback, link-local and tunnel addresses. Go socket errors name
+/// both ends wherever they occur, as in
+/// `close tcp 172.19.0.1:54626->198.51.100.7:443: endpoint not connected`,
+/// so addresses are found by what they are, not by the words before them.
+pub fn hide_public_addresses(line: &str) -> String {
+    let mut hidden = String::with_capacity(line.len());
+    let mut copied = 0;
+    for (ip, mut range) in ip_literals(line) {
+        if !is_public_ip(ip) {
+            continue;
+        }
+        if line[..range.start].ends_with('[') && line[range.end..].starts_with(']') {
+            range = range.start - 1..range.end + 1;
+        }
+        hidden.push_str(&line[copied..range.start]);
+        hidden.push_str("[hidden]");
+        copied = range.end;
+    }
+    hidden.push_str(&line[copied..]);
+    hidden
+}
+
+/// Whether `ip` can name a node or a site rather than this machine, its
+/// local network or the tunnel.
+pub fn is_public_ip(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(ip) => {
+            !(ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified())
+        }
+        IpAddr::V6(ip) => {
+            !(ip.is_unique_local()
+                || ip.is_loopback()
+                || ip.is_unicast_link_local()
+                || ip.is_unspecified())
+        }
+    }
+}
+
 fn address_words(text: &str) -> impl Iterator<Item = (usize, &str)> {
     let is_address_char =
         |ch: char| ch.is_alphanumeric() || matches!(ch, '.' | ':' | '-' | '_' | '%');

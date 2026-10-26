@@ -1,6 +1,5 @@
 use crate::readiness::strip_ansi_csi;
 use rosetun_engine::{OutboundFailure, OutboundFailures};
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Default)]
@@ -101,42 +100,7 @@ pub(super) fn hide_destinations(line: &str) -> String {
     ] {
         replace_token(&mut hidden, marker);
     }
-    hide_public_addresses(&hidden)
-}
-
-/// Go socket errors name both ends wherever they occur, as in
-/// `close tcp 172.19.0.1:54626->198.51.100.7:443: endpoint not connected`,
-/// so addresses are found by what they are, not by the words before them.
-fn hide_public_addresses(line: &str) -> String {
-    let mut hidden = String::with_capacity(line.len());
-    let mut copied = 0;
-    for (ip, mut range) in rosetun_config::ip_literals(line) {
-        if !is_public(ip) {
-            continue;
-        }
-        if line[..range.start].ends_with('[') && line[range.end..].starts_with(']') {
-            range = range.start - 1..range.end + 1;
-        }
-        hidden.push_str(&line[copied..range.start]);
-        hidden.push_str("[hidden]");
-        copied = range.end;
-    }
-    hidden.push_str(&line[copied..]);
-    hidden
-}
-
-fn is_public(ip: IpAddr) -> bool {
-    match ip.to_canonical() {
-        IpAddr::V4(ip) => {
-            !(ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified())
-        }
-        IpAddr::V6(ip) => {
-            !(ip.is_unique_local()
-                || ip.is_loopback()
-                || ip.is_unicast_link_local()
-                || ip.is_unspecified())
-        }
-    }
+    rosetun_config::hide_public_addresses(&hidden)
 }
 
 fn replace_between(line: &mut String, marker: &str, delimiter: &str) {

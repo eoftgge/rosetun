@@ -26,7 +26,7 @@ pub use node::{
     TlsParams, Transport, TrojanParams, VlessParams, VmessParams, XhttpExtra, XhttpMode,
     XhttpRange, XhttpXmux, node_country, uses_xray,
 };
-pub use report::{ip_literals, redact_report_text};
+pub use report::{hide_public_addresses, ip_literals, is_public_ip, redact_report_text};
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{
     ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind, LiveConnection,
