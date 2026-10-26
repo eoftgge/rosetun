@@ -98,6 +98,10 @@ const NETWORK_WAIT: Duration = Duration::from_secs(30);
 const NETWORK_WAIT_INTERVAL: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const NETWORK_WAIT_INTERVAL: Duration = Duration::from_millis(10);
+/// How long a connect asks the network's DNS servers whether the network is
+/// up after the system resolver failed.
+#[cfg(not(test))]
+const NETWORK_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[cfg(test)]
 fn test_physical_interface(_: &str) -> Option<String> {
@@ -265,6 +269,9 @@ struct Session {
     name_lookup: fn(&str, u16, NameLookup) -> Result<Vec<IpAddr>, Unresolved>,
     /// How long a connect waits for the network to look the server name up.
     network_wait: Duration,
+    /// Whether the network is not up yet, asked after the system resolver
+    /// failed on connect.
+    network_down: fn(&str) -> bool,
     cancelled: Arc<AtomicBool>,
     lists: Option<Arc<Mutex<ListStore>>>,
     list_run_dir: Option<PathBuf>,
@@ -363,6 +370,10 @@ impl Helper {
                 network_wait: NETWORK_WAIT,
                 #[cfg(test)]
                 network_wait: Duration::ZERO,
+                #[cfg(not(test))]
+                network_down,
+                #[cfg(test)]
+                network_down: |_| false,
             }),
         }
     }
@@ -1646,7 +1657,7 @@ impl Session {
                 Err(failure) => failure,
             };
             let left = self.network_wait.saturating_sub(started.elapsed());
-            if !failure.offline || left.is_zero() {
+            if left.is_zero() || !self.network_is_down(&failure, server, lookup) {
                 if waiting {
                     let elapsed_ms = started.elapsed().as_millis();
                     tracing::info!(elapsed_ms, "stopped waiting for the network");
@@ -1665,6 +1676,15 @@ impl Session {
             }
             sleep_cancellable(left.min(NETWORK_WAIT_INTERVAL), &self.cancelled)?;
         }
+    }
+
+    /// Whether a failed lookup means the network is not up yet. Windows
+    /// answers alike for a name that does not exist and a network that is not
+    /// up, so a failure of the system resolver is checked with the network's
+    /// own DNS servers. A connect asks before any protection is installed,
+    /// so that question leaves the way the system resolver's did.
+    fn network_is_down(&self, failure: &Unresolved, server: &str, lookup: NameLookup) -> bool {
+        failure.offline || (lookup == NameLookup::System && (self.network_down)(server))
     }
 
     fn stage(&self, stage: rosetun_config::ConnectStage) -> Result<(), HelperError> {
@@ -2949,11 +2969,7 @@ fn lookup_name(server: &str, port: u16, lookup: NameLookup) -> Result<Vec<IpAddr
     let addresses = match lookup {
         NameLookup::System => (server, port)
             .to_socket_addrs()
-            .map_err(|error| {
-                let offline = rosetun_dns::wire::labels(server).is_some()
-                    && !rosetun_dns::has_system_servers();
-                failed(&error, offline)
-            })?
+            .map_err(|error| failed(&error, false))?
             .map(|address| address.ip())
             .collect::<Vec<_>>(),
         NameLookup::Direct => {
@@ -2978,6 +2994,17 @@ fn lookup_name(server: &str, port: u16, lookup: NameLookup) -> Result<Vec<IpAddr
     }
 
     Ok(addresses)
+}
+
+/// Asks the network's DNS servers directly: no server, or sockets that fail
+/// before any reply, mean the network is not up yet.
+#[cfg(not(test))]
+fn network_down(server: &str) -> bool {
+    rosetun_dns::wire::labels(server).is_some()
+        && matches!(
+            rosetun_dns::resolve(server, NETWORK_PROBE_TIMEOUT),
+            Err(rosetun_dns::ResolveError::NoServers | rosetun_dns::ResolveError::Unreachable)
+        )
 }
 
 fn select_endpoint(addresses: &[IpAddr]) -> Result<IpAddr, HelperError> {

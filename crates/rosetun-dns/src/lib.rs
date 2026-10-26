@@ -57,12 +57,6 @@ impl fmt::Display for ResolveError {
 
 impl std::error::Error for ResolveError {}
 
-/// Whether a network adapter with a default route has a DNS server, as a
-/// sign that the network is up even for the system resolver.
-pub fn has_system_servers() -> bool {
-    !servers::system().is_empty()
-}
-
 /// The addresses of `host`, IPv4 first, from an IP literal, the hosts file
 /// or the DNS servers of the default network adapter, within `timeout`.
 pub fn resolve(host: &str, timeout: Duration) -> Result<Vec<IpAddr>, ResolveError> {

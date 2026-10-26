@@ -6506,6 +6506,34 @@ fn a_name_that_does_not_exist_fails_without_waiting() {
 }
 
 #[test]
+fn a_system_lookup_that_fails_while_the_network_is_down_is_tried_again() {
+    static UP: AtomicBool = AtomicBool::new(false);
+    let helper = network_wait_helper(Duration::from_secs(5), |_, _, _| {
+        if UP.load(Ordering::Acquire) {
+            Ok(vec![IpAddr::from([127, 0, 0, 1])])
+        } else {
+            Err(Unresolved {
+                error: HelperError::new(ErrorCode::ServerNameUnresolved, "no such host"),
+                offline: false,
+            })
+        }
+    });
+    helper.session().unwrap().network_down = |_| !UP.load(Ordering::Acquire);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let worker = {
+        let helper = Arc::clone(&helper);
+        thread::spawn(move || helper.connect(&request))
+    };
+    wait_for_stage(&helper, rosetun_config::ConnectStage::WaitingForNetwork);
+    UP.store(true, Ordering::Release);
+
+    worker.join().unwrap().expect("the network came up in time");
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    helper.disconnect().unwrap();
+}
+
+#[test]
 fn disconnect_ends_the_wait_for_the_network_at_once() {
     let helper = network_wait_helper(Duration::from_secs(30), |_, _, _| Err(offline()));
     let mut request = connect_request();
