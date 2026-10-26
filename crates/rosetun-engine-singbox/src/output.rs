@@ -164,17 +164,40 @@ pub(super) fn line_level(line: &str) -> Option<LineLevel> {
     strip_ansi_csi(line)
         .split_whitespace()
         .take(4)
-        .find_map(|word| {
-            let level = word.split_once('[').map_or(word, |(prefix, _)| prefix);
-            match level {
-                "TRACE" => Some(LineLevel::Trace),
-                "DEBUG" => Some(LineLevel::Debug),
-                "INFO" => Some(LineLevel::Info),
-                "WARN" => Some(LineLevel::Warn),
-                "ERROR" | "FATAL" | "PANIC" => Some(LineLevel::Error),
-                _ => None,
-            }
-        })
+        .find_map(word_level)
+}
+
+fn word_level(word: &str) -> Option<LineLevel> {
+    let level = word.split_once('[').map_or(word, |(prefix, _)| prefix);
+    match level {
+        "TRACE" => Some(LineLevel::Trace),
+        "DEBUG" => Some(LineLevel::Debug),
+        "INFO" => Some(LineLevel::Info),
+        "WARN" => Some(LineLevel::Warn),
+        "ERROR" | "FATAL" | "PANIC" => Some(LineLevel::Error),
+        _ => None,
+    }
+}
+
+/// Whether the line is about one connection: sing-box puts the
+/// connection's id and age after the level, as in
+/// `ERROR [1184364709 2.62s] connection: connection download closed: ...`.
+/// Engine lines (start, config, the DNS module, a crash) carry none.
+pub(super) fn is_connection_line(line: &str) -> bool {
+    let plain = strip_ansi_csi(line);
+    let mut words = plain
+        .split_whitespace()
+        .take(6)
+        .skip_while(|word| word_level(word).is_none())
+        .skip(1);
+    let (Some(id), Some(age)) = (words.next(), words.next()) else {
+        return false;
+    };
+    let id = id.strip_prefix('[').unwrap_or_default();
+    let age = age.strip_suffix(']').unwrap_or_default();
+    !id.is_empty()
+        && id.bytes().all(|byte| byte.is_ascii_digit())
+        && age.starts_with(|first: char| first.is_ascii_digit())
 }
 
 /// The FATAL sing-box prints when Wintun still holds the adapter of a killed
@@ -385,6 +408,30 @@ mod tests {
             ("", None),
         ] {
             assert_eq!(line_level(line), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn recognizes_lines_about_one_connection() {
+        for line in [
+            "+0300 2026-10-21 20:05:11 ERROR [3021546114 2.62s] connection: connection download closed: close tcp 172.19.0.1:50112->[hidden]:443: endpoint not connected",
+            "+0300 2026-10-21 20:05:12 ERROR [2202218134 5.01s] connection: open connection to [hidden] using outbound/direct[direct]: dial tcp [hidden]:443: i/o timeout",
+            "+0300 2026-10-21 20:05:13 INFO [2202218135 0ms] inbound/tun[tun-in]: inbound connection to [hidden]",
+            "\x1b[31mERROR\x1b[0m [77 1m3s] outbound/vless[proxy]: EOF",
+        ] {
+            assert!(super::is_connection_line(line), "{line}");
+        }
+        for line in [
+            "+0900 2026-10-03 02:24:28 INFO sing-box started (0.62s)",
+            "+0900 2026-10-03 02:24:27 INFO inbound/tun[tun-in]: started at rosetun0",
+            "WARN[0000] inbound/tun[tun-in]: open interface take too much time to finish!",
+            "FATAL[0015] start service: create adapter: Cannot create a file when that file already exists.",
+            "+0300 2026-10-21 20:05:14 ERROR dns: exchange failed for [hidden] IN A: timeout",
+            "ERROR [hidden] connection: reset",
+            "goroutine 1 [running]:",
+            "",
+        ] {
+            assert!(!super::is_connection_line(line), "{line}");
         }
     }
 

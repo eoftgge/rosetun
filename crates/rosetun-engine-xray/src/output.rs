@@ -96,13 +96,29 @@ fn classify_failure(line: &str) -> Option<OutboundFailure> {
 }
 
 /// The line as the service journal records it: unchanged while the verbose
-/// log is on, without destinations otherwise.
-pub(crate) fn journal_line(line: &str, verbose: bool) -> String {
+/// log is on; otherwise without destinations, and not at all when it is
+/// about one connection, which is the user's activity.
+pub(crate) fn journal_line(line: &str, verbose: bool) -> Option<String> {
     if verbose {
-        line.to_owned()
+        Some(line.to_owned())
+    } else if is_connection_line(line) {
+        None
     } else {
-        hide_destinations(line)
+        Some(hide_destinations(line))
     }
+}
+
+/// Whether the line is about one connection: Xray puts the session id
+/// after the level, as in `[Info] [42] proxy/freedom: dialing to ...`.
+/// Engine lines (start, config, a crash) carry none.
+fn is_connection_line(line: &str) -> bool {
+    const LEVELS: [&str; 5] = ["[Debug]", "[Info]", "[Warning]", "[Error]", "[Fatal]"];
+    line.split_whitespace()
+        .take(5)
+        .skip_while(|word| !LEVELS.contains(word))
+        .nth(1)
+        .and_then(|word| word.strip_prefix('[')?.strip_suffix(']'))
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Hides the sites and the node a line names, keeping the failure cause and
@@ -254,8 +270,43 @@ mod tests {
     #[test]
     fn the_verbose_log_keeps_the_line_unchanged() {
         let line = "from 127.0.0.1:50110 accepted tcp:example.com:443 > dial tcp 192.0.2.5:443: i/o timeout";
-        assert_eq!(journal_line(line, true), line);
-        assert_eq!(journal_line(line, false), hide_destinations(line));
+        assert_eq!(journal_line(line, true).unwrap(), line);
+        assert_eq!(journal_line(line, false).unwrap(), hide_destinations(line));
+    }
+
+    #[test]
+    fn session_lines_are_counted_but_kept_for_the_verbose_log() {
+        let timeout = "2026/10/21 20:05:12.123456 [Warning] [3021546114] proxy/vless/outbound: failed to process outbound traffic > dial tcp 192.0.2.10:443: i/o timeout";
+        let dialing = "2026/10/21 20:05:12.123457 [Info] [3021546114] proxy/freedom: dialing to tcp:198.51.100.7:25565";
+        let started = "2026/10/21 20:05:10.000000 [Warning] core: Xray 25.10.15 started";
+        let failures = FailureCounters::default();
+        for line in [timeout, dialing, started] {
+            failures.observe(line);
+        }
+        assert_eq!(failures.snapshot().unreachable, 1);
+
+        assert_eq!(journal_line(timeout, false), None);
+        assert_eq!(journal_line(dialing, false), None);
+        assert_eq!(journal_line(started, false).unwrap(), started);
+        for line in [timeout, dialing, started] {
+            assert_eq!(journal_line(line, true).unwrap(), line);
+        }
+    }
+
+    #[test]
+    fn lines_without_a_session_id_stay_in_the_journal() {
+        let lines = include_str!("../tests/fixtures/output-errors.txt");
+        for line in lines.lines() {
+            assert!(journal_line(line, false).is_some(), "{line}");
+        }
+        for line in [
+            "[Info] [hidden] proxy/freedom: dialing",
+            "[Error] [] app: failed",
+            "Failed to start: main: failed to load config",
+            "",
+        ] {
+            assert!(!is_connection_line(line), "{line}");
+        }
     }
 
     #[test]

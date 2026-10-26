@@ -240,7 +240,9 @@ fn spawn_output_drain(
 fn log_output_line(stream: &'static str, line: &str, secrets: &[String], until_unix: &AtomicU64) {
     use rosetun_engine::ENGINE_OUTPUT_TARGET as TARGET;
     let verbose = now_unix() < until_unix.load(Ordering::Acquire);
-    let mut safe = output::journal_line(line, verbose);
+    let Some(mut safe) = output::journal_line(line, verbose) else {
+        return;
+    };
     for secret in secrets {
         safe = safe.replace(secret, "[redacted]");
     }

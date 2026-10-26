@@ -444,7 +444,9 @@ where
 
 fn log_output_line(stream: &'static str, line: &str, verbose_until_unix: &AtomicU64) {
     use rosetun_engine::ENGINE_OUTPUT_TARGET as TARGET;
-    let line = safe_output_line(line, verbose_until_unix, now_unix());
+    let Some(line) = safe_output_line(line, verbose_until_unix, now_unix()) else {
+        return;
+    };
     match output::line_level(&line) {
         Some(LineLevel::Trace) => tracing::trace!(target: TARGET, stream, "{line}"),
         Some(LineLevel::Debug) => tracing::debug!(target: TARGET, stream, "{line}"),
@@ -454,11 +456,20 @@ fn log_output_line(stream: &'static str, line: &str, verbose_until_unix: &Atomic
     }
 }
 
-fn safe_output_line<'a>(line: &'a str, until_unix: &AtomicU64, now_unix: u64) -> Cow<'a, str> {
+/// The line as the service journal records it: whole while the verbose log
+/// is on; otherwise without destinations, and not at all when it is about
+/// one connection, whose port and age are the user's activity.
+fn safe_output_line<'a>(
+    line: &'a str,
+    until_unix: &AtomicU64,
+    now_unix: u64,
+) -> Option<Cow<'a, str>> {
     if now_unix < until_unix.load(Ordering::Acquire) {
-        Cow::Borrowed(line)
+        Some(Cow::Borrowed(line))
+    } else if output::is_connection_line(line) {
+        None
     } else {
-        Cow::Owned(output::hide_destinations(line))
+        Some(Cow::Owned(output::hide_destinations(line)))
     }
 }
 
@@ -597,12 +608,39 @@ mod tests {
     fn engine_output_masks_destinations_after_verbose_log_expires() {
         let line = "ERROR connection: connection download closed: close tcp 172.19.0.1:54626->198.51.100.7:443: endpoint not connected";
         let deadline = std::sync::atomic::AtomicU64::new(100);
-        assert_eq!(super::safe_output_line(line, &deadline, 99), line);
-        assert!(!super::safe_output_line(line, &deadline, 100).contains("198.51.100.7"));
+        assert_eq!(super::safe_output_line(line, &deadline, 99).unwrap(), line);
+        assert!(
+            !super::safe_output_line(line, &deadline, 100)
+                .unwrap()
+                .contains("198.51.100.7")
+        );
         deadline.store(0, std::sync::atomic::Ordering::Release);
-        let hidden = super::safe_output_line(line, &deadline, 99);
+        let hidden = super::safe_output_line(line, &deadline, 99).unwrap();
         assert!(!hidden.contains("198.51.100.7"));
         assert!(hidden.contains("172.19.0.1:54626->[hidden]:443: endpoint not connected"));
+    }
+
+    #[test]
+    fn connection_lines_are_counted_but_kept_for_the_verbose_log() {
+        let closed = "+0300 2026-10-21 20:05:11 ERROR [3021546114 2.62s] connection: connection download closed: close tcp 172.19.0.1:50112->198.51.100.7:25565: endpoint not connected";
+        let timeout = "+0300 2026-10-21 20:05:12 ERROR [2202218134 5.01s] connection: open connection to 198.51.100.20:5222 using outbound/vless[proxy]: dial tcp 203.0.113.10:443: i/o timeout";
+        let started = "+0300 2026-10-21 20:05:10 INFO sing-box started (0.62s)";
+        let failures = super::output::FailureCounters::default();
+        for line in [closed, timeout, started] {
+            failures.observe(line);
+        }
+        assert_eq!(failures.snapshot().unreachable, 1);
+
+        let deadline = std::sync::atomic::AtomicU64::new(100);
+        assert_eq!(super::safe_output_line(closed, &deadline, 100), None);
+        assert_eq!(super::safe_output_line(timeout, &deadline, 100), None);
+        assert_eq!(
+            super::safe_output_line(started, &deadline, 100).unwrap(),
+            started
+        );
+        for line in [closed, timeout, started] {
+            assert_eq!(super::safe_output_line(line, &deadline, 99).unwrap(), line);
+        }
     }
 
     #[test]
@@ -611,7 +649,7 @@ mod tests {
         let failures = super::output::FailureCounters::default();
         failures.observe(line);
         let deadline = std::sync::atomic::AtomicU64::new(0);
-        let safe = super::safe_output_line(line, &deadline, 100);
+        let safe = super::safe_output_line(line, &deadline, 100).unwrap();
         assert_eq!(failures.snapshot().unreachable, 1);
         assert!(!safe.contains("198.51.100.20"));
         assert!(!safe.contains("203.0.113.10"));
