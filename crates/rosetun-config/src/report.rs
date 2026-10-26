@@ -270,8 +270,8 @@ fn redact_addresses(text: &str) -> String {
                     || tld.chars().count() >= 2
                         && tld.chars().all(char::is_alphabetic)
                         && !FILE_EXTENSIONS
-                        .iter()
-                        .any(|extension| tld.eq_ignore_ascii_case(extension))
+                            .iter()
+                            .any(|extension| tld.eq_ignore_ascii_case(extension))
             });
         if let Some((_, end)) = ip.filter(|_| !safe_ip) {
             result.push_str("<ip>");

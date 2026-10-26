@@ -101,7 +101,11 @@ fn provider_link_keeps_other_links() {
         Some("https://sub.example.com/")
     );
     assert_eq!(
-        provider_link("https://panel.example.com/sub", "https://panel.example.com/sub/").as_deref(),
+        provider_link(
+            "https://panel.example.com/sub",
+            "https://panel.example.com/sub/"
+        )
+        .as_deref(),
         None
     );
 }

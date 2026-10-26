@@ -215,9 +215,7 @@ impl App {
 
     #[cfg(windows)]
     fn hides_on_close(&self) -> bool {
-        self.tray.is_some()
-            && !self.quitting
-            && self.state.close_hides_window()
+        self.tray.is_some() && !self.quitting && self.state.close_hides_window()
     }
 
     #[cfg(not(windows))]

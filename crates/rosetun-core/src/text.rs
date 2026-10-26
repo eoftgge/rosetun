@@ -45,7 +45,8 @@ pub fn provider_text(text: &str, subscription_url: &str) -> String {
 /// link there, and its token must not reach a screen or a pasted issue.
 pub fn provider_link(link: &str, subscription_url: &str) -> Option<String> {
     let link = link.trim();
-    if link.is_empty() || link.trim_end_matches('/') == subscription_url.trim().trim_end_matches('/')
+    if link.is_empty()
+        || link.trim_end_matches('/') == subscription_url.trim().trim_end_matches('/')
     {
         return None;
     }
