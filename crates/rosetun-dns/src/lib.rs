@@ -251,7 +251,10 @@ mod tests {
     /// A loopback port nobody listens on: the system answers with an ICMP
     /// unreachable, a reset on Windows and a refusal on Linux.
     fn closed() -> SocketAddr {
-        UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+        UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
     }
 
     const V6: [u8; 16] = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7];

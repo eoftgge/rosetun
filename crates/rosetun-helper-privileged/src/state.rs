@@ -1656,7 +1656,10 @@ impl Session {
                 return Err(failure.error);
             }
             if !waiting {
-                tracing::info!(?lookup, "waiting for the network to look up the server name");
+                tracing::info!(
+                    ?lookup,
+                    "waiting for the network to look up the server name"
+                );
                 self.stage(rosetun_config::ConnectStage::WaitingForNetwork)?;
                 waiting = true;
             }

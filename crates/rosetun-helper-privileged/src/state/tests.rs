@@ -6471,7 +6471,9 @@ fn a_network_that_stays_down_fails_as_an_unresolved_server_name() {
     request.settings.kill_switch = true;
     let started = Instant::now();
 
-    let error = helper.connect(&request).expect_err("the network never came up");
+    let error = helper
+        .connect(&request)
+        .expect_err("the network never came up");
     assert_eq!(error.code, ErrorCode::ServerNameUnresolved);
     assert!(started.elapsed() >= Duration::from_millis(100));
     assert!(matches!(
@@ -6515,7 +6517,9 @@ fn disconnect_ends_the_wait_for_the_network_at_once() {
     wait_for_stage(&helper, rosetun_config::ConnectStage::WaitingForNetwork);
     let started = Instant::now();
 
-    helper.disconnect().expect("cancellation is accepted while waiting");
+    helper
+        .disconnect()
+        .expect("cancellation is accepted while waiting");
     assert_eq!(
         worker.join().unwrap().unwrap_err().code,
         ErrorCode::Cancelled
