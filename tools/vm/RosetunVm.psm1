@@ -40,7 +40,13 @@ $script:Config = @{
     # Downloaded at a limited rate through the tunnel and closed midway, so it
     # must be far larger than a minute at that rate (tens of MB) and, like
     # TunnelProbeUrl, reachable from the node's exit.
-    LongTransferUrl = 'https://mirror.yandex.ru/debian/dists/bookworm/main/Contents-amd64.gz'
+    # ROSETUN_LONG_TRANSFER_URL replaces it when the mirror stops answering there.
+    LongTransferUrl = $(if ($env:ROSETUN_LONG_TRANSFER_URL) {
+            $env:ROSETUN_LONG_TRANSFER_URL
+        }
+        else {
+            'https://mirror.yandex.ru/debian/dists/bookworm/main/Contents-amd64.gz'
+        })
 }
 $script:Session = $null
 # Second cold starts Restart-RosetunGuest needed in this session of the module.
@@ -2000,16 +2006,24 @@ function Get-RosetunConnectionRows {
 }
 
 function Invoke-RosetunConnectionClose {
-    # Starts one long download through the tunnel at a limited rate, finds it
-    # in `rosetun connections` by host (curl's own row when the engine named
-    # the program) and closes it with `rosetun connections close <id>`. A
-    # poller keeps the list collected the whole time, so the closed connection
-    # is kept. Without the close curl would stop only at --max-time (exit 28).
-    # Returns the id, the close command's result, curl's exit code and run
-    # time, and the list read after curl ended.
-    param([Parameter(Mandatory)][string]$Url)
+    # Starts one download through the tunnel at a limited rate, finds it in
+    # `rosetun connections` by host (curl's own row when the engine named the
+    # program) and closes it with `rosetun connections close <id>`. A poller
+    # keeps the list collected the whole time, so the closed connection is
+    # kept. Without the close curl would stop only at --max-time.
+    # The close waits until the download has received data, so a server that
+    # never answers shows up as such, not as a close that did not work. With
+    # -WhileWaiting it closes as soon as the row appears, while the connection
+    # still waits for the server's first byte.
+    # Returns the id, the close command's result, whether curl still ran and
+    # what it had received at the close, curl's exit code, run time and time
+    # after the close, and the list read after curl ended.
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [switch]$WhileWaiting
+    )
     Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $url)
+        param($dir, $url, $whileWaiting)
         $cli = Join-Path $dir 'rosetun.exe'
         $hostName = ([uri]$url).Host
         $poller = Start-Job -ScriptBlock {
@@ -2020,8 +2034,12 @@ function Invoke-RosetunConnectionClose {
         $id = ''
         $closeExit = $null
         $closeOutput = ''
+        $closeAt = $null
+        $runningAtClose = $false
+        $downAtClose = $null
         $curlExit = $null
         $seconds = $null
+        $afterClose = $null
         $after = @()
         $encoding = [Console]::OutputEncoding
         [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -2033,29 +2051,52 @@ function Invoke-RosetunConnectionClose {
             $start.UseShellExecute = $false
             $watch = [Diagnostics.Stopwatch]::StartNew()
             $curl = [Diagnostics.Process]::Start($start)
-            Start-Sleep -Seconds 3
-            $during = @(& $cli connections 2>&1 | ForEach-Object { "$_" })
-            $rows = @(foreach ($line in $during) {
-                    $columns = $line -split "`t"
-                    if ($columns.Count -ge 9 -and $columns[0] -eq 'active' -and
-                        $columns[7] -like "${hostName}:*" -and $columns[1] -ne '-') {
-                        [pscustomobject]@{ Id = $columns[1]; Program = $columns[8] }
-                    }
-                })
-            $row = @($rows | Where-Object { $_.Program -like '*\curl.exe' }) + $rows | Select-Object -First 1
+            # A dead server sends no byte, so waiting longer for data proves nothing.
+            $limitSeconds = if ($whileWaiting) { 5 } else { 15 }
+            $pollMilliseconds = if ($whileWaiting) { 200 } else { 500 }
+            $row = $null
+            $during = @()
+            while (-not $row -and -not $curl.HasExited -and $watch.Elapsed.TotalSeconds -lt $limitSeconds) {
+                Start-Sleep -Milliseconds $pollMilliseconds
+                $during = @(& $cli connections 2>&1 | ForEach-Object { "$_" })
+                $rows = @(foreach ($line in $during) {
+                        $columns = $line -split "`t"
+                        if ($columns.Count -ge 9 -and $columns[0] -eq 'active' -and
+                            $columns[7] -like "${hostName}:*" -and $columns[1] -ne '-' -and
+                            ($whileWaiting -or [long]$columns[4] -gt 0)) {
+                            [pscustomobject]@{ Id = $columns[1]; Down = [long]$columns[4]; Program = $columns[8] }
+                        }
+                    })
+                $row = @(@($rows | Where-Object { $_.Program -like '*\curl.exe' }) + $rows) | Select-Object -First 1
+            }
             if ($row) {
                 $id = $row.Id
-                $closeOutput = @(& $cli connections close $id 2>&1 | ForEach-Object { "$_" }) -join "`n"
+                $downAtClose = $row.Down
+                $runningAtClose = -not $curl.HasExited
+                $closeAt = $watch.Elapsed.TotalSeconds
+                $closeLines = @(& $cli connections close $id 2>&1 | ForEach-Object { "$_" })
                 $closeExit = $LASTEXITCODE
+                # The CLI logs its connection to the service; on one table row
+                # that line and its line break only get in the way.
+                $closeOutput = @($closeLines | Where-Object { $_ -notmatch '\sINFO\s+rosetun:' }) -join ' | '
+            }
+            elseif ($curl.HasExited) {
+                $closeOutput = "curl ended after $([math]::Round($watch.Elapsed.TotalSeconds, 1)) s, before the close"
             }
             else {
-                $closeOutput = "no active row for ${hostName}: " + (($during | Select-Object -First 10) -join ' | ')
+                $missing = if ($whileWaiting) { 'no active row' } else { 'no data' }
+                $closeOutput = "$missing for $hostName within $limitSeconds s: " +
+                    (@($during | Select-Object -First 10) -join ' | ')
+                $curl.Kill()
             }
             if (-not $curl.WaitForExit(90000)) {
                 $curl.Kill()
                 $curl.WaitForExit()
             }
             $seconds = [math]::Round($watch.Elapsed.TotalSeconds, 1)
+            if ($null -ne $closeAt) {
+                $afterClose = [math]::Round($watch.Elapsed.TotalSeconds - $closeAt, 1)
+            }
             $curlExit = $curl.ExitCode
             Start-Sleep -Seconds 2
             $after = @(& $cli connections 2>&1 | ForEach-Object { "$_" })
@@ -2074,11 +2115,14 @@ function Invoke-RosetunConnectionClose {
             Id = $id
             CloseExit = $closeExit
             CloseOutput = $closeOutput
+            RunningAtClose = $runningAtClose
+            DownAtClose = $downAtClose
             CurlExit = $curlExit
             CurlSeconds = $seconds
+            SecondsAfterClose = $afterClose
             After = ($after -join "`n")
         }
-    } -ArgumentList $script:Config.GuestDir, $Url
+    } -ArgumentList $script:Config.GuestDir, $Url, [bool]$WhileWaiting
 }
 
 function Find-RosetunLogText {

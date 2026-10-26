@@ -636,15 +636,32 @@ $longTransferAddresses = Get-RosetunGuestAddresses $longTransferHost
 $closing = Invoke-RosetunConnectionClose -Url (Get-RosetunLongTransferUrl)
 $closedId = $closing.Id
 $closedRows = @(Get-RosetunConnectionRows $closing.After | Where-Object { $closedId -and $_.Id -eq $closedId })
-# curl exits 28 only at --max-time, which the download reaches unless it is closed.
+# Without data the next check would test a server that never answered, not the close.
+Test-Step 'connections' "the download from $longTransferHost receives data before the close" `
+    -Note "$($closing.DownAtClose) B; $($closing.CloseOutput)" {
+    $closedId -and $closing.DownAtClose -gt 0
+}
+# Unclosed, curl runs to --max-time: exit 28, or 35 when the time runs out in
+# the TLS handshake, so the time after the close decides.
 Test-Step 'connections' "closing a download from $longTransferHost by its id ends it early" `
-    -Note "close exit $($closing.CloseExit): $($closing.CloseOutput); curl $($closing.CurlExit) after $($closing.CurlSeconds) s" {
-    $closedId -and $closing.CloseExit -eq 0 -and $null -ne $closing.CurlExit -and
-        $closing.CurlExit -notin @(0, 28) -and $closing.CurlSeconds -lt 30
+    -Note "close exit $($closing.CloseExit): $($closing.CloseOutput); curl $($closing.CurlExit) $($closing.SecondsAfterClose) s after the close" {
+    $closedId -and $closing.CloseExit -eq 0 -and $closing.RunningAtClose -and
+        $null -ne $closing.CurlExit -and $closing.CurlExit -notin @(0, 28) -and
+        $null -ne $closing.SecondsAfterClose -and $closing.SecondsAfterClose -lt 10
 }
 Test-Step 'connections' 'the closed download moves to the closed list' `
     -Note "states: $(@($closedRows | ForEach-Object { $_.State }) -join ',')" {
     $closedRows.Count -gt 0 -and @($closedRows | Where-Object State -ne 'closed').Count -eq 0
+}
+# 192.0.2.1 (documentation range) answers nothing, so the connection waits for
+# the node's dial, which sing-box gives up after about 5 s. Closing it must end
+# it at once, not when the node gives up.
+$waiting = Invoke-RosetunConnectionClose -Url 'https://192.0.2.1/' -WhileWaiting
+Test-Step 'connections' 'closing a connection that waits for a silent server ends it at once' `
+    -Note "close exit $($waiting.CloseExit): $($waiting.CloseOutput); curl $($waiting.CurlExit) $($waiting.SecondsAfterClose) s after the close, $($waiting.CurlSeconds) s in all" {
+    $waiting.Id -and $waiting.CloseExit -eq 0 -and $waiting.RunningAtClose -and
+        $null -ne $waiting.CurlExit -and $waiting.CurlExit -notin @(0, 28) -and
+        $null -ne $waiting.SecondsAfterClose -and $waiting.SecondsAfterClose -lt 3
 }
 Test-Step 'no network' 'connect succeeds after the route returns' { (Get-RosetunState) -eq 'Connected' }
 Test-Step 'no network' 'direct egress is blocked after the route returns' { -not (Test-RosetunDirectEgress) }
