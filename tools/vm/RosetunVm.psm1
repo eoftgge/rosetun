@@ -2045,7 +2045,8 @@ function Invoke-RosetunConnectionClose {
         [Console]::OutputEncoding = [Text.Encoding]::UTF8
         try {
             Start-Sleep -Seconds 3
-            $flags = @('--max-time', '60', '--silent', '--limit-rate', '100k', '--output', 'NUL', $url)
+            # The kill switch blocks Windows certificate revocation lookups outside the tunnel.
+            $flags = @('--max-time', '60', '--silent', '--ssl-no-revoke', '--limit-rate', '100k', '--output', 'NUL', $url)
             $start = [Diagnostics.ProcessStartInfo]::new((Get-Command -Name curl.exe -ErrorAction Stop).Source,
                 ($flags -join ' '))
             $start.UseShellExecute = $false

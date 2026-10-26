@@ -38,6 +38,8 @@ function Test-Step {
         $passed = $false
         $Note = "$_"
     }
+    # A line break in a note splits its row of the table.
+    $Note = $Note -replace '\s*[\r\n]+\s*', ' | '
     $results.Add([pscustomobject]@{
         Result   = if ($passed) { 'PASS' } else { 'FAIL' }
         Scenario = $Scenario
@@ -1066,6 +1068,9 @@ if ($UseHostNode) {
             (Get-RosetunState) -ne 'Connected' -and -not (Test-RosetunTunAdapter) -and
                 -not (Test-RosetunEngineRunning) -and -not (Test-RosetunXrayRunning)
         }
+        # A refusal before protection leaves nothing behind; this tells a leftover
+        # filter from a network hiccup when the next check fails.
+        Test-Step 'XHTTP off' 'no WFP filters remain after the refusal' { -not (Test-RosetunWfpFilters) }
         Test-Step 'XHTTP off' 'direct egress works' { Test-RosetunDirectEgress }
     }
     finally {
