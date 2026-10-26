@@ -6403,6 +6403,127 @@ fn names_are_resolved_directly_only_under_lockdown_without_a_tunnel() {
     }
 }
 
+fn offline() -> Unresolved {
+    Unresolved {
+        error: HelperError::new(ErrorCode::ServerNameUnresolved, "offline"),
+        offline: true,
+    }
+}
+
+fn network_wait_helper(
+    wait: Duration,
+    lookup: fn(&str, u16, NameLookup) -> Result<Vec<IpAddr>, Unresolved>,
+) -> Arc<Helper> {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(CancellableEngine {
+        ready: Arc::new(AtomicBool::new(true)),
+        stopped: Arc::new(AtomicUsize::new(0)),
+        dns: None,
+    }));
+    let helper = Helper::new(
+        engines,
+        Box::new(CountingRouting {
+            reverted: Arc::new(AtomicUsize::new(0)),
+        }),
+        VerboseGate::default(),
+    );
+    {
+        let mut session = helper.session().unwrap();
+        session.network_wait = wait;
+        session.name_lookup = lookup;
+    }
+    Arc::new(helper)
+}
+
+#[test]
+fn a_connect_waits_for_the_network_to_look_up_the_server_name() {
+    static UP: AtomicBool = AtomicBool::new(false);
+    static TRIES: AtomicUsize = AtomicUsize::new(0);
+    let helper = network_wait_helper(Duration::from_secs(5), |_, _, _| {
+        TRIES.fetch_add(1, Ordering::AcqRel);
+        if UP.load(Ordering::Acquire) {
+            Ok(vec![IpAddr::from([127, 0, 0, 1])])
+        } else {
+            Err(offline())
+        }
+    });
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let worker = {
+        let helper = Arc::clone(&helper);
+        thread::spawn(move || helper.connect(&request))
+    };
+    wait_for_stage(&helper, rosetun_config::ConnectStage::WaitingForNetwork);
+    while TRIES.load(Ordering::Acquire) < 3 {
+        thread::sleep(Duration::from_millis(1));
+    }
+    UP.store(true, Ordering::Release);
+
+    worker.join().unwrap().expect("the network came up in time");
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    helper.disconnect().unwrap();
+}
+
+#[test]
+fn a_network_that_stays_down_fails_as_an_unresolved_server_name() {
+    let helper = network_wait_helper(Duration::from_millis(100), |_, _, _| Err(offline()));
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let started = Instant::now();
+
+    let error = helper.connect(&request).expect_err("the network never came up");
+    assert_eq!(error.code, ErrorCode::ServerNameUnresolved);
+    assert!(started.elapsed() >= Duration::from_millis(100));
+    assert!(matches!(
+        helper.status().state,
+        ConnectionState::Failed {
+            failure_kind: Some(rosetun_config::FailureKind::ServerNameUnresolved),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_name_that_does_not_exist_fails_without_waiting() {
+    static TRIES: AtomicUsize = AtomicUsize::new(0);
+    let helper = network_wait_helper(Duration::from_secs(30), |_, _, _| {
+        TRIES.fetch_add(1, Ordering::AcqRel);
+        Err(Unresolved {
+            error: HelperError::new(ErrorCode::ServerNameUnresolved, "not found"),
+            offline: false,
+        })
+    });
+    let started = Instant::now();
+
+    let error = helper
+        .connect(&connect_request())
+        .expect_err("the name does not exist");
+    assert_eq!(error.code, ErrorCode::ServerNameUnresolved);
+    assert_eq!(TRIES.load(Ordering::Acquire), 1);
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn disconnect_ends_the_wait_for_the_network_at_once() {
+    let helper = network_wait_helper(Duration::from_secs(30), |_, _, _| Err(offline()));
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let worker = {
+        let helper = Arc::clone(&helper);
+        thread::spawn(move || helper.connect(&request))
+    };
+    wait_for_stage(&helper, rosetun_config::ConnectStage::WaitingForNetwork);
+    let started = Instant::now();
+
+    helper.disconnect().expect("cancellation is accepted while waiting");
+    assert_eq!(
+        worker.join().unwrap().unwrap_err().code,
+        ErrorCode::Cancelled
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(helper.status(), Status::default());
+}
+
 #[derive(Debug)]
 struct SlowCheckEngine {
     checked: Arc<AtomicBool>,

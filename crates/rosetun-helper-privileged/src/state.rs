@@ -90,6 +90,14 @@ const NETWORK_GRACE: Duration = Duration::from_secs(15);
 const NETWORK_DNS_TIMEOUT: Duration = Duration::from_secs(5);
 /// A wall-clock jump this large between two ticks means the machine slept.
 const SLEEP_GAP: Duration = Duration::from_secs(30);
+/// Right after power-on the adapter is up before the network carries
+/// anything, and a connect at startup fails at once without this wait.
+#[cfg(not(test))]
+const NETWORK_WAIT: Duration = Duration::from_secs(30);
+#[cfg(not(test))]
+const NETWORK_WAIT_INTERVAL: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const NETWORK_WAIT_INTERVAL: Duration = Duration::from_millis(10);
 
 #[cfg(test)]
 fn test_physical_interface(_: &str) -> Option<String> {
@@ -254,6 +262,9 @@ struct Session {
     server_check_grace: Duration,
     watchdog_timing: WatchdogTiming,
     adapter_lookup: fn(&str) -> std::io::Result<bool>,
+    name_lookup: fn(&str, u16, NameLookup) -> Result<Vec<IpAddr>, Unresolved>,
+    /// How long a connect waits for the network to look the server name up.
+    network_wait: Duration,
     cancelled: Arc<AtomicBool>,
     lists: Option<Arc<Mutex<ListStore>>>,
     list_run_dir: Option<PathBuf>,
@@ -347,6 +358,11 @@ impl Helper {
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
                 #[cfg(test)]
                 adapter_lookup: |_| Ok(false),
+                name_lookup: lookup_name,
+                #[cfg(not(test))]
+                network_wait: NETWORK_WAIT,
+                #[cfg(test)]
+                network_wait: Duration::ZERO,
             }),
         }
     }
@@ -1606,6 +1622,48 @@ impl Session {
         self.stage(rosetun_config::ConnectStage::StartingEngine)
     }
 
+    /// The addresses of the main node's server. While the network is not up
+    /// yet it tries again every `NETWORK_WAIT_INTERVAL` up to `network_wait`;
+    /// a name that does not exist fails at once.
+    fn resolve_server(
+        &self,
+        server: &str,
+        port: u16,
+        lookup: NameLookup,
+    ) -> Result<Vec<IpAddr>, HelperError> {
+        let started = Instant::now();
+        let mut waiting = false;
+        loop {
+            let failure = match (self.name_lookup)(server, port, lookup) {
+                Ok(addresses) => {
+                    if waiting {
+                        let elapsed_ms = started.elapsed().as_millis();
+                        tracing::info!(elapsed_ms, "the network is up");
+                        self.stage(rosetun_config::ConnectStage::StartingEngine)?;
+                    }
+                    return Ok(addresses);
+                }
+                Err(failure) => failure,
+            };
+            let left = self.network_wait.saturating_sub(started.elapsed());
+            if !failure.offline || left.is_zero() {
+                if waiting {
+                    let elapsed_ms = started.elapsed().as_millis();
+                    tracing::info!(elapsed_ms, "stopped waiting for the network");
+                }
+                let error = &failure.error;
+                tracing::warn!(%server, %error, ?lookup, "failed to resolve the VPN endpoint");
+                return Err(failure.error);
+            }
+            if !waiting {
+                tracing::info!(?lookup, "waiting for the network to look up the server name");
+                self.stage(rosetun_config::ConnectStage::WaitingForNetwork)?;
+                waiting = true;
+            }
+            sleep_cancellable(left.min(NETWORK_WAIT_INTERVAL), &self.cancelled)?;
+        }
+    }
+
     fn stage(&self, stage: rosetun_config::ConnectStage) -> Result<(), HelperError> {
         let mut status = self
             .status
@@ -1818,7 +1876,11 @@ impl Session {
         } else if mode == StartMode::ProtectedReconnect {
             Some(protected_endpoint(node, self.last_endpoint.as_ref())?)
         } else if settings.engine == rosetun_config::EngineKind::SingBox {
-            Some(select_endpoint(&resolve(&node.server, node.port, lookup)?)?)
+            Some(select_endpoint(&self.resolve_server(
+                &node.server,
+                node.port,
+                lookup,
+            )?)?)
         } else {
             None
         };
@@ -2859,39 +2921,57 @@ impl NameLookup {
 /// Matches the server check's wait for the system resolver.
 const DIRECT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn resolve(server: &str, port: u16, lookup: NameLookup) -> Result<Vec<IpAddr>, HelperError> {
-    let result = resolve_quiet(server, port, lookup);
-    if let Err(error) = &result {
-        tracing::warn!(%server, %error, ?lookup, "failed to resolve the VPN endpoint");
-    }
-    result
+/// A server name that was not looked up.
+#[derive(Debug)]
+struct Unresolved {
+    error: HelperError,
+    /// The network is not up yet, so a later try may succeed.
+    offline: bool,
 }
 
 fn resolve_quiet(server: &str, port: u16, lookup: NameLookup) -> Result<Vec<IpAddr>, HelperError> {
+    lookup_name(server, port, lookup).map_err(|failure| failure.error)
+}
+
+fn lookup_name(server: &str, port: u16, lookup: NameLookup) -> Result<Vec<IpAddr>, Unresolved> {
     // The status carries this message to the GUI and to reports; the
-    // server's name stays in the log line of `resolve`.
-    let failed = |error: &dyn std::fmt::Display| {
-        HelperError::new(
+    // server's name stays in the log line of `Session::resolve_server`.
+    let failed = |error: &dyn std::fmt::Display, offline| Unresolved {
+        error: HelperError::new(
             ErrorCode::ServerNameUnresolved,
             format!("failed to resolve the VPN server name: {error}"),
-        )
+        ),
+        offline,
     };
     let addresses = match lookup {
         NameLookup::System => (server, port)
             .to_socket_addrs()
-            .map_err(|error| failed(&error))?
+            .map_err(|error| {
+                let offline = rosetun_dns::wire::labels(server).is_some()
+                    && !rosetun_dns::has_system_servers();
+                failed(&error, offline)
+            })?
             .map(|address| address.ip())
             .collect::<Vec<_>>(),
         NameLookup::Direct => {
-            rosetun_dns::resolve(server, DIRECT_RESOLVE_TIMEOUT).map_err(|error| failed(&error))?
+            rosetun_dns::resolve(server, DIRECT_RESOLVE_TIMEOUT).map_err(|error| {
+                let offline = matches!(
+                    error,
+                    rosetun_dns::ResolveError::NoServers | rosetun_dns::ResolveError::Unreachable
+                );
+                failed(&error, offline)
+            })?
         }
     };
 
     if addresses.is_empty() {
-        return Err(HelperError::new(
-            ErrorCode::ServerNameUnresolved,
-            "the VPN server name resolved to no addresses",
-        ));
+        return Err(Unresolved {
+            error: HelperError::new(
+                ErrorCode::ServerNameUnresolved,
+                "the VPN server name resolved to no addresses",
+            ),
+            offline: false,
+        });
     }
 
     Ok(addresses)
