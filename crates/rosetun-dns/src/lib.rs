@@ -38,6 +38,9 @@ pub enum ResolveError {
     NotFound,
     NoServers,
     NoAnswer,
+    /// Every server failed at the socket in every round: the network is
+    /// not up yet.
+    Unreachable,
 }
 
 impl fmt::Display for ResolveError {
@@ -47,11 +50,18 @@ impl fmt::Display for ResolveError {
             Self::NotFound => "the name does not exist",
             Self::NoServers => "the network adapter has no DNS server",
             Self::NoAnswer => "no DNS server answered",
+            Self::Unreachable => "the network is not reachable",
         })
     }
 }
 
 impl std::error::Error for ResolveError {}
+
+/// Whether a network adapter with a default route has a DNS server, as a
+/// sign that the network is up even for the system resolver.
+pub fn has_system_servers() -> bool {
+    !servers::system().is_empty()
+}
 
 /// The addresses of `host`, IPv4 first, from an IP literal, the hosts file
 /// or the DNS servers of the default network adapter, within `timeout`.
@@ -109,13 +119,15 @@ fn resolve_with(
             Outcome::Alias(target) => name = target,
             Outcome::NoData | Outcome::NotFound => return Err(ResolveError::NotFound),
             Outcome::Failed => return Err(ResolveError::NoAnswer),
+            Outcome::Unreachable => return Err(ResolveError::Unreachable),
         }
     }
     Err(ResolveError::NotFound)
 }
 
 /// The first answer that settles the name; a server that fails or stays
-/// silent passes the question to the next one.
+/// silent passes the question to the next one. `Unreachable` only when no
+/// server got as far as a timeout or a reply.
 fn ask_servers(
     name: &str,
     labels: &[&[u8]],
@@ -123,19 +135,27 @@ fn ask_servers(
     rounds: &[Duration],
     deadline: Instant,
 ) -> Outcome {
-    for wait in rounds {
+    let mut asked = false;
+    let mut reached = false;
+    'rounds: for wait in rounds {
         for server in servers {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Outcome::Failed;
+                break 'rounds;
             }
+            asked = true;
             match exchange::ask(*server, name, labels, (*wait).min(remaining)) {
-                Outcome::Failed => {}
+                Outcome::Unreachable => {}
+                Outcome::Failed => reached = true,
                 settled => return settled,
             }
         }
     }
-    Outcome::Failed
+    if asked && !reached {
+        Outcome::Unreachable
+    } else {
+        Outcome::Failed
+    }
 }
 
 #[cfg(test)]
@@ -228,6 +248,12 @@ mod tests {
         address
     }
 
+    /// A loopback port nobody listens on: the system answers with an ICMP
+    /// unreachable, a reset on Windows and a refusal on Linux.
+    fn closed() -> SocketAddr {
+        UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+    }
+
     const V6: [u8; 16] = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7];
 
     fn zone(name: &str, kind: u16) -> Option<(u16, Records)> {
@@ -315,6 +341,37 @@ mod tests {
         assert_eq!(
             lookup("node.example.com", &[silent(), refusing]),
             Err(ResolveError::NoAnswer)
+        );
+    }
+
+    #[test]
+    fn servers_that_fail_at_the_socket_mean_an_unreachable_network() {
+        let started = Instant::now();
+        assert_eq!(
+            lookup("node.example.com", &[closed(), closed()]),
+            Err(ResolveError::Unreachable)
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn one_silent_server_among_unreachable_ones_is_no_answer() {
+        assert_eq!(
+            lookup("node.example.com", &[closed(), silent()]),
+            Err(ResolveError::NoAnswer)
+        );
+    }
+
+    #[test]
+    fn an_answering_server_after_unreachable_ones_settles_the_name() {
+        let server = serve(zone, false);
+        assert_eq!(
+            lookup("node.example.com", &[closed(), server]),
+            Ok(vec![IpAddr::from([192, 0, 2, 7]), IpAddr::from(V6)])
+        );
+        assert_eq!(
+            lookup("missing.example.com", &[closed(), server]),
+            Err(ResolveError::NotFound)
         );
     }
 

@@ -19,6 +19,9 @@ pub(crate) enum Outcome {
     NotFound,
     /// No usable answer: timeout, refusal, server failure.
     Failed,
+    /// The socket failed before any reply: the network is not up yet, or
+    /// nothing listens there (an ICMP unreachable comes back as an error).
+    Unreachable,
 }
 
 pub(crate) fn random_id() -> u16 {
@@ -47,11 +50,11 @@ pub(crate) fn ask(server: SocketAddr, name: &str, labels: &[&[u8]], timeout: Dur
         socket.connect(server)?;
         Ok(socket)
     }) else {
-        return Outcome::Failed;
+        return Outcome::Unreachable;
     };
     for question in &questions {
         if socket.send(question).is_err() {
-            return Outcome::Failed;
+            return Outcome::Unreachable;
         }
     }
 
@@ -82,7 +85,9 @@ pub(crate) fn ask(server: SocketAddr, name: &str, labels: &[&[u8]], timeout: Dur
                         | io::ErrorKind::WouldBlock
                         | io::ErrorKind::Interrupted
                 ) => {}
-            // An ICMP port unreachable shows up as a reset on Windows.
+            // An ICMP port unreachable shows up as a reset on Windows and as
+            // a refusal elsewhere.
+            Err(_) if answers.iter().all(Option::is_none) => return Outcome::Unreachable,
             Err(_) => break,
         }
     }
