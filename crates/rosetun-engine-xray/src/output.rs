@@ -166,7 +166,9 @@ fn destination_end(line: &str, start: usize) -> usize {
 
 fn is_local_destination(destination: &str) -> bool {
     let host = match destination.strip_prefix('[') {
-        Some(bracketed) => bracketed.split_once(']').map_or(bracketed, |(host, _)| host),
+        Some(bracketed) => bracketed
+            .split_once(']')
+            .map_or(bracketed, |(host, _)| host),
         None => destination
             .rsplit_once(':')
             .filter(|(_, port)| port.bytes().all(|byte| byte.is_ascii_digit()))
