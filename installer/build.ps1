@@ -86,7 +86,10 @@ if (-not ((Test-Path -LiteralPath $binary -PathType Leaf) -and
     $unpacked = Join-Path $tempDir 'unpacked'
     New-Item -ItemType Directory -Path $tempDir | Out-Null
     try {
-        & curl.exe --fail --silent --show-error --location --output $archive $url
+        # The pinned hash below vouches for the file, so a revocation server that
+        # cannot be reached (CRYPT_E_REVOCATION_OFFLINE) must not stop the build;
+        # a certificate known to be revoked still does.
+        & curl.exe --fail --silent --show-error --location --ssl-revoke-best-effort --output $archive $url
         if ($LASTEXITCODE -ne 0) {
             throw "Downloading $url failed with curl exit code $LASTEXITCODE."
         }
@@ -114,7 +117,8 @@ $xrayTemp = Join-Path ([IO.Path]::GetTempPath()) ("rosetun-xray-" + [guid]::NewG
 New-Item -ItemType Directory -Path $xrayTemp | Out-Null
 try {
     $archive = Join-Path $xrayTemp 'Xray-windows-64.zip'
-    & curl.exe --fail --silent --show-error --location --output $archive $xrayUrl
+    # As for sing-box: the pinned hash vouches for the archive.
+    & curl.exe --fail --silent --show-error --location --ssl-revoke-best-effort --output $archive $xrayUrl
     if ($LASTEXITCODE -ne 0) {
         throw "Downloading $xrayUrl failed with curl exit code $LASTEXITCODE."
     }
