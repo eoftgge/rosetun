@@ -45,7 +45,7 @@ $script:Config = @{
             $env:ROSETUN_LONG_TRANSFER_URL
         }
         else {
-            'https://mirror.yandex.ru/debian/dists/bookworm/main/Contents-amd64.gz'
+            'https://mirror.truenetwork.ru/debian/dists/bookworm/main/Contents-amd64.gz'
         })
 }
 $script:Session = $null
