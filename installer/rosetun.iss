@@ -290,8 +290,12 @@ begin
     RunHidden(ExpandConstant('{app}\xray.exe'), 'version', ResultCode);
     RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--install-service', ResultCode);
     if ResultCode <> 0 then
+    begin
       SuppressibleMsgBox(FmtMessage(CustomMessage('ServiceFailed'), [IntToStr(ResultCode)]),
         mbError, MB_OK, IDOK);
+      Log('Service setup failed with exit code ' + IntToStr(ResultCode));
+      InstallFailureCode := 4;
+    end;
   end;
 end;
 
