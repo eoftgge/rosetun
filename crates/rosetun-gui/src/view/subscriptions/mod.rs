@@ -224,17 +224,19 @@ fn menu_link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     }
 }
 
-fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, value: &str) {
-    if display::safe_web_url(value).is_some() {
+/// `shown` is the link as `rosetun_core::provider_link` cleaned it; `link`
+/// itself only goes to the browser.
+fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, link: &str, shown: &str) {
+    if display::safe_web_url(link).is_some() {
         let response = widgets::link(ui, label, true);
         if response.clicked() {
-            display::open_web_link(ui.ctx(), value);
+            display::open_web_link(ui.ctx(), link);
         }
-        response.on_hover_text(rosetun_core::terminal_text(&state.text(value)));
+        response.on_hover_text(state.text(shown));
     } else {
         ui.add(
             egui::Label::new(
-                RichText::new(state.text(&i18n::plain_link(label, value))).color(theme::TEXT_DIM),
+                RichText::new(state.text(&i18n::plain_link(label, shown))).color(theme::TEXT_DIM),
             )
             .truncate(),
         );

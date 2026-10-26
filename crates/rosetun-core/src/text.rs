@@ -33,18 +33,45 @@ pub fn provider_text(text: &str, subscription_url: &str) -> String {
         output = output.replace(&secret, &crate::redacted_subscription_url(subscription_url));
     }
 
-    if let Ok(url) = url::Url::parse(subscription_url) {
-        let mut path_and_query = url.path().to_owned();
-        if let Some(query) = url.query() {
-            path_and_query.push('?');
-            path_and_query.push_str(query);
-        }
-        if path_and_query.len() > 8 {
-            output = output.replace(&terminal_text(&path_and_query), "/…");
-        }
+    if let Some(path_and_query) = token_path(subscription_url) {
+        output = output.replace(&terminal_text(&path_and_query), "/…");
     }
 
     output
+}
+
+/// A provider's support or web page link as it may be shown, or `None` when
+/// the link is the subscription itself: panels often put the subscription
+/// link there, and its token must not reach a screen or a pasted issue.
+pub fn provider_link(link: &str, subscription_url: &str) -> Option<String> {
+    let link = link.trim();
+    if link.is_empty() || link.trim_end_matches('/') == subscription_url.trim().trim_end_matches('/')
+    {
+        return None;
+    }
+    if let (Some(subscription_path), Some(link_path)) =
+        (token_path(subscription_url), url_path_and_query(link))
+        && link_path.trim_end_matches('/') == subscription_path.trim_end_matches('/')
+    {
+        return None;
+    }
+    Some(provider_text(link, subscription_url))
+}
+
+/// The path and query of a subscription link when they are long enough to
+/// carry its token; a short path such as `/sub` is shown as it is.
+fn token_path(subscription_url: &str) -> Option<String> {
+    url_path_and_query(subscription_url).filter(|path_and_query| path_and_query.len() > 8)
+}
+
+fn url_path_and_query(link: &str) -> Option<String> {
+    let url = url::Url::parse(link).ok()?;
+    let mut path_and_query = url.path().to_owned();
+    if let Some(query) = url.query() {
+        path_and_query.push('?');
+        path_and_query.push_str(query);
+    }
+    Some(path_and_query)
 }
 
 pub fn fetch_error_message(error: &FetchError, subscription_url: &str) -> String {

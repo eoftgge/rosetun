@@ -419,3 +419,40 @@ fn list_preserves_provider_links_and_redacts_subscription_secrets() {
     assert!(!stdout.contains("private-token"));
     assert!(!stdout.contains("query-secret"));
 }
+
+#[test]
+fn list_hides_provider_links_that_are_the_subscription() {
+    let directory = TestDirectory::new();
+    let config = serde_json::json!({
+        "subscriptions": [{
+            "id": "1",
+            "name": "Example",
+            "url": "https://sub.example.com/private-token?key=query-secret",
+            "nodes": [],
+            "support_url": "https://sub.example.com/private-token?key=query-secret",
+            "web_page_url": "https://panel.example.com/private-token?key=query-secret"
+        }, {
+            "id": "2",
+            "name": "Second",
+            "url": "https://sub.example.com/other-token",
+            "nodes": [],
+            "web_page_url": "https://panel.example.com/info/other-token"
+        }]
+    });
+    fs::write(
+        directory.config_path(),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+
+    let output = directory.run(&["sub", "list"]);
+    assert_success(&output);
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("support:"), "{stdout}");
+    assert_eq!(stdout.matches("web page:").count(), 1, "{stdout}");
+    assert!(stdout.contains("web page: https://panel.example.com/info/…"));
+    assert!(!stdout.contains("private-token"));
+    assert!(!stdout.contains("other-token"));
+    assert!(!stdout.contains("query-secret"));
+}

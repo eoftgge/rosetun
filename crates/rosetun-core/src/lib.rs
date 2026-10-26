@@ -71,7 +71,7 @@ pub use subscriptions::{
 pub use system_checks::{CheckDetail, CheckKind, CheckResult, CheckStatus, check_system};
 pub use text::{
     expiry_text, fetch_error_message, node_address, node_protocol, node_tls, node_transport,
-    provider_text, terminal_text, traffic_text, updated_text,
+    provider_link, provider_text, terminal_text, traffic_text, updated_text,
 };
 pub use update::{UpdateReport, group_skipped};
 pub use updates::{Release, UpdateCheckError, is_newer, latest_release};

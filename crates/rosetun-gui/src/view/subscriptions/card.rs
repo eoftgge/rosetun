@@ -334,13 +334,18 @@ pub(super) fn subscription_card(
                             }
                         });
                 }
-                if subscription.support_url.is_some() || subscription.web_page_url.is_some() {
+                let shown_link = |link| {
+                    rosetun_core::provider_link(link, &subscription.url).map(|shown| (link, shown))
+                };
+                let support = subscription.support_url.as_deref().and_then(shown_link);
+                let web_page = subscription.web_page_url.as_deref().and_then(shown_link);
+                if support.is_some() || web_page.is_some() {
                     ui.horizontal(|ui| {
-                        if let Some(value) = &subscription.support_url {
-                            provider_link(ui, state, &tr!("support"), value);
+                        if let Some((link, shown)) = &support {
+                            provider_link(ui, state, &tr!("support"), link, shown);
                         }
-                        if let Some(value) = &subscription.web_page_url {
-                            provider_link(ui, state, &tr!("website"), value);
+                        if let Some((link, shown)) = &web_page {
+                            provider_link(ui, state, &tr!("website"), link, shown);
                         }
                     });
                 }

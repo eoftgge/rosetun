@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rosetun_config::{Subscription, SubscriptionId};
 use rosetun_core::{
     SkipReason, Timeouts, expiry_text, node_address, node_protocol, node_tls, node_transport,
-    provider_text, terminal_text, traffic_text, updated_text,
+    provider_link, provider_text, terminal_text, traffic_text, updated_text,
 };
 
 use crate::subcommands::SubCommand;
@@ -225,11 +225,19 @@ fn print_info(subscription: &Subscription, now: u64) {
     if let Some(announce) = &subscription.announce {
         println!("  announce: {}", provider_text(announce, &subscription.url));
     }
-    if let Some(url) = &subscription.support_url {
-        println!("  support: {}", terminal_text(url));
+    if let Some(link) = subscription
+        .support_url
+        .as_deref()
+        .and_then(|link| provider_link(link, &subscription.url))
+    {
+        println!("  support: {link}");
     }
-    if let Some(url) = &subscription.web_page_url {
-        println!("  web page: {}", terminal_text(url));
+    if let Some(link) = subscription
+        .web_page_url
+        .as_deref()
+        .and_then(|link| provider_link(link, &subscription.url))
+    {
+        println!("  web page: {link}");
     }
 }
 
