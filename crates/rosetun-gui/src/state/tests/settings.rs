@@ -794,3 +794,56 @@ fn xhttp_without_xray_blocks_connect_and_offers_xray_first() {
     ));
     assert!(matches!(state.take_xray_connect(), Some(Job::Connect(_))));
 }
+
+fn state_with_unreadable_config() -> State {
+    let mut state = State::default();
+    state.reduce(WorkerEvent::ConfigError(ConfigWorkerError::Store(
+        StoreError::NoConfigDir,
+    )));
+    state
+}
+
+#[cfg(windows)]
+#[test]
+fn unreadable_settings_still_open_their_folder_and_collect_a_report() {
+    let mut state = state_with_unreadable_config();
+    state.settings.screen.config_folder = Some(PathBuf::from(r"C:\Users\Test\Rosetun"));
+    assert!(state.config_unreadable());
+    assert!(state.can_open_folders());
+    assert!(state.can_save_report());
+    assert!(!state.can_edit_settings());
+    assert!(!state.can_reset_settings());
+
+    assert!(matches!(
+        state.act(Action::OpenFolder(AboutFolder::Config)),
+        Some(Job::OpenFolder(path)) if path.as_path() == std::path::Path::new(r"C:\Users\Test\Rosetun")
+    ));
+    state.reduce(WorkerEvent::OpenFolder(Ok(())));
+    assert!(matches!(
+        state.act(Action::SaveReport),
+        Some(Job::SaveReport { .. })
+    ));
+    assert!(state.act(Action::RequestResetSettings).is_none());
+    assert!(state.act(Action::ConfirmResetSettings).is_none());
+}
+
+#[test]
+fn unreadable_settings_keep_their_error_and_close_the_window() {
+    let state = State::default();
+    assert!(state.close_hides_window());
+    assert!(!state.can_save_report());
+
+    let mut state = state_with_unreadable_config();
+    assert!(!state.close_hides_window());
+    assert!(state.act(Action::DismissConfigError).is_none());
+    assert!(state.config_error.is_some());
+
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config: AppConfig::default(),
+    });
+    assert!(!state.config_unreadable());
+    assert!(state.close_hides_window());
+    state.config.interface.close_to_tray = false;
+    assert!(!state.close_hides_window());
+}

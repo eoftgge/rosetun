@@ -217,7 +217,7 @@ impl App {
     fn hides_on_close(&self) -> bool {
         self.tray.is_some()
             && !self.quitting
-            && (!self.state.config_ready || self.state.config.interface.close_to_tray)
+            && self.state.close_hides_window()
     }
 
     #[cfg(not(windows))]

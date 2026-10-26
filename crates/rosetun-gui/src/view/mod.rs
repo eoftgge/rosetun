@@ -82,7 +82,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                     ..Default::default()
                 })
                 .show(ui, |ui| {
-                    if let Some(error) = &state.config_error
+                    if state.config_unreadable() {
+                        config_unreadable_banner(ui, state, &mut actions);
+                    } else if let Some(error) = &state.config_error
                         && widgets::dismissible_error(
                             ui,
                             &state.text(&errors::config_worker(crate::i18n::language(), error)),
@@ -169,6 +171,44 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     }
     window_frame::resize_edges(ui);
     actions
+}
+
+/// Shown instead of a dismissible error while the settings cannot be read: the
+/// rest of the window has nothing to work with, so the way out stays in view.
+fn config_unreadable_banner(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let mut message = tr!("config-unreadable");
+    if let Some(error) = &state.config_error {
+        message.push('\n');
+        message.push_str(&errors::config_worker(crate::i18n::language(), error));
+    }
+    #[cfg(windows)]
+    {
+        let buttons = [
+            (tr!("open-settings-folder"), state.can_open_folders()),
+            (
+                if state.settings.screen.report_running {
+                    tr!("report-collecting")
+                } else {
+                    tr!("report-save")
+                },
+                state.can_save_report(),
+            ),
+        ];
+        let buttons = buttons
+            .iter()
+            .map(|(label, enabled)| (label.as_ref(), *enabled))
+            .collect::<Vec<_>>();
+        match widgets::error_with_actions(ui, &state.text(&message), &buttons) {
+            Some(0) => actions.push(Action::OpenFolder(crate::state::AboutFolder::Config)),
+            Some(_) => actions.push(Action::SaveReport),
+            None => {}
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = actions;
+        widgets::error_with_actions(ui, &state.text(&message), &[]);
+    }
 }
 
 fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {

@@ -144,6 +144,30 @@ impl State {
         self.config_ready && !self.operations.settings
     }
 
+    /// The settings file could not be read. Nothing is loaded and nothing may
+    /// be written over it, but its folder and a report stay within reach.
+    pub(crate) fn config_unreadable(&self) -> bool {
+        !self.config_ready && self.config_error.is_some()
+    }
+
+    pub(crate) fn can_open_folders(&self) -> bool {
+        (self.config_ready || self.config_unreadable()) && !self.operations.settings
+    }
+
+    pub(crate) fn can_save_report(&self) -> bool {
+        (self.config_ready || self.config_unreadable()) && !self.settings.screen.report_running
+    }
+
+    /// Whether closing the window hides it to the tray. With unreadable
+    /// settings there is nothing to keep running, so closing quits.
+    pub(crate) fn close_hides_window(&self) -> bool {
+        if self.config_ready {
+            self.config.interface.close_to_tray
+        } else {
+            self.config_error.is_none()
+        }
+    }
+
     pub(super) fn start_settings(&mut self, job: Job) -> Option<Job> {
         self.operations.settings = true;
         self.operation_error = None;
@@ -425,7 +449,7 @@ impl State {
             }
             #[cfg(windows)]
             Action::SaveReport => {
-                if self.config_ready && !self.settings.screen.report_running {
+                if self.can_save_report() {
                     self.settings.screen.report_running = true;
                     self.settings.screen.report_saved = None;
                     self.operation_error = None;
@@ -465,7 +489,7 @@ impl State {
                     AboutFolder::Config => &self.settings.screen.config_folder,
                     AboutFolder::Licenses => &self.settings.screen.licenses_folder,
                 };
-                if self.can_edit_settings()
+                if self.can_open_folders()
                     && let Some(path) = path
                 {
                     return self.start_settings(Job::OpenFolder(path.clone()));

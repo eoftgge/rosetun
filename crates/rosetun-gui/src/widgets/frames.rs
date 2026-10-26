@@ -22,6 +22,38 @@ pub(crate) fn dismissible_error(ui: &mut egui::Ui, message: &str) -> bool {
     dismissible_error_with_action(ui, message, None).0
 }
 
+/// An error that stays until its cause is gone, with a row of buttons; returns
+/// the index of the clicked one.
+pub(crate) fn error_with_actions(
+    ui: &mut egui::Ui,
+    message: &str,
+    actions: &[(&str, bool)],
+) -> Option<usize> {
+    card_frame()
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.colored_label(ERROR, crate::constants::ERROR_MARK);
+                ui.vertical(|ui| {
+                    ui.add(egui::Label::new(message).wrap());
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| {
+                        let mut clicked = None;
+                        for (index, (label, enabled)) in actions.iter().enumerate() {
+                            if crate::widgets::outline_button(ui, *label, *enabled).clicked() {
+                                clicked = Some(index);
+                            }
+                        }
+                        clicked
+                    })
+                    .inner
+                })
+                .inner
+            })
+            .inner
+        })
+        .inner
+}
+
 pub(crate) fn dismissible_error_with_action(
     ui: &mut egui::Ui,
     message: &str,

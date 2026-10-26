@@ -740,7 +740,11 @@ impl State {
             | Action::DismissOutcome(_)) => return self.act_subscriptions(action),
             Action::DismissOperationError => self.operation_error = None,
             Action::DismissApplyFailure => return self.act_session(Action::DismissApplyFailure),
-            Action::DismissConfigError => self.config_error = None,
+            Action::DismissConfigError => {
+                if !self.config_unreadable() {
+                    self.config_error = None;
+                }
+            }
         }
         None
     }

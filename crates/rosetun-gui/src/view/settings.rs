@@ -654,7 +654,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     } else {
                         tr!("report-save")
                     },
-                    state.config_ready && !state.settings.screen.report_running,
+                    state.can_save_report(),
                 )
                 .clicked()
                 {
@@ -1063,7 +1063,7 @@ fn about_path(
             },
         );
         #[cfg(windows)]
-        if widgets::outline_button(ui, tr!("open-folder"), state.can_edit_settings()).clicked() {
+        if widgets::outline_button(ui, tr!("open-folder"), state.can_open_folders()).clicked() {
             actions.push(Action::OpenFolder(folder));
         }
         #[cfg(not(windows))]
