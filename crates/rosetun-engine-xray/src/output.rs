@@ -128,7 +128,29 @@ pub(crate) fn hide_destinations(line: &str) -> String {
     for marker in ["tcp:", "udp:"] {
         hide_xray_destinations(&mut hidden, marker);
     }
+    hide_lookup_names(&mut hidden);
     rosetun_config::hide_public_addresses(&hidden)
+}
+
+/// Go's resolver names the host it looked up, as in
+/// `dial tcp: lookup node.example.com: no such host`: Xray alone resolves the
+/// node itself, so the name can be the node's.
+fn hide_lookup_names(line: &mut String) {
+    const MARKER: &str = "lookup ";
+    let mut cursor = 0;
+    while let Some(relative) = line[cursor..].find(MARKER) {
+        let start = cursor + relative + MARKER.len();
+        let end = line[start..]
+            .find(char::is_whitespace)
+            .map_or(line.len(), |offset| start + offset);
+        let name_end = start + line[start..end].trim_end_matches(':').len();
+        if name_end == start || line[start..name_end] == *"[hidden]" {
+            cursor = end;
+            continue;
+        }
+        line.replace_range(start..name_end, "[hidden]");
+        cursor = start + "[hidden]".len();
+    }
 }
 
 /// Xray writes a destination as `tcp:host:port` or `udp:host:port`, as in
@@ -259,6 +281,14 @@ mod tests {
             (
                 "[Warning] failed to open connection to tcp:198.51.100.9:443: read udp [2001:db8::1]:5300->203.0.113.7:53: refused",
                 "[Warning] failed to open connection to tcp:[hidden]: read udp [hidden]:5300->[hidden]:53: refused",
+            ),
+            (
+                "[Warning] [7] transport/internet: failed to dial > dial tcp: lookup node.example.com: no such host",
+                "[Warning] [7] transport/internet: failed to dial > dial tcp: lookup [hidden]: no such host",
+            ),
+            (
+                "[Error] app/dns: lookup node.example.com on 192.168.1.1:53: i/o timeout and lookup  twice",
+                "[Error] app/dns: lookup [hidden] on 192.168.1.1:53: i/o timeout and lookup  twice",
             ),
         ] {
             let hidden = hide_destinations(line);
