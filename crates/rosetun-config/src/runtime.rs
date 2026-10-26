@@ -6,6 +6,9 @@ use crate::{EngineKind, ExitId, NodeId, XrayUse};
 #[serde(rename_all = "snake_case")]
 pub enum ConnectStage {
     WaitingForAdapter,
+    /// The server name cannot be looked up yet: right after power-on the
+    /// adapter is up before the network carries anything.
+    WaitingForNetwork,
     /// Waiting for the engine's version check, which an antivirus can hold up
     /// for half a minute after a cold boot.
     CheckingEngine,

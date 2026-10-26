@@ -280,6 +280,7 @@ pub(crate) fn rate(bytes_per_second: u64) -> String {
 pub(crate) fn stage_label(stage: ConnectStage, xray: bool) -> String {
     match stage {
         ConnectStage::WaitingForAdapter => tr!("stage-waiting"),
+        ConnectStage::WaitingForNetwork => tr!("stage-waiting-network"),
         ConnectStage::CheckingEngine if xray => tr!("stage-checking-engines"),
         ConnectStage::CheckingEngine => tr!("stage-checking-engine"),
         ConnectStage::StartingEngine => tr!("stage-starting"),
