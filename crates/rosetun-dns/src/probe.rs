@@ -2,11 +2,11 @@
 //! transport, for checking the network rather than looking a name up.
 //! `resolve` does not use it.
 
-use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream, UdpSocket};
+use std::io;
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use crate::exchange::{local_address, random_id};
+use crate::exchange::{local_address, random_id, tcp_reply};
 use crate::wire::{self, TextAnswer};
 
 /// A larger UDP reply is dropped; a TCP reply is limited to 64 KiB by its
@@ -95,30 +95,13 @@ fn over_udp(server: SocketAddr, question: &[u8], deadline: Instant) -> Option<Te
 
 /// RFC 7766: the question with a two-byte length prefix, one reply.
 fn over_tcp(server: SocketAddr, question: &[u8], deadline: Instant) -> Option<TextAnswer> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return None;
-    }
-    let mut stream = TcpStream::connect_timeout(&server, remaining).ok()?;
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return None;
-    }
-    stream.set_read_timeout(Some(remaining)).ok()?;
-    stream.set_write_timeout(Some(remaining)).ok()?;
-    let mut message = u16::try_from(question.len()).ok()?.to_be_bytes().to_vec();
-    message.extend_from_slice(question);
-    stream.write_all(&message).ok()?;
-
-    let mut length = [0u8; 2];
-    stream.read_exact(&mut length).ok()?;
-    let mut reply = vec![0u8; usize::from(u16::from_be_bytes(length))];
-    stream.read_exact(&mut reply).ok()?;
+    let reply = tcp_reply(server, question, deadline)?;
     wire::parse_text_answer(&reply, question)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
 

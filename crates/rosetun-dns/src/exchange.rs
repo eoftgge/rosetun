@@ -128,6 +128,14 @@ fn decide(name: &str, answers: &[Option<Option<Answer>>; 2]) -> Outcome {
 
 /// RFC 7766: the same question with a two-byte length prefix.
 fn over_tcp(server: SocketAddr, question: &[u8], deadline: Instant) -> Option<Answer> {
+    let reply = tcp_reply(server, question, deadline)?;
+    wire::parse_answer(&reply, question).filter(|answer| !answer.truncated)
+}
+
+/// Sends `question` over TCP and reads one length-prefixed reply, all by
+/// `deadline`. A read timeout alone restarts with every byte, so a server
+/// trickling its reply would hold the lookup for hours.
+pub(crate) fn tcp_reply(server: SocketAddr, question: &[u8], deadline: Instant) -> Option<Vec<u8>> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return None;
@@ -137,23 +145,90 @@ fn over_tcp(server: SocketAddr, question: &[u8], deadline: Instant) -> Option<An
     if remaining.is_zero() {
         return None;
     }
-    stream.set_read_timeout(Some(remaining)).ok()?;
     stream.set_write_timeout(Some(remaining)).ok()?;
     let mut message = u16::try_from(question.len()).ok()?.to_be_bytes().to_vec();
     message.extend_from_slice(question);
     stream.write_all(&message).ok()?;
 
     let mut length = [0u8; 2];
-    stream.read_exact(&mut length).ok()?;
+    read_by(&mut stream, &mut length, deadline)?;
     let mut reply = vec![0u8; usize::from(u16::from_be_bytes(length))];
-    stream.read_exact(&mut reply).ok()?;
-    wire::parse_answer(&reply, question).filter(|answer| !answer.truncated)
+    read_by(&mut stream, &mut reply, deadline)?;
+    Some(reply)
+}
+
+fn read_by(stream: &mut TcpStream, buffer: &mut [u8], deadline: Instant) -> Option<()> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        stream.set_read_timeout(Some(remaining)).ok()?;
+        match stream.read(&mut buffer[filled..]) {
+            Ok(0) => return None,
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    Some(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+    use std::thread;
+
     use super::*;
     use crate::wire::test_support::{a, aaaa, cname, reply};
+
+    /// A TCP server that answers one A question for `n.example.com` with
+    /// 192.0.2.1, sending the reply in pieces of `chunk` bytes `pause` apart.
+    fn trickling_server(chunk: usize, pause: Duration) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut length = [0u8; 2];
+            stream.read_exact(&mut length).unwrap();
+            let mut question = vec![0u8; usize::from(u16::from_be_bytes(length))];
+            stream.read_exact(&mut question).unwrap();
+            let answer = reply(&question, 0x8180, &[a("n.example.com", [192, 0, 2, 1])]);
+            let mut message = u16::try_from(answer.len()).unwrap().to_be_bytes().to_vec();
+            message.extend_from_slice(&answer);
+            for piece in message.chunks(chunk) {
+                if stream.write_all(piece).is_err() {
+                    return;
+                }
+                thread::sleep(pause);
+            }
+        });
+        address
+    }
+
+    fn a_question() -> Vec<u8> {
+        wire::query(7, &wire::labels("n.example.com").unwrap(), TYPE_A)
+    }
+
+    #[test]
+    fn a_reply_over_tcp_is_read_whole() {
+        let server = trickling_server(usize::MAX, Duration::ZERO);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let answer = over_tcp(server, &a_question(), deadline).unwrap();
+        assert_eq!(answer.rcode, 0);
+    }
+
+    #[test]
+    fn a_reply_trickling_over_tcp_ends_at_the_deadline() {
+        let server = trickling_server(1, Duration::from_millis(100));
+        let limit = Duration::from_millis(400);
+        let started = Instant::now();
+        assert_eq!(over_tcp(server, &a_question(), started + limit), None);
+        assert!(started.elapsed() < limit + Duration::from_millis(300));
+    }
 
     fn answer(
         question_name: &str,
