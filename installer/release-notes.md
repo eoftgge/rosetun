@@ -1,10 +1,24 @@
 # Rosetun {{version}}
 
-Rosetun 0.3. Its main features: **Lockdown**, no internet without the tunnel, also while disconnected, after a restart and if the Rosetun service stops; the **Traffic** tab with the live list of connections, where each one goes and why; **XHTTP** servers; adding a subscription from a **QR code**. Rosetun 0.2.0 offers this release as an update.
+Rosetun 0.3.1 fixes what a review of 0.3.0 found: privacy gaps in the service log and in **Collect report**, a connection that failed right after Windows started, a way out when the settings cannot be read, and an installer that reported success without the Rosetun service. Settings and Lockdown stay as in 0.3.0, so going back to 0.3.0 needs nothing. Rosetun 0.3.0 and 0.2.0 offer this release as an update.
 
-Settings move to a new format (see What's new); 0.2.0 cannot read the new one. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Coming from 0.2.0: see What's new in 0.3; the settings move to a new format, which 0.2.0 cannot read. Please report what breaks in [Issues](https://github.com/eoftgge/rosetun/issues); report vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
 **Going back to 0.2.0.** Turn Lockdown off first: 0.2.0 does not know Lockdown, can neither remove it nor connect while it is on, and the computer stays offline. If you already went back, install 0.3 again and turn Lockdown off, or run `rosetun reset-firewall` from it as administrator; uninstalling 0.3 removes Lockdown too. 0.2.0 also cannot read settings saved by 0.3. The previous file is kept as `%APPDATA%\Rosetun\config.v5.json`; close Rosetun and rename it to `config.json` (changes made in 0.3 are lost).
+
+## Fixed in 0.3.1
+
+- **Connecting right after Windows starts.** With **Connect at startup**, the connection no longer fails at once when the network is not up yet: Rosetun waits up to 30 s and shows "Waiting for the network…", and **Cancel** stops the wait. A server name that does not exist still fails at once.
+- **Settings that cannot be read.** If `config.json` is damaged, the error stays on screen with **Open settings folder** and **Collect report**, the file is left as it is, and closing the window quits Rosetun instead of hiding it in the tray.
+- **Installer.** When the Rosetun service cannot be set up, the installation ends with an error and does not start Rosetun; before, it reported success.
+- **Privacy fixes.**
+  - Without the detailed log, the Rosetun service log no longer records each connection of sing-box and Xray (with its ports and times); Rosetun still counts their failures.
+  - Xray's lines in the service log hide every public address and the server's name, as sing-box's do since 0.3.0.
+  - **Collect report** also hides international names in punycode (`xn--`), addresses written as `tcp:203.0.113.5:443`, more key names (`publicKey`, `shortId`, pre-shared keys, Xray's user `id`), UUIDs anywhere in the text and user folders on any drive, not only `C:`.
+  - A provider's **Support** and **Website** links that point to the subscription itself are no longer shown, and the subscription's token is removed from the others, in the app and in the command line.
+  - The README now says that **Send device ID** is on by default and how to turn it off for a subscription.
+- **DNS over TCP.** A DNS server that sends its answer slowly can no longer hold Rosetun's own name lookups (under Lockdown) or the DNS substitution check past their time limit.
+- **Icons.** The plate under the rose in the taskbar, Start and Alt+Tab has smooth edges and the app's background colour, the tray's state mark sits on it too, and Explorer shows a sharp icon at 125 to 200 % scaling.
 
 ## What's new in 0.3
 
@@ -59,11 +73,25 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-Rosetun 0.3. Главное в нём: **Lockdown** (без туннеля интернета нет, и без подключения, и после перезагрузки, и если служба Rosetun остановится); вкладка **Трафик** с живым списком соединений: куда идёт каждое и почему; серверы **XHTTP**; добавление подписки по **QR-коду**. Rosetun 0.2.0 предложит этот выпуск как обновление.
+Rosetun 0.3.1 исправляет то, что нашёл разбор 0.3.0: пробелы в приватности журнала службы и **Собрать отчёт**, подключение, которое срывалось сразу после запуска Windows, выход, когда настройки не читаются, и установщик, который сообщал об успехе без службы Rosetun. Настройки и Lockdown остаются как в 0.3.0, поэтому вернуться на 0.3.0 можно без подготовки. Rosetun 0.3.0 и 0.2.0 предложат этот выпуск как обновление.
 
-Настройки переходят на новый формат (см. «Что нового»); 0.2.0 его прочитать не сможет. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+Если вы переходите с 0.2.0, см. «Что нового в 0.3»: настройки переходят на новый формат, который 0.2.0 прочитать не сможет. Сообщайте о проблемах в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
 **Возврат на 0.2.0.** Сначала выключите Lockdown: 0.2.0 не знает про него, не может ни снять его, ни подключиться, пока он включён, и компьютер остаётся без сети. Если вы уже вернулись, установите 0.3 снова и выключите Lockdown или выполните её `rosetun reset-firewall` от имени администратора; удаление 0.3 тоже снимает Lockdown. Кроме того, 0.2.0 не читает настройки, сохранённые 0.3. Прежний файл лежит как `%APPDATA%\Rosetun\config.v5.json`; закройте Rosetun и переименуйте его в `config.json` (изменения, сделанные в 0.3, пропадут).
+
+### Исправлено в 0.3.1
+
+- **Подключение сразу после запуска Windows.** С **Подключаться при запуске** подключение больше не срывается сразу, если сеть ещё не поднялась: Rosetun ждёт до 30 с и показывает «Жду сеть…», а **Отменить** прерывает ожидание. Несуществующее имя сервера по-прежнему даёт ошибку сразу.
+- **Настройки, которые не читаются.** Если `config.json` повреждён, ошибка остаётся на экране с кнопками **Открыть папку настроек** и **Собрать отчёт**, файл остаётся как есть, а закрытие окна завершает Rosetun, а не прячет его в трей.
+- **Установщик.** Если службу Rosetun не удалось настроить, установка завершается с ошибкой и не запускает Rosetun; раньше она сообщала об успехе.
+- **Исправления приватности.**
+  - Без подробного журнала журнал службы Rosetun больше не записывает каждое соединение sing-box и Xray (с портами и временем); сбои Rosetun по-прежнему считает.
+  - В строках Xray в журнале службы скрыты любой публичный адрес и имя сервера, как в строках sing-box с 0.3.0.
+  - **Собрать отчёт** скрывает и международные имена в punycode (`xn--`), адреса вида `tcp:203.0.113.5:443`, другие имена ключей (`publicKey`, `shortId`, общие ключи, пользовательский `id` Xray), UUID в любом месте текста и папки пользователя на любом диске, не только `C:`.
+  - Ссылки провайдера **Поддержка** и **Сайт**, которые ведут на саму подписку, больше не показываются, а из остальных убран токен подписки, в программе и в командной строке.
+  - В README теперь сказано, что **Отправлять ID устройства** включено по умолчанию, и как выключить его для подписки.
+- **DNS по TCP.** DNS-сервер, который отдаёт ответ медленно, больше не держит собственные запросы имён Rosetun (при Lockdown) и проверку подмены DNS дольше их срока.
+- **Значки.** Подложка под розой на панели задач, в «Пуске» и в Alt+Tab получила ровные края и цвет фона программы, значок состояния в трее тоже лежит на ней, а Проводник показывает чёткий значок при масштабе от 125 до 200 %.
 
 ### Что нового в 0.3
 
