@@ -5,13 +5,20 @@ const SECRET_KEYS: &[&str] = &[
     "password",
     "uuid",
     "public_key",
+    "publickey",
     "short_id",
+    "shortid",
+    "pre_shared_key",
+    "presharedkey",
     "private_key",
     "secret",
     "token",
     "auth",
     "psk",
     "x-hwid",
+    // Xray names the VLESS and VMess user ID only `id`; a bare `id` would hide
+    // ordinary fields such as `thread_id`.
+    "\"id\"",
 ];
 const PUBLIC_HOSTS: &[&str] = &["api.github.com", "github.com", "cp.cloudflare.com"];
 const FILE_EXTENSIONS: &[&str] = &[
@@ -22,6 +29,7 @@ const FILE_EXTENSIONS: &[&str] = &[
 pub fn redact_report_text(text: &str) -> String {
     let text = redact_profiles(text);
     let text = redact_secrets(&text);
+    let text = redact_uuids(&text);
     let text = redact_urls(&text);
     let text = redact_emails(&text);
     redact_addresses(&text)
@@ -32,9 +40,16 @@ fn redact_profiles(text: &str) -> String {
     let mut at = 0;
     while at < text.len() {
         let rest = &text[at..];
-        if rest.get(..9).is_some_and(|prefix| {
-            prefix.eq_ignore_ascii_case("C:\\Users\\") || prefix.eq_ignore_ascii_case("C:/Users/")
-        }) {
+        let drive = rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            && !text[..at]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric);
+        if drive
+            && rest.get(1..9).is_some_and(|prefix| {
+                prefix.eq_ignore_ascii_case(":\\Users\\") || prefix.eq_ignore_ascii_case(":/Users/")
+            })
+        {
             let start = at + 9;
             let end = text[start..]
                 .find(['\\', '/', '\n', '\r', '"', '\'', ',', ';'])
@@ -58,8 +73,9 @@ fn redact_secrets(text: &str) -> String {
         let rest = &text[at..];
         let found = SECRET_KEYS.iter().find_map(|key| {
             let matched = rest.get(..key.len())?.eq_ignore_ascii_case(key);
+            // `_` is no boundary: `peer_public_key` hides like `public_key`.
             let previous = text[..at].chars().next_back();
-            if !matched || previous.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+            if !matched || previous.is_some_and(|ch| ch.is_ascii_alphanumeric()) {
                 return None;
             }
             let mut pos = at + key.len();
@@ -109,6 +125,38 @@ fn redact_secrets(text: &str) -> String {
             result.push_str(&text[at..start]);
             result.push_str("<redacted>");
             at = end;
+        } else {
+            let ch = rest.chars().next().expect("non-empty remainder");
+            result.push(ch);
+            at += ch.len_utf8();
+        }
+    }
+    result
+}
+
+/// Hides a UUID wherever it stands: VLESS and VMess user IDs also reach a log
+/// without a key in front of them.
+fn redact_uuids(text: &str) -> String {
+    const GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
+    const UUID_LEN: usize = 36;
+    let is_uuid_char = |ch: char| ch.is_alphanumeric() || ch == '-';
+    let mut result = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < text.len() {
+        let rest = &text[at..];
+        let is_uuid = rest.get(..UUID_LEN).is_some_and(|candidate| {
+            let mut groups = candidate.split('-');
+            GROUPS.iter().all(|&len| {
+                groups.next().is_some_and(|group| {
+                    group.len() == len && group.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            }) && groups.next().is_none()
+                && !text[..at].chars().next_back().is_some_and(is_uuid_char)
+                && !rest[UUID_LEN..].chars().next().is_some_and(is_uuid_char)
+        });
+        if is_uuid {
+            result.push_str("<redacted>");
+            at += UUID_LEN;
         } else {
             let ch = rest.chars().next().expect("non-empty remainder");
             result.push(ch);
@@ -210,9 +258,18 @@ fn redact_addresses(text: &str) -> String {
                         .all(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '_'))
             })
             && host.rsplit('.').next().is_some_and(|tld| {
-                tld.chars().count() >= 2
-                    && tld.chars().all(char::is_alphabetic)
-                    && !FILE_EXTENSIONS
+                // Engines write international names in punycode: `.xn--p1ai` is `.рф`.
+                let punycode = tld.len() > 4
+                    && tld
+                        .get(..4)
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("xn--"))
+                    && tld[4..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+                punycode
+                    || tld.chars().count() >= 2
+                        && tld.chars().all(char::is_alphabetic)
+                        && !FILE_EXTENSIONS
                         .iter()
                         .any(|extension| tld.eq_ignore_ascii_case(extension))
             });
@@ -291,8 +348,33 @@ fn address_words(text: &str) -> impl Iterator<Item = (usize, &str)> {
         at = text[start..]
             .find(|ch: char| !is_address_char(ch))
             .map_or(text.len(), |offset| start + offset);
-        Some((start, &text[start..at]))
+        let word = &text[start..at];
+        // Engines tag an address with its network, as in `tcp:203.0.113.5:443`:
+        // the tag ends the word, so the address after it is a word of its own.
+        if leading_ip(word).is_none()
+            && let Some(tag_len) = network_tag_len(word)
+        {
+            at = start + tag_len + 1;
+            return Some((start, &word[..tag_len]));
+        }
+        Some((start, word))
     })
+}
+
+/// Length of a leading `tag:` in front of more text. It is asked only of a word
+/// that does not start with an IP literal, so an IPv6 address is never split.
+fn network_tag_len(word: &str) -> Option<usize> {
+    let tag_len = word
+        .bytes()
+        .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        .count();
+    (word.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && word.as_bytes().get(tag_len) == Some(&b':')
+        && word
+            .as_bytes()
+            .get(tag_len + 1)
+            .is_some_and(|&byte| byte != b':'))
+    .then_some(tag_len)
 }
 
 fn leading_ip(word: &str) -> Option<(IpAddr, usize)> {
@@ -406,6 +488,64 @@ mod tests {
     #[test]
     fn ordinary_logs_keep_levels_times_and_error_codes() {
         let input = "2026-10-15T15:02:03Z INFO helper::state: ErrorCode::NoNetwork (code 10061)\n";
+        assert_eq!(redact_report_text(input), input);
+    }
+
+    #[test]
+    fn punycode_names_are_hidden() {
+        let input = "node.xn--e1afmkfd xn--e1afmkfd.test:443 XN--E1AFMKFD.XN--E1AFMKFD";
+        assert_eq!(redact_report_text(input), "<host> <host>:443 <host>");
+    }
+
+    #[test]
+    fn addresses_after_a_network_tag_are_hidden() {
+        let input = "from tcp:192.0.2.7:51234 accepted udp:[2001:db8::7]:53 tcp:node.example.test:443 dns:2001:db8::53";
+        assert_eq!(
+            redact_report_text(input),
+            "from tcp:<ip>:51234 accepted udp:[<ip>]:53 tcp:<host>:443 dns:<ip>"
+        );
+        assert_eq!(
+            super::hide_public_addresses("tcp:203.0.113.5:443"),
+            "tcp:[hidden]:443"
+        );
+    }
+
+    #[test]
+    fn engine_key_spellings_and_bare_uuids_are_hidden() {
+        for text in [
+            "\"publicKey\": \"value\"",
+            "\"shortId\": \"value\"",
+            "\"id\": \"value\"",
+            "peer_public_key=value",
+            "pre_shared_key: value",
+            "PresharedKey = value",
+        ] {
+            let output = redact_report_text(text);
+            assert!(!output.contains("value"), "{output}");
+            assert!(output.contains("<redacted>"), "{output}");
+        }
+        assert_eq!(
+            redact_report_text("user 00000000-0000-0000-0000-000000000000 rejected"),
+            "user <redacted> rejected"
+        );
+    }
+
+    #[test]
+    fn profile_paths_on_every_drive_are_hidden() {
+        for (input, expected) in [
+            (r"D:\Users\Example\Rosetun", r"D:\Users\<user>\Rosetun"),
+            ("e:/users/Example/rosetun", "e:/users/<user>/rosetun"),
+            (r"\\?\C:\Users\Example\x", r"\\?\C:\Users\<user>\x"),
+        ] {
+            assert_eq!(redact_report_text(input), expected);
+        }
+    }
+
+    #[test]
+    fn ordinary_report_lines_stay_as_they_are() {
+        let input = "Rosetun: 0.3.1\nsing-box: 1.12.10\nXray: 25.10.15\nDNS: 1\n\
+            Rules: 12\nWindows 10.0.26300\nFirewall: Found\n\
+            2026-10-26T10:00:00.123Z  INFO rosetun_helper::state: connected elapsed_ms=532 thread_id=4 stage=CheckingEngine\n";
         assert_eq!(redact_report_text(input), input);
     }
 }
