@@ -3,6 +3,9 @@ use eframe::egui::Color32;
 
 use crate::{rose_shape::PETALS, theme};
 
+const SAMPLES_PER_AXIS: usize = 4;
+const DISTANCE_INFINITY: u32 = u32::MAX / 4;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RoseIcon {
     /// Inside the window, on the app's own background.
@@ -159,28 +162,36 @@ fn scanline(y: f32, intersections: &mut Vec<f32>) {
     intersections.sort_unstable_by(f32::total_cmp);
 }
 
-const SAMPLES_PER_AXIS: usize = 4;
-const DISTANCE_INFINITY: u32 = u32::MAX / 4;
-
 /// Straight-alpha RGBA of the icon, `size`×`size`.
 pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon) -> Vec<u8> {
-    let plate = (icon != RoseIcon::Emblem).then(|| back(size as usize));
+    let plate = (icon != RoseIcon::Emblem).then(|| back(size, icon));
     rasterize(size, icon, plate.as_deref())
 }
 
-fn petal_mask(side: usize) -> Vec<bool> {
-    let scale = 48.0 / side as f32;
+/// Design-unit coordinate of sample `sub` inside pixel `pixel`.
+fn sample_coordinate(pixel: usize, sub: usize, scale: f32) -> f32 {
+    (pixel as f32 + (sub as f32 + 0.5) / SAMPLES_PER_AXIS as f32) * scale
+}
+
+/// Which samples the icon draws, petals and the tray badge alike, at the
+/// positions `rasterize` uses.
+fn drawn_mask(size: u32, icon: RoseIcon) -> Vec<bool> {
+    let scale = 48.0 / size as f32;
+    let side = size as usize * SAMPLES_PER_AXIS;
+    let grid = BadgeGrid::new(size);
     let mut mask = vec![false; side * side];
     let mut intersections = Vec::new();
     for y in 0..side {
-        scanline((y as f32 + 0.5) * scale, &mut intersections);
+        let sample_y = sample_coordinate(y / SAMPLES_PER_AXIS, y % SAMPLES_PER_AXIS, scale);
+        scanline(sample_y, &mut intersections);
         let mut crossing = 0;
         for x in 0..side {
-            let sample_x = (x as f32 + 0.5) * scale;
+            let sample_x = sample_coordinate(x / SAMPLES_PER_AXIS, x % SAMPLES_PER_AXIS, scale);
             while crossing < intersections.len() && intersections[crossing] <= sample_x {
                 crossing += 1;
             }
-            mask[y * side + x] = crossing % 2 == 1;
+            let drawn = sample((sample_x, sample_y), icon, crossing % 2 == 1, grid);
+            mask[y * side + x] = drawn.is_some();
         }
     }
     mask
@@ -256,21 +267,20 @@ fn distance_transform(seeds: &[bool], side: usize) -> Vec<u32> {
 
 /// Rose petals vanish on a background of a similar colour (a red Windows
 /// accent on the taskbar), so every icon shown outside the window sits on a
-/// dark plate: the silhouette with the gaps between petals filled, plus a rim.
+/// dark plate: the silhouette of everything drawn (the tray badge too) with
+/// the gaps between petals filled, plus a rim.
 /// The gaps are channels open to the outside; a closing (grow, flood the
 /// outside, grow it back) tells them from the outside itself.
-fn back(size: usize) -> Vec<bool> {
-    let sample_side = size * SAMPLES_PER_AXIS;
-    let radius = (size / 16).max(1) * SAMPLES_PER_AXIS;
-    let rim = (size / 32).max(1) * SAMPLES_PER_AXIS;
+fn back(size: u32, icon: RoseIcon) -> Vec<bool> {
+    let sample_side = size as usize * SAMPLES_PER_AXIS;
+    let radius = (size as usize / 16).max(1) * SAMPLES_PER_AXIS;
+    let rim = (size as usize / 32).max(1) * SAMPLES_PER_AXIS;
     // A margin beyond the edges ensures the flood can reach every exterior cell.
     let pad = radius + rim + 1;
     let side = sample_side + 2 * pad;
     let mut solid = vec![false; side * side];
-    for (y, row) in petal_mask(sample_side)
-        .chunks_exact(sample_side)
-        .enumerate()
-    {
+    let drawn = drawn_mask(size, icon);
+    for (y, row) in drawn.chunks_exact(sample_side).enumerate() {
         let start = (y + pad) * side + pad;
         solid[start..start + sample_side].copy_from_slice(row);
     }
@@ -327,12 +337,12 @@ fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>) -> Vec<u8> {
     for y in 0..size {
         row.fill([0; 4]);
         for j in 0..SAMPLES_PER_AXIS {
-            let sample_y = (y as f32 + (j as f32 + 0.5) / SAMPLES_PER_AXIS as f32) * scale;
+            let sample_y = sample_coordinate(y as usize, j, scale);
             scanline(sample_y, &mut intersections);
             let mut crossing = 0;
             for (x, pixel) in row.iter_mut().enumerate() {
                 for i in 0..SAMPLES_PER_AXIS {
-                    let sample_x = (x as f32 + (i as f32 + 0.5) / SAMPLES_PER_AXIS as f32) * scale;
+                    let sample_x = sample_coordinate(x, i, scale);
                     while crossing < intersections.len() && intersections[crossing] <= sample_x {
                         crossing += 1;
                     }
@@ -527,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn tray_badges_have_coloured_discs_white_marks_and_transparent_cutouts() {
+    fn tray_badges_have_coloured_discs_white_marks_and_cutouts_on_the_plate() {
         for (state, color, mark) in [
             (TrayState::Connecting, theme::ROSE_BRIGHT, (35, 27)),
             (TrayState::Blocked, theme::ERROR, (35, 38)),
@@ -546,6 +556,27 @@ mod tests {
                 theme::BG.to_array(),
                 "{state:?} cutout"
             );
+        }
+    }
+
+    #[test]
+    fn tray_badge_discs_lie_entirely_on_the_plate() {
+        for size in [16, 20, 24, 32, 48] {
+            let scale = 48.0 / size as f32;
+            let side = size as usize * SAMPLES_PER_AXIS;
+            let grid = BadgeGrid::new(size);
+            for state in TRAY_STATES {
+                let plate = back(size, RoseIcon::Tray(state));
+                for (index, &backed) in plate.iter().enumerate() {
+                    let (x, y) = (index % side, index / side);
+                    let point = (
+                        sample_coordinate(x / SAMPLES_PER_AXIS, x % SAMPLES_PER_AXIS, scale),
+                        sample_coordinate(y / SAMPLES_PER_AXIS, y % SAMPLES_PER_AXIS, scale),
+                    );
+                    let on_disc = matches!(sample_badge(point, state, grid), Some(Some(_)));
+                    assert!(backed || !on_disc, "{state:?} {size} px: {point:?}");
+                }
+            }
         }
     }
 
