@@ -287,7 +287,10 @@ impl FilterConditions {
                 ]);
             }
             // Lockdown's TCP permits for Rosetun's own programs.
-            [Condition::Application(binary), Condition::Protocol(protocol)] => {
+            [
+                Condition::Application(binary),
+                Condition::Protocol(protocol),
+            ] => {
                 let blob = app_id.insert(AppIdBlob::from_path(binary)?);
                 conditions.extend([application_condition(blob), protocol_condition(*protocol)]);
             }
