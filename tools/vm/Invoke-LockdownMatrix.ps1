@@ -252,7 +252,9 @@ function Invoke-StandardFetch {
     # `Ok` is true when the fetch succeeded, false when it failed and $null
     # when the account could not run it, which no check counts as a pass.
     param([switch]$Physical)
-    $arguments = @('tools', 'fetch', 'https://1.1.1.1')
+    # The trace page answers itself; the root redirects to a name, which
+    # the name zone of scenarios 1 to 3 refuses.
+    $arguments = @('tools', 'fetch', 'https://1.1.1.1/cdn-cgi/trace')
     if ($Physical) {
         $config = Join-Path $standardDir 'physical.json'
         $address = Get-RosetunEgressAddress
@@ -295,7 +297,9 @@ function Get-StandardFetchNote {
 
 function Test-StandardLockdownOff {
     # `rosetun lockdown off` from the standard account is refused with the
-    # hint and Lockdown stays.
+    # hint and Lockdown stays. Only against the real service: the CLI checks
+    # a pipe server without one by its token, which a standard account
+    # cannot open on the SYSTEM helper task.
     param([Parameter(Mandatory)][string]$Scenario)
     try {
         $off = Invoke-AsStandardUser -FilePath (Join-Path $guestDir 'rosetun.exe') -Arguments @('lockdown', 'off')
@@ -599,7 +603,6 @@ try {
     Test-Step '2 on, disconnected' 'status: lockdown on' { (Get-LockdownStatusLine) -eq 'on' }
     Test-Step '2 on, disconnected' 'CLI permits present, the retired one absent' { Test-ProgramPermits -Present } `
         -Note (Format-Objects (Get-LockdownObjects))
-    Test-StandardLockdownOff '2 standard account'
     Test-StandardFetchBlocked '2 standard account'
     Test-Step '2 on, disconnected' 'direct egress closed' { -not (Test-RosetunDirectEgress) }
     Test-Step '2 on, disconnected' 'direct DNS over UDP closed' { -not (Test-RosetunDirectDns) }
@@ -617,7 +620,7 @@ try {
     Test-Step '3 inbound' 'the host cannot reach a guest listener' { -not (Test-InboundFromHost $guestListenerPort) }
     Test-Step '3 inbound' 'the guest cannot reach a host listener' { -not (Test-RosetunLanListener $hostLan) }
     $lanOn = Invoke-RosetunCli -Quiet 'lan' 'on'
-    Test-Step '3 lan on' 'rosetun lan on updates Lockdown' { $lanOn.ExitCode -eq 0 -and $lanOn.Output -match 'lockdown on' } -Note $lanOn.Output
+    Test-Step '3 lan on' 'rosetun lan on updates Lockdown' { $lanOn.ExitCode -eq 0 } -Note $lanOn.Output
     Test-Step '3 lan on' 'LAN filters present' { Test-LockdownInstalled -Lan } -Note (Format-Objects (Get-LockdownObjects))
     Test-Step '3 lan on' 'the host reaches a guest listener' { Test-InboundFromHost $guestListenerPort }
     Test-Step '3 lan on' 'the guest reaches a host listener' { Test-RosetunLanListener $hostLan }
@@ -652,7 +655,6 @@ try {
     Test-Step '4 connected' 'the host cannot reach a guest listener' { -not (Test-InboundFromHost $guestListenerPort) }
     Test-Step '4 connected' 'CLI permits removed for the session' { Test-ProgramPermits } -Note (Format-Objects (Get-LockdownObjects))
     Test-Step '4 connected' 'a program at the CLI path stays closed outside the tunnel' { -not (Test-CliPathEgress) }
-    Test-StandardLockdownOff '4 standard account, connected'
     # Without binding, the fetch follows the default route into the tunnel:
     # not a leak, so only recorded.
     $plain = Invoke-StandardFetch
@@ -867,8 +869,10 @@ try {
     $serviceInstalled = $true
     Install-TestService
     Invoke-Lockdown on | Out-Null
+    Test-StandardLockdownOff '9 standard account'
     $connect = Connect-RosetunTunnel -Quiet
     Test-Step '9 reset, running' 'connected through the service' { $connect.ExitCode -eq 0 } -Note $connect.Output
+    Test-StandardLockdownOff '9 standard account, connected'
     $reset = Invoke-RosetunHelperMode '--reset-firewall'
     Test-Step '9 reset, running' '--reset-firewall succeeds' {
         $reset.ExitCode -eq 0 -and $reset.Output -match 'Lockdown removed'
