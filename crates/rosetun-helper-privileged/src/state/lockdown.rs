@@ -746,11 +746,25 @@ mod tests {
         );
         let apps = super::test_apps();
 
-        super::sync_lan(&routing, &shared, &apps, &Caller::fake(b"user", false), true).unwrap();
+        super::sync_lan(
+            &routing,
+            &shared,
+            &apps,
+            &Caller::fake(b"user", false),
+            true,
+        )
+        .unwrap();
         assert!(calls.enabled.lock().unwrap().is_empty());
         assert!(!super::read(&shared).allow_lan);
 
-        super::sync_lan(&routing, &shared, &apps, &Caller::fake(b"admin", true), true).unwrap();
+        super::sync_lan(
+            &routing,
+            &shared,
+            &apps,
+            &Caller::fake(b"admin", true),
+            true,
+        )
+        .unwrap();
         assert_eq!(*calls.enabled.lock().unwrap(), [true]);
         assert!(super::read(&shared).allow_lan);
     }

@@ -243,9 +243,8 @@ fn common_rules(engine_binaries: &[&Path]) -> Vec<Rule> {
 }
 
 pub(super) fn probe_authorization(binary: &Path) -> [Rule; 2] {
-    [AddressFamily::Ipv4, AddressFamily::Ipv6].map(|family| {
-        Rule::allow(family, engine_permit(binary), BOOTSTRAP_ALLOW_WEIGHT)
-    })
+    [AddressFamily::Ipv4, AddressFamily::Ipv6]
+        .map(|family| Rule::allow(family, engine_permit(binary), BOOTSTRAP_ALLOW_WEIGHT))
 }
 
 /// Builds the phase-2 authorization added after the TUN adapter has been

@@ -709,7 +709,10 @@ mod tests {
         // SE_SELF_RELATIVE control bit.
         assert!(descriptor.len() > 20);
         assert_eq!(descriptor[0], 1);
-        assert_ne!(u16::from_le_bytes([descriptor[2], descriptor[3]]) & 0x8000, 0);
+        assert_ne!(
+            u16::from_le_bytes([descriptor[2], descriptor[3]]) & 0x8000,
+            0
+        );
     }
 
     #[test]
@@ -717,10 +720,9 @@ mod tests {
         let program = std::env::current_exe().expect("the test binary has a path");
         let wanted = FilterConditions::build(&engine_rule(engine_permit(&program))).unwrap();
         let again = FilterConditions::build(&engine_rule(engine_permit(&program))).unwrap();
-        let older = FilterConditions::build(&engine_rule(vec![Condition::Application(
-            program.clone(),
-        )]))
-        .unwrap();
+        let older =
+            FilterConditions::build(&engine_rule(vec![Condition::Application(program.clone())]))
+                .unwrap();
         let mut reversed = again.conditions.clone();
         reversed.reverse();
         // SAFETY: every condition points into values its builder owns, alive here.

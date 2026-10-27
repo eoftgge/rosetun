@@ -6700,9 +6700,7 @@ fn lockdown_program_permits_leave_with_a_session_and_return_after_it() {
 
         let mut request = connect_request();
         request.settings.allow_lan = true;
-        helper
-            .connect_as(&caller, &request)
-            .expect("DNS responds");
+        helper.connect_as(&caller, &request).expect("DNS responds");
         assert_eq!(*plans.lock().unwrap(), [true]);
         assert!(helper.session().unwrap().programs_withdrawn);
         // Only an administrator's connect syncs Lockdown's LAN permits; it

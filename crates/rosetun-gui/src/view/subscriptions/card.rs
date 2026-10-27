@@ -620,12 +620,12 @@ mod tests {
             (egui::pos2(24.0, ROW_Y), Spot::Button),
             (
                 egui::pos2(right - 28.0 - spacing - 14.0, ROW_Y),
-                Spot::Button
+                Spot::Button,
             ),
             (egui::pos2(right - 14.0, ROW_Y), Spot::Button),
             (
                 egui::pos2(13.0 + 22.0 + spacing + 12.0, ROW_Y),
-                Spot::Button
+                Spot::Button,
             ),
             (egui::pos2(WIDTH / 2.0, ROW_Y), Spot::Blank),
             (egui::pos2(6.0, ROW_Y), Spot::Grip),

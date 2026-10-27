@@ -584,7 +584,10 @@ pub(in crate::platform) fn enable(
 
     transaction.commit()?;
     if replaced > 0 {
-        tracing::info!(replaced, "Lockdown filters replaced with their current form");
+        tracing::info!(
+            replaced,
+            "Lockdown filters replaced with their current form"
+        );
     }
     flush();
     read_status(&engine)
@@ -1050,7 +1053,10 @@ mod tests {
                 assert_eq!(
                     web.iter()
                         .filter(|filter| filter.rule.family == family
-                            && filter.rule.conditions.contains(&Condition::RemotePort(port)))
+                            && filter
+                                .rule
+                                .conditions
+                                .contains(&Condition::RemotePort(port)))
                         .count(),
                     2
                 );
@@ -1064,7 +1070,15 @@ mod tests {
             service_account: false,
         });
         let decide = |protocol, port| {
-            decide_for(gui, Layer::Connect, &rules, [203, 0, 113, 7], protocol, port, 0)
+            decide_for(
+                gui,
+                Layer::Connect,
+                &rules,
+                [203, 0, 113, 7],
+                protocol,
+                port,
+                0,
+            )
         };
         assert_eq!(decide(6, 443), Action::Allow);
         assert_eq!(decide(6, 80), Action::Allow);
@@ -1127,7 +1141,15 @@ mod tests {
                 .chain(&session.rules)
                 .chain(&tunnel)
                 .collect::<Vec<_>>();
-            decide_for(process, Layer::Connect, &rules, [203, 0, 113, 7], 6, port, luid)
+            decide_for(
+                process,
+                Layer::Connect,
+                &rules,
+                [203, 0, 113, 7],
+                6,
+                port,
+                luid,
+            )
         };
         // With the permits the GUI would pass the session's block.
         assert_eq!(decide(&set, gui, 443, 999), Action::Allow);

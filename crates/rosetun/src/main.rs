@@ -617,8 +617,7 @@ fn lockdown(client: &mut HelperClient, enabled: bool, allow_lan: bool) -> ExitCo
     }
 }
 
-const LOCKDOWN_DENIED: &str =
-    "only an administrator can change Lockdown; run this command in a terminal opened as administrator";
+const LOCKDOWN_DENIED: &str = "only an administrator can change Lockdown; run this command in a terminal opened as administrator";
 
 /// The service refuses a Lockdown change from anyone but an administrator.
 fn lockdown_denied(error: &ClientError) -> bool {
@@ -817,9 +816,9 @@ Options for sub add may appear in any order after the URL."
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, LAN_KEPT_BY_LOCKDOWN, LOCKDOWN_DENIED, access_denied_message,
-        apply_error_message, lockdown_denied, parse_command_arguments, status_has_no_network,
-        temporary_rule_line, temporary_rules_status,
+        Command, LAN_KEPT_BY_LOCKDOWN, LOCKDOWN_DENIED, access_denied_message, apply_error_message,
+        lockdown_denied, parse_command_arguments, status_has_no_network, temporary_rule_line,
+        temporary_rules_status,
     };
     use rosetun_config::{
         ConnectionState, DomainMatch, FailureKind, ProcessMatch, Rule, RuleId, RuleMatcher,
