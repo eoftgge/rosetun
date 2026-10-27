@@ -25,6 +25,8 @@ pub(super) fn subscription_card(
     let mut frame = widgets::card_frame()
         .inner_margin(12)
         .stroke(Stroke::new(1.0, theme::BORDER));
+    // The grip is drawn in this margin, left of the header row.
+    let grip_margin = f32::from(frame.inner_margin.left) + frame.stroke.width;
     if dragged {
         frame = frame.fill(Color32::from_rgba_unmultiplied(
             theme::CARD.r(),
@@ -43,24 +45,20 @@ pub(super) fn subscription_card(
                 if dragged {
                     ui.multiply_opacity(0.5);
                 }
-                // The drag zone covers only the name slot of the row below: egui hands a
-                // drag that starts on a click-only button to a drag zone underneath, and
-                // the zone must stay below the name so the name still takes clicks.
-                let spacing = ui.spacing().item_spacing.x;
+                // Only the grip drags the card, as only a rule's handle drags its row.
+                // It lies in the margin, clear of the chevron, the name and the buttons.
                 let origin = ui.next_widget_position();
-                let name_left = origin.x + 22.0 + spacing;
-                let name_right = origin.x + ui.available_width() - 2.0 * 28.0 - 2.0 * spacing;
-                let header_drag = reorder.then(|| {
+                let grip_drag = reorder.then(|| {
                     ui.interact(
                         egui::Rect::from_min_max(
-                            egui::pos2(name_left, origin.y),
-                            egui::pos2(name_right.max(name_left), origin.y + 28.0),
+                            egui::pos2(origin.x - grip_margin, origin.y),
+                            egui::pos2(origin.x - 1.0, origin.y + 28.0),
                         ),
-                        ui.id().with("header_drag"),
+                        ui.id().with("grip_drag"),
                         egui::Sense::drag(),
                     )
                 });
-                if header_drag.as_ref().is_some_and(egui::Response::hovered) {
+                if grip_drag.as_ref().is_some_and(egui::Response::hovered) {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                 }
                 ui.horizontal(|ui| {
@@ -93,6 +91,7 @@ pub(super) fn subscription_card(
                                     .truncate()
                                     .sense(egui::Sense::click()),
                                 )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .on_hover_text(name)
                                 .clicked()
                             {
@@ -175,7 +174,7 @@ pub(super) fn subscription_card(
                         }
                     });
                 });
-                if header_drag.is_some_and(|header_drag| header_drag.drag_started()) {
+                if grip_drag.is_some_and(|grip_drag| grip_drag.drag_started()) {
                     egui::DragAndDrop::set_payload(ui.ctx(), subscription.id.clone());
                 }
                 ui.horizontal(|ui| {
@@ -605,24 +604,41 @@ mod tests {
         }
     }
 
-    fn header_points(ctx: &egui::Context) -> [(egui::Pos2, bool); 5] {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Spot {
+        /// The chevron, the update and menu buttons, the name.
+        Button,
+        /// Empty header space right of the name.
+        Blank,
+        Grip,
+    }
+
+    fn header_points(ctx: &egui::Context) -> [(egui::Pos2, Spot); 6] {
         let spacing = ctx.global_style().spacing.item_spacing.x;
         let right = WIDTH - 13.0;
         [
-            (egui::pos2(24.0, ROW_Y), false),
-            (egui::pos2(right - 28.0 - spacing - 14.0, ROW_Y), false),
-            (egui::pos2(right - 14.0, ROW_Y), false),
-            (egui::pos2(13.0 + 22.0 + spacing + 12.0, ROW_Y), true),
-            (egui::pos2(WIDTH / 2.0, ROW_Y), true),
+            (egui::pos2(24.0, ROW_Y), Spot::Button),
+            (
+                egui::pos2(right - 28.0 - spacing - 14.0, ROW_Y),
+                Spot::Button
+            ),
+            (egui::pos2(right - 14.0, ROW_Y), Spot::Button),
+            (
+                egui::pos2(13.0 + 22.0 + spacing + 12.0, ROW_Y),
+                Spot::Button
+            ),
+            (egui::pos2(WIDTH / 2.0, ROW_Y), Spot::Blank),
+            (egui::pos2(6.0, ROW_Y), Spot::Grip),
         ]
     }
 
     #[test]
-    fn card_drags_from_its_header_but_not_from_its_buttons() {
+    fn card_drags_from_its_grip_only() {
         let subscription = card_subscription();
         let mut state = State::default();
         state.config_ready = true;
-        for (pos, drags) in header_points(&egui::Context::default()) {
+        for (pos, spot) in header_points(&egui::Context::default()) {
+            let drags = spot == Spot::Grip;
             let ctx = egui::Context::default();
             theme::apply(&ctx);
             card_frame_actions(&ctx, &state, &subscription, Vec::new());
@@ -648,11 +664,12 @@ mod tests {
     }
 
     #[test]
-    fn header_buttons_start_no_drag_and_no_drag_cursor() {
+    fn only_the_grip_starts_a_drag_and_shows_the_drag_cursor() {
         let subscription = card_subscription();
         let mut state = State::default();
         state.config_ready = true;
-        for (pos, drags) in header_points(&egui::Context::default()) {
+        for (pos, spot) in header_points(&egui::Context::default()) {
+            let drags = spot == Spot::Grip;
             let ctx = egui::Context::default();
             theme::apply(&ctx);
             card_frame(&ctx, &state, &subscription, Vec::new());
@@ -692,14 +709,14 @@ mod tests {
     }
 
     #[test]
-    fn header_buttons_keep_the_pointing_hand_cursor() {
+    fn the_grab_cursor_shows_on_the_grip_only() {
         let subscription = card_subscription();
         let mut state = State::default();
         state.config_ready = true;
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         card_frame(&ctx, &state, &subscription, Vec::new());
-        for (pos, drags) in header_points(&ctx) {
+        for (pos, spot) in header_points(&ctx) {
             card_frame(
                 &ctx,
                 &state,
@@ -707,12 +724,13 @@ mod tests {
                 vec![egui::Event::PointerMoved(pos)],
             );
             let (_, cursor) = card_frame(&ctx, &state, &subscription, Vec::new());
-            let expected = if drags {
-                egui::CursorIcon::Grab
-            } else {
-                egui::CursorIcon::PointingHand
-            };
-            assert_eq!(cursor, expected, "hover at {pos:?}");
+            match spot {
+                Spot::Grip => assert_eq!(cursor, egui::CursorIcon::Grab, "hover at {pos:?}"),
+                Spot::Button => {
+                    assert_eq!(cursor, egui::CursorIcon::PointingHand, "hover at {pos:?}");
+                }
+                Spot::Blank => assert_ne!(cursor, egui::CursorIcon::Grab, "hover at {pos:?}"),
+            }
         }
     }
 
