@@ -49,6 +49,10 @@ enum Command {
     Xray(XrayUse),
     Lan(bool),
     Lockdown(bool),
+    /// Lockdown on with this LAN access instead of the saved one: the GUI
+    /// runs the command elevated, possibly as another account with other
+    /// settings.
+    LockdownWithLan(bool),
     ResetFirewall,
     Disconnect,
     Shutdown,
@@ -106,6 +110,9 @@ fn main() -> ExitCode {
             Ok(allow_lan) => with_helper(|client| lockdown(client, enabled, allow_lan)),
             Err(message) => local_result(Err(message)),
         },
+        Command::LockdownWithLan(allow_lan) => {
+            with_helper(|client| lockdown(client, true, allow_lan))
+        }
         Command::ResetFirewall => reset_firewall(),
         Command::Connect { request_path } => match prepare_list_request(request_path.as_deref()) {
             Ok(request) => with_helper(|client| connect(client, request)),
@@ -599,16 +606,29 @@ fn lockdown(client: &mut HelperClient, enabled: bool, allow_lan: bool) -> ExitCo
             println!("lockdown {}", if enabled { "on" } else { "off" });
             ExitCode::SUCCESS
         }
+        Err(error) if lockdown_denied(&error) => {
+            eprintln!("{LOCKDOWN_DENIED}");
+            ExitCode::FAILURE
+        }
         Err(error) => {
-            report_helper_error(&error, "failed to change Lockdown");
+            tracing::error!(%error, "failed to change Lockdown");
             ExitCode::FAILURE
         }
     }
 }
 
-/// Lockdown keeps its own LAN permits; they follow the setting at once.
-/// Without a running service there is nothing to update: the next connect
-/// brings Lockdown in line with the setting.
+const LOCKDOWN_DENIED: &str =
+    "only an administrator can change Lockdown; run this command in a terminal opened as administrator";
+
+/// The service refuses a Lockdown change from anyone but an administrator.
+fn lockdown_denied(error: &ClientError) -> bool {
+    matches!(error, ClientError::Helper(helper) if helper.code == ErrorCode::AccessDenied)
+}
+
+/// Lockdown keeps its own LAN permits; they follow the setting at once when
+/// an administrator runs the command. Otherwise the setting is saved and
+/// Lockdown keeps its permits. Without a running service there is nothing
+/// to update: the next connect by an administrator brings Lockdown in line.
 fn update_lockdown_lan(enabled: bool) -> ExitCode {
     let endpoint = rosetun_ipc::default_endpoint();
     let client_name = concat!("rosetun/", env!("CARGO_PKG_VERSION"));
@@ -616,10 +636,22 @@ fn update_lockdown_lan(enabled: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     };
     match client.status() {
-        Ok(status) if status.lockdown => lockdown(&mut client, true, enabled),
+        Ok(status) if status.lockdown => match client.set_lockdown(true, enabled) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) if lockdown_denied(&error) => {
+                eprintln!("{LAN_KEPT_BY_LOCKDOWN}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to change Lockdown");
+                ExitCode::FAILURE
+            }
+        },
         _ => ExitCode::SUCCESS,
     }
 }
+
+const LAN_KEPT_BY_LOCKDOWN: &str = "the setting is saved, but Lockdown keeps its local network access; run `rosetun lockdown on` in a terminal opened as administrator to apply it";
 
 /// Under Lockdown the CLI resolves names itself (`rosetun_core::follow_service_status`).
 fn follow_service_status() {
@@ -708,6 +740,8 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["lan", "off"] => Ok(Command::Lan(false)),
         ["lockdown", "on"] => Ok(Command::Lockdown(true)),
         ["lockdown", "off"] => Ok(Command::Lockdown(false)),
+        ["lockdown", "on", "--lan", "on"] => Ok(Command::LockdownWithLan(true)),
+        ["lockdown", "on", "--lan", "off"] => Ok(Command::LockdownWithLan(false)),
         ["reset-firewall"] => Ok(Command::ResetFirewall),
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
@@ -765,6 +799,7 @@ Usage:
   rosetun xray <auto|off|always>
   rosetun lan <on|off>
   rosetun lockdown <on|off>    (experimental)
+  rosetun lockdown on --lan <on|off>
   rosetun reset-firewall
   rosetun disconnect
   rosetun shutdown
@@ -773,8 +808,8 @@ Subscription and node commands are local and do not require the helper.
 connections lists the tunnel's connections for the account that connected it;
 close ends one of them by its ID (the 8 characters shown, or the full ID).
 Lockdown (experimental) blocks all traffic outside the tunnel, also when
-disconnected and after a reboot. reset-firewall removes it without the
-service; run it as administrator.
+disconnected and after a reboot. Only an administrator changes it.
+reset-firewall removes it without the service; run it as administrator.
 Options for sub add may appear in any order after the URL."
     );
 }
@@ -782,8 +817,9 @@ Options for sub add may appear in any order after the URL."
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, access_denied_message, apply_error_message, parse_command_arguments,
-        status_has_no_network, temporary_rule_line, temporary_rules_status,
+        Command, LAN_KEPT_BY_LOCKDOWN, LOCKDOWN_DENIED, access_denied_message,
+        apply_error_message, lockdown_denied, parse_command_arguments, status_has_no_network,
+        temporary_rule_line, temporary_rules_status,
     };
     use rosetun_config::{
         ConnectionState, DomainMatch, FailureKind, ProcessMatch, Rule, RuleId, RuleMatcher,
@@ -880,6 +916,15 @@ mod tests {
         assert!(parse(&["lan", "unknown"]).is_err());
         assert_eq!(parse(&["lockdown", "on"]), Ok(Command::Lockdown(true)));
         assert_eq!(parse(&["lockdown", "off"]), Ok(Command::Lockdown(false)));
+        assert_eq!(
+            parse(&["lockdown", "on", "--lan", "off"]),
+            Ok(Command::LockdownWithLan(false))
+        );
+        assert_eq!(
+            parse(&["lockdown", "on", "--lan", "on"]),
+            Ok(Command::LockdownWithLan(true))
+        );
+        assert!(parse(&["lockdown", "off", "--lan", "on"]).is_err());
         assert!(parse(&["lockdown"]).is_err());
         assert!(parse(&["lockdown", "on", "now"]).is_err());
         assert_eq!(parse(&["reset-firewall"]), Ok(Command::ResetFirewall));
@@ -918,6 +963,22 @@ mod tests {
         assert_eq!(access_denied_message(&denied), Some(message));
         assert_eq!(apply_error_message(&denied), Some(message));
         assert_eq!(access_denied_message(&ClientError::Closed), None);
+    }
+
+    #[test]
+    fn a_refused_lockdown_change_asks_for_an_administrator_terminal() {
+        let denied = ClientError::Helper(HelperError::new(
+            ErrorCode::AccessDenied,
+            "only an administrator can change Lockdown",
+        ));
+        assert!(lockdown_denied(&denied));
+        assert!(!lockdown_denied(&ClientError::Closed));
+        assert!(!lockdown_denied(&ClientError::Helper(HelperError::new(
+            ErrorCode::Busy,
+            "a server check is in progress",
+        ))));
+        assert!(LOCKDOWN_DENIED.contains("administrator"));
+        assert!(LAN_KEPT_BY_LOCKDOWN.contains("rosetun lockdown on"));
     }
 
     #[test]

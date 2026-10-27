@@ -1049,6 +1049,13 @@ impl Helper {
             "starting tunnel connection"
         );
 
+        lockdown::sync_lan(
+            session.routing.as_ref(),
+            &session.lockdown,
+            &session.lockdown_programs(),
+            caller,
+            request.settings.allow_lan,
+        )?;
         let previous_owner = self.begin_connect(caller)?;
         session.request = None;
         session.reconnect = None;
@@ -2002,12 +2009,6 @@ impl Session {
 
         self.protected_binaries = binaries.iter().map(|path| path.to_path_buf()).collect();
 
-        lockdown::sync_lan(
-            self.routing.as_ref(),
-            &self.lockdown,
-            &self.lockdown_programs(),
-            settings.allow_lan,
-        )?;
         let lockdown = lockdown::read(&self.lockdown).enabled;
         if lockdown && !settings.kill_switch {
             tracing::info!("Lockdown is on: the kill switch is forced on");

@@ -7,7 +7,7 @@ use rosetun_ipc::{ClientError, ErrorCode, ExitOutcome, HelperError, ProbeOutcome
 use super::{Action, Job, Screen, State};
 use crate::actions::{self, PrimaryAction};
 use crate::errors;
-use crate::worker::{HelperCommandError, WorkerEvent};
+use crate::worker::{HelperCommandError, LockdownChange, WorkerEvent};
 
 /// The engine check after a cold boot can wait for an antivirus; past this
 /// the connection screen says why.
@@ -566,11 +566,16 @@ impl State {
             }
             WorkerEvent::SetLockdown { enabled, result } => {
                 self.operations.lockdown = false;
-                if result.is_ok() {
-                    self.status.lockdown = enabled;
-                    self.lockdown_confirmation = None;
+                match result {
+                    Ok(change) => {
+                        if change == LockdownChange::Done {
+                            self.status.lockdown = enabled;
+                        }
+                        self.lockdown_confirmation = None;
+                        self.operation_error = None;
+                    }
+                    Err(error) => self.helper_result(Err(error)),
                 }
-                self.helper_result(result);
             }
             WorkerEvent::TunnelDelay(result) => {
                 if !self.status_received

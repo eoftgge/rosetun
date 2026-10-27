@@ -48,6 +48,18 @@ pub(crate) enum HelperCommandError {
     ListPreparation(#[from] ListPreparationError),
     #[error(transparent)]
     Client(#[from] ClientError),
+    #[error("could not start the Lockdown command: {0}")]
+    LockdownLaunch(std::io::Error),
+    #[error("the Lockdown command exited with code {0}")]
+    LockdownCommand(u32),
+}
+
+/// How an elevated Lockdown command ended without an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LockdownChange {
+    Done,
+    /// The user declined the UAC prompt.
+    Declined,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,7 +163,7 @@ pub(crate) enum WorkerEvent {
     SetKillSwitch(Result<(), StoreError>),
     SetLockdown {
         enabled: bool,
-        result: Result<(), HelperCommandError>,
+        result: Result<LockdownChange, HelperCommandError>,
     },
     Add(Result<(Subscription, UpdateReport), AddFromUrlError>),
     /// `None` when the file dialog was closed without a choice.

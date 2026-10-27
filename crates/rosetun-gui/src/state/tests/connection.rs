@@ -642,7 +642,7 @@ fn lockdown_changes_only_after_confirmation() {
     assert_eq!(state.lockdown_confirmation, Some(true));
     state.reduce(WorkerEvent::SetLockdown {
         enabled: true,
-        result: Ok(()),
+        result: Ok(LockdownChange::Done),
     });
     assert!(!state.operations.lockdown);
     assert!(state.lockdown_confirmation.is_none());
@@ -656,9 +656,35 @@ fn lockdown_changes_only_after_confirmation() {
     ));
     state.reduce(WorkerEvent::SetLockdown {
         enabled: false,
-        result: Ok(()),
+        result: Ok(LockdownChange::Done),
     });
     assert!(!state.lockdown_active());
+}
+
+#[test]
+fn a_declined_administrator_prompt_closes_the_dialog_quietly() {
+    let mut state = state_with_lockdown(false);
+    state.act(Action::RequestLockdown(true));
+    state.act(Action::ConfirmLockdown);
+    state.reduce(WorkerEvent::SetLockdown {
+        enabled: true,
+        result: Ok(LockdownChange::Declined),
+    });
+    assert!(!state.operations.lockdown);
+    assert!(state.lockdown_confirmation.is_none());
+    assert!(!state.lockdown_active());
+    assert!(state.operation_error.is_none());
+}
+
+#[test]
+fn a_failed_lockdown_command_names_the_way_out() {
+    for error in [
+        HelperCommandError::LockdownCommand(1),
+        HelperCommandError::LockdownLaunch(std::io::Error::other("test")),
+    ] {
+        let message = errors::helper_command(crate::i18n::Language::English, &error);
+        assert!(message.contains("rosetun lockdown"), "{message}");
+    }
 }
 
 #[test]

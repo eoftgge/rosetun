@@ -71,6 +71,11 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         {
             actions.push(Action::RequestLockdown(lockdown_on));
         }
+        ui.label(
+            RichText::new(tr!("lockdown-administrator"))
+                .small()
+                .color(theme::TEXT_DIM),
+        );
         row_divider(ui);
         let mut connect_on_start = state.config.interface.connect_on_start;
         if widgets::toggle_row(

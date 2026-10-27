@@ -129,6 +129,10 @@ impl WorkerDispatcher {
 
     /// The saved "Local network" value is read here, not when the job was
     /// queued: a LAN change sends this right after it is written.
+    ///
+    /// Only an administrator changes Lockdown, so the GUI runs the CLI next
+    /// to it elevated and passes the LAN value: the elevated process may run
+    /// as another account with its own settings.
     pub(crate) fn set_lockdown(&self, enabled: bool) {
         self.spawn_task("rosetun-set-lockdown", move |publisher| {
             tracing::info!(enabled, "Lockdown command started");
@@ -136,11 +140,12 @@ impl WorkerDispatcher {
                 .store
                 .load()
                 .map_err(HelperCommandError::Store)
-                .and_then(|config| {
-                    with_helper(|client| client.set_lockdown(enabled, config.settings.allow_lan))
-                });
+                .and_then(|config| run_lockdown_command(enabled, config.settings.allow_lan));
             match &result {
-                Ok(()) => tracing::info!(enabled, "Lockdown command succeeded"),
+                Ok(LockdownChange::Done) => tracing::info!(enabled, "Lockdown command succeeded"),
+                Ok(LockdownChange::Declined) => {
+                    tracing::info!("Lockdown command cancelled at the administrator prompt");
+                }
                 Err(error) => tracing::warn!(%error, "Lockdown command failed"),
             }
             emit(
@@ -213,6 +218,30 @@ impl WorkerDispatcher {
     }
 }
 
+/// `rosetun.exe lockdown …` from the GUI's folder, elevated through UAC.
+fn run_lockdown_command(
+    enabled: bool,
+    allow_lan: bool,
+) -> Result<LockdownChange, HelperCommandError> {
+    let cli = std::env::current_exe()
+        .map_err(HelperCommandError::LockdownLaunch)?
+        .with_file_name(format!("rosetun{}", std::env::consts::EXE_SUFFIX));
+    match rosetun_shell::run_elevated(&cli, &lockdown_arguments(enabled, allow_lan)) {
+        Ok(None) => Ok(LockdownChange::Declined),
+        Ok(Some(0)) => Ok(LockdownChange::Done),
+        Ok(Some(code)) => Err(HelperCommandError::LockdownCommand(code)),
+        Err(error) => Err(HelperCommandError::LockdownLaunch(error)),
+    }
+}
+
+fn lockdown_arguments(enabled: bool, allow_lan: bool) -> String {
+    if enabled {
+        format!("lockdown on --lan {}", if allow_lan { "on" } else { "off" })
+    } else {
+        "lockdown off".to_owned()
+    }
+}
+
 fn conflicting_processes(processes: Vec<RunningProcess>) -> Vec<String> {
     let mut names: Vec<_> = processes
         .into_iter()
@@ -263,6 +292,18 @@ fn serve_connections(requests: &std::sync::mpsc::Receiver<()>, publisher: &Confi
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => client = None,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod lockdown_command_tests {
+    use super::lockdown_arguments;
+
+    #[test]
+    fn the_elevated_command_carries_the_lan_value_only_when_turning_on() {
+        assert_eq!(lockdown_arguments(true, true), "lockdown on --lan on");
+        assert_eq!(lockdown_arguments(true, false), "lockdown on --lan off");
+        assert_eq!(lockdown_arguments(false, true), "lockdown off");
     }
 }
 

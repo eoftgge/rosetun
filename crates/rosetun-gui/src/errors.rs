@@ -785,6 +785,9 @@ pub(crate) fn helper_command(language: Language, error: &HelperCommandError) -> 
             }
         },
         HelperCommandError::Client(error) => client(language, error),
+        HelperCommandError::LockdownLaunch(_) | HelperCommandError::LockdownCommand(_) => {
+            tr_in(language, "lockdown-command-failed", &FluentArgs::new())
+        }
     }
 }
 

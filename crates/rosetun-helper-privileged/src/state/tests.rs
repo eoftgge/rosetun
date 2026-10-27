@@ -6674,48 +6674,55 @@ impl RoutingBackend for LockdownSessionRouting {
 fn lockdown_program_permits_leave_with_a_session_and_return_after_it() {
     use super::dns::test_support::{Behavior, Server};
 
-    let server = Server::new(Behavior::Noerror);
-    let mut engines = EngineRegistry::new();
-    engines.register(Box::new(DnsEngine {
-        server: Some(server.address()),
-        stopped: Arc::new(AtomicUsize::new(0)),
-    }));
-    let plans = Arc::new(Mutex::new(Vec::new()));
-    let enabled = Arc::new(Mutex::new(Vec::new()));
-    let helper = Helper::new(
-        engines,
-        Box::new(LockdownSessionRouting {
-            plans: Arc::clone(&plans),
-            enabled: Arc::clone(&enabled),
-        }),
-        VerboseGate::default(),
-    );
-    shorten_dns_timeouts(&helper);
-    let with_programs = |apps: &LockdownApps| apps.gui.is_some() && apps.cli.is_some();
+    for administrator in [false, true] {
+        let server = Server::new(Behavior::Noerror);
+        let mut engines = EngineRegistry::new();
+        engines.register(Box::new(DnsEngine {
+            server: Some(server.address()),
+            stopped: Arc::new(AtomicUsize::new(0)),
+        }));
+        let plans = Arc::new(Mutex::new(Vec::new()));
+        let enabled = Arc::new(Mutex::new(Vec::new()));
+        let helper = Helper::new(
+            engines,
+            Box::new(LockdownSessionRouting {
+                plans: Arc::clone(&plans),
+                enabled: Arc::clone(&enabled),
+            }),
+            VerboseGate::default(),
+        );
+        shorten_dns_timeouts(&helper);
+        let caller = Caller::fake(b"owner", administrator);
+        let with_programs = |apps: &LockdownApps| apps.gui.is_some() && apps.cli.is_some();
 
-    helper.restore_lockdown();
-    assert!(with_programs(&enabled.lock().unwrap()[0]));
+        helper.restore_lockdown();
+        assert!(with_programs(&enabled.lock().unwrap()[0]));
 
-    let mut request = connect_request();
-    request.settings.allow_lan = true;
-    helper.connect(&request).expect("DNS responds");
-    assert_eq!(*plans.lock().unwrap(), [true]);
-    assert!(helper.session().unwrap().programs_withdrawn);
-    // The LAN sync runs before protection; the routing layer removes the
-    // programs' permits in the transaction that adds the session's filters.
-    assert_eq!(enabled.lock().unwrap().len(), 2);
-    assert_eq!(
-        helper.session().unwrap().lockdown_programs(),
-        LockdownApps {
-            gui: None,
-            cli: None,
-            ..lockdown::test_apps()
-        }
-    );
+        let mut request = connect_request();
+        request.settings.allow_lan = true;
+        helper
+            .connect_as(&caller, &request)
+            .expect("DNS responds");
+        assert_eq!(*plans.lock().unwrap(), [true]);
+        assert!(helper.session().unwrap().programs_withdrawn);
+        // Only an administrator's connect syncs Lockdown's LAN permits; it
+        // runs before protection, and the routing layer removes the
+        // programs' permits in the transaction that adds the session's.
+        let synced = usize::from(administrator);
+        assert_eq!(enabled.lock().unwrap().len(), 1 + synced);
+        assert_eq!(
+            helper.session().unwrap().lockdown_programs(),
+            LockdownApps {
+                gui: None,
+                cli: None,
+                ..lockdown::test_apps()
+            }
+        );
 
-    helper.disconnect().unwrap();
-    let after = enabled.lock().unwrap().clone();
-    assert_eq!(after.len(), 3);
-    assert!(with_programs(&after[2]));
-    assert!(!helper.session().unwrap().programs_withdrawn);
+        helper.disconnect_as(&caller).unwrap();
+        let after = enabled.lock().unwrap().clone();
+        assert_eq!(after.len(), 2 + synced);
+        assert!(with_programs(&after[1 + synced]));
+        assert!(!helper.session().unwrap().programs_withdrawn);
+    }
 }

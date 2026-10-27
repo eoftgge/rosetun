@@ -96,9 +96,16 @@ impl Helper {
         enabled: bool,
         allow_lan: bool,
     ) -> Result<(), HelperError> {
-        self.check_owner(caller)?;
+        // Lockdown is machine-wide and outlives the session, so the session
+        // owner alone may not turn it off. An administrator passes any
+        // owner check as well.
+        if !caller.administrator {
+            return Err(HelperError::new(
+                ErrorCode::AccessDenied,
+                "only an administrator can change Lockdown",
+            ));
+        }
         let mut session = self.session()?;
-        self.check_owner(caller)?;
         if self.with_status(|status| status.state.is_transitional()) {
             return Err(HelperError::new(
                 ErrorCode::Busy,
@@ -440,15 +447,25 @@ impl Session {
     }
 }
 
-/// Updates the persistent LAN permits to what a connect asks for.
+/// Updates the persistent LAN permits to what an administrator's connect
+/// asks for. Anyone else's connect leaves Lockdown as it is; the session's
+/// own LAN rules still follow the request.
 pub(super) fn sync_lan(
     routing: &dyn RoutingBackend,
     shared: &SharedLockdown,
     apps: &LockdownApps,
+    caller: &Caller,
     allow_lan: bool,
 ) -> Result<(), HelperError> {
     let state = read(shared);
     if !state.enabled || state.allow_lan == allow_lan {
+        return Ok(());
+    }
+    if !caller.administrator {
+        tracing::info!(
+            allow_lan = state.allow_lan,
+            "Lockdown LAN access stays: only an administrator changes it"
+        );
         return Ok(());
     }
     routing
@@ -598,7 +615,7 @@ mod tests {
     fn set_lockdown_writes_the_objects_and_reports_them_in_status() {
         let calls = Arc::new(Calls::default());
         let helper = lockdown_helper(&calls);
-        let caller = Caller::fake(b"user", false);
+        let caller = Caller::fake(b"admin", true);
         assert!(!helper.status().lockdown);
 
         helper.set_lockdown_as(&caller, true, true).unwrap();
@@ -636,7 +653,7 @@ mod tests {
     fn failed_removal_moves_the_session_back_above_the_block() {
         let calls = Arc::new(Calls::default());
         let helper = lockdown_helper(&calls);
-        let caller = Caller::fake(b"user", false);
+        let caller = Caller::fake(b"admin", true);
         helper.set_lockdown_as(&caller, true, false).unwrap();
         let moves = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&moves);
@@ -661,7 +678,7 @@ mod tests {
     fn lockdown_turned_on_during_a_session_permits_the_programs_only_after_it() {
         let calls = Arc::new(Calls::default());
         let helper = lockdown_helper(&calls);
-        let caller = Caller::fake(b"user", false);
+        let caller = Caller::fake(b"admin", true);
         helper.session.lock().unwrap().guard = Some(Guard {
             routing: Arc::new(Mutex::new(RoutingGuard::new_with_lockdown(|_| Ok(())))),
             scope: ProtectionScope::AllTraffic,
@@ -690,9 +707,51 @@ mod tests {
         let helper = lockdown_helper(&calls);
         let _session = helper.session.lock().unwrap();
         let error = helper
-            .set_lockdown_as(&Caller::fake(b"user", false), true, false)
+            .set_lockdown_as(&Caller::fake(b"admin", true), true, false)
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::Busy);
         assert!(calls.enabled.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn only_an_administrator_changes_lockdown() {
+        let calls = Arc::new(Calls::default());
+        let helper = lockdown_helper(&calls);
+        let user = Caller::fake(b"user", false);
+        let admin = Caller::fake(b"admin", true);
+
+        let error = helper.set_lockdown_as(&user, true, false).unwrap_err();
+        assert_eq!(error.code, ErrorCode::AccessDenied);
+        assert!(!helper.status().lockdown);
+        assert!(calls.enabled.lock().unwrap().is_empty());
+
+        helper.set_lockdown_as(&admin, true, false).unwrap();
+        let error = helper.set_lockdown_as(&user, false, false).unwrap_err();
+        assert_eq!(error.code, ErrorCode::AccessDenied);
+        assert!(helper.status().lockdown);
+        assert_eq!(calls.disabled.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_connect_changes_lockdown_lan_access_only_for_an_administrator() {
+        let calls = Arc::new(Calls::default());
+        let routing = LockdownRouting(Arc::clone(&calls));
+        let shared = super::SharedLockdown::default();
+        super::write(
+            &shared,
+            super::LockdownState {
+                enabled: true,
+                allow_lan: false,
+            },
+        );
+        let apps = super::test_apps();
+
+        super::sync_lan(&routing, &shared, &apps, &Caller::fake(b"user", false), true).unwrap();
+        assert!(calls.enabled.lock().unwrap().is_empty());
+        assert!(!super::read(&shared).allow_lan);
+
+        super::sync_lan(&routing, &shared, &apps, &Caller::fake(b"admin", true), true).unwrap();
+        assert_eq!(*calls.enabled.lock().unwrap(), [true]);
+        assert!(super::read(&shared).allow_lan);
     }
 }
