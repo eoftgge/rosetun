@@ -535,11 +535,20 @@ if ($RestoreCheckpoint) {
     Restore-RosetunVm
 }
 
+Write-Host "Checking the guest's network..."
+# An old lease (the host's switch moved to a new subnet) leaves the guest
+# without IPv4, so the baseline fails and the helper's first start can wait
+# for Defender's cloud lookup past the start timeout.
+Restore-RosetunGuestLease
+
 Write-Host 'Deploying binaries...'
 # A helper left running by a previous run keeps its executable locked.
 Stop-RosetunHelper
 Publish-Rosetun -BuildDir $BuildDir -SingBoxPath $SingBoxPath -RequestPath $RequestPath `
     -UseHostNode:$UseHostNode -XrayNode $xrayNode
+# A Lockdown left by an interrupted Lockdown matrix would close the guest.
+$reset = Invoke-RosetunHelperMode '--reset-firewall'
+if ($reset.ExitCode -ne 0) { throw "Initial --reset-firewall failed: $($reset.Output)" }
 Register-RosetunHelper
 Start-RosetunHelper
 $lanListener = Start-RosetunLanListener

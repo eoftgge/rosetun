@@ -2208,20 +2208,69 @@ function Get-RosetunGuestLease {
     }
 }
 
+function Get-RosetunHostSwitchSubnet {
+    # The host's address on the Default Switch and its prefix. The host picks
+    # a new subnet for the switch after its own reboot.
+    $address = Get-NetIPAddress -InterfaceAlias 'vEthernet (Default Switch)' -AddressFamily IPv4 `
+        -AddressState Preferred -ErrorAction Stop | Select-Object -First 1
+    [pscustomobject]@{ Address = $address.IPAddress; PrefixLength = [int]$address.PrefixLength }
+}
+
+function Test-RosetunSameSubnet {
+    param(
+        [Parameter(Mandatory)][string]$Address,
+        [Parameter(Mandatory)][string]$Other,
+        [Parameter(Mandatory)][int]$PrefixLength
+    )
+    $value = {
+        param($ip)
+        $bytes = [Net.IPAddress]::Parse($ip).GetAddressBytes()
+        [Array]::Reverse($bytes)
+        [BitConverter]::ToUInt32($bytes, 0)
+    }
+    $all = [uint64]4294967295
+    $mask = [uint32](($all -shl (32 - $PrefixLength)) -band $all)
+    ((& $value $Address) -band $mask) -eq ((& $value $Other) -band $mask)
+}
+
+function Get-RosetunGuestIpv4 {
+    # The guest's IPv4 addresses outside the tunnel, loopback and APIPA.
+    @(Invoke-RosetunGuest -ScriptBlock {
+            param($tunAlias)
+            Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.InterfaceAlias -ne $tunAlias -and $_.IPAddress -notlike '127.*' -and
+                        $_.IPAddress -notlike '169.254.*'
+                } |
+                ForEach-Object { $_.IPAddress }
+        } -ArgumentList $script:Config.TunAlias)
+}
+
 function Restore-RosetunGuestLease {
     # A boot under a boot-time block lost the DHCP lease on the VM, and the
-    # DHCP client only retries every few minutes on its own.
-    Invoke-RosetunGuest -ScriptBlock {
-        if (-not (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)) {
+    # DHCP client only retries every few minutes on its own. After a reboot
+    # of the host the Default Switch has a new subnet, while the guest, or a
+    # checkpoint restored, keeps the old lease and a default route to nowhere;
+    # Defender then holds a new executable's first start for its cloud lookup.
+    $subnet = Get-RosetunHostSwitchSubnet
+    $leased = {
+        $inSubnet = @(Get-RosetunGuestIpv4 | Where-Object {
+                Test-RosetunSameSubnet -Address $_ -Other $subnet.Address -PrefixLength $subnet.PrefixLength
+            })
+        $inSubnet.Count -gt 0 -and
+            [bool](Invoke-RosetunGuest -ScriptBlock { Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue })
+    }
+    if (-not (& $leased)) {
+        Invoke-RosetunGuest -ScriptBlock {
             & ipconfig.exe /renew *> $null
             $global:LASTEXITCODE = 0
         }
     }
-    $leased = Wait-RosetunCondition {
-        [bool](Invoke-RosetunGuest -ScriptBlock { Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue })
-    } -TimeoutSeconds 90
-    if (-not $leased) {
-        throw 'The guest got no default route back within 90 s.'
+    if (-not (Wait-RosetunCondition -Condition $leased -TimeoutSeconds 90)) {
+        $has = (Get-RosetunGuestIpv4) -join ', '
+        throw ("The guest got no address in the host's Default Switch subnet $($subnet.Address)/" +
+            "$($subnet.PrefixLength) within 90 s (it has: $has). With Lockdown on the host its " +
+            'guests stay offline; turn it off there.')
     }
 }
 

@@ -534,6 +534,9 @@ try {
         Restore-RosetunVm
     }
 
+    Write-Host "Checking the guest's network..."
+    Restore-RosetunGuestLease
+
     Write-Host 'Deploying binaries...'
     Stop-RosetunHelper
     Publish-Rosetun -BuildDir $BuildDir -SingBoxPath $SingBoxPath -RequestPath $RequestPath -UseHostNode:$UseHostNode
