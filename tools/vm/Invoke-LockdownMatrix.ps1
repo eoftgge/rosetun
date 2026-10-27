@@ -40,11 +40,19 @@ $lockdownKeys = [ordered]@{
     Outbound = '57bf2a6e-57db-4d99-bed7-ecbd2c63aa75'
     Inbound  = 'e599db5e-6aeb-4e4d-aa51-4314f1b3076c'
     Dhcp     = '98419911-30f0-4f71-9178-263b40bc7f6e'
-    Cli      = '729b156a-c411-4f01-b7d9-a789c94e992b'
     # The service's DNS permit (IPv4, UDP), present whenever Lockdown is.
     ServiceDns = 'cb0f8c4b-4967-4626-a493-a4e32369e6f5'
     Lan      = 'ce01436a-65d3-48e9-b921-e0a167b05f7b'
+    # The CLI's permits (IPv4: TCP 443, UDP DNS) exist only while no session
+    # runs. The GUI is not deployed, so it has none.
+    CliWeb   = '05b9da42-ea8e-4b28-a2b8-2404db01e0d1'
+    CliDns   = '982cc554-9f41-4c9a-833f-87cc5149725f'
+    # Retired in 0.4 (the CLI to any port); never present again.
+    RetiredCli = '729b156a-c411-4f01-b7d9-a789c94e992b'
 }
+# A local account outside Administrators, created for this run.
+$standardUser = 'RosetunMatrixUser'
+$standardDir = 'C:\rosetun-matrix-user'
 $probeProviderKey = '8c9a1588-cf36-44b8-80d8-987a6b81b4d2'
 # The service's dynamic provider (session.rs).
 $rosetunProviderKey = '51a47ec7-6459-4b84-8854-075e1576e7f9'
@@ -121,10 +129,186 @@ function Format-Objects {
 }
 
 function Test-LockdownInstalled {
+    # The program permits come and go with sessions; Test-ProgramPermits
+    # checks them.
     param([switch]$Lan)
     $objects = Get-LockdownObjects
     $objects.Provider -and $objects.Sublayer -and $objects.Outbound -and $objects.Inbound -and
-        $objects.Dhcp -and $objects.Cli -and $objects.ServiceDns -and $objects.Lan -eq [bool]$Lan
+        $objects.Dhcp -and $objects.ServiceDns -and $objects.Lan -eq [bool]$Lan -and -not $objects.RetiredCli
+}
+
+function Test-ProgramPermits {
+    # Whether the CLI's Lockdown permits are present (`-Present`) or absent.
+    param([switch]$Present)
+    $objects = Get-LockdownObjects
+    if ($objects.RetiredCli) { return $false }
+    if ($Present) { $objects.CliWeb -and $objects.CliDns } else { -not $objects.CliWeb -and -not $objects.CliDns }
+}
+
+function New-StandardAccount {
+    # Its password lives only in this run. The account gets a folder of its
+    # own for the runner scripts and their output.
+    $password = 'Rm1!' + [guid]::NewGuid().ToString('N')
+    Invoke-RosetunGuest -ScriptBlock {
+        param($name, $password, $dir)
+        Get-LocalUser -Name $name -ErrorAction SilentlyContinue | Remove-LocalUser
+        $secure = ConvertTo-SecureString -String $password -AsPlainText -Force
+        New-LocalUser -Name $name -Password $secure -PasswordNeverExpires -AccountNeverExpires `
+            -Description 'Rosetun Lockdown matrix' | Out-Null
+        # Users, and Performance Log Users for "Log on as a batch job", which
+        # a task with a stored password needs (the failure matrix's task as
+        # a fresh account never finished). Neither gives administrator
+        # rights. By SID, since group names are localized.
+        foreach ($group in 'S-1-5-32-545', 'S-1-5-32-559') {
+            try { Add-LocalGroupMember -SID $group -Member $name -ErrorAction Stop }
+            catch [Microsoft.PowerShell.Commands.MemberExistsException] { }
+        }
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        & icacls.exe $dir /grant "${name}:(OI)(CI)M" | Out-Null
+        $global:LASTEXITCODE = 0
+    } -ArgumentList $standardUser, $password, $standardDir
+    $password
+}
+
+function Remove-StandardAccount {
+    Invoke-RosetunGuest -ScriptBlock {
+        param($name, $dir)
+        $user = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+        if ($user) {
+            Get-CimInstance -ClassName Win32_UserProfile |
+                Where-Object { $_.SID -eq $user.SID.Value } |
+                Remove-CimInstance -ErrorAction SilentlyContinue
+            Remove-LocalUser -Name $name
+        }
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    } -ArgumentList $standardUser, $standardDir
+}
+
+function Invoke-AsStandardUser {
+    # Runs a program as the standard account through a one-off scheduled task
+    # with its password: the token has no administrator rights and no
+    # elevation. Arguments must not contain spaces or quotes.
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [int]$TimeoutSeconds = 30
+    )
+    Invoke-RosetunGuest -ScriptBlock {
+        param($name, $password, $dir, $file, $arguments, $timeout)
+        $id = [guid]::NewGuid().ToString('N')
+        $runner = Join-Path $dir "run-$id.ps1"
+        $out = Join-Path $dir "out-$id.txt"
+        $err = Join-Path $dir "err-$id.txt"
+        $code = Join-Path $dir "code-$id.txt"
+        $task = "RosetunMatrixUser-$id"
+        $quote = { param($value) "'" + ($value -replace "'", "''") + "'" }
+        $script = @(
+            "`$process = Start-Process -FilePath $(& $quote $file) -ArgumentList $(& $quote $arguments) " +
+                "-WorkingDirectory $(& $quote $dir) -NoNewWindow -PassThru " +
+                "-RedirectStandardOutput $(& $quote $out) -RedirectStandardError $(& $quote $err)"
+            # Without reading the handle first, ExitCode stays empty.
+            '$null = $process.Handle'
+            "if (`$process.WaitForExit($($timeout * 1000))) { `$result = `$process.ExitCode } else { `$process.Kill(); `$result = 'timeout' }"
+            "Set-Content -LiteralPath $(& $quote $code) -Value `$result"
+        ) -join "`r`n"
+        [IO.File]::WriteAllText($runner, $script)
+        $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+            -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runner`"" -WorkingDirectory $dir
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::FromMinutes(2)) `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        Register-ScheduledTask -TaskName $task -Action $action -Settings $settings -User $name `
+            -Password $password -RunLevel Limited | Out-Null
+        try {
+            Start-ScheduledTask -TaskName $task
+            $deadline = (Get-Date).AddSeconds($timeout + 30)
+            while (-not (Test-Path -LiteralPath $code) -and (Get-Date) -lt $deadline) {
+                Start-Sleep -Milliseconds 250
+            }
+            if (-not (Test-Path -LiteralPath $code)) {
+                # 0x80070569: the account lacks "Log on as a batch job".
+                $last = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
+                throw ("The task as {0} did not finish; last result 0x{1:X8}." -f $name, $last)
+            }
+            $text = (Get-Content -Raw -LiteralPath $code).Trim()
+            $output = @($out, $err | Where-Object { Test-Path -LiteralPath $_ } |
+                ForEach-Object { Get-Content -Raw -LiteralPath $_ }) -join "`n"
+            [pscustomobject]@{
+                ExitCode = if ($text -match '^-?\d+$') { [int]$text } else { $text }
+                Output   = $output.Trim()
+            }
+        }
+        finally {
+            Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $runner, $out, $err, $code -ErrorAction SilentlyContinue
+        }
+    } -ArgumentList $standardUser, $script:standardPassword, $standardDir, $FilePath, ($Arguments -join ' '), $TimeoutSeconds
+}
+
+function Invoke-StandardFetch {
+    # Rosetun's own sing-box.exe started by the standard account, with no
+    # node config: plain (the default route, so into the tunnel while one is
+    # up) or bound to the physical adapter's address (outside the tunnel).
+    # `Ok` is true when the fetch succeeded, false when it failed and $null
+    # when the account could not run it, which no check counts as a pass.
+    param([switch]$Physical)
+    $arguments = @('tools', 'fetch', 'https://1.1.1.1')
+    if ($Physical) {
+        $config = Join-Path $standardDir 'physical.json'
+        $address = Get-RosetunEgressAddress
+        Invoke-RosetunGuest -ScriptBlock {
+            param($path, $address)
+            $outbound = [ordered]@{ type = 'direct'; tag = 'direct'; inet4_bind_address = $address }
+            $json = [ordered]@{ log = @{ level = 'error' }; outbounds = @($outbound) } | ConvertTo-Json -Depth 5
+            [IO.File]::WriteAllText($path, $json)
+        } -ArgumentList $config, $address
+        $arguments = @('-c', $config) + $arguments
+    }
+    try {
+        $run = Invoke-AsStandardUser -FilePath (Join-Path $guestDir 'sing-box.exe') -Arguments $arguments
+        [pscustomobject]@{ Ok = $run.ExitCode -eq 0; Note = "exit $($run.ExitCode): $($run.Output)" }
+    }
+    catch {
+        [pscustomobject]@{ Ok = $null; Note = "not run: $_" }
+    }
+}
+
+function Test-StandardFetchBlocked {
+    # Both fetches fail: without a session Lockdown holds, and the engine
+    # permits match only the service's account.
+    param([Parameter(Mandatory)][string]$Scenario)
+    $plain = Invoke-StandardFetch
+    Test-Step $Scenario 'sing-box.exe tools fetch from a standard account fails' {
+        $standardFetchWorks -and $plain.Ok -eq $false
+    } -Note (Get-StandardFetchNote $plain)
+    $physical = Invoke-StandardFetch -Physical
+    Test-Step $Scenario 'the same, bound to the physical adapter, fails' {
+        $standardFetchWorks -and $physical.Ok -eq $false
+    } -Note (Get-StandardFetchNote $physical)
+}
+
+function Get-StandardFetchNote {
+    # A failure proves nothing unless the same fetch worked without Lockdown.
+    param([Parameter(Mandatory)]$Fetch)
+    if ($standardFetchWorks) { $Fetch.Note } else { "not meaningful: the fetch failed in '1 off' too; $($Fetch.Note)" }
+}
+
+function Test-StandardLockdownOff {
+    # `rosetun lockdown off` from the standard account is refused with the
+    # hint and Lockdown stays.
+    param([Parameter(Mandatory)][string]$Scenario)
+    try {
+        $off = Invoke-AsStandardUser -FilePath (Join-Path $guestDir 'rosetun.exe') -Arguments @('lockdown', 'off')
+    }
+    catch {
+        $off = [pscustomobject]@{ ExitCode = 'not run'; Output = "$_" }
+    }
+    Test-Step $Scenario 'rosetun lockdown off from a standard account is refused' {
+        $off.ExitCode -is [int] -and $off.ExitCode -ne 0 -and $off.Output -match 'administrator'
+    } -Note "exit $($off.ExitCode): $($off.Output)"
+    Test-Step $Scenario 'Lockdown stays after the refusal' {
+        (Get-LockdownStatusLine) -eq 'on' -and (Test-LockdownInstalled)
+    } -Note (Format-Objects (Get-LockdownObjects))
 }
 
 function Test-LockdownAbsent {
@@ -327,6 +511,8 @@ $zone = $null
 $guestResolver = $null
 $subscriptionId = $null
 $egressWatchActive = $false
+$standardPassword = $null
+$standardFetchWorks = $false
 try {
     if ($Build) {
         Write-Host 'Building...'
@@ -393,12 +579,25 @@ try {
     Test-Step '1 off' 'rosetun sub add from sub.rosetun.test succeeds' { $add.ExitCode -eq 0 -and $subscriptionId } -Note $add.Output
     if (-not $subscriptionId) { throw 'The subscription by name could not be added.' }
     Test-ByName '1 off' $requestByName
+    # The standard account's fetches must work here, or every "fails" check
+    # below proves nothing; those then fail as not meaningful.
+    try { $standardPassword = New-StandardAccount }
+    catch { Test-Step '1 off' 'a standard account is created' { $false } -Note "$_" }
+    $plain = Invoke-StandardFetch
+    $physical = Invoke-StandardFetch -Physical
+    Test-Step '1 off' 'sing-box.exe tools fetch from a standard account works' { $plain.Ok } -Note $plain.Note
+    Test-Step '1 off' 'the same, bound to the physical adapter, works' { $physical.Ok } -Note $physical.Note
+    $standardFetchWorks = [bool]($plain.Ok -and $physical.Ok)
 
     # 2. On while disconnected.
     $on = Invoke-Lockdown on
     Test-Step '2 on, disconnected' 'rosetun lockdown on succeeds' { $on.ExitCode -eq 0 } -Note $on.Output
     Test-Step '2 on, disconnected' 'objects present, without LAN' { Test-LockdownInstalled } -Note (Format-Objects (Get-LockdownObjects))
     Test-Step '2 on, disconnected' 'status: lockdown on' { (Get-LockdownStatusLine) -eq 'on' }
+    Test-Step '2 on, disconnected' 'CLI permits present, the retired one absent' { Test-ProgramPermits -Present } `
+        -Note (Format-Objects (Get-LockdownObjects))
+    Test-StandardLockdownOff '2 standard account'
+    Test-StandardFetchBlocked '2 standard account'
     Test-Step '2 on, disconnected' 'direct egress closed' { -not (Test-RosetunDirectEgress) }
     Test-Step '2 on, disconnected' 'direct DNS over UDP closed' { -not (Test-RosetunDirectDns) }
     Test-Step '2 on, disconnected' 'direct DNS over TCP closed' { -not (Test-RosetunDirectDns -Tcp) }
@@ -448,10 +647,23 @@ try {
     Test-Step '4 connected' 'direct DNS over TCP closed' { -not (Test-RosetunDirectDns -Tcp) }
     Test-Step '4 connected' 'IPv6 to the host closed' { -not (Test-RosetunIpv6Open -Neighbors $ipv6Neighbors) }
     Test-Step '4 connected' 'the host cannot reach a guest listener' { -not (Test-InboundFromHost $guestListenerPort) }
+    Test-Step '4 connected' 'CLI permits removed for the session' { Test-ProgramPermits } -Note (Format-Objects (Get-LockdownObjects))
+    Test-Step '4 connected' 'a program at the CLI path stays closed outside the tunnel' { -not (Test-CliPathEgress) }
+    Test-StandardLockdownOff '4 standard account, connected'
+    # Without binding, the fetch follows the default route into the tunnel:
+    # not a leak, so only recorded.
+    $plain = Invoke-StandardFetch
+    Add-Info '4 standard account, connected' 'plain sing-box.exe tools fetch (through the tunnel)' "ok: $($plain.Ok); $($plain.Note)"
+    $physical = Invoke-StandardFetch -Physical
+    Test-Step '4 standard account, connected' 'sing-box.exe tools fetch bound to the physical adapter fails' {
+        $standardFetchWorks -and $physical.Ok -eq $false
+    } -Note (Get-StandardFetchNote $physical)
     Disconnect-RosetunTunnel | Out-Null
     Test-Step '4 disconnected' 'direct egress closed' { -not (Test-RosetunDirectEgress) }
     Test-Step '4 disconnected' 'no Rosetun session filters left' { -not (Test-RosetunGuestWfpKey $rosetunProviderKey) }
     Test-Step '4 disconnected' 'objects still present' { Test-LockdownInstalled }
+    Test-Step '4 disconnected' 'CLI permits back' { Test-ProgramPermits -Present } -Note (Format-Objects (Get-LockdownObjects))
+    Test-StandardFetchBlocked '4 standard account, disconnected'
 
     $unprotected = Connect-RosetunTunnel -RequestName 'request-apply-unprotected.json' -Quiet
     Test-Step '4 kill switch off' 'connect succeeds' { $unprotected.ExitCode -eq 0 } -Note $unprotected.Output
@@ -465,12 +677,16 @@ try {
     Test-Step '5 killed, on' 'IPv6 to the host closed' { -not (Test-RosetunIpv6Open -Neighbors $ipv6Neighbors) }
     Test-Step '5 killed, on' 'the dynamic session is gone' { -not (Test-RosetunGuestWfpKey $rosetunProviderKey) }
     Test-Step '5 killed, on' 'objects still present' { Test-LockdownInstalled }
+    # The session removed them for good; only the service puts them back.
+    Test-Step '5 killed, on' 'CLI permits still absent' { Test-ProgramPermits } -Note (Format-Objects (Get-LockdownObjects))
     Start-RosetunHelper
     $startLog = Get-RosetunHelperLogSince 0
     Test-Step '5 restarted, on' 'the service finds Lockdown complete' {
         $startLog -match 'Lockdown is on.*\bcomplete=true'
     } -Note (($startLog -split "`n" | Select-String -Pattern 'Lockdown') -join ' | ')
     Test-Step '5 restarted, on' 'status: lockdown on' { (Get-LockdownStatusLine) -eq 'on' }
+    Test-Step '5 restarted, on' 'CLI permits back without a session' { Test-ProgramPermits -Present } `
+        -Note (Format-Objects (Get-LockdownObjects))
     $off = Invoke-Lockdown off
     Test-Step '5 off' 'rosetun lockdown off succeeds' { $off.ExitCode -eq 0 } -Note $off.Output
     Connect-RosetunTunnel | Out-Null
@@ -737,6 +953,7 @@ finally {
     if ($bootTaskRegistered) {
         try { Unregister-RosetunBootCheck -TaskName $bootTask } catch { Write-Warning "$_" }
     }
+    try { Remove-StandardAccount } catch { Write-Warning "Could not remove the account ${standardUser}: $_" }
     try {
         Invoke-RosetunGuest -ScriptBlock {
             param($dir)
