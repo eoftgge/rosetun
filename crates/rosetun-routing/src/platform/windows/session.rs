@@ -13,6 +13,7 @@ use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
 
 use super::{
     filters::{self, Placement},
+    lockdown,
     policy::{self, BootstrapPolicy},
     tunnel,
 };
@@ -154,6 +155,9 @@ impl Drop for Engine {
 /// instead of Rosetun's: a permit there sits above Lockdown's block-all and
 /// opens it, while a soft permit in a lower sublayer could not (study, run 3).
 /// The provider and the Rosetun sublayer stay in this session either way.
+/// The same transaction removes Lockdown's GUI and CLI permits, which would
+/// sit above the session's block-all; the deletion of those persistent
+/// filters outlives this dynamic session, and the service restores them.
 #[derive(Debug)]
 pub(super) struct WfpProtectionSession {
     session: Option<Engine>,
@@ -181,6 +185,9 @@ impl WfpProtectionSession {
         let mut bootstrap_filter_ids = Vec::with_capacity(bootstrap_policy.rules.len());
         for rule in &bootstrap_policy.rules {
             bootstrap_filter_ids.push(filters::add_rule(&session, rule, &placement)?);
+        }
+        if plan.lockdown {
+            lockdown::withdraw_programs(&session)?;
         }
 
         transaction.commit()?;
@@ -345,6 +352,9 @@ impl ProtectionSession for WfpProtectionSession {
             .chain(&self.probe_filter_ids)
         {
             filters::delete_rule(session, id)?;
+        }
+        if lockdown {
+            lockdown::withdraw_programs(session)?;
         }
 
         transaction.commit()?;

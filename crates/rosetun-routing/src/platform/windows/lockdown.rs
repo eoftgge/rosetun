@@ -54,6 +54,8 @@ mod keys {
         0xa6af7d22_44d1_4318_8d63_dc1c9ca8a2e8,
     ];
     pub(super) const OUTBOUND_DHCP: u128 = 0x98419911_30f0_4f71_9178_263b40bc7f6e;
+    /// Retired in 0.4: the GUI and CLI permits to any port. Still removed
+    /// wherever Lockdown's filters are, since older versions left them.
     pub(super) const OUTBOUND_GUI: [u128; 2] = [
         0x77c4c790_4f77_451d_aa96_f5e28daa304e,
         0x299d3b28_6573_4642_a6c5_fe03b92c693b,
@@ -61,6 +63,27 @@ mod keys {
     pub(super) const OUTBOUND_CLI: [u128; 2] = [
         0x729b156a_c411_4f01_b7d9_a789c94e992b,
         0x9c72b60d_eece_47de_8f81_e48c081cee74,
+    ];
+    /// TCP permits, `[IPv4, IPv6]`, each `WEB_PORTS`.
+    pub(super) const OUTBOUND_GUI_WEB: [[u128; 2]; 2] = [
+        [
+            0x09743848_d967_4e6c_a308_f69f1463a391,
+            0xbdabfc6a_2126_4919_bb2f_f12afcd493f7,
+        ],
+        [
+            0xfe0fe381_3ea1_4c95_8295_ec71eb1f4468,
+            0x1b5c9178_7e70_4378_82c1_598da15df2c2,
+        ],
+    ];
+    pub(super) const OUTBOUND_CLI_WEB: [[u128; 2]; 2] = [
+        [
+            0x05b9da42_ea8e_4b28_a2b8_2404db01e0d1,
+            0xe1d62bb1_9461_4a6e_9661_a361ee2360bf,
+        ],
+        [
+            0xbc5492bb_a4b2_4e58_b3fa_94ed74688b68,
+            0x742c7479_7054_40bf_a1ad_bf32bed8ddbf,
+        ],
     ];
     /// DNS permits, `[IPv4, IPv6]`, each `[UDP, TCP]`.
     pub(super) const OUTBOUND_SERVICE_DNS: [[u128; 2]; 2] = [
@@ -178,14 +201,23 @@ const BLOCK_WEIGHT: u8 = 0;
 /// block (3), so the router's resolver answers them with "Local network" on,
 /// and apart from the tunnel permit (4).
 const RESOLVER_WEIGHT: u8 = 5;
+/// The GUI's and the CLI's TCP ports while no session runs: HTTPS and HTTP
+/// for subscriptions and lists.
+const WEB_PORTS: [u16; 2] = [443, 80];
+const TCP: u8 = 6;
 const FAMILIES: [AddressFamily; 2] = [AddressFamily::Ipv4, AddressFamily::Ipv6];
 
-/// What a filter belongs to, for `LockdownStatus::complete`.
+/// What a filter belongs to, for `LockdownStatus::complete` and for
+/// `withdraw_programs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Part {
     Base,
     Lan,
+    /// The service's DNS permit.
     App,
+    /// The GUI's and the CLI's permits, which exist only while no session
+    /// runs: the session's block sits below them in the same sublayer.
+    Program,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,54 +328,60 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
         ]);
         for (keys, name, path) in [
             (
-                keys::OUTBOUND_GUI,
-                "Rosetun Lockdown: permit Rosetun",
+                keys::OUTBOUND_GUI_WEB,
+                "Rosetun Lockdown: permit Rosetun's web requests",
                 &apps.gui,
             ),
             (
-                keys::OUTBOUND_CLI,
-                "Rosetun Lockdown: permit the Rosetun CLI",
+                keys::OUTBOUND_CLI_WEB,
+                "Rosetun Lockdown: permit the Rosetun CLI's web requests",
                 &apps.cli,
             ),
         ] {
             if let Some(path) = path {
-                set.push(filter(
-                    keys[index],
-                    name,
-                    Rule::allow(
-                        family,
-                        vec![Condition::Application(path.clone())],
-                        BOOTSTRAP_ALLOW_WEIGHT,
-                    ),
-                    false,
-                    Part::App,
-                ));
+                for (key, port) in keys[index].into_iter().zip(WEB_PORTS) {
+                    set.push(filter(
+                        key,
+                        name,
+                        Rule::allow(
+                            family,
+                            vec![
+                                Condition::Application(path.clone()),
+                                Condition::Protocol(TCP),
+                                Condition::RemotePort(port),
+                            ],
+                            BOOTSTRAP_ALLOW_WEIGHT,
+                        ),
+                        false,
+                        Part::Program,
+                    ));
+                }
             }
         }
-        for (keys, name, path, service) in [
+        for (keys, name, path, part) in [
             (
                 keys::OUTBOUND_SERVICE_DNS,
                 "Rosetun Lockdown: permit the Rosetun service's DNS queries",
                 &apps.service,
-                true,
+                Part::App,
             ),
             (
                 keys::OUTBOUND_GUI_DNS,
                 "Rosetun Lockdown: permit Rosetun's DNS queries",
                 &apps.gui,
-                false,
+                Part::Program,
             ),
             (
                 keys::OUTBOUND_CLI_DNS,
                 "Rosetun Lockdown: permit the Rosetun CLI's DNS queries",
                 &apps.cli,
-                false,
+                Part::Program,
             ),
         ] {
             if let Some(path) = path {
                 for (key, protocol) in keys[index].into_iter().zip(DNS_PROTOCOLS) {
                     let mut conditions = vec![Condition::Application(path.clone())];
-                    if service {
+                    if part == Part::App {
                         conditions.push(Condition::ServiceAccount);
                     }
                     conditions.extend([Condition::Protocol(protocol), Condition::RemotePort(53)]);
@@ -352,7 +390,7 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
                         name,
                         Rule::allow(family, conditions, RESOLVER_WEIGHT),
                         false,
-                        Part::App,
+                        part,
                     ));
                 }
             }
@@ -429,14 +467,49 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
 
 /// Every filter any version of the set can hold, for removal.
 pub(super) fn every_filter() -> Vec<LockdownFilter> {
-    filter_set(
+    let mut all = filter_set(
         true,
         &LockdownApps {
             gui: Some(PathBuf::new()),
             cli: Some(PathBuf::new()),
             service: Some(PathBuf::new()),
         },
-    )
+    );
+    for (index, family) in FAMILIES.into_iter().enumerate() {
+        for key in [keys::OUTBOUND_GUI[index], keys::OUTBOUND_CLI[index]] {
+            all.push(LockdownFilter {
+                key,
+                name: "Rosetun Lockdown: retired program permit",
+                rule: Rule::allow(
+                    family,
+                    vec![Condition::Application(PathBuf::new())],
+                    BOOTSTRAP_ALLOW_WEIGHT,
+                ),
+                boottime: false,
+                part: Part::Program,
+            });
+        }
+    }
+    all
+}
+
+/// Removes the GUI's and the CLI's permits inside the caller's transaction,
+/// when the session's filters go into the Lockdown sublayer: its block sits
+/// below them there. The service puts them back once the session's filters
+/// are gone (`enable` with the programs).
+pub(super) fn withdraw_programs(engine: &Engine) -> Result<(), RoutingError> {
+    for key in program_keys() {
+        delete_filter(engine, key)?;
+    }
+    Ok(())
+}
+
+fn program_keys() -> Vec<u128> {
+    every_filter()
+        .into_iter()
+        .filter(|filter| filter.part == Part::Program)
+        .map(|filter| filter.key)
+        .collect()
 }
 
 pub(in crate::platform) fn status() -> Result<LockdownStatus, RoutingError> {
@@ -455,7 +528,7 @@ fn read_status(engine: &Engine) -> Result<LockdownStatus, RoutingError> {
                 lan_total += 1;
                 lan_present += usize::from(filter_exists(engine, filter.key)?);
             }
-            Part::App => {}
+            Part::App | Part::Program => {}
         }
     }
     Ok(LockdownStatus {
@@ -865,7 +938,7 @@ mod tests {
         let all = every_filter();
         let keys = all.iter().map(|filter| filter.key).collect::<HashSet<_>>();
         assert_eq!(keys.len(), all.len());
-        assert_eq!(all.len(), 60);
+        assert_eq!(all.len(), 68);
         for object in [
             super::PROVIDER_KEY,
             super::SUBLAYER_KEY,
@@ -922,9 +995,9 @@ mod tests {
         let set = filter_set(false, &apps());
         let programs = set
             .iter()
-            .filter(|filter| filter.part == Part::App)
+            .filter(|filter| matches!(filter.part, Part::App | Part::Program))
             .collect::<Vec<_>>();
-        assert_eq!(programs.len(), 16);
+        assert_eq!(programs.len(), 20);
         for filter in programs {
             assert!(!filter.boottime);
             assert_eq!(filter.rule.layer, Layer::Connect);
@@ -941,13 +1014,134 @@ mod tests {
                 ..apps()
             },
         );
-        // The CLI's two permits and four DNS permits, the service's four.
+        // The CLI's four web and four DNS permits, the service's four.
         assert_eq!(
             only_cli
                 .iter()
-                .filter(|filter| filter.part == Part::App)
+                .filter(|filter| matches!(filter.part, Part::App | Part::Program))
                 .count(),
-            10
+            12
+        );
+    }
+
+    #[test]
+    fn the_gui_and_the_cli_reach_only_tcp_443_and_80_under_new_keys() {
+        let set = filter_set(false, &apps());
+        let web = set
+            .iter()
+            .filter(|filter| filter.part == Part::Program && filter.rule.weight != RESOLVER_WEIGHT)
+            .collect::<Vec<_>>();
+        assert_eq!(web.len(), 8);
+        let retired = [super::keys::OUTBOUND_GUI, super::keys::OUTBOUND_CLI].concat();
+        for filter in &web {
+            assert!(!retired.contains(&filter.key));
+            assert_eq!(filter.rule.weight, BOOTSTRAP_ALLOW_WEIGHT);
+            assert!(matches!(
+                filter.rule.conditions.as_slice(),
+                [
+                    Condition::Application(_),
+                    Condition::Protocol(6),
+                    Condition::RemotePort(443 | 80)
+                ]
+            ));
+        }
+        for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
+            for port in [443, 80] {
+                assert_eq!(
+                    web.iter()
+                        .filter(|filter| filter.rule.family == family
+                            && filter.rule.conditions.contains(&Condition::RemotePort(port)))
+                        .count(),
+                    2
+                );
+            }
+        }
+
+        let rules = persistent(&set);
+        let apps = apps();
+        let gui = Some(Process {
+            path: apps.gui.as_deref().expect("installed"),
+            service_account: false,
+        });
+        let decide = |protocol, port| {
+            decide_for(gui, Layer::Connect, &rules, [203, 0, 113, 7], protocol, port, 0)
+        };
+        assert_eq!(decide(6, 443), Action::Allow);
+        assert_eq!(decide(6, 80), Action::Allow);
+        assert_eq!(decide(6, 8443), Action::Block);
+        assert_eq!(decide(17, 443), Action::Block);
+    }
+
+    #[test]
+    fn removal_and_withdrawal_cover_the_retired_permits_but_not_the_service() {
+        let all = every_filter();
+        for key in [super::keys::OUTBOUND_GUI, super::keys::OUTBOUND_CLI].concat() {
+            assert!(all.iter().any(|filter| filter.key == key));
+            assert!(super::program_keys().contains(&key));
+        }
+        let withdrawn = super::program_keys();
+        assert_eq!(withdrawn.len(), 4 + 8 + 8);
+        for key in super::keys::OUTBOUND_SERVICE_DNS.concat() {
+            assert!(!withdrawn.contains(&key));
+        }
+        for key in [
+            super::keys::OUTBOUND_GUI_WEB.concat(),
+            super::keys::OUTBOUND_CLI_WEB.concat(),
+            super::keys::OUTBOUND_GUI_DNS.concat(),
+            super::keys::OUTBOUND_CLI_DNS.concat(),
+        ]
+        .concat()
+        {
+            assert!(withdrawn.contains(&key));
+        }
+    }
+
+    #[test]
+    fn without_the_program_permits_the_session_blocks_the_gui_outside_the_tunnel() {
+        let plan = RoutingPlan {
+            scope: ProtectionScope::AllTraffic,
+            allow_lan: true,
+            lockdown: true,
+        };
+        let session =
+            BootstrapPolicy::from_plan(&plan, &[std::path::Path::new(r"C:\sing-box.exe")]);
+        let tunnel = policy::tunnel_authorization(123, true);
+        let apps = apps();
+        let gui = Some(Process {
+            path: apps.gui.as_deref().expect("installed"),
+            service_account: false,
+        });
+        let service = Some(Process {
+            path: apps.service.as_deref().expect("installed"),
+            service_account: true,
+        });
+        let set = filter_set(true, &apps);
+        let withdrawn = set
+            .iter()
+            .filter(|filter| !super::program_keys().contains(&filter.key))
+            .cloned()
+            .collect::<Vec<_>>();
+        let decide = |set: &[LockdownFilter], process, port, luid| {
+            let rules = persistent(set)
+                .into_iter()
+                .chain(&session.rules)
+                .chain(&tunnel)
+                .collect::<Vec<_>>();
+            decide_for(process, Layer::Connect, &rules, [203, 0, 113, 7], 6, port, luid)
+        };
+        // With the permits the GUI would pass the session's block.
+        assert_eq!(decide(&set, gui, 443, 999), Action::Allow);
+        assert_eq!(decide(&withdrawn, gui, 443, 999), Action::Block);
+        assert_eq!(decide(&withdrawn, gui, 53, 999), Action::Block);
+        assert_eq!(decide(&withdrawn, gui, 443, 123), Action::Allow);
+        // The service keeps its resolver.
+        let rules = persistent(&withdrawn)
+            .into_iter()
+            .chain(&session.rules)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decide_for(service, Layer::Connect, &rules, [192, 168, 3, 1], 17, 53, 0),
+            Action::Allow
         );
     }
 
@@ -993,15 +1187,16 @@ mod tests {
                     );
                 }
             }
-            // The service gets DNS only; the GUI keeps its permit for everything.
+            // The service gets DNS only; the GUI also gets the web ports.
             assert_eq!(decide(service, [203, 0, 113, 7], 6, 443), Action::Block);
             assert_eq!(decide(gui, [203, 0, 113, 7], 6, 443), Action::Allow);
+            assert_eq!(decide(gui, [203, 0, 113, 7], 6, 22), Action::Block);
         }
         assert!(
             filter_set(true, &apps)
                 .iter()
                 .filter(|filter| filter.rule.weight == RESOLVER_WEIGHT)
-                .all(|filter| filter.part == Part::App
+                .all(|filter| matches!(filter.part, Part::App | Part::Program)
                     && !filter.boottime
                     && filter.rule.action == Action::Allow
                     && filter.rule.conditions.contains(&Condition::RemotePort(53)))

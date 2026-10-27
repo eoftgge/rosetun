@@ -32,7 +32,7 @@ use rosetun_ipc::{
     SessionExit,
 };
 use rosetun_routing::{
-    ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
+    LockdownApps, ProtectionScope, RoutingBackend, RoutingGuard, RoutingPlan, TunnelInterface,
 };
 
 use crate::list_store::{ListChunk, ListStore, valid_hash, valid_tag};
@@ -276,6 +276,11 @@ struct Session {
     lists: Option<Arc<Mutex<ListStore>>>,
     list_run_dir: Option<PathBuf>,
     lockdown: lockdown::SharedLockdown,
+    /// The programs Lockdown permits; a hook for tests.
+    lockdown_apps: fn() -> LockdownApps,
+    /// Lockdown's GUI and CLI permits are removed because the session's
+    /// filters sit in its sublayer; `teardown` puts them back.
+    programs_withdrawn: bool,
     /// The engine binaries the current protection permits, for changing its
     /// scope when Lockdown is turned on or off.
     protected_binaries: Vec<PathBuf>,
@@ -359,6 +364,11 @@ impl Helper {
                 lists: None,
                 list_run_dir: None,
                 lockdown,
+                #[cfg(not(test))]
+                lockdown_apps: lockdown::lockdown_apps,
+                #[cfg(test)]
+                lockdown_apps: lockdown::test_apps,
+                programs_withdrawn: false,
                 protected_binaries: Vec::new(),
                 cold_start: true,
                 #[cfg(not(test))]
@@ -1992,7 +2002,12 @@ impl Session {
 
         self.protected_binaries = binaries.iter().map(|path| path.to_path_buf()).collect();
 
-        lockdown::sync_lan(self.routing.as_ref(), &self.lockdown, settings.allow_lan)?;
+        lockdown::sync_lan(
+            self.routing.as_ref(),
+            &self.lockdown,
+            &self.lockdown_programs(),
+            settings.allow_lan,
+        )?;
         let lockdown = lockdown::read(&self.lockdown).enabled;
         if lockdown && !settings.kill_switch {
             tracing::info!("Lockdown is on: the kill switch is forced on");
@@ -2023,6 +2038,8 @@ impl Session {
                                 routing: Arc::new(Mutex::new(routing)),
                                 scope,
                             });
+                            // The same transaction removed Lockdown's GUI and CLI permits.
+                            self.programs_withdrawn |= lockdown;
                             tracing::info!(?scope, "routing protection installed");
                         }
                         Err(error) if scope == ProtectionScope::DnsOnly => {
@@ -2052,6 +2069,7 @@ impl Session {
                             HelperError::new(ErrorCode::RoutingFailed, error.to_string())
                         })?;
                     guard.scope = scope;
+                    self.programs_withdrawn |= lockdown;
                 }
             }
         }
@@ -2631,6 +2649,7 @@ impl Session {
         {
             tracing::error!(%error, "failed to roll back routes");
         }
+        self.restore_lockdown_programs();
         *self
             .owner
             .lock()

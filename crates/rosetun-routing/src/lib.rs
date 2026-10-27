@@ -79,6 +79,10 @@ pub struct LockdownStatus {
 /// no permit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LockdownApps {
+    /// The GUI and the CLI get DNS and TCP 443 and 80, only while no session
+    /// runs: a session under Lockdown removes their permits in the
+    /// transaction that adds its own filters, and the service passes `None`
+    /// for both while a session's filters stay.
     pub gui: Option<std::path::PathBuf>,
     pub cli: Option<std::path::PathBuf>,
     /// The service itself, permitted DNS only: it resolves server names

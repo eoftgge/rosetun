@@ -6621,3 +6621,101 @@ fn status_shows_the_engine_check_while_a_connect_waits_for_it() {
     assert_eq!(helper.status().connect_stage, None);
     helper.disconnect().unwrap();
 }
+
+/// Lockdown is installed; records each `begin_protection`'s Lockdown flag
+/// and the programs of each `enable_lockdown`.
+#[derive(Debug)]
+struct LockdownSessionRouting {
+    plans: Arc<Mutex<Vec<bool>>>,
+    enabled: Arc<Mutex<Vec<LockdownApps>>>,
+}
+
+impl RoutingBackend for LockdownSessionRouting {
+    fn name(&self) -> &'static str {
+        "test-lockdown-session"
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        plan: &RoutingPlan,
+        _engine_binaries: &[&Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        self.plans.lock().unwrap().push(plan.lockdown);
+        Ok(RoutingGuard::noop())
+    }
+
+    fn lockdown_status(&self) -> Result<rosetun_routing::LockdownStatus, RoutingError> {
+        Ok(rosetun_routing::LockdownStatus {
+            enabled: true,
+            complete: true,
+            allow_lan: false,
+            sublayer_weight: Some(0xD000),
+        })
+    }
+
+    fn enable_lockdown(
+        &self,
+        allow_lan: bool,
+        apps: &LockdownApps,
+    ) -> Result<rosetun_routing::LockdownStatus, RoutingError> {
+        self.enabled.lock().unwrap().push(apps.clone());
+        Ok(rosetun_routing::LockdownStatus {
+            allow_lan,
+            ..self.lockdown_status()?
+        })
+    }
+}
+
+#[test]
+fn lockdown_program_permits_leave_with_a_session_and_return_after_it() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(DnsEngine {
+        server: Some(server.address()),
+        stopped: Arc::new(AtomicUsize::new(0)),
+    }));
+    let plans = Arc::new(Mutex::new(Vec::new()));
+    let enabled = Arc::new(Mutex::new(Vec::new()));
+    let helper = Helper::new(
+        engines,
+        Box::new(LockdownSessionRouting {
+            plans: Arc::clone(&plans),
+            enabled: Arc::clone(&enabled),
+        }),
+        VerboseGate::default(),
+    );
+    shorten_dns_timeouts(&helper);
+    let with_programs = |apps: &LockdownApps| apps.gui.is_some() && apps.cli.is_some();
+
+    helper.restore_lockdown();
+    assert!(with_programs(&enabled.lock().unwrap()[0]));
+
+    let mut request = connect_request();
+    request.settings.allow_lan = true;
+    helper.connect(&request).expect("DNS responds");
+    assert_eq!(*plans.lock().unwrap(), [true]);
+    assert!(helper.session().unwrap().programs_withdrawn);
+    // The LAN sync runs before protection; the routing layer removes the
+    // programs' permits in the transaction that adds the session's filters.
+    assert_eq!(enabled.lock().unwrap().len(), 2);
+    assert_eq!(
+        helper.session().unwrap().lockdown_programs(),
+        LockdownApps {
+            gui: None,
+            cli: None,
+            ..lockdown::test_apps()
+        }
+    );
+
+    helper.disconnect().unwrap();
+    let after = enabled.lock().unwrap().clone();
+    assert_eq!(after.len(), 3);
+    assert!(with_programs(&after[2]));
+    assert!(!helper.session().unwrap().programs_withdrawn);
+}

@@ -55,6 +55,7 @@ pub(super) fn protection_scope(
 /// The GUI and the CLI next to the service, so a subscription can be updated
 /// while locked, and the service for its own name lookups. A program that is
 /// not installed gets no permit.
+#[cfg_attr(test, expect(dead_code, reason = "tests permit fixed paths"))]
 pub(super) fn lockdown_apps() -> LockdownApps {
     let exe = std::env::current_exe().ok();
     let dir = exe
@@ -70,6 +71,17 @@ pub(super) fn lockdown_apps() -> LockdownApps {
         gui: find("rosetun-gui.exe"),
         cli: find("rosetun.exe"),
         service: exe.and_then(|exe| std::fs::canonicalize(exe).ok()),
+    }
+}
+
+/// Programs under fixed documentation paths, since the test binary has no
+/// GUI or CLI next to it.
+#[cfg(test)]
+pub(super) fn test_apps() -> LockdownApps {
+    LockdownApps {
+        gui: Some(PathBuf::from(r"C:\Rosetun\rosetun-gui.exe")),
+        cli: Some(PathBuf::from(r"C:\Rosetun\rosetun.exe")),
+        service: Some(PathBuf::from(r"C:\Rosetun\rosetun-helper-privileged.exe")),
     }
 }
 
@@ -138,9 +150,10 @@ impl Helper {
                 allow_lan: status.allow_lan,
             },
         );
+        // No session yet: the GUI and the CLI get their permits back too.
         match session
             .routing
-            .enable_lockdown(status.allow_lan, &lockdown_apps())
+            .enable_lockdown(status.allow_lan, &(session.lockdown_apps)())
         {
             Ok(repaired) => tracing::info!(
                 allow_lan = status.allow_lan,
@@ -199,9 +212,15 @@ impl Session {
     /// Persistent objects first, then the session's filters move above
     /// Lockdown's block. In between the tunnel is blocked, never open.
     fn enable_lockdown(&mut self, allow_lan: bool) -> Result<(), HelperError> {
+        // During a session the GUI and the CLI get no permits: the session's
+        // filters land in the Lockdown sublayer, above its block but below
+        // them.
+        if self.guard.is_some() || self.request.is_some() {
+            self.programs_withdrawn = true;
+        }
         let status = self
             .routing
-            .enable_lockdown(allow_lan, &lockdown_apps())
+            .enable_lockdown(allow_lan, &self.lockdown_programs())
             .map_err(routing_failed)?;
         write(
             &self.lockdown,
@@ -302,9 +321,52 @@ impl Session {
             }
         };
         write(&self.lockdown, LockdownState::default());
+        self.programs_withdrawn = false;
         tracing::info!(removed, "Lockdown turned off");
         self.release_forced_kill_switch();
         Ok(())
+    }
+
+    /// The programs Lockdown permits now: without the GUI and the CLI while
+    /// the session's filters keep their permits away.
+    pub(super) fn lockdown_programs(&self) -> LockdownApps {
+        let apps = (self.lockdown_apps)();
+        if self.programs_withdrawn {
+            LockdownApps {
+                gui: None,
+                cli: None,
+                ..apps
+            }
+        } else {
+            apps
+        }
+    }
+
+    /// Once the session's filters are gone, the GUI and the CLI get their
+    /// Lockdown permits back. A failure leaves them blocked until the next
+    /// disconnect or service start, which is closed rather than open.
+    pub(super) fn restore_lockdown_programs(&mut self) {
+        if !self.programs_withdrawn {
+            return;
+        }
+        let state = read(&self.lockdown);
+        if !state.enabled {
+            self.programs_withdrawn = false;
+            return;
+        }
+        match self
+            .routing
+            .enable_lockdown(state.allow_lan, &(self.lockdown_apps)())
+        {
+            Ok(_) => {
+                self.programs_withdrawn = false;
+                tracing::info!("Lockdown permits for Rosetun's programs restored");
+            }
+            Err(error) => tracing::error!(
+                %error,
+                "could not restore Lockdown permits for Rosetun's programs"
+            ),
+        }
     }
 
     /// Lockdown forced the kill switch on a session whose settings have it
@@ -382,6 +444,7 @@ impl Session {
 pub(super) fn sync_lan(
     routing: &dyn RoutingBackend,
     shared: &SharedLockdown,
+    apps: &LockdownApps,
     allow_lan: bool,
 ) -> Result<(), HelperError> {
     let state = read(shared);
@@ -389,7 +452,7 @@ pub(super) fn sync_lan(
         return Ok(());
     }
     routing
-        .enable_lockdown(allow_lan, &lockdown_apps())
+        .enable_lockdown(allow_lan, apps)
         .map_err(routing_failed)?;
     write(
         shared,
@@ -464,6 +527,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct Calls {
         enabled: Mutex<Vec<bool>>,
+        apps: Mutex<Vec<LockdownApps>>,
         disabled: AtomicUsize,
         installed: Mutex<Option<LockdownStatus>>,
         fail_disable: std::sync::atomic::AtomicBool,
@@ -496,9 +560,10 @@ mod tests {
         fn enable_lockdown(
             &self,
             allow_lan: bool,
-            _apps: &LockdownApps,
+            apps: &LockdownApps,
         ) -> Result<LockdownStatus, RoutingError> {
             self.0.enabled.lock().unwrap().push(allow_lan);
+            self.0.apps.lock().unwrap().push(apps.clone());
             let status = LockdownStatus {
                 enabled: true,
                 complete: true,
@@ -590,6 +655,33 @@ mod tests {
         assert_eq!(error.code, ErrorCode::RoutingFailed);
         assert_eq!(*moves.lock().unwrap(), [false, true]);
         assert!(helper.status().lockdown);
+    }
+
+    #[test]
+    fn lockdown_turned_on_during_a_session_permits_the_programs_only_after_it() {
+        let calls = Arc::new(Calls::default());
+        let helper = lockdown_helper(&calls);
+        let caller = Caller::fake(b"user", false);
+        helper.session.lock().unwrap().guard = Some(Guard {
+            routing: Arc::new(Mutex::new(RoutingGuard::new_with_lockdown(|_| Ok(())))),
+            scope: ProtectionScope::AllTraffic,
+        });
+
+        helper.set_lockdown_as(&caller, true, false).unwrap();
+        let during = calls.apps.lock().unwrap()[0].clone();
+        assert_eq!((during.gui, during.cli), (None, None));
+        assert!(during.service.is_some());
+
+        helper.session.lock().unwrap().teardown();
+        let after = calls.apps.lock().unwrap()[1].clone();
+        assert_eq!(after, super::test_apps());
+        assert!(!helper.session.lock().unwrap().programs_withdrawn);
+
+        // Without Lockdown nothing comes back.
+        helper.session.lock().unwrap().programs_withdrawn = true;
+        helper.set_lockdown_as(&caller, false, false).unwrap();
+        helper.session.lock().unwrap().teardown();
+        assert_eq!(calls.apps.lock().unwrap().len(), 2);
     }
 
     #[test]
