@@ -275,7 +275,7 @@ impl ProtectionSession for WfpProtectionSession {
                 .bootstrap_policy
                 .rules
                 .iter()
-                .any(|rule| rule.conditions == [policy::Condition::Application(binary.to_owned())])
+                .any(|rule| rule.conditions == policy::engine_permit(binary))
         {
             return Ok(());
         }

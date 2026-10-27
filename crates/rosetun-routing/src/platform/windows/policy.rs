@@ -82,6 +82,11 @@ pub(super) const DNS_PROTOCOLS: [u8; 2] = [17, 6];
 pub(super) enum Condition {
     /// Limits endpoint access to the selected engine executable.
     Application(PathBuf),
+    /// Matches processes running as the account of this process: SYSTEM for
+    /// the service, the user who started it in console mode. The engines
+    /// inherit its token, so a user who starts the same executable does not
+    /// match.
+    ServiceAccount,
     /// Matches loopback traffic.
     Loopback,
     /// Matches the client side of DHCPv4: UDP port 68 to UDP port 67. At the
@@ -208,6 +213,14 @@ pub(super) fn private_dns_blocks(subnet: Subnet) -> [Rule; 2] {
     })
 }
 
+/// The conditions of an engine permit: the program, run by the service.
+pub(super) fn engine_permit(binary: &Path) -> Vec<Condition> {
+    vec![
+        Condition::Application(binary.to_owned()),
+        Condition::ServiceAccount,
+    ]
+}
+
 fn common_rules(engine_binaries: &[&Path]) -> Vec<Rule> {
     // Each process in the selected chain dials under its own app ID.
     let mut rules = Vec::with_capacity(engine_binaries.len() * 2 + 2);
@@ -215,7 +228,7 @@ fn common_rules(engine_binaries: &[&Path]) -> Vec<Rule> {
         for binary in engine_binaries {
             rules.push(Rule::allow(
                 family,
-                vec![Condition::Application((*binary).to_owned())],
+                engine_permit(binary),
                 BOOTSTRAP_ALLOW_WEIGHT,
             ));
         }
@@ -231,11 +244,7 @@ fn common_rules(engine_binaries: &[&Path]) -> Vec<Rule> {
 
 pub(super) fn probe_authorization(binary: &Path) -> [Rule; 2] {
     [AddressFamily::Ipv4, AddressFamily::Ipv6].map(|family| {
-        Rule::allow(
-            family,
-            vec![Condition::Application(binary.to_owned())],
-            BOOTSTRAP_ALLOW_WEIGHT,
-        )
+        Rule::allow(family, engine_permit(binary), BOOTSTRAP_ALLOW_WEIGHT)
     })
 }
 
@@ -291,9 +300,17 @@ pub(super) mod tests {
         decide_for(None, layer, rules, destination, protocol, port, luid)
     }
 
-    /// `decide_at` for a connection made by `application`.
+    /// A program making a connection, and whether it runs as the service's
+    /// account (started by the service) or as a user.
+    #[derive(Debug, Clone, Copy)]
+    pub(in crate::platform::windows) struct Process<'a> {
+        pub(in crate::platform::windows) path: &'a Path,
+        pub(in crate::platform::windows) service_account: bool,
+    }
+
+    /// `decide_at` for a connection made by `process`.
     pub(in crate::platform::windows) fn decide_for(
-        application: Option<&Path>,
+        process: Option<Process<'_>>,
         layer: Layer,
         rules: &[&Rule],
         destination: [u8; 4],
@@ -315,7 +332,12 @@ pub(super) mod tests {
                         Condition::Protocol(value) => *value == protocol,
                         Condition::RemotePort(value) => *value == port,
                         Condition::LocalInterface(value) => *value == luid,
-                        Condition::Application(path) => application == Some(path.as_path()),
+                        Condition::Application(path) => {
+                            process.is_some_and(|process| process.path == path)
+                        }
+                        Condition::ServiceAccount => {
+                            process.is_some_and(|process| process.service_account)
+                        }
                         _ => false,
                     })
             })
@@ -337,7 +359,7 @@ pub(super) mod tests {
             assert!(chained.rules.iter().any(|rule| {
                 rule.family == family
                     && rule.action == Action::Allow
-                    && rule.conditions == [Condition::Application(xray.to_owned())]
+                    && rule.conditions == super::engine_permit(xray)
             }));
             assert!(chained.rules.iter().any(|rule| {
                 rule.family == family
@@ -355,24 +377,42 @@ pub(super) mod tests {
         assert_eq!(ipv6.family, AddressFamily::Ipv6);
         for rule in [ipv4, ipv6] {
             assert_eq!(rule.action, Action::Allow);
-            assert_eq!(rule.conditions, [Condition::Application(xray.to_owned())]);
+            assert_eq!(rule.conditions, super::engine_permit(xray));
             assert!(rule.weight > super::BLOCK_WEIGHT);
         }
     }
 
     #[test]
-    fn endpoint_access_is_restricted_to_the_engine_binary() {
+    fn endpoint_access_is_restricted_to_the_engine_binary_run_by_the_service() {
         let engine = Path::new(r"C:\Program Files\Rosetun\sing-box.exe");
         let policy = BootstrapPolicy::from_plan(&plan(), &[engine]);
 
-        assert_eq!(
-            policy.rules[0].conditions,
-            vec![Condition::Application(engine.to_owned()),]
-        );
-        assert_eq!(
-            policy.rules[1].conditions,
-            vec![Condition::Application(engine.to_owned()),]
-        );
+        for rule in &policy.rules[..2] {
+            assert_eq!(
+                rule.conditions,
+                [
+                    Condition::Application(engine.to_owned()),
+                    Condition::ServiceAccount
+                ]
+            );
+        }
+        let rules = policy.rules.iter().collect::<Vec<_>>();
+        let decide = |service_account| {
+            decide_for(
+                Some(Process {
+                    path: engine,
+                    service_account,
+                }),
+                Layer::Connect,
+                &rules,
+                [203, 0, 113, 7],
+                6,
+                443,
+                0,
+            )
+        };
+        assert_eq!(decide(true), Action::Allow);
+        assert_eq!(decide(false), Action::Block);
     }
 
     #[test]
@@ -519,7 +559,7 @@ pub(super) mod tests {
         assert_eq!(policy.rules.len(), 8);
         assert!(policy.rules.iter().all(|rule| !rule.conditions.is_empty()));
         for rule in &policy.rules[..2] {
-            assert_eq!(rule.conditions, [Condition::Application(engine.to_owned())]);
+            assert_eq!(rule.conditions, super::engine_permit(engine));
             assert_eq!(rule.action, Action::Allow);
         }
 

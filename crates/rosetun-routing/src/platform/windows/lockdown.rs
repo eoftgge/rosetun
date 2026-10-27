@@ -12,7 +12,7 @@ use windows_sys::Win32::Foundation::{
     FWP_E_FILTER_NOT_FOUND, FWP_E_IN_USE, FWP_E_PROVIDER_NOT_FOUND, FWP_E_SUBLAYER_NOT_FOUND,
 };
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
-    FWP_BYTE_BLOB_TYPE, FWPM_FILTER_FLAG_BOOTTIME, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0,
+    FWPM_FILTER_FLAG_BOOTTIME, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0,
     FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_PROVIDER0, FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0,
     FwpmFilterDeleteByKey0, FwpmFilterGetByKey0, FwpmFreeMemory0, FwpmProviderAdd0,
     FwpmProviderDeleteByKey0, FwpmProviderGetByKey0, FwpmSubLayerAdd0, FwpmSubLayerDeleteByKey0,
@@ -23,7 +23,7 @@ use windows_sys::Win32::System::Registry::{
 };
 use windows_sys::core::GUID;
 
-use super::filters::{self, AppIdBlob, Placement, blob_bytes};
+use super::filters::{self, FilterConditions, Placement};
 use super::policy::{
     AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, Condition, DNS_PROTOCOLS, LAN_SUBNETS, Rule, lan_permit,
     private_dns_blocks, probe_authorization,
@@ -213,16 +213,6 @@ impl LockdownFilter {
             name: self.name,
         }
     }
-
-    fn application(&self) -> Option<&Path> {
-        self.rule
-            .conditions
-            .iter()
-            .find_map(|condition| match condition {
-                Condition::Application(path) => Some(path.as_path()),
-                _ => None,
-            })
-    }
 }
 
 /// The filters Lockdown keeps for these settings.
@@ -330,37 +320,37 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
                 ));
             }
         }
-        for (keys, name, path) in [
+        for (keys, name, path, service) in [
             (
                 keys::OUTBOUND_SERVICE_DNS,
                 "Rosetun Lockdown: permit the Rosetun service's DNS queries",
                 &apps.service,
+                true,
             ),
             (
                 keys::OUTBOUND_GUI_DNS,
                 "Rosetun Lockdown: permit Rosetun's DNS queries",
                 &apps.gui,
+                false,
             ),
             (
                 keys::OUTBOUND_CLI_DNS,
                 "Rosetun Lockdown: permit the Rosetun CLI's DNS queries",
                 &apps.cli,
+                false,
             ),
         ] {
             if let Some(path) = path {
                 for (key, protocol) in keys[index].into_iter().zip(DNS_PROTOCOLS) {
+                    let mut conditions = vec![Condition::Application(path.clone())];
+                    if service {
+                        conditions.push(Condition::ServiceAccount);
+                    }
+                    conditions.extend([Condition::Protocol(protocol), Condition::RemotePort(53)]);
                     set.push(filter(
                         key,
                         name,
-                        Rule::allow(
-                            family,
-                            vec![
-                                Condition::Application(path.clone()),
-                                Condition::Protocol(protocol),
-                                Condition::RemotePort(53),
-                            ],
-                            RESOLVER_WEIGHT,
-                        ),
+                        Rule::allow(family, conditions, RESOLVER_WEIGHT),
                         false,
                         Part::App,
                     ));
@@ -502,21 +492,27 @@ pub(in crate::platform) fn enable(
             delete_filter(&engine, filter.key)?;
         }
     }
+    let mut replaced = 0_usize;
     for filter in &wanted {
-        if filter_exists(&engine, filter.key)? {
-            // A permit for a program that moved names the old file; replace
-            // it. Every other filter is fixed by its key.
-            match filter.application() {
-                Some(path) if !permits_application(&engine, filter.key, path)? => {
-                    delete_filter(&engine, filter.key)?;
-                }
-                _ => continue,
+        // A filter from an older version (a permit without the service's
+        // account) or for a program that moved is replaced under its key.
+        // Any error aborts the transaction and leaves the old one: closed is
+        // better than open.
+        match stored_conditions_match(&engine, filter)? {
+            Some(true) => continue,
+            Some(false) => {
+                delete_filter(&engine, filter.key)?;
+                replaced += 1;
             }
+            None => {}
         }
         filters::add_rule(&engine, &filter.rule, &filter.placement())?;
     }
 
     transaction.commit()?;
+    if replaced > 0 {
+        tracing::info!(replaced, "Lockdown filters replaced with their current form");
+    }
     flush();
     read_status(&engine)
 }
@@ -746,32 +742,34 @@ fn filter_exists(engine: &Engine, key: u128) -> Result<bool, RoutingError> {
     Ok(present)
 }
 
-/// Whether the present filter `key` permits the program at `path` now.
-fn permits_application(engine: &Engine, key: u128, path: &Path) -> Result<bool, RoutingError> {
-    let app_id = AppIdBlob::from_path(path)?;
-    let key = GUID::from_u128(key);
-    let mut filter: *mut FWPM_FILTER0 = ptr::null_mut();
+/// Whether the stored filter under `filter.key` has the conditions `filter`
+/// wants now; `None` when there is no such filter.
+fn stored_conditions_match(
+    engine: &Engine,
+    filter: &LockdownFilter,
+) -> Result<Option<bool>, RoutingError> {
+    let wanted = FilterConditions::build(&filter.rule)?;
+    let key = GUID::from_u128(filter.key);
+    let mut stored: *mut FWPM_FILTER0 = ptr::null_mut();
     // SAFETY: on success BFE allocates the filter with its conditions and
-    // blobs in one block, read here and freed below.
-    let status = unsafe { FwpmFilterGetByKey0(engine.handle(), &key, &mut filter) };
-    if status != 0 {
-        return Err(wfp_error(status, "reading a Lockdown program permit"));
+    // their values in one block, read here and freed below.
+    let status = unsafe { FwpmFilterGetByKey0(engine.handle(), &key, &mut stored) };
+    if !found(status, FWP_E_FILTER_NOT_FOUND, "reading a Lockdown filter")? {
+        return Ok(None);
     }
+    // SAFETY: `stored` is the live result above; its condition array holds
+    // `numFilterConditions` entries whose values stay valid until the free.
     let same = unsafe {
-        let filter = &*filter;
-        filter.numFilterConditions == 1
-            && !filter.filterCondition.is_null()
-            && (*filter.filterCondition).conditionValue.r#type == FWP_BYTE_BLOB_TYPE
-            && !(*filter.filterCondition)
-                .conditionValue
-                .Anonymous
-                .byteBlob
-                .is_null()
-            && blob_bytes(&*(*filter.filterCondition).conditionValue.Anonymous.byteBlob)
-                == app_id.bytes()
+        let stored = &*stored;
+        let conditions = if stored.filterCondition.is_null() {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(stored.filterCondition, stored.numFilterConditions as usize)
+        };
+        wanted.same_as(conditions)
     };
-    free(filter);
-    Ok(same)
+    free(stored);
+    Ok(Some(same))
 }
 
 /// Deletes a filter by key; `Ok(false)` when it was not there.
@@ -841,7 +839,7 @@ mod tests {
     use crate::platform::windows::policy::{
         self, Action, AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, BootstrapPolicy, Condition, Layer,
         PRIVATE_DNS_BLOCK_WEIGHT, Rule, TUNNEL_WEIGHT,
-        tests::{decide_at, decide_for},
+        tests::{Process, decide_at, decide_for},
     };
     use crate::{LockdownApps, ProtectionScope, RoutingPlan};
 
@@ -931,7 +929,10 @@ mod tests {
             assert!(!filter.boottime);
             assert_eq!(filter.rule.layer, Layer::Connect);
             assert_eq!(filter.rule.action, Action::Allow);
-            assert!(filter.application().is_some());
+            assert!(matches!(
+                filter.rule.conditions.first(),
+                Some(Condition::Application(_))
+            ));
         }
         let only_cli = filter_set(
             false,
@@ -952,11 +953,21 @@ mod tests {
 
     #[test]
     fn rosetun_resolves_through_the_local_network_but_nothing_else_does() {
+        fn process(path: &Option<PathBuf>, service_account: bool) -> Option<Process<'_>> {
+            Some(Process {
+                path: path.as_deref().expect("every program is installed"),
+                service_account,
+            })
+        }
         const { assert!(RESOLVER_WEIGHT > PRIVATE_DNS_BLOCK_WEIGHT && RESOLVER_WEIGHT != TUNNEL_WEIGHT) };
         let apps = apps();
-        let service = apps.service.as_deref();
-        let gui = apps.gui.as_deref();
-        let other = Some(std::path::Path::new(r"C:\Windows\System32\svchost.exe"));
+        let service = process(&apps.service, true);
+        let service_by_user = process(&apps.service, false);
+        let gui = process(&apps.gui, false);
+        let other = Some(Process {
+            path: std::path::Path::new(r"C:\Windows\System32\svchost.exe"),
+            service_account: true,
+        });
         for allow_lan in [false, true] {
             let set = filter_set(allow_lan, &apps);
             let rules = persistent(&set);
@@ -976,6 +987,10 @@ mod tests {
                     assert_eq!(decide(service, destination, protocol, 53), Action::Allow);
                     assert_eq!(decide(gui, destination, protocol, 53), Action::Allow);
                     assert_eq!(decide(other, destination, protocol, 53), Action::Block);
+                    assert_eq!(
+                        decide(service_by_user, destination, protocol, 53),
+                        Action::Block
+                    );
                 }
             }
             // The service gets DNS only; the GUI keeps its permit for everything.
