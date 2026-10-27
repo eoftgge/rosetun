@@ -286,6 +286,11 @@ impl FilterConditions {
                     port_condition(FWPM_CONDITION_IP_REMOTE_PORT, *port),
                 ]);
             }
+            // Lockdown's TCP permits for Rosetun's own programs.
+            [Condition::Application(binary), Condition::Protocol(protocol)] => {
+                let blob = app_id.insert(AppIdBlob::from_path(binary)?);
+                conditions.extend([application_condition(blob), protocol_condition(*protocol)]);
+            }
             // Lockdown's DNS permits for Rosetun's own programs.
             [
                 Condition::Application(binary),

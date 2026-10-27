@@ -54,7 +54,7 @@ mod keys {
         0xa6af7d22_44d1_4318_8d63_dc1c9ca8a2e8,
     ];
     pub(super) const OUTBOUND_DHCP: u128 = 0x98419911_30f0_4f71_9178_263b40bc7f6e;
-    /// Retired in 0.4: the GUI and CLI permits to any port. Still removed
+    /// Retired in 0.4: the GUI and CLI permits to any protocol. Still removed
     /// wherever Lockdown's filters are, since older versions left them.
     pub(super) const OUTBOUND_GUI: [u128; 2] = [
         0x77c4c790_4f77_451d_aa96_f5e28daa304e,
@@ -64,7 +64,9 @@ mod keys {
         0x729b156a_c411_4f01_b7d9_a789c94e992b,
         0x9c72b60d_eece_47de_8f81_e48c081cee74,
     ];
-    /// TCP permits, `[IPv4, IPv6]`, each `WEB_PORTS`.
+    /// Retired in 0.4: the GUI and CLI TCP permits to 443 and 80 only,
+    /// `[IPv4, IPv6]`, each `[443, 80]`. Still removed wherever Lockdown's
+    /// filters are, since earlier 0.4 builds left them.
     pub(super) const OUTBOUND_GUI_WEB: [[u128; 2]; 2] = [
         [
             0x09743848_d967_4e6c_a308_f69f1463a391,
@@ -84,6 +86,16 @@ mod keys {
             0xbc5492bb_a4b2_4e58_b3fa_94ed74688b68,
             0x742c7479_7054_40bf_a1ad_bf32bed8ddbf,
         ],
+    ];
+    /// TCP permits to any port, so a subscription on a panel's own port
+    /// updates too.
+    pub(super) const OUTBOUND_GUI_TCP: [u128; 2] = [
+        0x1a7c5337_f1e6_48d0_a225_c7cfb3f9329b,
+        0xad309994_3cf8_4cdd_a3c8_97ea35e83040,
+    ];
+    pub(super) const OUTBOUND_CLI_TCP: [u128; 2] = [
+        0xe0222624_bc2f_43a6_8058_b939a77ddd4b,
+        0x51b45927_c200_4b1d_b8fa_2ca8f5304e4f,
     ];
     /// DNS permits, `[IPv4, IPv6]`, each `[UDP, TCP]`.
     pub(super) const OUTBOUND_SERVICE_DNS: [[u128; 2]; 2] = [
@@ -201,9 +213,6 @@ const BLOCK_WEIGHT: u8 = 0;
 /// block (3), so the router's resolver answers them with "Local network" on,
 /// and apart from the tunnel permit (4).
 const RESOLVER_WEIGHT: u8 = 5;
-/// The GUI's and the CLI's TCP ports while no session runs: HTTPS and HTTP
-/// for subscriptions and lists.
-const WEB_PORTS: [u16; 2] = [443, 80];
 const TCP: u8 = 6;
 const FAMILIES: [AddressFamily; 2] = [AddressFamily::Ipv4, AddressFamily::Ipv6];
 
@@ -328,34 +337,31 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
         ]);
         for (keys, name, path) in [
             (
-                keys::OUTBOUND_GUI_WEB,
-                "Rosetun Lockdown: permit Rosetun's web requests",
+                keys::OUTBOUND_GUI_TCP,
+                "Rosetun Lockdown: permit Rosetun's TCP connections",
                 &apps.gui,
             ),
             (
-                keys::OUTBOUND_CLI_WEB,
-                "Rosetun Lockdown: permit the Rosetun CLI's web requests",
+                keys::OUTBOUND_CLI_TCP,
+                "Rosetun Lockdown: permit the Rosetun CLI's TCP connections",
                 &apps.cli,
             ),
         ] {
             if let Some(path) = path {
-                for (key, port) in keys[index].into_iter().zip(WEB_PORTS) {
-                    set.push(filter(
-                        key,
-                        name,
-                        Rule::allow(
-                            family,
-                            vec![
-                                Condition::Application(path.clone()),
-                                Condition::Protocol(TCP),
-                                Condition::RemotePort(port),
-                            ],
-                            BOOTSTRAP_ALLOW_WEIGHT,
-                        ),
-                        false,
-                        Part::Program,
-                    ));
-                }
+                set.push(filter(
+                    keys[index],
+                    name,
+                    Rule::allow(
+                        family,
+                        vec![
+                            Condition::Application(path.clone()),
+                            Condition::Protocol(TCP),
+                        ],
+                        BOOTSTRAP_ALLOW_WEIGHT,
+                    ),
+                    false,
+                    Part::Program,
+                ));
             }
         }
         for (keys, name, path, part) in [
@@ -476,27 +482,37 @@ pub(super) fn every_filter() -> Vec<LockdownFilter> {
         },
     );
     for (index, family) in FAMILIES.into_iter().enumerate() {
+        let retired = |key, conditions| LockdownFilter {
+            key,
+            name: "Rosetun Lockdown: retired program permit",
+            rule: Rule::allow(family, conditions, BOOTSTRAP_ALLOW_WEIGHT),
+            boottime: false,
+            part: Part::Program,
+        };
         for key in [keys::OUTBOUND_GUI[index], keys::OUTBOUND_CLI[index]] {
-            all.push(LockdownFilter {
-                key,
-                name: "Rosetun Lockdown: retired program permit",
-                rule: Rule::allow(
-                    family,
-                    vec![Condition::Application(PathBuf::new())],
-                    BOOTSTRAP_ALLOW_WEIGHT,
-                ),
-                boottime: false,
-                part: Part::Program,
-            });
+            all.push(retired(key, vec![Condition::Application(PathBuf::new())]));
+        }
+        for keys in [keys::OUTBOUND_GUI_WEB[index], keys::OUTBOUND_CLI_WEB[index]] {
+            for (key, port) in keys.into_iter().zip([443, 80]) {
+                all.push(retired(
+                    key,
+                    vec![
+                        Condition::Application(PathBuf::new()),
+                        Condition::Protocol(TCP),
+                        Condition::RemotePort(port),
+                    ],
+                ));
+            }
         }
     }
     all
 }
 
-/// Removes the GUI's and the CLI's permits inside the caller's transaction,
-/// when the session's filters go into the Lockdown sublayer: its block sits
-/// below them there. The service puts them back once the session's filters
-/// are gone (`enable` with the programs).
+/// Removes the GUI's and the CLI's permits (TCP to any port, DNS, and every
+/// retired form an older version left) inside the caller's transaction, when
+/// the session's filters go into the Lockdown sublayer: its block sits below
+/// them there. The service puts them back once the session's filters are gone
+/// (`enable` with the programs).
 pub(super) fn withdraw_programs(engine: &Engine) -> Result<(), RoutingError> {
     for key in program_keys() {
         delete_filter(engine, key)?;
@@ -941,7 +957,7 @@ mod tests {
         let all = every_filter();
         let keys = all.iter().map(|filter| filter.key).collect::<HashSet<_>>();
         assert_eq!(keys.len(), all.len());
-        assert_eq!(all.len(), 68);
+        assert_eq!(all.len(), 72);
         for object in [
             super::PROVIDER_KEY,
             super::SUBLAYER_KEY,
@@ -1000,7 +1016,7 @@ mod tests {
             .iter()
             .filter(|filter| matches!(filter.part, Part::App | Part::Program))
             .collect::<Vec<_>>();
-        assert_eq!(programs.len(), 20);
+        assert_eq!(programs.len(), 16);
         for filter in programs {
             assert!(!filter.boottime);
             assert_eq!(filter.rule.layer, Layer::Connect);
@@ -1017,50 +1033,46 @@ mod tests {
                 ..apps()
             },
         );
-        // The CLI's four web and four DNS permits, the service's four.
+        // The CLI's two TCP and four DNS permits, the service's four.
         assert_eq!(
             only_cli
                 .iter()
                 .filter(|filter| matches!(filter.part, Part::App | Part::Program))
                 .count(),
-            12
+            10
         );
     }
 
     #[test]
-    fn the_gui_and_the_cli_reach_only_tcp_443_and_80_under_new_keys() {
+    fn the_gui_and_the_cli_reach_tcp_on_any_port_under_new_keys() {
         let set = filter_set(false, &apps());
-        let web = set
+        let tcp = set
             .iter()
             .filter(|filter| filter.part == Part::Program && filter.rule.weight != RESOLVER_WEIGHT)
             .collect::<Vec<_>>();
-        assert_eq!(web.len(), 8);
-        let retired = [super::keys::OUTBOUND_GUI, super::keys::OUTBOUND_CLI].concat();
-        for filter in &web {
+        assert_eq!(tcp.len(), 4);
+        let retired = [
+            super::keys::OUTBOUND_GUI.as_slice(),
+            &super::keys::OUTBOUND_CLI,
+            &super::keys::OUTBOUND_GUI_WEB.concat(),
+            &super::keys::OUTBOUND_CLI_WEB.concat(),
+        ]
+        .concat();
+        for filter in &tcp {
             assert!(!retired.contains(&filter.key));
             assert_eq!(filter.rule.weight, BOOTSTRAP_ALLOW_WEIGHT);
             assert!(matches!(
                 filter.rule.conditions.as_slice(),
-                [
-                    Condition::Application(_),
-                    Condition::Protocol(6),
-                    Condition::RemotePort(443 | 80)
-                ]
+                [Condition::Application(_), Condition::Protocol(6)]
             ));
         }
         for family in [AddressFamily::Ipv4, AddressFamily::Ipv6] {
-            for port in [443, 80] {
-                assert_eq!(
-                    web.iter()
-                        .filter(|filter| filter.rule.family == family
-                            && filter
-                                .rule
-                                .conditions
-                                .contains(&Condition::RemotePort(port)))
-                        .count(),
-                    2
-                );
-            }
+            assert_eq!(
+                tcp.iter()
+                    .filter(|filter| filter.rule.family == family)
+                    .count(),
+                2
+            );
         }
 
         let rules = persistent(&set);
@@ -1069,9 +1081,13 @@ mod tests {
             path: apps.gui.as_deref().expect("installed"),
             service_account: false,
         });
-        let decide = |protocol, port| {
+        let other = Some(Process {
+            path: std::path::Path::new(r"C:\Windows\System32\curl.exe"),
+            service_account: false,
+        });
+        let decide = |process, protocol, port| {
             decide_for(
-                gui,
+                process,
                 Layer::Connect,
                 &rules,
                 [203, 0, 113, 7],
@@ -1080,27 +1096,36 @@ mod tests {
                 0,
             )
         };
-        assert_eq!(decide(6, 443), Action::Allow);
-        assert_eq!(decide(6, 80), Action::Allow);
-        assert_eq!(decide(6, 8443), Action::Block);
-        assert_eq!(decide(17, 443), Action::Block);
+        assert_eq!(decide(gui, 6, 443), Action::Allow);
+        assert_eq!(decide(gui, 6, 80), Action::Allow);
+        assert_eq!(decide(gui, 6, 2096), Action::Allow);
+        assert_eq!(decide(gui, 17, 443), Action::Block);
+        assert_eq!(decide(other, 6, 2096), Action::Block);
     }
 
     #[test]
     fn removal_and_withdrawal_cover_the_retired_permits_but_not_the_service() {
         let all = every_filter();
-        for key in [super::keys::OUTBOUND_GUI, super::keys::OUTBOUND_CLI].concat() {
+        let retired = [
+            super::keys::OUTBOUND_GUI.as_slice(),
+            &super::keys::OUTBOUND_CLI,
+            &super::keys::OUTBOUND_GUI_WEB.concat(),
+            &super::keys::OUTBOUND_CLI_WEB.concat(),
+        ]
+        .concat();
+        assert_eq!(retired.len(), 4 + 8);
+        for key in retired {
             assert!(all.iter().any(|filter| filter.key == key));
             assert!(super::program_keys().contains(&key));
         }
         let withdrawn = super::program_keys();
-        assert_eq!(withdrawn.len(), 4 + 8 + 8);
+        assert_eq!(withdrawn.len(), 4 + 8 + 4 + 8);
         for key in super::keys::OUTBOUND_SERVICE_DNS.concat() {
             assert!(!withdrawn.contains(&key));
         }
         for key in [
-            super::keys::OUTBOUND_GUI_WEB.concat(),
-            super::keys::OUTBOUND_CLI_WEB.concat(),
+            super::keys::OUTBOUND_GUI_TCP.to_vec(),
+            super::keys::OUTBOUND_CLI_TCP.to_vec(),
             super::keys::OUTBOUND_GUI_DNS.concat(),
             super::keys::OUTBOUND_CLI_DNS.concat(),
         ]
@@ -1209,10 +1234,10 @@ mod tests {
                     );
                 }
             }
-            // The service gets DNS only; the GUI also gets the web ports.
+            // The service gets DNS only; the GUI also gets TCP.
             assert_eq!(decide(service, [203, 0, 113, 7], 6, 443), Action::Block);
             assert_eq!(decide(gui, [203, 0, 113, 7], 6, 443), Action::Allow);
-            assert_eq!(decide(gui, [203, 0, 113, 7], 6, 22), Action::Block);
+            assert_eq!(decide(gui, [203, 0, 113, 7], 17, 443), Action::Block);
         }
         assert!(
             filter_set(true, &apps)
