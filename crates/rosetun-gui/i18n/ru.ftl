@@ -567,6 +567,7 @@ lockdown = Lockdown
 lockdown-detail = Без туннеля интернета нет, даже после перезагрузки и без службы. Подписки обновляются.
 lockdown-short = Без туннеля интернета нет, даже без подключения.
 lockdown-administrator = Чтобы включить или выключить, нужны права администратора.
+lockdown-lan-kept = Lockdown оставил прежний доступ: для изменения нужны права администратора.
 lockdown-command-failed = Lockdown не изменился. Попробуйте ещё раз или выполните rosetun lockdown в терминале от имени администратора.
 experimental = Экспериментально
 lockdown-experimental = Lockdown проверен только на Windows 11. Если что-то не так, выключите его.

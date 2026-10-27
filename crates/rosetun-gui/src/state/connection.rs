@@ -178,6 +178,7 @@ impl State {
             return None;
         }
         self.lockdown_lan_pending = false;
+        self.lockdown_lan_sync = true;
         self.operations.lockdown = true;
         Some(Job::SetLockdown(true))
     }
@@ -391,6 +392,7 @@ impl State {
                 self.protection_confirmation = false;
                 self.lockdown_confirmation = None;
                 self.lockdown_lan_pending = false;
+                self.lockdown_lan_sync = false;
                 self.reset_failure_interference();
                 self.reset_system_failure();
                 self.cancel_in_flight = false;
@@ -566,10 +568,14 @@ impl State {
             }
             WorkerEvent::SetLockdown { enabled, result } => {
                 self.operations.lockdown = false;
+                let lan_sync = std::mem::take(&mut self.lockdown_lan_sync);
                 match result {
                     Ok(change) => {
                         if change == LockdownChange::Done {
                             self.status.lockdown = enabled;
+                            self.lockdown_lan_kept = false;
+                        } else if lan_sync {
+                            self.lockdown_lan_kept = true;
                         }
                         self.lockdown_confirmation = None;
                         self.operation_error = None;
@@ -728,6 +734,7 @@ impl State {
                     && self.can_change_lockdown()
                 {
                     self.operations.lockdown = true;
+                    self.lockdown_lan_sync = false;
                     self.operation_error = None;
                     return Some(Job::SetLockdown(enabled));
                 }

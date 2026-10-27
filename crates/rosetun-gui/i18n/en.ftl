@@ -552,6 +552,7 @@ lockdown = Lockdown
 lockdown-detail = No internet without the tunnel, even after a restart or without the service. Subscriptions still update.
 lockdown-short = No internet without the tunnel, even while disconnected.
 lockdown-administrator = Turning it on or off needs administrator rights.
+lockdown-lan-kept = Lockdown keeps the previous setting: changing it needs administrator rights.
 lockdown-command-failed = Lockdown did not change. Try again or run rosetun lockdown in a terminal as administrator.
 experimental = Experimental
 lockdown-experimental = Lockdown is tested on Windows 11 only. If something goes wrong, turn it off.

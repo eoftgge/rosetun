@@ -791,6 +791,48 @@ fn local_network_change_updates_lockdown_only_while_it_is_on() {
 }
 
 #[test]
+fn a_declined_prompt_for_a_local_network_change_says_lockdown_kept_it() {
+    let mut state = state_with_lockdown(true);
+    state.act(Action::SetAllowLan(true));
+    state.reduce(WorkerEvent::Setting(SettingChange::AllowLan(true), Ok(())));
+    assert!(matches!(
+        state.take_lockdown_lan(),
+        Some(Job::SetLockdown(true))
+    ));
+    state.reduce(WorkerEvent::SetLockdown {
+        enabled: true,
+        result: Ok(LockdownChange::Declined),
+    });
+    assert!(state.lockdown_lan_kept);
+    assert!(state.lockdown_active());
+
+    state.act(Action::SetAllowLan(false));
+    state.reduce(WorkerEvent::Setting(SettingChange::AllowLan(false), Ok(())));
+    assert!(state.take_lockdown_lan().is_some());
+    state.reduce(WorkerEvent::SetLockdown {
+        enabled: true,
+        result: Ok(LockdownChange::Done),
+    });
+    assert!(!state.lockdown_lan_kept);
+}
+
+#[test]
+fn declining_the_prompt_to_turn_lockdown_off_is_no_lan_notice() {
+    let mut state = state_with_lockdown(true);
+    state.act(Action::RequestLockdown(false));
+    assert!(matches!(
+        state.act(Action::ConfirmLockdown),
+        Some(Job::SetLockdown(false))
+    ));
+    state.reduce(WorkerEvent::SetLockdown {
+        enabled: false,
+        result: Ok(LockdownChange::Declined),
+    });
+    assert!(!state.lockdown_lan_kept);
+    assert!(state.lockdown_active());
+}
+
+#[test]
 fn failure_details_are_scrubbed_and_fold_on_a_new_state() {
     let mut state = State {
         helper_available: true,

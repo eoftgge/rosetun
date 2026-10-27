@@ -126,6 +126,12 @@ pub(crate) struct State {
     /// The Lockdown value waiting for the user's confirmation.
     pub(crate) lockdown_confirmation: Option<bool>,
     lockdown_lan_pending: bool,
+    /// The Lockdown command in flight only brings its LAN access in line
+    /// with the saved "Local network" value.
+    lockdown_lan_sync: bool,
+    /// The administrator prompt for a "Local network" change was declined:
+    /// the setting is saved, but Lockdown keeps its previous LAN access.
+    pub(crate) lockdown_lan_kept: bool,
 }
 
 impl Default for State {
@@ -170,6 +176,8 @@ impl Default for State {
             protection_confirmation: false,
             lockdown_confirmation: None,
             lockdown_lan_pending: false,
+            lockdown_lan_sync: false,
+            lockdown_lan_kept: false,
         }
     }
 }

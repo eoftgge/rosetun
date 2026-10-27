@@ -201,6 +201,15 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 );
             });
         }
+        if state.lockdown_lan_kept && state.lockdown_active() {
+            card.body(|ui| {
+                ui.label(
+                    RichText::new(tr!("lockdown-lan-kept"))
+                        .small()
+                        .color(theme::ROSE_LIGHT),
+                );
+            });
+        }
         let mut auto_reconnect = state.config.settings.auto_reconnect;
         if card
             .toggle(
