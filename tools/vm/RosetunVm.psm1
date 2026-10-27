@@ -1189,11 +1189,21 @@ function Test-RosetunLanListener {
 function Test-RosetunDirectEgress {
     # True when a process other than the engine reaches the internet through
     # the physical adapter. Under an active kill switch this must be false.
+    (Get-RosetunDirectEgressCode) -eq 0
+}
+
+function Get-RosetunDirectEgressCode {
+    # curl's exit code for the direct egress probe: 0 when it got out.
+    # Without --ssl-no-revoke a failed revocation lookup (the guest's
+    # resolver need not answer outside a session) reads as a closed exit
+    # and would hide a leak under the kill switch.
     $address = Get-RosetunEgressAddress
     Invoke-RosetunGuest -ScriptBlock {
         param($address, $url)
-        & curl.exe --interface $address --max-time 5 --silent --output NUL $url 2>$null
-        $LASTEXITCODE -eq 0
+        & curl.exe --interface $address --max-time 5 --silent --ssl-no-revoke --output NUL $url 2>$null
+        $code = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        $code
     } -ArgumentList $address, $script:Config.ProbeUrl
 }
 

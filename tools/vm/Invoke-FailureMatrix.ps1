@@ -1080,7 +1080,8 @@ if ($UseHostNode) {
         # A refusal before protection leaves nothing behind; this tells a leftover
         # filter from a network hiccup when the next check fails.
         Test-Step 'XHTTP off' 'no WFP filters remain after the refusal' { -not (Test-RosetunWfpFilters) }
-        Test-Step 'XHTTP off' 'direct egress works' { Test-RosetunDirectEgress }
+        $egressCode = Get-RosetunDirectEgressCode
+        Test-Step 'XHTTP off' 'direct egress works' -Note "curl exit $egressCode" { $egressCode -eq 0 }
     }
     finally {
         $setting = Invoke-XraySetting -Setting auto
