@@ -43,12 +43,14 @@ $lockdownKeys = [ordered]@{
     # The service's DNS permit (IPv4, UDP), present whenever Lockdown is.
     ServiceDns = 'cb0f8c4b-4967-4626-a493-a4e32369e6f5'
     Lan      = 'ce01436a-65d3-48e9-b921-e0a167b05f7b'
-    # The CLI's permits (IPv4: TCP 443, UDP DNS) exist only while no session
-    # runs. The GUI is not deployed, so it has none.
-    CliWeb   = '05b9da42-ea8e-4b28-a2b8-2404db01e0d1'
+    # The CLI's permits (IPv4: TCP to any port, UDP DNS) exist only while no
+    # session runs. The GUI is not deployed, so it has none.
+    CliTcp   = 'e0222624-bc2f-43a6-8058-b939a77ddd4b'
     CliDns   = '982cc554-9f41-4c9a-833f-87cc5149725f'
-    # Retired in 0.4 (the CLI to any port); never present again.
+    # Retired in 0.4 (the CLI to any protocol, then to TCP 443); never
+    # present again.
     RetiredCli = '729b156a-c411-4f01-b7d9-a789c94e992b'
+    RetiredCliWeb = '05b9da42-ea8e-4b28-a2b8-2404db01e0d1'
 }
 # A local account outside Administrators, created for this run.
 $standardUser = 'RosetunMatrixUser'
@@ -134,15 +136,16 @@ function Test-LockdownInstalled {
     param([switch]$Lan)
     $objects = Get-LockdownObjects
     $objects.Provider -and $objects.Sublayer -and $objects.Outbound -and $objects.Inbound -and
-        $objects.Dhcp -and $objects.ServiceDns -and $objects.Lan -eq [bool]$Lan -and -not $objects.RetiredCli
+        $objects.Dhcp -and $objects.ServiceDns -and $objects.Lan -eq [bool]$Lan -and -not $objects.RetiredCli -and
+        -not $objects.RetiredCliWeb
 }
 
 function Test-ProgramPermits {
     # Whether the CLI's Lockdown permits are present (`-Present`) or absent.
     param([switch]$Present)
     $objects = Get-LockdownObjects
-    if ($objects.RetiredCli) { return $false }
-    if ($Present) { $objects.CliWeb -and $objects.CliDns } else { -not $objects.CliWeb -and -not $objects.CliDns }
+    if ($objects.RetiredCli -or $objects.RetiredCliWeb) { return $false }
+    if ($Present) { $objects.CliTcp -and $objects.CliDns } else { -not $objects.CliTcp -and -not $objects.CliDns }
 }
 
 function New-StandardAccount {
@@ -472,6 +475,7 @@ function Test-ByName {
     Disconnect-RosetunTunnel | Out-Null
     $probe = Invoke-RosetunProbe -RequestName $RequestName
     Test-Step $Scenario 'server check of node.rosetun.test works' { $probe.Output -match '(?m)^works' } -Note $probe.Output
+    # The subscription is on a random port, neither 443 nor 80, on purpose.
     $update = Invoke-RosetunCli -Quiet 'sub' 'update' $subscriptionId
     Test-Step $Scenario 'rosetun sub update from sub.rosetun.test succeeds' { $update.ExitCode -eq 0 } -Note $update.Output
     if ($Lockdown) {
