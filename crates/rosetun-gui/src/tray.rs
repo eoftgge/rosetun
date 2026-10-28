@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
@@ -13,8 +15,8 @@ use crate::rose_icon::{self, RoseIcon, TrayState};
 use crate::state::{State, primary_label};
 use crate::{constants, i18n, theme, view};
 
-const OPEN_ID: &str = "rosetun.tray.open";
-const HIDE_ID: &str = "rosetun.tray.hide";
+const STATUS_ID: &str = "rosetun.tray.status";
+const WINDOW_ID: &str = "rosetun.tray.window";
 const PRIMARY_ID: &str = "rosetun.tray.primary";
 const QUIT_ID: &str = "rosetun.tray.quit";
 /// The taskbar's icon size changes with its monitor's scale; reading it on
@@ -25,14 +27,16 @@ const SIZE_CHECK: Duration = Duration::from_secs(3);
 pub(crate) struct TrayView {
     pub(crate) icon: TrayState,
     pub(crate) tooltip: String,
+    pub(crate) status_label: String,
     pub(crate) primary_label: String,
     pub(crate) primary_enabled: bool,
-    pub(crate) open_label: String,
-    pub(crate) hide_label: String,
+    /// The window is on screen, so the window item hides it.
+    pub(crate) window_shown: bool,
+    pub(crate) window_label: String,
     pub(crate) quit_label: String,
 }
 
-pub(crate) fn tray_view(state: &State) -> TrayView {
+pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
     let (status, icon) = state.visible_status().map_or_else(
         || (tr!("helper-unavailable"), TrayState::ServiceUnavailable),
         |status| {
@@ -57,23 +61,44 @@ pub(crate) fn tray_view(state: &State) -> TrayView {
     let server = state
         .visible_status()
         .and_then(|_| state.config.active_node())
-        .map(|(_, node)| {
-            state
-                .text(&node.name)
-                .split(|character: char| character.is_whitespace() || character.is_control())
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>()
-                .join(" ")
-        });
+        .map(|(_, node)| menu_text(state, &node.name));
+    let status_label = match (icon, &server) {
+        (TrayState::Blocked, _) => tr!("tray-blocked"),
+        (TrayState::Connected, Some(server)) => format!("{status} · {server}"),
+        _ => status.clone(),
+    };
+    let primary_action = state.primary_action();
+    let primary_label = match &server {
+        Some(server) if primary_action == PrimaryAction::Connect => {
+            tr!("tray-connect-to", server = server.as_str())
+        }
+        _ => primary_label(state),
+    };
     TrayView {
         icon,
         tooltip: fit_tooltip(&i18n::tray_tooltip(&status, server.as_deref())),
-        primary_label: primary_label(state),
-        primary_enabled: state.primary_action() != PrimaryAction::Disabled,
-        open_label: tr!("tray-open"),
-        hide_label: tr!("tray-hide"),
+        status_label,
+        primary_label,
+        primary_enabled: primary_action != PrimaryAction::Disabled,
+        window_shown,
+        window_label: if window_shown {
+            tr!("tray-hide")
+        } else {
+            tr!("tray-open")
+        },
         quit_label: tr!("tray-quit"),
     }
+}
+
+/// A subscription's text on one line: Windows draws a line break or a tab in
+/// a tooltip or a menu item as is.
+fn menu_text(state: &State, text: &str) -> String {
+    state
+        .text(text)
+        .split(|character: char| character.is_whitespace() || character.is_control())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn fit_tooltip(text: &str) -> String {
@@ -178,9 +203,11 @@ pub(crate) enum TrayError {
 
 pub(crate) struct Tray {
     icon: tray_icon::TrayIcon,
+    status: MenuItem,
     primary: MenuItem,
-    open: MenuItem,
-    hide: MenuItem,
+    window: MenuItem,
+    /// Read by the menu handler, so the window item does what its text said.
+    window_shown: Arc<AtomicBool>,
     quit: MenuItem,
     shown: Option<TrayView>,
     slot: IconSlot<Icon>,
@@ -188,13 +215,14 @@ pub(crate) struct Tray {
 
 impl Tray {
     pub(crate) fn new(events: Sender<ShellEvent>, ctx: egui::Context) -> Result<Self, TrayError> {
-        let open = MenuItem::with_id(OPEN_ID, tr!("tray-open"), true, None);
-        let hide = MenuItem::with_id(HIDE_ID, tr!("tray-hide"), true, None);
+        let status = MenuItem::with_id(STATUS_ID, constants::TITLE, false, None);
+        let window = MenuItem::with_id(WINDOW_ID, tr!("tray-open"), true, None);
         let primary = MenuItem::with_id(PRIMARY_ID, tr!("connect"), false, None);
         let quit = MenuItem::with_id(QUIT_ID, tr!("tray-quit"), true, None);
         let menu = Menu::with_items(&[
-            &open,
-            &hide,
+            &status,
+            &PredefinedMenuItem::separator(),
+            &window,
             &PredefinedMenuItem::separator(),
             &primary,
             &PredefinedMenuItem::separator(),
@@ -227,10 +255,12 @@ impl Tray {
                 click_ctx.request_repaint();
             }
         }));
+        let window_shown = Arc::new(AtomicBool::new(false));
+        let menu_window_shown = Arc::clone(&window_shown);
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             let shell_event = match event.id.as_ref() {
-                OPEN_ID => Some(ShellEvent::Show),
-                HIDE_ID => Some(ShellEvent::Hide),
+                WINDOW_ID if menu_window_shown.load(Ordering::Relaxed) => Some(ShellEvent::Hide),
+                WINDOW_ID => Some(ShellEvent::Show),
                 PRIMARY_ID => Some(ShellEvent::Primary),
                 QUIT_ID => Some(ShellEvent::Quit),
                 _ => None,
@@ -242,9 +272,10 @@ impl Tray {
         }));
         Ok(Self {
             icon,
+            status,
             primary,
-            open,
-            hide,
+            window,
+            window_shown,
             quit,
             shown: None,
             slot,
@@ -297,16 +328,18 @@ impl Tray {
         if self
             .shown
             .as_ref()
-            .is_none_or(|shown| shown.open_label != view.open_label)
+            .is_none_or(|shown| shown.status_label != view.status_label)
         {
-            self.open.set_text(view.open_label.as_str());
+            self.status.set_text(view.status_label.as_str());
         }
+        self.window_shown
+            .store(view.window_shown, Ordering::Relaxed);
         if self
             .shown
             .as_ref()
-            .is_none_or(|shown| shown.hide_label != view.hide_label)
+            .is_none_or(|shown| shown.window_label != view.window_label)
         {
-            self.hide.set_text(view.hide_label.as_str());
+            self.window.set_text(view.window_label.as_str());
         }
         if self
             .shown
@@ -325,10 +358,25 @@ mod tests {
     use crate::i18n;
     use crate::rose_icon::TrayState;
     use crate::state::State;
-    use rosetun_config::{ConnectionState, Status};
+    use rosetun_config::{AppConfig, ConnectionState, Status};
     use rosetun_core::Store;
     use std::fs;
     use std::time::{Duration, Instant};
+
+    fn config_with_server(test: &str, name: &str) -> AppConfig {
+        let path =
+            std::env::temp_dir().join(format!("rosetun-tray-test-{test}-{}", std::process::id()));
+        fs::write(
+            &path,
+            format!(
+                r#"{{"subscriptions":[{{"id":"provider","name":"Provider","url":"https://example.com","nodes":[{{"id":"server","name":"{name}","server":"example.com","port":443,"outbound":{{"trojan":{{"password":"test"}}}}}}]}}],"active":{{"subscription":"provider","node":"server"}}}}"#
+            ),
+        )
+        .unwrap();
+        let config = Store::at(&path).load().unwrap();
+        fs::remove_file(path).unwrap();
+        config
+    }
 
     #[test]
     fn icon_size_stays_within_16_to_64() {
@@ -428,29 +476,22 @@ mod tests {
     #[test]
     fn status_and_primary_action_follow_visible_state() {
         let mut state = State::default();
-        let unknown = tray_view(&state);
+        let unknown = tray_view(&state, true);
         assert_eq!(unknown.icon, TrayState::ServiceUnavailable);
         assert_eq!(
             unknown.tooltip,
             i18n::tray_tooltip(&tr!("helper-unavailable"), None)
         );
         assert!(!unknown.primary_enabled);
-        assert_eq!(unknown.hide_label, tr!("tray-hide"));
+        assert_eq!(unknown.window_label, tr!("tray-hide"));
 
         state.helper_available = true;
         state.status = Status {
             state: ConnectionState::Connected,
             ..Status::default()
         };
-        let path = std::env::temp_dir().join(format!("rosetun-tray-test-{}", std::process::id()));
-        fs::write(
-            &path,
-            r#"{"subscriptions":[{"id":"provider","name":"Provider","url":"https://example.com","nodes":[{"id":"server","name":"Server\r\n\tBlue","server":"example.com","port":443,"outbound":{"trojan":{"password":"test"}}}]}],"active":{"subscription":"provider","node":"server"}}"#,
-        )
-        .unwrap();
-        state.config = Store::at(&path).load().unwrap();
-        fs::remove_file(path).unwrap();
-        let connected = tray_view(&state);
+        state.config = config_with_server("status", r"Server\r\n\tBlue");
+        let connected = tray_view(&state, true);
         assert_eq!(connected.icon, TrayState::Connected);
         assert_eq!(connected.primary_label, tr!("disconnect"));
         assert!(connected.primary_enabled);
@@ -460,7 +501,7 @@ mod tests {
         assert!(!connected.tooltip.contains('\t'));
 
         state.helper_available = false;
-        let unavailable = tray_view(&state);
+        let unavailable = tray_view(&state, true);
         assert_eq!(unavailable.icon, TrayState::ServiceUnavailable);
         assert_eq!(
             unavailable.tooltip,
@@ -493,7 +534,7 @@ mod tests {
             ),
         ] {
             state.status.state = connection.clone();
-            let tray = tray_view(&state);
+            let tray = tray_view(&state, true);
             assert_eq!(tray.icon, expected, "{connection:?}");
             assert_eq!(
                 tray.tooltip,
@@ -520,7 +561,85 @@ mod tests {
             (ConnectionState::Connected, TrayState::Connected),
         ] {
             state.status.state = connection.clone();
-            assert_eq!(tray_view(&state).icon, expected, "{connection:?}");
+            assert_eq!(tray_view(&state, true).icon, expected, "{connection:?}");
         }
+    }
+
+    #[test]
+    fn the_status_line_names_the_state_and_the_server_when_connected() {
+        let mut state = State::default();
+        assert_eq!(
+            tray_view(&state, true).status_label,
+            tr!("helper-unavailable")
+        );
+        state.helper_available = true;
+        state.config = config_with_server("line", r"Server\r\n\tBlue");
+        let failed = || ConnectionState::Failed {
+            reason: String::new(),
+            failure_kind: None,
+        };
+        for (connection, lockdown, expected) in [
+            (
+                ConnectionState::Connected,
+                false,
+                format!("{} · Server Blue", tr!("connected")),
+            ),
+            (ConnectionState::Connecting, false, tr!("connecting")),
+            (ConnectionState::Reconnecting, false, tr!("reconnecting")),
+            (ConnectionState::Disconnected, false, tr!("disconnected")),
+            (ConnectionState::Disconnected, true, tr!("tray-blocked")),
+            (failed(), false, tr!("failed")),
+            (failed(), true, tr!("tray-blocked")),
+            (
+                ConnectionState::FailedProtected {
+                    reason: String::new(),
+                    failure_kind: None,
+                },
+                false,
+                tr!("tray-blocked"),
+            ),
+        ] {
+            state.status.state = connection.clone();
+            state.status.lockdown = lockdown;
+            assert_eq!(
+                tray_view(&state, true).status_label,
+                expected,
+                "{connection:?}, Lockdown {lockdown}"
+            );
+        }
+        state.helper_available = false;
+        assert_eq!(
+            tray_view(&state, true).status_label,
+            tr!("helper-unavailable")
+        );
+    }
+
+    #[test]
+    fn one_window_item_opens_a_hidden_window_and_hides_a_shown_one() {
+        let state = State::default();
+        let shown = tray_view(&state, true);
+        assert!(shown.window_shown);
+        assert_eq!(shown.window_label, tr!("tray-hide"));
+        let hidden = tray_view(&state, false);
+        assert!(!hidden.window_shown);
+        assert_eq!(hidden.window_label, tr!("tray-open"));
+        assert_ne!(shown, hidden, "a changed window item is synced");
+    }
+
+    #[test]
+    fn connect_names_the_selected_server() {
+        let mut state = State::default();
+        state.helper_available = true;
+        let tray = tray_view(&state, true);
+        assert_eq!(tray.primary_label, tr!("connect"), "no server selected");
+        state.config = config_with_server("connect", r"Japan\t1");
+        let tray = tray_view(&state, true);
+        assert_eq!(
+            tray.primary_label,
+            tr!("tray-connect-to", server = "Japan 1")
+        );
+        assert!(tray.primary_enabled);
+        state.status.state = ConnectionState::Connected;
+        assert_eq!(tray_view(&state, true).primary_label, tr!("disconnect"));
     }
 }

@@ -549,10 +549,11 @@ impl eframe::App for App {
                     );
                 }
             }
-            if let Some(tray) = &mut self.tray {
-                tray.sync(&tray::tray_view(&self.state));
-            }
             let minimized = ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+            if let Some(tray) = &mut self.tray {
+                let window_shown = !self.window_hidden && !minimized;
+                tray.sync(&tray::tray_view(&self.state, window_shown));
+            }
             if minimized
                 && !self.window_minimized
                 && !self.quitting
