@@ -346,7 +346,10 @@ function Test-CliPathEgress {
         Move-Item -LiteralPath $cli -Destination $saved -Force
         try {
             Copy-Item -LiteralPath (Get-Command -Name curl.exe -ErrorAction Stop).Source -Destination $cli -Force
-            & $cli --interface $address --max-time 5 --silent --output NUL $url 2>$null
+            # As in the egress probe: a failed revocation lookup (the guest's
+            # resolver is the name zone in scenarios 1 to 3) must not read
+            # as a closed path.
+            & $cli --interface $address --max-time 5 --silent --ssl-no-revoke --output NUL $url 2>$null
             $LASTEXITCODE -eq 0
         }
         finally {
