@@ -34,6 +34,14 @@ const DESTINATION_HINT_HEIGHT: f32 = 18.0;
 const DESTINATION_POPUP_MARGIN: f32 = 24.0;
 const MIN_DESTINATION_POPUP: f32 = 120.0;
 
+/// The frame the rule dialog was last shown in and how many times it has
+/// opened, so a new opening gets fresh animation ids.
+#[derive(Clone, Copy)]
+struct Opening {
+    frame: u64,
+    count: u64,
+}
+
 /// A process row's tile: the program's icon, else a letter on a colour.
 struct ProcessTile<'a> {
     letter: &'a str,
@@ -41,8 +49,8 @@ struct ProcessTile<'a> {
     icon: Option<&'a Path>,
 }
 
-fn process_body_height(top: f32, limit: f32, advanced: bool) -> f32 {
-    let min_list = if advanced {
+fn process_body_height(top: f32, limit: f32, advanced: f32) -> f32 {
+    let min_list = if advanced > 0.0 {
         PROCESS_ROW_HEIGHT
     } else {
         MIN_PROCESS_LIST
@@ -57,19 +65,40 @@ fn has_advanced(dialog: &AddRuleDialog) -> bool {
     dialog.kind == RuleInputKind::Process || dialog.editing.is_none()
 }
 
-fn advanced_height(dialog: &AddRuleDialog) -> f32 {
+/// The advanced section's height with its rows `progress` of the way open.
+fn advanced_height(dialog: &AddRuleDialog, progress: f32) -> f32 {
     if has_advanced(dialog) {
         ADVANCED_HEADER_HEIGHT
-            + if dialog.advanced {
-                ADVANCED_ROW_HEIGHT
-                    * (usize::from(dialog.kind == RuleInputKind::Process)
-                        + usize::from(dialog.editing.is_none())) as f32
-            } else {
-                0.0
-            }
+            + ADVANCED_ROW_HEIGHT
+                * (usize::from(dialog.kind == RuleInputKind::Process)
+                    + usize::from(dialog.editing.is_none())) as f32
+                * progress.clamp(0.0, 1.0)
     } else {
         0.0
     }
+}
+
+/// How far the advanced section is open. Each opening of the dialog animates
+/// under its own id, and egui shows a new id at its target at once, so the
+/// section never finishes the last opening's move.
+fn advanced_progress(ctx: &egui::Context, dialog: &AddRuleDialog, reduce_motion: bool) -> f32 {
+    let id = egui::Id::new("add_rule_opening");
+    let frame = ctx.cumulative_frame_nr();
+    let count = ctx.data_mut(|data| {
+        let count = match data.get_temp::<Opening>(id) {
+            Some(opening) if opening.frame + 1 >= frame => opening.count,
+            Some(opening) => opening.count + 1,
+            None => 0,
+        };
+        data.insert_temp(id, Opening { frame, count });
+        count
+    });
+    widgets::reveal_progress(
+        ctx,
+        egui::Id::new("add_rule_advanced").with(count),
+        dialog.advanced,
+        reduce_motion,
+    )
 }
 
 fn footer_buttons(
@@ -113,6 +142,7 @@ pub(crate) fn show(
     let top = DIALOG_TOP
         .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0));
     let dialog_width = DIALOG_WIDTH.min((ctx.content_rect().width() - 144.0).max(320.0));
+    let advanced = advanced_progress(ctx, dialog, config.interface.reduce_motion);
     let response = widgets::show_modal(
         ctx,
         egui::Modal::new(id).area(
@@ -167,14 +197,14 @@ pub(crate) fn show(
                         - BUTTON_ROW_HEIGHT
                         - DIVIDER_HEIGHT
                         - 104.0
-                        - advanced_height(dialog)
+                        - advanced_height(dialog, advanced)
                         - destination_hint_height(dialog)
                         - if dialog.error.is_some() {
                             ERROR_HEIGHT
                         } else {
                             0.0
                         };
-                    let height = process_body_height(ui.cursor().top(), limit, dialog.advanced);
+                    let height = process_body_height(ui.cursor().top(), limit, advanced);
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), height),
                         egui::Layout::top_down(egui::Align::Min),
@@ -201,9 +231,7 @@ pub(crate) fn show(
                 ui.horizontal(|ui| {
                     let chevron = icons::icon_button_sized(
                         ui,
-                        Icon::Chevron {
-                            open: if dialog.advanced { 1.0 } else { 0.0 },
-                        },
+                        Icon::Chevron { open: advanced },
                         !dialog.busy,
                         20.0,
                     );
@@ -225,41 +253,48 @@ pub(crate) fn show(
                         dialog.advanced = !dialog.advanced;
                     }
                 });
-                if dialog.advanced && dialog.kind == RuleInputKind::Process {
-                    let available = full_path_available(dialog);
-                    let mut match_path = dialog.match_mode == ProcessMatchMode::Path;
-                    let response = widgets::toggle_row(
-                        ui,
-                        tr!("match-by-full-path"),
-                        None,
-                        tr!("full-path-detail"),
-                        &mut match_path,
-                        available && !dialog.busy,
-                    );
-                    if !available {
-                        response.on_hover_text(tr!("path-unavailable"));
-                    }
-                    if match_path != (dialog.match_mode == ProcessMatchMode::Path) {
-                        dialog.set_process_match_mode(if match_path {
-                            ProcessMatchMode::Path
-                        } else {
-                            ProcessMatchMode::Name
-                        });
-                    }
-                }
-                if dialog.advanced && dialog.editing.is_none() {
-                    let response = widgets::toggle_row(
-                        ui,
-                        tr!("temporary-only"),
-                        None,
-                        tr!("temporary-dialog-hint"),
-                        &mut dialog.temporary_only,
-                        can_temporary && !dialog.busy,
-                    );
-                    if !can_temporary {
-                        response.on_hover_text(tr!("temporary-needs-connection"));
-                    }
-                }
+                widgets::reveal(
+                    ui,
+                    egui::Id::new("add_rule_advanced_rows"),
+                    advanced,
+                    |ui| {
+                        if dialog.kind == RuleInputKind::Process {
+                            let available = full_path_available(dialog);
+                            let mut match_path = dialog.match_mode == ProcessMatchMode::Path;
+                            let response = widgets::toggle_row(
+                                ui,
+                                tr!("match-by-full-path"),
+                                None,
+                                tr!("full-path-detail"),
+                                &mut match_path,
+                                available && !dialog.busy,
+                            );
+                            if !available {
+                                response.on_hover_text(tr!("path-unavailable"));
+                            }
+                            if match_path != (dialog.match_mode == ProcessMatchMode::Path) {
+                                dialog.set_process_match_mode(if match_path {
+                                    ProcessMatchMode::Path
+                                } else {
+                                    ProcessMatchMode::Name
+                                });
+                            }
+                        }
+                        if dialog.editing.is_none() {
+                            let response = widgets::toggle_row(
+                                ui,
+                                tr!("temporary-only"),
+                                None,
+                                tr!("temporary-dialog-hint"),
+                                &mut dialog.temporary_only,
+                                can_temporary && !dialog.busy,
+                            );
+                            if !can_temporary {
+                                response.on_hover_text(tr!("temporary-needs-connection"));
+                            }
+                        }
+                    },
+                );
             }
             if let Some(error) = &dialog.error {
                 ui.add_space(6.0);
@@ -1522,17 +1557,17 @@ mod tests {
 
     #[test]
     fn process_body_fits_available_space_with_bounds() {
-        assert_eq!(process_body_height(250.0, 500.0, false), 250.0);
+        assert_eq!(process_body_height(250.0, 500.0, 0.0), 250.0);
         assert_eq!(
-            process_body_height(250.0, 900.0, false),
+            process_body_height(250.0, 900.0, 0.0),
             PROCESS_FOOTER_HEIGHT + MAX_PROCESS_LIST
         );
         assert_eq!(
-            process_body_height(250.0, 300.0, false),
+            process_body_height(250.0, 300.0, 0.0),
             PROCESS_FOOTER_HEIGHT + MIN_PROCESS_LIST
         );
         assert_eq!(
-            process_body_height(250.0, 300.0, true),
+            process_body_height(250.0, 300.0, 1.0),
             PROCESS_FOOTER_HEIGHT + 44.0
         );
     }
@@ -1993,6 +2028,87 @@ mod tests {
         assert_eq!(
             matches.iter().filter(|item| **item == "google@cn").count(),
             1
+        );
+    }
+
+    /// Runs one frame at `time` seconds and returns the advanced section's
+    /// progress, or `None` for a frame without the dialog.
+    fn advanced_frame(
+        ctx: &super::egui::Context,
+        time: f64,
+        dialog: Option<&crate::state::AddRuleDialog>,
+        reduce_motion: bool,
+    ) -> Option<f32> {
+        let mut progress = None;
+        let mut output = ctx.run_ui(
+            super::egui::RawInput {
+                time: Some(time),
+                ..super::egui::RawInput::default()
+            },
+            |ui| {
+                progress =
+                    dialog.map(|dialog| super::advanced_progress(ui.ctx(), dialog, reduce_motion));
+            },
+        );
+        output.textures_delta.clear();
+        progress
+    }
+
+    #[test]
+    fn the_advanced_section_moves_over_time_unless_motion_is_reduced() {
+        use rosetun_config::RuleSetId;
+
+        for reduce_motion in [false, true] {
+            let ctx = super::egui::Context::default();
+            let mut dialog = crate::state::AddRuleDialog::new(RuleSetId::new("set"));
+            assert_eq!(
+                advanced_frame(&ctx, 0.0, Some(&dialog), reduce_motion),
+                Some(0.0)
+            );
+            dialog.advanced = true;
+            let opening = advanced_frame(&ctx, 0.016, Some(&dialog), reduce_motion)
+                .expect("the dialog is shown");
+            dialog.advanced = false;
+            let closing = advanced_frame(&ctx, 1.0, Some(&dialog), reduce_motion)
+                .expect("the dialog is shown");
+            if reduce_motion {
+                assert_eq!((opening, closing), (1.0, 0.0));
+            } else {
+                assert!(0.0 < opening && opening < 1.0, "{opening}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_reopened_dialog_shows_the_advanced_section_where_it_now_is() {
+        use rosetun_config::RuleSetId;
+
+        let ctx = super::egui::Context::default();
+        let mut dialog = crate::state::AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.advanced = true;
+        assert_eq!(advanced_frame(&ctx, 0.0, Some(&dialog), false), Some(1.0));
+        advanced_frame(&ctx, 0.016, None, false);
+        dialog.advanced = false;
+        assert_eq!(advanced_frame(&ctx, 0.032, Some(&dialog), false), Some(0.0));
+        advanced_frame(&ctx, 0.048, None, false);
+        dialog.advanced = true;
+        assert_eq!(advanced_frame(&ctx, 0.064, Some(&dialog), false), Some(1.0));
+    }
+
+    #[test]
+    fn advanced_rows_count_by_how_far_the_section_is_open() {
+        use super::{ADVANCED_HEADER_HEIGHT, ADVANCED_ROW_HEIGHT, advanced_height};
+        use rosetun_config::RuleSetId;
+
+        let dialog = crate::state::AddRuleDialog::new(RuleSetId::new("set"));
+        assert_eq!(advanced_height(&dialog, 0.0), ADVANCED_HEADER_HEIGHT);
+        assert_eq!(
+            advanced_height(&dialog, 0.5),
+            ADVANCED_HEADER_HEIGHT + ADVANCED_ROW_HEIGHT
+        );
+        assert_eq!(
+            advanced_height(&dialog, 1.0),
+            ADVANCED_HEADER_HEIGHT + 2.0 * ADVANCED_ROW_HEIGHT
         );
     }
 
