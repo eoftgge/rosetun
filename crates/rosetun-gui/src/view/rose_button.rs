@@ -401,6 +401,7 @@ pub(crate) fn rose_button(
     label: &str,
     enabled: bool,
     reduce_motion: bool,
+    frame: Option<Duration>,
 ) -> bool {
     let sense = if enabled {
         Sense::click()
@@ -456,8 +457,10 @@ pub(crate) fn rose_button(
     {
         ctx.request_repaint();
     }
-    if phase == RosePhase::Opening && !reduce_motion {
-        ctx.request_repaint_after(Duration::from_millis(33));
+    if let Some(frame) = frame
+        && phase == RosePhase::Opening
+    {
+        ctx.request_repaint_after(frame);
     }
 
     if ui.is_rect_visible(rect) {

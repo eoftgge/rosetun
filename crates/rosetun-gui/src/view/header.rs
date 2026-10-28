@@ -8,13 +8,12 @@ use rosetun_config::ConnectionState;
 
 use crate::brand;
 use crate::state::{Action, ExitLookup, ExitRoute, Screen, State};
-use crate::{constants, theme, widgets};
+use crate::{constants, motion, theme, widgets};
 
 /// The window draws its own title bar on Windows; elsewhere the system frame stays.
 pub(crate) const CUSTOM_FRAME: bool = cfg!(windows);
 
 const INTRO_DURATION: f64 = 2.7;
-const PETAL_FRAME: Duration = Duration::from_millis(33);
 
 #[derive(Clone, Copy)]
 enum WindowButton {
@@ -80,7 +79,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     let intro = if reduce_motion {
         1.0
     } else {
-        1.0 - (1.0 - progress).powi(3)
+        motion::ease_out(progress)
     };
     let status = state.visible_status();
     let connected = status.is_some_and(|status| matches!(status.state, ConnectionState::Connected));
@@ -117,17 +116,16 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             drift_time,
         ),
     };
-    let window_away =
-        state.window_hidden() || ui.input(|input| input.viewport().minimized.unwrap_or(false));
-    if !reduce_motion && progress < 1.0 {
-        ui.ctx().request_repaint_after(PETAL_FRAME);
-    }
-    if let Some(delay) = petal_repaint(
-        status.map(|status| &status.state),
-        drift.weight,
+    let frame = motion::continuous_frame(
+        motion::WindowView::of(ui.ctx(), state.window_hidden()),
         reduce_motion,
-        window_away,
-    ) {
+    );
+    if let Some(frame) = frame
+        && progress < 1.0
+    {
+        ui.ctx().request_repaint_after(frame);
+    }
+    if let Some(delay) = petal_repaint(status.map(|status| &status.state), drift.weight, frame) {
         ui.ctx().request_repaint_after(delay);
     }
 
@@ -277,7 +275,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .inner;
 
     if let Some(tab_rect) = selected_rect {
-        let duration = if reduce_motion { 0.0 } else { 0.2 };
+        let duration = motion::duration(motion::NORMAL, reduce_motion);
         let left = ui.ctx().animate_value_with_time(
             Id::new("header_tab_underline_left"),
             tab_rect.left(),
@@ -353,17 +351,16 @@ fn header_status_for(
 }
 
 /// When the header petals need their next frame: while they drift or
-/// settle, and never for a window that cannot be seen.
+/// settle, at the pace `frame` allows for continuous animation.
 fn petal_repaint(
     connection: Option<&ConnectionState>,
     drift_weight: f32,
-    reduce_motion: bool,
-    window_away: bool,
+    frame: Option<Duration>,
 ) -> Option<Duration> {
     let moving = connection.is_some_and(|connection| {
         matches!(connection, ConnectionState::Connected) || connection.is_transitional()
     }) || drift_weight > 0.0;
-    (moving && !reduce_motion && !window_away).then_some(PETAL_FRAME)
+    frame.filter(|_| moving)
 }
 
 fn intro_progress(time: f64, started_at: f64) -> f32 {
@@ -724,24 +721,22 @@ mod tests {
 
     #[test]
     fn petals_ask_for_frames_only_while_moving_on_screen() {
-        let frame = Some(Duration::from_millis(33));
+        let frame = Some(Duration::from_millis(16));
         let connected = Some(&ConnectionState::Connected);
         let connecting = Some(&ConnectionState::Connecting);
         let disconnected = Some(&ConnectionState::Disconnected);
-        assert_eq!(petal_repaint(connected, 1.0, false, false), frame);
-        assert_eq!(petal_repaint(connecting, 0.0, false, false), frame);
+        assert_eq!(petal_repaint(connected, 1.0, frame), frame);
+        assert_eq!(petal_repaint(connecting, 0.0, frame), frame);
         assert_eq!(
-            petal_repaint(Some(&ConnectionState::Reconnecting), 0.3, false, false),
+            petal_repaint(Some(&ConnectionState::Reconnecting), 0.3, frame),
             frame
         );
-        assert_eq!(petal_repaint(connected, 1.0, true, false), None);
-        assert_eq!(petal_repaint(connecting, 0.5, true, false), None);
-        assert_eq!(petal_repaint(connected, 1.0, false, true), None);
-        assert_eq!(petal_repaint(connecting, 1.0, false, true), None);
-        assert_eq!(petal_repaint(disconnected, 0.0, false, false), None);
-        assert_eq!(petal_repaint(None, 0.0, false, false), None);
-        assert_eq!(petal_repaint(disconnected, 0.2, false, false), frame);
-        assert_eq!(petal_repaint(disconnected, 0.2, false, true), None);
+        assert_eq!(petal_repaint(connected, 1.0, None), None);
+        assert_eq!(petal_repaint(connecting, 0.5, None), None);
+        assert_eq!(petal_repaint(disconnected, 0.0, frame), None);
+        assert_eq!(petal_repaint(None, 0.0, frame), None);
+        assert_eq!(petal_repaint(disconnected, 0.2, frame), frame);
+        assert_eq!(petal_repaint(disconnected, 0.2, None), None);
     }
 
     #[test]

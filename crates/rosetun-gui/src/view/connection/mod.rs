@@ -6,7 +6,7 @@ use crate::actions::{PrimaryAction, ProtectionAction, protection_action};
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::state::{Action, ExitLookup, ExitRoute, SessionPart, State, TunnelDelay, primary_label};
-use crate::{display, i18n, theme, widgets};
+use crate::{display, i18n, motion, theme, widgets};
 
 use super::rose_button::{self, RosePhase};
 use super::rules::{rule_label, target_color};
