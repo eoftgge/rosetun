@@ -28,7 +28,7 @@ pub(crate) use search::{
     MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix, search_width_beside,
 };
 pub(crate) use segmented::{segmented, segmented_width};
-pub(crate) use settings_card::settings_card;
+pub(crate) use settings_card::{SettingsCard, settings_card};
 pub(crate) use status_pill::{status_pill, status_pill_width};
 pub(crate) use swatches::{Swatch, swatches};
 pub(crate) use toggle::{toggle, toggle_row};

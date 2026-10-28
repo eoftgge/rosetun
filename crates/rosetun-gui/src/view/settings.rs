@@ -1005,39 +1005,35 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
     ui.add_space(theme::SECTION_GAP);
     widgets::settings_card(ui, |card| {
-        card.body(|ui| {
-            if let Some(folder) = &state.settings.screen.config_folder {
-                about_path(
-                    ui,
-                    state,
-                    &tr!("configuration-folder"),
-                    folder.to_string_lossy().as_ref(),
-                    AboutFolder::Config,
-                    actions,
-                );
-                ui.add_space(8.0);
-                let log = folder.join(constants::LOG_FILE_NAME);
-                about_path(
-                    ui,
-                    state,
-                    &tr!("log-file"),
-                    log.to_string_lossy().as_ref(),
-                    AboutFolder::Config,
-                    actions,
-                );
-            }
-            if let Some(folder) = &state.settings.screen.licenses_folder {
-                ui.add_space(8.0);
-                about_path(
-                    ui,
-                    state,
-                    &tr!("licenses-folder"),
-                    folder.to_string_lossy().as_ref(),
-                    AboutFolder::Licenses,
-                    actions,
-                );
-            }
-        });
+        if let Some(folder) = &state.settings.screen.config_folder {
+            about_path(
+                card,
+                state,
+                &tr!("configuration-folder"),
+                folder.to_string_lossy().as_ref(),
+                AboutFolder::Config,
+                actions,
+            );
+            let log = folder.join(constants::LOG_FILE_NAME);
+            about_path(
+                card,
+                state,
+                &tr!("log-file"),
+                log.to_string_lossy().as_ref(),
+                AboutFolder::Config,
+                actions,
+            );
+        }
+        if let Some(folder) = &state.settings.screen.licenses_folder {
+            about_path(
+                card,
+                state,
+                &tr!("licenses-folder"),
+                folder.to_string_lossy().as_ref(),
+                AboutFolder::Licenses,
+                actions,
+            );
+        }
     });
     ui.add_space(theme::SECTION_GAP);
     ui.add(
@@ -1131,40 +1127,37 @@ fn update_status(state: &State, now: u64, language: crate::i18n::Language) -> (S
 }
 
 fn about_path(
-    ui: &mut egui::Ui,
+    card: &mut widgets::SettingsCard<'_>,
     state: &State,
     label: &str,
     path: &str,
     folder: AboutFolder,
     actions: &mut Vec<Action>,
 ) {
-    ui.label(label);
-    ui.horizontal(|ui| {
-        let path = state.text(path);
-        let width = (ui.available_width() - if cfg!(windows) { 180.0 } else { 0.0 }).max(0.0);
-        ui.allocate_ui_with_layout(
-            egui::vec2(width, ui.text_style_height(&egui::TextStyle::Small)),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.set_width(width);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&path)
-                            .small()
-                            .color(theme::palette().text_dim),
-                    )
-                    .truncate(),
+    let path = state.text(path);
+    card.row_with_title(
+        |ui| {
+            ui.label(RichText::new(label).color(theme::palette().text));
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&path)
+                        .small()
+                        .color(theme::palette().text_dim),
                 )
-                .on_hover_text(&path);
-            },
-        );
-        #[cfg(windows)]
-        if widgets::outline_button(ui, tr!("open-folder"), state.can_open_folders()).clicked() {
-            actions.push(Action::OpenFolder(folder));
-        }
-        #[cfg(not(windows))]
-        let _ = (actions, folder);
-    });
+                .truncate(),
+            )
+            .on_hover_text(&path);
+        },
+        None,
+        |ui| {
+            #[cfg(windows)]
+            if widgets::outline_button(ui, tr!("open-folder"), state.can_open_folders()).clicked() {
+                actions.push(Action::OpenFolder(folder));
+            }
+            #[cfg(not(windows))]
+            let _ = (ui, actions, folder);
+        },
+    );
 }
 
 #[cfg(test)]
