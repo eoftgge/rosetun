@@ -26,6 +26,14 @@ mod instance;
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
 mod link_pipe;
+#[cfg_attr(
+    windows,
+    expect(
+        unsafe_code,
+        reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+    )
+)]
+mod program_icon;
 
 #[cfg(windows)]
 #[expect(
@@ -68,6 +76,9 @@ pub use instance::{Activation, Instance, acquire};
 pub use language::user_language_is_russian;
 #[cfg(windows)]
 pub use link_pipe::{LinkListener, MAX_LINK_BYTES, send_link};
+#[cfg(windows)]
+pub use program_icon::ComApartment;
+pub use program_icon::{IconImage, program_icon};
 #[cfg(windows)]
 pub use screen_clip::{clipboard_sequence, start_screen_clip};
 #[cfg(windows)]
