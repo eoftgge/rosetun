@@ -1,4 +1,4 @@
-use eframe::egui::{self, Pos2, Rect, Shape, Stroke};
+use eframe::egui::{self, Pos2, Rect, Shape, Stroke, Vec2};
 use rosetun_config::AccentPreset;
 
 use crate::rose_icon::{self, RoseIcon};
@@ -7,7 +7,11 @@ use crate::theme::{self, Palette};
 const PETAL: [(f32, f32); 4] = [(0.0, -20.0), (12.0, 0.0), (0.0, 22.0), (-12.0, 0.0)];
 /// Keeps the header petals behind the navigation instead of competing with it.
 const HEADER_PETAL_FADE: f32 = 0.65;
+/// The two ends of a petal's drift: shift in points and turn in degrees.
+const DRIFT_FROM: (f32, f32, f32) = (7.0, -6.0, 10.0);
+const DRIFT_TO: (f32, f32, f32) = (-5.0, 5.0, -8.0);
 
+#[derive(Clone, Copy)]
 pub(crate) struct Petal {
     x: f32,
     y: f32,
@@ -124,6 +128,38 @@ const PETALS: [Petal; 13] = [
     },
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Speed {
+    /// Connected: slow, each petal on its own period.
+    Calm,
+    /// Connecting: faster, under the bloom pulse.
+    Quick,
+}
+
+/// How far the header petals have drifted from their places.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Drift {
+    pub(crate) time: f64,
+    /// 0 keeps every petal in place, 1 is the full drift.
+    pub(crate) weight: f32,
+    /// Blends the calm drift (0) into the quick one (1), so a change of
+    /// speed moves the petals instead of jumping them to another phase.
+    pub(crate) quick: f32,
+}
+
+impl Drift {
+    fn offset(self, index: usize) -> (Vec2, f32) {
+        if self.weight <= 0.0 {
+            return (Vec2::ZERO, 0.0);
+        }
+        let (calm_shift, calm_turn) = drift(index, self.time, Speed::Calm);
+        let (quick_shift, quick_turn) = drift(index, self.time, Speed::Quick);
+        let shift = calm_shift + (quick_shift - calm_shift) * self.quick;
+        let turn = calm_turn + (quick_turn - calm_turn) * self.quick;
+        (shift * self.weight, turn * self.weight)
+    }
+}
+
 pub(crate) fn petal_points(petal: &Petal, origin: Pos2, x_scale: f32) -> [Pos2; 4] {
     let (sin, cos) = petal.rotation.to_radians().sin_cos();
     PETAL.map(|(x, y)| {
@@ -136,11 +172,22 @@ pub(crate) fn petal_points(petal: &Petal, origin: Pos2, x_scale: f32) -> [Pos2; 
     })
 }
 
-pub(crate) fn paint_petals(painter: &egui::Painter, rect: Rect, bloom: f32, intro: f32) {
+pub(crate) fn paint_petals(
+    painter: &egui::Painter,
+    rect: Rect,
+    bloom: f32,
+    intro: f32,
+    drift: Drift,
+) {
     let painter = painter.with_clip_rect(rect);
     let origin = rect.left_top() + egui::vec2(0.0, -20.0 * (1.0 - intro));
-    for petal in &PETALS {
-        let points = petal_points(petal, origin, rect.width() / 1200.0).to_vec();
+    for (index, petal) in PETALS.iter().enumerate() {
+        let (shift, turn) = drift.offset(index);
+        let moved = Petal {
+            rotation: petal.rotation + turn,
+            ..*petal
+        };
+        let points = petal_points(&moved, origin + shift, rect.width() / 1200.0).to_vec();
         let alpha = petal_alpha(petal.alpha, bloom, intro) * HEADER_PETAL_FADE;
         if petal.outline {
             painter.add(Shape::closed_line(
@@ -215,8 +262,25 @@ pub(crate) fn bloom(settled: f32, transitional: bool, time: f64) -> f32 {
     }
 }
 
+/// A petal's shift in points and turn in degrees at `time`, swinging
+/// smoothly between the drift's ends. Neighbours get different periods and
+/// phases so the petals never move in step.
+pub(crate) fn drift(index: usize, time: f64, speed: Speed) -> (Vec2, f32) {
+    let index_f = index as f64;
+    let (period, lead) = match speed {
+        Speed::Calm => (9.0 + (index % 5) as f64 * 1.6, 1.3 * index_f),
+        Speed::Quick => (2.4 + (index % 3) as f64 * 0.4, 0.4 * index_f),
+    };
+    let swing = (0.5 - 0.5 * (std::f64::consts::TAU * (time + lead) / period).cos()) as f32;
+    let along = |from: f32, to: f32| from + (to - from) * swing;
+    (
+        egui::vec2(along(DRIFT_FROM.0, DRIFT_TO.0), along(DRIFT_FROM.1, DRIFT_TO.1)),
+        along(DRIFT_FROM.2, DRIFT_TO.2),
+    )
+}
+
 pub(crate) fn petal_alpha(base: f32, bloom: f32, intro: f32) -> f32 {
-    (base * (1.0 + 0.8 * bloom) * intro).clamp(0.0, 1.0)
+    (base * (1.0 + 1.2 * bloom) * intro).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -294,7 +358,69 @@ mod tests {
     #[test]
     fn petals_fade_in_and_brighten() {
         near(petal_alpha(0.1, 0.0, 1.0), 0.1);
-        near(petal_alpha(0.1, 1.0, 1.0), 0.18);
+        near(petal_alpha(0.1, 1.0, 1.0), 0.22);
+        near(petal_alpha(0.1, 0.5, 1.0), 0.16);
         near(petal_alpha(0.1, 1.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn petals_stay_in_place_without_drift_weight() {
+        for time in [0.0, 3.7, 120.25] {
+            for quick in [0.0, 0.5, 1.0] {
+                let drift = Drift {
+                    time,
+                    weight: 0.0,
+                    quick,
+                };
+                for index in 0..PETALS.len() {
+                    assert_eq!(drift.offset(index), (Vec2::ZERO, 0.0));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn drift_stays_between_its_ends() {
+        for speed in [Speed::Calm, Speed::Quick] {
+            for index in 0..PETALS.len() {
+                for step in 0..400 {
+                    let (shift, turn) = drift(index, f64::from(step) * 0.137, speed);
+                    assert!((-5.001..=7.001).contains(&shift.x), "{shift:?}");
+                    assert!((-6.001..=5.001).contains(&shift.y), "{shift:?}");
+                    assert!((-8.001..=10.001).contains(&turn), "{turn}");
+                }
+            }
+        }
+        let full = Drift {
+            time: 4.2,
+            weight: 1.0,
+            quick: 0.0,
+        };
+        assert_eq!(full.offset(3), drift(3, 4.2, Speed::Calm));
+        let (half_shift, half_turn) = Drift {
+            weight: 0.5,
+            ..full
+        }
+        .offset(3);
+        let (shift, turn) = drift(3, 4.2, Speed::Calm);
+        near(half_shift.x, shift.x / 2.0);
+        near(half_turn, turn / 2.0);
+    }
+
+    #[test]
+    fn neighbouring_petals_drift_out_of_step() {
+        for speed in [Speed::Calm, Speed::Quick] {
+            for time in [1.1, 2.5, 17.3] {
+                for index in 0..PETALS.len() - 1 {
+                    let (shift, turn) = drift(index, time, speed);
+                    let (next_shift, next_turn) = drift(index + 1, time, speed);
+                    assert!(
+                        (shift - next_shift).length() > 0.01 || (turn - next_turn).abs() > 0.01,
+                        "petals {index} and {} move together",
+                        index + 1
+                    );
+                }
+            }
+        }
     }
 }

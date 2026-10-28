@@ -396,6 +396,11 @@ impl State {
         self.traffic.window_hidden = hidden;
     }
 
+    /// Whether the window is hidden in the tray.
+    pub(crate) fn window_hidden(&self) -> bool {
+        self.traffic.window_hidden
+    }
+
     /// Whether there is a tunnel whose connections the service can list.
     pub(crate) fn connections_available(&self) -> bool {
         self.helper_available
