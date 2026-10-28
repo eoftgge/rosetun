@@ -94,7 +94,7 @@ The service (`rosetun-helper-privileged`) starts sing-box, which runs the tunnel
 
 With **Lockdown** on, Rosetun also keeps persistent WFP filters in its own sublayer that block everything outside the tunnel. Windows keeps them across a service crash and a restart, and the Base Filtering Engine (BFE) restores them at boot, with boot-time filters covering the time before it starts (fail-closed). They are removed only by turning Lockdown off, by `rosetun reset-firewall` (as administrator) or by uninstalling Rosetun.
 
-Lockdown protects against accidental leaks: the VPN drops, the service stops, the computer boots. It does not protect against malware you run yourself. The engines get through only when the service starts them, and the Rosetun app and the `rosetun` command only over HTTPS, HTTP and DNS and only while not connected, but a program running under your account can still go out through `rosetun.exe`, among many other ways.
+Lockdown protects against accidental leaks: the VPN drops, the service stops, the computer boots. It does not protect against malware you run yourself. The engines get through only when the service starts them, and the Rosetun app and the `rosetun` command only over TCP and DNS and only while not connected, but a program running under your account can still go out through `rosetun.exe`, among many other ways.
 
 ## Build from source
 
