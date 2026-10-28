@@ -7,9 +7,9 @@ use crate::theme::{self, Palette};
 const PETAL: [(f32, f32); 4] = [(0.0, -20.0), (12.0, 0.0), (0.0, 22.0), (-12.0, 0.0)];
 /// Keeps the header petals behind the navigation instead of competing with it.
 const HEADER_PETAL_FADE: f32 = 0.65;
-/// The two ends of a petal's drift: shift in points and turn in degrees.
-const DRIFT_FROM: (f32, f32, f32) = (7.0, -6.0, 10.0);
-const DRIFT_TO: (f32, f32, f32) = (-5.0, 5.0, -8.0);
+/// Where a petal may wander: shift in points (x, y) and turn in degrees.
+const DRIFT_LOW: [f32; 3] = [-5.0, -6.0, -8.0];
+const DRIFT_HIGH: [f32; 3] = [7.0, 5.0, 10.0];
 
 #[derive(Clone, Copy)]
 pub(crate) struct Petal {
@@ -130,16 +130,27 @@ const PETALS: [Petal; 13] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Speed {
-    /// Connected: slow, each petal on its own period.
+    /// Connected: a new random aim every few seconds.
     Calm,
     /// Connecting: faster, under the bloom pulse.
     Quick,
+}
+
+impl Speed {
+    fn knot_spacing(self) -> f64 {
+        match self {
+            Self::Calm => 2.6,
+            Self::Quick => 0.8,
+        }
+    }
 }
 
 /// How far the header petals have drifted from their places.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Drift {
     pub(crate) time: f64,
+    /// Picks the random paths; a new one each launch.
+    pub(crate) seed: u64,
     /// 0 keeps every petal in place, 1 is the full drift.
     pub(crate) weight: f32,
     /// Blends the calm drift (0) into the quick one (1), so a change of
@@ -152,8 +163,8 @@ impl Drift {
         if self.weight <= 0.0 {
             return (Vec2::ZERO, 0.0);
         }
-        let (calm_shift, calm_turn) = drift(index, self.time, Speed::Calm);
-        let (quick_shift, quick_turn) = drift(index, self.time, Speed::Quick);
+        let (calm_shift, calm_turn) = drift(index, self.time, Speed::Calm, self.seed);
+        let (quick_shift, quick_turn) = drift(index, self.time, Speed::Quick, self.seed);
         let shift = calm_shift + (quick_shift - calm_shift) * self.quick;
         let turn = calm_turn + (quick_turn - calm_turn) * self.quick;
         (shift * self.weight, turn * self.weight)
@@ -262,24 +273,45 @@ pub(crate) fn bloom(settled: f32, transitional: bool, time: f64) -> f32 {
     }
 }
 
-/// A petal's shift in points and turn in degrees at `time`, swinging
-/// smoothly between the drift's ends. Neighbours get different periods and
-/// phases so the petals never move in step.
-pub(crate) fn drift(index: usize, time: f64, speed: Speed) -> (Vec2, f32) {
-    let index_f = index as f64;
-    let (period, lead) = match speed {
-        Speed::Calm => (9.0 + (index % 5) as f64 * 1.6, 1.3 * index_f),
-        Speed::Quick => (2.4 + (index % 3) as f64 * 0.4, 0.4 * index_f),
+/// A petal's shift in points and turn in degrees at `time`: each of the
+/// three wanders on its own random path inside the drift's bounds.
+pub(crate) fn drift(index: usize, time: f64, speed: Speed, seed: u64) -> (Vec2, f32) {
+    let at = |channel: usize| {
+        let key = [seed, index as u64, channel as u64, speed as u64];
+        let wander = smooth_noise(key, time / speed.knot_spacing());
+        DRIFT_LOW[channel] + (DRIFT_HIGH[channel] - DRIFT_LOW[channel]) * wander
     };
-    let swing = (0.5 - 0.5 * (std::f64::consts::TAU * (time + lead) / period).cos()) as f32;
-    let along = |from: f32, to: f32| from + (to - from) * swing;
-    (
-        egui::vec2(
-            along(DRIFT_FROM.0, DRIFT_TO.0),
-            along(DRIFT_FROM.1, DRIFT_TO.1),
-        ),
-        along(DRIFT_FROM.2, DRIFT_TO.2),
-    )
+    (egui::vec2(at(0), at(1)), at(2))
+}
+
+/// Smooth 1D value noise in `0..=1`: random knots at whole `position`s
+/// joined by a Catmull-Rom curve, so a petal never stops at a knot or jerks.
+fn smooth_noise(key: [u64; 4], position: f64) -> f32 {
+    let knot = position.floor();
+    let t = (position - knot) as f32;
+    let knot = knot as i64;
+    // Knots stay within 0.1..0.9 because the curve overshoots by at most an
+    // eighth of their spread.
+    let value = |offset: i64| 0.1 + 0.8 * unit_hash(key, knot.wrapping_add(offset));
+    let [p0, p1, p2, p3] = [value(-1), value(0), value(1), value(2)];
+    let curve = 0.5
+        * (2.0 * p1
+            + (p2 - p0) * t
+            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
+            + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t * t * t);
+    curve.clamp(0.0, 1.0)
+}
+
+/// SplitMix64 over the key and knot, mapped to `0..1`.
+fn unit_hash(key: [u64; 4], knot: i64) -> f32 {
+    let mut hash = 0x9e37_79b9_7f4a_7c15_u64;
+    for word in key.into_iter().chain([knot as u64]) {
+        hash = (hash ^ word).wrapping_add(0x9e37_79b9_7f4a_7c15);
+        hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        hash ^= hash >> 31;
+    }
+    (hash >> 40) as f32 / (1u64 << 24) as f32
 }
 
 pub(crate) fn petal_alpha(base: f32, bloom: f32, intro: f32) -> f32 {
@@ -372,6 +404,7 @@ mod tests {
             for quick in [0.0, 0.5, 1.0] {
                 let drift = Drift {
                     time,
+                    seed: 7,
                     weight: 0.0,
                     quick,
                 };
@@ -383,29 +416,32 @@ mod tests {
     }
 
     #[test]
-    fn drift_stays_between_its_ends() {
-        for speed in [Speed::Calm, Speed::Quick] {
-            for index in 0..PETALS.len() {
-                for step in 0..400 {
-                    let (shift, turn) = drift(index, f64::from(step) * 0.137, speed);
-                    assert!((-5.001..=7.001).contains(&shift.x), "{shift:?}");
-                    assert!((-6.001..=5.001).contains(&shift.y), "{shift:?}");
-                    assert!((-8.001..=10.001).contains(&turn), "{turn}");
+    fn drift_stays_inside_its_bounds() {
+        for seed in [0, 7, u64::MAX] {
+            for speed in [Speed::Calm, Speed::Quick] {
+                for index in 0..PETALS.len() {
+                    for step in 0..400 {
+                        let (shift, turn) = drift(index, f64::from(step) * 0.137, speed, seed);
+                        assert!((-5.0..=7.0).contains(&shift.x), "{shift:?}");
+                        assert!((-6.0..=5.0).contains(&shift.y), "{shift:?}");
+                        assert!((-8.0..=10.0).contains(&turn), "{turn}");
+                    }
                 }
             }
         }
         let full = Drift {
             time: 4.2,
+            seed: 7,
             weight: 1.0,
             quick: 0.0,
         };
-        assert_eq!(full.offset(3), drift(3, 4.2, Speed::Calm));
+        assert_eq!(full.offset(3), drift(3, 4.2, Speed::Calm, 7));
         let (half_shift, half_turn) = Drift {
             weight: 0.5,
             ..full
         }
         .offset(3);
-        let (shift, turn) = drift(3, 4.2, Speed::Calm);
+        let (shift, turn) = drift(3, 4.2, Speed::Calm, 7);
         near(half_shift.x, shift.x / 2.0);
         near(half_turn, turn / 2.0);
     }
@@ -413,10 +449,10 @@ mod tests {
     #[test]
     fn neighbouring_petals_drift_out_of_step() {
         for speed in [Speed::Calm, Speed::Quick] {
-            for time in [1.1, 2.5, 17.3] {
+            for time in [0.0, 2.5, 17.3] {
                 for index in 0..PETALS.len() - 1 {
-                    let (shift, turn) = drift(index, time, speed);
-                    let (next_shift, next_turn) = drift(index + 1, time, speed);
+                    let (shift, turn) = drift(index, time, speed, 7);
+                    let (next_shift, next_turn) = drift(index + 1, time, speed, 7);
                     assert!(
                         (shift - next_shift).length() > 0.01 || (turn - next_turn).abs() > 0.01,
                         "petals {index} and {} move together",
@@ -425,5 +461,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn drift_moves_without_jumps() {
+        for speed in [Speed::Calm, Speed::Quick] {
+            for index in 0..PETALS.len() {
+                let mut last = drift(index, 0.0, speed, 7);
+                for step in 1..3000 {
+                    let next = drift(index, f64::from(step) * 0.033, speed, 7);
+                    assert!((next.0 - last.0).length() < 1.0, "{last:?} -> {next:?}");
+                    assert!((next.1 - last.1).abs() < 1.5, "{last:?} -> {next:?}");
+                    last = next;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn each_launch_wanders_its_own_way() {
+        let path = |seed| {
+            (0..20)
+                .map(|step| drift(0, f64::from(step) * 1.3, Speed::Calm, seed))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(path(7), path(7));
+        assert_ne!(path(7), path(8));
     }
 }

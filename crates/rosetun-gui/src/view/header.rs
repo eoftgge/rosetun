@@ -96,8 +96,16 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         brand::bloom(settled, transitional, time)
     };
     let drift_time = if reduce_motion { 0.0 } else { 0.8 };
+    let seed = ui.ctx().data_mut(|data| {
+        *data.get_temp_mut_or_insert_with(Id::new("header_drift_seed"), || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_nanos() as u64)
+        })
+    });
     let drift = brand::Drift {
         time,
+        seed,
         weight: ui.ctx().animate_bool_with_time(
             Id::new("header_drift"),
             !reduce_motion && (connected || transitional),
