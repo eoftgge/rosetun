@@ -90,6 +90,8 @@ pub(crate) struct State {
     pub(crate) config: AppConfig,
     pub(crate) config_ready: bool,
     auto_connect_pending: bool,
+    /// A server picked in the tray while disconnected connects once it is saved.
+    connect_after_choice: bool,
     pub(crate) subscriptions: SubscriptionsState,
     pub(crate) updates: UpdatesState,
     status_received: bool,
@@ -142,6 +144,7 @@ impl Default for State {
             config: AppConfig::default(),
             config_ready: false,
             auto_connect_pending: true,
+            connect_after_choice: false,
             subscriptions: SubscriptionsState::default(),
             updates: UpdatesState::default(),
             status_received: false,
@@ -317,6 +320,8 @@ pub(crate) enum Action {
     KeepBlocked,
     ConfirmProtectionOff,
     SelectNode(SubscriptionId, NodeId),
+    /// The tray's server list: as `SelectNode`, and a disconnected tunnel connects.
+    SelectNodeFromTray(SubscriptionId, NodeId),
     RevealServer,
     RevealDone,
     ToggleExitReveal,
@@ -608,6 +613,7 @@ impl State {
             | Action::KeepBlocked
             | Action::ConfirmProtectionOff
             | Action::SelectNode(_, _)
+            | Action::SelectNodeFromTray(_, _)
             | Action::ToggleExitReveal
             | Action::ToggleFailureDetails
             | Action::MeasureDelay

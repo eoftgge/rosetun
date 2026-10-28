@@ -847,6 +847,76 @@ fn selecting_a_server_applies_once_with_the_running_protection() {
 }
 
 #[test]
+fn a_server_picked_in_the_tray_while_disconnected_is_selected_then_connected() {
+    let mut state = state_for_auto_connect();
+    state.status_received = true;
+    let mut other = state.config.subscriptions[0].nodes[0].clone();
+    other.id = NodeId::new("other");
+    state.config.subscriptions[0].nodes.push(other);
+
+    assert!(matches!(
+        state.act(Action::SelectNodeFromTray(
+            SubscriptionId::new("1"),
+            NodeId::new("other")
+        )),
+        Some(Job::SelectNode(_, _))
+    ));
+    assert!(state.take_choice_connect().is_none(), "waits for the save");
+    state.config.active = Some(Selection {
+        subscription: SubscriptionId::new("1"),
+        node: NodeId::new("other"),
+    });
+    state.reduce(WorkerEvent::SelectNode(Ok("Other".into())));
+    assert!(matches!(state.take_choice_connect(), Some(Job::Connect(_))));
+    assert!(state.operations.helper);
+    assert!(state.take_choice_connect().is_none(), "connects once");
+}
+
+#[test]
+fn a_failed_tray_choice_does_not_connect() {
+    let mut state = state_for_auto_connect();
+    assert!(
+        state
+            .act(Action::SelectNodeFromTray(
+                SubscriptionId::new("1"),
+                NodeId::new("missing")
+            ))
+            .is_some()
+    );
+    state.reduce(WorkerEvent::SelectNode(Err(
+        rosetun_core::SelectNodeError::NodeNotFound,
+    )));
+    assert!(state.take_choice_connect().is_none());
+}
+
+#[test]
+fn a_server_picked_in_the_tray_while_connected_applies_without_a_new_connect() {
+    let mut state = connected_state_for_apply();
+    let mut other = state.config.subscriptions[0].nodes[0].clone();
+    other.id = NodeId::new("other");
+    state.config.subscriptions[0].nodes.push(other);
+    let selection = Selection {
+        subscription: SubscriptionId::new("1"),
+        node: NodeId::new("other"),
+    };
+    assert!(
+        state
+            .act(Action::SelectNodeFromTray(
+                selection.subscription.clone(),
+                selection.node.clone()
+            ))
+            .is_some()
+    );
+    state.config.active = Some(selection.clone());
+    state.reduce(WorkerEvent::SelectNode(Ok("Other".into())));
+    assert!(state.take_choice_connect().is_none());
+    let Some(Job::Apply(request)) = state.take_apply() else {
+        panic!("a tray choice applies as one made in the window");
+    };
+    assert_eq!(request.selection, selection);
+}
+
+#[test]
 fn server_choice_during_reconnect_does_not_apply() {
     let mut state = connected_state_for_apply();
     state.reduce(WorkerEvent::Status(Status {

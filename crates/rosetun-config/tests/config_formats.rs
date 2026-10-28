@@ -168,6 +168,16 @@ fn format_seven_config() -> AppConfig {
     let mut config = format_six_config();
     config.subscriptions[1].hwid_scope = HwidScope::Provider;
     config.interface.accent = AccentPreset::Teal;
+    config.interface.recent_servers = vec![
+        Selection {
+            subscription: SubscriptionId::new("subscription-one"),
+            node: NodeId::new("vless-reality"),
+        },
+        Selection {
+            subscription: SubscriptionId::new("subscription-two"),
+            node: NodeId::new("trojan-grpc"),
+        },
+    ];
     config
 }
 
@@ -321,6 +331,26 @@ fn a_format_seven_interface_without_accent_reads_as_rose() {
         from_json(&serde_json::to_vec(&input).unwrap()).expect("format seven without accent");
     assert_eq!(migrated_from, None);
     assert_eq!(config.interface.accent, AccentPreset::Rose);
+}
+
+#[test]
+fn a_format_seven_interface_without_recent_servers_has_none() {
+    let mut input = value(V7);
+    input["interface"]
+        .as_object_mut()
+        .unwrap()
+        .remove("recent_servers");
+
+    let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap())
+        .expect("format seven without recent servers");
+    assert_eq!(migrated_from, None);
+    assert!(config.interface.recent_servers.is_empty());
+    assert!(
+        serde_json::to_value(&config).unwrap()["interface"]
+            .get("recent_servers")
+            .is_none(),
+        "an empty list is left out"
+    );
 }
 
 #[test]

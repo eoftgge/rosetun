@@ -119,6 +119,10 @@ pub struct InterfaceSettings {
     /// Format 7 field; a preset this release does not know reads as rose.
     #[serde(default, deserialize_with = "known_accent")]
     pub accent: AccentPreset,
+    /// Format 7 field: the servers chosen last, newest first. An entry may
+    /// name a server a subscription update has since removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_servers: Vec<Selection>,
 }
 
 fn known_accent<'de, D>(deserializer: D) -> Result<AccentPreset, D::Error>
@@ -150,6 +154,7 @@ impl Default for InterfaceSettings {
             language: LanguageSetting::System,
             reduce_motion: false,
             accent: AccentPreset::Rose,
+            recent_servers: Vec::new(),
         }
     }
 }
@@ -202,7 +207,11 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn active_node(&self) -> Option<(&Subscription, &Node)> {
-        let selection = self.active.as_ref()?;
+        self.node_at(self.active.as_ref()?)
+    }
+
+    /// The node a selection names, if its subscription still has it.
+    pub fn node_at(&self, selection: &Selection) -> Option<(&Subscription, &Node)> {
         let subscription = self
             .subscriptions
             .iter()

@@ -37,6 +37,8 @@ pub(crate) enum ShellEvent {
     OpenLink(OpenedLink),
     Hide,
     Primary,
+    SelectServer(rosetun_config::Selection),
+    ShowServers,
     Quit,
 }
 
@@ -413,6 +415,9 @@ impl eframe::App for App {
         if let Some(job) = self.state.take_auto_connect() {
             self.dispatch(job);
         }
+        if let Some(job) = self.state.take_choice_connect() {
+            self.dispatch(job);
+        }
         if let Some(job) = self.state.take_xray_connect() {
             self.dispatch(job);
         }
@@ -519,6 +524,19 @@ impl eframe::App for App {
                         if let Some(job) = self.state.act(Action::Primary) {
                             self.dispatch(job);
                         }
+                    }
+                    ShellEvent::SelectServer(selection) => {
+                        let action =
+                            Action::SelectNodeFromTray(selection.subscription, selection.node);
+                        if let Some(job) = self.state.act(action) {
+                            self.dispatch(job);
+                        }
+                    }
+                    ShellEvent::ShowServers => {
+                        if let Some(job) = self.state.act(Action::ShowConnection) {
+                            self.dispatch(job);
+                        }
+                        self.show_window(ctx);
                     }
                     ShellEvent::Quit => {
                         self.quitting = true;

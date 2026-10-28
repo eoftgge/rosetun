@@ -33,7 +33,17 @@
     "last_update_check": 1700000003,
     "language": "russian",
     "reduce_motion": true,
-    "accent": "teal"
+    "accent": "teal",
+    "recent_servers": [
+      {
+        "subscription": "subscription-one",
+        "node": "vless-reality"
+      },
+      {
+        "subscription": "subscription-two",
+        "node": "trojan-grpc"
+      }
+    ]
   },
   "subscriptions": [
     {

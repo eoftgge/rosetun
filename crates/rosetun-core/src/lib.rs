@@ -48,7 +48,8 @@ pub use rules::{
     validate_list_matcher,
 };
 pub use selection::{
-    SelectNodeError, SelectRuleSetError, select_node, select_rule_set, set_kill_switch,
+    MAX_RECENT_SERVERS, SelectNodeError, SelectRuleSetError, select_node, select_rule_set,
+    set_kill_switch,
 };
 pub use settings::{
     DnsInputError, DnsPreset, INTERFACE_SCALES, SettingChange, SettingsError, change_setting,

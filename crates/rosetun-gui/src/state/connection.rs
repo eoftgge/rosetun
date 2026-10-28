@@ -239,6 +239,18 @@ impl State {
         None
     }
 
+    /// Connects to a server picked in the tray once its choice is saved.
+    pub(crate) fn take_choice_connect(&mut self) -> Option<Job> {
+        if !self.connect_after_choice || self.operations.selection {
+            return None;
+        }
+        self.connect_after_choice = false;
+        match self.primary_action() {
+            PrimaryAction::Connect | PrimaryAction::Retry => self.act(Action::Primary),
+            _ => None,
+        }
+    }
+
     /// Starts one lookup after the route changes.
     pub(crate) fn take_exit_lookup(&mut self) -> Option<Job> {
         let route = if !self.helper_available {
@@ -536,6 +548,7 @@ impl State {
             }
             WorkerEvent::SelectNode(result) => {
                 self.operations.selection = false;
+                self.connect_after_choice &= result.is_ok();
                 self.session.set_apply_after_choice(
                     result.is_ok()
                         && matches!(
@@ -673,6 +686,17 @@ impl State {
                     self.operation_error = None;
                     return Some(Job::SelectNode(subscription, node));
                 }
+            }
+            Action::SelectNodeFromTray(subscription, node) => {
+                let disconnected = matches!(
+                    self.visible_status().map(|status| &status.state),
+                    Some(ConnectionState::Disconnected | ConnectionState::Failed { .. })
+                );
+                let job = self.act_connection(Action::SelectNode(subscription, node));
+                if job.is_some() {
+                    self.connect_after_choice = disconnected;
+                }
+                return job;
             }
             Action::ToggleExitReveal => {
                 if matches!(self.exit, ExitLookup::Known { .. }) {

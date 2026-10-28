@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use rosetun_config::ConnectionState;
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use rosetun_config::{ConnectionState, Selection};
+use rosetun_core::MAX_RECENT_SERVERS;
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 use crate::actions::PrimaryAction;
@@ -18,6 +20,10 @@ use crate::{constants, i18n, theme, view};
 const STATUS_ID: &str = "rosetun.tray.status";
 const WINDOW_ID: &str = "rosetun.tray.window";
 const PRIMARY_ID: &str = "rosetun.tray.primary";
+const SERVERS_ID: &str = "rosetun.tray.servers";
+/// Followed by the server's place in `Tray::choices`.
+const SERVER_ID_PREFIX: &str = "rosetun.tray.server.";
+const ALL_SERVERS_ID: &str = "rosetun.tray.all-servers";
 const QUIT_ID: &str = "rosetun.tray.quit";
 /// The taskbar's icon size changes with its monitor's scale; reading it on
 /// every frame would cost a window lookup per frame.
@@ -33,7 +39,18 @@ pub(crate) struct TrayView {
     /// The window is on screen, so the window item hides it.
     pub(crate) window_shown: bool,
     pub(crate) window_label: String,
+    pub(crate) servers_label: String,
+    /// Recent servers that still exist, newest first.
+    pub(crate) servers: Vec<TrayServer>,
+    pub(crate) all_servers_label: String,
     pub(crate) quit_label: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TrayServer {
+    pub(crate) selection: Selection,
+    pub(crate) label: String,
+    pub(crate) current: bool,
 }
 
 pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
@@ -62,18 +79,34 @@ pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
         .visible_status()
         .and_then(|_| state.config.active_node())
         .map(|(_, node)| menu_text(state, &node.name));
-    let status_label = match (icon, &server) {
+    let menu_server = server.as_deref().map(menu_label);
+    let status_label = match (icon, &menu_server) {
         (TrayState::Blocked, _) => tr!("tray-blocked"),
         (TrayState::Connected, Some(server)) => format!("{status} · {server}"),
         _ => status.clone(),
     };
     let primary_action = state.primary_action();
-    let primary_label = match &server {
+    let primary_label = match &menu_server {
         Some(server) if primary_action == PrimaryAction::Connect => {
             tr!("tray-connect-to", server = server.as_str())
         }
         _ => primary_label(state),
     };
+    let servers = state
+        .config
+        .interface
+        .recent_servers
+        .iter()
+        .filter_map(|selection| {
+            let (_, node) = state.config.node_at(selection)?;
+            Some(TrayServer {
+                selection: selection.clone(),
+                label: menu_label(&menu_text(state, &node.name)),
+                current: state.config.active.as_ref() == Some(selection),
+            })
+        })
+        .take(MAX_RECENT_SERVERS)
+        .collect();
     TrayView {
         icon,
         tooltip: fit_tooltip(&i18n::tray_tooltip(&status, server.as_deref())),
@@ -86,8 +119,16 @@ pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
         } else {
             tr!("tray-open")
         },
+        servers_label: tr!("tray-servers"),
+        servers,
+        all_servers_label: tr!("tray-all-servers"),
         quit_label: tr!("tray-quit"),
     }
+}
+
+/// Windows reads `&` in a menu item as the mark of its access key.
+fn menu_label(text: &str) -> String {
+    text.replace('&', "&&")
 }
 
 /// A subscription's text on one line: Windows draws a line break or a tab in
@@ -208,6 +249,12 @@ pub(crate) struct Tray {
     window: MenuItem,
     /// Read by the menu handler, so the window item does what its text said.
     window_shown: Arc<AtomicBool>,
+    servers: Submenu,
+    /// The servers listed in `servers`, by place; read by the menu handler.
+    choices: Arc<Mutex<Vec<Selection>>>,
+    /// Windows flips a check item's mark on a click, so the list is rebuilt
+    /// after one even when the choice did not change.
+    server_clicked: Arc<AtomicBool>,
     quit: MenuItem,
     shown: Option<TrayView>,
     slot: IconSlot<Icon>,
@@ -218,6 +265,7 @@ impl Tray {
         let status = MenuItem::with_id(STATUS_ID, constants::TITLE, false, None);
         let window = MenuItem::with_id(WINDOW_ID, tr!("tray-open"), true, None);
         let primary = MenuItem::with_id(PRIMARY_ID, tr!("connect"), false, None);
+        let servers = Submenu::with_id(SERVERS_ID, tr!("tray-servers"), true);
         let quit = MenuItem::with_id(QUIT_ID, tr!("tray-quit"), true, None);
         let menu = Menu::with_items(&[
             &status,
@@ -225,6 +273,7 @@ impl Tray {
             &window,
             &PredefinedMenuItem::separator(),
             &primary,
+            &servers,
             &PredefinedMenuItem::separator(),
             &quit,
         ])?;
@@ -257,13 +306,29 @@ impl Tray {
         }));
         let window_shown = Arc::new(AtomicBool::new(false));
         let menu_window_shown = Arc::clone(&window_shown);
+        let choices = Arc::new(Mutex::new(Vec::new()));
+        let menu_choices = Arc::clone(&choices);
+        let server_clicked = Arc::new(AtomicBool::new(false));
+        let menu_server_clicked = Arc::clone(&server_clicked);
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             let shell_event = match event.id.as_ref() {
                 WINDOW_ID if menu_window_shown.load(Ordering::Relaxed) => Some(ShellEvent::Hide),
                 WINDOW_ID => Some(ShellEvent::Show),
                 PRIMARY_ID => Some(ShellEvent::Primary),
+                ALL_SERVERS_ID => Some(ShellEvent::ShowServers),
                 QUIT_ID => Some(ShellEvent::Quit),
-                _ => None,
+                id => id
+                    .strip_prefix(SERVER_ID_PREFIX)
+                    .and_then(|place| place.parse::<usize>().ok())
+                    .and_then(|place| {
+                        menu_server_clicked.store(true, Ordering::Relaxed);
+                        menu_choices
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .get(place)
+                            .cloned()
+                    })
+                    .map(ShellEvent::SelectServer),
             };
             if let Some(shell_event) = shell_event {
                 let _ = events.send(shell_event);
@@ -276,6 +341,9 @@ impl Tray {
             primary,
             window,
             window_shown,
+            servers,
+            choices,
+            server_clicked,
             quit,
             shown: None,
             slot,
@@ -300,8 +368,24 @@ impl Tray {
             Ok(None) => {}
             Err(error) => tracing::warn!(%error, "could not create tray icon"),
         }
-        if self.shown.as_ref() == Some(view) {
+        let server_clicked = self.server_clicked.swap(false, Ordering::Relaxed);
+        if self.shown.as_ref() == Some(view) && !server_clicked {
             return;
+        }
+        let servers_changed = self.shown.as_ref().is_none_or(|shown| {
+            shown.servers != view.servers || shown.all_servers_label != view.all_servers_label
+        });
+        if (server_clicked || servers_changed)
+            && let Err(error) = self.fill_servers(view)
+        {
+            tracing::warn!(%error, "could not update tray servers");
+        }
+        if self
+            .shown
+            .as_ref()
+            .is_none_or(|shown| shown.servers_label != view.servers_label)
+        {
+            self.servers.set_text(view.servers_label.as_str());
         }
         if self
             .shown
@@ -350,6 +434,33 @@ impl Tray {
         }
         self.shown = Some(view.clone());
     }
+
+    fn fill_servers(&self, view: &TrayView) -> Result<(), tray_icon::menu::Error> {
+        while self.servers.remove_at(0).is_some() {}
+        *self.choices.lock().unwrap_or_else(PoisonError::into_inner) = view
+            .servers
+            .iter()
+            .map(|server| server.selection.clone())
+            .collect();
+        for (place, server) in view.servers.iter().enumerate() {
+            self.servers.append(&CheckMenuItem::with_id(
+                format!("{SERVER_ID_PREFIX}{place}"),
+                server.label.as_str(),
+                true,
+                server.current,
+                None,
+            ))?;
+        }
+        if !view.servers.is_empty() {
+            self.servers.append(&PredefinedMenuItem::separator())?;
+        }
+        self.servers.append(&MenuItem::with_id(
+            ALL_SERVERS_ID,
+            view.all_servers_label.as_str(),
+            true,
+            None,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -358,14 +469,21 @@ mod tests {
     use crate::i18n;
     use crate::rose_icon::TrayState;
     use crate::state::State;
-    use rosetun_config::{AppConfig, ConnectionState, Status};
+    use rosetun_config::{
+        AppConfig, ConnectionState, Node, NodeId, Selection, Status, SubscriptionId,
+    };
     use rosetun_core::Store;
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     fn config_with_server(test: &str, name: &str) -> AppConfig {
-        let path =
-            std::env::temp_dir().join(format!("rosetun-tray-test-{test}-{}", std::process::id()));
+        static FILES: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "rosetun-tray-test-{test}-{}-{}",
+            std::process::id(),
+            FILES.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::write(
             &path,
             format!(
@@ -641,5 +759,94 @@ mod tests {
         assert!(tray.primary_enabled);
         state.status.state = ConnectionState::Connected;
         assert_eq!(tray_view(&state, true).primary_label, tr!("disconnect"));
+    }
+
+    fn pick(node: &str) -> Selection {
+        Selection {
+            subscription: SubscriptionId::new("provider"),
+            node: NodeId::new(node),
+        }
+    }
+
+    /// A subscription with servers `a` to `g`, `a` selected.
+    fn config_with_servers() -> AppConfig {
+        let mut config = config_with_server("servers", "a");
+        let template = config.subscriptions[0].nodes[0].clone();
+        config.subscriptions[0].nodes = ["a", "b", "c", "d", "e", "f", "g"]
+            .into_iter()
+            .map(|id| Node {
+                id: NodeId::new(id),
+                name: format!("Server {id}"),
+                ..template.clone()
+            })
+            .collect();
+        config.active = Some(pick("a"));
+        config
+    }
+
+    fn labels(state: &State) -> Vec<String> {
+        tray_view(state, true)
+            .servers
+            .into_iter()
+            .map(|server| server.label)
+            .collect()
+    }
+
+    #[test]
+    fn the_servers_menu_lists_recent_servers_newest_first_up_to_five() {
+        let mut state = State::default();
+        state.config = config_with_servers();
+        assert!(
+            tray_view(&state, true).servers.is_empty(),
+            "only All servers"
+        );
+        state.config.interface.recent_servers = ["a", "b", "c", "d", "e", "f"].map(pick).to_vec();
+        assert_eq!(
+            labels(&state),
+            ["Server a", "Server b", "Server c", "Server d", "Server e"]
+        );
+    }
+
+    #[test]
+    fn a_vanished_server_is_not_listed() {
+        let mut state = State::default();
+        state.config = config_with_servers();
+        state.config.interface.recent_servers = vec![
+            pick("b"),
+            pick("gone"),
+            Selection {
+                subscription: SubscriptionId::new("deleted"),
+                node: NodeId::new("a"),
+            },
+            pick("a"),
+        ];
+        assert_eq!(labels(&state), ["Server b", "Server a"]);
+    }
+
+    #[test]
+    fn the_current_server_is_checked() {
+        let mut state = State::default();
+        state.config = config_with_servers();
+        state.config.interface.recent_servers = vec![pick("b"), pick("a")];
+        let servers = tray_view(&state, true).servers;
+        assert_eq!(
+            servers
+                .iter()
+                .map(|server| (server.selection.node.as_str(), server.current))
+                .collect::<Vec<_>>(),
+            [("b", false), ("a", true)]
+        );
+    }
+
+    #[test]
+    fn an_ampersand_in_a_name_is_not_an_access_key() {
+        let mut state = State::default();
+        state.helper_available = true;
+        state.config = config_with_server("ampersand", "A&B");
+        state.config.interface.recent_servers = vec![pick("server")];
+        let tray = tray_view(&state, true);
+        assert_eq!(tray.servers[0].label, "A&&B");
+        assert_eq!(tray.primary_label, tr!("tray-connect-to", server = "A&&B"));
+        assert!(tray.tooltip.contains("A&B") && !tray.tooltip.contains("A&&B"));
     }
 }

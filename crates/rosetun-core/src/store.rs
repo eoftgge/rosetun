@@ -912,6 +912,7 @@ mod tests {
 
         let mut expected = initial;
         expected.active = saved.active.clone();
+        expected.interface.recent_servers = saved.active.clone().into_iter().collect();
         assert_eq!(saved, expected);
     }
 
