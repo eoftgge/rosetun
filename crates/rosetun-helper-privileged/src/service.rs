@@ -14,8 +14,13 @@ use rosetun_ipc::SERVICE_NAME;
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_CALL_NOT_IMPLEMENTED, ERROR_FAILED_SERVICE_CONTROLLER_CONNECT,
     ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_CANNOT_ACCEPT_CTRL, ERROR_SERVICE_DOES_NOT_EXIST,
-    ERROR_SERVICE_EXISTS, ERROR_SERVICE_NOT_ACTIVE, ERROR_SERVICE_SPECIFIC_ERROR, NO_ERROR,
+    ERROR_SERVICE_EXISTS, ERROR_SERVICE_NOT_ACTIVE, ERROR_SERVICE_SPECIFIC_ERROR, LocalFree,
+    NO_ERROR,
 };
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
 use windows_sys::Win32::System::Services::{
     ChangeServiceConfig2W, ChangeServiceConfigW, CloseServiceHandle, ControlService,
     CreateServiceW, DeleteService, OpenSCManagerW, OpenServiceW, QueryServiceStatus,
@@ -28,14 +33,19 @@ use windows_sys::Win32::System::Services::{
     SERVICE_FAILURE_ACTIONS_FLAG, SERVICE_FAILURE_ACTIONSW, SERVICE_PRESHUTDOWN_INFO,
     SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_START_PENDING, SERVICE_STATUS,
     SERVICE_STATUS_HANDLE, SERVICE_STOP, SERVICE_STOP_PENDING, SERVICE_STOPPED,
-    SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS, SetServiceStatus, StartServiceCtrlDispatcherW,
-    StartServiceW,
+    SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS, SetServiceObjectSecurity, SetServiceStatus,
+    StartServiceCtrlDispatcherW, StartServiceW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND};
 
 const DESCRIPTION: &str = "Runs the Rosetun tunnel and kill switch.";
 const WAIT_HINT_MS: u32 = 30_000;
 const DELETE: u32 = 0x0001_0000;
+const WRITE_DAC: u32 = 0x0004_0000;
+/// The SCM's default service DACL plus `SERVICE_QUERY_STATUS` (`LC`) for
+/// Authenticated Users: the CLI checks the pipe server's process ID against
+/// the service, and a batch logon (a scheduled task) is neither `IU` nor `SU`.
+const SERVICE_SDDL: &str = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)(A;;LC;;;AU)";
 
 struct StatusHandle(SERVICE_STATUS_HANDLE);
 
@@ -46,6 +56,37 @@ unsafe impl Send for StatusHandle {}
 unsafe impl Sync for StatusHandle {}
 
 struct ScHandle(SC_HANDLE);
+
+struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
+
+impl Drop for SecurityDescriptor {
+    fn drop(&mut self) {
+        // SAFETY: Allocated by ConvertStringSecurityDescriptorToSecurityDescriptorW
+        // and released exactly once, after every borrowed use.
+        unsafe { LocalFree(self.0) };
+    }
+}
+
+impl SecurityDescriptor {
+    fn from_sddl(sddl: &str) -> io::Result<Self> {
+        let sddl = wide(sddl);
+        let mut descriptor = ptr::null_mut();
+        // SAFETY: The NUL-terminated string and output pointer are live for
+        // this synchronous call; LocalFree in Drop owns the result.
+        let converted = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                ptr::null_mut(),
+            )
+        };
+        if converted == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self(descriptor))
+    }
+}
 
 impl Drop for ScHandle {
     fn drop(&mut self) {
@@ -214,6 +255,18 @@ fn command_line(exe: &Path) -> String {
     format!("\"{}\" --service", exe.display())
 }
 
+/// Applied on every install, so an upgrade brings the permission too.
+fn service_security(service: &ScHandle) -> io::Result<()> {
+    let descriptor = SecurityDescriptor::from_sddl(SERVICE_SDDL)?;
+    // SAFETY: The service handle has WRITE_DAC and the descriptor stays live
+    // for this synchronous call; the SCM copies it.
+    if unsafe { SetServiceObjectSecurity(service.0, DACL_SECURITY_INFORMATION, descriptor.0) } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 fn service_config(service: &ScHandle) -> io::Result<()> {
     let mut description = wide(DESCRIPTION);
     let mut description_info = SERVICE_DESCRIPTIONW {
@@ -309,7 +362,7 @@ pub(crate) fn install() -> io::Result<()> {
     let exe = std::env::current_exe()?;
     let binary = wide(&command_line(&exe));
     let dependencies = wide("BFE\0");
-    let access = SERVICE_CHANGE_CONFIG | SERVICE_START | SERVICE_QUERY_STATUS;
+    let access = SERVICE_CHANGE_CONFIG | SERVICE_START | SERVICE_QUERY_STATUS | WRITE_DAC;
 
     // SAFETY: All strings and the SCM handle remain live throughout this call.
     let service = unsafe {
@@ -365,6 +418,7 @@ pub(crate) fn install() -> io::Result<()> {
     };
 
     service_config(&service)?;
+    service_security(&service)?;
     // SAFETY: The service handle is live and no start arguments are supplied.
     if unsafe { StartServiceW(service.0, 0, ptr::null()) } == 0 {
         let error = io::Error::last_os_error();
@@ -558,6 +612,63 @@ pub(crate) fn reset_firewall() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows_sys::Win32::Security::{
+        ACL, ACL_SIZE_INFORMATION, AclSizeInformation, GetAce, GetAclInformation,
+        GetSecurityDescriptorDacl, IsWellKnownSid, WinAuthenticatedUserSid,
+    };
+
+    #[test]
+    fn authenticated_users_may_only_query_the_service_status() {
+        let descriptor = SecurityDescriptor::from_sddl(SERVICE_SDDL).unwrap();
+        let mut present = 0;
+        let mut dacl: *mut ACL = ptr::null_mut();
+        let mut defaulted = 0;
+        // SAFETY: The descriptor is live; Windows writes into these locals and
+        // the DACL is borrowed from the descriptor.
+        assert_ne!(
+            unsafe { GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted) },
+            0
+        );
+        assert!(present != 0 && !dacl.is_null());
+        let mut size = ACL_SIZE_INFORMATION {
+            AceCount: 0,
+            AclBytesInUse: 0,
+            AclBytesFree: 0,
+        };
+        // SAFETY: The DACL is borrowed from the live descriptor; the output is
+        // exactly sized and writable.
+        assert_ne!(
+            unsafe {
+                GetAclInformation(
+                    dacl,
+                    (&raw mut size).cast(),
+                    size_of::<ACL_SIZE_INFORMATION>() as u32,
+                    AclSizeInformation,
+                )
+            },
+            0
+        );
+        assert_eq!(size.AceCount, 5);
+        let mut authenticated = Vec::new();
+        for index in 0..size.AceCount {
+            let mut ace: *mut c_void = ptr::null_mut();
+            // SAFETY: The index is below the ACE count; the ACE is borrowed
+            // from the live descriptor.
+            assert_ne!(unsafe { GetAce(dacl, index, &mut ace) }, 0);
+            // SAFETY: Every ACE parsed from this SDDL is an allowed ACE of at
+            // least 16 bytes: header, mask, then the SID at offset 8.
+            let bytes = unsafe { std::slice::from_raw_parts(ace.cast::<u8>(), 16) };
+            let mask = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+            // SAFETY: The SID at offset 8 lives inside the borrowed ACE.
+            let sid = unsafe { ace.cast::<u8>().add(8).cast() };
+            // SAFETY: The SID stays live for the comparison.
+            if unsafe { IsWellKnownSid(sid, WinAuthenticatedUserSid) } != 0 {
+                assert_eq!(bytes[0], 0); // ACCESS_ALLOWED_ACE_TYPE
+                authenticated.push(mask);
+            }
+        }
+        assert_eq!(authenticated, [SERVICE_QUERY_STATUS]);
+    }
 
     #[test]
     fn service_binary_path_is_quoted() {
