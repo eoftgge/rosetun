@@ -626,7 +626,9 @@ mod tests {
         // SAFETY: The descriptor is live; Windows writes into these locals and
         // the DACL is borrowed from the descriptor.
         assert_ne!(
-            unsafe { GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted) },
+            unsafe {
+                GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted)
+            },
             0
         );
         assert!(present != 0 && !dacl.is_null());

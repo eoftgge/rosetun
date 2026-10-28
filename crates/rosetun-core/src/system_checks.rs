@@ -213,9 +213,9 @@ fn other_vpn_result(
                 // The service runs sing-box from its protected copy in `data\engines`.
                 let installed = own_dir.join(&process.name);
                 let copied = own_dir.join("data").join("engines").join(&process.name);
-                ![installed, copied].iter().any(|own| {
-                    path.eq_ignore_ascii_case(&own.to_string_lossy().replace('/', "\\"))
-                })
+                ![installed, copied]
+                    .iter()
+                    .any(|own| path.eq_ignore_ascii_case(&own.to_string_lossy().replace('/', "\\")))
             }
             _ => false,
         }

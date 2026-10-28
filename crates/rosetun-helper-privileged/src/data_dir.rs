@@ -465,10 +465,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "rosetun-engine-acl-{}-{stamp}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rosetun-engine-acl-{}-{stamp}", std::process::id()));
         fs::create_dir_all(dir.join("app")).unwrap();
         fs::create_dir(dir.join("data")).unwrap();
         let source = dir.join("app").join("sing-box.exe");
