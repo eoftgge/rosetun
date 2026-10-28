@@ -66,4 +66,4 @@ git tag -s vX.Y.Z -m "Rosetun X.Y.Z"
 git push origin master vX.Y.Z
 ```
 
-Run `./installer/build.ps1 -Release` to build the same assets locally, including the sing-box source archive, `SHA256SUMS.txt` and bilingual release notes. To fix an already released version, commit the fix on `master`, tag and push the corrected release, then bring that commit back to `dev` with `git switch dev && git merge -S master` and push `dev`.
+Run `./installer/build.ps1 -Release` to build the same assets locally, including the sing-box source archive, `SHA256SUMS.txt` and bilingual release notes. The sing-box and Xray source archives must match SHA-256 hashes pinned in `build.ps1`; update them together with the engine versions. To fix an already released version, commit the fix on `master`, tag and push the corrected release, then bring that commit back to `dev` with `git switch dev && git merge -S master` and push `dev`.

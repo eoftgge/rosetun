@@ -30,6 +30,9 @@ $singBoxVersion = '1.14.3'
 $expectedHash = '5C19BB3F8C12D4E85B3D47FE63123A7624B314B58DD7A8E32F51004F1C4D2FAF'
 $xrayVersion = '26.10.21'
 $xrayArchiveHash = 'FC58C39EE2F2717B4C54D28D374362389E5319B20AE44AEA76EA45A5243EC827'
+# GitHub's archives of the v<version> tags, shipped with -Release as the corresponding source.
+$singBoxSourceHash = '9A8E3712A5F611AD95F1D16874BBDCDFFBD3B8EED16DAE2D71CE7042A33C3386'
+$xraySourceHash = '44EF4874529A03848C90F1FDCFB763350FBC5F1DE741EC90E0024D651DF25650'
 $wintunVersion = '0.14.1'
 $wintunDllLength = 427552
 $wintunDllHash = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
@@ -245,6 +248,10 @@ if ($Release) {
         if ($LASTEXITCODE -ne 0) {
             throw "Downloading $sourceUrl failed with curl exit code $LASTEXITCODE."
         }
+        $hash = (Get-FileHash -LiteralPath $partialArchive -Algorithm SHA256).Hash
+        if ($hash -ne $singBoxSourceHash) {
+            throw "sing-box source archive from $sourceUrl has SHA-256 $hash, expected $singBoxSourceHash. Check that tag v$singBoxVersion still points to the commit the release binary was built from before updating the pinned hash."
+        }
         Move-Item -LiteralPath $partialArchive -Destination $sourceArchive -Force
     }
     finally {
@@ -261,6 +268,10 @@ if ($Release) {
         if ($LASTEXITCODE -ne 0) {
             throw "Downloading $xraySourceUrl failed with curl exit code $LASTEXITCODE."
         }
+        $hash = (Get-FileHash -LiteralPath $xrayPartial -Algorithm SHA256).Hash
+        if ($hash -ne $xraySourceHash) {
+            throw "Xray source archive from $xraySourceUrl has SHA-256 $hash, expected $xraySourceHash. Check that tag v$xrayVersion still points to the commit the release binary was built from before updating the pinned hash."
+        }
         Move-Item -LiteralPath $xrayPartial -Destination $xraySourceArchive -Force
     }
     finally {
@@ -270,12 +281,12 @@ if ($Release) {
     }
 
     $setupHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
-    $sourceHash = (Get-FileHash -LiteralPath $sourceArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-    $xraySourceHash = (Get-FileHash -LiteralPath $xraySourceArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sourceFileHash = (Get-FileHash -LiteralPath $sourceArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $xraySourceFileHash = (Get-FileHash -LiteralPath $xraySourceArchive -Algorithm SHA256).Hash.ToLowerInvariant()
     $checksums = @(
         "$setupHash  $([IO.Path]::GetFileName($setup))"
-        "$sourceHash  $([IO.Path]::GetFileName($sourceArchive))"
-        "$xraySourceHash  $([IO.Path]::GetFileName($xraySourceArchive))"
+        "$sourceFileHash  $([IO.Path]::GetFileName($sourceArchive))"
+        "$xraySourceFileHash  $([IO.Path]::GetFileName($xraySourceArchive))"
     )
     $utf8 = [Text.UTF8Encoding]::new($false)
     [IO.File]::WriteAllText((Join-Path $outputDir 'SHA256SUMS.txt'), ($checksums -join "`n") + "`n", $utf8)
