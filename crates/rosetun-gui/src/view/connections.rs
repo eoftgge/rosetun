@@ -573,7 +573,11 @@ fn program_list(ui: &mut egui::Ui, state: &State, now_ms: u64, actions: &mut Vec
                 if open <= 0.0 {
                     continue;
                 }
-                let shown = motion::reveal_height(group.connections.len() as f32 * stride, open);
+                let shown = motion::reveal_height(
+                    group.connections.len() as f32 * stride,
+                    open,
+                    LIST_HEIGHT,
+                );
                 block = (height, shown, 0);
                 height += shown;
                 // A closing program's connections are no longer among the rows.

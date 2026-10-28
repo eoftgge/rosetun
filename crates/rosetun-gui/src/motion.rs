@@ -13,9 +13,6 @@ pub(crate) const NORMAL: f32 = 0.22;
 
 const FOCUSED_FRAME: Duration = Duration::from_millis(16);
 const UNFOCUSED_FRAME: Duration = Duration::from_millis(33);
-/// A section taller than this grows by this much only and shows the rest at
-/// once: a hundred servers would otherwise crawl open off screen.
-const MAX_REVEAL_HEIGHT: f32 = 400.0;
 
 /// `interface.reduce_motion` for widgets that see no state, set between frames.
 static REDUCED: AtomicBool = AtomicBool::new(false);
@@ -69,12 +66,14 @@ pub(crate) fn continuous_frame(window: WindowView, reduce_motion: bool) -> Optio
 }
 
 /// How much of a section `full` points tall shows at `progress` of its
-/// opening.
-pub(crate) fn reveal_height(full: f32, progress: f32) -> f32 {
+/// opening. Only the part that fits in `room`, the space left in view,
+/// grows; the rest appears at the end below the edge, where nobody sees it
+/// jump, and a hundred servers open as fast as ten.
+pub(crate) fn reveal_height(full: f32, progress: f32, room: f32) -> f32 {
     if progress >= 1.0 {
         full
     } else {
-        full.min(MAX_REVEAL_HEIGHT) * progress.max(0.0)
+        full.min(room.max(0.0)) * progress.max(0.0)
     }
 }
 
@@ -122,15 +121,16 @@ mod tests {
 
     #[test]
     fn a_short_section_grows_through_its_whole_height() {
-        assert_eq!(reveal_height(200.0, 0.0), 0.0);
-        assert_eq!(reveal_height(200.0, 0.5), 100.0);
-        assert_eq!(reveal_height(200.0, 1.0), 200.0);
+        assert_eq!(reveal_height(200.0, 0.0, 600.0), 0.0);
+        assert_eq!(reveal_height(200.0, 0.5, 600.0), 100.0);
+        assert_eq!(reveal_height(200.0, 1.0, 600.0), 200.0);
     }
 
     #[test]
-    fn a_long_section_grows_by_at_most_the_cap_then_shows_the_rest() {
-        assert_eq!(reveal_height(3000.0, 0.5), 200.0);
-        assert_eq!(reveal_height(3000.0, 0.99), 396.0);
-        assert_eq!(reveal_height(3000.0, 1.0), 3000.0);
+    fn a_long_section_grows_through_the_room_in_view_then_shows_the_rest() {
+        assert_eq!(reveal_height(3000.0, 0.5, 700.0), 350.0);
+        assert_eq!(reveal_height(3000.0, 0.99, 700.0), 693.0);
+        assert_eq!(reveal_height(3000.0, 1.0, 700.0), 3000.0);
+        assert_eq!(reveal_height(3000.0, 0.5, -20.0), 0.0, "below the view");
     }
 }

@@ -58,7 +58,8 @@ pub(crate) fn reveal<R>(
     let full = ui
         .data(|data| data.get_temp::<f32>(height_id))
         .unwrap_or(10.0);
-    let shown = motion::reveal_height(full, progress);
+    let top = ui.available_rect_before_wrap().top();
+    let shown = motion::reveal_height(full, progress, ui.clip_rect().bottom() - top);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .id_salt(height_id)
