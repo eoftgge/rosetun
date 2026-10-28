@@ -74,7 +74,7 @@ function Test-Step {
     }
 }
 
-# A finding to record, not a pass or fail: the study needs the answer either way.
+# A finding to record, not a pass or fail: the design needs the answer either way.
 function Add-Info {
     param([Parameter(Mandatory)][string]$Scenario, [Parameter(Mandatory)][string]$Check, [string]$Note = '')
     $results.Add([pscustomobject]@{ Result = 'INFO'; Scenario = $Scenario; Check = $Check; Note = $Note })

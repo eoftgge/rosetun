@@ -1,8 +1,9 @@
 //! Lockdown: a persistent provider, sublayer and filters that BFE restores at
 //! every start, so the machine stays blocked outside the tunnel while
 //! disconnected, after a service crash and across reboots. Written in a
-//! standard (non-dynamic) session; the study behind every choice here is in
-//! `rules/LOCKDOWN-STUDY.md`.
+//! standard (non-dynamic) session. The choices here were tested in a Hyper-V
+//! guest with `tools/vm/Invoke-LockdownProbe.ps1` and are checked by
+//! `tools/vm/Invoke-LockdownMatrix.ps1`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -403,7 +404,7 @@ pub(super) fn filter_set(allow_lan: bool, apps: &LockdownApps) -> Vec<LockdownFi
         }
     }
 
-    // Without DHCP every boot under Lockdown lost the lease (study, run 3).
+    // Without DHCP every boot under Lockdown lost the lease (Lockdown probe).
     // IPv6 has no DHCPv6 or neighbor discovery permit: all of it is blocked.
     set.extend([
         filter(
@@ -891,7 +892,7 @@ fn free<T>(mut object: *mut T) {
 /// BFE keeps persistent policy under
 /// `HKLM\SYSTEM\CurrentControlSet\Services\BFE\Parameters\Policy` and leaves
 /// writing it to the registry's lazy flush: a power cut even 60 s after a
-/// change lost it (study, run 4). Flushing the SYSTEM hive writes it at once.
+/// change lost it (Lockdown probe). Flushing the SYSTEM hive writes it at once.
 /// A failure only warns: the change itself is in place.
 fn flush() {
     let path = wide("SYSTEM");

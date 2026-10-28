@@ -69,7 +69,7 @@ mod probe {
     const PERMIT_PROVIDER: GUID = GUID::from_u128(0x1ddf6dff_5a79_4f1a_a453_a39aba5c23fe);
     const PERMIT_SUBLAYER: GUID = GUID::from_u128(0x21b7a48e_d989_467e_b62a_dd52217bc5e7);
 
-    /// Where the study's preferred design puts Lockdown: above the product's
+    /// Where the probe puts Lockdown by default: above the product's
     /// dynamic sublayer (0x8000), below sing-tun's 0xFFFF.
     const DEFAULT_LOCKDOWN_SUBLAYER_WEIGHT: u16 = 0xC000;
     /// The product's dynamic sublayer weight.

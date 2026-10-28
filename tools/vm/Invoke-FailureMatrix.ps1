@@ -1903,7 +1903,7 @@ $egress = Wait-RosetunTunnelEgress
 Test-Step 'dns lock' 'tunnel carries traffic' -Note (Format-Egress $egress) { $egress.Ok }
 Test-Step 'dns lock' 'direct DNS is blocked' { -not (Test-RosetunDirectDns) }
 # Without the kill switch only sing-box's strict route blocks IPv6: the TUN
-# has no IPv6 address, so sing-tun blocks every IPv6 connect (rules/ENGINE.md).
+# has no IPv6 address, so sing-tun blocks every IPv6 connect (its strict route).
 Test-Step 'dns lock' 'IPv6 outside the tunnel is blocked without the kill switch' {
     -not (Test-RosetunIpv6Egress)
 }

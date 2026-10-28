@@ -20,7 +20,7 @@ param(
     # Each power cut pass runs this often for turning on and for turning off.
     [int]$PowerCutRepeats = 3,
     # Wait between the Lockdown change and the power cut. Without the flush a
-    # cut even 60 s after the change lost it (study, run 4).
+    # cut even 60 s after the change lost it (Invoke-LockdownProbe.ps1).
     [int]$PowerCutDelaySeconds = 2
 )
 

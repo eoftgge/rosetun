@@ -153,7 +153,7 @@ impl Drop for Engine {
 ///
 /// With Lockdown every filter goes into the persistent Lockdown sublayer
 /// instead of Rosetun's: a permit there sits above Lockdown's block-all and
-/// opens it, while a soft permit in a lower sublayer could not (study, run 3).
+/// opens it, while a soft permit in a lower sublayer could not (Lockdown probe).
 /// The provider and the Rosetun sublayer stay in this session either way.
 /// The same transaction removes Lockdown's GUI and CLI permits, which would
 /// sit above the session's block-all; the deletion of those persistent
