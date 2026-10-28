@@ -9,7 +9,7 @@ use rosetun_core::Store;
 #[cfg(windows)]
 use crate::notices::Notices;
 #[cfg(windows)]
-use crate::state::{Action, OpenedLink};
+use crate::state::{Action, OpenedLink, QuitDecision};
 use crate::state::{Job, State};
 #[cfg(windows)]
 use crate::tray;
@@ -75,6 +75,9 @@ pub(crate) struct App {
     quitting: bool,
     #[cfg(windows)]
     quit_apply_deadline: Option<Instant>,
+    /// The quit waits for the tunnel to go down, not only for the service's answer.
+    #[cfg(windows)]
+    quit_disconnecting: bool,
 }
 
 impl App {
@@ -134,6 +137,8 @@ impl App {
             quitting: false,
             #[cfg(windows)]
             quit_apply_deadline: None,
+            #[cfg(windows)]
+            quit_disconnecting: false,
         }
     }
 
@@ -239,8 +244,37 @@ impl App {
         if let Some(job) = self.state.apply_on_leave() {
             self.dispatch(job);
         }
+        let _ = self.state.act(Action::CancelQuit);
         self.window_hidden = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+    }
+
+    /// Hides the window and closes it once the service has the last request,
+    /// at most 10 s later. Without one it closes at once.
+    #[cfg(windows)]
+    fn quit(&mut self, ctx: &egui::Context, disconnect: bool) {
+        self.quitting = true;
+        // A disconnect leaves no session for pending edits to go to.
+        let job = if disconnect {
+            self.state.quit_disconnect()
+        } else {
+            self.state.apply_on_leave()
+        };
+        let waits = job.is_some() || self.state.saves_settings();
+        if let Some(job) = job {
+            self.dispatch(job);
+        }
+        if waits {
+            if let Some(window) = &self.window {
+                window.save();
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.quit_disconnecting = disconnect;
+            self.quit_apply_deadline = Some(Instant::now() + Duration::from_secs(10));
+            ctx.request_repaint_after(Duration::from_millis(100));
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     #[cfg(windows)]
@@ -554,24 +588,24 @@ impl eframe::App for App {
                         }
                     }
                     ShellEvent::Quit => {
-                        self.quitting = true;
-                        if let Some(job) = self.state.apply_on_leave() {
-                            self.dispatch(job);
-                            if let Some(window) = &self.window {
-                                window.save();
+                        match self.state.quit_decision(rosetun_shell::session_ending()) {
+                            QuitDecision::Ask => {
+                                self.show_window(ctx);
+                                self.state.open_quit_dialog();
                             }
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                            self.quit_apply_deadline =
-                                Some(Instant::now() + Duration::from_secs(10));
-                            ctx.request_repaint_after(Duration::from_millis(100));
-                        } else {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            QuitDecision::Disconnect => self.quit(ctx, true),
+                            QuitDecision::Leave => self.quit(ctx, false),
                         }
                     }
                 }
             }
+            if let Some(disconnect) = self.state.take_quit()
+                && !self.quitting
+            {
+                self.quit(ctx, disconnect);
+            }
             if let Some(deadline) = self.quit_apply_deadline {
-                if !self.state.operations.helper || Instant::now() >= deadline {
+                if self.state.quit_settled(self.quit_disconnecting) || Instant::now() >= deadline {
                     self.quit_apply_deadline = None;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 } else {
@@ -643,6 +677,22 @@ impl eframe::App for App {
                 #[cfg(windows)]
                 self.hide_window(ctx);
             } else {
+                #[cfg(windows)]
+                if !self.quitting {
+                    match self.state.quit_decision(rosetun_shell::session_ending()) {
+                        QuitDecision::Ask => {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                            self.state.open_quit_dialog();
+                            return;
+                        }
+                        QuitDecision::Disconnect => {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                            self.quit(ctx, true);
+                            return;
+                        }
+                        QuitDecision::Leave => {}
+                    }
+                }
                 #[cfg(windows)]
                 if let Some(window) = &self.window {
                     window.save();

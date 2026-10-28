@@ -48,6 +48,53 @@ pub(crate) fn confirm_modal(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThreeWayChoice {
+    None,
+    Cancel,
+    Other,
+    Confirm,
+}
+
+/// A confirmation with a second way forward between Cancel and the main button.
+pub(crate) struct ThreeWayModal {
+    pub(crate) id: &'static str,
+    pub(crate) title: String,
+    pub(crate) cancel: String,
+    pub(crate) other: String,
+    pub(crate) confirm: String,
+}
+
+pub(crate) fn three_way_modal(
+    ctx: &egui::Context,
+    options: ThreeWayModal,
+    body: impl FnOnce(&mut egui::Ui),
+) -> ThreeWayChoice {
+    let mut choice = ThreeWayChoice::None;
+    let response = show_modal(ctx, egui::Modal::new(egui::Id::new(options.id)), |ui| {
+        ui.set_width(520.0);
+        ui.heading(options.title);
+        body(ui);
+        ui.add_space(20.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if button_fill(ui, options.confirm, true).clicked() {
+                choice = ThreeWayChoice::Confirm;
+            }
+            if outline_button(ui, options.other, true).clicked() {
+                choice = ThreeWayChoice::Other;
+            }
+            if outline_button(ui, options.cancel, true).clicked() {
+                choice = ThreeWayChoice::Cancel;
+            }
+        });
+    });
+    if choice == ThreeWayChoice::None && response.should_close() {
+        ThreeWayChoice::Cancel
+    } else {
+        choice
+    }
+}
+
 pub(crate) struct NameModal<'a> {
     pub(crate) id: &'static str,
     pub(crate) title: String,

@@ -198,6 +198,8 @@ mod connection;
 mod exits;
 mod lists;
 mod qr;
+#[cfg(windows)]
+mod quit;
 mod route_reason;
 mod rules;
 mod schedule;

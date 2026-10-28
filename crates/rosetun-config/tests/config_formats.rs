@@ -3,9 +3,9 @@ mod support;
 use rosetun_config::{
     AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId,
     ExitTarget, FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId, ListSource,
-    Node, NodeId, Outbound, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection,
-    StreamSettings, SubscriptionId, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra,
-    XhttpMode, XhttpRange, XhttpXmux, from_json,
+    Node, NodeId, Outbound, QuitAction, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget,
+    Selection, StreamSettings, SubscriptionId, TlsMode, TlsParams, Transport, VlessParams,
+    XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, from_json,
 };
 use serde_json::{Value, json};
 
@@ -181,6 +181,7 @@ fn format_seven_config() -> AppConfig {
     config.interface.notifications = false;
     config.interface.newest_release = Some("9.9.10".to_owned());
     config.interface.announced_update = Some("9.9.10".to_owned());
+    config.interface.quit_action = QuitAction::KeepConnected;
     config
 }
 
@@ -276,6 +277,7 @@ fn version_five_loads_and_saves_as_version_seven() {
     expected["version"] = json!(7);
     expected["interface"]["accent"] = json!("rose");
     expected["interface"]["notifications"] = json!(true);
+    expected["interface"]["quit_action"] = json!("ask");
     assert_eq!(
         serde_json::to_value(&config).expect("serialize migrated configuration"),
         expected
@@ -298,6 +300,7 @@ fn version_six_keeps_the_machine_id_of_every_subscription() {
     expected["version"] = json!(7);
     expected["interface"]["accent"] = json!("rose");
     expected["interface"]["notifications"] = json!(true);
+    expected["interface"]["quit_action"] = json!("ask");
     assert_eq!(
         serde_json::to_value(&config).expect("serialize migrated configuration"),
         expected
@@ -420,6 +423,43 @@ fn an_unknown_accent_reads_as_rose_instead_of_failing() {
         let (config, _) =
             from_json(&serde_json::to_vec(&input).unwrap()).expect("an unknown accent loads");
         assert_eq!(config.interface.accent, AccentPreset::Rose);
+    }
+}
+
+#[test]
+fn every_quit_action_keeps_its_stored_name() {
+    for (action, name) in [
+        (QuitAction::Ask, "ask"),
+        (QuitAction::Disconnect, "disconnect"),
+        (QuitAction::KeepConnected, "keep_connected"),
+    ] {
+        assert_eq!(serde_json::to_value(action).unwrap(), json!(name));
+    }
+}
+
+#[test]
+fn a_format_seven_interface_without_a_quit_action_asks() {
+    let mut input = value(V7);
+    input["interface"]
+        .as_object_mut()
+        .unwrap()
+        .remove("quit_action");
+
+    let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap())
+        .expect("format seven without a quit action");
+    assert_eq!(migrated_from, None);
+    assert_eq!(config.interface.quit_action, QuitAction::Ask);
+}
+
+#[test]
+fn an_unknown_quit_action_reads_as_ask_instead_of_failing() {
+    for unknown in [json!("hibernate"), json!(3), json!(null)] {
+        let mut input = value(V7);
+        input["interface"]["quit_action"] = unknown;
+
+        let (config, _) =
+            from_json(&serde_json::to_vec(&input).unwrap()).expect("an unknown quit action loads");
+        assert_eq!(config.interface.quit_action, QuitAction::Ask);
     }
 }
 

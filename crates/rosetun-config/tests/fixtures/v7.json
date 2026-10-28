@@ -46,7 +46,8 @@
       }
     ],
     "notifications": false,
-    "announced_update": "9.9.10"
+    "announced_update": "9.9.10",
+    "quit_action": "keep_connected"
   },
   "subscriptions": [
     {

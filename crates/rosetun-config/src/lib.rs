@@ -92,6 +92,16 @@ impl AccentPreset {
     ];
 }
 
+/// What quitting the client does with a running tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuitAction {
+    #[default]
+    Ask,
+    Disconnect,
+    KeepConnected,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InterfaceSettings {
     /// Window scale in percent; see `rosetun_core::INTERFACE_SCALES`.
@@ -134,6 +144,9 @@ pub struct InterfaceSettings {
     /// announced once even across restarts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub announced_update: Option<String>,
+    /// Format 7 field; an action this release does not know reads as ask.
+    #[serde(default, deserialize_with = "known_quit_action")]
+    pub quit_action: QuitAction,
 }
 
 fn known_accent<'de, D>(deserializer: D) -> Result<AccentPreset, D::Error>
@@ -142,6 +155,14 @@ where
 {
     let value = Value::deserialize(deserializer)?;
     Ok(AccentPreset::deserialize(value).unwrap_or_default())
+}
+
+fn known_quit_action<'de, D>(deserializer: D) -> Result<QuitAction, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(QuitAction::deserialize(value).unwrap_or_default())
 }
 
 fn default_scale_percent() -> u16 {
@@ -169,6 +190,7 @@ impl Default for InterfaceSettings {
             recent_servers: Vec::new(),
             notifications: true,
             announced_update: None,
+            quit_action: QuitAction::Ask,
         }
     }
 }

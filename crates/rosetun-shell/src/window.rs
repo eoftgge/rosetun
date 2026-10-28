@@ -9,9 +9,9 @@ use windows_sys::Win32::UI::HiDpi::{
     GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GetWindowPlacement, IsIconic, IsWindowVisible, IsZoomed, SM_CXSMICON, SW_HIDE,
-    SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetWindowPlacement, SetWindowPos,
-    WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
+    FindWindowW, GetSystemMetrics, GetWindowPlacement, IsIconic, IsWindowVisible, IsZoomed,
+    SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOZORDER, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
 };
 
 use crate::first_start::{ScreenRect, first_start_rect};
@@ -162,6 +162,13 @@ pub fn place_window(hwnd: isize, saved: Option<SavedWindow>) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Whether the Windows session is signing out or shutting down. winit leaves
+/// `WM_QUERYENDSESSION` to the default handler, so this is the GUI's only view of it.
+pub fn session_ending() -> bool {
+    // SAFETY: no pointers; reads session-wide state.
+    unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
 }
 
 /// The small-icon width at the DPI of the taskbar's monitor, falling back to

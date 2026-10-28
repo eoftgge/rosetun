@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use rosetun_config::{
-    AccentPreset, DnsSettings, InterfaceSettings, LanguageSetting, Settings, XrayUse,
+    AccentPreset, DnsSettings, InterfaceSettings, LanguageSetting, QuitAction, Settings, XrayUse,
 };
 use url::Host;
 
@@ -60,6 +60,7 @@ pub enum SettingChange {
     AllowLan(bool),
     AutoUpdateSubscriptions(bool),
     CheckUpdates(bool),
+    QuitAction(QuitAction),
 }
 
 pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), SettingsError> {
@@ -76,6 +77,7 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
                 config.interface.auto_update_subscriptions = enabled;
             }
             SettingChange::CheckUpdates(enabled) => config.interface.check_updates = enabled,
+            SettingChange::QuitAction(action) => config.interface.quit_action = action,
         }
         Ok(())
     })
@@ -392,6 +394,14 @@ mod tests {
 
         change_setting(&store, SettingChange::CheckUpdates(false)).unwrap();
         expected.interface.check_updates = false;
+        assert_eq!(store.load().unwrap(), expected);
+
+        change_setting(
+            &store,
+            SettingChange::QuitAction(QuitAction::KeepConnected),
+        )
+        .unwrap();
+        expected.interface.quit_action = QuitAction::KeepConnected;
         assert_eq!(store.load().unwrap(), expected);
 
         skip_version(&store, Some("0.1.0-alpha.3".into())).unwrap();

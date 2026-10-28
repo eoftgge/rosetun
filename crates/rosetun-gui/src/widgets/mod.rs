@@ -19,7 +19,10 @@ pub(crate) use buttons::{
 };
 pub(crate) use choice_card::choice_card;
 pub(crate) use combo::filter_combo;
-pub(crate) use dialogs::{ConfirmModal, ModalChoice, NameModal, confirm_modal, name_modal};
+pub(crate) use dialogs::{
+    ConfirmModal, ModalChoice, NameModal, ThreeWayChoice, ThreeWayModal, confirm_modal, name_modal,
+    three_way_modal,
+};
 pub(crate) use frames::{
     card_frame, dismissible_error, dismissible_error_with_action, error_with_actions, modal_frame,
 };

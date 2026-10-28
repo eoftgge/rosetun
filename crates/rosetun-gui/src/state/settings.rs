@@ -72,7 +72,7 @@ pub(crate) enum AboutFolder {
 pub(crate) struct SettingsState {
     pub(crate) screen: SettingsScreen,
     /// Changes asked for while a save ran, sent one by one after it.
-    queued: Vec<Action>,
+    pub(super) queued: Vec<Action>,
     /// Keeps a failed save's error on screen while the changes queued behind it go out.
     keep_error: bool,
     /// This frame's `display::monotonic_ms`, set by the app before anything else.
@@ -113,6 +113,7 @@ fn waits_for_save(action: &Action) -> bool {
         #[cfg(windows)]
         Action::SetAutostart(_)
         | Action::SetCloseToTray(_)
+        | Action::SetQuitAction(_)
         | Action::SetNotifications(_)
         | Action::ShowReportFolder
         | Action::OpenFolder(_) => true,
@@ -466,6 +467,12 @@ impl State {
             Action::SetCloseToTray(enabled) => {
                 if self.can_edit_settings() && self.config.interface.close_to_tray != enabled {
                     return self.start_settings(Job::Setting(SettingChange::CloseToTray(enabled)));
+                }
+            }
+            #[cfg(windows)]
+            Action::SetQuitAction(action) => {
+                if self.can_edit_settings() && self.config.interface.quit_action != action {
+                    return self.start_settings(Job::Setting(SettingChange::QuitAction(action)));
                 }
             }
             #[cfg(windows)]

@@ -19,6 +19,8 @@ use crate::worker::{ConfigWorkerError, FailureInterference, WorkerEvent};
 mod connection;
 mod exits;
 mod lists;
+#[cfg(windows)]
+mod quit;
 mod route_reason;
 mod rules;
 mod session;
@@ -33,6 +35,10 @@ use exits::ExitsState;
 pub(crate) use exits::{ExitDialog, ExitKind};
 use lists::ListsState;
 pub(crate) use lists::{AddListDialog, ListOutcome, RulesTab, source_file_name, used_by};
+#[cfg(windows)]
+pub(crate) use quit::QuitDecision;
+#[cfg(windows)]
+use quit::QuitState;
 use rules::RulesState;
 pub(crate) use rules::{AddRuleDialog, DeleteDialog, NameDialogKind, RuleInputKind};
 use session::SessionState;
@@ -136,6 +142,8 @@ pub(crate) struct State {
     /// The administrator prompt for a "Local network" change was declined:
     /// the setting is saved, but Lockdown keeps its previous LAN access.
     pub(crate) lockdown_lan_kept: bool,
+    #[cfg(windows)]
+    pub(crate) quit: QuitState,
 }
 
 impl Default for State {
@@ -183,6 +191,8 @@ impl Default for State {
             lockdown_lan_pending: false,
             lockdown_lan_sync: false,
             lockdown_lan_kept: false,
+            #[cfg(windows)]
+            quit: QuitState::default(),
         }
     }
 }
@@ -217,6 +227,17 @@ pub(crate) enum Action {
     SetAutostart(bool),
     #[cfg(windows)]
     SetCloseToTray(bool),
+    #[cfg(windows)]
+    SetQuitAction(rosetun_config::QuitAction),
+    #[cfg(windows)]
+    SetRememberQuit(bool),
+    #[cfg(windows)]
+    CancelQuit,
+    /// The quit question's answer; `disconnect` turns the VPN off first.
+    #[cfg(windows)]
+    Quit {
+        disconnect: bool,
+    },
     #[cfg(windows)]
     SetNotifications(bool),
     SetConnectOnStart(bool),
@@ -645,6 +666,10 @@ impl State {
             }
             #[cfg(windows)]
             action @ Action::WindowMinimized => return self.act_session(action),
+            #[cfg(windows)]
+            action @ (Action::SetRememberQuit(_) | Action::CancelQuit | Action::Quit { .. }) => {
+                return self.act_quit(action);
+            }
             action @ (Action::OpenSettings
             | Action::OpenSettingsSection(_)
             | Action::OpenLanSettings
@@ -669,6 +694,7 @@ impl State {
             #[cfg(windows)]
             action @ (Action::SetAutostart(_)
             | Action::SetCloseToTray(_)
+            | Action::SetQuitAction(_)
             | Action::SetNotifications(_)
             | Action::SaveReport
             | Action::ShowReportFolder

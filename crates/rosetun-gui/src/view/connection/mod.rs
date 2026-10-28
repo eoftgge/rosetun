@@ -212,6 +212,39 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
     }
 }
 
+#[cfg(windows)]
+pub(crate) fn quit_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
+    let choice = widgets::three_way_modal(
+        ctx,
+        widgets::ThreeWayModal {
+            id: "quit",
+            title: tr!("quit-question"),
+            cancel: tr!("cancel"),
+            other: tr!("quit-keep-connected"),
+            confirm: tr!("quit-disconnect"),
+        },
+        |ui| {
+            ui.add_space(12.0);
+            ui.add(egui::Label::new(tr!("quit-connected")).wrap());
+            if state.lockdown_active() {
+                ui.add_space(8.0);
+                ui.add(egui::Label::new(tr!("quit-lockdown")).wrap());
+            }
+            ui.add_space(12.0);
+            let mut remember = state.quit.remember;
+            if ui.checkbox(&mut remember, tr!("quit-remember")).changed() {
+                actions.push(Action::SetRememberQuit(remember));
+            }
+        },
+    );
+    match choice {
+        widgets::ThreeWayChoice::Cancel => actions.push(Action::CancelQuit),
+        widgets::ThreeWayChoice::Other => actions.push(Action::Quit { disconnect: false }),
+        widgets::ThreeWayChoice::Confirm => actions.push(Action::Quit { disconnect: true }),
+        widgets::ThreeWayChoice::None => {}
+    }
+}
+
 pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
     let enabling = state.lockdown_confirmation == Some(true);
     let (title, confirm, body) = if enabling {

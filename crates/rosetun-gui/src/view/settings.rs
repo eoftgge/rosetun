@@ -1,4 +1,6 @@
 use eframe::egui::{self, RichText};
+#[cfg(windows)]
+use rosetun_config::QuitAction;
 use rosetun_config::{AccentPreset, ConnectionState, LanguageSetting, TlsMode, XrayUse};
 use rosetun_core::{CheckKind, CheckStatus, DnsPreset};
 
@@ -144,6 +146,15 @@ fn accent_label(accent: AccentPreset) -> String {
 }
 
 #[cfg(windows)]
+fn quit_action_label(action: QuitAction) -> String {
+    match action {
+        QuitAction::Ask => tr!("quit-action-ask"),
+        QuitAction::Disconnect => tr!("quit-action-disconnect"),
+        QuitAction::KeepConnected => tr!("quit-action-keep"),
+    }
+}
+
+#[cfg(windows)]
 fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
         let editable = state.can_edit_settings();
@@ -173,6 +184,27 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         {
             actions.push(Action::SetCloseToTray(close_to_tray));
         }
+        card.row(tr!("quit-action"), None, |ui| {
+            let saved = state.config.interface.quit_action;
+            let mut selected = saved;
+            ui.add_enabled_ui(editable, |ui| {
+                egui::ComboBox::from_id_salt("quit_action")
+                    .width(240.0)
+                    .selected_text(quit_action_label(selected))
+                    .show_ui(ui, |ui| {
+                        for action in [
+                            QuitAction::Ask,
+                            QuitAction::Disconnect,
+                            QuitAction::KeepConnected,
+                        ] {
+                            ui.selectable_value(&mut selected, action, quit_action_label(action));
+                        }
+                    });
+            });
+            if selected != saved && editable {
+                actions.push(Action::SetQuitAction(selected));
+            }
+        });
         let mut notifications = state.config.interface.notifications;
         if card
             .toggle(
