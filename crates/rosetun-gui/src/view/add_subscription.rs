@@ -47,6 +47,8 @@ pub(crate) fn show(
                     dialog.error = None;
                     dialog.qr.error = None;
                     dialog.link_error = false;
+                    // The host line names where the link came from, not what is typed now.
+                    dialog.from_link = None;
                 }
                 if widgets::outline_button(ui, tr!("paste"), editable).clicked() {
                     input.request_focus();
