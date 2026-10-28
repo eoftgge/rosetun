@@ -1,4 +1,6 @@
-use super::servers::{check_menu_items, ping_label, ping_millis, server_row};
+use super::servers::{
+    CardColumns, check_menu_items, ping_label, ping_millis, server_row, xray_badges,
+};
 use super::*;
 
 pub(super) fn subscription_card(
@@ -476,6 +478,16 @@ fn details(
         })
         .reduce(f32::max)
         .map(|width| width.max(70.0));
+    let xray_count = subscription
+        .nodes
+        .iter()
+        .filter(|node| rosetun_core::uses_xray(node, state.config.settings.xray))
+        .count();
+    let columns = CardColumns {
+        flags: show_flags,
+        ping_width,
+        xray_badges: xray_badges(xray_count, subscription.nodes.len()),
+    };
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         for node in &subscription.nodes {
@@ -485,18 +497,12 @@ fn details(
                     state,
                     subscription,
                     node,
-                    show_flags,
-                    ping_width,
+                    columns,
                     actions,
                 );
             });
         }
     });
-    let xray_count = subscription
-        .nodes
-        .iter()
-        .filter(|node| rosetun_core::uses_xray(node, state.config.settings.xray))
-        .count();
     if xray_count > 0 {
         ui.add(egui::Label::new(
             RichText::new(tr!(

@@ -242,6 +242,9 @@ pub(crate) const EXPIRED: Color32 = Color32::from_rgb(0xEF, 0x62, 0x62);
 /// Gap between blocks on the connection tab.
 pub(crate) const SECTION_GAP: f32 = 16.0;
 pub(crate) const SERVER_ROW: f32 = 40.0;
+/// Room a server's name keeps before its row gives up the quality bars, then the full Xray
+/// badge: "Нидерланды" is about 94 points in the semibold of a selected row.
+pub(crate) const SERVER_NAME_MIN: f32 = 110.0;
 pub(crate) const RULE_ROW: f32 = 58.0;
 
 /// Cards, buttons, fields, modals and menus.

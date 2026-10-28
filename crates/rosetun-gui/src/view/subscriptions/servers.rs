@@ -1,5 +1,84 @@
 use super::*;
 
+const ROW_PADDING: f32 = 10.0;
+const FLAG_WIDTH: f32 = 38.0;
+/// Between the name (or the Xray badge) and the check result.
+const RESULT_GAP: f32 = 10.0;
+/// The quality bars and their gap to the latency.
+const BARS_WIDTH: f32 = 13.0 + 8.0;
+const BADGE_GAP: f32 = 8.0;
+const BADGE_PADDING: f32 = 14.0;
+
+/// What every row of one subscription card shares.
+#[derive(Clone, Copy)]
+pub(super) struct CardColumns {
+    pub(super) flags: bool,
+    /// Width of the latency column once any server of the card has a check result.
+    pub(super) ping_width: Option<f32>,
+    /// False when every server goes through Xray: the line under the list says so once.
+    pub(super) xray_badges: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum XrayBadge {
+    Full,
+    Short,
+}
+
+/// What a server row has to show besides the name.
+#[derive(Clone, Copy)]
+struct RowNeeds {
+    width: f32,
+    flag: bool,
+    /// Widths of the full and the short Xray badge, when the row shows one.
+    xray: Option<(f32, f32)>,
+    /// Width of the latency column, when the row has a check result.
+    ping: Option<f32>,
+}
+
+#[derive(Debug, PartialEq)]
+struct RowLayout {
+    bars: bool,
+    xray: Option<XrayBadge>,
+    name_width: f32,
+}
+
+fn row_layout(needs: RowNeeds) -> RowLayout {
+    let mut room = needs.width - 2.0 * ROW_PADDING;
+    if needs.flag {
+        room -= FLAG_WIDTH;
+    }
+    if let Some(ping) = needs.ping {
+        room -= ping + RESULT_GAP;
+    }
+    let badge = |kind| {
+        needs.xray.map_or(0.0, |(full, short)| match kind {
+            XrayBadge::Full => full + BADGE_GAP,
+            XrayBadge::Short => short + BADGE_GAP,
+        })
+    };
+    let bars_width = if needs.ping.is_some() { BARS_WIDTH } else { 0.0 };
+    let layout = |bars: bool, kind| RowLayout {
+        bars: bars && needs.ping.is_some(),
+        xray: needs.xray.map(|_| kind),
+        name_width: (room - if bars { bars_width } else { 0.0 } - badge(kind)).max(0.0),
+    };
+    [
+        (true, XrayBadge::Full),
+        (false, XrayBadge::Full),
+        (false, XrayBadge::Short),
+    ]
+    .into_iter()
+    .map(|(bars, kind)| layout(bars, kind))
+    .find(|layout| layout.name_width >= theme::SERVER_NAME_MIN)
+    .unwrap_or_else(|| layout(false, XrayBadge::Short))
+}
+
+/// Every server through Xray is said once under the list, not on each row.
+pub(super) fn xray_badges(through_xray: usize, servers: usize) -> bool {
+    through_xray < servers
+}
+
 fn ping_quality(result: PingResult) -> u8 {
     match result {
         PingResult::Answered(elapsed) | PingResult::Works(elapsed) => match ping_millis(elapsed) {
@@ -122,8 +201,7 @@ pub(super) fn server_row(
     state: &State,
     subscription: &Subscription,
     node: &Node,
-    show_flags: bool,
-    ping_width: Option<f32>,
+    columns: CardColumns,
     actions: &mut Vec<Action>,
 ) {
     let enabled = state.config_ready && !state.operations.selection && !state.operations.helper;
@@ -145,8 +223,31 @@ pub(super) fn server_row(
         .pings
         .get(&(subscription.id.clone(), node.id.clone()))
         .copied();
-    let right = rect.right() - 10.0;
-    let ping_left = ping_width.map(|width| right - width);
+    let uses_xray = rosetun_core::uses_xray(node, state.config.settings.xray);
+    let small = egui::TextStyle::Small.resolve(ui.style());
+    let badge_width = |label: String| {
+        ui.painter()
+            .layout_no_wrap(label, small.clone(), theme::palette().accent_light)
+            .size()
+            .x
+            + BADGE_PADDING
+    };
+    let layout = row_layout(RowNeeds {
+        width: rect.width(),
+        flag: columns.flags,
+        xray: (uses_xray && columns.xray_badges).then(|| {
+            (
+                badge_width(tr!("xray-badge")),
+                badge_width(tr!("xray-badge-short")),
+            )
+        }),
+        ping: columns.ping_width.filter(|_| ping_result.is_some()),
+    });
+    let right = rect.right() - ROW_PADDING;
+    let ping_left = columns
+        .ping_width
+        .filter(|_| ping_result.is_some())
+        .map(|width| right - width);
     let ping_region = ping_left.map(|left| {
         egui::Rect::from_min_max(
             egui::pos2(left, rect.top()),
@@ -161,13 +262,19 @@ pub(super) fn server_row(
     ) {
         response.on_hover_text(hint)
     } else {
+        let details = i18n::node_details(
+            rosetun_core::node_protocol(node),
+            rosetun_core::node_tls(node),
+            rosetun_core::node_transport(node),
+        );
+        let details = if uses_xray {
+            tr!("server-details-xray", details = details)
+        } else {
+            details
+        };
         response.on_hover_text(i18n::server_tooltip(
             &full_name,
-            &i18n::node_details(
-                rosetun_core::node_protocol(node),
-                rosetun_core::node_tls(node),
-                rosetun_core::node_transport(node),
-            ),
+            &details,
             &state.text(&rosetun_core::node_address(node)),
         ))
     };
@@ -218,8 +325,8 @@ pub(super) fn server_row(
     if let Some(color) = background {
         painter.rect_filled(rect, theme::RADIUS_INNER, color);
     }
-    let mut name_left = rect.left() + 10.0;
-    if show_flags {
+    let mut name_left = rect.left() + ROW_PADDING;
+    if columns.flags {
         if let Some(code) = code {
             let badge = egui::Rect::from_min_size(
                 egui::pos2(name_left, rect.center().y - 10.0),
@@ -239,13 +346,14 @@ pub(super) fn server_row(
                 theme::palette().text_muted,
             );
         }
-        name_left += 38.0;
+        name_left += FLAG_WIDTH;
     }
     let mut name_right = right;
-    if let Some(ping_left) = ping_left {
-        let bars_left = ping_left - 8.0 - 13.0;
-        name_right = bars_left - 10.0;
-        if let Some(result) = ping_result {
+    if let Some((ping_left, result)) = ping_left.zip(ping_result) {
+        name_right = ping_left - RESULT_GAP;
+        if layout.bars {
+            let bars_left = ping_left - BARS_WIDTH;
+            name_right = bars_left - RESULT_GAP;
             let quality = ping_quality(result);
             let bottom = rect.center().y + 5.5;
             for (index, height) in [4.0, 7.0, 11.0].into_iter().enumerate() {
@@ -262,29 +370,23 @@ pub(super) fn server_row(
                     },
                 );
             }
-            let (ping_text, color, _) =
-                ping_label(result, matches!(&node.outbound, Outbound::Hysteria2(_)));
-            painter.text(
-                egui::pos2(right, rect.center().y),
-                egui::Align2::RIGHT_CENTER,
-                ping_text,
-                egui::TextStyle::Small.resolve(ui.style()),
-                color,
-            );
         }
+        let (ping_text, color, _) =
+            ping_label(result, matches!(&node.outbound, Outbound::Hysteria2(_)));
+        painter.text(
+            egui::pos2(right, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            ping_text,
+            small.clone(),
+            color,
+        );
     }
-    if rosetun_core::uses_xray(node, state.config.settings.xray) {
-        let label = tr!("xray-badge");
-        let width = ui
-            .painter()
-            .layout_no_wrap(
-                label.clone(),
-                egui::TextStyle::Small.resolve(ui.style()),
-                theme::palette().accent_light,
-            )
-            .size()
-            .x
-            + 14.0;
+    if let Some(kind) = layout.xray {
+        let label = match kind {
+            XrayBadge::Full => tr!("xray-badge"),
+            XrayBadge::Short => tr!("xray-badge-short"),
+        };
+        let width = badge_width(label.clone());
         let badge = egui::Rect::from_center_size(
             egui::pos2(name_right - width / 2.0, rect.center().y),
             egui::vec2(width, 20.0),
@@ -299,10 +401,10 @@ pub(super) fn server_row(
             badge.center(),
             egui::Align2::CENTER_CENTER,
             label,
-            egui::TextStyle::Small.resolve(ui.style()),
+            small.clone(),
             theme::palette().accent_light,
         );
-        name_right -= width + 8.0;
+        name_right -= width + BADGE_GAP;
     }
     let name_color = if selected {
         theme::palette().accent_light
@@ -342,6 +444,75 @@ pub(super) fn ping_millis(elapsed: Duration) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const FULL_BADGE: f32 = 38.0;
+    const SHORT_BADGE: f32 = 21.0;
+    /// The subscription card of the owner's screenshot: about 340 points wide.
+    const NARROW_ROW: f32 = 314.0;
+
+    fn needs(width: f32, xray: bool, ping: Option<f32>) -> RowNeeds {
+        RowNeeds {
+            width,
+            flag: true,
+            xray: xray.then_some((FULL_BADGE, SHORT_BADGE)),
+            ping,
+        }
+    }
+
+    #[test]
+    fn a_narrow_card_keeps_the_name_its_room_after_a_check() {
+        let all_through_xray = row_layout(needs(NARROW_ROW, false, Some(110.0)));
+        assert!(all_through_xray.name_width >= theme::SERVER_NAME_MIN);
+        assert_eq!(all_through_xray.xray, None);
+
+        let latency = row_layout(needs(NARROW_ROW, true, Some(70.0)));
+        assert!(latency.name_width >= theme::SERVER_NAME_MIN);
+        assert!(!latency.bars);
+        assert_eq!(latency.xray, Some(XrayBadge::Full));
+
+        let long_result = row_layout(needs(NARROW_ROW, true, Some(95.0)));
+        assert!(long_result.name_width >= theme::SERVER_NAME_MIN);
+        assert!(!long_result.bars);
+        assert_eq!(long_result.xray, Some(XrayBadge::Short));
+    }
+
+    #[test]
+    fn the_name_is_truncated_only_once_bars_and_the_full_badge_are_gone() {
+        let layout = row_layout(needs(260.0, true, Some(70.0)));
+        assert!(!layout.bars);
+        assert_eq!(layout.xray, Some(XrayBadge::Short));
+        assert!(layout.name_width < theme::SERVER_NAME_MIN);
+        assert_eq!(row_layout(needs(40.0, true, Some(70.0))).name_width, 0.0);
+    }
+
+    #[test]
+    fn a_wide_card_shows_everything_as_before() {
+        let layout = row_layout(needs(600.0, true, Some(70.0)));
+        assert_eq!(
+            layout,
+            RowLayout {
+                bars: true,
+                xray: Some(XrayBadge::Full),
+                name_width: 600.0 - 20.0 - 38.0 - 80.0 - 21.0 - 46.0,
+            }
+        );
+    }
+
+    #[test]
+    fn a_row_without_a_result_reserves_no_latency_column() {
+        let layout = row_layout(needs(NARROW_ROW, true, None));
+        assert!(!layout.bars);
+        assert_eq!(layout.xray, Some(XrayBadge::Full));
+        assert_eq!(layout.name_width, NARROW_ROW - 20.0 - 38.0 - 46.0);
+    }
+
+    #[test]
+    fn xray_badges_show_only_when_some_servers_go_without_xray() {
+        assert!(!xray_badges(6, 6));
+        assert!(xray_badges(2, 6));
+        assert!(xray_badges(0, 6));
+        assert!(!xray_badges(0, 0));
+    }
 
     #[test]
     fn ping_milliseconds_round_up_and_never_show_zero() {
