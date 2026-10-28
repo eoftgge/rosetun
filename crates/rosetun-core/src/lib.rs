@@ -76,7 +76,7 @@ pub use text::{
     provider_link, provider_text, terminal_text, traffic_text, updated_text,
 };
 pub use update::{UpdateReport, group_skipped};
-pub use updates::{Release, UpdateCheckError, is_newer, latest_release};
+pub use updates::{Release, UpdateCheckError, is_newer, latest_release, remembered_release};
 
 pub use rosetun_config::{is_sensitive_log_target, uses_xray};
 

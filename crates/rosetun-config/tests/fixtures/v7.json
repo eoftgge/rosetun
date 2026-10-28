@@ -31,6 +31,7 @@
     "check_updates": false,
     "skipped_version": "v9.9.9-test",
     "last_update_check": 1700000003,
+    "newest_release": "9.9.10",
     "language": "russian",
     "reduce_motion": true,
     "accent": "teal",

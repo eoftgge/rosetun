@@ -503,6 +503,9 @@ impl State {
                 self.config_generation = generation;
                 self.config = config;
                 self.cache_config_request();
+                if !self.config_ready {
+                    self.restore_found_update();
+                }
                 self.config_ready = true;
                 self.config_error = None;
                 if self.settings.screen.opened && !self.settings.screen.dirty {

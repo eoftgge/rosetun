@@ -6,8 +6,10 @@ impl WorkerDispatcher {
             let result =
                 rosetun_core::latest_release(env!("CARGO_PKG_VERSION"), Duration::from_secs(15));
             let checked_at = crate::state::now_unix();
-            if result.is_ok() {
-                if rosetun_core::record_update_check(&publisher.store, checked_at).is_err() {
+            if let Ok(release) = &result {
+                let newest = release.as_ref().map(|release| release.version.clone());
+                if rosetun_core::record_update_check(&publisher.store, checked_at, newest).is_err()
+                {
                     tracing::warn!("could not save update check time");
                 } else {
                     publisher.publish();

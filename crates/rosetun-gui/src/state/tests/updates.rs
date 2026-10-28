@@ -214,3 +214,73 @@ fn manual_update_check_is_blocked_in_transitional_states() {
     state.status.state = ConnectionState::Connected;
     assert!(state.can_check_updates());
 }
+
+fn restarted_with(config: &rosetun_config::AppConfig) -> State {
+    let mut state = State::default();
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config: config.clone(),
+    });
+    state
+}
+
+fn found(version: &str) -> Release {
+    Release {
+        version: version.into(),
+        url: format!("https://github.com/eoftgge/rosetun/releases/tag/v{version}"),
+        prerelease: false,
+    }
+}
+
+#[test]
+fn a_found_release_survives_a_restart_without_the_network() {
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    state.take_update_check(1_000);
+    state.finish_update_check(Ok(Some(found("999.0.0"))), 1_001);
+    assert_eq!(
+        state.config.interface.newest_release.as_deref(),
+        Some("999.0.0")
+    );
+
+    let mut restarted = restarted_with(&state.config);
+    assert_eq!(restarted.available_update(), Some(&found("999.0.0")));
+    assert!(restarted.take_update_check(1_002).is_none());
+}
+
+#[test]
+fn a_remembered_release_not_newer_than_this_build_is_not_offered() {
+    let mut config = rosetun_config::AppConfig::default();
+    config.interface.newest_release = Some("0.0.1".into());
+    let restarted = restarted_with(&config);
+    assert!(restarted.updates.newest_release.is_none());
+    assert!(restarted.available_update().is_none());
+}
+
+#[test]
+fn a_successful_check_without_a_newer_release_clears_the_record() {
+    let mut config = rosetun_config::AppConfig::default();
+    config.interface.newest_release = Some("999.0.0".into());
+    let mut state = restarted_with(&config);
+    assert!(state.available_update().is_some());
+
+    assert!(matches!(
+        state.act(Action::CheckUpdatesNow),
+        Some(Job::CheckUpdates)
+    ));
+    state.finish_update_check(Ok(None), 1_000);
+    assert!(state.available_update().is_none());
+    assert_eq!(state.config.interface.newest_release, None);
+}
+
+#[test]
+fn a_skipped_remembered_release_is_not_offered() {
+    let mut config = rosetun_config::AppConfig::default();
+    config.interface.newest_release = Some("999.0.0".into());
+    config.interface.skipped_version = Some("999.0.0".into());
+    let restarted = restarted_with(&config);
+    assert!(restarted.updates.newest_release.is_some());
+    assert!(restarted.available_update().is_none());
+}

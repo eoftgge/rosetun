@@ -1,5 +1,5 @@
 use rosetun_config::ConnectionState;
-use rosetun_core::{Release, UpdateCheckError, is_newer};
+use rosetun_core::{Release, UpdateCheckError, is_newer, remembered_release};
 
 use super::{Action, Job, State};
 
@@ -37,6 +37,17 @@ impl State {
         self.updates.newest_release.as_ref().filter(|release| {
             self.config.interface.skipped_version.as_deref() != Some(release.version.as_str())
         })
+    }
+
+    /// The offer found before a restart, kept while it is still newer than
+    /// this build; an older record (Rosetun was updated since) reads as none.
+    pub(super) fn restore_found_update(&mut self) {
+        self.updates.newest_release = self
+            .config
+            .interface
+            .newest_release
+            .as_deref()
+            .and_then(|version| remembered_release(version, env!("CARGO_PKG_VERSION")));
     }
 
     pub(super) fn update_check_due(&self, now: u64) -> Option<u64> {
@@ -81,6 +92,11 @@ impl State {
                 self.updates.update_check_failed = false;
                 self.updates.newest_release =
                     release.filter(|release| is_newer(&release.version, env!("CARGO_PKG_VERSION")));
+                self.config.interface.newest_release = self
+                    .updates
+                    .newest_release
+                    .as_ref()
+                    .map(|release| release.version.clone());
             }
             Err(_) => {
                 self.updates.next_update_check = Some(now.saturating_add(UPDATE_CHECK_RETRY));

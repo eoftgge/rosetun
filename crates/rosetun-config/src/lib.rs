@@ -112,6 +112,10 @@ pub struct InterfaceSettings {
     pub skipped_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_update_check: Option<u64>,
+    /// Format 7 field: the version (without `v`) the last successful check
+    /// found, so the offer survives a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newest_release: Option<String>,
     #[serde(default)]
     pub language: LanguageSetting,
     #[serde(default)]
@@ -154,6 +158,7 @@ impl Default for InterfaceSettings {
             check_updates: true,
             skipped_version: None,
             last_update_check: None,
+            newest_release: None,
             language: LanguageSetting::System,
             reduce_motion: false,
             accent: AccentPreset::Rose,
@@ -481,9 +486,11 @@ mod tests {
         assert_eq!(config.interface.skipped_version, None);
         assert_eq!(interface.last_update_check, None);
         assert_eq!(config.interface.last_update_check, None);
+        assert_eq!(interface.newest_release, None);
         let saved = serde_json::to_value(&interface).unwrap();
         assert!(saved.get("skipped_version").is_none());
         assert!(saved.get("last_update_check").is_none());
+        assert!(saved.get("newest_release").is_none());
     }
 
     #[test]

@@ -148,9 +148,16 @@ pub fn skip_version(store: &Store, version: Option<String>) -> Result<(), Settin
     })
 }
 
-pub fn record_update_check(store: &Store, at: u64) -> Result<(), SettingsError> {
+/// Saves the time of a successful check and the version it found (`None`
+/// when there is nothing newer).
+pub fn record_update_check(
+    store: &Store,
+    at: u64,
+    newest_release: Option<String>,
+) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.interface.last_update_check = Some(at);
+        config.interface.newest_release = newest_release;
         Ok(())
     })
 }
@@ -387,8 +394,13 @@ mod tests {
         expected.interface.skipped_version = None;
         assert_eq!(store.load().unwrap(), expected);
 
-        record_update_check(&store, 123_456).unwrap();
+        record_update_check(&store, 123_456, Some("0.1.0".into())).unwrap();
         expected.interface.last_update_check = Some(123_456);
+        expected.interface.newest_release = Some("0.1.0".into());
+        assert_eq!(store.load().unwrap(), expected);
+        record_update_check(&store, 123_457, None).unwrap();
+        expected.interface.last_update_check = Some(123_457);
+        expected.interface.newest_release = None;
         assert_eq!(store.load().unwrap(), expected);
 
         change_setting(&store, SettingChange::AutoReconnect(false)).unwrap();

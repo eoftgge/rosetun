@@ -146,6 +146,20 @@ fn is_offered(candidate: &Version<'_>, current: &Version<'_>) -> bool {
     candidate > current && stability(candidate) >= stability(current)
 }
 
+/// A version remembered from an earlier check, offered again without the
+/// network if it is still offered to `current` (see `is_offered`).
+pub fn remembered_release(version_text: &str, current: &str) -> Option<Release> {
+    let candidate = version(version_text)?;
+    if version_text.starts_with('v') || !is_offered(&candidate, &version(current)?) {
+        return None;
+    }
+    Some(Release {
+        version: version_text.to_owned(),
+        url: format!("{RELEASE_PAGE_PREFIX}tag/v{version_text}"),
+        prerelease: candidate.prerelease.is_some(),
+    })
+}
+
 fn parse_releases(body: &str, current: &str) -> Result<Option<Release>, UpdateCheckError> {
     let current = version(current);
     let entries: serde_json::Value =
@@ -238,7 +252,10 @@ pub fn latest_release(
 
 #[cfg(test)]
 mod tests {
-    use super::{Release, UpdateCheckError, is_newer, parse_releases, stability, version};
+    use super::{
+        Release, UpdateCheckError, is_newer, parse_releases, remembered_release, stability,
+        version,
+    };
 
     #[test]
     fn version_order_includes_numeric_prerelease_parts() {
@@ -332,6 +349,29 @@ mod tests {
             assert!(stability(&version(pair[0]).unwrap()) < stability(&version(pair[1]).unwrap()));
         }
         assert_eq!(stability(&version("1.0.0-dev.1").unwrap()), 0);
+    }
+
+    #[test]
+    fn a_remembered_release_follows_the_same_offer_rules() {
+        assert_eq!(
+            remembered_release("0.3.1", "0.2.0-beta.2"),
+            Some(Release {
+                version: "0.3.1".into(),
+                url: "https://github.com/eoftgge/rosetun/releases/tag/v0.3.1".into(),
+                prerelease: false,
+            })
+        );
+        assert!(
+            remembered_release("0.3.0-beta.1", "0.2.0-beta.2")
+                .unwrap()
+                .prerelease
+        );
+        assert_eq!(remembered_release("0.3.1", "0.3.1"), None);
+        assert_eq!(remembered_release("0.3.0", "0.3.1"), None);
+        assert_eq!(remembered_release("0.4.0-alpha.1", "0.3.1"), None);
+        assert_eq!(remembered_release("v0.3.1", "0.2.0"), None);
+        assert_eq!(remembered_release("0.3.1/../x", "0.2.0"), None);
+        assert_eq!(remembered_release("0.3.1", "not a version"), None);
     }
 
     #[test]
