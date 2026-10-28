@@ -27,6 +27,8 @@ const DATA_DACL: &str = "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
 const INSTALL_DACL: &str = "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
 // Upgrades also repair ownership; ordinary service startup changes only the DACL.
 const OWNED_DATA_DACL: &str = "O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
+// Set explicitly on an engine copy so that no inherited entry can widen it.
+const OWNED_FILE_DACL: &str = "O:BAD:PAI(A;;FA;;;SY)(A;;FA;;;BA)";
 
 struct SecurityDescriptor(*mut c_void);
 
@@ -134,6 +136,34 @@ pub(crate) fn secure(dir: &Path) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(status as i32));
     }
     Ok(())
+}
+
+/// A folder only SYSTEM and Administrators can enter, owned by
+/// Administrators; created with that descriptor, never widened first.
+pub(crate) fn secure_private_dir(dir: &Path) -> io::Result<()> {
+    let descriptor = SecurityDescriptor::from_sddl(OWNED_DATA_DACL)?;
+    if !dir.exists() {
+        create_secure_dir(dir, &descriptor)?;
+    }
+    let handle = open_no_follow(dir)?;
+    if !handle.metadata()?.is_dir() {
+        return Err(io::Error::other(format!(
+            "not a directory: {}",
+            dir.display()
+        )));
+    }
+    set_security(&handle, &descriptor, true)
+}
+
+/// Only SYSTEM and Administrators may open the file at all, executing
+/// included, whatever its folder grants.
+pub(crate) fn secure_private_file(path: &Path) -> io::Result<()> {
+    let descriptor = SecurityDescriptor::from_sddl(OWNED_FILE_DACL)?;
+    let handle = open_no_follow(path)?;
+    if !handle.metadata()?.is_file() {
+        return Err(io::Error::other(format!("not a file: {}", path.display())));
+    }
+    set_security(&handle, &descriptor, true)
 }
 
 fn open_no_follow(path: &Path) -> io::Result<File> {
@@ -380,8 +410,7 @@ mod tests {
         assert_eq!(users, expected_users);
     }
 
-    #[test]
-    fn install_tree_has_administrator_owner_and_expected_acls() {
+    fn has_admin_token() -> bool {
         let admin = SecurityDescriptor::from_sddl("O:BA").unwrap();
         let mut is_admin = 0;
         // SAFETY: A null token asks the Windows system ABI for the effective
@@ -391,7 +420,12 @@ mod tests {
             unsafe { CheckTokenMembership(ptr::null_mut(), admin.owner().unwrap(), &mut is_admin) },
             0
         );
-        if is_admin == 0 {
+        is_admin != 0
+    }
+
+    #[test]
+    fn install_tree_has_administrator_owner_and_expected_acls() {
+        if !has_admin_token() {
             eprintln!("skipping elevated install ACL test without an administrator token");
             return;
         }
@@ -418,6 +452,30 @@ mod tests {
         fs::create_dir(dir.join("oldempty")).unwrap();
         secure_install(&dir.join("oldempty"), true).unwrap();
         check_acl(&dir.join("oldempty"), true, true);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_engine_copy_is_owned_by_administrators_and_inherits_nothing() {
+        if !has_admin_token() {
+            eprintln!("skipping elevated engine copy ACL test without an administrator token");
+            return;
+        }
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "rosetun-engine-acl-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(dir.join("app")).unwrap();
+        fs::create_dir(dir.join("data")).unwrap();
+        let source = dir.join("app").join("sing-box.exe");
+        fs::write(&source, "engine").unwrap();
+        let copy = crate::engine_copy::prepare(&source, &dir.join("data")).unwrap();
+        check_acl(copy.parent().unwrap(), false, true);
+        check_acl(&copy, false, true);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

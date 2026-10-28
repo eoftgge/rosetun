@@ -208,15 +208,15 @@ fn other_vpn_result(
             return false;
         }
         match (process.path.as_deref(), own_dir) {
-            (Some(path), Some(own_dir)) => !path
-                .to_string_lossy()
-                .replace('/', "\\")
-                .eq_ignore_ascii_case(
-                    &own_dir
-                        .join(&process.name)
-                        .to_string_lossy()
-                        .replace('/', "\\"),
-                ),
+            (Some(path), Some(own_dir)) => {
+                let path = path.to_string_lossy().replace('/', "\\");
+                // The service runs sing-box from its protected copy in `data\engines`.
+                let installed = own_dir.join(&process.name);
+                let copied = own_dir.join("data").join("engines").join(&process.name);
+                ![installed, copied].iter().any(|own| {
+                    path.eq_ignore_ascii_case(&own.to_string_lossy().replace('/', "\\"))
+                })
+            }
             _ => false,
         }
     });
@@ -547,17 +547,26 @@ mod tests {
         let exe = Path::new("C:/Example/Rosetun/rosetun-gui.exe");
         let own = [
             process("sing-box.exe", Some("C:/Example/Rosetun/sing-box.exe")),
+            process(
+                "sing-box.exe",
+                Some("C:/Example/Rosetun/data/engines/sing-box.exe"),
+            ),
             process("xray.exe", None),
         ];
         assert_eq!(other_vpn_result(&own, vec![], exe).status, CheckStatus::Ok);
         let other = [
             process("SING-BOX.EXE", Some("C:/Example/Other/sing-box.exe")),
             process("THRONE.EXE", None),
+            process("xray.exe", Some("C:/Example/Other/data/engines/xray.exe")),
         ];
         assert_eq!(
             other_vpn_result(&other, vec![], exe).detail,
             CheckDetail::OtherVpn {
-                processes: vec!["SING-BOX.EXE".into(), "THRONE.EXE".into()],
+                processes: vec![
+                    "SING-BOX.EXE".into(),
+                    "THRONE.EXE".into(),
+                    "xray.exe".into()
+                ],
                 adapters: vec![]
             }
         );

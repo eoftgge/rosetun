@@ -6,6 +6,8 @@
 #[cfg(windows)]
 mod data_dir;
 #[cfg(windows)]
+mod engine_copy;
+#[cfg(windows)]
 mod install_dir;
 mod list_store;
 #[cfg(windows)]
@@ -293,8 +295,11 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
         ))
     })?;
 
+    let data_dir = run_dir
+        .parent()
+        .ok_or_else(|| StartError("engine run directory has no data directory".to_owned()))?;
     let mut engines = EngineRegistry::new();
-    let singbox = SingBoxBackend::new(run_dir.join("sing-box"));
+    let singbox = singbox_backend(run_dir, data_dir);
     let xray = XrayHelper::new(run_dir.join("xray"));
     let warmup = singbox.clone();
     let xray_warmup = xray.clone();
@@ -330,9 +335,6 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
         .map_err(|error| StartError(format!("failed to start engine warmup thread: {error}")))?;
     engines.register(Box::new(singbox));
 
-    let data_dir = run_dir
-        .parent()
-        .ok_or_else(|| StartError("engine run directory has no data directory".to_owned()))?;
     let lists = list_store::ListStore::open(data_dir.join("lists"))
         .map_err(|error| StartError(format!("failed to initialize list storage: {error}")))?;
     let helper = Arc::new(
@@ -356,9 +358,55 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
     Ok((listener, helper))
 }
 
+/// sing-box runs only from its protected copy; without one, connects fail
+/// with the reason instead of starting the installed binary.
+#[cfg(windows)]
+fn singbox_backend(run_dir: &Path, data_dir: &Path) -> SingBoxBackend {
+    let work_dir = run_dir.join("sing-box");
+    let copied = std::env::current_exe().and_then(|exe| {
+        let dir = exe
+            .parent()
+            .ok_or_else(|| std::io::Error::other("service executable has no parent"))?;
+        engine_copy::prepare(&dir.join("sing-box.exe"), data_dir)
+    });
+    backend_from_copy(work_dir, copied)
+}
+
+#[cfg(not(windows))]
+fn singbox_backend(run_dir: &Path, _data_dir: &Path) -> SingBoxBackend {
+    SingBoxBackend::new(run_dir.join("sing-box"))
+}
+
+#[cfg(windows)]
+fn backend_from_copy(
+    work_dir: std::path::PathBuf,
+    copied: std::io::Result<std::path::PathBuf>,
+) -> SingBoxBackend {
+    match copied {
+        Ok(copy) => SingBoxBackend::with_binary(work_dir, copy),
+        Err(error) => {
+            tracing::error!(%error, "cannot prepare the sing-box copy; connecting will fail");
+            SingBoxBackend::unavailable(work_dir, format!("sing-box copy: {error}"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_engine_copy_never_runs_the_installed_engine() {
+        let backend = backend_from_copy(
+            "unused".into(),
+            Err(std::io::Error::from(std::io::ErrorKind::StorageFull)),
+        );
+        assert!(matches!(
+            backend.locate_binary(),
+            Err(rosetun_engine::errors::EngineError::BinaryUnavailable(_))
+        ));
+    }
 
     #[cfg(windows)]
     #[test]

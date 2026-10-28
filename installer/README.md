@@ -18,6 +18,7 @@ The installer places these files in the chosen folder:
 | `sing-box.exe` | Tunnel engine |
 | `licenses/` | Rosetun, sing-box and prebuilt Wintun licenses, Wintun notices, sing-box source information, bundled font licenses, and Rust crate license notices |
 | `data/` | Service data, created by the service and accessible only to administrators; its log is `data/logs/helper.log` |
+| `data/engines/sing-box.exe` | Copy of `sing-box.exe` the service runs, refreshed at service start; only SYSTEM and Administrators can open it, so a standard account cannot start the engine with its WFP permit |
 
 The installer registers the `rosetun://` link scheme for all users under `HKLM\Software\Classes\rosetun` (command `"{app}\rosetun-gui.exe" --open-url "%1"`); uninstall deletes the key.
 

@@ -49,21 +49,37 @@ const BINARY: &str = if cfg!(windows) {
 #[derive(Debug, Clone)]
 pub struct SingBoxBackend {
     work_dir: PathBuf,
-    binary: Option<PathBuf>,
+    binary: Binary,
+}
+
+#[derive(Debug, Clone)]
+enum Binary {
+    Neighbour,
+    Path(PathBuf),
+    Unavailable(String),
 }
 
 impl SingBoxBackend {
     pub fn new(work_dir: impl Into<PathBuf>) -> Self {
         Self {
             work_dir: work_dir.into(),
-            binary: None,
+            binary: Binary::Neighbour,
         }
     }
 
     pub fn with_binary(work_dir: impl Into<PathBuf>, binary: impl Into<PathBuf>) -> Self {
         Self {
             work_dir: work_dir.into(),
-            binary: Some(binary.into()),
+            binary: Binary::Path(binary.into()),
+        }
+    }
+
+    /// A backend that refuses to start: the binary it may run could not be
+    /// prepared, and the copy next to the executable must not stand in.
+    pub fn unavailable(work_dir: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
+        Self {
+            work_dir: work_dir.into(),
+            binary: Binary::Unavailable(reason.into()),
         }
     }
 }
@@ -109,12 +125,15 @@ impl EngineBackend for SingBoxBackend {
 
     fn locate_binary(&self) -> Result<PathBuf, EngineError> {
         let binary = match &self.binary {
-            Some(binary) if binary.is_file() => binary.clone(),
-            Some(binary) => {
+            Binary::Path(binary) if binary.is_file() => binary.clone(),
+            Binary::Path(binary) => {
                 return Err(EngineError::BinaryNotFound(binary.display().to_string()));
             }
-            None => find_in_neighbours()
+            Binary::Neighbour => find_in_neighbours()
                 .ok_or_else(|| EngineError::BinaryNotFound(BINARY.to_owned()))?,
+            Binary::Unavailable(reason) => {
+                return Err(EngineError::BinaryUnavailable(reason.clone()));
+            }
         };
         let binary = std::fs::canonicalize(binary)?;
 
@@ -1357,6 +1376,14 @@ mod tests {
             render_with_dns(dns),
             Err(EngineError::Render(message))
                 if message.contains("port")
+        ));
+    }
+
+    #[test]
+    fn an_unavailable_backend_never_falls_back_to_a_neighbour_binary() {
+        assert!(matches!(
+            SingBoxBackend::unavailable("unused", "copy failed").locate_binary(),
+            Err(EngineError::BinaryUnavailable(reason)) if reason == "copy failed"
         ));
     }
 

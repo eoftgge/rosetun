@@ -2,6 +2,8 @@
 pub enum EngineError {
     #[error("engine binary {0} not found")]
     BinaryNotFound(String),
+    #[error("engine binary is unavailable: {0}")]
+    BinaryUnavailable(String),
     #[error("engine does not support this configuration: {0}")]
     Unsupported(String),
     #[error("failed to render configuration: {0}")]
