@@ -228,6 +228,8 @@ pub(crate) enum Action {
     SetCheckUpdates(bool),
     CheckUpdatesNow,
     SkipVersion,
+    /// The tray announced this version; saved so it is announced once.
+    AnnounceUpdate(String),
     SaveDns,
     SelectCustomDns,
     SetDnsPreset(DnsPreset),
@@ -387,6 +389,7 @@ pub(crate) enum Job {
     #[cfg(windows)]
     SetAutostart(bool),
     SkipVersion(String),
+    AnnounceUpdate(String),
     CheckUpdates,
     SetDns(DnsSettings),
     ResetSettings,
@@ -573,6 +576,7 @@ impl State {
             | WorkerEvent::SetAccent(_)
             | WorkerEvent::Setting(_, _)
             | WorkerEvent::SkipVersion(_)
+            | WorkerEvent::AnnounceUpdate
             | WorkerEvent::SetDns(_)
             | WorkerEvent::ResetSettings(_)
             | WorkerEvent::SetVerboseLog(_)) => self.reduce_settings(event),
@@ -671,7 +675,9 @@ impl State {
             | Action::OpenFolder(_)) => {
                 return self.act_settings(action);
             }
-            action @ (Action::CheckUpdatesNow | Action::SkipVersion) => {
+            action @ (Action::CheckUpdatesNow
+            | Action::SkipVersion
+            | Action::AnnounceUpdate(_)) => {
                 return self.act_updates(action);
             }
             action @ (Action::ShowLists

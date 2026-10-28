@@ -180,6 +180,7 @@ fn format_seven_config() -> AppConfig {
     ];
     config.interface.notifications = false;
     config.interface.newest_release = Some("9.9.10".to_owned());
+    config.interface.announced_update = Some("9.9.10".to_owned());
     config
 }
 
@@ -358,15 +359,20 @@ fn a_format_seven_interface_without_a_found_release_has_none() {
         .as_object_mut()
         .unwrap()
         .remove("newest_release");
+    input["interface"]
+        .as_object_mut()
+        .unwrap()
+        .remove("announced_update");
 
     let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap())
         .expect("format seven without a found release");
     assert_eq!(migrated_from, None);
     assert_eq!(config.interface.newest_release, None);
+    assert_eq!(config.interface.announced_update, None);
+    let saved = serde_json::to_value(&config).unwrap();
     assert!(
-        serde_json::to_value(&config).unwrap()["interface"]
-            .get("newest_release")
-            .is_none(),
+        saved["interface"].get("newest_release").is_none()
+            && saved["interface"].get("announced_update").is_none(),
         "an empty record is left out"
     );
 }

@@ -130,6 +130,10 @@ pub struct InterfaceSettings {
     /// Format 7 field: the tray says when the tunnel drops or comes back.
     #[serde(default = "default_true")]
     pub notifications: bool,
+    /// Format 7 field: the version the tray has announced, so it is
+    /// announced once even across restarts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announced_update: Option<String>,
 }
 
 fn known_accent<'de, D>(deserializer: D) -> Result<AccentPreset, D::Error>
@@ -164,6 +168,7 @@ impl Default for InterfaceSettings {
             accent: AccentPreset::Rose,
             recent_servers: Vec::new(),
             notifications: true,
+            announced_update: None,
         }
     }
 }
@@ -491,6 +496,7 @@ mod tests {
         assert!(saved.get("skipped_version").is_none());
         assert!(saved.get("last_update_check").is_none());
         assert!(saved.get("newest_release").is_none());
+        assert!(saved.get("announced_update").is_none());
     }
 
     #[test]

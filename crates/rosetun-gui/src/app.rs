@@ -41,6 +41,8 @@ pub(crate) enum ShellEvent {
     Primary,
     SelectServer(rosetun_config::Selection),
     ShowServers,
+    /// The tray's update item: the release page in the browser.
+    OpenUpdate,
     Quit,
 }
 
@@ -286,6 +288,7 @@ impl App {
             #[cfg(windows)]
             Job::SetAutostart(enabled) => self.workers.set_autostart(enabled),
             Job::SkipVersion(version) => self.workers.skip_version(version),
+            Job::AnnounceUpdate(version) => self.workers.announce_update(version),
             Job::CheckUpdates => self.workers.check_updates(),
             Job::SetDns(dns) => self.workers.set_dns(dns),
             Job::ResetSettings => self.workers.reset_settings(),
@@ -545,6 +548,11 @@ impl eframe::App for App {
                         }
                         self.show_window(ctx);
                     }
+                    ShellEvent::OpenUpdate => {
+                        if let Some(release) = self.state.available_update() {
+                            crate::display::open_web_link(ctx, &release.url);
+                        }
+                    }
                     ShellEvent::Quit => {
                         self.quitting = true;
                         if let Some(job) = self.state.apply_on_leave() {
@@ -596,6 +604,24 @@ impl eframe::App for App {
                 && let Some(tray) = &self.tray
             {
                 tray.notify(notice);
+            }
+            let interface = &self.state.config.interface;
+            let announce = self.notices.observe_update(
+                self.state
+                    .available_update()
+                    .map(|release| release.version.as_str()),
+                interface.announced_update.as_deref(),
+                interface.skipped_version.as_deref(),
+                interface.notifications && self.tray.is_some(),
+                window_shown && focused,
+            );
+            if let Some(version) = announce {
+                if let Some(tray) = &self.tray {
+                    tray.notify_update(&version);
+                }
+                if let Some(job) = self.state.act(Action::AnnounceUpdate(version)) {
+                    self.dispatch(job);
+                }
             }
             if minimized
                 && !self.window_minimized

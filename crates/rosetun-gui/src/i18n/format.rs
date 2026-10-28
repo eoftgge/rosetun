@@ -70,6 +70,10 @@ pub(crate) fn update_available(version: &str) -> String {
     tr!("update-available", version = version)
 }
 
+pub(crate) fn update_offer(version: &str) -> String {
+    tr!("update-offer", version = version)
+}
+
 pub(crate) fn template_name(template: RuleTemplate) -> String {
     match template {
         RuleTemplate::RussianSites => tr!("russian-sites-name"),

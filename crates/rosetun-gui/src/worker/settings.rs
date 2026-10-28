@@ -63,6 +63,15 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn announce_update(&self, version: String) {
+        self.spawn_complete("rosetun-announce-update", move |store| {
+            if rosetun_core::record_update_announced(store, version).is_err() {
+                tracing::warn!("could not save the announced update");
+            }
+            WorkerEvent::AnnounceUpdate
+        });
+    }
+
     pub(crate) fn set_dns(&self, dns: DnsSettings) {
         self.spawn_complete("rosetun-set-dns", move |store| {
             WorkerEvent::SetDns(set_dns(store, dns))

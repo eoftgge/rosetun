@@ -27,6 +27,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         service_banner(ui, state);
         ui.add_space(theme::SECTION_GAP);
     }
+    // Above the hero rather than inside it: the hero's height and the rose
+    // button stay where they are, and the offer is the first thing read.
+    if state.available_update().is_some() {
+        update_strip(ui, state, actions);
+        ui.add_space(theme::SECTION_GAP);
+    }
     hero_card(ui, state, actions);
     ui.add_space(theme::SECTION_GAP);
     // Protection right under the hero, so a 960 px window shows it without
@@ -111,6 +117,47 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
             });
         }
     });
+}
+
+fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    let Some(release) = state.available_update() else {
+        return;
+    };
+    egui::Frame::new()
+        .fill(theme::palette().input)
+        .stroke(egui::Stroke::new(1.0, theme::palette().accent_base))
+        .corner_radius(theme::RADIUS)
+        .inner_margin(egui::Margin::symmetric(16, 10))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            egui::Sides::new().shrink_left().wrap().spacing(16.0).show(
+                ui,
+                |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(i18n::update_offer(&release.version))
+                                .strong()
+                                .color(theme::palette().accent_light),
+                        )
+                        .wrap(),
+                    );
+                },
+                |ui| {
+                    if widgets::outline_button(
+                        ui,
+                        tr!("update-offer-skip"),
+                        state.can_edit_settings(),
+                    )
+                    .clicked()
+                    {
+                        actions.push(Action::SkipVersion);
+                    }
+                    if widgets::button_fill(ui, tr!("update-download"), true).clicked() {
+                        display::open_web_link(ui.ctx(), &release.url);
+                    }
+                },
+            );
+        });
 }
 
 pub(crate) fn state_style(state: &ConnectionState) -> (String, Color32) {

@@ -1,5 +1,6 @@
-//! When the tray says the tunnel dropped or came back. The notices name no
-//! server and no address: Windows shows them on the lock screen.
+//! When the tray says the tunnel dropped or came back, or that a new version
+//! is out. The notices name no server and no address: Windows shows them on
+//! the lock screen.
 
 use std::collections::HashMap;
 use std::mem::discriminant;
@@ -64,6 +65,21 @@ pub(crate) fn notice(
     (!recent).then_some(notice)
 }
 
+/// Whether the tray announces `found`, the offered version (`None` when
+/// there is none). A version is announced once: `announced` is the one
+/// announced last, and a skipped one is never announced.
+pub(crate) fn announces_update(
+    found: Option<&str>,
+    announced: Option<&str>,
+    skipped: Option<&str>,
+    notifications: bool,
+    window_active: bool,
+) -> bool {
+    found.is_some_and(|found| {
+        notifications && !window_active && announced != Some(found) && skipped != Some(found)
+    })
+}
+
 /// Follows the visible connection state between frames for `notice`.
 #[derive(Default)]
 pub(crate) struct Notices {
@@ -71,6 +87,8 @@ pub(crate) struct Notices {
     /// The user started the current drop, so its end is theirs too.
     drop_by_user: bool,
     shown: HashMap<Notice, Instant>,
+    /// Announced in this run: the saved record may still be on its way.
+    announced_update: Option<String>,
 }
 
 impl Notices {
@@ -114,6 +132,27 @@ impl Notices {
         }
         self.previous = Some(next.clone());
         notice
+    }
+
+    /// The version to announce now, if any (see `announces_update`).
+    pub(crate) fn observe_update(
+        &mut self,
+        found: Option<&str>,
+        saved_announced: Option<&str>,
+        skipped: Option<&str>,
+        notifications: bool,
+        window_active: bool,
+    ) -> Option<String> {
+        let announced = match self.announced_update.as_deref() {
+            Some(version) if Some(version) == found => Some(version),
+            _ => saved_announced,
+        };
+        if !announces_update(found, announced, skipped, notifications, window_active) {
+            return None;
+        }
+        let found = found?.to_owned();
+        self.announced_update = Some(found.clone());
+        Some(found)
     }
 }
 
@@ -295,6 +334,72 @@ mod tests {
             notices.observe(Some(&connected), false, false, now + NOTICE_INTERVAL),
             None,
             "the first status after the service comes back"
+        );
+    }
+
+    #[test]
+    fn a_found_version_is_announced_while_the_window_is_away() {
+        assert!(announces_update(Some("0.4.0"), None, None, true, false));
+        assert!(announces_update(
+            Some("0.4.0"),
+            Some("0.3.1"),
+            Some("0.3.1"),
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn nothing_found_is_not_announced() {
+        assert!(!announces_update(None, None, None, true, false));
+    }
+
+    #[test]
+    fn an_announced_version_is_not_announced_again() {
+        assert!(!announces_update(
+            Some("0.4.0"),
+            Some("0.4.0"),
+            None,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn a_skipped_version_is_not_announced() {
+        assert!(!announces_update(
+            Some("0.4.0"),
+            None,
+            Some("0.4.0"),
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn no_update_notice_with_notifications_off() {
+        assert!(!announces_update(Some("0.4.0"), None, None, false, false));
+    }
+
+    #[test]
+    fn no_update_notice_while_the_window_is_active() {
+        assert!(!announces_update(Some("0.4.0"), None, None, true, true));
+    }
+
+    #[test]
+    fn the_tracker_announces_once_before_the_record_is_saved() {
+        let mut notices = Notices::default();
+        assert_eq!(
+            notices.observe_update(Some("0.4.0"), None, None, true, false),
+            Some("0.4.0".to_owned())
+        );
+        assert_eq!(
+            notices.observe_update(Some("0.4.0"), None, None, true, false),
+            None
+        );
+        assert_eq!(
+            notices.observe_update(Some("0.4.1"), Some("0.4.0"), None, true, false),
+            Some("0.4.1".to_owned())
         );
     }
 }

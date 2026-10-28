@@ -107,6 +107,7 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::ConfirmResetSettings
         | Action::SetVerboseLog(_)
         | Action::SkipVersion
+        | Action::AnnounceUpdate(_)
         | Action::Apply
         | Action::RestoreMyEdits => true,
         #[cfg(windows)]
@@ -342,6 +343,8 @@ impl State {
                 self.finish_settings(result);
             }
             WorkerEvent::SkipVersion(result) => self.finish_settings(result),
+            // A background record: its failure costs one more notice at most.
+            WorkerEvent::AnnounceUpdate => self.end_settings(None),
             WorkerEvent::SetDns(result) => {
                 if result.is_ok() {
                     self.settings.screen.dirty = false;

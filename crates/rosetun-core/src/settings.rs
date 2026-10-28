@@ -162,6 +162,13 @@ pub fn record_update_check(
     })
 }
 
+pub fn record_update_announced(store: &Store, version: String) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.announced_update = Some(version);
+        Ok(())
+    })
+}
+
 pub fn set_language(store: &Store, language: LanguageSetting) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.interface.language = language;
@@ -401,6 +408,9 @@ mod tests {
         record_update_check(&store, 123_457, None).unwrap();
         expected.interface.last_update_check = Some(123_457);
         expected.interface.newest_release = None;
+        assert_eq!(store.load().unwrap(), expected);
+        record_update_announced(&store, "0.1.0".into()).unwrap();
+        expected.interface.announced_update = Some("0.1.0".into());
         assert_eq!(store.load().unwrap(), expected);
 
         change_setting(&store, SettingChange::AutoReconnect(false)).unwrap();

@@ -45,7 +45,8 @@
         "node": "trojan-grpc"
       }
     ],
-    "notifications": false
+    "notifications": false,
+    "announced_update": "9.9.10"
   },
   "subscriptions": [
     {

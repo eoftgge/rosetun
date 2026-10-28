@@ -284,3 +284,26 @@ fn a_skipped_remembered_release_is_not_offered() {
     assert!(restarted.updates.newest_release.is_some());
     assert!(restarted.available_update().is_none());
 }
+
+#[test]
+fn an_announced_update_is_saved_once() {
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    assert!(matches!(
+        state.act(Action::AnnounceUpdate("999.0.0".into())),
+        Some(Job::AnnounceUpdate(version)) if version == "999.0.0"
+    ));
+    assert_eq!(
+        state.config.interface.announced_update.as_deref(),
+        Some("999.0.0")
+    );
+    state.reduce(WorkerEvent::AnnounceUpdate);
+    assert!(state.operations.settings.is_none());
+    assert!(
+        state
+            .act(Action::AnnounceUpdate("999.0.0".into()))
+            .is_none()
+    );
+}

@@ -129,6 +129,14 @@ impl State {
                     return self.start_settings(Job::SkipVersion(release.version.clone()));
                 }
             }
+            Action::AnnounceUpdate(version) => {
+                if self.config_ready
+                    && self.config.interface.announced_update.as_deref() != Some(version.as_str())
+                {
+                    self.config.interface.announced_update = Some(version.clone());
+                    return self.start_settings(Job::AnnounceUpdate(version));
+                }
+            }
             _ => unreachable!("only update actions are dispatched here"),
         }
         None

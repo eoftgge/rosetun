@@ -124,6 +124,7 @@ pub(crate) enum WorkerEvent {
     #[cfg(windows)]
     SetAutostart(std::io::Result<bool>),
     SkipVersion(Result<(), SettingsError>),
+    AnnounceUpdate,
     UpdateCheck {
         checked_at: u64,
         result: Result<Option<Release>, UpdateCheckError>,

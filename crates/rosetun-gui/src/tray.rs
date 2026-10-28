@@ -25,6 +25,9 @@ const SERVERS_ID: &str = "rosetun.tray.servers";
 /// Followed by the server's place in `Tray::choices`.
 const SERVER_ID_PREFIX: &str = "rosetun.tray.server.";
 const ALL_SERVERS_ID: &str = "rosetun.tray.all-servers";
+const UPDATE_ID: &str = "rosetun.tray.update";
+/// The update item's place in the menu: right before the quit item.
+const UPDATE_PLACE: usize = 6;
 /// The `uID` the icon was added with: tray-icon numbers its icons from 1 in
 /// the order they are made (its `COUNTER`, 0.26) and hides the number, and
 /// Rosetun makes one. Were it wrong, a notice fails with a warning only.
@@ -48,6 +51,8 @@ pub(crate) struct TrayView {
     /// Recent servers that still exist, newest first.
     pub(crate) servers: Vec<TrayServer>,
     pub(crate) all_servers_label: String,
+    /// "Update to <version>…" while a new version is offered.
+    pub(crate) update_label: Option<String>,
     pub(crate) quit_label: String,
 }
 
@@ -127,6 +132,9 @@ pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
         servers_label: tr!("tray-servers"),
         servers,
         all_servers_label: tr!("tray-all-servers"),
+        update_label: state
+            .available_update()
+            .map(|release| tr!("tray-update", version = release.version.as_str())),
         quit_label: tr!("tray-quit"),
     }
 }
@@ -260,6 +268,9 @@ pub(crate) struct Tray {
     /// Windows flips a check item's mark on a click, so the list is rebuilt
     /// after one even when the choice did not change.
     server_clicked: Arc<AtomicBool>,
+    menu: Menu,
+    /// In the menu only while `TrayView::update_label` is set.
+    update: MenuItem,
     quit: MenuItem,
     shown: Option<TrayView>,
     slot: IconSlot<Icon>,
@@ -271,8 +282,10 @@ impl Tray {
         let window = MenuItem::with_id(WINDOW_ID, tr!("tray-open"), true, None);
         let primary = MenuItem::with_id(PRIMARY_ID, tr!("connect"), false, None);
         let servers = Submenu::with_id(SERVERS_ID, tr!("tray-servers"), true);
+        let update = MenuItem::with_id(UPDATE_ID, "", true, None);
         let quit = MenuItem::with_id(QUIT_ID, tr!("tray-quit"), true, None);
-        // The connection under its state, the window and the app at the bottom.
+        // The connection under its state, the window and the app at the bottom;
+        // the update item goes in before quit (`UPDATE_PLACE`).
         let menu = Menu::with_items(&[
             &status,
             &PredefinedMenuItem::separator(),
@@ -288,7 +301,7 @@ impl Tray {
             .update(TrayState::Disconnected, now, || 32, rose)?
             .expect("a new slot shows nothing yet");
         let icon = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(menu.clone()))
             .with_menu_on_left_click(false)
             .with_tooltip(constants::TITLE)
             .with_icon(initial_icon)
@@ -321,6 +334,7 @@ impl Tray {
                 WINDOW_ID => Some(ShellEvent::Show),
                 PRIMARY_ID => Some(ShellEvent::Primary),
                 ALL_SERVERS_ID => Some(ShellEvent::ShowServers),
+                UPDATE_ID => Some(ShellEvent::OpenUpdate),
                 QUIT_ID => Some(ShellEvent::Quit),
                 id => id
                     .strip_prefix(SERVER_ID_PREFIX)
@@ -349,6 +363,8 @@ impl Tray {
             servers,
             choices,
             server_clicked,
+            menu,
+            update,
             quit,
             shown: None,
             slot,
@@ -430,6 +446,15 @@ impl Tray {
         {
             self.window.set_text(view.window_label.as_str());
         }
+        let shown_update = self
+            .shown
+            .as_ref()
+            .and_then(|shown| shown.update_label.as_deref());
+        if shown_update != view.update_label.as_deref()
+            && let Err(error) = self.show_update(shown_update.is_some(), view)
+        {
+            tracing::warn!(%error, "could not update the tray update item");
+        }
         if self
             .shown
             .as_ref()
@@ -449,6 +474,31 @@ impl Tray {
         ) {
             tracing::warn!(%error, ?notice, "could not show tray notification");
         }
+    }
+
+    pub(crate) fn notify_update(&self, version: &str) {
+        if let Err(error) = rosetun_shell::tray_notice(
+            self.icon.window_handle(),
+            TRAY_ICON_ID,
+            &i18n::update_offer(version),
+            &tr!("notice-update-body"),
+        ) {
+            tracing::warn!(%error, "could not show the update notification");
+        }
+    }
+
+    fn show_update(&self, in_menu: bool, view: &TrayView) -> Result<(), tray_icon::menu::Error> {
+        match (&view.update_label, in_menu) {
+            (Some(label), in_menu) => {
+                self.update.set_text(label.as_str());
+                if !in_menu {
+                    self.menu.insert(&self.update, UPDATE_PLACE)?;
+                }
+            }
+            (None, true) => self.menu.remove(&self.update)?,
+            (None, false) => {}
+        }
+        Ok(())
     }
 
     fn fill_servers(&self, view: &TrayView) -> Result<(), tray_icon::menu::Error> {
@@ -864,5 +914,22 @@ mod tests {
         assert_eq!(tray.servers[0].label, "A&&B");
         assert_eq!(tray.primary_label, tr!("tray-connect-to", server = "A&&B"));
         assert!(tray.tooltip.contains("A&B") && !tray.tooltip.contains("A&&B"));
+    }
+
+    #[test]
+    fn the_update_item_is_there_only_while_a_version_is_offered() {
+        let mut state = State::default();
+        assert_eq!(tray_view(&state, true).update_label, None);
+        state.updates.newest_release = Some(rosetun_core::Release {
+            version: "999.0.0".into(),
+            url: "https://github.com/eoftgge/rosetun/releases/tag/v999.0.0".into(),
+            prerelease: false,
+        });
+        assert_eq!(
+            tray_view(&state, true).update_label,
+            Some(tr!("tray-update", version = "999.0.0"))
+        );
+        state.config.interface.skipped_version = Some("999.0.0".into());
+        assert_eq!(tray_view(&state, true).update_label, None);
     }
 }
