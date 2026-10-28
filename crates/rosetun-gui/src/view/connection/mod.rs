@@ -232,7 +232,7 @@ pub(crate) fn quit_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<
             }
             ui.add_space(12.0);
             let mut remember = state.quit.remember;
-            if ui.checkbox(&mut remember, tr!("quit-remember")).changed() {
+            if widgets::checkbox(ui, &mut remember, tr!("quit-remember"), true).changed() {
                 actions.push(Action::SetRememberQuit(remember));
             }
         },
