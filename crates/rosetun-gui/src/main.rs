@@ -56,8 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
     let open_link = open_url_arg(std::env::args_os());
     #[cfg(windows)]
-    let start_hidden =
-        open_link.is_none() && std::env::args_os().any(|arg| arg == HIDDEN_ARG);
+    let start_hidden = open_link.is_none() && std::env::args_os().any(|arg| arg == HIDDEN_ARG);
     #[cfg(windows)]
     let (activation, links) = match rosetun_shell::acquire(!start_hidden) {
         // Taken before the settings load, so a later instance's link

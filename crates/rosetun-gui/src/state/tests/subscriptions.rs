@@ -906,7 +906,13 @@ fn open_link(state: &mut State, link: &str) -> Option<Job> {
 #[test]
 fn an_opened_link_fills_the_add_dialog_and_adds_nothing() {
     let mut state = state_with_subscriptions();
-    assert!(open_link(&mut state, "rosetun://add/https://other.example.com/sub#Example").is_none());
+    assert!(
+        open_link(
+            &mut state,
+            "rosetun://add/https://other.example.com/sub#Example"
+        )
+        .is_none()
+    );
 
     let dialog = state.subscriptions.add.as_ref().unwrap();
     assert_eq!(dialog.url, "https://other.example.com/sub");
@@ -937,7 +943,13 @@ fn an_opened_link_does_not_replace_an_open_add_dialog() {
     state.act(Action::OpenAdd);
     state.subscriptions.add.as_mut().unwrap().url = "typed.example.com/sub".into();
 
-    assert!(open_link(&mut state, "rosetun://add/https://other.example.com/sub#Example").is_none());
+    assert!(
+        open_link(
+            &mut state,
+            "rosetun://add/https://other.example.com/sub#Example"
+        )
+        .is_none()
+    );
     let dialog = state.subscriptions.add.as_ref().unwrap();
     assert_eq!(dialog.url, "typed.example.com/sub");
     assert!(dialog.name.is_empty() && dialog.from_link.is_none());
@@ -951,7 +963,10 @@ fn a_bad_link_opens_an_empty_dialog_with_an_error() {
 
         let dialog = state.subscriptions.add.as_ref().unwrap();
         assert!(dialog.link_error, "{link}");
-        assert!(dialog.url.is_empty() && dialog.from_link.is_none(), "{link}");
+        assert!(
+            dialog.url.is_empty() && dialog.from_link.is_none(),
+            "{link}"
+        );
     }
 }
 

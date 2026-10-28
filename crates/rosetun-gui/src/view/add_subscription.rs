@@ -22,7 +22,10 @@ pub(crate) fn show(
             if let Some(host) = &dialog.from_link {
                 ui.colored_label(
                     theme::TEXT_MUTED,
-                    tr!("subscriptions-add-from-link", host = display::safe_text(host)),
+                    tr!(
+                        "subscriptions-add-from-link",
+                        host = display::safe_text(host)
+                    ),
                 );
                 ui.add_space(6.0);
             }
