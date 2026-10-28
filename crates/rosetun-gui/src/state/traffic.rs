@@ -159,6 +159,9 @@ pub(crate) struct ConnectionsList {
     /// The tunnel belongs to another Windows account.
     pub(crate) denied: bool,
     pub(crate) programs: ProgramNames,
+    /// Program paths in the order they stood when the user started working
+    /// with the list, so rows do not move under the pointer.
+    held_order: Option<Vec<Option<String>>>,
     /// Arrival time in milliseconds and bytes down and up by connection id,
     /// oldest first, reaching back about `RATE_WINDOW_MS`.
     samples: HashMap<String, VecDeque<(u64, u64, u64)>>,
@@ -174,6 +177,7 @@ impl ConnectionsList {
         self.denied = false;
         self.selected = None;
         self.samples = HashMap::new();
+        self.held_order = None;
     }
 
     /// Adds each active connection's bytes at `received_ms` and forgets the
@@ -273,8 +277,26 @@ impl ConnectionsList {
             .collect()
     }
 
+    pub(crate) fn order_held(&self) -> bool {
+        self.held_order.is_some()
+    }
+
+    fn hold_order(&mut self, hold: bool) {
+        self.held_order = match (hold, self.held_order.take()) {
+            (true, Some(order)) => Some(order),
+            (true, None) => Some(
+                self.groups()
+                    .iter()
+                    .map(|group| group.path.map(str::to_owned))
+                    .collect(),
+            ),
+            (false, _) => None,
+        };
+    }
+
     /// The visible connections by program, the fastest download first, then
-    /// the most transferred.
+    /// the most transferred. While the order is held, programs keep their
+    /// places and new ones follow in that order.
     pub(crate) fn groups(&self) -> Vec<ProgramGroup<'_>> {
         let mut groups: Vec<ProgramGroup<'_>> = Vec::new();
         let mut index = HashMap::new();
@@ -304,6 +326,14 @@ impl ConnectionsList {
                 .cmp(&left.down_rate)
                 .then(right.transferred.cmp(&left.transferred))
         });
+        if let Some(held) = &self.held_order {
+            let places: HashMap<Option<&str>, usize> = held
+                .iter()
+                .enumerate()
+                .map(|(place, path)| (path.as_deref(), place))
+                .collect();
+            groups.sort_by_key(|group| places.get(&group.path).copied().unwrap_or(usize::MAX));
+        }
         groups
     }
 
@@ -520,18 +550,22 @@ impl State {
             }
             Action::SetConnectionsTab(tab) => {
                 self.traffic.connections.tab = tab;
+                self.traffic.connections.held_order = None;
                 None
             }
             Action::SetConnectionsFilter(filter) => {
                 self.traffic.connections.filter = filter;
+                self.traffic.connections.held_order = None;
                 None
             }
             Action::SetConnectionsView(view) => {
                 self.traffic.connections.view = view;
+                self.traffic.connections.held_order = None;
                 None
             }
             Action::SetConnectionsRoute(route) => {
                 self.traffic.connections.route = route;
+                self.traffic.connections.held_order = None;
                 None
             }
             Action::SelectConnection(id) => {
@@ -557,6 +591,10 @@ impl State {
                 }
                 list.closing = Some(id.clone());
                 Some(Job::CloseConnection(id))
+            }
+            Action::HoldConnectionOrder(hold) => {
+                self.traffic.connections.hold_order(hold);
+                None
             }
             Action::ToggleProgramGroup(path) => {
                 let expanded = &mut self.traffic.connections.expanded;

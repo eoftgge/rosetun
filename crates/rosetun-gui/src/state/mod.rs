@@ -193,6 +193,8 @@ pub(crate) enum Action {
     SetConnectionsRoute(RouteFilter),
     /// Show or hide a program's connections under it, by path.
     ToggleProgramGroup(Option<String>),
+    /// Keep the programs where they stand while the user works with the list.
+    HoldConnectionOrder(bool),
     /// By the engine's connection id; `None` closes the details.
     SelectConnection(Option<String>),
     CloseConnection(String),
@@ -620,6 +622,7 @@ impl State {
             | Action::SetConnectionsView(_)
             | Action::SetConnectionsRoute(_)
             | Action::ToggleProgramGroup(_)
+            | Action::HoldConnectionOrder(_)
             | Action::SelectConnection(_)
             | Action::CloseConnection(_)) => {
                 return self.act_traffic(action);

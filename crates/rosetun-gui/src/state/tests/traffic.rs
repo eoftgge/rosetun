@@ -993,3 +993,151 @@ fn closing_sends_the_id_once_and_only_for_an_active_connection() {
     assert_eq!(state.traffic.connections.closing, None);
     assert_eq!(state.operation_error, None);
 }
+
+/// Program paths in the order the list shows them.
+fn group_order(state: &State) -> Vec<Option<String>> {
+    state
+        .traffic
+        .connections
+        .groups()
+        .iter()
+        .map(|group| group.path.map(str::to_owned))
+        .collect()
+}
+
+fn downloading(host: &str, process: &str, download: u64) -> rosetun_config::LiveConnection {
+    with_bytes(
+        live(host, Some(process), rosetun_config::ConnectionRoute::Proxy),
+        download,
+        0,
+    )
+}
+
+#[test]
+fn a_held_order_keeps_programs_in_place_and_puts_new_ones_last() {
+    let (one, two, three) = (r"C:\one.exe", r"C:\two.exe", r"C:\three.exe");
+    let (four, five) = (r"C:\four.exe", r"C:\five.exe");
+    let mut state = connected_on_traffic();
+    let paths = |paths: &[&str]| -> Vec<Option<String>> {
+        paths.iter().map(|path| Some((*path).to_owned())).collect()
+    };
+    answer(
+        &mut state,
+        100,
+        vec![
+            downloading("one.example", one, 0),
+            downloading("two.example", two, 0),
+            downloading("three.example", three, 0),
+        ],
+    );
+    answer(
+        &mut state,
+        101,
+        vec![
+            downloading("one.example", one, 3_000),
+            downloading("two.example", two, 2_000),
+            downloading("three.example", three, 1_000),
+        ],
+    );
+    assert_eq!(group_order(&state), paths(&[one, two, three]));
+    assert!(state.act(Action::HoldConnectionOrder(true)).is_none());
+    assert!(state.traffic.connections.order_held());
+
+    answer(
+        &mut state,
+        102,
+        vec![
+            downloading("one.example", one, 3_000),
+            downloading("three.example", three, 9_000),
+            downloading("four.example", four, 100),
+            downloading("five.example", five, 500),
+        ],
+    );
+    assert_eq!(
+        state.traffic.connections.groups()[1].down_rate,
+        4_500,
+        "the numbers follow the answers"
+    );
+    assert_eq!(
+        group_order(&state),
+        paths(&[one, three, five, four]),
+        "two is gone, the new ones follow by speed"
+    );
+
+    assert!(state.act(Action::HoldConnectionOrder(false)).is_none());
+    assert!(!state.traffic.connections.order_held());
+    assert_eq!(group_order(&state), paths(&[three, one, five, four]));
+}
+
+#[test]
+fn a_new_list_or_a_disconnect_releases_the_held_order() {
+    let mut state = connected_on_traffic();
+    answer(
+        &mut state,
+        100,
+        vec![downloading("one.example", r"C:\one.exe", 0)],
+    );
+    for action in [
+        Action::SetConnectionsFilter("one".to_owned()),
+        Action::SetConnectionsRoute(RouteFilter::Proxy),
+        Action::SetConnectionsView(ConnectionsView::All),
+        Action::SetConnectionsTab(ConnectionsTab::Closed),
+    ] {
+        assert!(state.act(Action::HoldConnectionOrder(true)).is_none());
+        assert!(state.traffic.connections.order_held());
+        assert!(state.act(action).is_none());
+        assert!(!state.traffic.connections.order_held());
+    }
+
+    assert!(state.act(Action::HoldConnectionOrder(true)).is_none());
+    state.reduce(WorkerEvent::Status(Status::default()));
+    assert!(!state.traffic.connections.order_held());
+}
+
+#[test]
+fn connections_keep_the_service_order_whatever_their_speed() {
+    let browser = r"C:\browser.exe";
+    let mut state = connected_on_traffic();
+    let hosts = |state: &State| -> Vec<String> {
+        state
+            .traffic
+            .connections
+            .rows()
+            .iter()
+            .filter_map(|row| match row {
+                ConnectionRow::Connection(connection) => Some(connection.host.clone()),
+                ConnectionRow::Program { .. } => None,
+            })
+            .collect()
+    };
+    answer(
+        &mut state,
+        100,
+        vec![
+            downloading("slow.example", browser, 0),
+            downloading("fast.example", browser, 0),
+        ],
+    );
+    assert!(
+        state
+            .act(Action::ToggleProgramGroup(Some(browser.to_owned())))
+            .is_none()
+    );
+    answer(
+        &mut state,
+        101,
+        vec![
+            downloading("slow.example", browser, 10),
+            downloading("fast.example", browser, 9_000),
+        ],
+    );
+    assert_eq!(hosts(&state), ["slow.example", "fast.example"]);
+    let all: Vec<_> = state
+        .traffic
+        .connections
+        .visible()
+        .iter()
+        .map(|connection| connection.host.clone())
+        .collect();
+    assert_eq!(all, ["slow.example", "fast.example"]);
+}

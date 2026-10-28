@@ -21,6 +21,9 @@ const ROUTE_FILTER_WIDTH: f32 = 180.0;
 const LIST_HEIGHT: f32 = 360.0;
 const DETAILS_WIDTH: f32 = 480.0;
 const DETAIL_LABEL_WIDTH: f32 = 88.0;
+/// The programs keep their places this long after the pointer left the list:
+/// the pointer often reaches a row across the edge.
+const HOLD_ORDER_AFTER_SECS: f64 = 1.5;
 
 /// The list, and the selected connection's details in a dialog over it.
 pub(super) fn section(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -520,22 +523,62 @@ fn divider(ui: &mut egui::Ui) {
 
 fn program_list(ui: &mut egui::Ui, state: &State, now_ms: u64, actions: &mut Vec<Action>) {
     let rows = state.traffic.connections.rows();
-    egui::ScrollArea::vertical()
-        .id_salt("connection_programs")
-        .max_height(LIST_HEIGHT)
-        .auto_shrink([false, true])
-        .show_rows(ui, PROGRAM_ROW_HEIGHT, rows.len(), |ui, range| {
-            for row in &rows[range] {
-                match row {
-                    ConnectionRow::Program { group, expanded } => {
-                        program_row(ui, state, group, *expanded, actions);
-                    }
-                    ConnectionRow::Connection(connection) => {
-                        program_connection_row(ui, state, connection, now_ms, actions);
+    let area = ui.scope(|ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("connection_programs")
+            .max_height(LIST_HEIGHT)
+            .auto_shrink([false, true])
+            .show_rows(ui, PROGRAM_ROW_HEIGHT, rows.len(), |ui, range| {
+                for row in &rows[range] {
+                    match row {
+                        ConnectionRow::Program { group, expanded } => {
+                            program_row(ui, state, group, *expanded, actions);
+                        }
+                        ConnectionRow::Connection(connection) => {
+                            program_connection_row(ui, state, connection, now_ms, actions);
+                        }
                     }
                 }
-            }
-        });
+            })
+    });
+    hold_order(
+        ui,
+        state,
+        area.response.rect,
+        area.inner.state.offset.y,
+        actions,
+    );
+}
+
+/// Holds the programs' order while the pointer is over the list, the list
+/// scrolls or a connection's details are open, and releases it
+/// `HOLD_ORDER_AFTER_SECS` after the last of these.
+fn hold_order(
+    ui: &egui::Ui,
+    state: &State,
+    area: egui::Rect,
+    offset: f32,
+    actions: &mut Vec<Action>,
+) {
+    let id = egui::Id::new("connections_hold_order");
+    let now = ui.input(|input| input.time);
+    let (last_offset, last_busy) = ui
+        .data(|data| data.get_temp::<(f32, f64)>(id))
+        .unwrap_or((offset, f64::NEG_INFINITY));
+    let busy = ui.rect_contains_pointer(area)
+        || offset != last_offset
+        || state.traffic.connections.selected.is_some();
+    let busy_at = if busy { now } else { last_busy };
+    ui.data_mut(|data| data.insert_temp(id, (offset, busy_at)));
+    let remaining = busy_at + HOLD_ORDER_AFTER_SECS - now;
+    let hold = remaining > 0.0;
+    if hold && !busy {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+    }
+    if hold != state.traffic.connections.order_held() {
+        actions.push(Action::HoldConnectionOrder(hold));
+    }
 }
 
 /// A full-width row that highlights under the pointer.
