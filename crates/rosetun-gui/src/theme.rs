@@ -227,7 +227,8 @@ const fn rgb(value: u32) -> Color32 {
 }
 
 pub(crate) const DISABLED: Color32 = Color32::from_rgb(0x5C, 0x4D, 0x54);
-pub(crate) const CONNECTED: Color32 = Color32::from_rgb(0xE0, 0x70, 0x5B);
+/// Lighter than `ERROR`, so connected and failed differ without hue.
+pub(crate) const CONNECTED: Color32 = Color32::from_rgb(0x5F, 0xD3, 0x9A);
 pub(crate) const DISCONNECTED: Color32 = Color32::from_rgb(0x8C, 0x81, 0x89);
 pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x2A);
 pub(crate) const WARNING: Color32 = Color32::from_rgb(0xE8, 0xB4, 0x57);
@@ -370,6 +371,11 @@ mod tests {
         assert_eq!(palette_of(AccentPreset::Teal), &Palette::TEAL);
         assert_eq!(palette_of(AccentPreset::Cocoa), &Palette::COCOA);
         assert_eq!(palette_of(AccentPreset::Amber), &Palette::AMBER);
+    }
+
+    #[test]
+    fn connected_is_lighter_than_error() {
+        assert!(luminance(CONNECTED) > luminance(ERROR) * 1.3);
     }
 
     #[test]
