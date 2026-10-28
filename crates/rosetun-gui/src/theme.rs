@@ -227,8 +227,11 @@ const fn rgb(value: u32) -> Color32 {
 }
 
 pub(crate) const DISABLED: Color32 = Color32::from_rgb(0x5C, 0x4D, 0x54);
-/// Lighter than `ERROR`, so connected and failed differ without hue.
-pub(crate) const CONNECTED: Color32 = Color32::from_rgb(0x5F, 0xD3, 0x9A);
+/// The palette's pale accent: it belongs to the scheme, and it is lighter
+/// than `ERROR`, so connected and failed differ without hue.
+pub(crate) fn connected() -> Color32 {
+    palette().accent_pale
+}
 pub(crate) const DISCONNECTED: Color32 = Color32::from_rgb(0x8C, 0x81, 0x89);
 pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x2A);
 pub(crate) const WARNING: Color32 = Color32::from_rgb(0xE8, 0xB4, 0x57);
@@ -374,8 +377,13 @@ mod tests {
     }
 
     #[test]
-    fn connected_is_lighter_than_error() {
-        assert!(luminance(CONNECTED) > luminance(ERROR) * 1.3);
+    fn connected_is_lighter_than_error_in_every_palette() {
+        for palette in &PALETTES {
+            assert!(
+                luminance(palette.accent_pale) > luminance(ERROR) * 1.3,
+                "connected too dark in {palette:?}"
+            );
+        }
     }
 
     #[test]

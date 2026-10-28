@@ -310,7 +310,7 @@ fn header_status_for(
         Some(ConnectionState::Connected) => {
             return (
                 country.map_or_else(|| tr!("connected"), crate::i18n::connected_in),
-                theme::CONNECTED,
+                theme::connected(),
             );
         }
         Some(ConnectionState::Failed { .. }) => (tr!("failed"), theme::ERROR),
@@ -616,7 +616,7 @@ mod tests {
             ),
             (
                 ConnectionState::Connected,
-                (tr!("connected"), theme::CONNECTED),
+                (tr!("connected"), theme::connected()),
             ),
             (
                 ConnectionState::Failed {
@@ -651,7 +651,7 @@ mod tests {
         }
         assert_eq!(
             header_status_for(true, Some(&ConnectionState::Connected), Some("NL")),
-            ("Connected · NL".to_owned(), theme::CONNECTED),
+            ("Connected · NL".to_owned(), theme::connected()),
         );
         assert_eq!(
             header_status_for(true, None, Some("NL")),

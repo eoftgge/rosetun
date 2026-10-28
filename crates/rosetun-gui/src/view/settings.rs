@@ -611,7 +611,7 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let running = state.helper_available;
     let color = if running {
-        theme::CONNECTED
+        theme::connected()
     } else {
         theme::ERROR
     };
@@ -679,7 +679,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     CheckKind::DnsSubstitution => tr!("system-check-dns"),
                 };
                 let (icon, color) = match result.status {
-                    CheckStatus::Ok => (Icon::Check, theme::CONNECTED),
+                    CheckStatus::Ok => (Icon::Check, theme::connected()),
                     CheckStatus::Warning => (Icon::Warning, theme::WARNING),
                     CheckStatus::Unavailable | CheckStatus::Skipped => {
                         (Icon::Unknown, theme::palette().text_dim)

@@ -109,7 +109,7 @@ pub(crate) fn state_style(state: &ConnectionState) -> (String, Color32) {
     match state {
         ConnectionState::Disconnected => (tr!("disconnected"), theme::DISCONNECTED),
         ConnectionState::Connecting => (tr!("connecting"), theme::palette().accent_bright),
-        ConnectionState::Connected => (tr!("connected"), theme::CONNECTED),
+        ConnectionState::Connected => (tr!("connected"), theme::connected()),
         ConnectionState::Reconnecting => (tr!("reconnecting"), theme::palette().accent_bright),
         ConnectionState::Failed { .. } => (tr!("failed"), theme::ERROR),
         ConnectionState::FailedProtected { .. } => (tr!("failed-protected"), theme::ERROR),
