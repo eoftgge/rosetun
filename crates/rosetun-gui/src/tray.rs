@@ -125,6 +125,12 @@ impl<I: Clone> IconSlot<I> {
         }
     }
 
+    /// Drops every icon drawn so far, so the next update draws in the current palette.
+    fn forget(&mut self) {
+        self.shown = None;
+        self.icons.clear();
+    }
+
     /// The icon to set for `state`, or `None` when it is already shown.
     fn update<E>(
         &mut self,
@@ -243,6 +249,11 @@ impl Tray {
             shown: None,
             slot,
         })
+    }
+
+    /// The accent preset changed: the shown icon is drawn again on the next `sync`.
+    pub(crate) fn forget_icons(&mut self) {
+        self.slot.forget();
     }
 
     pub(crate) fn sync(&mut self, view: &TrayView) {
@@ -381,7 +392,16 @@ mod tests {
             update(&mut slot, connected, later, 20),
             Some((connected, 20))
         );
-        assert_eq!(built, [(connected, 20), (connected, 24), (failed, 20)]);
+        // After a palette change the cached icon is drawn again.
+        slot.forget();
+        assert_eq!(
+            update(&mut slot, connected, later, 20),
+            Some((connected, 20))
+        );
+        assert_eq!(
+            built,
+            [(connected, 20), (connected, 24), (failed, 20), (connected, 20)]
+        );
     }
 
     #[test]

@@ -872,6 +872,12 @@ language-title = Язык
 language-system = Как в системе
 language-english = Английский
 language-russian = Русский
+accent-title = Цвет
+accent-rose = Роза
+accent-lilac = Сирень
+accent-teal = Бирюза
+accent-graphite = Графит
+accent-amber = Янтарь
 
 stored-as = Хранится как { $ascii }
 servers = { $count ->

@@ -8,6 +8,7 @@ mod search;
 mod segmented;
 mod settings_card;
 mod status_pill;
+mod swatches;
 mod tag;
 mod toggle;
 
@@ -28,4 +29,5 @@ pub(crate) use search::{
 pub(crate) use segmented::{segmented, segmented_width};
 pub(crate) use settings_card::settings_card;
 pub(crate) use status_pill::{status_pill, status_pill_width};
+pub(crate) use swatches::{Swatch, swatches};
 pub(crate) use toggle::{toggle, toggle_row};

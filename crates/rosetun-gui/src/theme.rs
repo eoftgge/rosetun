@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use eframe::egui::{
     self, Color32, CornerRadius, FontFamily, FontId, Shadow, Stroke, Style, TextStyle, Visuals,
 };
+use rosetun_config::AccentPreset;
 
 pub(crate) const BRAND_FONT: &str = "brand";
 pub(crate) const UI_SEMIBOLD: &str = "ui-semibold";
@@ -155,6 +156,7 @@ impl Palette {
     };
 }
 
+/// In the order of `AccentPreset::ALL`.
 static PALETTES: [Palette; 5] = [
     Palette::ROSE,
     Palette::LILAC,
@@ -171,6 +173,33 @@ pub(crate) fn palette() -> &'static Palette {
     PALETTES
         .get(usize::from(CURRENT.load(Ordering::Relaxed)))
         .unwrap_or(&PALETTES[0])
+}
+
+pub(crate) fn palette_of(accent: AccentPreset) -> &'static Palette {
+    &PALETTES[usize::from(palette_index(accent))]
+}
+
+fn palette_index(accent: AccentPreset) -> u8 {
+    match accent {
+        AccentPreset::Rose => 0,
+        AccentPreset::Lilac => 1,
+        AccentPreset::Teal => 2,
+        AccentPreset::Graphite => 3,
+        AccentPreset::Amber => 4,
+    }
+}
+
+pub(crate) fn accent() -> AccentPreset {
+    AccentPreset::ALL
+        .get(usize::from(CURRENT.load(Ordering::Relaxed)))
+        .copied()
+        .unwrap_or_default()
+}
+
+/// Switches the palette for the next frame; true when it changed.
+pub(crate) fn set_accent(accent: AccentPreset) -> bool {
+    let index = palette_index(accent);
+    CURRENT.swap(index, Ordering::Relaxed) != index
 }
 
 const fn rgb(value: u32) -> Color32 {
@@ -201,7 +230,11 @@ pub(crate) const RADIUS_TOGGLE: u8 = 11;
 pub(crate) fn apply(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
     ctx.set_theme(egui::Theme::Dark);
+    apply_style(ctx);
+}
 
+/// The style in the colours of the current palette; called again when the preset changes.
+pub(crate) fn apply_style(ctx: &egui::Context) {
     let palette = palette();
     let mut visuals = Visuals::dark();
     visuals.override_text_color = Some(palette.text);
@@ -305,7 +338,17 @@ mod tests {
         for (actual, [r, g, b]) in expected {
             assert_eq!(actual, Color32::from_rgb(r, g, b));
         }
-        assert_eq!(palette(), &Palette::ROSE);
+        assert_eq!(palette_of(AccentPreset::default()), &Palette::ROSE);
+    }
+
+    #[test]
+    fn every_preset_has_its_own_palette_in_order() {
+        for (index, accent) in AccentPreset::ALL.into_iter().enumerate() {
+            assert_eq!(usize::from(palette_index(accent)), index);
+            assert!(std::ptr::eq(palette_of(accent), &PALETTES[index]));
+        }
+        assert_eq!(palette_of(AccentPreset::Teal), &Palette::TEAL);
+        assert_eq!(palette_of(AccentPreset::Amber), &Palette::AMBER);
     }
 
     #[test]

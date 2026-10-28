@@ -52,8 +52,8 @@ pub use selection::{
 };
 pub use settings::{
     DnsInputError, DnsPreset, INTERFACE_SCALES, SettingChange, SettingsError, change_setting,
-    parse_dns_input, record_update_check, reset_settings, set_dns, set_interface_scale,
-    set_language, set_verbose_log, skip_version,
+    parse_dns_input, record_update_check, reset_settings, set_accent, set_dns,
+    set_interface_scale, set_language, set_verbose_log, skip_version,
 };
 pub use store::{Store, StoreError};
 pub use subscription_url::{

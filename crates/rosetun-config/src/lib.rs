@@ -66,6 +66,28 @@ pub enum LanguageSetting {
     Russian,
 }
 
+/// A ready colour scheme of the client: the accent and the surfaces tinted to match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccentPreset {
+    #[default]
+    Rose,
+    Lilac,
+    Teal,
+    Graphite,
+    Amber,
+}
+
+impl AccentPreset {
+    pub const ALL: [Self; 5] = [
+        Self::Rose,
+        Self::Lilac,
+        Self::Teal,
+        Self::Graphite,
+        Self::Amber,
+    ];
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InterfaceSettings {
     /// Window scale in percent; see `rosetun_core::INTERFACE_SCALES`.
@@ -90,6 +112,17 @@ pub struct InterfaceSettings {
     pub language: LanguageSetting,
     #[serde(default)]
     pub reduce_motion: bool,
+    /// Format 7 field; a preset this release does not know reads as rose.
+    #[serde(default, deserialize_with = "known_accent")]
+    pub accent: AccentPreset,
+}
+
+fn known_accent<'de, D>(deserializer: D) -> Result<AccentPreset, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(AccentPreset::deserialize(value).unwrap_or_default())
 }
 
 fn default_scale_percent() -> u16 {
@@ -112,6 +145,7 @@ impl Default for InterfaceSettings {
             last_update_check: None,
             language: LanguageSetting::System,
             reduce_motion: false,
+            accent: AccentPreset::Rose,
         }
     }
 }

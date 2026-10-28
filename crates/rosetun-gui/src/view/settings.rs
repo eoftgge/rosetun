@@ -1,5 +1,5 @@
 use eframe::egui::{self, RichText};
-use rosetun_config::{ConnectionState, LanguageSetting, TlsMode, XrayUse};
+use rosetun_config::{AccentPreset, ConnectionState, LanguageSetting, TlsMode, XrayUse};
 use rosetun_core::{CheckKind, CheckStatus, DnsPreset};
 
 use crate::brand;
@@ -67,6 +67,29 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 actions.push(Action::SetLanguage(selected));
             }
         });
+        card.row(tr!("accent-title"), None, |ui| {
+            let options: Vec<_> = AccentPreset::ALL
+                .into_iter()
+                .map(|accent| {
+                    let palette = theme::palette_of(accent);
+                    widgets::Swatch {
+                        value: accent,
+                        label: accent_label(accent),
+                        fill: palette.accent_base,
+                        ring: palette.card,
+                    }
+                })
+                .collect();
+            if let Some(accent) = widgets::swatches(
+                ui,
+                "interface_accent",
+                state.config.interface.accent,
+                &options,
+                state.can_edit_settings(),
+            ) {
+                actions.push(Action::SetAccent(accent));
+            }
+        });
         let mut reduce_motion = state.config.interface.reduce_motion;
         if card
             .toggle(
@@ -93,6 +116,16 @@ fn language_label(setting: LanguageSetting) -> String {
         LanguageSetting::System => tr!("language-system"),
         LanguageSetting::English => constants::ENGLISH.to_owned(),
         LanguageSetting::Russian => constants::RUSSIAN.to_owned(),
+    }
+}
+
+fn accent_label(accent: AccentPreset) -> String {
+    match accent {
+        AccentPreset::Rose => tr!("accent-rose"),
+        AccentPreset::Lilac => tr!("accent-lilac"),
+        AccentPreset::Teal => tr!("accent-teal"),
+        AccentPreset::Graphite => tr!("accent-graphite"),
+        AccentPreset::Amber => tr!("accent-amber"),
     }
 }
 

@@ -321,6 +321,38 @@ fn changing_language_uses_a_settings_job_and_completion_clears_busy() {
 }
 
 #[test]
+fn choosing_an_accent_saves_it_and_switches_the_palette_it_selects() {
+    use rosetun_config::AccentPreset;
+
+    let mut state = State::default();
+    assert!(state.act(Action::SetAccent(AccentPreset::Teal)).is_none());
+    state.config_ready = true;
+    assert_eq!(state.config.interface.accent, AccentPreset::Rose);
+    assert!(state.act(Action::SetAccent(AccentPreset::Rose)).is_none());
+    assert!(matches!(
+        state.act(Action::SetAccent(AccentPreset::Teal)),
+        Some(Job::SetAccent(AccentPreset::Teal))
+    ));
+    assert!(state.operations.settings);
+    assert!(state.act(Action::SetAccent(AccentPreset::Amber)).is_none());
+    state.reduce(WorkerEvent::SetAccent(Ok(())));
+    assert!(!state.operations.settings);
+
+    let mut config = state.config.clone();
+    config.interface.accent = AccentPreset::Teal;
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config,
+    });
+    assert_eq!(state.config.interface.accent, AccentPreset::Teal);
+    assert_eq!(
+        crate::theme::palette_of(state.config.interface.accent),
+        &crate::theme::Palette::TEAL
+    );
+    assert!(state.act(Action::SetAccent(AccentPreset::Teal)).is_none());
+}
+
+#[test]
 fn reduce_motion_setting_uses_a_settings_job_and_saved_value() {
     let mut state = State::default();
     assert!(state.act(Action::SetReduceMotion(true)).is_none());

@@ -855,6 +855,12 @@ language-title = Language
 language-system = System
 language-english = English
 language-russian = Russian
+accent-title = Color
+accent-rose = Rose
+accent-lilac = Lilac
+accent-teal = Teal
+accent-graphite = Graphite
+accent-amber = Amber
 
 stored-as = Stored as { $ascii }
 servers = { $count ->

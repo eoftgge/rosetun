@@ -1,7 +1,7 @@
 mod support;
 
 use rosetun_config::{
-    AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId, ExitTarget,
+    AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId, ExitTarget,
     FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId,
     Outbound, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
     SubscriptionId, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange,
@@ -167,6 +167,7 @@ fn format_six_config() -> AppConfig {
 fn format_seven_config() -> AppConfig {
     let mut config = format_six_config();
     config.subscriptions[1].hwid_scope = HwidScope::Provider;
+    config.interface.accent = AccentPreset::Teal;
     config
 }
 
@@ -260,6 +261,7 @@ fn version_five_loads_and_saves_as_version_seven() {
 
     let mut expected = with_machine_scope(value(V5));
     expected["version"] = json!(7);
+    expected["interface"]["accent"] = json!("rose");
     assert_eq!(
         serde_json::to_value(&config).expect("serialize migrated configuration"),
         expected
@@ -280,6 +282,7 @@ fn version_six_keeps_the_machine_id_of_every_subscription() {
 
     let mut expected = with_machine_scope(value(V6));
     expected["version"] = json!(7);
+    expected["interface"]["accent"] = json!("rose");
     assert_eq!(
         serde_json::to_value(&config).expect("serialize migrated configuration"),
         expected
@@ -307,6 +310,29 @@ fn a_format_seven_subscription_without_hwid_scope_keeps_the_machine_id() {
         from_json(&serde_json::to_vec(&input).unwrap()).expect("hand-edited format seven");
     assert_eq!(migrated_from, None);
     assert_eq!(config.subscriptions[1].hwid_scope, HwidScope::Machine);
+}
+
+#[test]
+fn a_format_seven_interface_without_accent_reads_as_rose() {
+    let mut input = value(V7);
+    input["interface"].as_object_mut().unwrap().remove("accent");
+
+    let (config, migrated_from) =
+        from_json(&serde_json::to_vec(&input).unwrap()).expect("format seven without accent");
+    assert_eq!(migrated_from, None);
+    assert_eq!(config.interface.accent, AccentPreset::Rose);
+}
+
+#[test]
+fn an_unknown_accent_reads_as_rose_instead_of_failing() {
+    for unknown in [json!("violet"), json!(3), json!(null)] {
+        let mut input = value(V7);
+        input["interface"]["accent"] = unknown;
+
+        let (config, _) =
+            from_json(&serde_json::to_vec(&input).unwrap()).expect("an unknown accent loads");
+        assert_eq!(config.interface.accent, AccentPreset::Rose);
+    }
 }
 
 #[test]

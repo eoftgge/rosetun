@@ -185,6 +185,7 @@ impl State {
         match event {
             WorkerEvent::SetInterfaceScale(result) => self.finish_settings(result),
             WorkerEvent::SetLanguage(result) => self.finish_settings(result),
+            WorkerEvent::SetAccent(result) => self.finish_settings(result),
             #[cfg(windows)]
             WorkerEvent::AutostartLoaded(result) => match result {
                 Ok(enabled) => self.settings.screen.autostart = Some(enabled),
@@ -311,6 +312,11 @@ impl State {
             Action::SetLanguage(language) => {
                 if self.can_edit_settings() && self.config.interface.language != language {
                     return self.start_settings(Job::SetLanguage(language));
+                }
+            }
+            Action::SetAccent(accent) => {
+                if self.can_edit_settings() && self.config.interface.accent != accent {
+                    return self.start_settings(Job::SetAccent(accent));
                 }
             }
             Action::SetReduceMotion(enabled) => {

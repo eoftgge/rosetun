@@ -119,13 +119,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok()
     });
 
+    // Before the window and its icon exist, so a non-rose preset never flashes rose.
+    theme::set_accent(app::initial_accent(&store));
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(constants::TITLE)
-        .with_icon(std::sync::Arc::new(eframe::egui::IconData {
-            rgba: rose_icon::rose_icon_rgba(128, rose_icon::RoseIcon::App, theme::palette()),
-            width: 128,
-            height: 128,
-        }))
+        .with_icon(std::sync::Arc::new(brand::window_icon(theme::palette())))
         .with_decorations(!view::header::CUSTOM_FRAME)
         .with_inner_size([1200.0, 780.0])
         .with_min_inner_size([960.0, 640.0]);

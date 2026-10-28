@@ -14,7 +14,7 @@ use crate::tray;
 #[cfg(windows)]
 use crate::window_memory::WindowMemory;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
-use crate::{display, i18n, theme, view};
+use crate::{brand, display, i18n, theme, view};
 
 #[cfg(windows)]
 /// Far outside every monitor: the first frame of a hidden start is drawn here.
@@ -271,6 +271,7 @@ impl App {
             Job::Disconnect => self.workers.disconnect(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
             Job::SetLanguage(language) => self.workers.set_language(language),
+            Job::SetAccent(accent) => self.workers.set_accent(accent),
             Job::Setting(change) => self.workers.change_setting(change),
             #[cfg(windows)]
             Job::LoadAutostart => self.workers.load_autostart(),
@@ -357,6 +358,12 @@ impl App {
 #[cfg(any(not(windows), test))]
 fn locale_is_russian(value: &str) -> bool {
     value.starts_with("ru")
+}
+
+pub(crate) fn initial_accent(store: &Store) -> rosetun_config::AccentPreset {
+    store
+        .load()
+        .map_or_else(|_| Default::default(), |config| config.interface.accent)
 }
 
 fn initial_scale(store: &Store) -> u16 {
@@ -465,6 +472,17 @@ impl eframe::App for App {
             i18n::resolve_language(self.state.config.interface.language, self.system_russian);
         if self.state.config_ready && language != i18n::language() {
             i18n::set_language(language);
+            ctx.request_repaint();
+        }
+        if self.state.config_ready && theme::set_accent(self.state.config.interface.accent) {
+            theme::apply_style(ctx);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(
+                brand::window_icon(theme::palette()),
+            ))));
+            #[cfg(windows)]
+            if let Some(tray) = &mut self.tray {
+                tray.forget_icons();
+            }
             ctx.request_repaint();
         }
         #[cfg(windows)]
@@ -600,7 +618,7 @@ fn repaint_delay(clock_shown: bool, next_wake: Option<Duration>) -> Option<Durat
 mod tests {
     #[cfg(windows)]
     use super::centered_position;
-    use super::{initial_scale, locale_is_russian, next_scale};
+    use super::{initial_accent, initial_scale, locale_is_russian, next_scale};
     #[cfg(windows)]
     use eframe::egui;
     use rosetun_core::Store;
@@ -686,6 +704,24 @@ mod tests {
         assert_eq!(initial_scale(&store), 100);
         fs::write(&path, "{invalid").unwrap();
         assert_eq!(initial_scale(&store), 100);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn initial_accent_uses_saved_preset_and_rose_without_one() {
+        use rosetun_config::AccentPreset;
+
+        let path =
+            std::env::temp_dir().join(format!("rosetun-gui-initial-accent-{}", std::process::id()));
+        let store = Store::at(&path);
+        assert_eq!(initial_accent(&store), AccentPreset::Rose);
+
+        fs::write(&path, r#"{"interface":{"accent":"teal"}}"#).unwrap();
+        assert_eq!(initial_accent(&store), AccentPreset::Teal);
+        fs::write(&path, r#"{"interface":{"scale_percent":125}}"#).unwrap();
+        assert_eq!(initial_accent(&store), AccentPreset::Rose);
+        fs::write(&path, r#"{"interface":{"accent":"violet"}}"#).unwrap();
+        assert_eq!(initial_accent(&store), AccentPreset::Rose);
         fs::remove_file(path).unwrap();
     }
 

@@ -13,6 +13,12 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn set_accent(&self, accent: AccentPreset) {
+        self.spawn_complete("rosetun-set-accent", move |store| {
+            WorkerEvent::SetAccent(set_accent(store, accent))
+        });
+    }
+
     pub(crate) fn change_setting(&self, change: SettingChange) {
         self.spawn_complete("rosetun-change-setting", move |store| {
             WorkerEvent::Setting(change, rosetun_core::change_setting(store, change))

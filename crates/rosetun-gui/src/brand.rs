@@ -1,7 +1,8 @@
 use eframe::egui::{self, Pos2, Rect, Shape, Stroke};
+use rosetun_config::AccentPreset;
 
 use crate::rose_icon::{self, RoseIcon};
-use crate::theme;
+use crate::theme::{self, Palette};
 
 const PETAL: [(f32, f32); 4] = [(0.0, -20.0), (12.0, 0.0), (0.0, 22.0), (-12.0, 0.0)];
 /// Keeps the header petals behind the navigation instead of competing with it.
@@ -163,16 +164,17 @@ fn emblem_pixel_size(side: f32, pixels_per_point: f32) -> u32 {
 fn emblem_texture(
     ctx: &egui::Context,
     size: u32,
-    rasterize: impl FnOnce(u32) -> Vec<u8>,
+    accent: AccentPreset,
+    rasterize: impl FnOnce(u32, &Palette) -> Vec<u8>,
 ) -> egui::TextureHandle {
-    let id = egui::Id::new(("brand_emblem", size));
+    let id = egui::Id::new(("brand_emblem", size, accent));
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return texture;
     }
-    let pixels = rasterize(size);
+    let pixels = rasterize(size, theme::palette_of(accent));
     let image = egui::ColorImage::from_rgba_unmultiplied([size as usize, size as usize], &pixels);
     let texture = ctx.load_texture(
-        format!("brand_emblem_{size}"),
+        format!("brand_emblem_{size}_{accent:?}"),
         image,
         egui::TextureOptions::LINEAR,
     );
@@ -180,11 +182,20 @@ fn emblem_texture(
     texture
 }
 
+/// The window's own icon (title bar, Alt+Tab, taskbar button) in `palette`.
+pub(crate) fn window_icon(palette: &Palette) -> egui::IconData {
+    egui::IconData {
+        rgba: rose_icon::rose_icon_rgba(128, RoseIcon::App, palette),
+        width: 128,
+        height: 128,
+    }
+}
+
 pub(crate) fn paint_emblem(painter: &egui::Painter, rect: Rect) {
     let ctx = painter.ctx();
     let size = emblem_pixel_size(rect.width(), ctx.pixels_per_point());
-    let texture = emblem_texture(ctx, size, |size| {
-        rose_icon::rose_icon_rgba(size, RoseIcon::Emblem, theme::palette())
+    let texture = emblem_texture(ctx, size, theme::accent(), |size, palette| {
+        rose_icon::rose_icon_rgba(size, RoseIcon::Emblem, palette)
     });
     painter.image(
         texture.id(),
@@ -249,22 +260,28 @@ mod tests {
     fn emblem_uses_physical_pixels_and_reuses_its_texture() {
         let ctx = egui::Context::default();
         let rasterizations = std::cell::Cell::new(0);
-        let make_texture = |size| {
-            emblem_texture(&ctx, size, |size| {
+        let make_texture = |size, accent| {
+            emblem_texture(&ctx, size, accent, |size, palette| {
                 rasterizations.set(rasterizations.get() + 1);
-                rose_icon::rose_icon_rgba(size, RoseIcon::Emblem, &theme::Palette::ROSE)
+                rose_icon::rose_icon_rgba(size, RoseIcon::Emblem, palette)
             })
         };
         let size = emblem_pixel_size(40.0, 1.0);
-        let first = make_texture(size);
+        let first = make_texture(size, AccentPreset::Rose);
         assert_eq!(first.size(), [40, 40]);
-        let repeated = make_texture(size);
+        let repeated = make_texture(size, AccentPreset::Rose);
         assert_eq!(repeated.id(), first.id());
         assert_eq!(rasterizations.get(), 1);
 
-        let scaled = make_texture(emblem_pixel_size(40.0, 1.5));
+        let scaled = make_texture(emblem_pixel_size(40.0, 1.5), AccentPreset::Rose);
         assert_eq!(scaled.size(), [60, 60]);
         assert_eq!(rasterizations.get(), 2);
+
+        let teal = make_texture(size, AccentPreset::Teal);
+        assert_ne!(teal.id(), first.id());
+        assert_eq!(rasterizations.get(), 3);
+        assert_eq!(make_texture(size, AccentPreset::Rose).id(), first.id());
+        assert_eq!(rasterizations.get(), 3);
     }
 
     #[test]

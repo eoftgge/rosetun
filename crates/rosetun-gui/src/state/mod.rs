@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AppConfig, DnsSettings, ExitId, ExitTarget, LanguageSetting, ListId, ListSource, NodeId,
+    AccentPreset, AppConfig, DnsSettings, ExitId, ExitTarget, LanguageSetting, ListId, ListSource, NodeId,
     RuleId, RuleMatcher, RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{
@@ -204,6 +204,7 @@ pub(crate) enum Action {
     OpenLanSettings,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
+    SetAccent(AccentPreset),
     SetReduceMotion(bool),
     #[cfg(windows)]
     SetAutostart(bool),
@@ -368,6 +369,7 @@ pub(crate) enum Job {
     Disconnect,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
+    SetAccent(AccentPreset),
     Setting(SettingChange),
     #[cfg(windows)]
     LoadAutostart,
@@ -554,6 +556,7 @@ impl State {
             | WorkerEvent::DeleteExit { .. }) => self.reduce_exits(event),
             event @ (WorkerEvent::SetInterfaceScale(_)
             | WorkerEvent::SetLanguage(_)
+            | WorkerEvent::SetAccent(_)
             | WorkerEvent::Setting(_, _)
             | WorkerEvent::SkipVersion(_)
             | WorkerEvent::SetDns(_)
@@ -627,6 +630,7 @@ impl State {
             | Action::OpenLanSettings
             | Action::SetInterfaceScale(_)
             | Action::SetLanguage(_)
+            | Action::SetAccent(_)
             | Action::SetReduceMotion(_)
             | Action::SetConnectOnStart(_)
             | Action::SetAutoReconnect(_)

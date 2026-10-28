@@ -1,6 +1,8 @@
 use std::net::IpAddr;
 
-use rosetun_config::{DnsSettings, InterfaceSettings, LanguageSetting, Settings, XrayUse};
+use rosetun_config::{
+    AccentPreset, DnsSettings, InterfaceSettings, LanguageSetting, Settings, XrayUse,
+};
 use url::Host;
 
 use crate::{Store, StoreError};
@@ -154,6 +156,13 @@ pub fn record_update_check(store: &Store, at: u64) -> Result<(), SettingsError> 
 pub fn set_language(store: &Store, language: LanguageSetting) -> Result<(), SettingsError> {
     store.modify(|config| {
         config.interface.language = language;
+        Ok(())
+    })
+}
+
+pub fn set_accent(store: &Store, accent: AccentPreset) -> Result<(), SettingsError> {
+    store.modify(|config| {
+        config.interface.accent = accent;
         Ok(())
     })
 }
@@ -386,6 +395,10 @@ mod tests {
 
         set_language(&store, LanguageSetting::Russian).unwrap();
         expected.interface.language = LanguageSetting::Russian;
+        assert_eq!(store.load().unwrap(), expected);
+
+        set_accent(&store, AccentPreset::Lilac).unwrap();
+        expected.interface.accent = AccentPreset::Lilac;
         assert_eq!(store.load().unwrap(), expected);
 
         let dns = parse_dns_input("1.1.1.1", "cloudflare-dns.com", "443", "/dns-query").unwrap();

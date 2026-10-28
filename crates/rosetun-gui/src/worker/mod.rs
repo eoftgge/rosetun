@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_config::{
-    AppConfig, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId,
+    AccentPreset, AppConfig, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId,
     LiveConnection, Node, NodeId, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget,
     Status, Subscription, SubscriptionId,
 };
@@ -24,7 +24,7 @@ use rosetun_core::{
     ping_all, prepare_subscription, reconcile_lists, remove_rule, remove_rules,
     remove_subscription, rename_exit, rename_rule_set, rename_subscription, reset_settings,
     restore_rules_and_dns, select_node, select_rule_set, set_default_target, set_dns,
-    set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
+    set_accent, set_interface_scale, set_kill_switch, set_language, set_rule_enabled, set_rule_target,
     set_verbose_log, update_all, update_all_lists, update_list, update_rule, update_subscription,
 };
 use rosetun_ipc::{
@@ -117,6 +117,7 @@ pub(crate) enum WorkerEvent {
     Disconnect(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
     SetLanguage(Result<(), SettingsError>),
+    SetAccent(Result<(), SettingsError>),
     Setting(SettingChange, Result<(), SettingsError>),
     #[cfg(windows)]
     AutostartLoaded(std::io::Result<bool>),
