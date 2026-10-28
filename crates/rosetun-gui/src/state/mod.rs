@@ -217,6 +217,8 @@ pub(crate) enum Action {
     SetAutostart(bool),
     #[cfg(windows)]
     SetCloseToTray(bool),
+    #[cfg(windows)]
+    SetNotifications(bool),
     SetConnectOnStart(bool),
     SetAutoReconnect(bool),
     SetAllowLan(bool),
@@ -660,6 +662,7 @@ impl State {
             #[cfg(windows)]
             action @ (Action::SetAutostart(_)
             | Action::SetCloseToTray(_)
+            | Action::SetNotifications(_)
             | Action::SaveReport
             | Action::ShowReportFolder
             | Action::OpenFolder(_)) => {

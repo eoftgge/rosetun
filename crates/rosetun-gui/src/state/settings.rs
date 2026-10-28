@@ -112,6 +112,7 @@ fn waits_for_save(action: &Action) -> bool {
         #[cfg(windows)]
         Action::SetAutostart(_)
         | Action::SetCloseToTray(_)
+        | Action::SetNotifications(_)
         | Action::ShowReportFolder
         | Action::OpenFolder(_) => true,
         _ => false,
@@ -462,6 +463,13 @@ impl State {
             Action::SetCloseToTray(enabled) => {
                 if self.can_edit_settings() && self.config.interface.close_to_tray != enabled {
                     return self.start_settings(Job::Setting(SettingChange::CloseToTray(enabled)));
+                }
+            }
+            #[cfg(windows)]
+            Action::SetNotifications(enabled) => {
+                if self.can_edit_settings() && self.config.interface.notifications != enabled {
+                    return self
+                        .start_settings(Job::Setting(SettingChange::Notifications(enabled)));
                 }
             }
             Action::SetConnectOnStart(enabled) => {

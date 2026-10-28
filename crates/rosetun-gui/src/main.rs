@@ -17,6 +17,8 @@ mod destinations;
 mod display;
 mod errors;
 mod icons;
+#[cfg(windows)]
+mod notices;
 mod program_icons;
 mod programs;
 mod qr;

@@ -64,6 +64,12 @@ mod system_info;
     unsafe_code,
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
+mod tray_notice;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod window;
 
 #[cfg(windows)]
@@ -85,5 +91,7 @@ pub use screen_clip::{clipboard_sequence, start_screen_clip};
 pub use system_checks::{proxy_settings, windivert_running};
 #[cfg(windows)]
 pub use system_info::{local_report_timestamp, windows_build};
+#[cfg(windows)]
+pub use tray_notice::tray_notice;
 #[cfg(windows)]
 pub use window::{SavedWindow, place_window, saved_window, taskbar_small_icon_size};

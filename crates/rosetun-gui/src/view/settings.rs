@@ -167,6 +167,19 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         {
             actions.push(Action::SetCloseToTray(close_to_tray));
         }
+        let mut notifications = state.config.interface.notifications;
+        if card
+            .toggle(
+                tr!("notifications"),
+                None,
+                tr!("notifications-detail"),
+                &mut notifications,
+                editable,
+            )
+            .changed()
+        {
+            actions.push(Action::SetNotifications(notifications));
+        }
     });
 }
 

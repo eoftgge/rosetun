@@ -13,6 +13,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEv
 
 use crate::actions::PrimaryAction;
 use crate::app::ShellEvent;
+use crate::notices::Notice;
 use crate::rose_icon::{self, RoseIcon, TrayState};
 use crate::state::{State, primary_label};
 use crate::{constants, i18n, theme, view};
@@ -24,6 +25,10 @@ const SERVERS_ID: &str = "rosetun.tray.servers";
 /// Followed by the server's place in `Tray::choices`.
 const SERVER_ID_PREFIX: &str = "rosetun.tray.server.";
 const ALL_SERVERS_ID: &str = "rosetun.tray.all-servers";
+/// The `uID` the icon was added with: tray-icon numbers its icons from 1 in
+/// the order they are made (its `COUNTER`, 0.26) and hides the number, and
+/// Rosetun makes one. Were it wrong, a notice fails with a warning only.
+const TRAY_ICON_ID: u32 = 1;
 const QUIT_ID: &str = "rosetun.tray.quit";
 /// The taskbar's icon size changes with its monitor's scale; reading it on
 /// every frame would cost a window lookup per frame.
@@ -433,6 +438,17 @@ impl Tray {
             self.quit.set_text(view.quit_label.as_str());
         }
         self.shown = Some(view.clone());
+    }
+
+    pub(crate) fn notify(&self, notice: Notice) {
+        if let Err(error) = rosetun_shell::tray_notice(
+            self.icon.window_handle(),
+            TRAY_ICON_ID,
+            constants::TITLE,
+            &notice.text(),
+        ) {
+            tracing::warn!(%error, ?notice, "could not show tray notification");
+        }
     }
 
     fn fill_servers(&self, view: &TrayView) -> Result<(), tray_icon::menu::Error> {

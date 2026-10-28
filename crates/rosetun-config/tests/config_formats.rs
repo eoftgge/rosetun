@@ -178,6 +178,7 @@ fn format_seven_config() -> AppConfig {
             node: NodeId::new("trojan-grpc"),
         },
     ];
+    config.interface.notifications = false;
     config
 }
 
@@ -272,6 +273,7 @@ fn version_five_loads_and_saves_as_version_seven() {
     let mut expected = with_machine_scope(value(V5));
     expected["version"] = json!(7);
     expected["interface"]["accent"] = json!("rose");
+    expected["interface"]["notifications"] = json!(true);
     assert_eq!(
         serde_json::to_value(&config).expect("serialize migrated configuration"),
         expected
@@ -293,6 +295,7 @@ fn version_six_keeps_the_machine_id_of_every_subscription() {
     let mut expected = with_machine_scope(value(V6));
     expected["version"] = json!(7);
     expected["interface"]["accent"] = json!("rose");
+    expected["interface"]["notifications"] = json!(true);
     assert_eq!(
         serde_json::to_value(&config).expect("serialize migrated configuration"),
         expected
@@ -331,6 +334,20 @@ fn a_format_seven_interface_without_accent_reads_as_rose() {
         from_json(&serde_json::to_vec(&input).unwrap()).expect("format seven without accent");
     assert_eq!(migrated_from, None);
     assert_eq!(config.interface.accent, AccentPreset::Rose);
+}
+
+#[test]
+fn a_format_seven_interface_without_notifications_shows_them() {
+    let mut input = value(V7);
+    input["interface"]
+        .as_object_mut()
+        .unwrap()
+        .remove("notifications");
+
+    let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap())
+        .expect("format seven without notifications");
+    assert_eq!(migrated_from, None);
+    assert!(config.interface.notifications);
 }
 
 #[test]

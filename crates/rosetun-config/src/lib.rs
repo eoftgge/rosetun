@@ -123,6 +123,9 @@ pub struct InterfaceSettings {
     /// name a server a subscription update has since removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_servers: Vec<Selection>,
+    /// Format 7 field: the tray says when the tunnel drops or comes back.
+    #[serde(default = "default_true")]
+    pub notifications: bool,
 }
 
 fn known_accent<'de, D>(deserializer: D) -> Result<AccentPreset, D::Error>
@@ -155,6 +158,7 @@ impl Default for InterfaceSettings {
             reduce_motion: false,
             accent: AccentPreset::Rose,
             recent_servers: Vec::new(),
+            notifications: true,
         }
     }
 }

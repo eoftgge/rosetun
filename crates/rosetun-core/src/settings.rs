@@ -55,6 +55,7 @@ pub enum SettingChange {
     CloseToTray(bool),
     ReduceMotion(bool),
     ConnectOnStart(bool),
+    Notifications(bool),
     AutoReconnect(bool),
     AllowLan(bool),
     AutoUpdateSubscriptions(bool),
@@ -68,6 +69,7 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
             SettingChange::CloseToTray(enabled) => config.interface.close_to_tray = enabled,
             SettingChange::ReduceMotion(enabled) => config.interface.reduce_motion = enabled,
             SettingChange::ConnectOnStart(enabled) => config.interface.connect_on_start = enabled,
+            SettingChange::Notifications(enabled) => config.interface.notifications = enabled,
             SettingChange::AutoReconnect(enabled) => config.settings.auto_reconnect = enabled,
             SettingChange::AllowLan(enabled) => config.settings.allow_lan = enabled,
             SettingChange::AutoUpdateSubscriptions(enabled) => {
@@ -364,6 +366,10 @@ mod tests {
 
         change_setting(&store, SettingChange::ConnectOnStart(true)).unwrap();
         expected.interface.connect_on_start = true;
+        assert_eq!(store.load().unwrap(), expected);
+
+        change_setting(&store, SettingChange::Notifications(false)).unwrap();
+        expected.interface.notifications = false;
         assert_eq!(store.load().unwrap(), expected);
 
         change_setting(&store, SettingChange::AutoUpdateSubscriptions(false)).unwrap();

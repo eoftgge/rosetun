@@ -7,6 +7,8 @@ use eframe::egui;
 use rosetun_core::Store;
 
 #[cfg(windows)]
+use crate::notices::Notices;
+#[cfg(windows)]
 use crate::state::{Action, OpenedLink};
 use crate::state::{Job, State};
 #[cfg(windows)]
@@ -52,6 +54,8 @@ pub(crate) struct App {
     shell_events: Option<Receiver<ShellEvent>>,
     #[cfg(windows)]
     tray: Option<tray::Tray>,
+    #[cfg(windows)]
+    notices: Notices,
     #[cfg(windows)]
     hide_on_start: bool,
     #[cfg(windows)]
@@ -110,6 +114,8 @@ impl App {
             shell_events: None,
             #[cfg(windows)]
             tray: None,
+            #[cfg(windows)]
+            notices: Notices::default(),
             #[cfg(windows)]
             hide_on_start: false,
             #[cfg(windows)]
@@ -567,10 +573,28 @@ impl eframe::App for App {
                     );
                 }
             }
-            let minimized = ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+            let (minimized, focused) = ctx.input(|input| {
+                let viewport = input.viewport();
+                (
+                    viewport.minimized.unwrap_or(false),
+                    viewport.focused.unwrap_or(false),
+                )
+            });
+            let window_shown = !self.window_hidden && !minimized;
             if let Some(tray) = &mut self.tray {
-                let window_shown = !self.window_hidden && !minimized;
                 tray.sync(&tray::tray_view(&self.state, window_shown));
+            }
+            let notice = self.notices.observe(
+                self.state.visible_status().map(|status| &status.state),
+                self.state.operations.helper,
+                window_shown && focused,
+                Instant::now(),
+            );
+            if let Some(notice) = notice
+                && self.state.config.interface.notifications
+                && let Some(tray) = &self.tray
+            {
+                tray.notify(notice);
             }
             if minimized
                 && !self.window_minimized
