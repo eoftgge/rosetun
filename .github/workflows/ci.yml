@@ -45,6 +45,31 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Cache cargo-deny
+        id: cargo-deny-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          # Keep this version in sync with the install step below.
+          key: cargo-deny-0.20.2-${{ runner.os }}
+      - name: Install cargo-deny
+        if: steps.cargo-deny-cache.outputs.cache-hit != 'true'
+        # Keep this version in sync with the cache key above.
+        run: cargo install cargo-deny --locked --version 0.20.2
+      - name: Check dependencies
+        # deny.toml has no warning level for unmaintained crates; this flag gives them one.
+        run: cargo deny --locked check --warn unmaintained
+
   commits:
     runs-on: ubuntu-24.04
     steps:

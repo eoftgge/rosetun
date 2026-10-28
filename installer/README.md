@@ -2,6 +2,8 @@
 
 Requires Rust 1.96 or newer, Inno Setup 6.3 or newer, `cargo-about` 0.9.2 (`cargo install cargo-about --locked --version 0.9.2 --features cli`), and `curl.exe` (included with Windows 10 and newer).
 
+CI also runs `cargo deny --locked check --warn unmaintained` (advisories, licenses, sources, duplicates; see `deny.toml`). To run it locally, install the same version: `cargo install cargo-deny --locked --version 0.20.2`.
+
 From the repository root, run `./installer/build.ps1` in PowerShell. The result is `target/installer/rosetun-<version>-setup.exe`; the build prints its path and SHA-256. The script checks the pinned sing-box version against the Rust engine and verifies the downloaded executable's SHA-256 before packaging it. A verified copy and its `LICENSE` are reused on subsequent builds. The version comes from `Cargo.toml`; a `-alpha.N` suffix appears only in textual version fields, not the numeric file version.
 
 The default install folder is `C:\Program Files\Rosetun`. On a first install, you may select another safe folder on a local drive; upgrades reuse the previous folder without showing the folder page. The SYSTEM service runs both its helper and `sing-box.exe` from this folder, so a standard user must not be able to modify it or its parents. The installer checks the folder before copying anything, assigns Administrators ownership, and applies a non-inheriting DACL: SYSTEM and Administrators have full access, while Users can read and run the installed files. Service data remains readable only by SYSTEM and Administrators. An unsafe existing installation cannot be upgraded: uninstall it and reinstall in a safe folder.
