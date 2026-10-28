@@ -54,7 +54,14 @@ pub(crate) fn choice_card(
                 ui.painter().rect_stroke(
                     response.rect,
                     CornerRadius::same(RADIUS),
-                    Stroke::new(1.0, if selected { theme::palette().accent_base } else { theme::palette().border }),
+                    Stroke::new(
+                        1.0,
+                        if selected {
+                            theme::palette().accent_base
+                        } else {
+                            theme::palette().border
+                        },
+                    ),
                     egui::StrokeKind::Inside,
                 );
             },

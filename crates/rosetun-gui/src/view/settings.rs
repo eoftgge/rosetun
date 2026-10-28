@@ -389,7 +389,14 @@ fn dns_choice(
                     ))
                     .color(theme::palette().text),
             );
-            ui.add(egui::Label::new(RichText::new(detail).small().color(theme::palette().text_dim)).wrap());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(detail)
+                        .small()
+                        .color(theme::palette().text_dim),
+                )
+                .wrap(),
+            );
         });
     })
 }
@@ -504,8 +511,11 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 ),
                             );
                             if selected == setting {
-                                ui.painter()
-                                    .circle_filled(radio.center(), 3.5, theme::palette().accent_light);
+                                ui.painter().circle_filled(
+                                    radio.center(),
+                                    3.5,
+                                    theme::palette().accent_light,
+                                );
                             }
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
@@ -519,7 +529,9 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 });
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(&detail).small().color(theme::palette().text_dim),
+                                        RichText::new(&detail)
+                                            .small()
+                                            .color(theme::palette().text_dim),
                                     )
                                     .wrap(),
                                 );
@@ -574,7 +586,12 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     tr!("xray-current-singbox")
                 };
                 ui.add(
-                    egui::Label::new(RichText::new(current).small().color(theme::palette().text_dim)).wrap(),
+                    egui::Label::new(
+                        RichText::new(current)
+                            .small()
+                            .color(theme::palette().text_dim),
+                    )
+                    .wrap(),
                 );
                 if status.xray_use.is_some_and(|running| running != selected) {
                     ui.colored_label(theme::palette().accent_light, tr!("xray-next-connect"));
@@ -827,7 +844,11 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             .then_some(state.helper_version.as_deref())
                             .flatten(),
                     );
-                    ui.label(RichText::new(version).small().color(theme::palette().text_muted));
+                    ui.label(
+                        RichText::new(version)
+                            .small()
+                            .color(theme::palette().text_muted),
+                    );
                 });
             });
         });
@@ -903,7 +924,9 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 );
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(detail).small().color(theme::palette().text_muted),
+                                        RichText::new(detail)
+                                            .small()
+                                            .color(theme::palette().text_muted),
                                     )
                                     .wrap(),
                                 );
@@ -1099,8 +1122,12 @@ fn about_path(
             |ui| {
                 ui.set_width(width);
                 ui.add(
-                    egui::Label::new(RichText::new(&path).small().color(theme::palette().text_dim))
-                        .truncate(),
+                    egui::Label::new(
+                        RichText::new(&path)
+                            .small()
+                            .color(theme::palette().text_dim),
+                    )
+                    .truncate(),
                 )
                 .on_hover_text(&path);
             },

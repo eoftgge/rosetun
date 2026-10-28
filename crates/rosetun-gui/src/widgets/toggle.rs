@@ -53,7 +53,11 @@ pub(super) fn paint_toggle(
     ui.painter().rect(
         rect,
         CornerRadius::same(RADIUS_TOGGLE),
-        faded(if on { theme::palette().accent_base } else { theme::palette().input }),
+        faded(if on {
+            theme::palette().accent_base
+        } else {
+            theme::palette().input
+        }),
         if on {
             Stroke::NONE
         } else {
@@ -64,7 +68,11 @@ pub(super) fn paint_toggle(
     ui.painter().circle_filled(
         egui::pos2(rect.left() + 11.0 + 16.0 * progress, rect.center().y),
         8.0,
-        faded(if on { theme::palette().text } else { theme::palette().text_muted }),
+        faded(if on {
+            theme::palette().text
+        } else {
+            theme::palette().text_muted
+        }),
     );
 }
 
@@ -87,7 +95,14 @@ pub(crate) fn toggle_row(
         ui.vertical(|ui| {
             ui.set_max_width(text_width);
             title_with_tag(ui, title.into(), tag);
-            ui.add(egui::Label::new(egui::RichText::new(detail).small().color(theme::palette().text_dim)).wrap());
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(detail)
+                        .small()
+                        .color(theme::palette().text_dim),
+                )
+                .wrap(),
+            );
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.allocate_space(TOGGLE_SIZE).1

@@ -30,7 +30,11 @@ pub(crate) fn status_pill(
         ui.painter().rect(
             rect,
             CornerRadius::same(16),
-            if response.hovered() { theme::palette().border } else { theme::palette().card },
+            if response.hovered() {
+                theme::palette().border
+            } else {
+                theme::palette().card
+            },
             Stroke::new(1.0, theme::palette().border),
             egui::StrokeKind::Inside,
         );

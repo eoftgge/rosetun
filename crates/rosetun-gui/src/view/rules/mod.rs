@@ -115,7 +115,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     let can_apply = state.can_apply();
     let mut apply_clicked = false;
     ui.heading(tr!("rules-tab-title"));
-    ui.add(egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::palette().text_muted)).wrap());
+    ui.add(
+        egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::palette().text_muted))
+            .wrap(),
+    );
     if pending_apply {
         ui.add_space(6.0);
         let (_, link) = apply_notice(ui, can_apply);
@@ -243,7 +246,11 @@ fn apply_notice(ui: &mut egui::Ui, can_apply: bool) -> (egui::Response, Option<e
         } else {
             tr!("next-connect")
         };
-        let label = ui.label(RichText::new(text).small().color(theme::palette().text_muted));
+        let label = ui.label(
+            RichText::new(text)
+                .small()
+                .color(theme::palette().text_muted),
+        );
         let link = can_apply
             .then(|| widgets::link(ui, &tr!("apply-now"), true).on_hover_text(tr!("apply-hint")));
         (label, link)

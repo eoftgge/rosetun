@@ -44,7 +44,13 @@ impl SettingsCard<'_> {
         control: impl FnOnce(&mut egui::Ui),
     ) -> egui::Rect {
         self.row_with_title(
-            |ui| title_with_tag(ui, RichText::new(title).color(theme::palette().text).into(), tag),
+            |ui| {
+                title_with_tag(
+                    ui,
+                    RichText::new(title).color(theme::palette().text).into(),
+                    tag,
+                )
+            },
             detail,
             control,
         )
@@ -61,9 +67,11 @@ impl SettingsCard<'_> {
                 egui::vec2(self.ui.available_width(), 1.0),
                 egui::Sense::hover(),
             );
-            self.ui
-                .painter()
-                .hline(line.x_range(), line.center().y, (1.0, theme::palette().border));
+            self.ui.painter().hline(
+                line.x_range(),
+                line.center().y,
+                (1.0, theme::palette().border),
+            );
         }
         self.rows += 1;
         let width = self.ui.available_width();
@@ -96,7 +104,9 @@ impl SettingsCard<'_> {
                                     if let Some(detail) = detail {
                                         ui.add(
                                             egui::Label::new(
-                                                RichText::new(detail).small().color(theme::palette().text_dim),
+                                                RichText::new(detail)
+                                                    .small()
+                                                    .color(theme::palette().text_dim),
                                             )
                                             .wrap(),
                                         );

@@ -23,7 +23,11 @@ pub(crate) fn segmented_width<T, L: AsRef<str>>(ui: &egui::Ui, options: &[(T, L)
         .iter()
         .map(|(_, label)| {
             ui.painter()
-                .layout_no_wrap(label.as_ref().to_owned(), font.clone(), theme::palette().text)
+                .layout_no_wrap(
+                    label.as_ref().to_owned(),
+                    font.clone(),
+                    theme::palette().text,
+                )
                 .size()
                 .x
                 + 28.0
@@ -52,7 +56,11 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
         .iter()
         .map(|(_, label)| {
             ui.painter()
-                .layout_no_wrap(label.as_ref().to_owned(), font.clone(), theme::palette().text)
+                .layout_no_wrap(
+                    label.as_ref().to_owned(),
+                    font.clone(),
+                    theme::palette().text,
+                )
                 .size()
                 .x
                 + 28.0
@@ -111,7 +119,11 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
             ui.painter().rect_filled(
                 rect,
                 CornerRadius::same(RADIUS_INNER),
-                faded(if active { theme::palette().accent_base } else { theme::palette().border }),
+                faded(if active {
+                    theme::palette().accent_base
+                } else {
+                    theme::palette().border
+                }),
             );
         }
         if response.has_focus() {
@@ -122,7 +134,11 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
                 egui::StrokeKind::Inside,
             );
         }
-        let color = faded(if active || hovered { theme::palette().text } else { theme::palette().text_muted });
+        let color = faded(if active || hovered {
+            theme::palette().text
+        } else {
+            theme::palette().text_muted
+        });
         let galley = ui
             .painter()
             .layout_no_wrap(label.as_ref().to_owned(), font.clone(), color);

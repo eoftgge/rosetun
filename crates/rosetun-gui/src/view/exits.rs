@@ -58,8 +58,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             ui.vertical(|ui| {
                 ui.heading(tr!("exits-title"));
                 ui.add(
-                    egui::Label::new(RichText::new(tr!("exits-subtitle")).color(theme::palette().text_muted))
-                        .wrap(),
+                    egui::Label::new(
+                        RichText::new(tr!("exits-subtitle")).color(theme::palette().text_muted),
+                    )
+                    .wrap(),
                 );
             });
         },
@@ -366,7 +368,11 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
         }
     });
     if country.is_none() && dialog.node.is_some() {
-        note(ui, tr!("exit-fallback-no-country"), theme::palette().text_dim);
+        note(
+            ui,
+            tr!("exit-fallback-no-country"),
+            theme::palette().text_dim,
+        );
     }
 }
 
@@ -620,7 +626,10 @@ mod tests {
                 format!("{node_kind} · {}", tr!("exit-now-gone")),
                 theme::WARNING,
             ),
-            (tr!("exit-rules", count = 1, n = "1"), theme::palette().accent_light),
+            (
+                tr!("exit-rules", count = 1, n = "1"),
+                theme::palette().accent_light,
+            ),
             (tr!("exit-no-rules"), theme::palette().text_dim),
         ] {
             assert!(

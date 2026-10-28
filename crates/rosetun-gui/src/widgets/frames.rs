@@ -134,7 +134,9 @@ mod tests {
                 .shapes
                 .iter()
                 .find_map(|shape| match &shape.shape {
-                    egui::Shape::Rect(rect) if rect.fill == theme::palette().card => Some(rect.rect),
+                    egui::Shape::Rect(rect) if rect.fill == theme::palette().card => {
+                        Some(rect.rect)
+                    }
                     _ => None,
                 })
                 .unwrap();

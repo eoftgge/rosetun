@@ -301,8 +301,12 @@ fn header_status_for(
     }
     let (label, color) = match connection {
         None | Some(ConnectionState::Disconnected) => (tr!("disconnected"), theme::DISCONNECTED),
-        Some(ConnectionState::Connecting) => (tr!("connecting-action"), theme::palette().accent_bright),
-        Some(ConnectionState::Reconnecting) => (tr!("reconnecting-action"), theme::palette().accent_bright),
+        Some(ConnectionState::Connecting) => {
+            (tr!("connecting-action"), theme::palette().accent_bright)
+        }
+        Some(ConnectionState::Reconnecting) => {
+            (tr!("reconnecting-action"), theme::palette().accent_bright)
+        }
         Some(ConnectionState::Connected) => {
             return (
                 country.map_or_else(|| tr!("connected"), crate::i18n::connected_in),
@@ -485,8 +489,12 @@ fn tab(
         selected || response.hovered(),
         if reduce_motion { 0.0 } else { 0.12 },
     );
-    let text_color = theme::palette().text_muted.lerp_to_gamma(theme::palette().text, t);
-    let icon_color = theme::palette().text_dim.lerp_to_gamma(theme::palette().accent_base, t);
+    let text_color = theme::palette()
+        .text_muted
+        .lerp_to_gamma(theme::palette().text, t);
+    let icon_color = theme::palette()
+        .text_dim
+        .lerp_to_gamma(theme::palette().accent_base, t);
     if ui.is_rect_visible(rect) {
         paint_tab_icon(
             ui.painter(),

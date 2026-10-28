@@ -65,7 +65,10 @@ pub(crate) fn show(
                     .wrap(),
                 );
             }
-            ui.add(egui::Label::new(RichText::new(tr!("url-help")).color(theme::palette().text_dim)).wrap());
+            ui.add(
+                egui::Label::new(RichText::new(tr!("url-help")).color(theme::palette().text_dim))
+                    .wrap(),
+            );
             let normalized = rosetun_core::normalize_subscription_url(&dialog.url);
             if !dialog.url.trim().is_empty() {
                 match &normalized {
@@ -93,7 +96,10 @@ pub(crate) fn show(
                     Ok(_) => {
                         if let Some(note) = assumed_https_note(&dialog.url) {
                             ui.add(
-                                egui::Label::new(RichText::new(note).color(theme::palette().text_dim)).wrap(),
+                                egui::Label::new(
+                                    RichText::new(note).color(theme::palette().text_dim),
+                                )
+                                .wrap(),
                             );
                         }
                     }

@@ -127,13 +127,14 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
             let center_y = rect.center().y;
             let left = rect.left() + 12.0;
             let name_left = left;
-            let galley = egui::WidgetText::from(RichText::new(name).font(font).color(theme::palette().text))
-                .into_galley(
-                    ui,
-                    Some(egui::TextWrapMode::Truncate),
-                    name_width,
-                    egui::TextStyle::Body,
-                );
+            let galley =
+                egui::WidgetText::from(RichText::new(name).font(font).color(theme::palette().text))
+                    .into_galley(
+                        ui,
+                        Some(egui::TextWrapMode::Truncate),
+                        name_width,
+                        egui::TextStyle::Body,
+                    );
             painter.galley(
                 egui::pos2(name_left, center_y - galley.size().y / 2.0),
                 galley,

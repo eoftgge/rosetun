@@ -428,14 +428,21 @@ mod tests {
     fn emblem_has_solid_petals_and_transparent_gaps() {
         let rgba = rose_icon_rgba(48, RoseIcon::Emblem, &Palette::ROSE);
         // At y = 12.5, PETALS span x = 13.114..22.407, then 28.764..30.592.
-        assert_eq!(pixel(&rgba, 48, 18, 12), Palette::ROSE.accent_base.to_array());
+        assert_eq!(
+            pixel(&rgba, 48, 18, 12),
+            Palette::ROSE.accent_base.to_array()
+        );
         for (x, y) in [(25, 12), (0, 0), (47, 47)] {
             assert_eq!(pixel(&rgba, 48, x, y), [0; 4], "({x}, {y})");
         }
         let filled = rgba.chunks_exact(4).filter(|pixel| pixel[3] != 0).count();
         let coverage = filled as f32 / (48 * 48) as f32;
         assert!((0.45..=0.75).contains(&coverage), "{coverage}");
-        assert_eq!(rgba, rasterize(48, RoseIcon::Emblem, None, &Palette::ROSE), "no plate");
+        assert_eq!(
+            rgba,
+            rasterize(48, RoseIcon::Emblem, None, &Palette::ROSE),
+            "no plate"
+        );
     }
 
     #[test]
@@ -505,7 +512,8 @@ mod tests {
     fn tray_states_have_distinct_shapes_and_expected_petal_colors() {
         let states = TRAY_STATES;
         for size in [16, 32, 48] {
-            let images = states.map(|state| rose_icon_rgba(size, RoseIcon::Tray(state), &Palette::ROSE));
+            let images =
+                states.map(|state| rose_icon_rgba(size, RoseIcon::Tray(state), &Palette::ROSE));
             assert_eq!(
                 images
                     .iter()
@@ -590,7 +598,10 @@ mod tests {
                         sample_coordinate(x / SAMPLES_PER_AXIS, x % SAMPLES_PER_AXIS, scale),
                         sample_coordinate(y / SAMPLES_PER_AXIS, y % SAMPLES_PER_AXIS, scale),
                     );
-                    let on_disc = matches!(sample_badge(point, state, grid, &Palette::ROSE), Some(Some(_)));
+                    let on_disc = matches!(
+                        sample_badge(point, state, grid, &Palette::ROSE),
+                        Some(Some(_))
+                    );
                     assert!(backed || !on_disc, "{state:?} {size} px: {point:?}");
                 }
             }
@@ -647,6 +658,9 @@ mod tests {
 
     #[test]
     fn rgba_has_the_requested_size() {
-        assert_eq!(rose_icon_rgba(32, RoseIcon::Emblem, &Palette::ROSE).len(), 32 * 32 * 4);
+        assert_eq!(
+            rose_icon_rgba(32, RoseIcon::Emblem, &Palette::ROSE).len(),
+            32 * 32 * 4
+        );
     }
 }

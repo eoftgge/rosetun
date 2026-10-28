@@ -104,8 +104,11 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
 fn row_divider(ui: &mut egui::Ui) {
     let (line, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
-    ui.painter()
-        .hline(line.x_range(), line.center().y, (1.0, theme::palette().border));
+    ui.painter().hline(
+        line.x_range(),
+        line.center().y,
+        (1.0, theme::palette().border),
+    );
 }
 
 fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, height: f32) {
@@ -124,8 +127,10 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
             |ui| {
                 if ui
                     .add(
-                        egui::Label::new(RichText::new(tr!("open-link")).color(theme::palette().accent_light))
-                            .sense(egui::Sense::click()),
+                        egui::Label::new(
+                            RichText::new(tr!("open-link")).color(theme::palette().accent_light),
+                        )
+                        .sense(egui::Sense::click()),
                     )
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()

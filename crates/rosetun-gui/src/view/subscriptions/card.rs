@@ -83,12 +83,14 @@ pub(super) fn subscription_card(
                             ui.set_width(name_width);
                             if ui
                                 .add(
-                                    egui::Label::new(RichText::new(&name).color(theme::palette().text).font(
-                                        egui::FontId::new(
-                                            egui::TextStyle::Body.resolve(ui.style()).size,
-                                            egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+                                    egui::Label::new(
+                                        RichText::new(&name).color(theme::palette().text).font(
+                                            egui::FontId::new(
+                                                egui::TextStyle::Body.resolve(ui.style()).size,
+                                                egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
+                                            ),
                                         ),
-                                    ))
+                                    )
                                     .truncate()
                                     .sense(egui::Sense::click()),
                                 )
@@ -257,7 +259,9 @@ pub(super) fn subscription_card(
                         |ui| {
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(traffic).small().color(theme::palette().text_muted),
+                                    RichText::new(traffic)
+                                        .small()
+                                        .color(theme::palette().text_muted),
                                 )
                                 .truncate(),
                             );

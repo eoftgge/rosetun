@@ -382,7 +382,10 @@ mod tests {
     fn every_palette_keeps_text_readable() {
         for palette in &PALETTES {
             let on_accent = contrast(palette.text, palette.accent_base);
-            assert!(on_accent >= 4.5, "text on accent {on_accent:.2} in {palette:?}");
+            assert!(
+                on_accent >= 4.5,
+                "text on accent {on_accent:.2} in {palette:?}"
+            );
             for surface in [palette.card, palette.panel] {
                 let dim = contrast(palette.text_dim, surface);
                 assert!(dim >= 4.5, "dim text {dim:.2} in {palette:?}");

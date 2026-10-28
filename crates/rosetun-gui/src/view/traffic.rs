@@ -145,7 +145,11 @@ fn traffic_row(ui: &mut egui::Ui, color: Color32, label: &str, rate: u64, connec
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 0.0, color);
-        ui.label(RichText::new(label).small().color(theme::palette().text_dim));
+        ui.label(
+            RichText::new(label)
+                .small()
+                .color(theme::palette().text_dim),
+        );
     });
     ui.horizontal(|ui| {
         ui.add_space(16.0);

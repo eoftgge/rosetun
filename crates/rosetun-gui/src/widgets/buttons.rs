@@ -33,7 +33,11 @@ pub(crate) fn outline_button(
         .fill(Color32::TRANSPARENT)
         .stroke(Stroke::new(
             1.0,
-            if enabled { theme::palette().border_strong } else { theme::palette().border },
+            if enabled {
+                theme::palette().border_strong
+            } else {
+                theme::palette().border
+            },
         ));
     ui.scope(|ui| {
         // egui sizes a button by its state's stroke width; match hover's 1 px so it keeps its size.
@@ -80,7 +84,11 @@ fn compact_button(
     let button = if outlined {
         button.fill(Color32::TRANSPARENT).stroke(Stroke::new(
             1.0,
-            if enabled { theme::palette().border_strong } else { theme::palette().border },
+            if enabled {
+                theme::palette().border_strong
+            } else {
+                theme::palette().border
+            },
         ))
     } else {
         button.fill(primary_fill(enabled))
@@ -135,7 +143,10 @@ mod tests {
     fn disabled_primary_keeps_its_size_and_rose_fill() {
         assert_eq!(primary_fill(true), theme::palette().accent_base);
         assert_ne!(primary_fill(false), theme::palette().card);
-        assert_eq!(primary_fill(false), theme::palette().accent_dark.gamma_multiply(0.65));
+        assert_eq!(
+            primary_fill(false),
+            theme::palette().accent_dark.gamma_multiply(0.65)
+        );
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {

@@ -292,7 +292,11 @@ pub(crate) fn show(
                 ui,
                 |ui| {
                     if let Some(reason) = &reason {
-                        ui.label(RichText::new(reason).small().color(theme::palette().text_dim));
+                        ui.label(
+                            RichText::new(reason)
+                                .small()
+                                .color(theme::palette().text_dim),
+                        );
                     }
                 },
                 |ui| {
@@ -482,7 +486,11 @@ fn category_checkbox(
     ui.scope(|ui| {
         ui.spacing_mut().interact_size.y = CATEGORY_ROW_HEIGHT;
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-        let fill = if *checked { theme::palette().accent_base } else { theme::palette().card };
+        let fill = if *checked {
+            theme::palette().accent_base
+        } else {
+            theme::palette().card
+        };
         let border = if *checked {
             theme::palette().accent_base
         } else {
@@ -517,7 +525,11 @@ fn category_row(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, category: &str, a
         .any(|item| item == category);
     let mut checked = selected;
     let response = egui::Frame::new()
-        .fill(if selected { theme::palette().input } else { theme::palette().card })
+        .fill(if selected {
+            theme::palette().input
+        } else {
+            theme::palette().card
+        })
         .corner_radius(theme::RADIUS_INNER)
         .inner_margin(egui::Margin::symmetric(4, 0))
         .show(ui, |ui| {
@@ -1291,8 +1303,15 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
         &dialog.target
     {
         let hint = tr!("where-new-exit", name = display::safe_text(name));
-        ui.add(egui::Label::new(RichText::new(&hint).small().color(theme::palette().text_dim)).truncate())
-            .on_hover_text(hint);
+        ui.add(
+            egui::Label::new(
+                RichText::new(&hint)
+                    .small()
+                    .color(theme::palette().text_dim),
+            )
+            .truncate(),
+        )
+        .on_hover_text(hint);
     }
     if !enabled {
         return;
@@ -1368,11 +1387,22 @@ fn destination_item(
 fn destination_section(ui: &mut egui::Ui, title: String) {
     ui.add_space(4.0);
     ui.separator();
-    ui.label(RichText::new(title).small().color(theme::palette().text_dim));
+    ui.label(
+        RichText::new(title)
+            .small()
+            .color(theme::palette().text_dim),
+    );
 }
 
 fn destination_note(ui: &mut egui::Ui, note: String) {
-    ui.add(egui::Label::new(RichText::new(note).small().color(theme::palette().text_muted)).wrap());
+    ui.add(
+        egui::Label::new(
+            RichText::new(note)
+                .small()
+                .color(theme::palette().text_muted),
+        )
+        .wrap(),
+    );
 }
 
 fn exits_full_note(ui: &mut egui::Ui) {
@@ -1903,7 +1933,8 @@ mod tests {
                 && rect.stroke.color == theme::palette().border_strong
         }));
         assert!(rectangles.iter().any(|rect| {
-            rect.corner_radius == egui::CornerRadius::same(0) && rect.fill == theme::palette().accent_base
+            rect.corner_radius == egui::CornerRadius::same(0)
+                && rect.fill == theme::palette().accent_base
         }));
         assert!(output.shapes.iter().any(|shape| matches!(
             &shape.shape,

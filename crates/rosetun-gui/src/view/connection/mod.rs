@@ -177,7 +177,8 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
             if enabling {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(tr!("lockdown-experimental")).color(theme::palette().text_muted),
+                        RichText::new(tr!("lockdown-experimental"))
+                            .color(theme::palette().text_muted),
                     )
                     .wrap(),
                 );

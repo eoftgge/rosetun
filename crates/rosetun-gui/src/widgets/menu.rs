@@ -32,14 +32,17 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
         } else if item.selected {
             ui.painter().rect_filled(rect, radius, selected_fill);
         } else if enabled && response.hovered() {
-            ui.painter().rect_filled(rect, radius, theme::palette().border);
+            ui.painter()
+                .rect_filled(rect, radius, theme::palette().border);
         }
         let color = if !enabled {
             theme::DISABLED
         } else if item.danger {
             theme::ERROR
         } else {
-            ui.visuals().override_text_color.unwrap_or(theme::palette().text)
+            ui.visuals()
+                .override_text_color
+                .unwrap_or(theme::palette().text)
         };
         let mut right = rect.right() - 10.0;
         if item.selected {

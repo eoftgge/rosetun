@@ -25,7 +25,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     egui::Panel::top("header")
         .exact_size(76.0)
         .show_separator_line(false)
-        .frame(egui::Frame::new().fill(theme::palette().panel).inner_margin(0))
+        .frame(
+            egui::Frame::new()
+                .fill(theme::palette().panel)
+                .inner_margin(0),
+        )
         .show(ui, |ui| header::show(ui, state, &mut actions));
     if state.screen == Screen::Connection {
         egui::Panel::left("subscriptions")

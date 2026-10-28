@@ -48,8 +48,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             ui.vertical(|ui| {
                 ui.heading(tr!("lists-title"));
                 ui.add(
-                    egui::Label::new(RichText::new(tr!("lists-empty")).color(theme::palette().text_muted))
-                        .wrap(),
+                    egui::Label::new(
+                        RichText::new(tr!("lists-empty")).color(theme::palette().text_muted),
+                    )
+                    .wrap(),
                 );
             });
         },
@@ -244,8 +246,12 @@ fn list_card(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         list_menu(ui, state, list, &used, busy, actions);
                         ui.add(
-                            egui::Label::new(RichText::new(&usage).small().color(theme::palette().text_dim))
-                                .truncate(),
+                            egui::Label::new(
+                                RichText::new(&usage)
+                                    .small()
+                                    .color(theme::palette().text_dim),
+                            )
+                            .truncate(),
                         )
                         .on_hover_text(&usage);
                     });
@@ -544,7 +550,8 @@ mod tests {
             .iter()
             .find_map(|shape| match &shape.shape {
                 egui::Shape::Rect(rect)
-                    if rect.fill == theme::palette().input && rect.rect.size() == egui::vec2(32.0, 32.0) =>
+                    if rect.fill == theme::palette().input
+                        && rect.rect.size() == egui::vec2(32.0, 32.0) =>
                 {
                     Some(rect.rect)
                 }

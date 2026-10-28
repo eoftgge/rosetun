@@ -86,8 +86,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                                 |hours| tr!("auto-update-every", hours = hours.to_string()),
                             );
                         ui.add(
-                            egui::Label::new(RichText::new(text).small().color(theme::palette().text_dim))
-                                .truncate(),
+                            egui::Label::new(
+                                RichText::new(text).small().color(theme::palette().text_dim),
+                            )
+                            .truncate(),
                         );
                     }
                 },
@@ -104,7 +106,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 )),
         );
         ui.label(
-            RichText::new(format!("· {}", state.config.subscriptions.len())).color(theme::palette().text_dim),
+            RichText::new(format!("· {}", state.config.subscriptions.len()))
+                .color(theme::palette().text_dim),
         );
     });
     ui.add_space(12.0);
@@ -240,7 +243,8 @@ fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, link: &str, show
     } else {
         ui.add(
             egui::Label::new(
-                RichText::new(state.text(&i18n::plain_link(label, shown))).color(theme::palette().text_dim),
+                RichText::new(state.text(&i18n::plain_link(label, shown)))
+                    .color(theme::palette().text_dim),
             )
             .truncate(),
         );

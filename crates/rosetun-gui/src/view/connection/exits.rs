@@ -34,7 +34,9 @@ fn exit_row(ui: &mut egui::Ui, state: &State, row: &SessionExitRow<'_>) {
                 let title = row
                     .exit
                     .map_or_else(|| tr!("connection-exit-removed"), exit_title);
-                ui.add(egui::Label::new(RichText::new(title).color(theme::palette().text)).truncate());
+                ui.add(
+                    egui::Label::new(RichText::new(title).color(theme::palette().text)).truncate(),
+                );
                 ui.add(
                     egui::Label::new(
                         RichText::new(display::safe_text(&state.text(row.node)))
@@ -54,9 +56,10 @@ fn exit_row(ui: &mut egui::Ui, state: &State, row: &SessionExitRow<'_>) {
 /// The delay column of a row and its colour.
 fn exit_status(outcome: Option<ExitOutcome>) -> (String, Color32) {
     match outcome {
-        Some(ExitOutcome::Probed(ProbeOutcome::Works { millis })) => {
-            (tr!("ping-ms", ms = millis.max(1).to_string()), theme::palette().text)
-        }
+        Some(ExitOutcome::Probed(ProbeOutcome::Works { millis })) => (
+            tr!("ping-ms", ms = millis.max(1).to_string()),
+            theme::palette().text,
+        ),
         Some(ExitOutcome::Probed(_)) => (tr!("connection-exit-no-answer"), theme::WARNING),
         Some(ExitOutcome::NoAddress) => (tr!("connection-exit-no-address"), theme::WARNING),
         None => (tr!("ping-pending").to_owned(), theme::palette().text_dim),
@@ -193,7 +196,8 @@ mod tests {
         assert!(
             texts
                 .iter()
-                .filter(|(text, color)| text == &tr!("ping-pending") && *color == theme::palette().text_dim)
+                .filter(|(text, color)| text == &tr!("ping-pending")
+                    && *color == theme::palette().text_dim)
                 .count()
                 == 3
         );

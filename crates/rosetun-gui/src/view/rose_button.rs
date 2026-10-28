@@ -485,7 +485,9 @@ pub(crate) fn rose_button(
                 painter.circle_filled(
                     center,
                     radius,
-                    theme::palette().accent_base.gamma_multiply(alpha * visible.glow),
+                    theme::palette()
+                        .accent_base
+                        .gamma_multiply(alpha * visible.glow),
                 );
             }
         }
@@ -512,7 +514,9 @@ pub(crate) fn rose_button(
             painter.circle_filled(
                 center,
                 3.6 * visible.stamen_scale,
-                theme::palette().accent_pale.gamma_multiply(visible.stamen_alpha),
+                theme::palette()
+                    .accent_pale
+                    .gamma_multiply(visible.stamen_alpha),
             );
         }
         painter.galley(label_rect.min, galley, visible.label);
@@ -590,7 +594,10 @@ mod tests {
         let bud = params(RosePhase::Bud);
         near(bud.layers[OUTER].k, 1.35);
         near(bud.layers[OUTER].rotation, -24.0);
-        assert_eq!(bud.layers[OUTER].fill, theme::palette().text.gamma_multiply(0.20));
+        assert_eq!(
+            bud.layers[OUTER].fill,
+            theme::palette().text.gamma_multiply(0.20)
+        );
         assert_eq!(bud.layers[OUTER].stroke, theme::palette().text);
         assert_eq!(
             params(RosePhase::Blocked).layers[OUTER].stroke,
@@ -648,9 +655,18 @@ mod tests {
             assert_eq!(bloom.layers[index].fill, fill);
             assert_eq!(bloom.layers[index].stroke, stroke);
         }
-        assert_eq!(bloom.ring, theme::palette().accent_light.gamma_multiply(0.35));
-        assert_eq!(bloom.disc_fill, theme::palette().accent_base.gamma_multiply(0.10));
-        assert_eq!(bloom.disc_stroke, theme::palette().accent_light.gamma_multiply(0.90));
+        assert_eq!(
+            bloom.ring,
+            theme::palette().accent_light.gamma_multiply(0.35)
+        );
+        assert_eq!(
+            bloom.disc_fill,
+            theme::palette().accent_base.gamma_multiply(0.10)
+        );
+        assert_eq!(
+            bloom.disc_stroke,
+            theme::palette().accent_light.gamma_multiply(0.90)
+        );
         assert_eq!(bloom.label, theme::palette().text_muted);
         near(bloom.glow, 1.0);
         near(bloom.stamen_scale, 1.0);

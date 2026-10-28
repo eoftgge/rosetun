@@ -400,7 +400,12 @@ mod tests {
         );
         assert_eq!(
             built,
-            [(connected, 20), (connected, 24), (failed, 20), (connected, 20)]
+            [
+                (connected, 20),
+                (connected, 24),
+                (failed, 20),
+                (connected, 20)
+            ]
         );
     }
 

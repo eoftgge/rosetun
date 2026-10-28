@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
-    AccentPreset, AppConfig, DnsSettings, ExitId, ExitTarget, LanguageSetting, ListId, ListSource, NodeId,
-    RuleId, RuleMatcher, RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId, XrayUse,
+    AccentPreset, AppConfig, DnsSettings, ExitId, ExitTarget, LanguageSetting, ListId, ListSource,
+    NodeId, RuleId, RuleMatcher, RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId,
+    XrayUse,
 };
 use rosetun_core::{
     AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, SettingChange,

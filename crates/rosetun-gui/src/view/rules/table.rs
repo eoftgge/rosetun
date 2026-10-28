@@ -161,7 +161,8 @@ pub(super) fn target_button(
         let (rect, response) = ui.allocate_exact_size(egui::vec2(TARGET_WIDTH, 34.0), sense);
         if ui.is_rect_visible(rect) {
             if response.hovered() && enabled {
-                ui.painter().rect_filled(rect, theme::RADIUS, theme::palette().border);
+                ui.painter()
+                    .rect_filled(rect, theme::RADIUS, theme::palette().border);
             }
             ui.painter().rect_stroke(
                 rect,
@@ -224,7 +225,11 @@ pub(super) fn target_button(
             for choice in choices {
                 if let Some(section) = &choice.section {
                     ui.separator();
-                    ui.label(RichText::new(section).small().color(theme::palette().text_dim));
+                    ui.label(
+                        RichText::new(section)
+                            .small()
+                            .color(theme::palette().text_dim),
+                    );
                 }
                 let item = ui
                     .scope(|ui| {
@@ -337,7 +342,11 @@ pub(super) fn rule_row(
             *id == rule.id || (selected && state.rules.screen.selected_rules.contains(&*id))
         });
     let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(12, 0));
-    let fill = if selected { theme::palette().input } else { theme::palette().card };
+    let fill = if selected {
+        theme::palette().input
+    } else {
+        theme::palette().card
+    };
     if dragged {
         frame = frame.fill(Color32::from_rgba_unmultiplied(
             fill.r(),
@@ -373,8 +382,13 @@ pub(super) fn rule_row(
                 ui.add_space(HANDLE_GAP);
                 table_cell(ui, ICON_WIDTH, theme::RULE_ROW, |ui| {
                     if temporary {
-                        icons::icon_badge_colored(ui, Icon::Clock, ICON_WIDTH, theme::palette().text_dim)
-                            .on_hover_text(tr!("temporary-hint"));
+                        icons::icon_badge_colored(
+                            ui,
+                            Icon::Clock,
+                            ICON_WIDTH,
+                            theme::palette().text_dim,
+                        )
+                        .on_hover_text(tr!("temporary-hint"));
                     } else {
                         icons::icon_badge(ui, rule_icon(&rule.matcher), ICON_WIDTH);
                     }
@@ -681,8 +695,10 @@ fn rule_value(
         egui::TextStyle::Body.resolve(ui.style()).size,
         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
     );
-    ui.add(egui::Label::new(RichText::new(value).font(font).color(theme::palette().text)).truncate())
-        .on_hover_text(&tooltip);
+    ui.add(
+        egui::Label::new(RichText::new(value).font(font).color(theme::palette().text)).truncate(),
+    )
+    .on_hover_text(&tooltip);
     if let Some(missing) = missing {
         let warning = if missing.last_good {
             tr!("rule-category-last-good")
