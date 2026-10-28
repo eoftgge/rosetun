@@ -46,6 +46,7 @@ fn subscription(id: &str) -> rosetun_config::Subscription {
         updated_at_unix: None,
         user_agent: None,
         send_hwid: true,
+        hwid_scope: rosetun_config::HwidScope::Machine,
         info: None,
         update_interval_hours: None,
         support_url: None,

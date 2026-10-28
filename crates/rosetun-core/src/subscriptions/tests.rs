@@ -1,4 +1,4 @@
-use rosetun_config::AppConfig;
+use rosetun_config::{AppConfig, HwidScope};
 use rosetun_subscription::ParseError;
 
 use super::*;
@@ -255,6 +255,71 @@ fn addition_uses_explicit_name_then_title_then_host() {
         assert_eq!(store.load().unwrap().subscriptions, vec![added]);
         assert!(store.load().unwrap().active.is_none());
     }
+}
+
+fn sent_hwid(subscription: &Subscription) -> Option<String> {
+    crate::fetch::request_device(subscription, |scope| {
+        Ok(rosetun_hwid::DeviceInfo {
+            hwid: rosetun_hwid::hwid_for("00000000-0000-4000-8000-000000000001", scope)?,
+            os: "Windows",
+            os_version: "10.0.26100".to_owned(),
+            model: "Test PC".to_owned(),
+        })
+    })
+    .map(|device| device.hwid.as_str().to_owned())
+}
+
+#[test]
+fn a_re_added_subscription_gets_the_same_provider_id_each_time() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let mut sent = Vec::new();
+    for _ in 0..2 {
+        let prepared = prepare_subscription(
+            &store,
+            "https://sub.example.com/private-token",
+            AddOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(prepared.template.hwid_scope, HwidScope::Provider);
+        let (added, _) =
+            add_prepared_subscription_with(&store, prepared, Timeouts::default(), |template, _| {
+                sent.push(sent_hwid(template).unwrap());
+                Ok(successful_update())
+            })
+            .unwrap();
+        assert_eq!(added.hwid_scope, HwidScope::Provider);
+        remove_subscription(&store, &added.id).unwrap();
+    }
+
+    assert_eq!(sent[0], sent[1]);
+    let machine = rosetun_hwid::hwid_from_machine_id("00000000-0000-4000-8000-000000000001")
+        .unwrap();
+    assert_ne!(sent[0], machine.as_str());
+}
+
+#[test]
+fn update_and_rename_keep_the_machine_id_of_an_existing_subscription() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    save_config(store.path(), &test_config()).unwrap();
+    let id = SubscriptionId::new("1");
+
+    rename_subscription(&store, &id, "Renamed").unwrap();
+    update_subscription_with(&store, &id, Timeouts::default(), &mut |requested, _| {
+        assert_eq!(requested.hwid_scope, HwidScope::Machine);
+        Ok(successful_update())
+    })
+    .unwrap();
+
+    let subscription = &store.load().unwrap().subscriptions[0];
+    assert_eq!(subscription.hwid_scope, HwidScope::Machine);
+    assert_eq!(
+        sent_hwid(subscription).unwrap(),
+        rosetun_hwid::hwid_from_machine_id("00000000-0000-4000-8000-000000000001")
+            .unwrap()
+            .as_str()
+    );
 }
 
 #[test]

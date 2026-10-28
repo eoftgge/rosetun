@@ -2,7 +2,7 @@ mod support;
 
 use rosetun_config::{
     AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId, ExitTarget,
-    FormatError, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId, Outbound,
+    FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId, Outbound,
     RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
     SubscriptionId, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange,
     XhttpXmux, from_json,
@@ -17,6 +17,7 @@ const V3: &[u8] = include_bytes!("fixtures/v3.json");
 const V4: &[u8] = include_bytes!("fixtures/v4.json");
 const V5: &[u8] = include_bytes!("fixtures/v5.json");
 const V6: &[u8] = include_bytes!("fixtures/v6.json");
+const V7: &[u8] = include_bytes!("fixtures/v7.json");
 
 fn current_config() -> AppConfig {
     let mut config = support::legacy_config();
@@ -163,6 +164,12 @@ fn format_six_config() -> AppConfig {
     config
 }
 
+fn format_seven_config() -> AppConfig {
+    let mut config = format_six_config();
+    config.subscriptions[1].hwid_scope = HwidScope::Provider;
+    config
+}
+
 fn expected_migrated_legacy_config() -> AppConfig {
     let mut config = support::legacy_config();
     config.version = CONFIG_VERSION;
@@ -177,8 +184,8 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 6,
-        "released fixtures require format version six"
+        CONFIG_VERSION, 7,
+        "released fixtures require format version seven"
     );
     let expected = expected_migrated_legacy_config();
 
@@ -201,8 +208,8 @@ fn released_configurations_migrate_to_the_expected_configuration() {
 
 #[test]
 fn current_configuration_fixture_guards_the_serialized_format() {
-    let expected = format_six_config();
-    let (loaded, migrated_from) = from_json(V6).expect("current fixture should load");
+    let expected = format_seven_config();
+    let (loaded, migrated_from) = from_json(V7).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
@@ -233,23 +240,73 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V6),
-        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v6.json"
+        value(V7),
+        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v7.json"
     );
 }
 
+fn with_machine_scope(mut config: Value) -> Value {
+    for subscription in config["subscriptions"].as_array_mut().unwrap() {
+        subscription["hwid_scope"] = json!("machine");
+    }
+    config
+}
+
 #[test]
-fn version_five_loads_and_saves_as_version_six() {
+fn version_five_loads_and_saves_as_version_seven() {
     let (config, migrated_from) = from_json(V5).expect("version five should migrate");
     assert_eq!(migrated_from, Some(5));
     assert_eq!(config, format_five_config());
 
-    let mut expected = value(V5);
-    expected["version"] = json!(6);
+    let mut expected = with_machine_scope(value(V5));
+    expected["version"] = json!(7);
     assert_eq!(
         serde_json::to_value(&config).expect("serialize migrated configuration"),
         expected
     );
+}
+
+#[test]
+fn version_six_keeps_the_machine_id_of_every_subscription() {
+    let (config, migrated_from) = from_json(V6).expect("version six should migrate");
+    assert_eq!(migrated_from, Some(6));
+    assert_eq!(config, format_six_config());
+    assert!(
+        config
+            .subscriptions
+            .iter()
+            .all(|subscription| subscription.hwid_scope == HwidScope::Machine)
+    );
+
+    let mut expected = with_machine_scope(value(V6));
+    expected["version"] = json!(7);
+    assert_eq!(
+        serde_json::to_value(&config).expect("serialize migrated configuration"),
+        expected
+    );
+}
+
+#[test]
+fn version_six_overrides_a_stray_hwid_scope_with_machine() {
+    let mut input = value(V6);
+    input["subscriptions"][0]["hwid_scope"] = json!("provider");
+
+    let (config, _) = from_json(&serde_json::to_vec(&input).unwrap()).expect("version six");
+    assert_eq!(config.subscriptions[0].hwid_scope, HwidScope::Machine);
+}
+
+#[test]
+fn a_format_seven_subscription_without_hwid_scope_keeps_the_machine_id() {
+    let mut input = value(V7);
+    input["subscriptions"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("hwid_scope");
+
+    let (config, migrated_from) =
+        from_json(&serde_json::to_vec(&input).unwrap()).expect("hand-edited format seven");
+    assert_eq!(migrated_from, None);
+    assert_eq!(config.subscriptions[1].hwid_scope, HwidScope::Machine);
 }
 
 #[test]

@@ -362,6 +362,7 @@ mod tests {
                 updated_at_unix: Some(1),
                 user_agent: Some("CustomClient/1".to_owned()),
                 send_hwid: false,
+                hwid_scope: rosetun_config::HwidScope::Machine,
                 info: None,
                 update_interval_hours: None,
                 support_url: None,

@@ -19,6 +19,10 @@ pub struct Subscription {
     pub user_agent: Option<String>,
     #[serde(default = "crate::default_true")]
     pub send_hwid: bool,
+    /// Missing in a hand-edited file reads as `Machine`: the old ID is better
+    /// than one more device on the provider's panel.
+    #[serde(default)]
+    pub hwid_scope: HwidScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub info: Option<SubscriptionInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -31,6 +35,17 @@ pub struct Subscription {
     pub announce: Option<String>,
     #[serde(default)]
     pub notices: Vec<String>,
+}
+
+/// Which device ID requests for a subscription carry.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HwidScope {
+    /// One ID for the whole machine; subscriptions added before format 7 keep it.
+    #[default]
+    Machine,
+    /// An ID of its own for the subscription server's host.
+    Provider,
 }
 
 impl fmt::Debug for Subscription {
@@ -112,7 +127,7 @@ pub(crate) fn debug_host(value: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Subscription, SubscriptionInfo};
+    use super::{HwidScope, Subscription, SubscriptionInfo};
 
     #[test]
     fn old_subscription_uses_new_field_defaults() {
@@ -124,6 +139,7 @@ mod tests {
         .unwrap();
 
         assert!(subscription.send_hwid);
+        assert_eq!(subscription.hwid_scope, HwidScope::Machine);
         assert!(subscription.user_agent.is_none());
         assert!(subscription.info.is_none());
         assert!(subscription.update_interval_hours.is_none());
@@ -148,6 +164,28 @@ mod tests {
 
         assert!(!decoded.send_hwid);
         assert_eq!(decoded, subscription);
+    }
+
+    #[test]
+    fn hwid_scope_is_always_written() {
+        let mut subscription: Subscription = serde_json::from_value(serde_json::json!({
+            "id": "1",
+            "name": "Example",
+            "url": "https://sub.example.com/private"
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&subscription).unwrap()["hwid_scope"],
+            "machine"
+        );
+
+        subscription.hwid_scope = HwidScope::Provider;
+        let encoded = serde_json::to_value(&subscription).unwrap();
+        assert_eq!(encoded["hwid_scope"], "provider");
+        assert_eq!(
+            serde_json::from_value::<Subscription>(encoded).unwrap(),
+            subscription
+        );
     }
 
     #[test]

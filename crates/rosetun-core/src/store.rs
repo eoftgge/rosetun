@@ -618,6 +618,7 @@ mod tests {
                 updated_at_unix: None,
                 user_agent: None,
                 send_hwid: true,
+                hwid_scope: rosetun_config::HwidScope::Machine,
                 info: None,
                 update_interval_hours: None,
                 support_url: None,
@@ -1415,6 +1416,34 @@ mod tests {
             fs::read(directory.path.join("config.v1.json")).unwrap(),
             original
         );
+    }
+
+    #[test]
+    fn format_six_is_backed_up_and_its_subscriptions_keep_the_machine_id() {
+        let directory = TestDirectory::new();
+        let store = Store::at(directory.config_path());
+        let original = include_bytes!("../../rosetun-config/tests/fixtures/v6.json");
+        fs::write(store.path(), original).unwrap();
+
+        store
+            .modify(|config| {
+                config.settings.kill_switch = false;
+                Ok::<_, StoreError>(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            fs::read(directory.path.join("config.v6.json")).unwrap(),
+            original
+        );
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.path()).unwrap()).unwrap();
+        assert_eq!(saved["version"], CONFIG_VERSION);
+        let subscriptions = saved["subscriptions"].as_array().unwrap();
+        assert!(!subscriptions.is_empty());
+        for subscription in subscriptions {
+            assert_eq!(subscription["hwid_scope"], "machine");
+        }
     }
 
     #[test]

@@ -89,6 +89,7 @@ pub fn prepare_subscription(
         updated_at_unix: None,
         user_agent: options.user_agent,
         send_hwid: options.send_hwid,
+        hwid_scope: rosetun_config::HwidScope::Provider,
         info: None,
         update_interval_hours: None,
         support_url: None,
@@ -259,6 +260,7 @@ pub fn commit_subscription_update(
         if current.url != requested.url
             || current.user_agent != requested.user_agent
             || current.send_hwid != requested.send_hwid
+            || current.hwid_scope != requested.hwid_scope
         {
             return Err(CommitUpdateError::RequestSettingsChanged);
         }

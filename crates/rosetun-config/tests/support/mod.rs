@@ -159,6 +159,7 @@ pub(crate) fn legacy_config() -> AppConfig {
                 updated_at_unix: Some(1_700_000_001),
                 user_agent: Some("Rosetun fixture".to_owned()),
                 send_hwid: false,
+                hwid_scope: rosetun_config::HwidScope::Machine,
                 info: Some(SubscriptionInfo {
                     upload: 100,
                     download: 200,
@@ -180,6 +181,7 @@ pub(crate) fn legacy_config() -> AppConfig {
                 updated_at_unix: Some(1_700_000_002),
                 user_agent: Some("Rosetun fixture secondary".to_owned()),
                 send_hwid: true,
+                hwid_scope: rosetun_config::HwidScope::Machine,
                 info: Some(SubscriptionInfo {
                     upload: 300,
                     download: 400,

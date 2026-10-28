@@ -33,7 +33,7 @@ pub use runtime::{
     Status, Traffic,
 };
 pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings, XrayUse};
-pub use subscription::{Selection, Subscription, SubscriptionInfo};
+pub use subscription::{HwidScope, Selection, Subscription, SubscriptionInfo};
 pub use uploaded_list::{ListRef, UploadedListFormat, list_tag};
 
 use serde::{Deserialize, Serialize};
@@ -41,7 +41,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 6;
+pub const CONFIG_VERSION: u32 = 7;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -243,6 +243,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             3 => migrate_3_to_4(config),
             4 => migrate_4_to_5(config),
             5 => migrate_5_to_6(config),
+            6 => migrate_6_to_7(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -281,6 +282,17 @@ fn migrate_4_to_5(config: &mut Map<String, Value>) {
 
 fn migrate_5_to_6(_config: &mut Map<String, Value>) {
     // Format 6 adds the XHTTP transport; an older release would drop such nodes on save.
+}
+
+fn migrate_6_to_7(config: &mut Map<String, Value>) {
+    // Subscriptions added before format 7 keep the machine-wide device ID, or the
+    // provider's panel would count the computer as a new device.
+    let Some(subscriptions) = config.get_mut("subscriptions").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for subscription in subscriptions.iter_mut().filter_map(Value::as_object_mut) {
+        subscription.insert("hwid_scope".to_owned(), Value::from("machine"));
+    }
 }
 
 impl AppConfig {

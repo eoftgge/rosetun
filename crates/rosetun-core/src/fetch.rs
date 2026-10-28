@@ -2,8 +2,8 @@ use std::fmt;
 use std::io::Read;
 use std::time::Duration;
 
-use rosetun_config::Subscription;
-use rosetun_hwid::{DeviceInfo, sanitize_header_value};
+use rosetun_config::{HwidScope, Subscription};
+use rosetun_hwid::{DeviceInfo, HwidError, HwidFor, sanitize_header_value};
 use rosetun_subscription::{ParseError, Parsed};
 use ureq::tls::{RootCerts, TlsConfig};
 use url::Url;
@@ -161,22 +161,41 @@ pub(crate) fn fetch_list_bytes(
 }
 
 pub fn fetch(subscription: &Subscription, timeouts: Timeouts) -> Result<Parsed, FetchError> {
-    let device = if subscription.send_hwid {
-        match rosetun_hwid::device_info(rosetun_hwid::HwidFor::Machine) {
-            Ok(device) => Some(device),
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "device information unavailable; sending subscription request without HWID"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-
+    let device = request_device(subscription, rosetun_hwid::device_info);
     fetch_with_device(subscription, timeouts, device.as_ref())
+}
+
+pub(crate) fn request_device(
+    subscription: &Subscription,
+    device_info: impl FnOnce(HwidFor<'_>) -> Result<DeviceInfo, HwidError>,
+) -> Option<DeviceInfo> {
+    if !subscription.send_hwid {
+        return None;
+    }
+    let url = Url::parse(&subscription.url).ok();
+    let scope = match subscription.hwid_scope {
+        HwidScope::Machine => HwidFor::Machine,
+        // Never the machine-wide ID instead: it would let providers link the device.
+        HwidScope::Provider => match url.as_ref().and_then(Url::host_str) {
+            Some(host) => HwidFor::Provider(host),
+            None => {
+                tracing::warn!(
+                    "subscription host unavailable; sending subscription request without HWID"
+                );
+                return None;
+            }
+        },
+    };
+    match device_info(scope) {
+        Ok(device) => Some(device),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "device information unavailable; sending subscription request without HWID"
+            );
+            None
+        }
+    }
 }
 
 fn parse_url(url: &str) -> Result<Url, FetchError> {
@@ -331,10 +350,11 @@ mod tests {
     use std::thread::{self, JoinHandle};
 
     use rosetun_config::SubscriptionId;
-    use rosetun_hwid::Hwid;
+    use rosetun_hwid::{Hwid, hwid_for, hwid_for_provider, hwid_from_machine_id};
 
     use super::*;
 
+    const MACHINE_ID: &str = "00000000-0000-4000-8000-000000000001";
     const NODE: &str = "trojan://secret@node.example.com:443#Example";
     const SECRET_SUFFIX: &str = "/private-token?key=query-secret";
 
@@ -488,6 +508,7 @@ mod tests {
             updated_at_unix: None,
             user_agent: None,
             send_hwid: true,
+            hwid_scope: rosetun_config::HwidScope::Machine,
             info: None,
             update_interval_hours: None,
             support_url: None,
@@ -504,6 +525,20 @@ mod tests {
             os_version: "10.0.26100".to_owned(),
             model: "Test PC".to_owned(),
         }
+    }
+
+    fn test_device_info(scope: HwidFor<'_>) -> Result<DeviceInfo, HwidError> {
+        Ok(DeviceInfo {
+            hwid: hwid_for(MACHINE_ID, scope)?,
+            ..device()
+        })
+    }
+
+    fn sent_hwid(subscription: &Subscription, server: &Server) -> String {
+        let device = request_device(subscription, test_device_info);
+        fetch_with_device(subscription, timeouts(), device.as_ref()).unwrap();
+        let requests = server.requests.lock().unwrap();
+        requests[0].headers["x-hwid"].clone()
     }
 
     fn timeouts() -> Timeouts {
@@ -777,6 +812,69 @@ mod tests {
         let requests = server.requests.lock().unwrap();
         for name in ["x-hwid", "x-device-os", "x-ver-os", "x-device-model"] {
             assert!(!requests[0].headers.contains_key(name));
+        }
+    }
+
+    #[test]
+    fn machine_scope_sends_the_machine_wide_id() {
+        let server = Server::start(vec![Reply::ok(NODE.as_bytes().to_vec())]);
+        let subscription = subscription(&server.url);
+
+        assert_eq!(
+            sent_hwid(&subscription, &server),
+            hwid_from_machine_id(MACHINE_ID).unwrap().as_str()
+        );
+    }
+
+    #[test]
+    fn provider_scope_sends_the_id_of_the_subscription_host() {
+        let server = Server::start(vec![Reply::ok(NODE.as_bytes().to_vec())]);
+        let mut subscription = subscription(&server.url);
+        subscription.hwid_scope = HwidScope::Provider;
+
+        let sent = sent_hwid(&subscription, &server);
+        assert_eq!(
+            sent,
+            hwid_for_provider(MACHINE_ID, "127.0.0.1").unwrap().as_str()
+        );
+        assert_ne!(sent, hwid_from_machine_id(MACHINE_ID).unwrap().as_str());
+    }
+
+    #[test]
+    fn provider_id_depends_on_the_host_only() {
+        let hwid = |url: &str| {
+            let mut subscription = subscription(url);
+            subscription.hwid_scope = HwidScope::Provider;
+            request_device(&subscription, test_device_info).unwrap().hwid
+        };
+
+        let expected = hwid_for_provider(MACHINE_ID, "sub.example.com").unwrap();
+        assert_eq!(hwid("https://sub.example.com/private?token=one"), expected);
+        assert_eq!(hwid("https://SUB.example.com:8443/other"), expected);
+        assert_ne!(hwid("https://other.example.com/private"), expected);
+    }
+
+    #[test]
+    fn provider_scope_without_a_host_sends_no_device_id() {
+        for url in ["not a subscription link", "file:///private"] {
+            let mut subscription = subscription(url);
+            subscription.hwid_scope = HwidScope::Provider;
+
+            let device = request_device(&subscription, |_| {
+                panic!("the machine ID must not be read without a provider host")
+            });
+            assert!(device.is_none());
+        }
+    }
+
+    #[test]
+    fn disabled_hwid_reads_no_device() {
+        for scope in [HwidScope::Machine, HwidScope::Provider] {
+            let mut subscription = subscription("https://sub.example.com/private");
+            subscription.send_hwid = false;
+            subscription.hwid_scope = scope;
+
+            assert!(request_device(&subscription, |_| panic!("device read")).is_none());
         }
     }
 
