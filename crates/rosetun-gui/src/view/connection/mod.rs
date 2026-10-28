@@ -133,13 +133,24 @@ fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             egui::Sides::new().shrink_left().wrap().spacing(16.0).show(
                 ui,
                 |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(i18n::update_offer(&release.version))
-                                .strong()
-                                .color(theme::palette().accent_light),
-                        )
-                        .wrap(),
+                    // As tall as the buttons, so the text sits on their middle.
+                    let button_height = (ui.text_style_height(&egui::TextStyle::Button)
+                        + 2.0 * ui.spacing().button_padding.y)
+                        .max(ui.spacing().interact_size.y);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), button_height),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_min_height(button_height);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(i18n::update_offer(&release.version))
+                                        .strong()
+                                        .color(theme::palette().accent_light),
+                                )
+                                .wrap(),
+                            );
+                        },
                     );
                 },
                 |ui| {
