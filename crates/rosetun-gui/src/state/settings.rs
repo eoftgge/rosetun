@@ -113,7 +113,7 @@ fn waits_for_save(action: &Action) -> bool {
         #[cfg(windows)]
         Action::SetAutostart(_)
         | Action::SetCloseToTray(_)
-        | Action::SetQuitAction(_)
+        | Action::SetOnQuit(_)
         | Action::SetNotifications(_)
         | Action::ShowReportFolder
         | Action::OpenFolder(_) => true,
@@ -470,7 +470,7 @@ impl State {
                 }
             }
             #[cfg(windows)]
-            Action::SetQuitAction(action) => {
+            Action::SetOnQuit(action) => {
                 if self.can_edit_settings() && self.config.interface.quit_action != action {
                     return self.start_settings(Job::Setting(SettingChange::QuitAction(action)));
                 }

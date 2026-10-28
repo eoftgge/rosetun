@@ -177,9 +177,9 @@ fn an_answer_after_the_question_closed_is_ignored() {
 fn the_quit_setting_saves_only_a_change() {
     let mut state = state_in(ConnectionState::Disconnected);
 
-    assert!(state.act(Action::SetQuitAction(QuitAction::Ask)).is_none());
+    assert!(state.act(Action::SetOnQuit(QuitAction::Ask)).is_none());
     assert!(matches!(
-        state.act(Action::SetQuitAction(QuitAction::KeepConnected)),
+        state.act(Action::SetOnQuit(QuitAction::KeepConnected)),
         Some(Job::Setting(SettingChange::QuitAction(
             QuitAction::KeepConnected
         )))

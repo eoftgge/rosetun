@@ -228,7 +228,7 @@ pub(crate) enum Action {
     #[cfg(windows)]
     SetCloseToTray(bool),
     #[cfg(windows)]
-    SetQuitAction(rosetun_config::QuitAction),
+    SetOnQuit(rosetun_config::QuitAction),
     #[cfg(windows)]
     SetRememberQuit(bool),
     #[cfg(windows)]
@@ -694,7 +694,7 @@ impl State {
             #[cfg(windows)]
             action @ (Action::SetAutostart(_)
             | Action::SetCloseToTray(_)
-            | Action::SetQuitAction(_)
+            | Action::SetOnQuit(_)
             | Action::SetNotifications(_)
             | Action::SaveReport
             | Action::ShowReportFolder

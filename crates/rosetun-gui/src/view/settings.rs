@@ -202,7 +202,7 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     });
             });
             if selected != saved && editable {
-                actions.push(Action::SetQuitAction(selected));
+                actions.push(Action::SetOnQuit(selected));
             }
         });
         let mut notifications = state.config.interface.notifications;

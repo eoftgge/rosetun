@@ -91,9 +91,9 @@ impl State {
     /// Nothing the quit started is still on its way: the service answered,
     /// settings are saved and, when disconnecting, the tunnel is gone.
     pub(crate) fn quit_settled(&self, disconnecting: bool) -> bool {
-        !self.operations.helper
-            && !self.saves_settings()
-            && !(disconnecting && holds_tunnel(self.visible_status().map(|status| &status.state)))
+        let tunnel_left =
+            disconnecting && holds_tunnel(self.visible_status().map(|status| &status.state));
+        !(self.operations.helper || self.saves_settings() || tunnel_left)
     }
 
     pub(crate) fn saves_settings(&self) -> bool {
@@ -119,7 +119,7 @@ impl State {
                     } else {
                         QuitAction::KeepConnected
                     };
-                    return self.act(Action::SetQuitAction(action));
+                    return self.act(Action::SetOnQuit(action));
                 }
             }
             _ => unreachable!("only quit actions are dispatched here"),
