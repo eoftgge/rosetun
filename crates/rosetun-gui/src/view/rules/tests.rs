@@ -1,3 +1,8 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use rosetun_config::{DomainMatch, ProcessMatch};
+
 use super::*;
 
 fn drag_set() -> RuleSet {
@@ -18,6 +23,28 @@ fn drag_set() -> RuleSet {
         })
         .collect();
     set
+}
+
+#[test]
+fn a_program_rule_shows_the_icon_of_its_path_or_of_a_running_program_by_name() {
+    let running = HashMap::from([(
+        "example.exe".to_owned(),
+        Path::new(r"C:\Apps\Example\Example.exe"),
+    )]);
+    let by_path = RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(r"D:\Tools\other.exe")));
+    assert_eq!(
+        program_icon_path(&by_path, &running),
+        Some(Path::new(r"D:\Tools\other.exe"))
+    );
+    let by_name = RuleMatcher::Process(ProcessMatch::Name("EXAMPLE.exe".to_owned()));
+    assert_eq!(
+        program_icon_path(&by_name, &running),
+        Some(Path::new(r"C:\Apps\Example\Example.exe"))
+    );
+    let not_running = RuleMatcher::Process(ProcessMatch::Name("absent.exe".to_owned()));
+    assert_eq!(program_icon_path(&not_running, &running), None);
+    let site = RuleMatcher::Domain(DomainMatch::Exact("example.com".to_owned()));
+    assert_eq!(program_icon_path(&site, &running), None);
 }
 
 #[test]
@@ -140,6 +167,7 @@ fn row_input_actions(
                         &RowContext {
                             set,
                             unresolved: &crate::destinations::unresolved_exits(&state.config),
+                            running: HashMap::new(),
                         },
                         &set.rules[0],
                         Some(0),

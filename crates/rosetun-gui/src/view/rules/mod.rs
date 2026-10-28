@@ -51,11 +51,11 @@ mod templates;
 pub(crate) use dialogs::{delete_dialog, name_dialog};
 use selection::{clear_selection_on_click_away, selection_shortcuts, selection_slot};
 use sets::set_controls;
-use table::{RowContext, default_rule, rule_row, scroll_rules_while_dragging};
+use table::{RowContext, default_rule, rule_row, running_programs, scroll_rules_while_dragging};
 #[cfg(test)]
 use table::{
-    TargetChoice, drag_scroll_delta, drag_target, drop_action, table_cell, target_button,
-    value_cell,
+    TargetChoice, drag_scroll_delta, drag_target, drop_action, program_icon_path, table_cell,
+    target_button, value_cell,
 };
 #[cfg(test)]
 use templates::template_card;
@@ -201,6 +201,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     let rows = RowContext {
         set,
         unresolved: &unresolved,
+        running: running_programs(state),
     };
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 6.0;

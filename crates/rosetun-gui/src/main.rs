@@ -17,6 +17,7 @@ mod destinations;
 mod display;
 mod errors;
 mod icons;
+mod program_icons;
 mod programs;
 mod qr;
 mod reorder;

@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::path::Path;
 
-use rosetun_config::ExitId;
+use rosetun_config::{ExitId, ProcessMatch};
 
 use super::templates::template_icon;
 use super::*;
@@ -322,6 +323,60 @@ pub(super) struct RowContext<'a> {
     pub(super) set: &'a RuleSet,
     /// `destinations::unresolved_exits`, which resolves every exit.
     pub(super) unresolved: &'a BTreeSet<ExitId>,
+    /// `running_programs`, for the icons of rules by file name.
+    pub(super) running: HashMap<String, &'a Path>,
+}
+
+/// Paths of programs already listed elsewhere (the add-rule dialog, the
+/// Traffic tab), by lowercase file name. Nothing is read for the table.
+pub(super) fn running_programs(state: &State) -> HashMap<String, &Path> {
+    let dialog = state
+        .rules
+        .screen
+        .add
+        .iter()
+        .flat_map(|dialog| &dialog.processes)
+        .filter_map(|group| group.path.as_deref());
+    let traffic = state.traffic.connections.programs.paths().map(Path::new);
+    dialog
+        .chain(traffic)
+        .map(|path| {
+            let name = crate::programs::file_name(&path.to_string_lossy()).to_lowercase();
+            (name, path)
+        })
+        .collect()
+}
+
+/// The executable whose icon a rule shows: its own full path, or a running
+/// program with the rule's file name.
+pub(super) fn program_icon_path<'a>(
+    matcher: &'a RuleMatcher,
+    running: &HashMap<String, &'a Path>,
+) -> Option<&'a Path> {
+    match matcher {
+        RuleMatcher::Process(ProcessMatch::Path(path)) => Some(path),
+        RuleMatcher::Process(ProcessMatch::Name(name)) => {
+            running.get(&name.to_lowercase()).copied()
+        }
+        _ => None,
+    }
+}
+
+/// A program rule's badge with the program's own icon when there is one.
+fn program_badge(ui: &mut egui::Ui, path: &Path) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ICON_WIDTH, ICON_WIDTH), egui::Sense::hover());
+    if !ui.is_rect_visible(rect) || crate::program_icons::paint(ui, rect, ICON_WIDTH, path) {
+        return;
+    }
+    ui.painter()
+        .rect_filled(rect, theme::RADIUS_INNER, theme::palette().input);
+    icons::paint(
+        ui.painter(),
+        rect.center(),
+        Icon::App,
+        theme::palette().text_muted,
+    );
 }
 
 pub(super) fn rule_row(
@@ -389,6 +444,8 @@ pub(super) fn rule_row(
                             theme::palette().text_dim,
                         )
                         .on_hover_text(tr!("temporary-hint"));
+                    } else if let Some(path) = program_icon_path(&rule.matcher, &rows.running) {
+                        program_badge(ui, path);
                     } else {
                         icons::icon_badge(ui, rule_icon(&rule.matcher), ICON_WIDTH);
                     }

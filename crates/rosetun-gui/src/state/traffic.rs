@@ -125,6 +125,11 @@ impl ProgramNames {
         }
     }
 
+    /// Every program path seen this session.
+    pub(crate) fn paths(&self) -> impl Iterator<Item = &str> {
+        self.requested.iter().map(String::as_str)
+    }
+
     /// "System and other" for a connection without a program.
     pub(crate) fn name(&self, path: Option<&str>) -> String {
         match path {

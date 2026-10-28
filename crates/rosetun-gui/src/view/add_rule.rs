@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use eframe::egui::{self, Color32, FontFamily, FontId, RichText, Stroke};
 use rosetun_config::{AppConfig, ExitTarget, List, ListId, ProcessMatch, RuleTarget};
 use rosetun_core::{NewExit, RuleDestination};
@@ -15,6 +17,7 @@ const DIALOG_TOP: f32 = 100.0;
 const COMPACT_DIALOG_HEIGHT: f32 = 632.0;
 const ERROR_HEIGHT: f32 = 28.0;
 const PROCESS_ROW_HEIGHT: f32 = 44.0;
+const PROCESS_TILE_SIDE: f32 = 28.0;
 const PROCESS_ROW_GAP: f32 = 4.0;
 const CATEGORY_ROW_HEIGHT: f32 = 22.0;
 const CATEGORY_VIEW_HEIGHT: f32 = 120.0;
@@ -30,6 +33,13 @@ const DESTINATION_HEIGHT: f32 = 36.0;
 const DESTINATION_HINT_HEIGHT: f32 = 18.0;
 const DESTINATION_POPUP_MARGIN: f32 = 24.0;
 const MIN_DESTINATION_POPUP: f32 = 120.0;
+
+/// A process row's tile: the program's icon, else a letter on a colour.
+struct ProcessTile<'a> {
+    letter: &'a str,
+    fill: Color32,
+    icon: Option<&'a Path>,
+}
 
 fn process_body_height(top: f32, limit: f32, advanced: bool) -> f32 {
     let min_list = if advanced {
@@ -942,8 +952,11 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     ui,
                     &display::safe_text(typed),
                     &tr!("typed-process"),
-                    "+",
-                    theme::palette().border_strong,
+                    ProcessTile {
+                        letter: "+",
+                        fill: theme::palette().border_strong,
+                        icon: None,
+                    },
                     selected,
                     !dialog.busy,
                 );
@@ -993,8 +1006,11 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     ui,
                     &name,
                     &display::safe_text(&path),
-                    &display::safe_text(&tile),
-                    tile_color(&group.name),
+                    ProcessTile {
+                        letter: &display::safe_text(&tile),
+                        fill: tile_color(&group.name),
+                        icon: group.path.as_deref(),
+                    },
                     dialog.selected_process == Some(index),
                     !dialog.busy,
                 );
@@ -1112,8 +1128,7 @@ fn process_row(
     ui: &mut egui::Ui,
     name: &str,
     detail: &str,
-    tile: &str,
-    tile_fill: Color32,
+    tile: ProcessTile<'_>,
     selected: bool,
     enabled: bool,
 ) -> egui::Response {
@@ -1148,21 +1163,26 @@ fn process_row(
     );
     let tile_rect = egui::Rect::from_min_size(
         egui::pos2(rect.left() + 10.0, rect.center().y - 14.0),
-        egui::vec2(28.0, 28.0),
-    );
-    ui.painter().rect_filled(
-        tile_rect,
-        egui::CornerRadius::same(theme::RADIUS),
-        tile_fill,
+        egui::vec2(PROCESS_TILE_SIDE, PROCESS_TILE_SIDE),
     );
     let semibold = FontFamily::Name(theme::UI_SEMIBOLD.into());
-    ui.painter().text(
-        tile_rect.center(),
-        egui::Align2::CENTER_CENTER,
-        tile,
-        FontId::new(13.0, semibold.clone()),
-        theme::palette().text,
-    );
+    if !tile
+        .icon
+        .is_some_and(|path| crate::program_icons::paint(ui, tile_rect, PROCESS_TILE_SIDE, path))
+    {
+        ui.painter().rect_filled(
+            tile_rect,
+            egui::CornerRadius::same(theme::RADIUS),
+            tile.fill,
+        );
+        ui.painter().text(
+            tile_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            tile.letter,
+            FontId::new(13.0, semibold.clone()),
+            theme::palette().text,
+        );
+    }
     let text_painter = ui.painter().with_clip_rect(egui::Rect::from_min_max(
         egui::pos2(tile_rect.right() + 10.0, rect.top()),
         egui::pos2(rect.right() - 10.0, rect.bottom()),

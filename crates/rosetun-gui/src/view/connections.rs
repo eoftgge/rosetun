@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use eframe::egui::{self, Color32, RichText};
 use rosetun_config::{ConnectionNetwork, ConnectionRoute, LiveConnection};
 
@@ -13,6 +15,8 @@ const TABLE_ROW_HEIGHT: f32 = 26.0;
 /// Program rows and the connection rows under them share one height, as
 /// `ScrollArea::show_rows` needs.
 const PROGRAM_ROW_HEIGHT: f32 = 34.0;
+/// A program's icon in its 24-point tile slot.
+const PROGRAM_ICON_SIDE: f32 = 20.0;
 /// Right of the name: connections or network, routes, speed, transferred or time.
 const PROGRAM_COLUMNS: [f32; 4] = [96.0, 56.0, 92.0, 76.0];
 /// Chevron and letter tile with their gaps; connection rows start after it.
@@ -639,7 +643,7 @@ fn program_row(
             Icon::Chevron { open: expanded },
             theme::palette().text_dim,
         );
-        letter_tile(ui, &name);
+        program_tile(ui, group.path, &name);
         let width = program_name_width(ui);
         ui.allocate_ui_with_layout(
             egui::vec2(width, PROGRAM_ROW_HEIGHT),
@@ -770,8 +774,14 @@ fn select_on_click(
     }
 }
 
-fn letter_tile(ui: &mut egui::Ui, name: &str) {
+/// The program's own icon, or a tile with its first letter.
+fn program_tile(ui: &mut egui::Ui, path: Option<&str>, name: &str) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+    if path.is_some_and(|path| {
+        crate::program_icons::paint(ui, rect, PROGRAM_ICON_SIDE, Path::new(path))
+    }) {
+        return;
+    }
     ui.painter()
         .rect_filled(rect, theme::RADIUS_INNER, theme::palette().input);
     let letter: String = name
