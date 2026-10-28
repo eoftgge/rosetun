@@ -635,9 +635,7 @@ fn paint_tab_icon(painter: &egui::Painter, rect: Rect, icon: TabIcon, color: Col
 mod tests {
     use std::time::Duration;
 
-    use super::{
-        CUSTOM_FRAME, header_status_for, intro_progress, petal_repaint, show_with_rects,
-    };
+    use super::{CUSTOM_FRAME, header_status_for, intro_progress, petal_repaint, show_with_rects};
     use crate::state::{ExitLookup, ExitRoute, State};
     use crate::theme;
     use rosetun_config::ConnectionState;

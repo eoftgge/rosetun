@@ -274,7 +274,10 @@ pub(crate) fn drift(index: usize, time: f64, speed: Speed) -> (Vec2, f32) {
     let swing = (0.5 - 0.5 * (std::f64::consts::TAU * (time + lead) / period).cos()) as f32;
     let along = |from: f32, to: f32| from + (to - from) * swing;
     (
-        egui::vec2(along(DRIFT_FROM.0, DRIFT_TO.0), along(DRIFT_FROM.1, DRIFT_TO.1)),
+        egui::vec2(
+            along(DRIFT_FROM.0, DRIFT_TO.0),
+            along(DRIFT_FROM.1, DRIFT_TO.1),
+        ),
         along(DRIFT_FROM.2, DRIFT_TO.2),
     )
 }
