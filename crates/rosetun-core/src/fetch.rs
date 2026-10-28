@@ -162,7 +162,7 @@ pub(crate) fn fetch_list_bytes(
 
 pub fn fetch(subscription: &Subscription, timeouts: Timeouts) -> Result<Parsed, FetchError> {
     let device = if subscription.send_hwid {
-        match rosetun_hwid::device_info() {
+        match rosetun_hwid::device_info(rosetun_hwid::HwidFor::Machine) {
             Ok(device) => Some(device),
             Err(error) => {
                 tracing::warn!(

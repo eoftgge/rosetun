@@ -29,6 +29,15 @@ impl Hwid {
     }
 }
 
+/// Which device ID a subscription request carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HwidFor<'a> {
+    /// The same ID for every subscription, as before 0.4.
+    Machine,
+    /// An ID of its own for one subscription server host.
+    Provider(&'a str),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
     pub hwid: Hwid,
@@ -41,6 +50,8 @@ pub struct DeviceInfo {
 pub enum HwidError {
     #[error("device identifier is empty")]
     EmptyIdentifier,
+    #[error("provider host is empty")]
+    EmptyHost,
     #[error("could not read the system device identifier")]
     MachineIdUnavailable,
     #[error("registry read failed for {value} (Windows error {code})")]
@@ -71,6 +82,36 @@ pub fn hwid_from_machine_id(machine_id: &str) -> Result<Hwid, HwidError> {
     Ok(Hwid(digest_hex(&digest[..16])))
 }
 
+pub fn hwid_for_provider(machine_id: &str, host: &str) -> Result<Hwid, HwidError> {
+    let normalized = machine_id.trim().to_lowercase();
+    if normalized.is_empty() {
+        return Err(HwidError::EmptyIdentifier);
+    }
+    let host = host.trim().to_ascii_lowercase();
+    if host.is_empty() {
+        return Err(HwidError::EmptyHost);
+    }
+
+    // A separate prefix keeps v2 IDs apart from v1 ones even for the same input.
+    // Only the host goes in: the path and query carry the provider's per-user
+    // token, and the port does not make another provider.
+    let mut hasher = Sha256::new();
+    hasher.update(b"rosetun-hwid-v2:");
+    hasher.update(normalized.as_bytes());
+    hasher.update([0]);
+    hasher.update(host.as_bytes());
+    let digest = hasher.finalize();
+
+    Ok(Hwid(digest_hex(&digest[..16])))
+}
+
+pub fn hwid_for(machine_id: &str, scope: HwidFor<'_>) -> Result<Hwid, HwidError> {
+    match scope {
+        HwidFor::Machine => hwid_from_machine_id(machine_id),
+        HwidFor::Provider(host) => hwid_for_provider(machine_id, host),
+    }
+}
+
 pub fn sanitize_header_value(value: &str) -> String {
     value
         .chars()
@@ -86,9 +127,9 @@ pub fn sanitize_header_value(value: &str) -> String {
 }
 
 #[cfg(windows)]
-pub fn device_info() -> Result<DeviceInfo, HwidError> {
+pub fn device_info(scope: HwidFor<'_>) -> Result<DeviceInfo, HwidError> {
     let machine_guid = registry::read_string(r"SOFTWARE\Microsoft\Cryptography", "MachineGuid")?;
-    let hwid = hwid_from_machine_id(&machine_guid)?;
+    let hwid = hwid_for(&machine_guid, scope)?;
 
     // Only the HWID is required: a panel with a device limit rejects requests
     // without it, while the version and model are informational.
@@ -119,10 +160,10 @@ fn windows_version() -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn device_info() -> Result<DeviceInfo, HwidError> {
+pub fn device_info(scope: HwidFor<'_>) -> Result<DeviceInfo, HwidError> {
     let machine_id =
         std::fs::read_to_string("/etc/machine-id").map_err(|_| HwidError::MachineIdUnavailable)?;
-    let hwid = hwid_from_machine_id(&machine_id)?;
+    let hwid = hwid_for(&machine_id, scope)?;
 
     let os_version = std::fs::read_to_string("/proc/sys/kernel/osrelease")
         .ok()
@@ -138,13 +179,90 @@ pub fn device_info() -> Result<DeviceInfo, HwidError> {
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-pub fn device_info() -> Result<DeviceInfo, HwidError> {
+pub fn device_info(_scope: HwidFor<'_>) -> Result<DeviceInfo, HwidError> {
     Err(HwidError::UnsupportedPlatform)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Hwid, HwidError, hwid_from_machine_id, sanitize_header_value};
+    use super::{
+        Hwid, HwidError, HwidFor, hwid_for, hwid_for_provider, hwid_from_machine_id,
+        sanitize_header_value,
+    };
+
+    const MACHINE_ID: &str = "12345678-abcd-1234-abcd-123456789abc";
+
+    fn assert_header_safe(hwid: &Hwid) {
+        let value = hwid.as_str();
+        assert!((10..=64).contains(&value.len()));
+        assert!(
+            value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'=' | b'-'))
+        );
+    }
+
+    #[test]
+    fn machine_hwid_is_unchanged_since_v1() {
+        assert_eq!(
+            hwid_from_machine_id(MACHINE_ID).unwrap().as_str(),
+            "e781aff7d87a5c6fc260ff77072cea9f"
+        );
+        assert_eq!(
+            hwid_for(MACHINE_ID, HwidFor::Machine).unwrap(),
+            hwid_from_machine_id(MACHINE_ID).unwrap()
+        );
+    }
+
+    #[test]
+    fn provider_hwid_differs_between_hosts() {
+        assert_ne!(
+            hwid_for_provider(MACHINE_ID, "a.example.com").unwrap(),
+            hwid_for_provider(MACHINE_ID, "b.example.com").unwrap()
+        );
+    }
+
+    #[test]
+    fn provider_hwid_ignores_host_case() {
+        assert_eq!(
+            hwid_for_provider(MACHINE_ID, "sub.example.com").unwrap(),
+            hwid_for_provider(MACHINE_ID, "SUB.example.com").unwrap()
+        );
+    }
+
+    #[test]
+    fn provider_hwid_normalizes_the_machine_id_as_v1() {
+        assert_eq!(
+            hwid_for_provider(" ABCDEF-123456
+", "sub.example.com").unwrap(),
+            hwid_for_provider("abcdef-123456", "sub.example.com").unwrap()
+        );
+    }
+
+    #[test]
+    fn provider_hwid_is_not_the_machine_hwid() {
+        let machine = hwid_from_machine_id(MACHINE_ID).unwrap();
+        for host in ["sub.example.com", "192.0.2.1", "[2001:db8::1]"] {
+            let provider = hwid_for(MACHINE_ID, HwidFor::Provider(host)).unwrap();
+            assert_ne!(provider, machine);
+            assert_header_safe(&provider);
+            assert_eq!(provider.as_str().len(), 32);
+        }
+    }
+
+    #[test]
+    fn provider_hwid_needs_a_host() {
+        for host in ["", " "] {
+            assert!(matches!(
+                hwid_for_provider(MACHINE_ID, host),
+                Err(HwidError::EmptyHost)
+            ));
+        }
+        assert!(matches!(
+            hwid_for_provider(" ", "sub.example.com"),
+            Err(HwidError::EmptyIdentifier)
+        ));
+    }
 
     #[test]
     fn same_machine_id_produces_same_hwid() {
