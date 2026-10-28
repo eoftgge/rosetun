@@ -49,7 +49,7 @@ impl SettingsCard<'_> {
                     ui,
                     RichText::new(title).color(theme::palette().text).into(),
                     tag,
-                )
+                );
             },
             detail,
             control,
