@@ -48,15 +48,32 @@ use tracing_subscriber::prelude::*;
 #[cfg(windows)]
 /// Passed by autostart: start in the tray without showing the window.
 pub(crate) const HIDDEN_ARG: &str = "--hidden";
+#[cfg(windows)]
+/// Passed by the `rosetun://` scheme handler with the link that was opened.
+const OPEN_URL_ARG: &str = "--open-url";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
-    let start_hidden = std::env::args_os().any(|arg| arg == HIDDEN_ARG);
+    let open_link = open_url_arg(std::env::args_os());
     #[cfg(windows)]
-    let activation = match rosetun_shell::acquire(!start_hidden) {
-        Ok(rosetun_shell::Instance::First(activation)) => Ok(activation),
-        Ok(rosetun_shell::Instance::Other) => return Ok(()),
-        Err(error) => Err(error),
+    let start_hidden =
+        open_link.is_none() && std::env::args_os().any(|arg| arg == HIDDEN_ARG);
+    #[cfg(windows)]
+    let (activation, links) = match rosetun_shell::acquire(!start_hidden) {
+        // Taken before the settings load, so a later instance's link
+        // waits in the pipe instead of finding no server.
+        Ok(rosetun_shell::Instance::First(activation)) => {
+            (Ok(activation), Some(rosetun_shell::LinkListener::bind()))
+        }
+        Ok(rosetun_shell::Instance::Other) => {
+            if let Some(link) = &open_link
+                && let Err(error) = rosetun_shell::send_link(link)
+            {
+                tracing::warn!(%error, "could not pass the link to the running GUI");
+            }
+            return Ok(());
+        }
+        Err(error) => (Err(error), None),
     };
     let store = rosetun_core::Store::open_default()?;
     #[cfg(windows)]
@@ -96,6 +113,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let activation = activation
         .inspect_err(|error| tracing::warn!(%error, "single-instance check failed"))
         .ok();
+    #[cfg(windows)]
+    let links = links.and_then(|links| {
+        links
+            .inspect_err(|error| tracing::warn!(%error, "could not open the link pipe"))
+            .ok()
+    });
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(constants::TITLE)
@@ -126,6 +149,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let app = app.with_shell(
                 &cc.egui_ctx,
                 activation,
+                links,
+                open_link,
                 start_hidden,
                 window_memory::WindowMemory::new(cc, window_file),
             );
@@ -133,4 +158,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
     )?;
     Ok(())
+}
+
+/// The link after `--open-url`. A missing or unreadable value is an empty
+/// link, so the add dialog still opens and says it holds no subscription.
+#[cfg(windows)]
+fn open_url_arg(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
+    let mut args = args.skip_while(|arg| arg != OPEN_URL_ARG);
+    args.next()?;
+    Some(
+        args.next()
+            .and_then(|link| link.into_string().ok())
+            .unwrap_or_default(),
+    )
 }

@@ -19,6 +19,13 @@ pub(crate) fn show(
             ui.heading(tr!("add-subscription"));
             ui.colored_label(theme::TEXT_MUTED, tr!("add-subtitle"));
             ui.add_space(18.0);
+            if let Some(host) = &dialog.from_link {
+                ui.colored_label(
+                    theme::TEXT_MUTED,
+                    tr!("subscriptions-add-from-link", host = display::safe_text(host)),
+                );
+                ui.add_space(6.0);
+            }
             ui.label(tr!("subscription-url"));
             let editable = !dialog.busy && !dialog.qr.busy();
             ui.horizontal(|ui| {
@@ -36,6 +43,7 @@ pub(crate) fn show(
                 if input.changed() {
                     dialog.error = None;
                     dialog.qr.error = None;
+                    dialog.link_error = false;
                 }
                 if widgets::outline_button(ui, tr!("paste"), editable).clicked() {
                     input.request_focus();
@@ -44,6 +52,14 @@ pub(crate) fn show(
                 qr_menu(ui, dialog, editable, actions);
             });
             qr_status(ui, dialog, actions);
+            if dialog.link_error {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr!("error-open-link-invalid")).color(theme::ERROR),
+                    )
+                    .wrap(),
+                );
+            }
             ui.add(egui::Label::new(RichText::new(tr!("url-help")).color(theme::TEXT_DIM)).wrap());
             let normalized = rosetun_core::normalize_subscription_url(&dialog.url);
             if !dialog.url.trim().is_empty() {

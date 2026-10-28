@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 use std::ops::RangeInclusive;
 
 use rosetun_config::{
@@ -6,7 +7,7 @@ use rosetun_config::{
 };
 use rosetun_core::{AddFromUrlError, AddOptions, UpdateReport, UpdateSubscriptionError};
 
-use super::{Action, Job, State};
+use super::{Action, Job, Screen, State};
 use crate::errors;
 use crate::reorder::drop_target;
 use crate::worker::WorkerEvent;
@@ -67,6 +68,16 @@ pub(in crate::state) fn list_update_due(list: &List, now: u64, last_attempt: Opt
         && last_attempt.is_none_or(|attempt| now.saturating_sub(attempt) >= AUTO_UPDATE_RETRY)
 }
 
+/// A `rosetun://` link as the system handed it over, before any check. It is
+/// as secret as the subscription, so `Debug` never shows it.
+pub(crate) struct OpenedLink(pub(crate) String);
+
+impl fmt::Debug for OpenedLink {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("OpenedLink(..)")
+    }
+}
+
 pub(crate) struct AddDialog {
     pub(crate) url: String,
     pub(crate) name: String,
@@ -75,6 +86,10 @@ pub(crate) struct AddDialog {
     pub(crate) error: Option<AddFromUrlError>,
     pub(crate) focus_url: bool,
     pub(crate) qr: QrImport,
+    /// The provider's host when a `rosetun://` link opened the dialog.
+    pub(crate) from_link: Option<String>,
+    /// A `rosetun://` link opened the dialog but held no subscription link.
+    pub(crate) link_error: bool,
 }
 
 impl Default for AddDialog {
@@ -87,6 +102,8 @@ impl Default for AddDialog {
             error: None,
             focus_url: true,
             qr: QrImport::default(),
+            from_link: None,
+            link_error: false,
         }
     }
 }
@@ -117,6 +134,10 @@ pub(crate) struct SubscriptionsState {
     list_auto_update_attempts: HashMap<ListId, u64>,
     pub(crate) expanded: BTreeSet<SubscriptionId>,
     pub(crate) reveal: Option<(SubscriptionId, NodeId)>,
+    /// A subscription card to scroll to, for a link to a subscription already added.
+    pub(crate) reveal_card: Option<SubscriptionId>,
+    /// A link opened before the settings loaded, applied once they do.
+    pending_link: Option<OpenedLink>,
     pub(crate) outcomes: BTreeMap<SubscriptionId, UpdateOutcome>,
     pub(crate) pings: HashMap<(SubscriptionId, NodeId), PingResult>,
     pub(crate) add: Option<AddDialog>,
@@ -398,7 +419,11 @@ impl State {
                     self.subscriptions.expanded.insert(subscription.id.clone());
                 }
             }
-            Action::RevealDone => self.subscriptions.reveal = None,
+            Action::RevealDone => {
+                self.subscriptions.reveal = None;
+                self.subscriptions.reveal_card = None;
+            }
+            Action::OpenLink(link) => return self.open_link(link),
             Action::ToggleExpanded(id) => {
                 if !self.subscriptions.expanded.remove(&id) {
                     self.subscriptions.expanded.insert(id);
@@ -555,5 +580,54 @@ impl State {
             _ => unreachable!("only subscription actions are dispatched here"),
         }
         None
+    }
+
+    /// Any web page can open a `rosetun://` link, so it only fills the add
+    /// dialog: nothing is fetched or added until the user confirms.
+    fn open_link(&mut self, link: OpenedLink) -> Option<Job> {
+        if !self.config_ready {
+            self.subscriptions.pending_link = Some(link);
+            return None;
+        }
+        // A page must not replace what the user is typing.
+        if self.subscriptions.add.is_some() {
+            return None;
+        }
+        let Ok(opened) = rosetun_core::parse_open_link(&link.0) else {
+            self.subscriptions.add = Some(AddDialog {
+                link_error: true,
+                ..AddDialog::default()
+            });
+            return None;
+        };
+        if let Some(existing) = self
+            .config
+            .subscriptions
+            .iter()
+            .find(|existing| existing.url == opened.url)
+        {
+            let id = existing.id.clone();
+            self.subscriptions.expanded.insert(id.clone());
+            self.subscriptions.reveal_card = Some(id);
+            return self.show_screen(Screen::Connection);
+        }
+        let host = url::Url::parse(&opened.url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned));
+        self.subscriptions.add = Some(AddDialog {
+            url: opened.url,
+            name: opened.name.unwrap_or_default(),
+            from_link: host,
+            ..AddDialog::default()
+        });
+        None
+    }
+
+    pub(super) fn apply_pending_link(&mut self) {
+        if let Some(link) = self.subscriptions.pending_link.take()
+            && let Some(job) = self.open_link(link)
+        {
+            self.session.queued_leave_apply = Some(job);
+        }
     }
 }

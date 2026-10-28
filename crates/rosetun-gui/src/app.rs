@@ -7,7 +7,7 @@ use eframe::egui;
 use rosetun_core::Store;
 
 #[cfg(windows)]
-use crate::state::Action;
+use crate::state::{Action, OpenedLink};
 use crate::state::{Job, State};
 #[cfg(windows)]
 use crate::tray;
@@ -31,9 +31,10 @@ fn centered_position(monitor: Option<egui::Vec2>, window: egui::Vec2) -> egui::P
 }
 
 #[cfg(windows)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum ShellEvent {
     Show,
+    OpenLink(OpenedLink),
     Hide,
     Primary,
     Quit,
@@ -131,6 +132,8 @@ impl App {
         mut self,
         ctx: &egui::Context,
         activation: Option<rosetun_shell::Activation>,
+        links: Option<rosetun_shell::LinkListener>,
+        open_link: Option<String>,
         start_hidden: bool,
         window: Option<WindowMemory>,
     ) -> Self {
@@ -154,6 +157,23 @@ impl App {
         }
         if start_hidden && self.tray.is_none() {
             let _ = sender.send(ShellEvent::Show);
+        }
+        if let Some(link) = open_link {
+            let _ = sender.send(ShellEvent::OpenLink(OpenedLink(link)));
+        }
+        if let Some(links) = links {
+            let sender = sender.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let served = links.serve(|link| {
+                    let _ = sender.send(ShellEvent::OpenLink(OpenedLink(link)));
+                    let _ = sender.send(ShellEvent::Show);
+                    ctx.request_repaint();
+                });
+                if let Err(error) = served {
+                    tracing::warn!(%error, "link pipe stopped");
+                }
+            });
         }
         if let Some(activation) = activation {
             let ctx = ctx.clone();
@@ -464,6 +484,11 @@ impl eframe::App for App {
                 ctx.request_repaint();
                 match event {
                     ShellEvent::Show => self.show_window(ctx),
+                    ShellEvent::OpenLink(link) => {
+                        if let Some(job) = self.state.act(Action::OpenLink(link)) {
+                            self.dispatch(job);
+                        }
+                    }
                     ShellEvent::Hide => self.hide_window(ctx),
                     ShellEvent::Primary => {
                         if let Some(job) = self.state.act(Action::Primary) {
@@ -581,6 +606,18 @@ mod tests {
     use rosetun_core::Store;
     use std::fs;
     use std::time::Duration;
+
+    #[cfg(windows)]
+    #[test]
+    fn an_opened_link_is_not_in_shell_event_debug() {
+        let event = super::ShellEvent::OpenLink(crate::state::OpenedLink(
+            "rosetun://add/https://example.com/private-token".into(),
+        ));
+
+        let debug = format!("{event:?}");
+        assert!(!debug.contains("private-token"));
+        assert!(!debug.contains("example.com"));
+    }
 
     #[cfg(windows)]
     #[test]

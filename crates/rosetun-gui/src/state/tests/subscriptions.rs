@@ -898,3 +898,75 @@ fn provider_controlled_labels_cannot_echo_subscription_urls() {
         "[DE] https://example.com/…\nnext"
     );
 }
+
+fn open_link(state: &mut State, link: &str) -> Option<Job> {
+    state.act(Action::OpenLink(OpenedLink(link.to_owned())))
+}
+
+#[test]
+fn an_opened_link_fills_the_add_dialog_and_adds_nothing() {
+    let mut state = state_with_subscriptions();
+    assert!(open_link(&mut state, "rosetun://add/https://other.example.com/sub#Example").is_none());
+
+    let dialog = state.subscriptions.add.as_ref().unwrap();
+    assert_eq!(dialog.url, "https://other.example.com/sub");
+    assert_eq!(dialog.name, "Example");
+    assert_eq!(dialog.from_link.as_deref(), Some("other.example.com"));
+    assert!(!dialog.link_error && !dialog.busy);
+    assert_eq!(state.config.subscriptions.len(), 3);
+}
+
+#[test]
+fn a_link_to_an_added_subscription_only_shows_it() {
+    let mut state = state_with_subscriptions();
+    state.screen = Screen::Settings;
+
+    assert!(open_link(&mut state, "rosetun://add/https://example.com/secret-path").is_none());
+    let id = SubscriptionId::new("1");
+    assert!(state.subscriptions.add.is_none());
+    assert_eq!(state.screen, Screen::Connection);
+    assert!(state.subscriptions.expanded.contains(&id));
+    assert_eq!(state.subscriptions.reveal_card, Some(id));
+    state.act(Action::RevealDone);
+    assert_eq!(state.subscriptions.reveal_card, None);
+}
+
+#[test]
+fn an_opened_link_does_not_replace_an_open_add_dialog() {
+    let mut state = state_with_subscriptions();
+    state.act(Action::OpenAdd);
+    state.subscriptions.add.as_mut().unwrap().url = "typed.example.com/sub".into();
+
+    assert!(open_link(&mut state, "rosetun://add/https://other.example.com/sub#Example").is_none());
+    let dialog = state.subscriptions.add.as_ref().unwrap();
+    assert_eq!(dialog.url, "typed.example.com/sub");
+    assert!(dialog.name.is_empty() && dialog.from_link.is_none());
+}
+
+#[test]
+fn a_bad_link_opens_an_empty_dialog_with_an_error() {
+    for link in ["rosetun://connect/x", "rosetun://add/", ""] {
+        let mut state = state_with_subscriptions();
+        assert!(open_link(&mut state, link).is_none(), "{link}");
+
+        let dialog = state.subscriptions.add.as_ref().unwrap();
+        assert!(dialog.link_error, "{link}");
+        assert!(dialog.url.is_empty() && dialog.from_link.is_none(), "{link}");
+    }
+}
+
+#[test]
+fn a_link_opened_before_the_settings_load_waits_for_them() {
+    let mut state = State::default();
+    assert!(open_link(&mut state, "rosetun://add/https://other.example.com/sub").is_none());
+    assert!(state.subscriptions.add.is_none());
+
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config: AppConfig::default(),
+    });
+    assert_eq!(
+        state.subscriptions.add.as_ref().unwrap().url,
+        "https://other.example.com/sub"
+    );
+}

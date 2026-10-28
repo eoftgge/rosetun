@@ -40,7 +40,7 @@ use settings::SettingsState;
 pub(crate) use settings::{AboutFolder, SettingsSection};
 use subscriptions::SubscriptionsState;
 pub(crate) use subscriptions::{
-    AddDialog, PingResult, QrSource, QrStage, UpdateOutcome, shared_auto_update_hours,
+    AddDialog, OpenedLink, PingResult, QrSource, QrStage, UpdateOutcome, shared_auto_update_hours,
 };
 use system_checks::SystemChecksState;
 use traffic::TrafficState;
@@ -325,6 +325,7 @@ pub(crate) enum Action {
     ToggleExpanded(SubscriptionId),
     DropSubscription(SubscriptionId, usize),
     OpenAdd,
+    OpenLink(OpenedLink),
     CancelAdd,
     SubmitAdd,
     ReadQr(QrSource),
@@ -499,6 +500,7 @@ impl State {
                 self.reconcile_exits();
                 self.reconcile_selected_set();
                 self.request_list_inspection();
+                self.apply_pending_link();
             }
             WorkerEvent::ConfigError(error) => self.config_error = Some(error),
             WorkerEvent::SystemChecks { request, results } => {
@@ -725,7 +727,7 @@ impl State {
             action @ (Action::ReadQr(_) | Action::CancelQr | Action::ChooseQrLink(_)) => {
                 return self.act_qr(action);
             }
-            action @ (Action::RevealServer | Action::RevealDone) => {
+            action @ (Action::RevealServer | Action::RevealDone | Action::OpenLink(_)) => {
                 return self.act_subscriptions(action);
             }
             action @ (Action::ToggleExpanded(_)

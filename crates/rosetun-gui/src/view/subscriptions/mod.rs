@@ -133,6 +133,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                                 ui.spacing_mut().item_spacing.y = item_spacing;
                                 subscription_card(ui, state, subscription, actions)
                             });
+                        if state.subscriptions.reveal_card.as_ref() == Some(&subscription.id) {
+                            response.response.scroll_to_me(Some(egui::Align::Min));
+                            actions.push(Action::RevealDone);
+                        }
                         if state.can_reorder_subscriptions()
                             && let Some(dragged_id) =
                                 response.response.dnd_hover_payload::<SubscriptionId>()
