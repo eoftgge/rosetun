@@ -20,6 +20,12 @@ mod first_start;
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
 mod instance;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
+mod link_pipe;
 
 #[cfg(windows)]
 #[expect(
@@ -60,6 +66,8 @@ pub use elevated::run_elevated;
 pub use instance::{Activation, Instance, acquire};
 #[cfg(windows)]
 pub use language::user_language_is_russian;
+#[cfg(windows)]
+pub use link_pipe::{LinkListener, MAX_LINK_BYTES, send_link};
 #[cfg(windows)]
 pub use screen_clip::{clipboard_sequence, start_screen_clip};
 #[cfg(windows)]
