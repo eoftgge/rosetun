@@ -857,9 +857,10 @@ language-english = English
 language-russian = Russian
 accent-title = Color
 accent-rose = Rose
+accent-graphite-rose = Graphite rose
+accent-cocoa = Cocoa
 accent-lilac = Lilac
 accent-teal = Teal
-accent-graphite = Graphite
 accent-amber = Amber
 
 stored-as = Stored as { $ascii }

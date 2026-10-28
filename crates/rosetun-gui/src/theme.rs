@@ -137,6 +137,24 @@ impl Palette {
         accent_light: rgb(0xE86A80),
         accent_pale: rgb(0xF4B6C1),
     };
+    /// Warm dark greys with a muted cocoa rose.
+    pub(crate) const COCOA: Self = Self {
+        bg: rgb(0x141211),
+        panel: rgb(0x181615),
+        card: rgb(0x1C1A18),
+        modal: rgb(0x1E1C1A),
+        input: rgb(0x262320),
+        border: rgb(0x2F2B28),
+        border_strong: rgb(0x3D3834),
+        text: rgb(0xF0ECE9),
+        text_muted: rgb(0xB6AEA8),
+        text_dim: rgb(0x958C85),
+        accent_dark: rgb(0x5A3A30),
+        accent_base: rgb(0x8A5646),
+        accent_bright: rgb(0x9E6656),
+        accent_light: rgb(0xC99A88),
+        accent_pale: rgb(0xE8D2C8),
+    };
     pub(crate) const AMBER: Self = Self {
         bg: rgb(0x15100B),
         panel: rgb(0x19140E),
@@ -157,11 +175,12 @@ impl Palette {
 }
 
 /// In the order of `AccentPreset::ALL`.
-static PALETTES: [Palette; 5] = [
+static PALETTES: [Palette; 6] = [
     Palette::ROSE,
+    Palette::GRAPHITE,
+    Palette::COCOA,
     Palette::LILAC,
     Palette::TEAL,
-    Palette::GRAPHITE,
     Palette::AMBER,
 ];
 
@@ -182,10 +201,11 @@ pub(crate) fn palette_of(accent: AccentPreset) -> &'static Palette {
 fn palette_index(accent: AccentPreset) -> u8 {
     match accent {
         AccentPreset::Rose => 0,
-        AccentPreset::Lilac => 1,
-        AccentPreset::Teal => 2,
-        AccentPreset::Graphite => 3,
-        AccentPreset::Amber => 4,
+        AccentPreset::Graphite => 1,
+        AccentPreset::Cocoa => 2,
+        AccentPreset::Lilac => 3,
+        AccentPreset::Teal => 4,
+        AccentPreset::Amber => 5,
     }
 }
 
@@ -348,6 +368,7 @@ mod tests {
             assert!(std::ptr::eq(palette_of(accent), &PALETTES[index]));
         }
         assert_eq!(palette_of(AccentPreset::Teal), &Palette::TEAL);
+        assert_eq!(palette_of(AccentPreset::Cocoa), &Palette::COCOA);
         assert_eq!(palette_of(AccentPreset::Amber), &Palette::AMBER);
     }
 

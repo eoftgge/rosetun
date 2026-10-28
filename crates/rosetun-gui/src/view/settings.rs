@@ -122,9 +122,10 @@ fn language_label(setting: LanguageSetting) -> String {
 fn accent_label(accent: AccentPreset) -> String {
     match accent {
         AccentPreset::Rose => tr!("accent-rose"),
+        AccentPreset::Graphite => tr!("accent-graphite-rose"),
+        AccentPreset::Cocoa => tr!("accent-cocoa"),
         AccentPreset::Lilac => tr!("accent-lilac"),
         AccentPreset::Teal => tr!("accent-teal"),
-        AccentPreset::Graphite => tr!("accent-graphite"),
         AccentPreset::Amber => tr!("accent-amber"),
     }
 }

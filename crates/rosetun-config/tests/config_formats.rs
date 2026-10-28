@@ -324,6 +324,20 @@ fn a_format_seven_interface_without_accent_reads_as_rose() {
 }
 
 #[test]
+fn every_accent_keeps_its_stored_name() {
+    for (accent, name) in [
+        (AccentPreset::Rose, "rose"),
+        (AccentPreset::Graphite, "graphite"),
+        (AccentPreset::Cocoa, "cocoa"),
+        (AccentPreset::Lilac, "lilac"),
+        (AccentPreset::Teal, "teal"),
+        (AccentPreset::Amber, "amber"),
+    ] {
+        assert_eq!(serde_json::to_value(accent).unwrap(), json!(name));
+    }
+}
+
+#[test]
 fn an_unknown_accent_reads_as_rose_instead_of_failing() {
     for unknown in [json!("violet"), json!(3), json!(null)] {
         let mut input = value(V7);

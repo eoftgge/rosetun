@@ -874,9 +874,10 @@ language-english = Английский
 language-russian = Русский
 accent-title = Цвет
 accent-rose = Роза
+accent-graphite-rose = Графитовая роза
+accent-cocoa = Какао
 accent-lilac = Сирень
 accent-teal = Бирюза
-accent-graphite = Графит
 accent-amber = Янтарь
 
 stored-as = Хранится как { $ascii }

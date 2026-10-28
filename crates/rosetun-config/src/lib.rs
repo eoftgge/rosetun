@@ -72,18 +72,22 @@ pub enum LanguageSetting {
 pub enum AccentPreset {
     #[default]
     Rose,
+    /// Shown as "Graphite rose"; the stored name stays short.
+    Graphite,
+    Cocoa,
     Lilac,
     Teal,
-    Graphite,
     Amber,
 }
 
 impl AccentPreset {
-    pub const ALL: [Self; 5] = [
+    /// In the order the settings show them.
+    pub const ALL: [Self; 6] = [
         Self::Rose,
+        Self::Graphite,
+        Self::Cocoa,
         Self::Lilac,
         Self::Teal,
-        Self::Graphite,
         Self::Amber,
     ];
 }
