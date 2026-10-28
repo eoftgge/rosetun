@@ -80,15 +80,22 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     }
                 })
                 .collect();
-            if let Some(accent) = widgets::swatches(
-                ui,
-                "interface_accent",
-                state.config.interface.accent,
-                &options,
-                state.can_edit_settings(),
-            ) {
-                actions.push(Action::SetAccent(accent));
-            }
+            ui.horizontal(|ui| {
+                if let Some(accent) = widgets::swatches(
+                    ui,
+                    "interface_accent",
+                    state.config.interface.accent,
+                    &options,
+                    state.can_edit_settings(),
+                ) {
+                    actions.push(Action::SetAccent(accent));
+                }
+                // Rose and Graphite rose share the accent; the name tells them apart.
+                ui.label(
+                    RichText::new(accent_label(state.config.interface.accent))
+                        .color(theme::palette().text_muted),
+                );
+            });
         });
         let mut reduce_motion = state.config.interface.reduce_motion;
         if card
