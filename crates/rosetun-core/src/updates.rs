@@ -307,7 +307,10 @@ pub fn latest_release(
         return Err(UpdateCheckError::Status(api_status));
     }
 
-    tracing::info!(status = api_status, "release API refused, checking the releases feed");
+    tracing::info!(
+        status = api_status,
+        "release API refused, checking the releases feed"
+    );
     let mut response = get(RELEASES_FEED_URL, "application/atom+xml")?;
     let feed_status = response.status().as_u16();
     if feed_status != 200 {
@@ -520,7 +523,9 @@ mod tests {
             .join(",")
         );
         let feed = tags
-            .map(|tag| format!(r#"<link href="https://github.com/eoftgge/rosetun/releases/tag/{tag}"/>"#))
+            .map(|tag| {
+                format!(r#"<link href="https://github.com/eoftgge/rosetun/releases/tag/{tag}"/>"#)
+            })
             .join("\n");
         for current in [
             "0.0.9",

@@ -675,9 +675,8 @@ impl State {
             | Action::OpenFolder(_)) => {
                 return self.act_settings(action);
             }
-            action @ (Action::CheckUpdatesNow
-            | Action::SkipVersion
-            | Action::AnnounceUpdate(_)) => {
+            action
+            @ (Action::CheckUpdatesNow | Action::SkipVersion | Action::AnnounceUpdate(_)) => {
                 return self.act_updates(action);
             }
             action @ (Action::ShowLists
