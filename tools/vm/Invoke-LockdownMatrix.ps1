@@ -191,7 +191,8 @@ function Remove-StandardAccount {
 function Invoke-AsStandardUser {
     # Runs a program as the standard account through a one-off scheduled task
     # with its password: the token has no administrator rights and no
-    # elevation. Arguments must not contain spaces or quotes.
+    # elevation. Arguments must not contain spaces or quotes. A program that
+    # cannot be started gives `ExitCode` 'not started: <Win32 code>: <message>'.
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [Parameter(Mandatory)][string[]]$Arguments,
@@ -207,9 +208,28 @@ function Invoke-AsStandardUser {
         $task = "RosetunMatrixUser-$id"
         $quote = { param($value) "'" + ($value -replace "'", "''") + "'" }
         $script = @(
-            "`$process = Start-Process -FilePath $(& $quote $file) -ArgumentList $(& $quote $arguments) " +
-                "-WorkingDirectory $(& $quote $dir) -NoNewWindow -PassThru " +
+            'try {'
+            "    `$process = Start-Process -FilePath $(& $quote $file) -ArgumentList $(& $quote $arguments) " +
+                "-WorkingDirectory $(& $quote $dir) -NoNewWindow -PassThru -ErrorAction Stop " +
                 "-RedirectStandardOutput $(& $quote $out) -RedirectStandardError $(& $quote $err)"
+            '}'
+            'catch {'
+            '    $message = $_.Exception.Message'
+            # Start-Process drops the Win32 error code; Process.Start keeps it.
+            '    $native = try {'
+            "        `$info = New-Object Diagnostics.ProcessStartInfo $(& $quote $file)"
+            '        $info.UseShellExecute = $false'
+            '        [Diagnostics.Process]::Start($info).Kill()'
+            "        'started on retry'"
+            '    }'
+            '    catch {'
+            '        $inner = $_.Exception'
+            '        while ($inner -and $inner -isnot [ComponentModel.Win32Exception]) { $inner = $inner.InnerException }'
+            '        if ($inner) { $inner.NativeErrorCode }'
+            '    }'
+            "    Set-Content -LiteralPath $(& $quote $code) -Value (`"not started: `${native}: `$message`")"
+            '    exit'
+            '}'
             # Without reading the handle first, ExitCode stays empty.
             '$null = $process.Handle'
             "if (`$process.WaitForExit($($timeout * 1000))) { `$result = `$process.ExitCode } else { `$process.Kill(); `$result = 'timeout' }"
@@ -271,6 +291,9 @@ function Invoke-StandardFetch {
     }
     try {
         $run = Invoke-AsStandardUser -FilePath (Join-Path $guestDir 'sing-box.exe') -Arguments $arguments
+        if ("$($run.ExitCode)" -like 'not started:*') {
+            return [pscustomobject]@{ Ok = $null; Note = "$($run.ExitCode)" }
+        }
         [pscustomobject]@{ Ok = $run.ExitCode -eq 0; Note = "exit $($run.ExitCode): $($run.Output)" }
     }
     catch {
@@ -290,6 +313,50 @@ function Test-StandardFetchBlocked {
     Test-Step $Scenario 'the same, bound to the physical adapter, fails' {
         $standardFetchWorks -and $physical.Ok -eq $false
     } -Note (Get-StandardFetchNote $physical)
+}
+
+function Test-StandardEngineCopyDenied {
+    # The service's copy of sing-box: Windows refuses to start it for the
+    # standard account (ERROR_ACCESS_DENIED), so its WFP permit is out of reach.
+    param([Parameter(Mandatory)][string]$Scenario)
+    $copy = Join-Path $guestDir 'data\engines\sing-box.exe'
+    try {
+        $run = Invoke-AsStandardUser -FilePath $copy -Arguments @('tools', 'fetch', 'https://1.1.1.1/cdn-cgi/trace')
+        $note = "$($run.ExitCode) $($run.Output)".Trim()
+        $denied = "$($run.ExitCode)" -match '^not started: 5:'
+    }
+    catch {
+        $note = "not run: $_"
+        $denied = $false
+    }
+    Test-Step $Scenario 'data\engines\sing-box.exe cannot be started by a standard account' { $denied } -Note $note
+}
+
+function Test-EngineCopyAcl {
+    # Exactly SYSTEM and Administrators, explicit, nothing inherited, owned by
+    # Administrators. SIDs, so a localized guest compares the same.
+    $acl = Invoke-RosetunGuest -ScriptBlock {
+        param($path)
+        $sid = [Security.Principal.SecurityIdentifier]
+        $acl = Get-Acl -LiteralPath $path
+        [pscustomobject]@{
+            Owner     = $acl.GetOwner($sid).Value
+            Protected = $acl.AreAccessRulesProtected
+            Rules     = @($acl.GetAccessRules($true, $true, $sid) | ForEach-Object {
+                    '{0} {1} {2} inherited={3}' -f $_.IdentityReference.Value, $_.AccessControlType,
+                        $_.FileSystemRights, $_.IsInherited
+                } | Sort-Object)
+        }
+    } -ArgumentList (Join-Path $guestDir 'data\engines\sing-box.exe')
+    $expected = @(
+        'S-1-5-18 Allow FullControl inherited=False'
+        'S-1-5-32-544 Allow FullControl inherited=False'
+    )
+    $note = "owner $($acl.Owner); protected $($acl.Protected); $($acl.Rules -join ' | ')"
+    Test-Step '1 off' 'data\engines\sing-box.exe: only SYSTEM and Administrators' {
+        $acl.Owner -eq 'S-1-5-32-544' -and $acl.Protected -and
+            (@(Compare-Object -ReferenceObject $expected -DifferenceObject @($acl.Rules)).Count -eq 0)
+    } -Note $note
 }
 
 function Get-StandardFetchNote {
@@ -602,6 +669,8 @@ try {
     Test-Step '1 off' 'sing-box.exe tools fetch from a standard account works' { $plain.Ok } -Note $plain.Note
     Test-Step '1 off' 'the same, bound to the physical adapter, works' { $physical.Ok } -Note $physical.Note
     $standardFetchWorks = [bool]($plain.Ok -and $physical.Ok)
+    Test-EngineCopyAcl
+    Test-StandardEngineCopyDenied '1 off'
 
     # 2. On while disconnected.
     $on = Invoke-Lockdown on
@@ -670,6 +739,7 @@ try {
     Test-Step '4 standard account, connected' 'sing-box.exe tools fetch bound to the physical adapter fails' {
         $standardFetchWorks -and $physical.Ok -eq $false
     } -Note (Get-StandardFetchNote $physical)
+    Test-StandardEngineCopyDenied '4 standard account, connected'
     Disconnect-RosetunTunnel | Out-Null
     Test-Step '4 disconnected' 'direct egress closed' { -not (Test-RosetunDirectEgress) }
     Test-Step '4 disconnected' 'no Rosetun session filters left' { -not (Test-RosetunGuestWfpKey $rosetunProviderKey) }
