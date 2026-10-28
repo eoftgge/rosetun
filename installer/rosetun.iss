@@ -107,6 +107,14 @@ Source: "{#LicensesDir}\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recu
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#GuiExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#GuiExe}"; Tasks: desktopicon
 
+[Registry]
+; rosetun:// links from a provider's page, for every user: HKCU of an elevated
+; installer can be another account's profile.
+Root: HKLM; Subkey: "Software\Classes\rosetun"; ValueType: string; ValueName: ""; ValueData: "URL:Rosetun"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\rosetun"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKLM; Subkey: "Software\Classes\rosetun\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#GuiExe}"",0"
+Root: HKLM; Subkey: "Software\Classes\rosetun\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#GuiExe}"" --open-url ""%1"""
+
 [Run]
 ; Without runasoriginaluser the GUI would inherit the installer's elevation and
 ; keep its configuration in the wrong profile.

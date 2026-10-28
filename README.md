@@ -70,6 +70,10 @@ The engine's control API and the link from sing-box to Xray use only local loopb
 
 With **Lockdown** on and no connection, Rosetun itself (the app and the `rosetun` command) still reaches the internet directly: your subscription provider, list addresses, `cp.cloudflare.com` for **System check**, and the other requests above that go directly when disconnected (server checks, the public IP, the update check). Other programs do not. Your subscription provider then sees your real IP address, just as without Lockdown.
 
+## Links for providers
+
+A button on a provider's page can open Rosetun with a subscription filled in: `rosetun://add/<subscription link>`, with the link raw (`rosetun://add/https://example.com/sub`) or percent-encoded (`rosetun://add/https%3A%2F%2Fexample.com%2Fsub`). An optional `#name` at the end suggests the subscription's name (`rosetun://add/https://example.com/sub#Example`). Rosetun only shows the **Add subscription** dialog with the link, its name and the provider's host; nothing is downloaded or added until you click **Add**. A link to a subscription you already have only brings it into view. The installer registers the scheme for all users.
+
 ## Troubleshooting
 
 - Run **System check** (Settings → Service and log) first: it finds other VPN clients, Zapret or WinDivert, a system proxy and a wrong clock. It also runs by itself after a failed connection and shows the first finding under the error.
