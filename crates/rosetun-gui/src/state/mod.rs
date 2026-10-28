@@ -66,7 +66,8 @@ pub(crate) struct Operations {
     pub(crate) rules_edit: bool,
     pub(crate) kill_switch: bool,
     pub(crate) lockdown: bool,
-    pub(crate) settings: bool,
+    /// When the running settings save started, by `display::monotonic_ms`.
+    pub(crate) settings: Option<u64>,
     pub(crate) updating: BTreeSet<SubscriptionId>,
     pub(crate) updating_lists: BTreeSet<ListId>,
     pub(crate) pinging: BTreeSet<SubscriptionId>,

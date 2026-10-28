@@ -405,11 +405,19 @@ impl State {
     }
 
     fn saving_config(&self) -> bool {
-        self.operations.rules || self.operations.rules_edit || self.operations.settings
+        self.operations.rules || self.operations.rules_edit || self.operations.settings.is_some()
+    }
+
+    /// Like `saving_config`, but a short settings save does not count: an apply asked for
+    /// during it waits for it.
+    fn saving_config_shown(&self) -> bool {
+        self.operations.rules
+            || self.operations.rules_edit
+            || self.settings_busy_shown(self.frame_time())
     }
 
     pub(crate) fn can_apply(&self) -> bool {
-        self.can_change_temporary() && !self.saving_config() && self.has_pending_apply()
+        self.can_change_temporary() && !self.saving_config_shown() && self.has_pending_apply()
     }
 
     pub(super) fn start_apply(&mut self, temporary_before: Option<Vec<Rule>>) {
@@ -481,7 +489,7 @@ impl State {
             && self.config_ready
             && !self.session.flow.restore_pending()
             && !self.operations.helper
-            && !self.operations.settings
+            && !self.settings_busy_shown(self.frame_time())
             && !self.operations.rules_edit
     }
 
@@ -816,6 +824,7 @@ impl State {
     }
 
     pub(super) fn act_session(&mut self, action: Action) -> Option<Job> {
+        let action = self.defer_setting(action)?;
         match action {
             #[cfg(windows)]
             Action::WindowMinimized => return self.apply_on_leave(),

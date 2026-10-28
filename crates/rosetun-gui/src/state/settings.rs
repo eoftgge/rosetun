@@ -1,4 +1,6 @@
+use std::mem::{Discriminant, discriminant};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rosetun_config::{ConnectionState, DnsSettings, Node, Outbound, TlsMode, XrayUse};
 use rosetun_core::{DnsPreset, SettingChange};
@@ -6,6 +8,11 @@ use rosetun_core::{DnsPreset, SettingChange};
 use super::{Action, Job, Screen, State, now_unix};
 use crate::errors;
 use crate::worker::WorkerEvent;
+
+/// A save shorter than this leaves the controls as they look; a click during it waits in
+/// `SettingsState::queued`. Saves take tens of milliseconds, and greying the page for that
+/// long reads as a flicker.
+pub(crate) const SETTINGS_BUSY_SHOWN_AFTER_MS: u64 = 400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum SettingsSection {
@@ -64,6 +71,51 @@ pub(crate) enum AboutFolder {
 #[derive(Default)]
 pub(crate) struct SettingsState {
     pub(crate) screen: SettingsScreen,
+    /// Changes asked for while a save ran, sent one by one after it.
+    queued: Vec<Action>,
+    /// Keeps a failed save's error on screen while the changes queued behind it go out.
+    keep_error: bool,
+    /// This frame's `display::monotonic_ms`, set by the app before anything else.
+    now_ms: u64,
+}
+
+/// Changes that replace each other's pending value share a slot.
+fn queue_slot(action: &Action) -> Discriminant<Action> {
+    match action {
+        Action::SetDnsPreset(_) => discriminant(&Action::SaveDns),
+        Action::EnableXrayAutoAndConnect => discriminant(&Action::SetXray(XrayUse::Auto)),
+        action => discriminant(action),
+    }
+}
+
+fn waits_for_save(action: &Action) -> bool {
+    match action {
+        Action::SetInterfaceScale(_)
+        | Action::SetLanguage(_)
+        | Action::SetAccent(_)
+        | Action::SetReduceMotion(_)
+        | Action::SetConnectOnStart(_)
+        | Action::SetAutoReconnect(_)
+        | Action::SetAllowLan(_)
+        | Action::SetXray(_)
+        | Action::EnableXrayAutoAndConnect
+        | Action::SetAutoUpdateSubscriptions(_)
+        | Action::SetCheckUpdates(_)
+        | Action::SaveDns
+        | Action::SetDnsPreset(_)
+        | Action::RequestResetSettings
+        | Action::ConfirmResetSettings
+        | Action::SetVerboseLog(_)
+        | Action::SkipVersion
+        | Action::Apply
+        | Action::RestoreMyEdits => true,
+        #[cfg(windows)]
+        Action::SetAutostart(_)
+        | Action::SetCloseToTray(_)
+        | Action::ShowReportFolder
+        | Action::OpenFolder(_) => true,
+        _ => false,
+    }
 }
 
 impl State {
@@ -140,8 +192,67 @@ impl State {
                 ))
     }
 
+    /// Whether settings controls look available. A click on one while a save runs is queued.
     pub(crate) fn can_edit_settings(&self) -> bool {
-        self.config_ready && !self.operations.settings
+        self.config_ready && !self.settings_busy_shown(self.settings.now_ms)
+    }
+
+    pub(crate) fn set_frame_time(&mut self, now_ms: u64) {
+        self.settings.now_ms = now_ms;
+    }
+
+    pub(crate) fn frame_time(&self) -> u64 {
+        self.settings.now_ms
+    }
+
+    /// Whether a settings save has run long enough to show it.
+    pub(crate) fn settings_busy_shown(&self, now_ms: u64) -> bool {
+        self.operations
+            .settings
+            .is_some_and(|started| now_ms.saturating_sub(started) >= SETTINGS_BUSY_SHOWN_AFTER_MS)
+    }
+
+    /// When a running save starts to show, so the controls grey out without a pointer move.
+    pub(crate) fn settings_busy_wake(&self) -> Option<Duration> {
+        let shown_at = self
+            .operations
+            .settings?
+            .saturating_add(SETTINGS_BUSY_SHOWN_AFTER_MS);
+        (shown_at > self.settings.now_ms)
+            .then(|| Duration::from_millis(shown_at - self.settings.now_ms))
+    }
+
+    /// Queues an action that would start a save while another runs, or hands it back.
+    pub(super) fn defer_setting(&mut self, action: Action) -> Option<Action> {
+        if self.operations.settings.is_none() || !waits_for_save(&action) {
+            return Some(action);
+        }
+        let slot = queue_slot(&action);
+        match self
+            .settings
+            .queued
+            .iter_mut()
+            .find(|queued| queue_slot(queued) == slot)
+        {
+            Some(queued) => *queued = action,
+            None => self.settings.queued.push(action),
+        }
+        None
+    }
+
+    /// The next queued change, once nothing saves. Each one is checked again against the
+    /// saved settings, so a change the earlier saves made unnecessary is dropped.
+    pub(crate) fn take_queued_setting(&mut self) -> Option<Job> {
+        while self.operations.settings.is_none() && !self.settings.queued.is_empty() {
+            let action = self.settings.queued.remove(0);
+            if let Some(job) = self.act(action) {
+                return Some(job);
+            }
+        }
+        if self.operations.settings.is_none() {
+            self.settings.keep_error = false;
+        }
+        None
     }
 
     /// The settings file could not be read. Nothing is loaded and nothing may
@@ -151,7 +262,8 @@ impl State {
     }
 
     pub(crate) fn can_open_folders(&self) -> bool {
-        (self.config_ready || self.config_unreadable()) && !self.operations.settings
+        (self.config_ready || self.config_unreadable())
+            && !self.settings_busy_shown(self.settings.now_ms)
     }
 
     pub(crate) fn can_save_report(&self) -> bool {
@@ -169,16 +281,28 @@ impl State {
     }
 
     pub(super) fn start_settings(&mut self, job: Job) -> Option<Job> {
-        self.operations.settings = true;
-        self.operation_error = None;
+        self.operations.settings = Some(self.settings.now_ms);
+        if !self.settings.keep_error {
+            self.operation_error = None;
+        }
         Some(job)
     }
 
     fn finish_settings(&mut self, result: Result<(), rosetun_core::SettingsError>) {
-        self.operations.settings = false;
-        self.operation_error = result
+        let error = result
             .err()
             .map(|error| self.text(&errors::settings(crate::i18n::language(), &error)));
+        self.end_settings(error);
+    }
+
+    fn end_settings(&mut self, error: Option<String>) {
+        self.operations.settings = None;
+        let failed = error.is_some();
+        if failed || !self.settings.keep_error {
+            self.operation_error = error;
+        }
+        self.settings.keep_error =
+            (failed || self.settings.keep_error) && !self.settings.queued.is_empty();
     }
 
     pub(super) fn reduce_settings(&mut self, event: WorkerEvent) {
@@ -197,12 +321,12 @@ impl State {
             },
             #[cfg(windows)]
             WorkerEvent::SetAutostart(result) => {
-                self.operations.settings = false;
                 self.settings.screen.autostart = result.as_ref().ok().copied();
-                self.operation_error = result.err().map(|error| {
+                let error = result.err().map(|error| {
                     let message = tr!("error-autostart-write", detail = error.to_string());
                     self.text(&message)
                 });
+                self.end_settings(error);
             }
             WorkerEvent::Setting(change, result) => {
                 if change == SettingChange::Xray(XrayUse::Auto)
@@ -256,17 +380,18 @@ impl State {
             }
             #[cfg(windows)]
             WorkerEvent::OpenFolder(result) => {
-                self.operations.settings = false;
-                self.operation_error = result.err().map(|error| {
+                let error = result.err().map(|error| {
                     let message = tr!("error-open-folder", detail = error.to_string());
                     self.text(&message)
                 });
+                self.end_settings(error);
             }
             _ => unreachable!("only settings events are dispatched here"),
         }
     }
 
     pub(super) fn act_settings(&mut self, action: Action) -> Option<Job> {
+        let action = self.defer_setting(action)?;
         match action {
             Action::OpenSettings => {
                 if !self.settings.screen.opened {
@@ -417,7 +542,7 @@ impl State {
                 }
             }
             Action::SelectCustomDns => {
-                if self.can_edit_settings() {
+                if self.config_ready {
                     self.settings.screen.custom_dns = true;
                 }
             }
@@ -437,7 +562,7 @@ impl State {
                 }
             }
             Action::CancelResetSettings => {
-                if !self.operations.settings {
+                if self.operations.settings.is_none() {
                     self.settings.screen.reset_open = false;
                 }
             }

@@ -400,8 +400,12 @@ impl eframe::App for App {
                 ctx.request_repaint();
             }
         }
+        self.state.set_frame_time(display::monotonic_ms());
         while let Ok(event) = self.events.try_recv() {
             self.state.reduce(event);
+        }
+        while let Some(job) = self.state.take_queued_setting() {
+            self.dispatch(job);
         }
         if let Some(job) = self.state.take_restore() {
             self.dispatch(job);
@@ -466,6 +470,9 @@ impl eframe::App for App {
         }
         // A hidden window runs `logic` only, so the schedule must be requested here, not in `ui`.
         if let Some(delay) = repaint_delay(false, self.state.next_wake(display::now_unix())) {
+            ctx.request_repaint_after(delay);
+        }
+        if let Some(delay) = self.state.settings_busy_wake() {
             ctx.request_repaint_after(delay);
         }
         let language =
@@ -575,6 +582,9 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // The root `Ui` copies the style before `logic` runs, so a new accent applied there
+        // would otherwise paint one frame of old widget colours around the new palette.
+        ui.set_style(ui.ctx().global_style());
         if self.state.config_ready
             && let Some(percent) = next_scale(
                 self.applied_scale,

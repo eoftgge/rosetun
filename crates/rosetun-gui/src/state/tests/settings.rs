@@ -135,7 +135,7 @@ fn settings_reset_requires_disconnection_and_resynchronizes_dns() {
     assert!(state.settings.screen.dirty);
     state.reduce(WorkerEvent::ResetSettings(Ok(())));
     assert!(!state.settings.screen.reset_open);
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert!(!state.settings.screen.dirty);
     assert!(!state.settings.screen.custom_dns);
     assert_eq!(state.settings.screen.server, "1.1.1.1");
@@ -157,7 +157,7 @@ fn settings_reset_failure_closes_confirmation_and_reports_error() {
         rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
     )));
     assert!(!state.settings.screen.reset_open);
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert_eq!(
         state.operation_error.as_deref(),
         Some("could not determine the configuration directory")
@@ -193,7 +193,7 @@ fn settings_dns_form_preserves_unsaved_input_across_config_reloads() {
         panic!("expected DNS save");
     };
     assert_eq!(dns.server_name, "dns.google");
-    assert!(state.operations.settings);
+    assert!(state.operations.settings.is_some());
     assert!(state.act(Action::SetDnsPreset(DnsPreset::Quad9)).is_none());
     assert_eq!(state.settings.screen.server, "8.8.8.8");
     let mut config = state.config.clone();
@@ -204,7 +204,7 @@ fn settings_dns_form_preserves_unsaved_input_across_config_reloads() {
     });
     assert!(state.settings.screen.dirty);
     state.reduce(WorkerEvent::SetDns(Ok(())));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert!(!state.settings.screen.dirty);
     assert_eq!(state.settings.screen.server, "8.8.8.8");
     assert!(state.act(Action::SaveDns).is_none());
@@ -237,12 +237,12 @@ fn settings_operations_clear_busy_and_report_errors() {
         state.act(Action::SetInterfaceScale(125)),
         Some(Job::SetInterfaceScale(125))
     ));
-    assert!(state.operations.settings);
+    assert!(state.operations.settings.is_some());
     assert!(state.act(Action::SetVerboseLog(true)).is_none());
     state.reduce(WorkerEvent::SetInterfaceScale(Err(
         rosetun_core::SettingsError::UnsupportedScale,
     )));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert_eq!(
         state.operation_error.as_deref(),
         Some("unsupported interface scale")
@@ -255,7 +255,7 @@ fn settings_operations_clear_busy_and_report_errors() {
     state.reduce(WorkerEvent::SetVerboseLog(Err(
         rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
     )));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert_eq!(
         state.operation_error.as_deref(),
         Some("could not determine the configuration directory")
@@ -272,7 +272,7 @@ fn settings_operations_clear_busy_and_report_errors() {
     state.reduce(WorkerEvent::SetDns(Err(
         rosetun_core::SettingsError::Store(StoreError::NoConfigDir),
     )));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert!(state.settings.screen.dirty);
     assert_eq!(state.settings.screen.server, "8.8.8.8");
     assert_eq!(
@@ -299,14 +299,14 @@ fn changing_language_uses_a_settings_job_and_completion_clears_busy() {
         state.act(Action::SetLanguage(LanguageSetting::Russian)),
         Some(Job::SetLanguage(LanguageSetting::Russian))
     ));
-    assert!(state.operations.settings);
+    assert!(state.operations.settings.is_some());
     assert!(
         state
             .act(Action::SetLanguage(LanguageSetting::English))
             .is_none()
     );
     state.reduce(WorkerEvent::SetLanguage(Ok(())));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     let mut config = state.config.clone();
     config.interface.language = LanguageSetting::Russian;
     state.reduce(WorkerEvent::Config {
@@ -333,10 +333,10 @@ fn choosing_an_accent_saves_it_and_switches_the_palette_it_selects() {
         state.act(Action::SetAccent(AccentPreset::Teal)),
         Some(Job::SetAccent(AccentPreset::Teal))
     ));
-    assert!(state.operations.settings);
+    assert!(state.operations.settings.is_some());
     assert!(state.act(Action::SetAccent(AccentPreset::Amber)).is_none());
     state.reduce(WorkerEvent::SetAccent(Ok(())));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
 
     let mut config = state.config.clone();
     config.interface.accent = AccentPreset::Teal;
@@ -362,13 +362,13 @@ fn reduce_motion_setting_uses_a_settings_job_and_saved_value() {
         state.act(Action::SetReduceMotion(true)),
         Some(Job::Setting(SettingChange::ReduceMotion(true)))
     ));
-    assert!(state.operations.settings);
+    assert!(state.operations.settings.is_some());
     assert!(state.act(Action::SetReduceMotion(true)).is_none());
     state.reduce(WorkerEvent::Setting(
         SettingChange::ReduceMotion(true),
         Ok(()),
     ));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     let mut config = state.config.clone();
     config.interface.reduce_motion = true;
     state.reduce(WorkerEvent::Config {
@@ -403,7 +403,7 @@ fn connection_settings_jobs_respect_busy_state_and_saved_values() {
         SettingChange::AutoReconnect(false),
         Err(rosetun_core::SettingsError::Store(StoreError::NoConfigDir)),
     ));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert!(state.operation_error.is_some());
     let mut config = AppConfig::default();
     config.interface.connect_on_start = true;
@@ -592,23 +592,33 @@ fn windows_settings_jobs_respect_busy_state_and_saved_values() {
         state.act(Action::SetAutostart(true)),
         Some(Job::SetAutostart(true))
     ));
-    assert!(state.operations.settings);
+    assert!(state.operations.settings.is_some());
     assert!(state.act(Action::SetCloseToTray(false)).is_none());
     state.reduce(WorkerEvent::SetAutostart(Ok(true)));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert_eq!(state.settings.screen.autostart, Some(true));
 
     assert!(matches!(
-        state.act(Action::SetCloseToTray(false)),
+        state.take_queued_setting(),
         Some(Job::Setting(SettingChange::CloseToTray(false)))
     ));
-    assert!(state.operations.settings);
+    assert!(state.operations.settings.is_some());
     assert!(state.act(Action::SetAutostart(false)).is_none());
     state.reduce(WorkerEvent::Setting(
         SettingChange::CloseToTray(false),
         Err(rosetun_core::SettingsError::Store(StoreError::NoConfigDir)),
     ));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
+    assert_eq!(
+        state.operation_error.as_deref(),
+        Some("could not determine the configuration directory")
+    );
+    assert!(matches!(
+        state.take_queued_setting(),
+        Some(Job::SetAutostart(false))
+    ));
+    state.reduce(WorkerEvent::SetAutostart(Ok(false)));
+    assert!(state.take_queued_setting().is_none());
     assert_eq!(
         state.operation_error.as_deref(),
         Some("could not determine the configuration directory")
@@ -627,7 +637,7 @@ fn windows_settings_jobs_respect_busy_state_and_saved_values() {
         SettingChange::CloseToTray(false),
         Ok(()),
     ));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert!(state.operation_error.is_none());
     assert!(state.act(Action::SetCloseToTray(false)).is_none());
 }
@@ -648,7 +658,7 @@ fn failed_autostart_write_clears_busy_and_loaded_state() {
         std::io::ErrorKind::PermissionDenied,
         "registry write denied",
     ))));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert_eq!(state.settings.screen.autostart, None);
     assert_eq!(
         state.operation_error.as_deref(),
@@ -707,12 +717,12 @@ fn folder_launch_uses_the_worker_and_reports_failures() {
         state.act(Action::OpenFolder(AboutFolder::Config)),
         Some(Job::OpenFolder(path)) if path.as_path() == std::path::Path::new("C:\\Users\\Test\\Rosetun")
     ));
-    assert!(state.operations.settings);
+    assert!(state.operations.settings.is_some());
     state.reduce(WorkerEvent::OpenFolder(Err(std::io::Error::new(
         std::io::ErrorKind::NotFound,
         "explorer unavailable",
     ))));
-    assert!(!state.operations.settings);
+    assert!(state.operations.settings.is_none());
     assert_eq!(
         state.operation_error.as_deref(),
         Some("could not open the folder: explorer unavailable")
@@ -878,4 +888,182 @@ fn unreadable_settings_keep_their_error_and_close_the_window() {
     assert!(state.close_hides_window());
     state.config.interface.close_to_tray = false;
     assert!(!state.close_hides_window());
+}
+
+#[test]
+fn a_short_save_leaves_the_settings_looking_available() {
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    state.set_frame_time(10_000);
+    assert!(matches!(
+        state.act(Action::SetReduceMotion(true)),
+        Some(Job::Setting(SettingChange::ReduceMotion(true)))
+    ));
+    assert!(!state.settings_busy_shown(10_000));
+    assert!(!state.settings_busy_shown(10_399));
+    assert!(state.settings_busy_shown(10_400));
+    assert!(state.can_edit_settings());
+    assert_eq!(
+        state.settings_busy_wake(),
+        Some(std::time::Duration::from_millis(400))
+    );
+
+    state.set_frame_time(10_250);
+    assert!(state.can_edit_settings());
+    assert_eq!(
+        state.settings_busy_wake(),
+        Some(std::time::Duration::from_millis(150))
+    );
+
+    state.set_frame_time(10_400);
+    assert!(!state.can_edit_settings());
+    assert!(!state.can_open_folders());
+    assert_eq!(state.settings_busy_wake(), None);
+
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::ReduceMotion(true),
+        Ok(()),
+    ));
+    assert!(state.can_edit_settings());
+    assert_eq!(state.settings_busy_wake(), None);
+}
+
+#[test]
+fn a_change_during_a_save_is_queued_and_sent_after_it() {
+    use rosetun_config::AccentPreset;
+
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    assert!(matches!(
+        state.act(Action::SetAccent(AccentPreset::Teal)),
+        Some(Job::SetAccent(AccentPreset::Teal))
+    ));
+    assert!(
+        state
+            .act(Action::SetLanguage(LanguageSetting::Russian))
+            .is_none()
+    );
+    assert!(state.take_queued_setting().is_none());
+
+    let mut config = state.config.clone();
+    config.interface.accent = AccentPreset::Teal;
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config,
+    });
+    state.reduce(WorkerEvent::SetAccent(Ok(())));
+    assert!(matches!(
+        state.take_queued_setting(),
+        Some(Job::SetLanguage(LanguageSetting::Russian))
+    ));
+    assert!(state.operations.settings.is_some());
+    assert!(state.take_queued_setting().is_none());
+}
+
+#[test]
+fn repeated_clicks_on_one_setting_save_only_the_last() {
+    use rosetun_config::AccentPreset;
+
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    assert!(matches!(
+        state.act(Action::SetAccent(AccentPreset::Teal)),
+        Some(Job::SetAccent(AccentPreset::Teal))
+    ));
+    assert!(state.act(Action::SetAccent(AccentPreset::Amber)).is_none());
+    assert!(state.act(Action::SetAccent(AccentPreset::Rose)).is_none());
+
+    let mut config = state.config.clone();
+    config.interface.accent = AccentPreset::Teal;
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config,
+    });
+    state.reduce(WorkerEvent::SetAccent(Ok(())));
+    assert!(matches!(
+        state.take_queued_setting(),
+        Some(Job::SetAccent(AccentPreset::Rose))
+    ));
+    let mut config = state.config.clone();
+    config.interface.accent = AccentPreset::Rose;
+    state.reduce(WorkerEvent::Config {
+        generation: 2,
+        config,
+    });
+    state.reduce(WorkerEvent::SetAccent(Ok(())));
+    assert!(state.take_queued_setting().is_none());
+}
+
+#[test]
+fn different_settings_queued_during_a_save_go_out_in_order() {
+    use rosetun_config::AccentPreset;
+
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    assert!(matches!(
+        state.act(Action::SetReduceMotion(true)),
+        Some(Job::Setting(SettingChange::ReduceMotion(true)))
+    ));
+    assert!(state.act(Action::SetCheckUpdates(false)).is_none());
+    assert!(state.act(Action::SetAccent(AccentPreset::Amber)).is_none());
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::ReduceMotion(true),
+        Ok(()),
+    ));
+    assert!(matches!(
+        state.take_queued_setting(),
+        Some(Job::Setting(SettingChange::CheckUpdates(false)))
+    ));
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::CheckUpdates(false),
+        Ok(()),
+    ));
+    assert!(matches!(
+        state.take_queued_setting(),
+        Some(Job::SetAccent(AccentPreset::Amber))
+    ));
+}
+
+#[test]
+fn a_failed_save_keeps_its_error_and_the_queue_behind_it() {
+    use rosetun_config::AccentPreset;
+
+    let mut state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    assert!(matches!(
+        state.act(Action::SetReduceMotion(true)),
+        Some(Job::Setting(SettingChange::ReduceMotion(true)))
+    ));
+    assert!(state.act(Action::SetAccent(AccentPreset::Teal)).is_none());
+    state.reduce(WorkerEvent::Setting(
+        SettingChange::ReduceMotion(true),
+        Err(rosetun_core::SettingsError::Store(StoreError::NoConfigDir)),
+    ));
+    let error = Some("could not determine the configuration directory");
+    assert_eq!(state.operation_error.as_deref(), error);
+
+    assert!(matches!(
+        state.take_queued_setting(),
+        Some(Job::SetAccent(AccentPreset::Teal))
+    ));
+    assert_eq!(state.operation_error.as_deref(), error);
+    state.reduce(WorkerEvent::SetAccent(Ok(())));
+    assert_eq!(state.operation_error.as_deref(), error);
+    assert!(state.take_queued_setting().is_none());
+
+    assert!(matches!(
+        state.act(Action::SetReduceMotion(true)),
+        Some(Job::Setting(SettingChange::ReduceMotion(true)))
+    ));
+    assert!(state.operation_error.is_none());
 }

@@ -98,6 +98,7 @@ impl State {
     }
 
     pub(super) fn act_updates(&mut self, action: Action) -> Option<Job> {
+        let action = self.defer_setting(action)?;
         match action {
             Action::CheckUpdatesNow => {
                 if self.can_check_updates() {

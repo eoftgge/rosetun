@@ -811,7 +811,7 @@ pub(crate) fn reset_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec
             title: tr!("reset-settings-question"),
             cancel: tr!("cancel"),
             confirm: tr!("reset-to-default"),
-            busy: state.operations.settings,
+            busy: state.settings_busy_shown(state.frame_time()),
             confirm_enabled: state.can_reset_settings(),
             button_gap: 20.0,
         },

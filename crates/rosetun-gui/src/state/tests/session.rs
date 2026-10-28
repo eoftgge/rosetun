@@ -63,7 +63,7 @@ fn leaving_while_rule_or_dns_save_is_running_applies_after_publication() {
 
     let mut state = connected_state_for_apply();
     state.act(Action::OpenSettings);
-    state.operations.settings = true;
+    state.operations.settings = Some(0);
     assert!(state.act(Action::ShowConnection).is_none());
     let mut saved = state.config.clone();
     saved.settings.dns = DnsPreset::Google.settings();
