@@ -272,14 +272,14 @@ impl Tray {
         let primary = MenuItem::with_id(PRIMARY_ID, tr!("connect"), false, None);
         let servers = Submenu::with_id(SERVERS_ID, tr!("tray-servers"), true);
         let quit = MenuItem::with_id(QUIT_ID, tr!("tray-quit"), true, None);
+        // The connection under its state, the window and the app at the bottom.
         let menu = Menu::with_items(&[
             &status,
-            &PredefinedMenuItem::separator(),
-            &window,
             &PredefinedMenuItem::separator(),
             &primary,
             &servers,
             &PredefinedMenuItem::separator(),
+            &window,
             &quit,
         ])?;
         let now = Instant::now();
