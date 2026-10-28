@@ -8,7 +8,7 @@ $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $releaseVersion = Get-RosetunVersion
 $version = $releaseVersion.Version
 $fileVersion = $releaseVersion.FileVersion
-# Keep this version in sync with the cargo-about cache key in .github/workflows/release.yml.
+# With -Release (the release workflow) cargo-about is installed here, never restored from a cache.
 $cargoAboutVersion = '0.9.2'
 $installedCargoAbout = & cargo about --version 2>$null
 if ($LASTEXITCODE -ne 0 -or ($installedCargoAbout | Out-String).Trim() -ne "cargo-about $cargoAboutVersion") {

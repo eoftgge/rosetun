@@ -89,12 +89,14 @@ jobs:
           }
           if (-not $iscc) { throw 'ISCC.exe was not found after installing Inno Setup.' }
           [IO.File]::AppendAllText($env:GITHUB_ENV, "ISCC=$iscc`n", [Text.UTF8Encoding]::new($false))
-      - name: Cache cargo-about
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cargo/bin/cargo-about.exe
-          # Keep this version in sync with $cargoAboutVersion in installer/build.ps1.
-          key: cargo-about-0.9.2-${{ runner.os }}
+      # No actions/cache here: a signed release must not start from a tool
+      # binary that another run wrote. build.ps1 -Release installs cargo-about.
+      - name: Install cargo-deny
+        # Keep this version in sync with the deny job in ci.yml.
+        run: cargo install cargo-deny --locked --version 0.20.2
+      - name: Check dependencies
+        # Advisories published since the last CI run stop the release too.
+        run: cargo deny --locked check --warn unmaintained
       - name: Build release assets
         id: build
         run: ./installer/build.ps1 -Release
