@@ -396,11 +396,7 @@ mod tests {
         expected.interface.check_updates = false;
         assert_eq!(store.load().unwrap(), expected);
 
-        change_setting(
-            &store,
-            SettingChange::QuitAction(QuitAction::KeepConnected),
-        )
-        .unwrap();
+        change_setting(&store, SettingChange::QuitAction(QuitAction::KeepConnected)).unwrap();
         expected.interface.quit_action = QuitAction::KeepConnected;
         assert_eq!(store.load().unwrap(), expected);
 
