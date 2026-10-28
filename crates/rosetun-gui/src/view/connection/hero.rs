@@ -113,7 +113,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     |since| display::session_text(Some(since), display::now_unix()),
                                 );
                             ui.colored_label(
-                                theme::TEXT_MUTED,
+                                theme::palette().text_muted,
                                 i18n::plain_link(&tr!("session"), &session),
                             );
                         });
@@ -144,7 +144,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     egui::Label::new(
                                         RichText::new(tr!("no-network-waiting-hint"))
                                             .small()
-                                            .color(theme::TEXT_MUTED),
+                                            .color(theme::palette().text_muted),
                                     )
                                     .wrap(),
                                 );
@@ -158,7 +158,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     egui::Label::new(
                                         RichText::new(tr!("xray-reconnecting-detail"))
                                             .small()
-                                            .color(theme::TEXT_MUTED),
+                                            .color(theme::palette().text_muted),
                                     )
                                     .wrap(),
                                 );
@@ -166,14 +166,14 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             if status.state.is_transitional() {
                                 if let Some(stage) = state.stage_line(display::now_unix()) {
                                     ui.label(
-                                        RichText::new(stage.text).small().color(theme::TEXT_MUTED),
+                                        RichText::new(stage.text).small().color(theme::palette().text_muted),
                                     );
                                     if let Some(hint) = stage.hint {
                                         ui.add(
                                             egui::Label::new(
                                                 RichText::new(hint)
                                                     .small()
-                                                    .color(theme::TEXT_MUTED),
+                                                    .color(theme::palette().text_muted),
                                             )
                                             .wrap(),
                                         );
@@ -220,7 +220,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     }
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(hint).small().color(theme::TEXT_MUTED),
+                                            RichText::new(hint).small().color(theme::palette().text_muted),
                                         )
                                         .wrap(),
                                     );
@@ -367,12 +367,12 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             );
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
-                                ui.label(RichText::new(message).small().color(theme::ROSE_LIGHT));
+                                ui.label(RichText::new(message).small().color(theme::palette().accent_light));
                                 if can_apply {
                                     ui.label(
                                         RichText::new(tr!("apply-separator"))
                                             .small()
-                                            .color(theme::ROSE_LIGHT),
+                                            .color(theme::palette().accent_light),
                                     );
                                     if widgets::link(ui, &tr!("apply"), true)
                                         .on_hover_text(tr!("apply-hint"))
@@ -408,7 +408,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                         .layout_no_wrap(
                                             text.to_owned(),
                                             egui::TextStyle::Body.resolve(ui.style()),
-                                            theme::ROSE_LIGHT,
+                                            theme::palette().accent_light,
                                         )
                                         .size()
                                         .x
@@ -431,7 +431,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     if ui
                                         .add(
                                             egui::Label::new(
-                                                RichText::new(toggle).color(theme::ROSE_LIGHT),
+                                                RichText::new(toggle).color(theme::palette().accent_light),
                                             )
                                             .sense(egui::Sense::click()),
                                         )
@@ -450,10 +450,10 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     let (text, color) = match state.tunnel_delay.proxy() {
                                         Some(ProbeOutcome::Works { millis }) => (
                                             tr!("ping-ms", ms = millis.max(1).to_string()),
-                                            theme::TEXT,
+                                            theme::palette().text,
                                         ),
                                         Some(_) => (tr!("ping-no-answer").to_owned(), theme::ERROR),
-                                        None => (tr!("ping-pending").to_owned(), theme::TEXT_DIM),
+                                        None => (tr!("ping-pending").to_owned(), theme::palette().text_dim),
                                     };
                                     let enabled =
                                         !matches!(state.tunnel_delay, TunnelDelay::Measuring);
@@ -522,7 +522,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             egui::Label::new(
                                                 RichText::new(tr!("xray-engine-detail"))
                                                     .small()
-                                                    .color(theme::TEXT_DIM),
+                                                    .color(theme::palette().text_dim),
                                             )
                                             .wrap(),
                                         );
@@ -560,7 +560,7 @@ fn failure_details(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         return;
     }
     ui.add(
-        egui::Label::new(RichText::new(&details).small().color(theme::TEXT_MUTED))
+        egui::Label::new(RichText::new(&details).small().color(theme::palette().text_muted))
             .selectable(true)
             .wrap(),
     );
@@ -584,7 +584,7 @@ fn exit_line(exit: &ExitLookup, revealed: bool) -> (String, Color32, Option<Stri
     match exit {
         ExitLookup::Known { .. } if !revealed => (
             tr!("ip-hidden").to_owned(),
-            theme::TEXT_MUTED,
+            theme::palette().text_muted,
             Some(tr!("ip-show")),
         ),
         ExitLookup::Known { route, info } => {
@@ -594,11 +594,11 @@ fn exit_line(exit: &ExitLookup, revealed: bool) -> (String, Color32, Option<Stri
             } else {
                 address
             };
-            (address, theme::TEXT, Some(tr!("ip-hide")))
+            (address, theme::palette().text, Some(tr!("ip-hide")))
         }
-        ExitLookup::Failed(_) => (tr!("ip-unknown").to_owned(), theme::TEXT_DIM, None),
+        ExitLookup::Failed(_) => (tr!("ip-unknown").to_owned(), theme::palette().text_dim, None),
         ExitLookup::None | ExitLookup::Pending(_) => {
-            (tr!("ip-pending").to_owned(), theme::TEXT_DIM, None)
+            (tr!("ip-pending").to_owned(), theme::palette().text_dim, None)
         }
     }
 }
@@ -618,7 +618,7 @@ fn detail_row<R>(
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.set_width(96.0);
-                ui.label(RichText::new(label.as_ref()).small().color(theme::TEXT_DIM));
+                ui.label(RichText::new(label.as_ref()).small().color(theme::palette().text_dim));
             },
         );
         ui.allocate_ui_with_layout(
@@ -657,8 +657,8 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
         .and_then(|(_, node)| display::leading_flag(&node.name).0);
     let width = ui.available_width();
     let response = egui::Frame::new()
-        .fill(theme::INPUT)
-        .stroke(egui::Stroke::new(1.0, theme::BORDER_STRONG))
+        .fill(theme::palette().input)
+        .stroke(egui::Stroke::new(1.0, theme::palette().border_strong))
         .corner_radius(theme::RADIUS)
         .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
@@ -683,9 +683,9 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                         egui::Stroke::new(
                             1.0,
                             if verified {
-                                theme::ROSE_DARK
+                                theme::palette().accent_dark
                             } else {
-                                theme::BORDER_STRONG
+                                theme::palette().border_strong
                             },
                         ),
                         egui::StrokeKind::Inside,
@@ -696,9 +696,9 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                         code,
                         egui::FontId::monospace(13.0),
                         if verified {
-                            theme::ROSE_LIGHT
+                            theme::palette().accent_light
                         } else {
-                            theme::TEXT_MUTED
+                            theme::palette().text_muted
                         },
                     );
                 }
@@ -729,7 +729,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                                     egui::Label::new(
                                         RichText::new(name)
                                             .font(name_font.clone())
-                                            .color(theme::TEXT),
+                                            .color(theme::palette().text),
                                     )
                                     .truncate(),
                                 );
@@ -746,7 +746,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                                     let detail = state.text(&subscription.name);
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(detail).small().color(theme::TEXT_DIM),
+                                            RichText::new(detail).small().color(theme::palette().text_dim),
                                         )
                                         .truncate(),
                                     );
@@ -756,7 +756,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                     },
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(tr!("server-change")).color(theme::ROSE_LIGHT));
+                    ui.label(RichText::new(tr!("server-change")).color(theme::palette().accent_light));
                 });
             });
         })
@@ -772,7 +772,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
         ui.painter().rect_stroke(
             response.rect,
             theme::RADIUS,
-            egui::Stroke::new(1.0, theme::ROSE_DARK),
+            egui::Stroke::new(1.0, theme::palette().accent_dark),
             egui::StrokeKind::Inside,
         );
     }
@@ -800,28 +800,28 @@ mod hero_details_tests {
                 known(ExitRoute::Direct),
                 false,
                 tr!("ip-hidden").to_owned(),
-                theme::TEXT_MUTED,
+                theme::palette().text_muted,
                 Some(tr!("ip-show")),
             ),
             (
                 known(ExitRoute::Tunnel),
                 false,
                 tr!("ip-hidden").to_owned(),
-                theme::TEXT_MUTED,
+                theme::palette().text_muted,
                 Some(tr!("ip-show")),
             ),
             (
                 known(ExitRoute::Direct),
                 true,
                 format!("203.0.113.7 {}", tr!("ip-own")),
-                theme::TEXT,
+                theme::palette().text,
                 Some(tr!("ip-hide")),
             ),
             (
                 known(ExitRoute::Tunnel),
                 true,
                 "203.0.113.7".to_owned(),
-                theme::TEXT,
+                theme::palette().text,
                 Some(tr!("ip-hide")),
             ),
         ];
@@ -848,7 +848,7 @@ mod hero_details_tests {
                 };
                 assert_eq!(
                     exit_line(&exit, revealed),
-                    (expected.to_owned(), theme::TEXT_DIM, None)
+                    (expected.to_owned(), theme::palette().text_dim, None)
                 );
             }
         }

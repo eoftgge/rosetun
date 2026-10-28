@@ -24,14 +24,15 @@ pub(super) fn subscription_card(
     );
     let mut frame = widgets::card_frame()
         .inner_margin(12)
-        .stroke(Stroke::new(1.0, theme::BORDER));
+        .stroke(Stroke::new(1.0, theme::palette().border));
     // The grip is drawn in this margin, left of the header row.
     let grip_margin = f32::from(frame.inner_margin.left) + frame.stroke.width;
     if dragged {
+        let card = theme::palette().card;
         frame = frame.fill(Color32::from_rgba_unmultiplied(
-            theme::CARD.r(),
-            theme::CARD.g(),
-            theme::CARD.b(),
+            card.r(),
+            card.g(),
+            card.b(),
             128,
         ));
     }
@@ -82,7 +83,7 @@ pub(super) fn subscription_card(
                             ui.set_width(name_width);
                             if ui
                                 .add(
-                                    egui::Label::new(RichText::new(&name).color(theme::TEXT).font(
+                                    egui::Label::new(RichText::new(&name).color(theme::palette().text).font(
                                         egui::FontId::new(
                                             egui::TextStyle::Body.resolve(ui.style()).size,
                                             egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
@@ -133,7 +134,7 @@ pub(super) fn subscription_card(
                                     &rosetun_core::redacted_subscription_url(&subscription.url),
                                 ))
                                 .small()
-                                .color(theme::TEXT_DIM),
+                                .color(theme::palette().text_dim),
                             )
                             .wrap(),
                         );
@@ -184,7 +185,7 @@ pub(super) fn subscription_card(
                         |ui| {
                             let muted = egui::TextFormat {
                                 font_id: egui::TextStyle::Small.resolve(ui.style()),
-                                color: theme::TEXT_DIM,
+                                color: theme::palette().text_dim,
                                 ..Default::default()
                             };
                             let mut summary = egui::text::LayoutJob::default();
@@ -217,7 +218,7 @@ pub(super) fn subscription_card(
                                         ms = ping_millis(best).to_string()
                                     ))
                                     .small()
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::palette().text_dim),
                                 );
                             }
                         },
@@ -256,7 +257,7 @@ pub(super) fn subscription_card(
                         |ui| {
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(traffic).small().color(theme::TEXT_MUTED),
+                                    RichText::new(traffic).small().color(theme::palette().text_muted),
                                 )
                                 .truncate(),
                             );
@@ -275,7 +276,7 @@ pub(super) fn subscription_card(
                             egui::vec2(ui.available_width(), 4.0),
                             egui::Sense::hover(),
                         );
-                        ui.painter().rect_filled(bar, 2.0, theme::INPUT);
+                        ui.painter().rect_filled(bar, 2.0, theme::palette().input);
                         if fraction > 0.0 {
                             ui.painter().rect_filled(
                                 egui::Rect::from_min_size(
@@ -286,7 +287,7 @@ pub(super) fn subscription_card(
                                 if fraction >= 1.0 {
                                     theme::ERROR
                                 } else {
-                                    theme::ROSE_DARK
+                                    theme::palette().accent_dark
                                 },
                             );
                         }
@@ -294,8 +295,8 @@ pub(super) fn subscription_card(
                 }
                 if subscription.announce.is_some() || !subscription.notices.is_empty() {
                     widgets::card_frame()
-                        .fill(theme::BG)
-                        .stroke(Stroke::new(1.0, theme::BORDER))
+                        .fill(theme::palette().bg)
+                        .stroke(Stroke::new(1.0, theme::palette().border))
                         .corner_radius(theme::RADIUS)
                         .inner_margin(10)
                         .show(ui, |ui| {
@@ -311,7 +312,7 @@ pub(super) fn subscription_card(
                                             egui::TextStyle::Small,
                                         ))
                                         .small()
-                                        .color(theme::TEXT_MUTED),
+                                        .color(theme::palette().text_muted),
                                     )
                                     .wrap(),
                                 );
@@ -326,7 +327,7 @@ pub(super) fn subscription_card(
                                             egui::TextStyle::Small,
                                         ))
                                         .small()
-                                        .color(theme::TEXT_MUTED),
+                                        .color(theme::palette().text_muted),
                                     )
                                     .wrap(),
                                 );
@@ -358,7 +359,7 @@ pub(super) fn subscription_card(
                                 report.removed,
                                 report.retained,
                             ))
-                            .color(theme::ROSE_LIGHT),
+                            .color(theme::palette().accent_light),
                         )
                         .wrap(),
                     );
@@ -386,7 +387,7 @@ pub(super) fn subscription_card(
                         ui.label(
                             RichText::new(tr!("servers-heading"))
                                 .small()
-                                .color(theme::TEXT_DIM),
+                                .color(theme::palette().text_dim),
                         );
                     },
                     |ui| {
@@ -395,7 +396,7 @@ pub(super) fn subscription_card(
                             ui.label(
                                 RichText::new(tr!("ping-checking"))
                                     .small()
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::palette().text_dim),
                             );
                         } else {
                             let enabled = state.config_ready
@@ -410,7 +411,7 @@ pub(super) fn subscription_card(
                     },
                 );
                 if subscription.nodes.is_empty() {
-                    ui.colored_label(theme::TEXT_DIM, tr!("no-servers"));
+                    ui.colored_label(theme::palette().text_dim, tr!("no-servers"));
                 }
                 let show_flags = subscription
                     .nodes
@@ -431,7 +432,7 @@ pub(super) fn subscription_card(
                         let (label, _, _) =
                             ping_label(result, matches!(&node.outbound, Outbound::Hysteria2(_)));
                         ui.painter()
-                            .layout_no_wrap(label, font.clone(), theme::TEXT_DIM)
+                            .layout_no_wrap(label, font.clone(), theme::palette().text_dim)
                             .size()
                             .x
                     })
@@ -466,7 +467,7 @@ pub(super) fn subscription_card(
                             total = subscription.nodes.len().to_string()
                         ))
                         .small()
-                        .color(theme::TEXT_DIM),
+                        .color(theme::palette().text_dim),
                     ));
                 }
             });
@@ -483,7 +484,7 @@ pub(super) fn subscription_card(
                         response.response.rect.top() + 26.0,
                     ),
                     Icon::Grip,
-                    theme::TEXT_DIM,
+                    theme::palette().text_dim,
                 );
             }
             if selected {
@@ -494,7 +495,7 @@ pub(super) fn subscription_card(
                         egui::pos2(rect.left() + 3.0, rect.bottom() - f32::from(theme::RADIUS)),
                     ),
                     0.0,
-                    theme::ROSE,
+                    theme::palette().accent_base,
                 );
             }
         },
@@ -508,7 +509,7 @@ fn expiry_color(expire: u64, now: u64) -> Color32 {
     } else if expire - now < 7 * 86_400 {
         theme::WARNING
     } else {
-        theme::TEXT_DIM
+        theme::palette().text_dim
     }
 }
 
@@ -763,7 +764,7 @@ mod tests {
     fn expiry_colors_change_within_seven_days_and_after_expiry() {
         let now = 1_000_000;
         let week = 7 * 86_400;
-        assert_eq!(expiry_color(now + week, now), theme::TEXT_DIM);
+        assert_eq!(expiry_color(now + week, now), theme::palette().text_dim);
         assert_eq!(expiry_color(now + week - 1, now), theme::WARNING);
         assert_eq!(expiry_color(now + 1, now), theme::WARNING);
         assert_eq!(expiry_color(now, now), theme::EXPIRED);

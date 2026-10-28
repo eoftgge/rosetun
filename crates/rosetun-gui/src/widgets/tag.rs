@@ -1,13 +1,13 @@
 use eframe::egui::{self, CornerRadius, Stroke, TextStyle};
 
-use crate::theme::{BORDER_STRONG, TEXT_MUTED};
+use crate::theme;
 
 /// A quiet outlined word next to a title, such as "Experimental".
 pub(crate) fn tag(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
         TextStyle::Small.resolve(ui.style()),
-        TEXT_MUTED,
+        theme::palette().text_muted,
     );
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(galley.size().x + 14.0, galley.size().y + 4.0),
@@ -17,13 +17,13 @@ pub(crate) fn tag(ui: &mut egui::Ui, text: &str) -> egui::Response {
         ui.painter().rect_stroke(
             rect,
             CornerRadius::same(9),
-            Stroke::new(1.0, BORDER_STRONG),
+            Stroke::new(1.0, theme::palette().border_strong),
             egui::StrokeKind::Inside,
         );
         ui.painter().galley(
             egui::pos2(rect.left() + 7.0, rect.center().y - galley.size().y / 2.0),
             galley,
-            TEXT_MUTED,
+            theme::palette().text_muted,
         );
     }
     response

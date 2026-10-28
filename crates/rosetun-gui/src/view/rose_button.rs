@@ -119,8 +119,8 @@ fn params(phase: RosePhase) -> RoseParams {
                     PetalLayer {
                         k: 1.35,
                         rotation: -24.0,
-                        fill: theme::TEXT.gamma_multiply(0.20),
-                        stroke: theme::TEXT,
+                        fill: theme::palette().text.gamma_multiply(0.20),
+                        stroke: theme::palette().text,
                     },
                     PetalLayer::HIDDEN,
                     PetalLayer::HIDDEN,
@@ -128,63 +128,63 @@ fn params(phase: RosePhase) -> RoseParams {
                 0.0,
                 0.2,
                 0.0,
-                theme::ROSE,
+                theme::palette().accent_base,
                 Color32::TRANSPARENT,
-                theme::BORDER_STRONG,
-                theme::TEXT,
+                theme::palette().border_strong,
+                theme::palette().text,
             ),
             RosePhase::Opening => (
                 [
                     PetalLayer {
                         k: 1.75,
                         rotation: -12.0,
-                        fill: theme::ROSE_BRIGHT.gamma_multiply(0.30),
-                        stroke: theme::ROSE_BRIGHT,
+                        fill: theme::palette().accent_bright.gamma_multiply(0.30),
+                        stroke: theme::palette().accent_bright,
                     },
                     PetalLayer {
                         k: 0.90,
                         rotation: 16.0,
-                        fill: theme::ROSE_BRIGHT.gamma_multiply(0.15),
-                        stroke: theme::ROSE_BRIGHT.gamma_multiply(0.60),
+                        fill: theme::palette().accent_bright.gamma_multiply(0.15),
+                        stroke: theme::palette().accent_bright.gamma_multiply(0.60),
                     },
                     PetalLayer::HIDDEN,
                 ],
                 0.0,
                 0.2,
                 0.0,
-                theme::ROSE_BRIGHT.gamma_multiply(0.12),
-                theme::ROSE_BRIGHT,
-                theme::ROSE_BRIGHT.gamma_multiply(0.40),
-                theme::ROSE_BRIGHT,
+                theme::palette().accent_bright.gamma_multiply(0.12),
+                theme::palette().accent_bright,
+                theme::palette().accent_bright.gamma_multiply(0.40),
+                theme::palette().accent_bright,
             ),
             RosePhase::Bloom => (
                 [
                     PetalLayer {
                         k: 2.25,
                         rotation: 0.0,
-                        fill: theme::ROSE_DARK.gamma_multiply(0.90),
-                        stroke: theme::ROSE_LIGHT.gamma_multiply(0.55),
+                        fill: theme::palette().accent_dark.gamma_multiply(0.90),
+                        stroke: theme::palette().accent_light.gamma_multiply(0.55),
                     },
                     PetalLayer {
                         k: 1.60,
                         rotation: 36.0,
-                        fill: theme::ROSE.gamma_multiply(0.92),
-                        stroke: theme::ROSE_LIGHT.gamma_multiply(0.80),
+                        fill: theme::palette().accent_base.gamma_multiply(0.92),
+                        stroke: theme::palette().accent_light.gamma_multiply(0.80),
                     },
                     PetalLayer {
                         k: 0.95,
                         rotation: 18.0,
-                        fill: theme::ROSE_LIGHT.gamma_multiply(0.95),
-                        stroke: theme::TEXT.gamma_multiply(0.55),
+                        fill: theme::palette().accent_light.gamma_multiply(0.95),
+                        stroke: theme::palette().text.gamma_multiply(0.55),
                     },
                 ],
                 1.0,
                 1.0,
                 1.0,
-                theme::ROSE.gamma_multiply(0.10),
-                theme::ROSE_LIGHT.gamma_multiply(0.90),
-                theme::ROSE_LIGHT.gamma_multiply(0.35),
-                theme::TEXT_MUTED,
+                theme::palette().accent_base.gamma_multiply(0.10),
+                theme::palette().accent_light.gamma_multiply(0.90),
+                theme::palette().accent_light.gamma_multiply(0.35),
+                theme::palette().text_muted,
             ),
             RosePhase::Unavailable => (
                 [
@@ -200,9 +200,9 @@ fn params(phase: RosePhase) -> RoseParams {
                 0.0,
                 0.2,
                 0.0,
-                theme::MODAL,
+                theme::palette().modal,
                 theme::DISABLED,
-                theme::BORDER_STRONG,
+                theme::palette().border_strong,
                 theme::DISABLED,
             ),
             RosePhase::Blocked => (
@@ -219,7 +219,7 @@ fn params(phase: RosePhase) -> RoseParams {
                 0.0,
                 0.2,
                 0.0,
-                theme::MODAL,
+                theme::palette().modal,
                 theme::ERROR,
                 theme::ERROR.gamma_multiply(0.45),
                 theme::ERROR,
@@ -414,7 +414,7 @@ pub(crate) fn rose_button(
     let font_id = FontId::new(17.0, FontFamily::Name(theme::UI_SEMIBOLD.into()));
     let galley = ui
         .painter()
-        .layout_no_wrap(label.to_owned(), font_id, theme::TEXT);
+        .layout_no_wrap(label.to_owned(), font_id, theme::palette().text);
     let label_rect = Rect::from_center_size(label_center, galley.size());
     let hovered = enabled
         && response.hovered()
@@ -468,7 +468,7 @@ pub(crate) fn rose_button(
             Stroke::new(
                 1.0,
                 if hovered {
-                    theme::ROSE.gamma_multiply(0.6)
+                    theme::palette().accent_base.gamma_multiply(0.6)
                 } else {
                     visible.ring
                 },
@@ -485,7 +485,7 @@ pub(crate) fn rose_button(
                 painter.circle_filled(
                     center,
                     radius,
-                    theme::ROSE.gamma_multiply(alpha * visible.glow),
+                    theme::palette().accent_base.gamma_multiply(alpha * visible.glow),
                 );
             }
         }
@@ -512,7 +512,7 @@ pub(crate) fn rose_button(
             painter.circle_filled(
                 center,
                 3.6 * visible.stamen_scale,
-                theme::ROSE_PALE.gamma_multiply(visible.stamen_alpha),
+                theme::palette().accent_pale.gamma_multiply(visible.stamen_alpha),
             );
         }
         painter.galley(label_rect.min, galley, visible.label);
@@ -590,8 +590,8 @@ mod tests {
         let bud = params(RosePhase::Bud);
         near(bud.layers[OUTER].k, 1.35);
         near(bud.layers[OUTER].rotation, -24.0);
-        assert_eq!(bud.layers[OUTER].fill, theme::TEXT.gamma_multiply(0.20));
-        assert_eq!(bud.layers[OUTER].stroke, theme::TEXT);
+        assert_eq!(bud.layers[OUTER].fill, theme::palette().text.gamma_multiply(0.20));
+        assert_eq!(bud.layers[OUTER].stroke, theme::palette().text);
         assert_eq!(
             params(RosePhase::Blocked).layers[OUTER].stroke,
             theme::ERROR
@@ -604,18 +604,18 @@ mod tests {
         near(opening.layers[OUTER].rotation, -12.0);
         assert_eq!(
             opening.layers[OUTER].fill,
-            theme::ROSE_BRIGHT.gamma_multiply(0.30)
+            theme::palette().accent_bright.gamma_multiply(0.30)
         );
-        assert_eq!(opening.layers[OUTER].stroke, theme::ROSE_BRIGHT);
+        assert_eq!(opening.layers[OUTER].stroke, theme::palette().accent_bright);
         near(opening.layers[MIDDLE].k, 0.90);
         near(opening.layers[MIDDLE].rotation, 16.0);
         assert_eq!(
             opening.layers[MIDDLE].fill,
-            theme::ROSE_BRIGHT.gamma_multiply(0.15)
+            theme::palette().accent_bright.gamma_multiply(0.15)
         );
         assert_eq!(
             opening.layers[MIDDLE].stroke,
-            theme::ROSE_BRIGHT.gamma_multiply(0.60)
+            theme::palette().accent_bright.gamma_multiply(0.60)
         );
 
         let bloom = params(RosePhase::Bloom);
@@ -625,22 +625,22 @@ mod tests {
                 OUTER,
                 2.25,
                 0.0,
-                theme::ROSE_DARK.gamma_multiply(0.90),
-                theme::ROSE_LIGHT.gamma_multiply(0.55),
+                theme::palette().accent_dark.gamma_multiply(0.90),
+                theme::palette().accent_light.gamma_multiply(0.55),
             ),
             (
                 MIDDLE,
                 1.60,
                 36.0,
-                theme::ROSE.gamma_multiply(0.92),
-                theme::ROSE_LIGHT.gamma_multiply(0.80),
+                theme::palette().accent_base.gamma_multiply(0.92),
+                theme::palette().accent_light.gamma_multiply(0.80),
             ),
             (
                 CORE,
                 0.95,
                 18.0,
-                theme::ROSE_LIGHT.gamma_multiply(0.95),
-                theme::TEXT.gamma_multiply(0.55),
+                theme::palette().accent_light.gamma_multiply(0.95),
+                theme::palette().text.gamma_multiply(0.55),
             ),
         ] {
             near(bloom.layers[index].k, k);
@@ -648,10 +648,10 @@ mod tests {
             assert_eq!(bloom.layers[index].fill, fill);
             assert_eq!(bloom.layers[index].stroke, stroke);
         }
-        assert_eq!(bloom.ring, theme::ROSE_LIGHT.gamma_multiply(0.35));
-        assert_eq!(bloom.disc_fill, theme::ROSE.gamma_multiply(0.10));
-        assert_eq!(bloom.disc_stroke, theme::ROSE_LIGHT.gamma_multiply(0.90));
-        assert_eq!(bloom.label, theme::TEXT_MUTED);
+        assert_eq!(bloom.ring, theme::palette().accent_light.gamma_multiply(0.35));
+        assert_eq!(bloom.disc_fill, theme::palette().accent_base.gamma_multiply(0.10));
+        assert_eq!(bloom.disc_stroke, theme::palette().accent_light.gamma_multiply(0.90));
+        assert_eq!(bloom.label, theme::palette().text_muted);
         near(bloom.glow, 1.0);
         near(bloom.stamen_scale, 1.0);
         near(bloom.stamen_alpha, 1.0);

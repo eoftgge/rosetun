@@ -1,19 +1,19 @@
 use eframe::egui::{self, CornerRadius, Stroke};
 
-use crate::theme::{BORDER, BORDER_STRONG, CARD, ERROR, MODAL, RADIUS};
+use crate::theme::{self, ERROR, RADIUS};
 
 pub(crate) fn card_frame() -> egui::Frame {
     egui::Frame::new()
-        .fill(CARD)
-        .stroke(Stroke::new(1.0, BORDER))
+        .fill(theme::palette().card)
+        .stroke(Stroke::new(1.0, theme::palette().border))
         .corner_radius(CornerRadius::same(RADIUS))
         .inner_margin(egui::Margin::same(16))
 }
 
 pub(crate) fn modal_frame() -> egui::Frame {
     egui::Frame::new()
-        .fill(MODAL)
-        .stroke(Stroke::new(1.0, BORDER_STRONG))
+        .fill(theme::palette().modal)
+        .stroke(Stroke::new(1.0, theme::palette().border_strong))
         .corner_radius(CornerRadius::same(RADIUS))
         .inner_margin(egui::Margin::same(24))
 }
@@ -134,7 +134,7 @@ mod tests {
                 .shapes
                 .iter()
                 .find_map(|shape| match &shape.shape {
-                    egui::Shape::Rect(rect) if rect.fill == CARD => Some(rect.rect),
+                    egui::Shape::Rect(rect) if rect.fill == theme::palette().card => Some(rect.rect),
                     _ => None,
                 })
                 .unwrap();

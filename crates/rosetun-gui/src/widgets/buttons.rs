@@ -1,12 +1,12 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
 
-use crate::theme::{self, BORDER, BORDER_STRONG, ROSE};
+use crate::theme;
 
 fn primary_fill(enabled: bool) -> Color32 {
     if enabled {
-        ROSE
+        theme::palette().accent_base
     } else {
-        theme::ROSE_DARK.gamma_multiply(0.65)
+        theme::palette().accent_dark.gamma_multiply(0.65)
     }
 }
 
@@ -17,7 +17,7 @@ pub(crate) fn button_fill(
 ) -> egui::Response {
     ui.scope(|ui| {
         if !enabled {
-            ui.visuals_mut().override_text_color = Some(theme::TEXT_MUTED);
+            ui.visuals_mut().override_text_color = Some(theme::palette().text_muted);
         }
         ui.add_enabled(enabled, egui::Button::new(text).fill(primary_fill(enabled)))
     })
@@ -33,7 +33,7 @@ pub(crate) fn outline_button(
         .fill(Color32::TRANSPARENT)
         .stroke(Stroke::new(
             1.0,
-            if enabled { BORDER_STRONG } else { BORDER },
+            if enabled { theme::palette().border_strong } else { theme::palette().border },
         ));
     ui.scope(|ui| {
         // egui sizes a button by its state's stroke width; match hover's 1 px so it keeps its size.
@@ -80,7 +80,7 @@ fn compact_button(
     let button = if outlined {
         button.fill(Color32::TRANSPARENT).stroke(Stroke::new(
             1.0,
-            if enabled { BORDER_STRONG } else { BORDER },
+            if enabled { theme::palette().border_strong } else { theme::palette().border },
         ))
     } else {
         button.fill(primary_fill(enabled))
@@ -91,7 +91,7 @@ fn compact_button(
         if outlined {
             ui.visuals_mut().widgets.inactive.bg_stroke.width = 1.0;
         } else if !enabled {
-            ui.visuals_mut().override_text_color = Some(theme::TEXT_MUTED);
+            ui.visuals_mut().override_text_color = Some(theme::palette().text_muted);
         }
         ui.add_enabled(enabled, button)
     })
@@ -101,9 +101,9 @@ fn compact_button(
 pub(crate) fn link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     let response = ui.add(
         egui::Label::new(RichText::new(text).small().color(if enabled {
-            theme::ROSE_LIGHT
+            theme::palette().accent_light
         } else {
-            theme::TEXT_DIM
+            theme::palette().text_dim
         }))
         .sense(if enabled {
             egui::Sense::click()
@@ -117,7 +117,7 @@ pub(crate) fn link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Respon
                 response.rect.left_bottom() + egui::vec2(0.0, -1.0),
                 response.rect.right_bottom() + egui::vec2(0.0, -1.0),
             ],
-            Stroke::new(1.0, theme::ROSE_LIGHT),
+            Stroke::new(1.0, theme::palette().accent_light),
         );
     }
     if enabled {
@@ -133,9 +133,9 @@ mod tests {
 
     #[test]
     fn disabled_primary_keeps_its_size_and_rose_fill() {
-        assert_eq!(primary_fill(true), theme::ROSE);
-        assert_ne!(primary_fill(false), theme::CARD);
-        assert_eq!(primary_fill(false), theme::ROSE_DARK.gamma_multiply(0.65));
+        assert_eq!(primary_fill(true), theme::palette().accent_base);
+        assert_ne!(primary_fill(false), theme::palette().card);
+        assert_eq!(primary_fill(false), theme::palette().accent_dark.gamma_multiply(0.65));
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {

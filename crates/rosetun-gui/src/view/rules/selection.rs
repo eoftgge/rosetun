@@ -54,7 +54,7 @@ pub(super) fn selection_slot(
                     egui::Label::new(
                         RichText::new(tr!("order-hint"))
                             .small()
-                            .color(theme::TEXT_DIM),
+                            .color(theme::palette().text_dim),
                     )
                     .wrap(),
                 );
@@ -68,7 +68,7 @@ fn selection_toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>
     let can_edit = state.can_edit_rules();
     let can_move = can_edit && !state.rules.screen.filter.is_active();
     let count = state.rules.screen.selected_rules.len();
-    ui.label(RichText::new(crate::i18n::selected_rule_count(count)).color(theme::TEXT_MUTED));
+    ui.label(RichText::new(crate::i18n::selected_rule_count(count)).color(theme::palette().text_muted));
     for (label, action) in [
         (tr!("move-selected-to-top"), Action::MoveSelectedRulesToTop),
         (tr!("move-to-end"), Action::MoveSelectedRulesToEnd),

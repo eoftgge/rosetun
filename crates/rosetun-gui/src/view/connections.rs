@@ -66,7 +66,7 @@ fn details(
             ui.add_space(12.0);
             if connection.end_unix_ms.is_some() {
                 detail_row(ui, &tr!("connections-state"), |ui| {
-                    ui.label(RichText::new(tr!("connections-state-closed")).color(theme::TEXT));
+                    ui.label(RichText::new(tr!("connections-state-closed")).color(theme::palette().text));
                 });
             }
             detail_row(ui, &tr!("connections-route"), |ui| {
@@ -78,7 +78,7 @@ fn details(
             let reason = state.route_reason(connection);
             detail_row(ui, &tr!("connections-why"), |ui| {
                 let text =
-                    ui.add(egui::Label::new(RichText::new(&reason.text).color(theme::TEXT)).wrap());
+                    ui.add(egui::Label::new(RichText::new(&reason.text).color(theme::palette().text)).wrap());
                 if let Some(hint) = &reason.hint {
                     text.on_hover_text(hint);
                 }
@@ -90,7 +90,7 @@ fn details(
                 .flatten()
                 {
                     ui.add(
-                        egui::Label::new(RichText::new(note).small().color(theme::TEXT_DIM)).wrap(),
+                        egui::Label::new(RichText::new(note).small().color(theme::palette().text_dim)).wrap(),
                     );
                 }
                 if let Some(rule) = &reason.edit
@@ -102,20 +102,20 @@ fn details(
                 }
             });
             detail_row(ui, &tr!("connections-network"), |ui| {
-                ui.label(RichText::new(network_label(connection.network)).color(theme::TEXT));
+                ui.label(RichText::new(network_label(connection.network)).color(theme::palette().text));
             });
             detail_row(ui, &tr!("connections-address"), |ui| {
                 ui.add(
-                    egui::Label::new(RichText::new(&destination).monospace().color(theme::TEXT))
+                    egui::Label::new(RichText::new(&destination).monospace().color(theme::palette().text))
                         .selectable(true)
                         .wrap(),
                 );
             });
             detail_row(ui, &tr!("connections-program"), |ui| {
-                ui.add(egui::Label::new(RichText::new(&name).color(theme::TEXT)).wrap());
+                ui.add(egui::Label::new(RichText::new(&name).color(theme::palette().text)).wrap());
                 if let Some(path) = &path {
                     ui.add(
-                        egui::Label::new(RichText::new(path).small().color(theme::TEXT_DIM))
+                        egui::Label::new(RichText::new(path).small().color(theme::palette().text_dim))
                             .selectable(true)
                             .wrap(),
                     );
@@ -128,7 +128,7 @@ fn details(
                         connection.start_unix_ms / 1000,
                         now,
                     ))
-                    .color(theme::TEXT),
+                    .color(theme::palette().text),
                 );
             });
             detail_row(ui, &tr!("connections-transferred"), |ui| {
@@ -139,7 +139,7 @@ fn details(
                             &crate::i18n::bytes(connection.upload),
                         ))
                         .monospace()
-                        .color(theme::TEXT),
+                        .color(theme::palette().text),
                     )
                     .extend(),
                 );
@@ -152,7 +152,7 @@ fn details(
                     },
                 );
                 ui.add(
-                    egui::Label::new(RichText::new(speed).monospace().color(theme::TEXT)).extend(),
+                    egui::Label::new(RichText::new(speed).monospace().color(theme::palette().text)).extend(),
                 );
             });
 
@@ -162,7 +162,7 @@ fn details(
             ui.label(
                 RichText::new(tr!("connections-create-rule"))
                     .small()
-                    .color(theme::TEXT_DIM),
+                    .color(theme::palette().text_dim),
             );
             ui.add_space(6.0);
             let can_add = state.can_edit_rules();
@@ -204,7 +204,7 @@ fn details(
                 ui.label(
                     RichText::new(tr!("connections-close-note"))
                         .small()
-                        .color(theme::TEXT_DIM),
+                        .color(theme::palette().text_dim),
                 );
             }
         });
@@ -221,7 +221,7 @@ fn detail_row(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui))
             |ui| {
                 ui.set_width(DETAIL_LABEL_WIDTH);
                 ui.add(
-                    egui::Label::new(RichText::new(label).small().color(theme::TEXT_DIM))
+                    egui::Label::new(RichText::new(label).small().color(theme::palette().text_dim))
                         .truncate(),
                 );
             },
@@ -239,12 +239,12 @@ fn close_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     if response.hovered() {
         ui.painter()
-            .rect_filled(rect, theme::RADIUS_INNER, theme::INPUT);
+            .rect_filled(rect, theme::RADIUS_INNER, theme::palette().input);
     }
     let color = if response.hovered() {
-        theme::TEXT
+        theme::palette().text
     } else {
-        theme::TEXT_DIM
+        theme::palette().text_dim
     };
     let half = 4.5;
     let center = rect.center();
@@ -285,7 +285,7 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             };
             ui.add_space(18.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new(text).small().color(theme::TEXT_DIM));
+                ui.label(RichText::new(text).small().color(theme::palette().text_dim));
             });
             ui.add_space(18.0);
         } else {
@@ -299,7 +299,7 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         ui.label(
             RichText::new(tr!("connections-note"))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::palette().text_dim),
         );
     });
 }
@@ -468,10 +468,10 @@ fn route_filter(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> 
 
 pub(super) fn route_color(route: &ConnectionRoute) -> Color32 {
     match route {
-        ConnectionRoute::Proxy => theme::ROSE_LIGHT,
-        ConnectionRoute::Direct => theme::TEXT_MUTED,
+        ConnectionRoute::Proxy => theme::palette().accent_light,
+        ConnectionRoute::Direct => theme::palette().text_muted,
         ConnectionRoute::Exit(_) => theme::EXIT,
-        ConnectionRoute::Other => theme::TEXT_DIM,
+        ConnectionRoute::Other => theme::palette().text_dim,
     }
 }
 
@@ -490,7 +490,7 @@ fn divider(ui: &mut egui::Ui) {
     ui.painter().hline(
         line.x_range(),
         line.center().y,
-        egui::Stroke::new(1.0, theme::BORDER),
+        egui::Stroke::new(1.0, theme::palette().border),
     );
 }
 
@@ -526,9 +526,9 @@ fn row_frame(
         let rect =
             egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height));
         let fill = if selected {
-            Some(theme::BORDER)
+            Some(theme::palette().border)
         } else if ui.response().hovered() {
-            Some(theme::INPUT)
+            Some(theme::palette().input)
         } else {
             None
         };
@@ -570,7 +570,7 @@ fn program_row(
             ui.painter(),
             chevron.center(),
             Icon::Chevron { open: expanded },
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
         letter_tile(ui, &name);
         let width = program_name_width(ui);
@@ -581,14 +581,14 @@ fn program_row(
                 ui.set_width(width);
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let response =
-                    ui.add(egui::Label::new(RichText::new(&name).color(theme::TEXT)).truncate());
+                    ui.add(egui::Label::new(RichText::new(&name).color(theme::palette().text)).truncate());
                 if let Some(path) = &path {
                     response.on_hover_text(path);
                     ui.add(
                         egui::Label::new(
                             RichText::new(crate::programs::file_name(path))
                                 .small()
-                                .color(theme::TEXT_DIM),
+                                .color(theme::palette().text_dim),
                         )
                         .truncate(),
                     );
@@ -606,7 +606,7 @@ fn program_row(
                 n = count.to_string()
             ))
             .small()
-            .color(theme::TEXT_MUTED),
+            .color(theme::palette().text_muted),
             None,
         );
         route_dots(ui, state, &group.routes);
@@ -655,7 +655,7 @@ fn program_connection_row(
                 RichText::new(&destination)
                     .small()
                     .monospace()
-                    .color(theme::TEXT),
+                    .color(theme::palette().text),
                 Some(&destination),
             );
             cell(
@@ -664,7 +664,7 @@ fn program_connection_row(
                 PROGRAM_ROW_HEIGHT,
                 RichText::new(network_label(connection.network))
                     .small()
-                    .color(theme::TEXT_MUTED),
+                    .color(theme::palette().text_muted),
                 None,
             );
             route_dots(ui, state, &[&connection.route]);
@@ -705,7 +705,7 @@ fn select_on_click(
 fn letter_tile(ui: &mut egui::Ui, name: &str) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
     ui.painter()
-        .rect_filled(rect, theme::RADIUS_INNER, theme::INPUT);
+        .rect_filled(rect, theme::RADIUS_INNER, theme::palette().input);
     let letter: String = name
         .chars()
         .find(|character| character.is_alphanumeric())
@@ -716,7 +716,7 @@ fn letter_tile(ui: &mut egui::Ui, name: &str) {
         egui::Align2::CENTER_CENTER,
         letter,
         egui::FontId::proportional(13.0),
-        theme::TEXT_MUTED,
+        theme::palette().text_muted,
     );
 }
 
@@ -774,7 +774,7 @@ fn mono(text: &str) -> RichText {
     RichText::new(text)
         .small()
         .monospace()
-        .color(theme::TEXT_MUTED)
+        .color(theme::palette().text_muted)
 }
 
 /// Program, destination, route, speed, down, up and time.
@@ -810,7 +810,7 @@ fn table_header(ui: &mut egui::Ui, widths: &[f32; 7]) {
                 ui,
                 *width,
                 TABLE_ROW_HEIGHT,
-                RichText::new(title).small().color(theme::TEXT_DIM),
+                RichText::new(title).small().color(theme::palette().text_dim),
                 None,
             );
         }
@@ -857,14 +857,14 @@ fn table_row(
             ui,
             widths[0],
             TABLE_ROW_HEIGHT,
-            RichText::new(&program).small().color(theme::TEXT),
+            RichText::new(&program).small().color(theme::palette().text),
             path.as_deref(),
         );
         cell(
             ui,
             widths[1],
             TABLE_ROW_HEIGHT,
-            RichText::new(&destination).small().color(theme::TEXT),
+            RichText::new(&destination).small().color(theme::palette().text),
             Some(&destination),
         );
         cell(

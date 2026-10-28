@@ -11,7 +11,7 @@ use crate::actions::PrimaryAction;
 use crate::app::ShellEvent;
 use crate::rose_icon::{self, RoseIcon, TrayState};
 use crate::state::{State, primary_label};
-use crate::{constants, i18n, view};
+use crate::{constants, i18n, theme, view};
 
 const OPEN_ID: &str = "rosetun.tray.open";
 const HIDE_ID: &str = "rosetun.tray.hide";
@@ -154,7 +154,7 @@ impl<I: Clone> IconSlot<I> {
 
 fn rose(state: TrayState, size: u32) -> Result<Icon, tray_icon::BadIcon> {
     Icon::from_rgba(
-        rose_icon::rose_icon_rgba(size, RoseIcon::Tray(state)),
+        rose_icon::rose_icon_rgba(size, RoseIcon::Tray(state), theme::palette()),
         size,
         size,
     )

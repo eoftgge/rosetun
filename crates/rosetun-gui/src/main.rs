@@ -122,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title(constants::TITLE)
         .with_icon(std::sync::Arc::new(eframe::egui::IconData {
-            rgba: rose_icon::rose_icon_rgba(128, rose_icon::RoseIcon::App),
+            rgba: rose_icon::rose_icon_rgba(128, rose_icon::RoseIcon::App, theme::palette()),
             width: 128,
             height: 128,
         }))

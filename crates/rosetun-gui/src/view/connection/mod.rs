@@ -21,7 +21,7 @@ use hero::hero_card;
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if !state.config_ready {
-        ui.colored_label(theme::TEXT_DIM, tr!("loading"));
+        ui.colored_label(theme::palette().text_dim, tr!("loading"));
     }
     if !state.helper_available {
         service_banner(ui, state);
@@ -62,13 +62,13 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
                         ui.label(
                             RichText::new(tr!("service-down-title"))
                                 .strong()
-                                .color(theme::TEXT),
+                                .color(theme::palette().text),
                         );
                         ui.add(
                             egui::Label::new(
                                 RichText::new(tr!("service-down-body"))
                                     .small()
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::palette().text_dim),
                             )
                             .wrap(),
                         );
@@ -97,7 +97,7 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
                 egui::Label::new(
                     RichText::new(state.text(&errors::client(crate::i18n::language(), error)))
                         .small()
-                        .color(theme::TEXT_DIM),
+                        .color(theme::palette().text_dim),
                 )
                 .wrap(),
             );
@@ -108,9 +108,9 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
 pub(crate) fn state_style(state: &ConnectionState) -> (String, Color32) {
     match state {
         ConnectionState::Disconnected => (tr!("disconnected"), theme::DISCONNECTED),
-        ConnectionState::Connecting => (tr!("connecting"), theme::ROSE_BRIGHT),
+        ConnectionState::Connecting => (tr!("connecting"), theme::palette().accent_bright),
         ConnectionState::Connected => (tr!("connected"), theme::CONNECTED),
-        ConnectionState::Reconnecting => (tr!("reconnecting"), theme::ROSE_BRIGHT),
+        ConnectionState::Reconnecting => (tr!("reconnecting"), theme::palette().accent_bright),
         ConnectionState::Failed { .. } => (tr!("failed"), theme::ERROR),
         ConnectionState::FailedProtected { .. } => (tr!("failed-protected"), theme::ERROR),
     }
@@ -177,7 +177,7 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
             if enabling {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(tr!("lockdown-experimental")).color(theme::TEXT_MUTED),
+                        RichText::new(tr!("lockdown-experimental")).color(theme::palette().text_muted),
                     )
                     .wrap(),
                 );
@@ -192,7 +192,7 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
                     egui::Label::new(
                         RichText::new(tr!("lockdown-way-out"))
                             .small()
-                            .color(theme::TEXT_DIM),
+                            .color(theme::palette().text_dim),
                     )
                     .wrap(),
                 );

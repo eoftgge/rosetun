@@ -14,7 +14,7 @@ pub(super) fn exits_card(ui: &mut egui::Ui, state: &State) -> bool {
     ui.add_space(theme::SECTION_GAP);
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.colored_label(theme::TEXT_DIM, tr!("connection-exits"));
+        ui.colored_label(theme::palette().text_dim, tr!("connection-exits"));
         ui.add_space(4.0);
         ui.spacing_mut().item_spacing.y = 8.0;
         for row in &rows {
@@ -34,12 +34,12 @@ fn exit_row(ui: &mut egui::Ui, state: &State, row: &SessionExitRow<'_>) {
                 let title = row
                     .exit
                     .map_or_else(|| tr!("connection-exit-removed"), exit_title);
-                ui.add(egui::Label::new(RichText::new(title).color(theme::TEXT)).truncate());
+                ui.add(egui::Label::new(RichText::new(title).color(theme::palette().text)).truncate());
                 ui.add(
                     egui::Label::new(
                         RichText::new(display::safe_text(&state.text(row.node)))
                             .small()
-                            .color(theme::TEXT_DIM),
+                            .color(theme::palette().text_dim),
                     )
                     .truncate(),
                 );
@@ -55,11 +55,11 @@ fn exit_row(ui: &mut egui::Ui, state: &State, row: &SessionExitRow<'_>) {
 fn exit_status(outcome: Option<ExitOutcome>) -> (String, Color32) {
     match outcome {
         Some(ExitOutcome::Probed(ProbeOutcome::Works { millis })) => {
-            (tr!("ping-ms", ms = millis.max(1).to_string()), theme::TEXT)
+            (tr!("ping-ms", ms = millis.max(1).to_string()), theme::palette().text)
         }
         Some(ExitOutcome::Probed(_)) => (tr!("connection-exit-no-answer"), theme::WARNING),
         Some(ExitOutcome::NoAddress) => (tr!("connection-exit-no-address"), theme::WARNING),
-        None => (tr!("ping-pending").to_owned(), theme::TEXT_DIM),
+        None => (tr!("ping-pending").to_owned(), theme::palette().text_dim),
     }
 }
 
@@ -193,7 +193,7 @@ mod tests {
         assert!(
             texts
                 .iter()
-                .filter(|(text, color)| text == &tr!("ping-pending") && *color == theme::TEXT_DIM)
+                .filter(|(text, color)| text == &tr!("ping-pending") && *color == theme::palette().text_dim)
                 .count()
                 == 3
         );
@@ -203,10 +203,10 @@ mod tests {
     fn rows_show_delay_no_answer_and_no_address() {
         let (_, texts, _) = render(&state(true, Some(delays())), 960.0);
         for (expected, color) in [
-            ("Example exit · NL".to_owned(), theme::TEXT),
-            ("NL One".to_owned(), theme::TEXT_DIM),
-            ("DE One".to_owned(), theme::TEXT_DIM),
-            (tr!("ping-ms", ms = "84"), theme::TEXT),
+            ("Example exit · NL".to_owned(), theme::palette().text),
+            ("NL One".to_owned(), theme::palette().text_dim),
+            ("DE One".to_owned(), theme::palette().text_dim),
+            (tr!("ping-ms", ms = "84"), theme::palette().text),
             (tr!("connection-exit-no-answer"), theme::WARNING),
             (tr!("connection-exit-no-address"), theme::WARNING),
         ] {

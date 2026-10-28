@@ -17,11 +17,11 @@ pub(crate) fn show(
         .show(ctx, |ui| {
             ui.set_width(520.0);
             ui.heading(tr!("add-subscription"));
-            ui.colored_label(theme::TEXT_MUTED, tr!("add-subtitle"));
+            ui.colored_label(theme::palette().text_muted, tr!("add-subtitle"));
             ui.add_space(18.0);
             if let Some(host) = &dialog.from_link {
                 ui.colored_label(
-                    theme::TEXT_MUTED,
+                    theme::palette().text_muted,
                     tr!(
                         "subscriptions-add-from-link",
                         host = display::safe_text(host)
@@ -65,7 +65,7 @@ pub(crate) fn show(
                     .wrap(),
                 );
             }
-            ui.add(egui::Label::new(RichText::new(tr!("url-help")).color(theme::TEXT_DIM)).wrap());
+            ui.add(egui::Label::new(RichText::new(tr!("url-help")).color(theme::palette().text_dim)).wrap());
             let normalized = rosetun_core::normalize_subscription_url(&dialog.url);
             if !dialog.url.trim().is_empty() {
                 match &normalized {
@@ -93,7 +93,7 @@ pub(crate) fn show(
                     Ok(_) => {
                         if let Some(note) = assumed_https_note(&dialog.url) {
                             ui.add(
-                                egui::Label::new(RichText::new(note).color(theme::TEXT_DIM)).wrap(),
+                                egui::Label::new(RichText::new(note).color(theme::palette().text_dim)).wrap(),
                             );
                         }
                     }
@@ -119,7 +119,7 @@ pub(crate) fn show(
             });
             ui.add(
                 egui::Label::new(
-                    RichText::new(tr!("device-id-explanation")).color(theme::TEXT_DIM),
+                    RichText::new(tr!("device-id-explanation")).color(theme::palette().text_dim),
                 )
                 .wrap(),
             );
@@ -177,9 +177,9 @@ fn qr_menu(ui: &mut egui::Ui, dialog: &AddDialog, enabled: bool, actions: &mut V
             egui::pos2(response.rect.right() - 14.0, response.rect.center().y),
             Icon::Chevron { open: true },
             if enabled {
-                theme::TEXT_DIM
+                theme::palette().text_dim
             } else {
-                theme::BORDER_STRONG
+                theme::palette().border_strong
             },
         );
     }
@@ -217,7 +217,7 @@ fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
     if matches!(dialog.qr.stage, QrStage::ScreenClip(_)) {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.colored_label(theme::TEXT_MUTED, tr!("qr-select-region"));
+            ui.colored_label(theme::palette().text_muted, tr!("qr-select-region"));
             if widgets::outline_button(ui, tr!("cancel"), true).clicked() {
                 actions.push(Action::CancelQr);
             }
@@ -233,7 +233,7 @@ fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
     }
     if !dialog.qr.choices.is_empty() {
         ui.add_space(6.0);
-        ui.colored_label(theme::TEXT_MUTED, tr!("qr-choose-link"));
+        ui.colored_label(theme::palette().text_muted, tr!("qr-choose-link"));
         for (index, link) in dialog.qr.choices.iter().enumerate() {
             if widgets::outline_button(ui, choice_label(index, link), !dialog.busy).clicked() {
                 actions.push(Action::ChooseQrLink(index));

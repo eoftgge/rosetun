@@ -41,7 +41,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         ui.set_width(232.0);
                         traffic_row(
                             ui,
-                            theme::ROSE_LIGHT,
+                            theme::palette().accent_light,
                             &tr!("traffic-down"),
                             down,
                             traffic.is_some(),
@@ -49,7 +49,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         ui.add_space(10.0);
                         traffic_row(
                             ui,
-                            theme::ROSE_DARK,
+                            theme::palette().accent_dark,
                             &tr!("traffic-up"),
                             up,
                             traffic.is_some(),
@@ -60,14 +60,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         ui.painter().hline(
                             line.x_range(),
                             line.center().y,
-                            egui::Stroke::new(1.0, theme::BORDER),
+                            egui::Stroke::new(1.0, theme::palette().border),
                         );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(tr!("traffic-session"))
                                     .small()
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::palette().text_dim),
                             );
                             let totals = crate::i18n::traffic_rates(
                                 &crate::i18n::bytes(down_total),
@@ -76,9 +76,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                             ui.add(
                                 egui::Label::new(RichText::new(&totals).small().color(
                                     if traffic.is_some() {
-                                        theme::TEXT
+                                        theme::palette().text
                                     } else {
-                                        theme::TEXT_DIM
+                                        theme::palette().text_dim
                                     },
                                 ))
                                 .truncate(),
@@ -104,7 +104,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                                     &crate::i18n::rate(peak),
                                 ))
                                 .small()
-                                .color(theme::TEXT_DIM),
+                                .color(theme::palette().text_dim),
                             );
                         },
                         |ui| {
@@ -138,14 +138,14 @@ fn traffic_row(ui: &mut egui::Ui, color: Color32, label: &str, rate: u64, connec
     let formatted = crate::i18n::rate(rate);
     let (number, unit) = formatted.split_once(' ').unwrap_or((&formatted, ""));
     let text_color = if connected {
-        theme::TEXT
+        theme::palette().text
     } else {
-        theme::TEXT_DIM
+        theme::palette().text_dim
     };
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 0.0, color);
-        ui.label(RichText::new(label).small().color(theme::TEXT_DIM));
+        ui.label(RichText::new(label).small().color(theme::palette().text_dim));
     });
     ui.horizontal(|ui| {
         ui.add_space(16.0);
@@ -156,7 +156,7 @@ fn traffic_row(ui: &mut egui::Ui, color: Color32, label: &str, rate: u64, connec
                 .monospace()
                 .color(text_color),
         );
-        ui.label(RichText::new(unit).small().color(theme::TEXT_DIM));
+        ui.label(RichText::new(unit).small().color(theme::palette().text_dim));
     });
 }
 
@@ -210,7 +210,7 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
     ui.painter().hline(
         rect.x_range(),
         baseline,
-        egui::Stroke::new(1.0, theme::BORDER),
+        egui::Stroke::new(1.0, theme::palette().border),
     );
     if columns.is_empty() {
         ui.painter().text(
@@ -218,7 +218,7 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
             egui::Align2::CENTER_CENTER,
             tr!("traffic-empty"),
             egui::TextStyle::Small.resolve(ui.style()),
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
         return;
     }
@@ -234,7 +234,7 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
                     egui::vec2(bar_width, down_height),
                 ),
                 0.0,
-                theme::ROSE_LIGHT,
+                theme::palette().accent_light,
             );
         }
         if bar_width > 0.0 && up_height > 0.0 {
@@ -244,7 +244,7 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
                     egui::vec2(bar_width, up_height),
                 ),
                 0.0,
-                theme::ROSE_DARK,
+                theme::palette().accent_dark,
             );
         }
     }

@@ -11,7 +11,7 @@ use crate::{constants, i18n, theme, widgets};
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     if !state.config_ready {
-        ui.colored_label(theme::TEXT_DIM, tr!("loading"));
+        ui.colored_label(theme::palette().text_dim, tr!("loading"));
         return;
     }
     match state.settings.screen.section {
@@ -197,7 +197,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 ui.label(
                     RichText::new(tr!("next-connect"))
                         .small()
-                        .color(theme::ROSE_LIGHT),
+                        .color(theme::palette().accent_light),
                 );
             });
         }
@@ -206,7 +206,7 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 ui.label(
                     RichText::new(tr!("lockdown-lan-kept"))
                         .small()
-                        .color(theme::ROSE_LIGHT),
+                        .color(theme::palette().accent_light),
                 );
             });
         }
@@ -296,7 +296,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             ui.label(
                 RichText::new(tr!("dns-reachable"))
                     .small()
-                    .color(theme::TEXT_DIM),
+                    .color(theme::palette().text_dim),
             );
             if state
                 .visible_status()
@@ -309,12 +309,12 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                         ui.label(
                             RichText::new(tr!("apply-on-leave"))
                                 .small()
-                                .color(theme::ROSE_LIGHT),
+                                .color(theme::palette().accent_light),
                         );
                         ui.label(
                             RichText::new(tr!("apply-separator"))
                                 .small()
-                                .color(theme::ROSE_LIGHT),
+                                .color(theme::palette().accent_light),
                         );
                         if widgets::link(ui, &tr!("apply-now"), true)
                             .on_hover_text(tr!("apply-hint"))
@@ -327,7 +327,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                     ui.label(
                         RichText::new(tr!("next-connect"))
                             .small()
-                            .color(theme::ROSE_LIGHT),
+                            .color(theme::palette().accent_light),
                     );
                 }
             }
@@ -353,9 +353,9 @@ fn dns_choice(
                         13.0,
                         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
                     ))
-                    .color(theme::TEXT),
+                    .color(theme::palette().text),
             );
-            ui.add(egui::Label::new(RichText::new(detail).small().color(theme::TEXT_DIM)).wrap());
+            ui.add(egui::Label::new(RichText::new(detail).small().color(theme::palette().text_dim)).wrap());
         });
     })
 }
@@ -375,7 +375,7 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             .layout_no_wrap(
                 label,
                 egui::TextStyle::Body.resolve(ui.style()),
-                theme::TEXT,
+                theme::palette().text,
             )
             .size()
             .x
@@ -463,29 +463,29 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 egui::Stroke::new(
                                     1.5,
                                     if selected == setting {
-                                        theme::ROSE_LIGHT
+                                        theme::palette().accent_light
                                     } else {
-                                        theme::TEXT_DIM
+                                        theme::palette().text_dim
                                     },
                                 ),
                             );
                             if selected == setting {
                                 ui.painter()
-                                    .circle_filled(radio.center(), 3.5, theme::ROSE_LIGHT);
+                                    .circle_filled(radio.center(), 3.5, theme::palette().accent_light);
                             }
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(&title).strong());
                                     if setting == XrayUse::Auto {
                                         ui.colored_label(
-                                            theme::ROSE_LIGHT,
+                                            theme::palette().accent_light,
                                             tr!("xray-recommended"),
                                         );
                                     }
                                 });
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(&detail).small().color(theme::TEXT_DIM),
+                                        RichText::new(&detail).small().color(theme::palette().text_dim),
                                     )
                                     .wrap(),
                                 );
@@ -540,10 +540,10 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     tr!("xray-current-singbox")
                 };
                 ui.add(
-                    egui::Label::new(RichText::new(current).small().color(theme::TEXT_DIM)).wrap(),
+                    egui::Label::new(RichText::new(current).small().color(theme::palette().text_dim)).wrap(),
                 );
                 if status.xray_use.is_some_and(|running| running != selected) {
-                    ui.colored_label(theme::ROSE_LIGHT, tr!("xray-next-connect"));
+                    ui.colored_label(theme::palette().accent_light, tr!("xray-next-connect"));
                 }
             }
         });
@@ -624,7 +624,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     CheckStatus::Ok => (Icon::Check, theme::CONNECTED),
                     CheckStatus::Warning => (Icon::Warning, theme::WARNING),
                     CheckStatus::Unavailable | CheckStatus::Skipped => {
-                        (Icon::Unknown, theme::TEXT_DIM)
+                        (Icon::Unknown, theme::palette().text_dim)
                     }
                 };
                 let detail = i18n::check_detail(result);
@@ -784,7 +784,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 28.0,
                                 egui::FontFamily::Name(theme::BRAND_FONT.into()),
                             ))
-                            .color(theme::TEXT),
+                            .color(theme::palette().text),
                     );
                     let version = crate::i18n::about_version(
                         env!("CARGO_PKG_VERSION"),
@@ -793,7 +793,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             .then_some(state.helper_version.as_deref())
                             .flatten(),
                     );
-                    ui.label(RichText::new(version).small().color(theme::TEXT_MUTED));
+                    ui.label(RichText::new(version).small().color(theme::palette().text_muted));
                 });
             });
         });
@@ -807,14 +807,14 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         17.0,
                         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
                     ))
-                    .color(theme::TEXT),
+                    .color(theme::palette().text),
             );
             if let Some(release) = state.available_update() {
                 ui.add_space(14.0);
                 let width = ui.available_width();
                 egui::Frame::new()
-                    .fill(theme::INPUT)
-                    .stroke(egui::Stroke::new(1.0, theme::ROSE_DARK))
+                    .fill(theme::palette().input)
+                    .stroke(egui::Stroke::new(1.0, theme::palette().accent_dark))
                     .corner_radius(theme::RADIUS)
                     .inner_margin(16)
                     .show(ui, |ui| {
@@ -828,7 +828,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             painter.circle_stroke(
                                 center,
                                 15.5,
-                                egui::Stroke::new(1.0, theme::ROSE),
+                                egui::Stroke::new(1.0, theme::palette().accent_base),
                             );
                             for (start, end) in [
                                 (
@@ -846,7 +846,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             ] {
                                 painter.line_segment(
                                     [start, end],
-                                    egui::Stroke::new(1.5, theme::ROSE_LIGHT),
+                                    egui::Stroke::new(1.5, theme::palette().accent_light),
                                 );
                             }
                             ui.vertical(|ui| {
@@ -856,7 +856,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                             16.0,
                                             egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
                                         ))
-                                        .color(theme::TEXT),
+                                        .color(theme::palette().text),
                                 );
                                 let detail = format!(
                                     "{}{}",
@@ -869,7 +869,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 );
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(detail).small().color(theme::TEXT_MUTED),
+                                        RichText::new(detail).small().color(theme::palette().text_muted),
                                     )
                                     .wrap(),
                                 );
@@ -961,7 +961,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         egui::Label::new(
             RichText::new(tr!("license-notice"))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::palette().text_dim),
         )
         .wrap(),
     );
@@ -1065,7 +1065,7 @@ fn about_path(
             |ui| {
                 ui.set_width(width);
                 ui.add(
-                    egui::Label::new(RichText::new(&path).small().color(theme::TEXT_DIM))
+                    egui::Label::new(RichText::new(&path).small().color(theme::palette().text_dim))
                         .truncate(),
                 )
                 .on_hover_text(&path);

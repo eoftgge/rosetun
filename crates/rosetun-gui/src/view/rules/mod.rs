@@ -115,7 +115,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     let can_apply = state.can_apply();
     let mut apply_clicked = false;
     ui.heading(tr!("rules-tab-title"));
-    ui.add(egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::TEXT_MUTED)).wrap());
+    ui.add(egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::palette().text_muted)).wrap());
     if pending_apply {
         ui.add_space(6.0);
         let (_, link) = apply_notice(ui, can_apply);
@@ -126,11 +126,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     }
     ui.add_space(20.0);
     if !state.config_ready {
-        ui.colored_label(theme::TEXT_DIM, tr!("loading"));
+        ui.colored_label(theme::palette().text_dim, tr!("loading"));
         return;
     }
     if state.config.rule_sets.is_empty() {
-        ui.colored_label(theme::TEXT_MUTED, tr!("no-rule-sets"));
+        ui.colored_label(theme::palette().text_muted, tr!("no-rule-sets"));
         ui.add_space(12.0);
         if widgets::button_fill(ui, tr!("create-rule-set"), state.can_edit_rules()).clicked() {
             actions.push(Action::OpenCreateSet);
@@ -192,7 +192,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         && visible_temporary.is_empty()
         && (!set.rules.is_empty() || !temporary.is_empty())
     {
-        ui.colored_label(theme::TEXT_MUTED, tr!("no-rules-match"));
+        ui.colored_label(theme::palette().text_muted, tr!("no-rules-match"));
     }
     let unresolved = crate::destinations::unresolved_exits(&state.config);
     let rows = RowContext {
@@ -237,13 +237,13 @@ fn apply_notice(ui: &mut egui::Ui, can_apply: bool) -> (egui::Response, Option<e
         ui.spacing_mut().item_spacing.x = 8.0;
         let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
         ui.painter()
-            .circle_filled(dot.center(), 3.0, theme::ROSE_LIGHT);
+            .circle_filled(dot.center(), 3.0, theme::palette().accent_light);
         let text = if can_apply {
             tr!("apply-on-leave")
         } else {
             tr!("next-connect")
         };
-        let label = ui.label(RichText::new(text).small().color(theme::TEXT_MUTED));
+        let label = ui.label(RichText::new(text).small().color(theme::palette().text_muted));
         let link = can_apply
             .then(|| widgets::link(ui, &tr!("apply-now"), true).on_hover_text(tr!("apply-hint")));
         (label, link)
@@ -286,7 +286,7 @@ fn filter_controls(
         .layout_no_wrap(
             add_label.clone(),
             egui::TextStyle::Button.resolve(ui.style()),
-            theme::TEXT,
+            theme::palette().text,
         )
         .size()
         .x
@@ -453,8 +453,8 @@ pub(crate) fn target_label(target: RuleTarget) -> String {
 
 pub(crate) fn target_color(target: RuleTarget) -> Color32 {
     match target {
-        RuleTarget::Proxy => theme::ROSE_LIGHT,
-        RuleTarget::Direct => theme::TEXT_MUTED,
+        RuleTarget::Proxy => theme::palette().accent_light,
+        RuleTarget::Direct => theme::palette().text_muted,
         RuleTarget::Block => theme::ERROR,
         RuleTarget::Exit => theme::EXIT,
     }

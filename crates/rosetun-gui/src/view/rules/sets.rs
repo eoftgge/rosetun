@@ -85,7 +85,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
     );
     let name_width = ui
         .painter()
-        .layout_no_wrap(name.clone(), font.clone(), theme::TEXT)
+        .layout_no_wrap(name.clone(), font.clone(), theme::palette().text)
         .size()
         .x
         .min(260.0);
@@ -95,7 +95,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
             .layout_no_wrap(
                 tr!("active").to_owned(),
                 egui::TextStyle::Small.resolve(ui.style()),
-                theme::ROSE_LIGHT,
+                theme::palette().accent_light,
             )
             .size()
             .x
@@ -113,21 +113,21 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
                 rect,
                 theme::RADIUS,
                 if ui.response().hovered() {
-                    theme::BORDER
+                    theme::palette().border
                 } else {
-                    theme::INPUT
+                    theme::palette().input
                 },
             );
             painter.rect_stroke(
                 rect,
                 theme::RADIUS,
-                Stroke::new(1.0, theme::BORDER_STRONG),
+                Stroke::new(1.0, theme::palette().border_strong),
                 egui::StrokeKind::Inside,
             );
             let center_y = rect.center().y;
             let left = rect.left() + 12.0;
             let name_left = left;
-            let galley = egui::WidgetText::from(RichText::new(name).font(font).color(theme::TEXT))
+            let galley = egui::WidgetText::from(RichText::new(name).font(font).color(theme::palette().text))
                 .into_galley(
                     ui,
                     Some(egui::TextWrapMode::Truncate),
@@ -137,7 +137,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
             painter.galley(
                 egui::pos2(name_left, center_y - galley.size().y / 2.0),
                 galley,
-                theme::TEXT,
+                theme::palette().text,
             );
             let icon_right = 18.0;
             if active {
@@ -146,14 +146,14 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
                     egui::Align2::RIGHT_CENTER,
                     tr!("active"),
                     egui::TextStyle::Small.resolve(ui.style()),
-                    theme::ROSE_LIGHT,
+                    theme::palette().accent_light,
                 );
             }
             icons::paint(
                 painter,
                 egui::pos2(rect.right() - icon_right, center_y),
                 Icon::Chevron { open: true },
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
             );
         })
         .response

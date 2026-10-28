@@ -86,7 +86,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                                 |hours| tr!("auto-update-every", hours = hours.to_string()),
                             );
                         ui.add(
-                            egui::Label::new(RichText::new(text).small().color(theme::TEXT_DIM))
+                            egui::Label::new(RichText::new(text).small().color(theme::palette().text_dim))
                                 .truncate(),
                         );
                     }
@@ -97,14 +97,14 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.label(
             RichText::new(tr!("subscriptions-title"))
-                .color(theme::TEXT)
+                .color(theme::palette().text)
                 .font(egui::FontId::new(
                     15.0,
                     egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
                 )),
         );
         ui.label(
-            RichText::new(format!("· {}", state.config.subscriptions.len())).color(theme::TEXT_DIM),
+            RichText::new(format!("· {}", state.config.subscriptions.len())).color(theme::palette().text_dim),
         );
     });
     ui.add_space(12.0);
@@ -113,11 +113,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if state.config.subscriptions.is_empty() {
-                ui.colored_label(theme::TEXT_MUTED, tr!("no-subscriptions"));
+                ui.colored_label(theme::palette().text_muted, tr!("no-subscriptions"));
                 ui.add_space(8.0);
                 ui.add(
                     egui::Label::new(
-                        RichText::new(tr!("empty-subscriptions")).color(theme::TEXT_DIM),
+                        RichText::new(tr!("empty-subscriptions")).color(theme::palette().text_dim),
                     )
                     .wrap(),
                 );
@@ -154,7 +154,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                                 let y = if above { rect.top() } else { rect.bottom() };
                                 ui.painter().line_segment(
                                     [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                                    Stroke::new(2.0, theme::ROSE),
+                                    Stroke::new(2.0, theme::palette().accent_base),
                                 );
                                 if let Some(payload) =
                                     response.response.dnd_release_payload::<SubscriptionId>()
@@ -178,7 +178,7 @@ fn menu_link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     let font = egui::TextStyle::Small.resolve(ui.style());
     let text_width = ui
         .painter()
-        .layout_no_wrap(text.to_owned(), font.clone(), theme::ROSE_LIGHT)
+        .layout_no_wrap(text.to_owned(), font.clone(), theme::palette().accent_light)
         .size()
         .x;
     let (rect, response) = ui.allocate_exact_size(
@@ -194,9 +194,9 @@ fn menu_link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     );
     if ui.is_rect_visible(rect) {
         let color = if enabled {
-            theme::ROSE_LIGHT
+            theme::palette().accent_light
         } else {
-            theme::TEXT_DIM
+            theme::palette().text_dim
         };
         ui.painter().text(
             rect.left_center(),
@@ -217,7 +217,7 @@ fn menu_link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
                     rect.left_bottom() + egui::vec2(0.0, -1.0),
                     egui::pos2(rect.left() + text_width, rect.bottom() - 1.0),
                 ],
-                Stroke::new(1.0, theme::ROSE_LIGHT),
+                Stroke::new(1.0, theme::palette().accent_light),
             );
         }
     }
@@ -240,7 +240,7 @@ fn provider_link(ui: &mut egui::Ui, state: &State, label: &str, link: &str, show
     } else {
         ui.add(
             egui::Label::new(
-                RichText::new(state.text(&i18n::plain_link(label, shown))).color(theme::TEXT_DIM),
+                RichText::new(state.text(&i18n::plain_link(label, shown))).color(theme::palette().text_dim),
             )
             .truncate(),
         );

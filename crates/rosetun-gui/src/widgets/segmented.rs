@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, CornerRadius, Stroke, TextStyle};
 
-use crate::theme::{BG, BORDER, RADIUS, RADIUS_INNER, ROSE, TEXT, TEXT_MUTED};
+use crate::theme::{self, RADIUS, RADIUS_INNER};
 
 /// Natural widths are the text plus 14 on each side. With `fill`, every
 /// segment gets an equal share of the inner width, but never less than the
@@ -23,7 +23,7 @@ pub(crate) fn segmented_width<T, L: AsRef<str>>(ui: &egui::Ui, options: &[(T, L)
         .iter()
         .map(|(_, label)| {
             ui.painter()
-                .layout_no_wrap(label.as_ref().to_owned(), font.clone(), TEXT)
+                .layout_no_wrap(label.as_ref().to_owned(), font.clone(), theme::palette().text)
                 .size()
                 .x
                 + 28.0
@@ -52,7 +52,7 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
         .iter()
         .map(|(_, label)| {
             ui.painter()
-                .layout_no_wrap(label.as_ref().to_owned(), font.clone(), TEXT)
+                .layout_no_wrap(label.as_ref().to_owned(), font.clone(), theme::palette().text)
                 .size()
                 .x
                 + 28.0
@@ -75,8 +75,8 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
     ui.painter().rect(
         track,
         CornerRadius::same(RADIUS),
-        faded(BG),
-        Stroke::new(1.0, faded(BORDER)),
+        faded(theme::palette().bg),
+        Stroke::new(1.0, faded(theme::palette().border)),
         egui::StrokeKind::Inside,
     );
     let mut x = track.left() + 4.0;
@@ -111,18 +111,18 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
             ui.painter().rect_filled(
                 rect,
                 CornerRadius::same(RADIUS_INNER),
-                faded(if active { ROSE } else { BORDER }),
+                faded(if active { theme::palette().accent_base } else { theme::palette().border }),
             );
         }
         if response.has_focus() {
             ui.painter().rect_stroke(
                 rect,
                 CornerRadius::same(RADIUS_INNER),
-                Stroke::new(1.0, faded(TEXT)),
+                Stroke::new(1.0, faded(theme::palette().text)),
                 egui::StrokeKind::Inside,
             );
         }
-        let color = faded(if active || hovered { TEXT } else { TEXT_MUTED });
+        let color = faded(if active || hovered { theme::palette().text } else { theme::palette().text_muted });
         let galley = ui
             .painter()
             .layout_no_wrap(label.as_ref().to_owned(), font.clone(), color);

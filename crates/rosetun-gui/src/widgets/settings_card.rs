@@ -2,14 +2,14 @@ use eframe::egui::{self, Align, Layout, RichText, Stroke};
 
 use super::tag::title_with_tag;
 use super::toggle::{TOGGLE_SIZE, paint_toggle};
-use crate::theme::{BORDER, CARD, RADIUS, TEXT, TEXT_DIM};
+use crate::theme::{self, RADIUS};
 
-/// A card of setting rows separated by 1 px BORDER lines.
+/// A card of setting rows separated by 1 px theme::palette().border lines.
 pub(crate) fn settings_card(ui: &mut egui::Ui, add_rows: impl FnOnce(&mut SettingsCard<'_>)) {
     let width = ui.available_width();
     egui::Frame::new()
-        .fill(CARD)
-        .stroke(Stroke::new(1.0, BORDER))
+        .fill(theme::palette().card)
+        .stroke(Stroke::new(1.0, theme::palette().border))
         .corner_radius(RADIUS)
         .inner_margin(0)
         .show(ui, |ui| {
@@ -44,7 +44,7 @@ impl SettingsCard<'_> {
         control: impl FnOnce(&mut egui::Ui),
     ) -> egui::Rect {
         self.row_with_title(
-            |ui| title_with_tag(ui, RichText::new(title).color(TEXT).into(), tag),
+            |ui| title_with_tag(ui, RichText::new(title).color(theme::palette().text).into(), tag),
             detail,
             control,
         )
@@ -63,7 +63,7 @@ impl SettingsCard<'_> {
             );
             self.ui
                 .painter()
-                .hline(line.x_range(), line.center().y, (1.0, BORDER));
+                .hline(line.x_range(), line.center().y, (1.0, theme::palette().border));
         }
         self.rows += 1;
         let width = self.ui.available_width();
@@ -96,7 +96,7 @@ impl SettingsCard<'_> {
                                     if let Some(detail) = detail {
                                         ui.add(
                                             egui::Label::new(
-                                                RichText::new(detail).small().color(TEXT_DIM),
+                                                RichText::new(detail).small().color(theme::palette().text_dim),
                                             )
                                             .wrap(),
                                         );

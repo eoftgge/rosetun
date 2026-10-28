@@ -144,12 +144,12 @@ pub(crate) fn paint_petals(painter: &egui::Painter, rect: Rect, bloom: f32, intr
         if petal.outline {
             painter.add(Shape::closed_line(
                 points,
-                Stroke::new(1.0, theme::ROSE_LIGHT.gamma_multiply(alpha)),
+                Stroke::new(1.0, theme::palette().accent_light.gamma_multiply(alpha)),
             ));
         } else {
             painter.add(Shape::convex_polygon(
                 points,
-                theme::ROSE.gamma_multiply(alpha),
+                theme::palette().accent_base.gamma_multiply(alpha),
                 Stroke::NONE,
             ));
         }
@@ -184,7 +184,7 @@ pub(crate) fn paint_emblem(painter: &egui::Painter, rect: Rect) {
     let ctx = painter.ctx();
     let size = emblem_pixel_size(rect.width(), ctx.pixels_per_point());
     let texture = emblem_texture(ctx, size, |size| {
-        rose_icon::rose_icon_rgba(size, RoseIcon::Emblem)
+        rose_icon::rose_icon_rgba(size, RoseIcon::Emblem, theme::palette())
     });
     painter.image(
         texture.id(),
@@ -252,7 +252,7 @@ mod tests {
         let make_texture = |size| {
             emblem_texture(&ctx, size, |size| {
                 rasterizations.set(rasterizations.get() + 1);
-                rose_icon::rose_icon_rgba(size, RoseIcon::Emblem)
+                rose_icon::rose_icon_rgba(size, RoseIcon::Emblem, &theme::Palette::ROSE)
             })
         };
         let size = emblem_pixel_size(40.0, 1.0);

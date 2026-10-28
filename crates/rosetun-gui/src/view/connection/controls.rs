@@ -35,7 +35,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.set_min_height((height - 34.0).max(0.0));
-        ui.colored_label(theme::TEXT_DIM, tr!("protection"));
+        ui.colored_label(theme::palette().text_dim, tr!("protection"));
         let lockdown = state.lockdown_active();
         let mut kill_switch = state.config.settings.kill_switch || lockdown;
         if widgets::toggle_row(
@@ -74,7 +74,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         ui.label(
             RichText::new(tr!("lockdown-administrator"))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::palette().text_dim),
         );
         row_divider(ui);
         let mut connect_on_start = state.config.interface.connect_on_start;
@@ -94,7 +94,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
             ui.label(
                 RichText::new(tr!("next-connect"))
                     .small()
-                    .color(theme::ROSE_LIGHT),
+                    .color(theme::palette().accent_light),
             );
         }
     });
@@ -105,7 +105,7 @@ fn row_divider(ui: &mut egui::Ui) {
     let (line, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
     ui.painter()
-        .hline(line.x_range(), line.center().y, (1.0, theme::BORDER));
+        .hline(line.x_range(), line.center().y, (1.0, theme::palette().border));
 }
 
 fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, height: f32) {
@@ -118,13 +118,13 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 ui.label(
                     RichText::new(tr!("rules-title"))
                         .small()
-                        .color(theme::TEXT_DIM),
+                        .color(theme::palette().text_dim),
                 );
             },
             |ui| {
                 if ui
                     .add(
-                        egui::Label::new(RichText::new(tr!("open-link")).color(theme::ROSE_LIGHT))
+                        egui::Label::new(RichText::new(tr!("open-link")).color(theme::palette().accent_light))
                             .sense(egui::Sense::click()),
                     )
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -141,7 +141,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                     state.session.temporary_rules.len(),
                 ))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::palette().text_dim),
             );
         }
         if let Some(rules) = state.config.active_rules() {
@@ -179,7 +179,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                     egui::Label::new(
                         RichText::new(tr!("no-rules-yet"))
                             .small()
-                            .color(theme::TEXT_DIM),
+                            .color(theme::palette().text_dim),
                     )
                     .wrap(),
                 );
@@ -189,7 +189,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 ui.label(
                     RichText::new(crate::i18n::more_rules(remaining))
                         .small()
-                        .color(theme::TEXT_DIM),
+                        .color(theme::palette().text_dim),
                 );
             }
         } else {
@@ -197,7 +197,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 egui::Label::new(
                     RichText::new(tr!("no-rules-yet"))
                         .small()
-                        .color(theme::TEXT_DIM),
+                        .color(theme::palette().text_dim),
                 )
                 .wrap(),
             );
@@ -221,12 +221,12 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                     ui.label(
                         RichText::new(tr!("not-applied"))
                             .small()
-                            .color(theme::TEXT_DIM),
+                            .color(theme::palette().text_dim),
                     );
                     ui.label(
                         RichText::new(tr!("apply-separator"))
                             .small()
-                            .color(theme::TEXT_DIM),
+                            .color(theme::palette().text_dim),
                     );
                     if widgets::link(ui, &tr!("apply"), true)
                         .on_hover_text(tr!("apply-hint"))
@@ -239,7 +239,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
                 ui.label(
                     RichText::new(tr!("next-connect"))
                         .small()
-                        .color(theme::TEXT_DIM),
+                        .color(theme::palette().text_dim),
                 );
             }
         }
@@ -258,7 +258,7 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     let available = ui.available_width();
     let name_width = ui
         .painter()
-        .layout_no_wrap(name.clone(), font.clone(), theme::TEXT)
+        .layout_no_wrap(name.clone(), font.clone(), theme::palette().text)
         .size()
         .x;
     let text_width = name_width.min((available - 22.0).max(0.0));
@@ -280,13 +280,13 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             ui.painter().rect_filled(
                 rect.expand2(egui::vec2(6.0, 0.0)),
                 theme::RADIUS_INNER,
-                theme::BORDER,
+                theme::palette().border,
             );
         }
         let color = if enabled {
-            theme::TEXT
+            theme::palette().text
         } else {
-            theme::TEXT_DIM
+            theme::palette().text_dim
         };
         let galley = egui::WidgetText::from(RichText::new(name).font(font).color(color))
             .into_galley(
@@ -304,7 +304,7 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             ui.painter(),
             egui::pos2(rect.left() + text_width + 12.0, rect.center().y),
             Icon::Chevron { open: true },
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
     }
     if !enabled {

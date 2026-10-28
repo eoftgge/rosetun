@@ -25,21 +25,21 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.min_rect().width(), 30.0), sense);
     if ui.is_rect_visible(rect) {
         let radius = item_radius(ui.ctx().pixels_per_point());
-        let selected_fill = theme::ROSE_DARK.gamma_multiply(0.35);
+        let selected_fill = theme::palette().accent_dark.gamma_multiply(0.35);
         if enabled && item.danger && response.hovered() {
             ui.painter()
                 .rect_filled(rect, radius, theme::ERROR.gamma_multiply(0.15));
         } else if item.selected {
             ui.painter().rect_filled(rect, radius, selected_fill);
         } else if enabled && response.hovered() {
-            ui.painter().rect_filled(rect, radius, theme::BORDER);
+            ui.painter().rect_filled(rect, radius, theme::palette().border);
         }
         let color = if !enabled {
             theme::DISABLED
         } else if item.danger {
             theme::ERROR
         } else {
-            ui.visuals().override_text_color.unwrap_or(theme::TEXT)
+            ui.visuals().override_text_color.unwrap_or(theme::palette().text)
         };
         let mut right = rect.right() - 10.0;
         if item.selected {
@@ -48,7 +48,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
                 egui::pos2(right - 5.0, rect.center().y),
                 Icon::Check,
                 if enabled {
-                    theme::TEXT
+                    theme::palette().text
                 } else {
                     theme::DISABLED
                 },
@@ -59,7 +59,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
             let font = egui::TextStyle::Small.resolve(ui.style());
             let width = ui
                 .painter()
-                .layout_no_wrap(note.to_owned(), font.clone(), theme::ROSE_LIGHT)
+                .layout_no_wrap(note.to_owned(), font.clone(), theme::palette().accent_light)
                 .size()
                 .x;
             ui.painter().text(
@@ -68,7 +68,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
                 note,
                 font,
                 if enabled {
-                    theme::ROSE_LIGHT
+                    theme::palette().accent_light
                 } else {
                     theme::DISABLED
                 },

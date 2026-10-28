@@ -43,18 +43,18 @@ pub(crate) fn icon_button_sized(
         if enabled && !matches!(icon, Icon::Grip) {
             if response.is_pointer_button_down_on() {
                 ui.painter()
-                    .rect_filled(rect, theme::RADIUS_INNER, theme::ROSE_DARK);
+                    .rect_filled(rect, theme::RADIUS_INNER, theme::palette().accent_dark);
             } else if response.hovered() {
                 ui.painter()
-                    .rect_filled(rect, theme::RADIUS_INNER, theme::BORDER);
+                    .rect_filled(rect, theme::RADIUS_INNER, theme::palette().border);
             }
         }
         let color = if !enabled {
             theme::DISABLED
         } else if response.hovered() {
-            theme::TEXT
+            theme::palette().text
         } else {
-            theme::TEXT_MUTED
+            theme::palette().text_muted
         };
         paint(ui.painter(), rect.center(), icon, color);
     }
@@ -67,7 +67,7 @@ pub(crate) fn icon_button_sized(
 
 /// A type mark: the icon on an INPUT square, not clickable.
 pub(crate) fn icon_badge(ui: &mut egui::Ui, icon: Icon, size: f32) -> egui::Response {
-    icon_badge_colored(ui, icon, size, theme::TEXT_MUTED)
+    icon_badge_colored(ui, icon, size, theme::palette().text_muted)
 }
 
 pub(crate) fn icon_badge_colored(
@@ -79,7 +79,7 @@ pub(crate) fn icon_badge_colored(
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     if ui.is_rect_visible(rect) {
         ui.painter()
-            .rect_filled(rect, theme::RADIUS_INNER, theme::INPUT);
+            .rect_filled(rect, theme::RADIUS_INNER, theme::palette().input);
         paint(ui.painter(), rect.center(), icon, color);
     }
     response

@@ -22,7 +22,7 @@ pub(super) fn template_section(
     ui.label(
         RichText::new(tr!("rules-templates"))
             .font(font)
-            .color(theme::TEXT_MUTED),
+            .color(theme::palette().text_muted),
     );
     ui.add_space(8.0);
     let width = ((ui.available_width() - 3.0 * 12.0) / 4.0).max(0.0);
@@ -58,9 +58,9 @@ pub(super) fn template_card(
             let frame = widgets::card_frame().inner_margin(14).stroke(Stroke::new(
                 1.0,
                 if rule.is_some() {
-                    theme::ROSE_DARK
+                    theme::palette().accent_dark
                 } else {
-                    theme::BORDER
+                    theme::palette().border
                 },
             ));
             let response = frame
@@ -80,7 +80,7 @@ pub(super) fn template_card(
                             egui::Label::new(
                                 RichText::new(state.text(&crate::i18n::template_name(template)))
                                     .font(font)
-                                    .color(theme::TEXT),
+                                    .color(theme::palette().text),
                             )
                             .truncate(),
                         )
@@ -96,7 +96,7 @@ pub(super) fn template_card(
                     let mut job = egui::text::LayoutJob::simple(
                         description.clone(),
                         egui::TextStyle::Small.resolve(ui.style()),
-                        theme::TEXT_DIM,
+                        theme::palette().text_dim,
                         ui.available_width(),
                     );
                     job.wrap.max_rows = 2;

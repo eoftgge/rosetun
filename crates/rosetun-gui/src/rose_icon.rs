@@ -1,7 +1,8 @@
 // Mirrors assets/icon/rosetun.svg through rose_shape.rs; change both together.
 use eframe::egui::Color32;
 
-use crate::{rose_shape::PETALS, theme};
+use crate::rose_shape::PETALS;
+use crate::theme::{self, Palette};
 
 const SAMPLES_PER_AXIS: usize = 4;
 const DISTANCE_INFINITY: u32 = u32::MAX / 4;
@@ -46,10 +47,10 @@ fn segment_distance_squared(point: Pt, a: Pt, b: Pt) -> f32 {
     x * x + y * y
 }
 
-fn badge_color(state: TrayState) -> Option<Color32> {
+fn badge_color(state: TrayState, palette: &Palette) -> Option<Color32> {
     match state {
         TrayState::Connected | TrayState::Disconnected => None,
-        TrayState::Connecting => Some(theme::ROSE_BRIGHT),
+        TrayState::Connecting => Some(palette.accent_bright),
         TrayState::Blocked | TrayState::Failed => Some(theme::ERROR),
         TrayState::ServiceUnavailable => Some(theme::DISABLED),
     }
@@ -111,8 +112,13 @@ fn badge_mark(point: Pt, state: TrayState, pixel: f32) -> bool {
     }
 }
 
-fn sample_badge(point: Pt, state: TrayState, grid: BadgeGrid) -> Option<Option<Color32>> {
-    let color = badge_color(state)?;
+fn sample_badge(
+    point: Pt,
+    state: TrayState,
+    grid: BadgeGrid,
+    palette: &Palette,
+) -> Option<Option<Color32>> {
+    let color = badge_color(state, palette)?;
     let point = (point.0 - grid.shift, point.1 - grid.shift);
     let distance = (point.0 - 35.0).hypot(point.1 - 35.0);
     // The cutout must stay at least a pixel wide, or the badge merges with the petals.
@@ -129,14 +135,22 @@ fn sample_badge(point: Pt, state: TrayState, grid: BadgeGrid) -> Option<Option<C
     }))
 }
 
-fn sample(point: Pt, icon: RoseIcon, inside: bool, grid: BadgeGrid) -> Option<(Color32, u8)> {
+fn sample(
+    point: Pt,
+    icon: RoseIcon,
+    inside: bool,
+    grid: BadgeGrid,
+    palette: &Palette,
+) -> Option<(Color32, u8)> {
     if let RoseIcon::Tray(state) = icon
-        && let Some(badge) = sample_badge(point, state, grid)
+        && let Some(badge) = sample_badge(point, state, grid, palette)
     {
         return badge.map(|color| (color, 255));
     }
     let color = match icon {
-        RoseIcon::Emblem | RoseIcon::App | RoseIcon::Tray(TrayState::Connected) => theme::ROSE,
+        RoseIcon::Emblem | RoseIcon::App | RoseIcon::Tray(TrayState::Connected) => {
+            palette.accent_base
+        }
         RoseIcon::Tray(_) => theme::DISCONNECTED,
     };
     let opacity = if matches!(icon, RoseIcon::Tray(TrayState::ServiceUnavailable)) {
@@ -162,10 +176,10 @@ fn scanline(y: f32, intersections: &mut Vec<f32>) {
     intersections.sort_unstable_by(f32::total_cmp);
 }
 
-/// Straight-alpha RGBA of the icon, `size`×`size`.
-pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon) -> Vec<u8> {
-    let plate = (icon != RoseIcon::Emblem).then(|| back(size, icon));
-    rasterize(size, icon, plate.as_deref())
+/// Straight-alpha RGBA of the icon, `size`×`size`, in the colours of `palette`.
+pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon, palette: &Palette) -> Vec<u8> {
+    let plate = (icon != RoseIcon::Emblem).then(|| back(size, icon, palette));
+    rasterize(size, icon, plate.as_deref(), palette)
 }
 
 /// Design-unit coordinate of sample `sub` inside pixel `pixel`.
@@ -175,7 +189,7 @@ fn sample_coordinate(pixel: usize, sub: usize, scale: f32) -> f32 {
 
 /// Which samples the icon draws, petals and the tray badge alike, at the
 /// positions `rasterize` uses.
-fn drawn_mask(size: u32, icon: RoseIcon) -> Vec<bool> {
+fn drawn_mask(size: u32, icon: RoseIcon, palette: &Palette) -> Vec<bool> {
     let scale = 48.0 / size as f32;
     let side = size as usize * SAMPLES_PER_AXIS;
     let grid = BadgeGrid::new(size);
@@ -190,7 +204,7 @@ fn drawn_mask(size: u32, icon: RoseIcon) -> Vec<bool> {
             while crossing < intersections.len() && intersections[crossing] <= sample_x {
                 crossing += 1;
             }
-            let drawn = sample((sample_x, sample_y), icon, crossing % 2 == 1, grid);
+            let drawn = sample((sample_x, sample_y), icon, crossing % 2 == 1, grid, palette);
             mask[y * side + x] = drawn.is_some();
         }
     }
@@ -271,7 +285,7 @@ fn distance_transform(seeds: &[bool], side: usize) -> Vec<u32> {
 /// the gaps between petals filled, plus a rim.
 /// The gaps are channels open to the outside; a closing (grow, flood the
 /// outside, grow it back) tells them from the outside itself.
-fn back(size: u32, icon: RoseIcon) -> Vec<bool> {
+fn back(size: u32, icon: RoseIcon, palette: &Palette) -> Vec<bool> {
     let sample_side = size as usize * SAMPLES_PER_AXIS;
     let radius = (size as usize / 16).max(1) * SAMPLES_PER_AXIS;
     let rim = (size as usize / 32).max(1) * SAMPLES_PER_AXIS;
@@ -279,7 +293,7 @@ fn back(size: u32, icon: RoseIcon) -> Vec<bool> {
     let pad = radius + rim + 1;
     let side = sample_side + 2 * pad;
     let mut solid = vec![false; side * side];
-    let drawn = drawn_mask(size, icon);
+    let drawn = drawn_mask(size, icon, palette);
     for (y, row) in drawn.chunks_exact(sample_side).enumerate() {
         let start = (y + pad) * side + pad;
         solid[start..start + sample_side].copy_from_slice(row);
@@ -327,7 +341,7 @@ fn back(size: u32, icon: RoseIcon) -> Vec<bool> {
     cropped
 }
 
-fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>) -> Vec<u8> {
+fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>, palette: &Palette) -> Vec<u8> {
     let scale = 48.0 / size as f32;
     let sample_side = size as usize * SAMPLES_PER_AXIS;
     let grid = BadgeGrid::new(size);
@@ -346,14 +360,15 @@ fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>) -> Vec<u8> {
                     while crossing < intersections.len() && intersections[crossing] <= sample_x {
                         crossing += 1;
                     }
-                    let foreground = sample((sample_x, sample_y), icon, crossing % 2 == 1, grid);
+                    let foreground =
+                        sample((sample_x, sample_y), icon, crossing % 2 == 1, grid, palette);
                     let backed = plate.is_some_and(|plate| {
                         plate[(y as usize * SAMPLES_PER_AXIS + j) * sample_side
                             + x * SAMPLES_PER_AXIS
                             + i]
                     });
                     if backed {
-                        let background = theme::BG;
+                        let background = palette.bg;
                         let opacity = foreground.map_or(0, |(_, opacity)| u32::from(opacity));
                         let color = foreground.map_or(background, |(color, _)| color);
                         for (total, (foreground, background)) in pixel[..3].iter_mut().zip(
@@ -411,16 +426,16 @@ mod tests {
 
     #[test]
     fn emblem_has_solid_petals_and_transparent_gaps() {
-        let rgba = rose_icon_rgba(48, RoseIcon::Emblem);
+        let rgba = rose_icon_rgba(48, RoseIcon::Emblem, &Palette::ROSE);
         // At y = 12.5, PETALS span x = 13.114..22.407, then 28.764..30.592.
-        assert_eq!(pixel(&rgba, 48, 18, 12), theme::ROSE.to_array());
+        assert_eq!(pixel(&rgba, 48, 18, 12), Palette::ROSE.accent_base.to_array());
         for (x, y) in [(25, 12), (0, 0), (47, 47)] {
             assert_eq!(pixel(&rgba, 48, x, y), [0; 4], "({x}, {y})");
         }
         let filled = rgba.chunks_exact(4).filter(|pixel| pixel[3] != 0).count();
         let coverage = filled as f32 / (48 * 48) as f32;
         assert!((0.45..=0.75).contains(&coverage), "{coverage}");
-        assert_eq!(rgba, rasterize(48, RoseIcon::Emblem, None), "no plate");
+        assert_eq!(rgba, rasterize(48, RoseIcon::Emblem, None, &Palette::ROSE), "no plate");
     }
 
     #[test]
@@ -438,7 +453,7 @@ mod tests {
         // `main` draws the window icon at 128 px on every start; the larger
         // sizes go only into the committed `.ico`, drawn ahead of time.
         let start = std::time::Instant::now();
-        let rgba = rose_icon_rgba(128, RoseIcon::App);
+        let rgba = rose_icon_rgba(128, RoseIcon::App, &Palette::ROSE);
         let elapsed = start.elapsed();
         assert_eq!(rgba.len(), 128 * 128 * 4);
         eprintln!("128 px rose rasterization: {elapsed:?}");
@@ -450,8 +465,8 @@ mod tests {
         let icons = TRAY_STATES.map(RoseIcon::Tray);
         for icon in icons.into_iter().chain([RoseIcon::App]) {
             for size in [16, 24, 32, 48, 256] {
-                let plain = rasterize(size, icon, None);
-                let backed = rose_icon_rgba(size, icon);
+                let plain = rasterize(size, icon, None, &Palette::ROSE);
+                let backed = rose_icon_rgba(size, icon, &Palette::ROSE);
                 for (before, after) in plain.chunks_exact(4).zip(backed.chunks_exact(4)) {
                     assert!(after[3] >= before[3], "{icon:?} {size} px");
                     if before[3] == 255 {
@@ -467,8 +482,8 @@ mod tests {
                     "{icon:?} {size} px corner"
                 );
             }
-            let plain = rasterize(32, icon, None);
-            let backed = rose_icon_rgba(32, icon);
+            let plain = rasterize(32, icon, None, &Palette::ROSE);
+            let backed = rose_icon_rgba(32, icon, &Palette::ROSE);
             assert_eq!(
                 pixel(&plain, 32, 14, 4),
                 [0; 4],
@@ -476,13 +491,13 @@ mod tests {
             );
             assert_eq!(
                 pixel(&backed, 32, 14, 4),
-                theme::BG.to_array(),
+                Palette::ROSE.bg.to_array(),
                 "{icon:?} closed gap"
             );
         }
-        let rgba = rose_icon_rgba(256, RoseIcon::App);
+        let rgba = rose_icon_rgba(256, RoseIcon::App, &Palette::ROSE);
         assert!(rgba.chunks_exact(4).any(|pixel| {
-            pixel[..3] == theme::BG.to_array()[..3] && (1..255).contains(&pixel[3])
+            pixel[..3] == Palette::ROSE.bg.to_array()[..3] && (1..255).contains(&pixel[3])
         }));
     }
 
@@ -490,7 +505,7 @@ mod tests {
     fn tray_states_have_distinct_shapes_and_expected_petal_colors() {
         let states = TRAY_STATES;
         for size in [16, 32, 48] {
-            let images = states.map(|state| rose_icon_rgba(size, RoseIcon::Tray(state)));
+            let images = states.map(|state| rose_icon_rgba(size, RoseIcon::Tray(state), &Palette::ROSE));
             assert_eq!(
                 images
                     .iter()
@@ -500,22 +515,22 @@ mod tests {
                 "{size} px"
             );
         }
-        let images = states.map(|state| rose_icon_rgba(48, RoseIcon::Tray(state)));
+        let images = states.map(|state| rose_icon_rgba(48, RoseIcon::Tray(state), &Palette::ROSE));
         for (state, rgba) in states.into_iter().zip(&images) {
             let petal = pixel(rgba, 48, 18, 12);
             assert_eq!(
                 petal,
                 match state {
-                    TrayState::Connected => theme::ROSE.to_array(),
+                    TrayState::Connected => Palette::ROSE.accent_base.to_array(),
                     TrayState::ServiceUnavailable => [
                         ((u32::from(theme::DISCONNECTED.r()) * 140
-                            + u32::from(theme::BG.r()) * 115)
+                            + u32::from(Palette::ROSE.bg.r()) * 115)
                             / 255) as u8,
                         ((u32::from(theme::DISCONNECTED.g()) * 140
-                            + u32::from(theme::BG.g()) * 115)
+                            + u32::from(Palette::ROSE.bg.g()) * 115)
                             / 255) as u8,
                         ((u32::from(theme::DISCONNECTED.b()) * 140
-                            + u32::from(theme::BG.b()) * 115)
+                            + u32::from(Palette::ROSE.bg.b()) * 115)
                             / 255) as u8,
                         255,
                     ],
@@ -527,12 +542,12 @@ mod tests {
                 assert!(
                     !rgba
                         .chunks_exact(4)
-                        .any(|pixel| pixel == theme::ROSE.to_array())
+                        .any(|pixel| pixel == Palette::ROSE.accent_base.to_array())
                 );
                 assert!(
                     !rgba
                         .chunks_exact(4)
-                        .any(|pixel| pixel == theme::ROSE_DARK.to_array())
+                        .any(|pixel| pixel == Palette::ROSE.accent_dark.to_array())
                 );
             }
         }
@@ -541,12 +556,12 @@ mod tests {
     #[test]
     fn tray_badges_have_coloured_discs_white_marks_and_cutouts_on_the_plate() {
         for (state, color, mark) in [
-            (TrayState::Connecting, theme::ROSE_BRIGHT, (35, 27)),
+            (TrayState::Connecting, Palette::ROSE.accent_bright, (35, 27)),
             (TrayState::Blocked, theme::ERROR, (35, 38)),
             (TrayState::Failed, theme::ERROR, (35, 32)),
             (TrayState::ServiceUnavailable, theme::DISABLED, (35, 35)),
         ] {
-            let rgba = rose_icon_rgba(48, RoseIcon::Tray(state));
+            let rgba = rose_icon_rgba(48, RoseIcon::Tray(state), &Palette::ROSE);
             assert_eq!(pixel(&rgba, 48, 35, 45), color.to_array(), "{state:?} disc");
             assert_eq!(
                 pixel(&rgba, 48, mark.0, mark.1),
@@ -555,7 +570,7 @@ mod tests {
             );
             assert_eq!(
                 pixel(&rgba, 48, 34, 21),
-                theme::BG.to_array(),
+                Palette::ROSE.bg.to_array(),
                 "{state:?} cutout"
             );
         }
@@ -568,14 +583,14 @@ mod tests {
             let side = size as usize * SAMPLES_PER_AXIS;
             let grid = BadgeGrid::new(size);
             for state in TRAY_STATES {
-                let plate = back(size, RoseIcon::Tray(state));
+                let plate = back(size, RoseIcon::Tray(state), &Palette::ROSE);
                 for (index, &backed) in plate.iter().enumerate() {
                     let (x, y) = (index % side, index / side);
                     let point = (
                         sample_coordinate(x / SAMPLES_PER_AXIS, x % SAMPLES_PER_AXIS, scale),
                         sample_coordinate(y / SAMPLES_PER_AXIS, y % SAMPLES_PER_AXIS, scale),
                     );
-                    let on_disc = matches!(sample_badge(point, state, grid), Some(Some(_)));
+                    let on_disc = matches!(sample_badge(point, state, grid, &Palette::ROSE), Some(Some(_)));
                     assert!(backed || !on_disc, "{state:?} {size} px: {point:?}");
                 }
             }
@@ -586,7 +601,7 @@ mod tests {
     fn tray_icons_at_taskbar_sizes_keep_the_badge_mark_and_the_outline() {
         for size in [16, 20, 24] {
             for state in TRAY_STATES {
-                let rgba = rose_icon_rgba(size, RoseIcon::Tray(state));
+                let rgba = rose_icon_rgba(size, RoseIcon::Tray(state), &Palette::ROSE);
                 assert_eq!(
                     rgba.len(),
                     (size * size * 4) as usize,
@@ -596,10 +611,10 @@ mod tests {
                     rgba.chunks_exact(4).filter(|pixel| wanted(pixel)).count()
                 };
                 assert!(
-                    count(&|pixel| pixel == theme::BG.to_array()) >= 4,
+                    count(&|pixel| pixel == Palette::ROSE.bg.to_array()) >= 4,
                     "{state:?} {size} px outline"
                 );
-                let Some(color) = badge_color(state) else {
+                let Some(color) = badge_color(state, &Palette::ROSE) else {
                     continue;
                 };
                 assert!(
@@ -624,7 +639,7 @@ mod tests {
         }
         assert_eq!(BadgeGrid::new(48).shift, 0.0);
         // At 20 px the disc covers columns 10..20: column 9 has no disc colour.
-        let rgba = rose_icon_rgba(20, RoseIcon::Tray(TrayState::Failed));
+        let rgba = rose_icon_rgba(20, RoseIcon::Tray(TrayState::Failed), &Palette::ROSE);
         assert_eq!(pixel(&rgba, 20, 15, 10)[..3], theme::ERROR.to_array()[..3]);
         assert_ne!(pixel(&rgba, 20, 9, 15), theme::ERROR.to_array());
         assert_eq!(pixel(&rgba, 20, 10, 15), theme::ERROR.to_array());
@@ -632,6 +647,6 @@ mod tests {
 
     #[test]
     fn rgba_has_the_requested_size() {
-        assert_eq!(rose_icon_rgba(32, RoseIcon::Emblem).len(), 32 * 32 * 4);
+        assert_eq!(rose_icon_rgba(32, RoseIcon::Emblem, &Palette::ROSE).len(), 32 * 32 * 4);
     }
 }

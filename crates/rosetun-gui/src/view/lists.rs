@@ -48,7 +48,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             ui.vertical(|ui| {
                 ui.heading(tr!("lists-title"));
                 ui.add(
-                    egui::Label::new(RichText::new(tr!("lists-empty")).color(theme::TEXT_MUTED))
+                    egui::Label::new(RichText::new(tr!("lists-empty")).color(theme::palette().text_muted))
                         .wrap(),
                 );
             });
@@ -71,7 +71,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         ui.colored_label(theme::ERROR, error);
     }
     if !state.config_ready {
-        ui.colored_label(theme::TEXT_DIM, tr!("loading"));
+        ui.colored_label(theme::palette().text_dim, tr!("loading"));
         return;
     }
     if state.config.lists.is_empty() {
@@ -200,7 +200,7 @@ fn list_card(
         tr!("list-used-rules", count = count, n = count.to_string())
     };
     widgets::card_frame()
-        .stroke(Stroke::new(1.0, theme::BORDER))
+        .stroke(Stroke::new(1.0, theme::palette().border))
         .inner_margin(egui::Margin {
             left: 12,
             right: 12,
@@ -231,9 +231,9 @@ fn list_card(
                                     if has_warning {
                                         theme::WARNING
                                     } else if applies_later {
-                                        theme::ROSE_LIGHT
+                                        theme::palette().accent_light
                                     } else {
-                                        theme::TEXT_MUTED
+                                        theme::palette().text_muted
                                     },
                                 ))
                                 .truncate(),
@@ -244,7 +244,7 @@ fn list_card(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         list_menu(ui, state, list, &used, busy, actions);
                         ui.add(
-                            egui::Label::new(RichText::new(&usage).small().color(theme::TEXT_DIM))
+                            egui::Label::new(RichText::new(&usage).small().color(theme::palette().text_dim))
                                 .truncate(),
                         )
                         .on_hover_text(&usage);
@@ -544,7 +544,7 @@ mod tests {
             .iter()
             .find_map(|shape| match &shape.shape {
                 egui::Shape::Rect(rect)
-                    if rect.fill == theme::INPUT && rect.rect.size() == egui::vec2(32.0, 32.0) =>
+                    if rect.fill == theme::palette().input && rect.rect.size() == egui::vec2(32.0, 32.0) =>
                 {
                     Some(rect.rect)
                 }

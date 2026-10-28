@@ -122,13 +122,13 @@ pub(crate) fn show(
                     tr!("new-rule-subtitle")
                 })
                 .small()
-                .color(theme::TEXT_MUTED),
+                .color(theme::palette().text_muted),
             );
             ui.add_space(2.0);
             ui.label(
                 RichText::new(tr!("what-to-route"))
                     .small()
-                    .color(theme::TEXT_DIM),
+                    .color(theme::palette().text_dim),
             );
             if let Some(kind) = widgets::segmented(
                 ui,
@@ -181,7 +181,7 @@ pub(crate) fn show(
             ui.label(
                 RichText::new(tr!("where-to-route"))
                     .small()
-                    .color(theme::TEXT_DIM),
+                    .color(theme::palette().text_dim),
             );
             destination_picker(ui, dialog, config);
             if has_advanced(dialog) {
@@ -201,9 +201,9 @@ pub(crate) fn show(
                         tr!("advanced")
                     };
                     let color = if !dialog.advanced && dialog.temporary_only {
-                        theme::ROSE_LIGHT
+                        theme::palette().accent_light
                     } else {
-                        theme::TEXT_MUTED
+                        theme::palette().text_muted
                     };
                     let link = ui.add_enabled(
                         !dialog.busy,
@@ -259,7 +259,7 @@ pub(crate) fn show(
             ui.painter().hline(
                 divider.x_range(),
                 divider.center().y,
-                Stroke::new(1.0, theme::BORDER),
+                Stroke::new(1.0, theme::palette().border),
             );
             ui.add_space(8.0);
             let exceeds_list_limit = dialog.kind == RuleInputKind::List
@@ -292,7 +292,7 @@ pub(crate) fn show(
                 ui,
                 |ui| {
                     if let Some(reason) = &reason {
-                        ui.label(RichText::new(reason).small().color(theme::TEXT_DIM));
+                        ui.label(RichText::new(reason).small().color(theme::palette().text_dim));
                     }
                 },
                 |ui| {
@@ -382,13 +382,13 @@ fn list_picker(
         painter.rect(
             rect,
             theme::RADIUS,
-            theme::INPUT,
+            theme::palette().input,
             Stroke::new(
                 1.0,
                 if response.hovered() && enabled {
-                    theme::BORDER_STRONG
+                    theme::palette().border_strong
                 } else {
-                    theme::BORDER
+                    theme::palette().border
                 },
             ),
             egui::StrokeKind::Inside,
@@ -397,7 +397,7 @@ fn list_picker(
         let detail_galley = egui::WidgetText::from(
             RichText::new(&detail)
                 .font(detail_font)
-                .color(theme::TEXT_DIM),
+                .color(theme::palette().text_dim),
         )
         .into_galley(
             ui,
@@ -413,7 +413,7 @@ fn list_picker(
                 rect.center().y - detail_galley.size().y / 2.0,
             ),
             detail_galley,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
         let name_width = (rect.width() - 58.0 - detail_width).max(40.0);
         let name_galley = egui::WidgetText::from(RichText::new(name).strong()).into_galley(
@@ -428,13 +428,13 @@ fn list_picker(
                 rect.center().y - name_galley.size().y / 2.0,
             ),
             name_galley,
-            theme::TEXT,
+            theme::palette().text,
         );
         icons::paint(
             painter,
             egui::pos2(rect.right() - 16.0, rect.center().y),
             Icon::Chevron { open: true },
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
     }
     let response = if enabled {
@@ -482,16 +482,16 @@ fn category_checkbox(
     ui.scope(|ui| {
         ui.spacing_mut().interact_size.y = CATEGORY_ROW_HEIGHT;
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-        let fill = if *checked { theme::ROSE } else { theme::CARD };
+        let fill = if *checked { theme::palette().accent_base } else { theme::palette().card };
         let border = if *checked {
-            theme::ROSE
+            theme::palette().accent_base
         } else {
-            theme::BORDER_STRONG
+            theme::palette().border_strong
         };
         let check = if *checked {
             Color32::WHITE
         } else {
-            theme::TEXT_MUTED
+            theme::palette().text_muted
         };
         let widgets = &mut ui.visuals_mut().widgets;
         for visuals in [
@@ -517,7 +517,7 @@ fn category_row(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, category: &str, a
         .any(|item| item == category);
     let mut checked = selected;
     let response = egui::Frame::new()
-        .fill(if selected { theme::INPUT } else { theme::CARD })
+        .fill(if selected { theme::palette().input } else { theme::palette().card })
         .corner_radius(theme::RADIUS_INNER)
         .inner_margin(egui::Margin::symmetric(4, 0))
         .show(ui, |ui| {
@@ -534,7 +534,7 @@ fn category_row(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, category: &str, a
                     ui.label(
                         RichText::new(tr!("rule-list-attribute"))
                             .small()
-                            .color(theme::TEXT_DIM),
+                            .color(theme::palette().text_dim),
                     );
                 }
                 response
@@ -554,8 +554,8 @@ fn category_view(
     custom: bool,
 ) -> egui::Response {
     egui::Frame::new()
-        .fill(theme::CARD)
-        .stroke(Stroke::new(1.0, theme::BORDER))
+        .fill(theme::palette().card)
+        .stroke(Stroke::new(1.0, theme::palette().border))
         .corner_radius(theme::RADIUS)
         .inner_margin(egui::Margin::same(4))
         .show(ui, |ui| {
@@ -604,7 +604,7 @@ fn list_input(
     ui.label(
         RichText::new(tr!("rule-list-select"))
             .small()
-            .color(theme::TEXT_DIM),
+            .color(theme::palette().text_dim),
     );
     list_picker(ui, selected, lists, &mut choice, !dialog.busy);
     if let Some(choice) = choice {
@@ -623,7 +623,7 @@ fn list_input(
                 ui.label(
                     RichText::new(tr!("rule-list-categories"))
                         .small()
-                        .color(theme::TEXT_DIM),
+                        .color(theme::palette().text_dim),
                 );
             },
             |ui| {
@@ -631,7 +631,7 @@ fn list_input(
                     ui.label(
                         RichText::new(tr!("rule-list-none-selected"))
                             .small()
-                            .color(theme::TEXT_DIM),
+                            .color(theme::palette().text_dim),
                     );
                 } else {
                     ui.horizontal(|ui| {
@@ -645,7 +645,7 @@ fn list_input(
                                 n = selected_count.to_string()
                             ))
                             .small()
-                            .color(theme::ROSE_LIGHT),
+                            .color(theme::palette().accent_light),
                         );
                     });
                 }
@@ -673,7 +673,7 @@ fn list_input(
         ui.label(
             RichText::new(tr!("rule-list-per-category"))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::palette().text_dim),
         );
         ui.add_space(8.0);
     } else {
@@ -686,7 +686,7 @@ fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Act
     ui.label(
         RichText::new(tr!("ip-label"))
             .small()
-            .color(theme::TEXT_DIM),
+            .color(theme::palette().text_dim),
     );
     let input = if dialog.editing.is_some() {
         ui.add_enabled(
@@ -751,7 +751,7 @@ fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Act
             egui::Label::new(
                 RichText::new(tr!("ip-local-warning"))
                     .small()
-                    .color(theme::ROSE_LIGHT),
+                    .color(theme::palette().accent_light),
             )
             .wrap(),
         );
@@ -768,7 +768,7 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     ui.label(
         RichText::new(tr!("sites-label"))
             .small()
-            .color(theme::TEXT_DIM),
+            .color(theme::palette().text_dim),
     );
     let input = if dialog.editing.is_some() {
         ui.add_enabled(
@@ -866,7 +866,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         ui.label(
             RichText::new(tr!("loading-processes"))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::palette().text_dim),
         );
     }
     let total: usize = dialog.processes.iter().map(|group| group.count).sum();
@@ -905,7 +905,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         ui.label(
             RichText::new(crate::i18n::found(shown))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::palette().text_dim),
         );
     }
     let list_height = (ui.available_height() - 36.0).clamp(0.0, MAX_PROCESS_LIST);
@@ -931,7 +931,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     &display::safe_text(typed),
                     &tr!("typed-process"),
                     "+",
-                    theme::BORDER_STRONG,
+                    theme::palette().border_strong,
                     selected,
                     !dialog.busy,
                 );
@@ -1000,7 +1000,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     } else {
                         tr!("no-running-processes")
                     })
-                    .color(theme::TEXT_DIM),
+                    .color(theme::palette().text_dim),
                 );
             }
         });
@@ -1034,7 +1034,7 @@ fn process_tab(ui: &mut egui::Ui, label: &str, selected: bool, enabled: bool) ->
     let font = egui::TextStyle::Body.resolve(ui.style());
     let width = ui
         .painter()
-        .layout_no_wrap(label.to_owned(), font.clone(), theme::TEXT)
+        .layout_no_wrap(label.to_owned(), font.clone(), theme::palette().text)
         .size()
         .x;
     let (rect, response) = ui.allocate_exact_size(
@@ -1045,11 +1045,11 @@ fn process_tab(ui: &mut egui::Ui, label: &str, selected: bool, enabled: bool) ->
         let color = if !enabled {
             theme::DISABLED
         } else if selected {
-            theme::TEXT
+            theme::palette().text
         } else if response.hovered() {
-            theme::TEXT_MUTED
+            theme::palette().text_muted
         } else {
-            theme::TEXT_DIM
+            theme::palette().text_dim
         };
         ui.painter().text(
             rect.min + egui::vec2(0.0, 2.0),
@@ -1065,7 +1065,7 @@ fn process_tab(ui: &mut egui::Ui, label: &str, selected: bool, enabled: bool) ->
                     egui::vec2(width, 2.0),
                 ),
                 0.0,
-                theme::ROSE,
+                theme::palette().accent_base,
             );
         }
     }
@@ -1114,9 +1114,9 @@ fn process_row(
         },
     );
     let fill = if selected {
-        theme::INPUT
+        theme::palette().input
     } else if response.hovered() && enabled {
-        theme::BORDER
+        theme::palette().border
     } else {
         Color32::TRANSPARENT
     };
@@ -1127,9 +1127,9 @@ fn process_row(
         Stroke::new(
             1.0,
             if selected {
-                theme::ROSE_DARK
+                theme::palette().accent_dark
             } else {
-                theme::BORDER
+                theme::palette().border
             },
         ),
         egui::StrokeKind::Inside,
@@ -1149,7 +1149,7 @@ fn process_row(
         egui::Align2::CENTER_CENTER,
         tile,
         FontId::new(13.0, semibold.clone()),
-        theme::TEXT,
+        theme::palette().text,
     );
     let text_painter = ui.painter().with_clip_rect(egui::Rect::from_min_max(
         egui::pos2(tile_rect.right() + 10.0, rect.top()),
@@ -1161,9 +1161,9 @@ fn process_row(
         name,
         FontId::new(13.0, semibold),
         if selected {
-            theme::ROSE_LIGHT
+            theme::palette().accent_light
         } else {
-            theme::TEXT
+            theme::palette().text
         },
     );
     text_painter.text(
@@ -1171,7 +1171,7 @@ fn process_row(
         egui::Align2::LEFT_CENTER,
         detail,
         egui::TextStyle::Small.resolve(ui.style()).clone(),
-        theme::TEXT_DIM,
+        theme::palette().text_dim,
     );
     let response = response.on_hover_text(display::safe_text(detail));
     if enabled {
@@ -1251,15 +1251,15 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
         painter.rect(
             rect,
             theme::RADIUS,
-            theme::INPUT,
+            theme::palette().input,
             Stroke::new(
                 1.0,
                 if open {
-                    theme::ROSE
+                    theme::palette().accent_base
                 } else if response.hovered() && enabled {
-                    theme::BORDER_STRONG
+                    theme::palette().border_strong
                 } else {
-                    theme::BORDER
+                    theme::palette().border
                 },
             ),
             egui::StrokeKind::Inside,
@@ -1281,7 +1281,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             egui::pos2(rect.right() - 16.0, rect.center().y),
             Icon::Chevron { open: true },
             if enabled {
-                theme::TEXT_DIM
+                theme::palette().text_dim
             } else {
                 theme::DISABLED
             },
@@ -1291,7 +1291,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
         &dialog.target
     {
         let hint = tr!("where-new-exit", name = display::safe_text(name));
-        ui.add(egui::Label::new(RichText::new(&hint).small().color(theme::TEXT_DIM)).truncate())
+        ui.add(egui::Label::new(RichText::new(&hint).small().color(theme::palette().text_dim)).truncate())
             .on_hover_text(hint);
     }
     if !enabled {
@@ -1368,11 +1368,11 @@ fn destination_item(
 fn destination_section(ui: &mut egui::Ui, title: String) {
     ui.add_space(4.0);
     ui.separator();
-    ui.label(RichText::new(title).small().color(theme::TEXT_DIM));
+    ui.label(RichText::new(title).small().color(theme::palette().text_dim));
 }
 
 fn destination_note(ui: &mut egui::Ui, note: String) {
-    ui.add(egui::Label::new(RichText::new(note).small().color(theme::TEXT_MUTED)).wrap());
+    ui.add(egui::Label::new(RichText::new(note).small().color(theme::palette().text_muted)).wrap());
 }
 
 fn exits_full_note(ui: &mut egui::Ui) {
@@ -1899,11 +1899,11 @@ mod tests {
             .collect();
         assert!(rectangles.iter().any(|rect| {
             rect.corner_radius == egui::CornerRadius::same(0)
-                && rect.fill == theme::CARD
-                && rect.stroke.color == theme::BORDER_STRONG
+                && rect.fill == theme::palette().card
+                && rect.stroke.color == theme::palette().border_strong
         }));
         assert!(rectangles.iter().any(|rect| {
-            rect.corner_radius == egui::CornerRadius::same(0) && rect.fill == theme::ROSE
+            rect.corner_radius == egui::CornerRadius::same(0) && rect.fill == theme::palette().accent_base
         }));
         assert!(output.shapes.iter().any(|shape| matches!(
             &shape.shape,
@@ -1929,7 +1929,7 @@ mod tests {
         });
         assert!(output.shapes.iter().any(|shape| matches!(
             &shape.shape,
-            egui::Shape::Rect(rect) if rect.fill == theme::INPUT && rect.rect.width() > 100.0
+            egui::Shape::Rect(rect) if rect.fill == theme::palette().input && rect.rect.width() > 100.0
         )));
         output.textures_delta.clear();
     }

@@ -104,7 +104,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             egui::pos2(rect.left(), rect.bottom() - 0.5),
             egui::pos2(rect.right(), rect.bottom() - 0.5),
         ],
-        Stroke::new(1.0, theme::BORDER),
+        Stroke::new(1.0, theme::palette().border),
     );
 
     let tabs = [
@@ -190,7 +190,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     ui.painter().circle_filled(
                         egui::pos2(response.rect.right() - 8.0, response.rect.top() + 10.0),
                         3.0,
-                        theme::ROSE_LIGHT,
+                        theme::palette().accent_light,
                     );
                 }
                 if selected {
@@ -261,7 +261,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 egui::vec2(width, 2.0),
             ),
             0.0,
-            theme::ROSE,
+            theme::palette().accent_base,
         );
     }
     HeaderRects {
@@ -301,8 +301,8 @@ fn header_status_for(
     }
     let (label, color) = match connection {
         None | Some(ConnectionState::Disconnected) => (tr!("disconnected"), theme::DISCONNECTED),
-        Some(ConnectionState::Connecting) => (tr!("connecting-action"), theme::ROSE_BRIGHT),
-        Some(ConnectionState::Reconnecting) => (tr!("reconnecting-action"), theme::ROSE_BRIGHT),
+        Some(ConnectionState::Connecting) => (tr!("connecting-action"), theme::palette().accent_bright),
+        Some(ConnectionState::Reconnecting) => (tr!("reconnecting-action"), theme::palette().accent_bright),
         Some(ConnectionState::Connected) => {
             return (
                 country.map_or_else(|| tr!("connected"), crate::i18n::connected_in),
@@ -326,7 +326,7 @@ fn brand_galleys(ui: &egui::Ui) -> (Arc<egui::Galley>, Arc<egui::Galley>) {
         0.0,
         TextFormat {
             font_id: FontId::new(25.0, FontFamily::Name(theme::BRAND_FONT.into())),
-            color: theme::TEXT,
+            color: theme::palette().text,
             extra_letter_spacing: 6.0,
             ..Default::default()
         },
@@ -339,7 +339,7 @@ fn brand_galleys(ui: &egui::Ui) -> (Arc<egui::Galley>, Arc<egui::Galley>) {
         0.0,
         TextFormat {
             font_id: FontId::new(10.5, FontFamily::Proportional),
-            color: theme::TEXT_DIM,
+            color: theme::palette().text_dim,
             extra_letter_spacing: 2.3,
             ..Default::default()
         },
@@ -370,11 +370,11 @@ fn paint_brand(
         let top = rect.center().y - (name.size().y + 1.0 + tagline.size().y) / 2.0;
         let x = rect.left() + 52.0;
         ui.painter()
-            .galley(egui::pos2(x, top), name.clone(), theme::TEXT);
+            .galley(egui::pos2(x, top), name.clone(), theme::palette().text);
         ui.painter().galley(
             egui::pos2(x, top + name.size().y + 1.0),
             tagline.clone(),
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
     }
     rect
@@ -396,9 +396,9 @@ fn window_button(ui: &mut egui::Ui, kind: WindowButton, reduce_motion: bool) -> 
     );
     if ui.is_rect_visible(rect) {
         let background = if matches!(kind, WindowButton::Close) {
-            theme::ROSE
+            theme::palette().accent_base
         } else {
-            theme::INPUT
+            theme::palette().input
         };
         if hover > 0.0 {
             ui.painter().rect_filled(
@@ -408,11 +408,11 @@ fn window_button(ui: &mut egui::Ui, kind: WindowButton, reduce_motion: bool) -> 
             );
         }
         let color = if matches!(kind, WindowButton::Close) {
-            theme::TEXT_MUTED
+            theme::palette().text_muted
         } else {
-            theme::TEXT_DIM
+            theme::palette().text_dim
         }
-        .lerp_to_gamma(theme::TEXT, hover);
+        .lerp_to_gamma(theme::palette().text, hover);
         let glyph = Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0));
         let point = |x: f32, y: f32| glyph.min + egui::vec2(x, y);
         let stroke = Stroke::new(1.3, color);
@@ -459,7 +459,7 @@ fn tab_width(ui: &egui::Ui, label: &str, icons_only: bool) -> f32 {
         .layout_no_wrap(
             label.to_owned(),
             FontId::new(15.0, FontFamily::Proportional),
-            theme::TEXT,
+            theme::palette().text,
         )
         .size()
         .x
@@ -485,8 +485,8 @@ fn tab(
         selected || response.hovered(),
         if reduce_motion { 0.0 } else { 0.12 },
     );
-    let text_color = theme::TEXT_MUTED.lerp_to_gamma(theme::TEXT, t);
-    let icon_color = theme::TEXT_DIM.lerp_to_gamma(theme::ROSE, t);
+    let text_color = theme::palette().text_muted.lerp_to_gamma(theme::palette().text, t);
+    let icon_color = theme::palette().text_dim.lerp_to_gamma(theme::palette().accent_base, t);
     if ui.is_rect_visible(rect) {
         paint_tab_icon(
             ui.painter(),
@@ -600,11 +600,11 @@ mod tests {
             ),
             (
                 ConnectionState::Connecting,
-                (tr!("connecting-action"), theme::ROSE_BRIGHT),
+                (tr!("connecting-action"), theme::palette().accent_bright),
             ),
             (
                 ConnectionState::Reconnecting,
-                (tr!("reconnecting-action"), theme::ROSE_BRIGHT),
+                (tr!("reconnecting-action"), theme::palette().accent_bright),
             ),
             (
                 ConnectionState::Connected,

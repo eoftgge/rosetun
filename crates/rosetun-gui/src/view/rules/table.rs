@@ -161,12 +161,12 @@ pub(super) fn target_button(
         let (rect, response) = ui.allocate_exact_size(egui::vec2(TARGET_WIDTH, 34.0), sense);
         if ui.is_rect_visible(rect) {
             if response.hovered() && enabled {
-                ui.painter().rect_filled(rect, theme::RADIUS, theme::BORDER);
+                ui.painter().rect_filled(rect, theme::RADIUS, theme::palette().border);
             }
             ui.painter().rect_stroke(
                 rect,
                 theme::RADIUS,
-                Stroke::new(1.0, theme::BORDER_STRONG),
+                Stroke::new(1.0, theme::palette().border_strong),
                 egui::StrokeKind::Inside,
             );
             let color = if enabled {
@@ -201,7 +201,7 @@ pub(super) fn target_button(
                 egui::pos2(rect.right() - 14.0, rect.center().y),
                 Icon::Chevron { open: true },
                 if enabled {
-                    theme::TEXT_DIM
+                    theme::palette().text_dim
                 } else {
                     theme::DISABLED
                 },
@@ -224,7 +224,7 @@ pub(super) fn target_button(
             for choice in choices {
                 if let Some(section) = &choice.section {
                     ui.separator();
-                    ui.label(RichText::new(section).small().color(theme::TEXT_DIM));
+                    ui.label(RichText::new(section).small().color(theme::palette().text_dim));
                 }
                 let item = ui
                     .scope(|ui| {
@@ -337,7 +337,7 @@ pub(super) fn rule_row(
             *id == rule.id || (selected && state.rules.screen.selected_rules.contains(&*id))
         });
     let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(12, 0));
-    let fill = if selected { theme::INPUT } else { theme::CARD };
+    let fill = if selected { theme::palette().input } else { theme::palette().card };
     if dragged {
         frame = frame.fill(Color32::from_rgba_unmultiplied(
             fill.r(),
@@ -373,7 +373,7 @@ pub(super) fn rule_row(
                 ui.add_space(HANDLE_GAP);
                 table_cell(ui, ICON_WIDTH, theme::RULE_ROW, |ui| {
                     if temporary {
-                        icons::icon_badge_colored(ui, Icon::Clock, ICON_WIDTH, theme::TEXT_DIM)
+                        icons::icon_badge_colored(ui, Icon::Clock, ICON_WIDTH, theme::palette().text_dim)
                             .on_hover_text(tr!("temporary-hint"));
                     } else {
                         icons::icon_badge(ui, rule_icon(&rule.matcher), ICON_WIDTH);
@@ -570,7 +570,7 @@ pub(super) fn rule_row(
                 egui::vec2(3.0, response.rect.height() - 20.0),
             ),
             0.0,
-            theme::ROSE,
+            theme::palette().accent_base,
         );
     }
     if !temporary {
@@ -615,7 +615,7 @@ pub(super) fn rule_row(
                     egui::pos2(response.rect.left(), y),
                     egui::pos2(response.rect.right(), y),
                 ],
-                Stroke::new(2.0, theme::ROSE),
+                Stroke::new(2.0, theme::palette().accent_base),
             );
             if let Some(payload) = response.dnd_release_payload::<RuleId>()
                 && let Some((rules, target)) = drag_target(state, set, &payload, slot)
@@ -681,7 +681,7 @@ fn rule_value(
         egui::TextStyle::Body.resolve(ui.style()).size,
         egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
     );
-    ui.add(egui::Label::new(RichText::new(value).font(font).color(theme::TEXT)).truncate())
+    ui.add(egui::Label::new(RichText::new(value).font(font).color(theme::palette().text)).truncate())
         .on_hover_text(&tooltip);
     if let Some(missing) = missing {
         let warning = if missing.last_good {
@@ -714,7 +714,7 @@ fn rule_value(
             egui::Label::new(
                 RichText::new(state.text(&caption))
                     .small()
-                    .color(theme::TEXT_DIM),
+                    .color(theme::palette().text_dim),
             )
             .truncate(),
         )
@@ -731,7 +731,7 @@ pub(super) fn default_rule(
 ) {
     let response = ui.push_id("default_rule", |ui| {
         widgets::card_frame()
-            .fill(theme::PANEL)
+            .fill(theme::palette().panel)
             .inner_margin(egui::Margin::symmetric(12, 0))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
@@ -754,7 +754,7 @@ pub(super) fn default_rule(
                             egui::Label::new(
                                 RichText::new(state.text(&tr!("all-other-traffic")))
                                     .font(font)
-                                    .color(theme::TEXT),
+                                    .color(theme::palette().text),
                             )
                             .truncate(),
                         )
@@ -763,7 +763,7 @@ pub(super) fn default_rule(
                             egui::Label::new(
                                 RichText::new(state.text(&tr!("default-fallback")))
                                     .small()
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::palette().text_dim),
                             )
                             .truncate(),
                         )
@@ -804,7 +804,7 @@ pub(super) fn default_rule(
             egui::pos2(rect.left(), rect.top()),
             egui::pos2(rect.right(), rect.top()),
         ],
-        Stroke::new(1.0, theme::BORDER_STRONG),
+        Stroke::new(1.0, theme::palette().border_strong),
     );
     if state.can_edit_rules()
         && !state.rules.screen.filter.is_active()
@@ -816,7 +816,7 @@ pub(super) fn default_rule(
                 egui::pos2(rect.left(), rect.top()),
                 egui::pos2(rect.right(), rect.top()),
             ],
-            Stroke::new(2.0, theme::ROSE),
+            Stroke::new(2.0, theme::palette().accent_base),
         );
         if let Some(payload) = response.inner.dnd_release_payload::<RuleId>()
             && let Some((rules, target)) = drag_target(state, set, &payload, set.rules.len())

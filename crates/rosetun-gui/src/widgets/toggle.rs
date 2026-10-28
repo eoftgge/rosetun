@@ -1,7 +1,7 @@
 use eframe::egui::{self, Color32, CornerRadius, Stroke};
 
 use super::tag::title_with_tag;
-use crate::theme::{BORDER_STRONG, INPUT, RADIUS_TOGGLE, ROSE, TEXT, TEXT_DIM, TEXT_MUTED};
+use crate::theme::{self, RADIUS_TOGGLE};
 
 pub(crate) const TOGGLE_SIZE: egui::Vec2 = egui::vec2(38.0, 22.0);
 
@@ -53,18 +53,18 @@ pub(super) fn paint_toggle(
     ui.painter().rect(
         rect,
         CornerRadius::same(RADIUS_TOGGLE),
-        faded(if on { ROSE } else { INPUT }),
+        faded(if on { theme::palette().accent_base } else { theme::palette().input }),
         if on {
             Stroke::NONE
         } else {
-            Stroke::new(1.0, faded(BORDER_STRONG))
+            Stroke::new(1.0, faded(theme::palette().border_strong))
         },
         egui::StrokeKind::Inside,
     );
     ui.painter().circle_filled(
         egui::pos2(rect.left() + 11.0 + 16.0 * progress, rect.center().y),
         8.0,
-        faded(if on { TEXT } else { TEXT_MUTED }),
+        faded(if on { theme::palette().text } else { theme::palette().text_muted }),
     );
 }
 
@@ -87,7 +87,7 @@ pub(crate) fn toggle_row(
         ui.vertical(|ui| {
             ui.set_max_width(text_width);
             title_with_tag(ui, title.into(), tag);
-            ui.add(egui::Label::new(egui::RichText::new(detail).small().color(TEXT_DIM)).wrap());
+            ui.add(egui::Label::new(egui::RichText::new(detail).small().color(theme::palette().text_dim)).wrap());
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.allocate_space(TOGGLE_SIZE).1

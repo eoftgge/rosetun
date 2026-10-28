@@ -1,4 +1,5 @@
 use crate::rose_icon::{self, RoseIcon};
+use crate::theme::Palette;
 
 /// Desktop sizes Windows asks for at 100, 125, 150 and 200 % scaling.
 const SIZES: [u32; 11] = [16, 20, 24, 32, 40, 48, 64, 72, 96, 128, 256];
@@ -12,7 +13,7 @@ fn app_icon() -> Vec<u8> {
 
     let mut images = Vec::new();
     for size in SIZES {
-        let rgba = rose_icon::rose_icon_rgba(size, RoseIcon::App);
+        let rgba = rose_icon::rose_icon_rgba(size, RoseIcon::App, &Palette::ROSE);
         let image = dib(&rgba, size);
         let offset = (6 + 16 * SIZES.len() + images.len()) as u32;
         ico.extend_from_slice(&[size as u8, size as u8, 0, 0]);

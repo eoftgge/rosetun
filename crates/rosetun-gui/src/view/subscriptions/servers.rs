@@ -22,12 +22,12 @@ pub(super) fn ping_label(
     match result {
         PingResult::Answered(elapsed) => (
             tr!("ping-ms", ms = ping_millis(elapsed).to_string()),
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             Some(tr!("ping-tcp-hint")),
         ),
         PingResult::Works(elapsed) => (
             tr!("ping-ms", ms = ping_millis(elapsed).to_string()),
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             Some(tr!("ping-full-hint")),
         ),
         PingResult::NoAnswer => (tr!("ping-no-answer"), theme::ERROR, None),
@@ -38,15 +38,15 @@ pub(super) fn ping_label(
         ),
         PingResult::Unresolved => (
             tr!("ping-unresolved"),
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             Some(tr!("ping-unresolved-hint")),
         ),
         PingResult::Unsupported => (
             tr!("ping-unsupported"),
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
             is_hysteria2.then(|| tr!("ping-udp-hint")),
         ),
-        PingResult::Pending => (tr!("ping-pending"), theme::TEXT_DIM, None),
+        PingResult::Pending => (tr!("ping-pending"), theme::palette().text_dim, None),
     }
 }
 
@@ -207,11 +207,11 @@ pub(super) fn server_row(
     }
     let painter = ui.painter();
     let background = if enabled && response.is_pointer_button_down_on() {
-        Some(theme::ROSE_DARK)
+        Some(theme::palette().accent_dark)
     } else if enabled && response.hovered() {
-        Some(theme::BORDER)
+        Some(theme::palette().border)
     } else if selected {
-        Some(theme::INPUT)
+        Some(theme::palette().input)
     } else {
         None
     };
@@ -228,7 +228,7 @@ pub(super) fn server_row(
             painter.rect_stroke(
                 badge,
                 theme::RADIUS_INNER,
-                Stroke::new(1.0, theme::BORDER_STRONG),
+                Stroke::new(1.0, theme::palette().border_strong),
                 egui::StrokeKind::Inside,
             );
             painter.text(
@@ -236,7 +236,7 @@ pub(super) fn server_row(
                 egui::Align2::CENTER_CENTER,
                 code,
                 egui::FontId::monospace(11.0),
-                theme::TEXT_MUTED,
+                theme::palette().text_muted,
             );
         }
         name_left += 38.0;
@@ -256,9 +256,9 @@ pub(super) fn server_row(
                     ),
                     1.0,
                     if index < quality as usize {
-                        theme::TEXT_MUTED
+                        theme::palette().text_muted
                     } else {
-                        theme::BORDER_STRONG
+                        theme::palette().border_strong
                     },
                 );
             }
@@ -280,7 +280,7 @@ pub(super) fn server_row(
             .layout_no_wrap(
                 label.clone(),
                 egui::TextStyle::Small.resolve(ui.style()),
-                theme::ROSE_LIGHT,
+                theme::palette().accent_light,
             )
             .size()
             .x
@@ -292,7 +292,7 @@ pub(super) fn server_row(
         painter.rect_stroke(
             badge,
             theme::RADIUS_INNER,
-            Stroke::new(1.0, theme::ROSE_LIGHT),
+            Stroke::new(1.0, theme::palette().accent_light),
             egui::StrokeKind::Inside,
         );
         painter.text(
@@ -300,14 +300,14 @@ pub(super) fn server_row(
             egui::Align2::CENTER_CENTER,
             label,
             egui::TextStyle::Small.resolve(ui.style()),
-            theme::ROSE_LIGHT,
+            theme::palette().accent_light,
         );
         name_right -= width + 8.0;
     }
     let name_color = if selected {
-        theme::ROSE_LIGHT
+        theme::palette().accent_light
     } else {
-        theme::TEXT
+        theme::palette().text
     };
     let text = RichText::new(name).color(name_color).font(if selected {
         egui::FontId::new(
@@ -422,13 +422,13 @@ mod tests {
             (
                 PingResult::Answered(elapsed),
                 ms.clone(),
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
                 Some(tr!("ping-tcp-hint")),
             ),
             (
                 PingResult::Works(elapsed),
                 ms,
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
                 Some(tr!("ping-full-hint")),
             ),
             (
@@ -446,19 +446,19 @@ mod tests {
             (
                 PingResult::Unresolved,
                 tr!("ping-unresolved").to_owned(),
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
                 Some(tr!("ping-unresolved-hint")),
             ),
             (
                 PingResult::Unsupported,
                 tr!("ping-unsupported").to_owned(),
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
                 None,
             ),
             (
                 PingResult::Pending,
                 tr!("ping-pending").to_owned(),
-                theme::TEXT_DIM,
+                theme::palette().text_dim,
                 None,
             ),
         ] {

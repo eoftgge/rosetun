@@ -58,7 +58,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             ui.vertical(|ui| {
                 ui.heading(tr!("exits-title"));
                 ui.add(
-                    egui::Label::new(RichText::new(tr!("exits-subtitle")).color(theme::TEXT_MUTED))
+                    egui::Label::new(RichText::new(tr!("exits-subtitle")).color(theme::palette().text_muted))
                         .wrap(),
                 );
             });
@@ -79,7 +79,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     );
     ui.add_space(8.0);
     if !state.config_ready {
-        ui.colored_label(theme::TEXT_DIM, tr!("loading"));
+        ui.colored_label(theme::palette().text_dim, tr!("loading"));
         return;
     }
     if state.config.exits.is_empty() {
@@ -131,7 +131,7 @@ fn exit_row(
     let rules = state.exit_rules(&exit.id);
     let can_edit = state.can_edit_rules();
     widgets::card_frame()
-        .stroke(Stroke::new(1.0, theme::BORDER))
+        .stroke(Stroke::new(1.0, theme::palette().border))
         .inner_margin(egui::Margin {
             left: 12,
             right: 12,
@@ -162,7 +162,7 @@ fn exit_row(
                                     if warning {
                                         theme::WARNING
                                     } else {
-                                        theme::TEXT_MUTED
+                                        theme::palette().text_muted
                                     },
                                 ))
                                 .truncate(),
@@ -179,7 +179,7 @@ fn exit_row(
                             ui.label(
                                 RichText::new(tr!("exit-no-rules"))
                                     .small()
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::palette().text_dim),
                             );
                         } else {
                             let label = tr!("exit-rules", count = rules, n = rules.to_string());
@@ -284,7 +284,7 @@ fn country_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig
             });
     });
     ui.add_space(8.0);
-    note(ui, tr!("exit-country-hint"), theme::TEXT_MUTED);
+    note(ui, tr!("exit-country-hint"), theme::palette().text_muted);
 }
 
 fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, busy: bool) {
@@ -306,7 +306,7 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             if nodes.is_empty() {
-                note(ui, tr!("where-node-none"), theme::TEXT_MUTED);
+                note(ui, tr!("where-node-none"), theme::palette().text_muted);
             }
             for node in &nodes {
                 let taken = node
@@ -352,9 +352,9 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
         let toggle = widgets::toggle(ui, &mut on, !busy && country.is_some());
         let text = ui.add(
             egui::Label::new(RichText::new(&label).color(if country.is_some() {
-                theme::TEXT
+                theme::palette().text
             } else {
-                theme::TEXT_DIM
+                theme::palette().text_dim
             }))
             .wrap(),
         );
@@ -366,7 +366,7 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
         }
     });
     if country.is_none() && dialog.node.is_some() {
-        note(ui, tr!("exit-fallback-no-country"), theme::TEXT_DIM);
+        note(ui, tr!("exit-fallback-no-country"), theme::palette().text_dim);
     }
 }
 
@@ -603,25 +603,25 @@ mod tests {
         for (expected, color) in [
             (
                 format!("{country_kind} · {}", tr!("exit-now", node = "NL One")),
-                theme::TEXT_MUTED,
+                theme::palette().text_muted,
             ),
             (
                 format!("{node_kind} · {}", tr!("exit-now", node = "NL One")),
-                theme::TEXT_MUTED,
+                theme::palette().text_muted,
             ),
             (
                 format!(
                     "{node_kind} · {}",
                     tr!("exit-now-fallback", country = netherlands.clone())
                 ),
-                theme::TEXT_MUTED,
+                theme::palette().text_muted,
             ),
             (
                 format!("{node_kind} · {}", tr!("exit-now-gone")),
                 theme::WARNING,
             ),
-            (tr!("exit-rules", count = 1, n = "1"), theme::ROSE_LIGHT),
-            (tr!("exit-no-rules"), theme::TEXT_DIM),
+            (tr!("exit-rules", count = 1, n = "1"), theme::palette().accent_light),
+            (tr!("exit-no-rules"), theme::palette().text_dim),
         ] {
             assert!(
                 texts

@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, CornerRadius, Stroke, TextStyle};
 
-use crate::theme::{BORDER, CARD};
+use crate::theme;
 
 /// The connection state as a small clickable badge: a dot and a word.
 pub(crate) fn status_pill_width(ui: &egui::Ui, text: &str, color: Color32) -> f32 {
@@ -30,8 +30,8 @@ pub(crate) fn status_pill(
         ui.painter().rect(
             rect,
             CornerRadius::same(16),
-            if response.hovered() { BORDER } else { CARD },
-            Stroke::new(1.0, BORDER),
+            if response.hovered() { theme::palette().border } else { theme::palette().card },
+            Stroke::new(1.0, theme::palette().border),
             egui::StrokeKind::Inside,
         );
         ui.painter()

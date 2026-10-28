@@ -2,10 +2,10 @@ use std::hash::{Hash, Hasher};
 
 use eframe::egui::{self, CornerRadius, Stroke, UiBuilder};
 
-use crate::theme::{BORDER, INPUT, RADIUS, ROSE};
+use crate::theme::{self, RADIUS};
 
-/// One of a few choices: no fill and a BORDER stroke at rest, an INPUT fill
-/// and a ROSE stroke when selected.
+/// One of a few choices: no fill and a theme::palette().border stroke at rest, an theme::palette().input fill
+/// and a theme::palette().accent_base stroke when selected.
 pub(crate) fn choice_card(
     ui: &mut egui::Ui,
     id_salt: impl Hash,
@@ -41,9 +41,9 @@ pub(crate) fn choice_card(
                     });
                 let response = ui.response();
                 let fill = if selected {
-                    INPUT
+                    theme::palette().input
                 } else if response.hovered() && enabled {
-                    BORDER
+                    theme::palette().border
                 } else {
                     egui::Color32::TRANSPARENT
                 };
@@ -54,7 +54,7 @@ pub(crate) fn choice_card(
                 ui.painter().rect_stroke(
                     response.rect,
                     CornerRadius::same(RADIUS),
-                    Stroke::new(1.0, if selected { ROSE } else { BORDER }),
+                    Stroke::new(1.0, if selected { theme::palette().accent_base } else { theme::palette().border }),
                     egui::StrokeKind::Inside,
                 );
             },

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use eframe::egui::{
     self, Color32, CornerRadius, FontFamily, FontId, Shadow, Stroke, Style, TextStyle, Visuals,
 };
@@ -42,23 +44,140 @@ fn fonts() -> egui::FontDefinitions {
     fonts
 }
 
-pub(crate) const BG: Color32 = Color32::from_rgb(0x17, 0x10, 0x14);
-pub(crate) const PANEL: Color32 = Color32::from_rgb(0x1B, 0x14, 0x18);
-pub(crate) const CARD: Color32 = Color32::from_rgb(0x1F, 0x15, 0x19);
-pub(crate) const MODAL: Color32 = Color32::from_rgb(0x21, 0x15, 0x19);
-pub(crate) const INPUT: Color32 = Color32::from_rgb(0x2B, 0x1D, 0x23);
-pub(crate) const BORDER: Color32 = Color32::from_rgb(0x33, 0x23, 0x2A);
-pub(crate) const BORDER_STRONG: Color32 = Color32::from_rgb(0x43, 0x2D, 0x36);
-pub(crate) const TEXT: Color32 = Color32::from_rgb(0xF3, 0xEC, 0xEE);
-pub(crate) const TEXT_MUTED: Color32 = Color32::from_rgb(0xB9, 0xA9, 0xAF);
-pub(crate) const TEXT_DIM: Color32 = Color32::from_rgb(0x93, 0x7F, 0x88);
+/// The colours an accent preset changes: the accent family and the surfaces
+/// tinted to match it. State colours below are the same in every preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Palette {
+    pub(crate) bg: Color32,
+    pub(crate) panel: Color32,
+    pub(crate) card: Color32,
+    pub(crate) modal: Color32,
+    pub(crate) input: Color32,
+    pub(crate) border: Color32,
+    pub(crate) border_strong: Color32,
+    pub(crate) text: Color32,
+    pub(crate) text_muted: Color32,
+    pub(crate) text_dim: Color32,
+    pub(crate) accent_dark: Color32,
+    pub(crate) accent_base: Color32,
+    pub(crate) accent_bright: Color32,
+    pub(crate) accent_light: Color32,
+    /// The light core of the bloomed rose on the connect button.
+    pub(crate) accent_pale: Color32,
+}
+
+impl Palette {
+    pub(crate) const ROSE: Self = Self {
+        bg: rgb(0x171014),
+        panel: rgb(0x1B1418),
+        card: rgb(0x1F1519),
+        modal: rgb(0x211519),
+        input: rgb(0x2B1D23),
+        border: rgb(0x33232A),
+        border_strong: rgb(0x432D36),
+        text: rgb(0xF3ECEE),
+        text_muted: rgb(0xB9A9AF),
+        text_dim: rgb(0x937F88),
+        accent_dark: rgb(0x8C2338),
+        accent_base: rgb(0xC2374F),
+        accent_bright: rgb(0xD9475F),
+        accent_light: rgb(0xE86A80),
+        accent_pale: rgb(0xF4B6C1),
+    };
+    pub(crate) const LILAC: Self = Self {
+        bg: rgb(0x120F17),
+        panel: rgb(0x16121B),
+        card: rgb(0x1B1622),
+        modal: rgb(0x1D1724),
+        input: rgb(0x261F30),
+        border: rgb(0x2E2639),
+        border_strong: rgb(0x3D324B),
+        text: rgb(0xEFEBF3),
+        text_muted: rgb(0xB3ABBF),
+        text_dim: rgb(0x9A90A8),
+        accent_dark: rgb(0x4E3178),
+        accent_base: rgb(0x7A4DB8),
+        accent_bright: rgb(0x8C60CC),
+        accent_light: rgb(0xB48CE8),
+        accent_pale: rgb(0xDCC6F4),
+    };
+    pub(crate) const TEAL: Self = Self {
+        bg: rgb(0x0D1414),
+        panel: rgb(0x111818),
+        card: rgb(0x141D1E),
+        modal: rgb(0x151F20),
+        input: rgb(0x1C2829),
+        border: rgb(0x233132),
+        border_strong: rgb(0x2F4142),
+        text: rgb(0xEAF2F1),
+        text_muted: rgb(0xA6B8B6),
+        text_dim: rgb(0x859896),
+        accent_dark: rgb(0x134A45),
+        accent_base: rgb(0x1E7870),
+        accent_bright: rgb(0x279086),
+        accent_light: rgb(0x5FC4B9),
+        accent_pale: rgb(0xB5EAE4),
+    };
+    /// Neutral surfaces with the rose accent.
+    pub(crate) const GRAPHITE: Self = Self {
+        bg: rgb(0x121214),
+        panel: rgb(0x161618),
+        card: rgb(0x1A1A1D),
+        modal: rgb(0x1C1C1F),
+        input: rgb(0x242428),
+        border: rgb(0x2C2C31),
+        border_strong: rgb(0x3A3A41),
+        text: rgb(0xEEEEF0),
+        text_muted: rgb(0xB1B1B9),
+        text_dim: rgb(0x8F8F99),
+        accent_dark: rgb(0x8C2338),
+        accent_base: rgb(0xC2374F),
+        accent_bright: rgb(0xD9475F),
+        accent_light: rgb(0xE86A80),
+        accent_pale: rgb(0xF4B6C1),
+    };
+    pub(crate) const AMBER: Self = Self {
+        bg: rgb(0x15100B),
+        panel: rgb(0x19140E),
+        card: rgb(0x1F1912),
+        modal: rgb(0x211A13),
+        input: rgb(0x2B2219),
+        border: rgb(0x352A1F),
+        border_strong: rgb(0x45372A),
+        text: rgb(0xF4EEE6),
+        text_muted: rgb(0xBEB1A1),
+        text_dim: rgb(0x9C8D7B),
+        accent_dark: rgb(0x6B4210),
+        accent_base: rgb(0x99601A),
+        accent_bright: rgb(0xB37224),
+        accent_light: rgb(0xE3A04A),
+        accent_pale: rgb(0xF6DAA8),
+    };
+}
+
+static PALETTES: [Palette; 5] = [
+    Palette::ROSE,
+    Palette::LILAC,
+    Palette::TEAL,
+    Palette::GRAPHITE,
+    Palette::AMBER,
+];
+
+/// Index into `PALETTES`; changed between frames, read on every paint.
+static CURRENT: AtomicU8 = AtomicU8::new(0);
+
+/// The palette of the chosen accent preset.
+pub(crate) fn palette() -> &'static Palette {
+    PALETTES
+        .get(usize::from(CURRENT.load(Ordering::Relaxed)))
+        .unwrap_or(&PALETTES[0])
+}
+
+const fn rgb(value: u32) -> Color32 {
+    Color32::from_rgb((value >> 16) as u8, (value >> 8) as u8, value as u8)
+}
+
 pub(crate) const DISABLED: Color32 = Color32::from_rgb(0x5C, 0x4D, 0x54);
-pub(crate) const ROSE_DARK: Color32 = Color32::from_rgb(0x8C, 0x23, 0x38);
-pub(crate) const ROSE: Color32 = Color32::from_rgb(0xC2, 0x37, 0x4F);
-pub(crate) const ROSE_BRIGHT: Color32 = Color32::from_rgb(0xD9, 0x47, 0x5F);
-pub(crate) const ROSE_LIGHT: Color32 = Color32::from_rgb(0xE8, 0x6A, 0x80);
-/// The light core of the bloomed rose on the connect button.
-pub(crate) const ROSE_PALE: Color32 = Color32::from_rgb(0xF4, 0xB6, 0xC1);
 pub(crate) const CONNECTED: Color32 = Color32::from_rgb(0xE0, 0x70, 0x5B);
 pub(crate) const DISCONNECTED: Color32 = Color32::from_rgb(0x8C, 0x81, 0x89);
 pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6A, 0x2A);
@@ -83,27 +202,28 @@ pub(crate) fn apply(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
     ctx.set_theme(egui::Theme::Dark);
 
+    let palette = palette();
     let mut visuals = Visuals::dark();
-    visuals.override_text_color = Some(TEXT);
-    visuals.hyperlink_color = ROSE_LIGHT;
-    visuals.window_fill = MODAL;
-    visuals.panel_fill = PANEL;
-    visuals.faint_bg_color = CARD;
-    visuals.extreme_bg_color = INPUT;
-    visuals.window_stroke = Stroke::new(1.0, BORDER_STRONG);
-    visuals.widgets.noninteractive.bg_fill = CARD;
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT_MUTED);
-    visuals.widgets.inactive.bg_fill = INPUT;
-    visuals.widgets.inactive.weak_bg_fill = CARD;
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT_MUTED);
-    visuals.widgets.hovered.bg_fill = BORDER;
-    visuals.widgets.hovered.weak_bg_fill = BORDER;
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
-    visuals.widgets.active.bg_fill = ROSE_DARK;
-    visuals.widgets.active.weak_bg_fill = ROSE_DARK;
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0, TEXT);
-    visuals.selection.bg_fill = ROSE;
-    visuals.selection.stroke = Stroke::new(1.0, TEXT);
+    visuals.override_text_color = Some(palette.text);
+    visuals.hyperlink_color = palette.accent_light;
+    visuals.window_fill = palette.modal;
+    visuals.panel_fill = palette.panel;
+    visuals.faint_bg_color = palette.card;
+    visuals.extreme_bg_color = palette.input;
+    visuals.window_stroke = Stroke::new(1.0, palette.border_strong);
+    visuals.widgets.noninteractive.bg_fill = palette.card;
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette.text_muted);
+    visuals.widgets.inactive.bg_fill = palette.input;
+    visuals.widgets.inactive.weak_bg_fill = palette.card;
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, palette.text_muted);
+    visuals.widgets.hovered.bg_fill = palette.border;
+    visuals.widgets.hovered.weak_bg_fill = palette.border;
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, palette.text);
+    visuals.widgets.active.bg_fill = palette.accent_dark;
+    visuals.widgets.active.weak_bg_fill = palette.accent_dark;
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0, palette.text);
+    visuals.selection.bg_fill = palette.accent_base;
+    visuals.selection.stroke = Stroke::new(1.0, palette.text);
     visuals.window_corner_radius = CornerRadius::same(RADIUS);
     visuals.menu_corner_radius = CornerRadius::same(RADIUS);
     visuals.window_shadow = Shadow::NONE;
@@ -139,4 +259,64 @@ pub(crate) fn apply(ctx: &egui::Context) {
     .into();
     style.visuals = visuals;
     ctx.set_global_style(style);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn luminance(color: Color32) -> f64 {
+        let channel = |value: u8| {
+            let value = f64::from(value) / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f64 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn the_rose_palette_keeps_the_colours_from_before_presets() {
+        let rose = Palette::ROSE;
+        let expected = [
+            (rose.bg, [0x17, 0x10, 0x14]),
+            (rose.panel, [0x1B, 0x14, 0x18]),
+            (rose.card, [0x1F, 0x15, 0x19]),
+            (rose.modal, [0x21, 0x15, 0x19]),
+            (rose.input, [0x2B, 0x1D, 0x23]),
+            (rose.border, [0x33, 0x23, 0x2A]),
+            (rose.border_strong, [0x43, 0x2D, 0x36]),
+            (rose.text, [0xF3, 0xEC, 0xEE]),
+            (rose.text_muted, [0xB9, 0xA9, 0xAF]),
+            (rose.text_dim, [0x93, 0x7F, 0x88]),
+            (rose.accent_dark, [0x8C, 0x23, 0x38]),
+            (rose.accent_base, [0xC2, 0x37, 0x4F]),
+            (rose.accent_bright, [0xD9, 0x47, 0x5F]),
+            (rose.accent_light, [0xE8, 0x6A, 0x80]),
+            (rose.accent_pale, [0xF4, 0xB6, 0xC1]),
+        ];
+        for (actual, [r, g, b]) in expected {
+            assert_eq!(actual, Color32::from_rgb(r, g, b));
+        }
+        assert_eq!(palette(), &Palette::ROSE);
+    }
+
+    #[test]
+    fn every_palette_keeps_text_readable() {
+        for palette in &PALETTES {
+            let on_accent = contrast(palette.text, palette.accent_base);
+            assert!(on_accent >= 4.5, "text on accent {on_accent:.2} in {palette:?}");
+            for surface in [palette.card, palette.panel] {
+                let dim = contrast(palette.text_dim, surface);
+                assert!(dim >= 4.5, "dim text {dim:.2} in {palette:?}");
+            }
+        }
+    }
 }

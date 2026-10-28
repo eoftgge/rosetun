@@ -43,7 +43,7 @@ fn search_field_inner(
     let font = egui::TextStyle::Small.resolve(ui.style());
     let right_margin = suffix.map_or(8, |suffix| {
         (ui.painter()
-            .layout_no_wrap(suffix.to_owned(), font.clone(), theme::TEXT_DIM)
+            .layout_no_wrap(suffix.to_owned(), font.clone(), theme::palette().text_dim)
             .size()
             .x
             + 16.0)
@@ -66,7 +66,7 @@ fn search_field_inner(
         ui.painter(),
         egui::pos2(search.rect.left() + 16.0, search.rect.center().y),
         Icon::Search,
-        theme::TEXT_DIM,
+        theme::palette().text_dim,
     );
     if let Some(suffix) = suffix {
         ui.painter().text(
@@ -74,7 +74,7 @@ fn search_field_inner(
             egui::Align2::RIGHT_CENTER,
             suffix,
             font,
-            theme::TEXT_DIM,
+            theme::palette().text_dim,
         );
     }
     search

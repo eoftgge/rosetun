@@ -25,7 +25,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     egui::Panel::top("header")
         .exact_size(76.0)
         .show_separator_line(false)
-        .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(0))
+        .frame(egui::Frame::new().fill(theme::palette().panel).inner_margin(0))
         .show(ui, |ui| header::show(ui, state, &mut actions));
     if state.screen == Screen::Connection {
         egui::Panel::left("subscriptions")
@@ -33,8 +33,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             .resizable(false)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .fill(theme::palette().panel)
+                    .stroke(Stroke::new(1.0, theme::palette().border))
                     .inner_margin(egui::Margin {
                         left: 16,
                         right: 16,
@@ -50,8 +50,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             .resizable(false)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .fill(theme::palette().panel)
+                    .stroke(Stroke::new(1.0, theme::palette().border))
                     .inner_margin(egui::Margin {
                         left: 16,
                         right: 16,
@@ -64,7 +64,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     egui::CentralPanel::default()
         .frame(
             egui::Frame::new()
-                .fill(theme::BG)
+                .fill(theme::palette().bg)
                 .inner_margin(egui::Margin {
                     left: if narrow { 16 } else { 36 },
                     right: if narrow { 16 } else { 36 },
@@ -240,7 +240,7 @@ fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         ui.add(egui::Label::new(
             RichText::new(tr!("settings-saved-instantly"))
                 .small()
-                .color(theme::TEXT_DIM),
+                .color(theme::palette().text_dim),
         ));
     });
 }
@@ -274,9 +274,9 @@ fn settings_nav_item(
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 42.0), egui::Sense::click());
     let fill = if selected {
-        theme::INPUT
+        theme::palette().input
     } else if response.hovered() {
-        theme::BORDER
+        theme::palette().border
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -288,7 +288,7 @@ fn settings_nav_item(
                 egui::vec2(3.0, 22.0),
             ),
             0,
-            theme::ROSE,
+            theme::palette().accent_base,
         );
     }
     ui.painter().text(
@@ -297,9 +297,9 @@ fn settings_nav_item(
         label,
         egui::TextStyle::Body.resolve(ui.style()),
         if selected {
-            theme::TEXT
+            theme::palette().text
         } else {
-            theme::TEXT_MUTED
+            theme::palette().text_muted
         },
     );
     if warning {
@@ -315,7 +315,7 @@ fn settings_nav_item(
         ui.painter().circle_filled(
             egui::pos2(rect.right() - 14.0, rect.center().y),
             3.0,
-            theme::ROSE_LIGHT,
+            theme::palette().accent_light,
         );
     }
     response.widget_info(|| {
