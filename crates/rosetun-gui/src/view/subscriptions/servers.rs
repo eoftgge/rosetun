@@ -57,7 +57,11 @@ fn row_layout(needs: RowNeeds) -> RowLayout {
             XrayBadge::Short => short + BADGE_GAP,
         })
     };
-    let bars_width = if needs.ping.is_some() { BARS_WIDTH } else { 0.0 };
+    let bars_width = if needs.ping.is_some() {
+        BARS_WIDTH
+    } else {
+        0.0
+    };
     let layout = |bars: bool, kind| RowLayout {
         bars: bars && needs.ping.is_some(),
         xray: needs.xray.map(|_| kind),

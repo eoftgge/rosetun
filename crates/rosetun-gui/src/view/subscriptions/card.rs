@@ -492,14 +492,7 @@ fn details(
         ui.spacing_mut().item_spacing.y = 2.0;
         for node in &subscription.nodes {
             ui.push_id(node.id.as_str(), |ui| {
-                server_row(
-                    ui,
-                    state,
-                    subscription,
-                    node,
-                    columns,
-                    actions,
-                );
+                server_row(ui, state, subscription, node, columns, actions);
             });
         }
     });
