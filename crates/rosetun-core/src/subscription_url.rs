@@ -1,6 +1,13 @@
+use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use percent_encoding::percent_decode_str;
 use url::Url;
+
+/// The longest `rosetun://` link the system may hand over, checked before any
+/// parsing.
+pub const MAX_OPEN_LINK_BYTES: usize = 8 * 1024;
+const MAX_LINK_NAME_CHARS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SubscriptionUrlError {
@@ -20,6 +27,24 @@ pub enum SubscriptionUrlError {
     ImportLinkWithMultipleUrls,
     #[error("too many nested subscription import links")]
     TooManyNestedLinks,
+}
+
+/// A `rosetun://add/` link opened from outside Rosetun: a normalized
+/// subscription URL and the name the provider suggests.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OpenLink {
+    pub url: String,
+    pub name: Option<String>,
+}
+
+impl fmt::Debug for OpenLink {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OpenLink")
+            .field("url", &redacted(&self.url))
+            .field("name", &self.name)
+            .finish()
+    }
 }
 
 pub fn normalize(input: &str) -> Result<String, SubscriptionUrlError> {
@@ -42,6 +67,9 @@ pub fn normalize(input: &str) -> Result<String, SubscriptionUrlError> {
                     return Err(SubscriptionUrlError::MissingHost);
                 }
                 return Ok(parsed.to_string());
+            }
+            "rosetun" => {
+                current = unwrap_path(remainder, "add/")?;
             }
             "happ" => {
                 if remainder
@@ -68,6 +96,62 @@ pub fn normalize(input: &str) -> Result<String, SubscriptionUrlError> {
     }
 
     Err(SubscriptionUrlError::TooManyNestedLinks)
+}
+
+/// Reads a `rosetun://add/<link>[#name]` link handed over by the system. Any
+/// web page can open one, so the link gets the same checks as a pasted one.
+pub fn parse_open_link(input: &str) -> Result<OpenLink, SubscriptionUrlError> {
+    if input.len() > MAX_OPEN_LINK_BYTES {
+        return Err(SubscriptionUrlError::InvalidImportLink);
+    }
+    let (scheme, remainder) = input
+        .trim()
+        .split_once("://")
+        .ok_or(SubscriptionUrlError::InvalidImportLink)?;
+    if !scheme.eq_ignore_ascii_case("rosetun") {
+        return Err(SubscriptionUrlError::InvalidImportLink);
+    }
+
+    let (link, name) = match remainder.rsplit_once('#') {
+        Some((link, name)) => (link, link_name(name)),
+        None => (remainder, None),
+    };
+    let link = unwrap_path(link, "add/")?;
+    // Only a link encoded as a whole is decoded: escapes in a raw link belong
+    // to the provider's token.
+    let link = if starts_with_ignore_case(&link, "http%3A")
+        || starts_with_ignore_case(&link, "https%3A")
+    {
+        percent_decode_str(&link)
+            .decode_utf8()
+            .map_err(|_| SubscriptionUrlError::Invalid)?
+            .into_owned()
+    } else {
+        link
+    };
+
+    Ok(OpenLink {
+        url: normalize(&link)?,
+        name,
+    })
+}
+
+fn link_name(encoded: &str) -> Option<String> {
+    let decoded = percent_decode_str(encoded).decode_utf8_lossy();
+    let name: String = decoded
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_LINK_NAME_CHARS)
+        .collect();
+    let name = name.trim_end();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+fn starts_with_ignore_case(value: &str, prefix: &str) -> bool {
+    value
+        .get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
 }
 
 /// Whether `normalize` reads `input` as an `https://` link: it has no scheme
@@ -184,7 +268,10 @@ pub fn redacted(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SubscriptionUrlError, assumes_https, normalize, redacted};
+    use super::{
+        MAX_OPEN_LINK_BYTES, OpenLink, SubscriptionUrlError, assumes_https, normalize,
+        parse_open_link, redacted,
+    };
 
     const SECRET_URL: &str = "https://sub.example.com/private-token?key=query-secret";
 
@@ -261,6 +348,7 @@ mod tests {
     fn path_wrappers_are_unwrapped() {
         for prefix in [
             "happ://add/",
+            "rosetun://add/",
             "v2raytun://import/",
             "hiddify://import/",
             "streisand://import/",
@@ -413,5 +501,123 @@ mod tests {
         );
         assert_eq!(redacted("invalid-private-token"), "<redacted>");
         assert_eq!(redacted("file:///private-token"), "<redacted>");
+    }
+
+    #[test]
+    fn an_open_link_carries_a_raw_or_encoded_url() {
+        let encoded: String = url::form_urlencoded::byte_serialize(SECRET_URL.as_bytes()).collect();
+
+        for input in [
+            format!("rosetun://add/{SECRET_URL}"),
+            format!("ROSETUN://add/{SECRET_URL}"),
+            format!("rosetun://add/{encoded}"),
+            format!(
+                "  rosetun://add/{}  ",
+                encoded.replace("https%3A", "HTTPS%3a")
+            ),
+        ] {
+            assert_eq!(
+                parse_open_link(&input).unwrap(),
+                OpenLink {
+                    url: SECRET_URL.to_owned(),
+                    name: None
+                },
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_open_link_name_follows_the_last_hash() {
+        for (suffix, expected) in [
+            ("#Example", Some("Example")),
+            (
+                "#%D0%9F%D1%80%D0%BE%D0%B2%D0%B0%D0%B9%D0%B4%D0%B5%D1%80",
+                Some("Провайдер"),
+            ),
+            ("#%20Example%20VPN%20", Some("Example VPN")),
+            ("#first#second", Some("second")),
+            ("#", None),
+            ("#%20%20", None),
+        ] {
+            let link =
+                parse_open_link(&format!("rosetun://add/https://example.com/sub{suffix}")).unwrap();
+            assert_eq!(link.name.as_deref(), expected, "{suffix}");
+            assert!(link.url.starts_with("https://example.com/sub"), "{suffix}");
+        }
+    }
+
+    #[test]
+    fn a_long_open_link_name_is_cut() {
+        let name = "й".repeat(100);
+        let link =
+            parse_open_link(&format!("rosetun://add/https://example.com/sub#{name}")).unwrap();
+
+        assert_eq!(link.name.unwrap().chars().count(), 64);
+    }
+
+    #[test]
+    fn escapes_in_a_raw_open_link_are_kept() {
+        let inner = "https://sub.example.com/token%2Fpart?key=a%26b";
+
+        assert_eq!(
+            parse_open_link(&format!("rosetun://add/{inner}"))
+                .unwrap()
+                .url,
+            inner
+        );
+    }
+
+    #[test]
+    fn bad_open_links_are_rejected() {
+        for (input, expected) in [
+            (
+                format!("rosetun://connect/{SECRET_URL}"),
+                SubscriptionUrlError::InvalidImportLink,
+            ),
+            (
+                "rosetun://add/".to_owned(),
+                SubscriptionUrlError::InvalidImportLink,
+            ),
+            (
+                "rosetun://add/#Example".to_owned(),
+                SubscriptionUrlError::InvalidImportLink,
+            ),
+            (
+                "rosetun:add/x".to_owned(),
+                SubscriptionUrlError::InvalidImportLink,
+            ),
+            (
+                format!("happ://add/{SECRET_URL}"),
+                SubscriptionUrlError::InvalidImportLink,
+            ),
+            (
+                "rosetun://add/file:///private-token".to_owned(),
+                SubscriptionUrlError::UnsupportedScheme,
+            ),
+            (
+                "rosetun://add/happ://crypt/private-token".to_owned(),
+                SubscriptionUrlError::EncryptedHappLink,
+            ),
+            (
+                format!(
+                    "rosetun://add/https://example.com/{}",
+                    "a".repeat(MAX_OPEN_LINK_BYTES)
+                ),
+                SubscriptionUrlError::InvalidImportLink,
+            ),
+        ] {
+            assert_eq!(parse_open_link(&input), Err(expected), "{input}");
+        }
+    }
+
+    #[test]
+    fn open_link_debug_has_no_token() {
+        let link = parse_open_link(&format!("rosetun://add/{SECRET_URL}#Example")).unwrap();
+        let debug = format!("{link:?}");
+
+        assert!(debug.contains("sub.example.com"));
+        assert!(!debug.contains("private-token"));
+        assert!(!debug.contains("query-secret"));
     }
 }
