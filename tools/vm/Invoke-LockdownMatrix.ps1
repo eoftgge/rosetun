@@ -430,8 +430,18 @@ function Test-CliPathEgress {
 function Start-GuestListener {
     # A TCP listener in the guest with a guest firewall rule for it, so only
     # Lockdown decides whether the host gets in. It lives in the PowerShell
-    # Direct session until Stop-GuestListener.
+    # Direct session until Stop-GuestListener. A saved VM or a reboot ends that
+    # session and the listener with it, but not its firewall rule; a later
+    # listener can get the same port, and a rule of the same name would make
+    # New-NetFirewallRule fail, so earlier rules go first.
     Invoke-RosetunGuest -ScriptBlock {
+        $state = Get-Variable -Name RosetunMatrixListener -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+        if ($state) {
+            $state.Listener.Stop()
+            Remove-Variable -Name RosetunMatrixListener -Scope Global
+        }
+        Get-NetFirewallRule -Name 'Rosetun-Lockdown-matrix-*' -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule -ErrorAction SilentlyContinue
         $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Any, 0)
         $listener.Start(8)
         $port = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
@@ -447,10 +457,12 @@ function Stop-GuestListener {
     Invoke-RosetunGuest -ScriptBlock {
         $state = Get-Variable -Name RosetunMatrixListener -Scope Global -ValueOnly -ErrorAction SilentlyContinue
         if ($state) {
-            Remove-NetFirewallRule -Name $state.RuleName -ErrorAction SilentlyContinue
             $state.Listener.Stop()
             Remove-Variable -Name RosetunMatrixListener -Scope Global
         }
+        # Also the rules of listeners whose session is gone.
+        Get-NetFirewallRule -Name 'Rosetun-Lockdown-matrix-*' -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule -ErrorAction SilentlyContinue
     }
 }
 
