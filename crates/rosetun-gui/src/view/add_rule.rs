@@ -113,10 +113,12 @@ pub(crate) fn show(
     let top = DIALOG_TOP
         .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0));
     let dialog_width = DIALOG_WIDTH.min((ctx.content_rect().width() - 144.0).max(320.0));
-    let response = egui::Modal::new(id)
-        .area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, top)))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
+    let response = widgets::show_modal(
+        ctx,
+        egui::Modal::new(id).area(
+            egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, top)),
+        ),
+        |ui| {
             ui.set_width(dialog_width);
             ui.set_max_width(dialog_width);
             ui.spacing_mut().item_spacing.y = 4.0;
@@ -200,7 +202,7 @@ pub(crate) fn show(
                     let chevron = icons::icon_button_sized(
                         ui,
                         Icon::Chevron {
-                            open: dialog.advanced,
+                            open: if dialog.advanced { 1.0 } else { 0.0 },
                         },
                         !dialog.busy,
                         20.0,
@@ -342,7 +344,8 @@ pub(crate) fn show(
                     }
                 },
             );
-        });
+        },
+    );
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAddRule);
     }
@@ -447,7 +450,7 @@ fn list_picker(
         icons::paint(
             painter,
             egui::pos2(rect.right() - 16.0, rect.center().y),
-            Icon::Chevron { open: true },
+            Icon::Chevron { open: 1.0 },
             theme::palette().text_dim,
         );
     }
@@ -1311,7 +1314,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
         icons::paint(
             painter,
             egui::pos2(rect.right() - 16.0, rect.center().y),
-            Icon::Chevron { open: true },
+            Icon::Chevron { open: 1.0 },
             if enabled {
                 theme::palette().text_dim
             } else {

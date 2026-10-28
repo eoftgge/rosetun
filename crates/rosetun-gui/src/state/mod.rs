@@ -77,7 +77,7 @@ pub(crate) struct Operations {
     pub(crate) moving_subscription: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub(crate) enum Screen {
     #[default]
     Connection,

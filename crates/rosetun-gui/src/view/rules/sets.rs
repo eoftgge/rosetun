@@ -153,7 +153,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
             icons::paint(
                 painter,
                 egui::pos2(rect.right() - icon_right, center_y),
-                Icon::Chevron { open: true },
+                Icon::Chevron { open: 1.0 },
                 theme::palette().text_dim,
             );
         })

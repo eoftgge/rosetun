@@ -12,6 +12,12 @@ pub(super) fn subscription_card(
         && egui::DragAndDrop::payload::<SubscriptionId>(ui.ctx())
             .is_some_and(|id| *id == subscription.id);
     let expanded = state.subscriptions.expanded.contains(&subscription.id);
+    let open = widgets::reveal_progress(
+        ui.ctx(),
+        egui::Id::new(("subscription_open", &subscription.id)),
+        expanded,
+        state.config.interface.reduce_motion,
+    );
     let selected = state
         .config
         .active
@@ -63,7 +69,7 @@ pub(super) fn subscription_card(
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                 }
                 ui.horizontal(|ui| {
-                    let chevron = icons::icon_button(ui, Icon::Chevron { open: expanded }, true)
+                    let chevron = icons::icon_button(ui, Icon::Chevron { open }, true)
                         .on_hover_text(if expanded {
                             constants::COLLAPSE
                         } else {
@@ -238,242 +244,12 @@ pub(super) fn subscription_card(
                 if state.dns_hint_for_update(&subscription.id) {
                     crate::view::settings::dns_hint(ui, actions);
                 }
-                if !expanded {
-                    return;
-                }
-                ui.add_space(6.0);
-                if let Some(info) = &subscription.info {
-                    let used = crate::i18n::bytes(info.upload.saturating_add(info.download));
-                    let traffic = info.total.map_or_else(
-                        || tr!("quota-used", used = &used),
-                        |total| {
-                            tr!(
-                                "quota-used-of",
-                                used = &used,
-                                total = crate::i18n::bytes(total)
-                            )
-                        },
-                    );
-                    egui::Sides::new().shrink_left().show(
-                        ui,
-                        |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(traffic)
-                                        .small()
-                                        .color(theme::palette().text_muted),
-                                )
-                                .truncate(),
-                            );
-                        },
-                        |ui| {
-                            if let Some(expire) = info.expire_unix {
-                                let (term, _) = crate::i18n::term_left(expire, now);
-                                ui.label(
-                                    RichText::new(term).small().color(expiry_color(expire, now)),
-                                );
-                            }
-                        },
-                    );
-                    if let Some(fraction) = quota_fraction(info, now) {
-                        let (bar, _) = ui.allocate_exact_size(
-                            egui::vec2(ui.available_width(), 4.0),
-                            egui::Sense::hover(),
-                        );
-                        ui.painter().rect_filled(bar, 2.0, theme::palette().input);
-                        if fraction > 0.0 {
-                            ui.painter().rect_filled(
-                                egui::Rect::from_min_size(
-                                    bar.min,
-                                    egui::vec2(bar.width() * fraction, 4.0),
-                                ),
-                                2.0,
-                                if fraction >= 1.0 {
-                                    theme::ERROR
-                                } else {
-                                    theme::palette().accent_dark
-                                },
-                            );
-                        }
-                    }
-                }
-                if subscription.announce.is_some() || !subscription.notices.is_empty() {
-                    widgets::card_frame()
-                        .fill(theme::palette().bg)
-                        .stroke(Stroke::new(1.0, theme::palette().border))
-                        .corner_radius(theme::RADIUS)
-                        .inner_margin(10)
-                        .show(ui, |ui| {
-                            ui.set_min_width(ui.available_width());
-                            ui.style_mut().interaction.selectable_labels = true;
-                            if let Some(announce) = &subscription.announce {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(provider_text(
-                                            ui,
-                                            state,
-                                            announce,
-                                            egui::TextStyle::Small,
-                                        ))
-                                        .small()
-                                        .color(theme::palette().text_muted),
-                                    )
-                                    .wrap(),
-                                );
-                            }
-                            for notice in &subscription.notices {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(provider_text(
-                                            ui,
-                                            state,
-                                            notice,
-                                            egui::TextStyle::Small,
-                                        ))
-                                        .small()
-                                        .color(theme::palette().text_muted),
-                                    )
-                                    .wrap(),
-                                );
-                            }
-                        });
-                }
-                let shown_link = |link| {
-                    rosetun_core::provider_link(link, &subscription.url).map(|shown| (link, shown))
-                };
-                let support = subscription.support_url.as_deref().and_then(shown_link);
-                let web_page = subscription.web_page_url.as_deref().and_then(shown_link);
-                if support.is_some() || web_page.is_some() {
-                    ui.horizontal(|ui| {
-                        if let Some((link, shown)) = &support {
-                            provider_link(ui, state, &tr!("support"), link, shown);
-                        }
-                        if let Some((link, shown)) = &web_page {
-                            provider_link(ui, state, &tr!("website"), link, shown);
-                        }
-                    });
-                }
-                if let Some(UpdateOutcome::Success(report)) =
-                    state.subscriptions.outcomes.get(&subscription.id)
-                {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(crate::i18n::updated(
-                                report.added,
-                                report.removed,
-                                report.retained,
-                            ))
-                            .color(theme::palette().accent_light),
-                        )
-                        .wrap(),
-                    );
-                    if report.selection_cleared {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(tr!("selection-cleared")).color(theme::ERROR),
-                            )
-                            .wrap(),
-                        );
-                    }
-                    for (reason, count) in &report.skipped {
-                        ui.add(
-                            egui::Label::new(state.text(&crate::i18n::skipped(
-                                *count,
-                                &errors::skip_reason(crate::i18n::language(), reason),
-                            )))
-                            .wrap(),
-                        );
-                    }
-                }
-                egui::Sides::new().shrink_left().show(
+                widgets::reveal(
                     ui,
-                    |ui| {
-                        ui.label(
-                            RichText::new(tr!("servers-heading"))
-                                .small()
-                                .color(theme::palette().text_dim),
-                        );
-                    },
-                    |ui| {
-                        let checking = state.operations.pinging.contains(&subscription.id);
-                        if checking {
-                            ui.label(
-                                RichText::new(tr!("ping-checking"))
-                                    .small()
-                                    .color(theme::palette().text_dim),
-                            );
-                        } else {
-                            let enabled = state.config_ready
-                                && !subscription.nodes.is_empty()
-                                && !state.subscription_busy(&subscription.id);
-                            let menu = menu_link(ui, &tr!("check-menu"), enabled)
-                                .on_hover_text(tr!("check-hint"));
-                            widgets::menu_popup(&menu).show(|ui| {
-                                check_menu_items(ui, state, subscription, None, enabled, actions);
-                            });
-                        }
-                    },
+                    egui::Id::new(("subscription_details", &subscription.id)),
+                    open,
+                    |ui| details(ui, state, subscription, now, actions),
                 );
-                if subscription.nodes.is_empty() {
-                    ui.colored_label(theme::palette().text_dim, tr!("no-servers"));
-                }
-                let show_flags = subscription
-                    .nodes
-                    .iter()
-                    .any(|node| display::leading_flag(&node.name).0.is_some());
-                let font = egui::TextStyle::Small.resolve(ui.style());
-                let ping_width = subscription
-                    .nodes
-                    .iter()
-                    .filter_map(|node| {
-                        state
-                            .subscriptions
-                            .pings
-                            .get(&(subscription.id.clone(), node.id.clone()))
-                            .map(|&result| (node, result))
-                    })
-                    .map(|(node, result)| {
-                        let (label, _, _) =
-                            ping_label(result, matches!(&node.outbound, Outbound::Hysteria2(_)));
-                        ui.painter()
-                            .layout_no_wrap(label, font.clone(), theme::palette().text_dim)
-                            .size()
-                            .x
-                    })
-                    .reduce(f32::max)
-                    .map(|width| width.max(70.0));
-                ui.scope(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    for node in &subscription.nodes {
-                        ui.push_id(node.id.as_str(), |ui| {
-                            server_row(
-                                ui,
-                                state,
-                                subscription,
-                                node,
-                                show_flags,
-                                ping_width,
-                                actions,
-                            );
-                        });
-                    }
-                });
-                let xray_count = subscription
-                    .nodes
-                    .iter()
-                    .filter(|node| rosetun_core::uses_xray(node, state.config.settings.xray))
-                    .count();
-                if xray_count > 0 {
-                    ui.add(egui::Label::new(
-                        RichText::new(tr!(
-                            "xray-server-count",
-                            used = xray_count.to_string(),
-                            total = subscription.nodes.len().to_string()
-                        ))
-                        .small()
-                        .color(theme::palette().text_dim),
-                    ));
-                }
             });
             if reorder
                 && ui
@@ -505,6 +281,233 @@ pub(super) fn subscription_card(
         },
     )
     .response
+}
+
+/// The quota, provider notes and servers under an expanded card.
+fn details(
+    ui: &mut egui::Ui,
+    state: &State,
+    subscription: &Subscription,
+    now: u64,
+    actions: &mut Vec<Action>,
+) {
+    ui.add_space(6.0);
+    if let Some(info) = &subscription.info {
+        let used = crate::i18n::bytes(info.upload.saturating_add(info.download));
+        let traffic = info.total.map_or_else(
+            || tr!("quota-used", used = &used),
+            |total| {
+                tr!(
+                    "quota-used-of",
+                    used = &used,
+                    total = crate::i18n::bytes(total)
+                )
+            },
+        );
+        egui::Sides::new().shrink_left().show(
+            ui,
+            |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(traffic)
+                            .small()
+                            .color(theme::palette().text_muted),
+                    )
+                    .truncate(),
+                );
+            },
+            |ui| {
+                if let Some(expire) = info.expire_unix {
+                    let (term, _) = crate::i18n::term_left(expire, now);
+                    ui.label(RichText::new(term).small().color(expiry_color(expire, now)));
+                }
+            },
+        );
+        if let Some(fraction) = quota_fraction(info, now) {
+            let (bar, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 4.0), egui::Sense::hover());
+            ui.painter().rect_filled(bar, 2.0, theme::palette().input);
+            if fraction > 0.0 {
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * fraction, 4.0)),
+                    2.0,
+                    if fraction >= 1.0 {
+                        theme::ERROR
+                    } else {
+                        theme::palette().accent_dark
+                    },
+                );
+            }
+        }
+    }
+    if subscription.announce.is_some() || !subscription.notices.is_empty() {
+        widgets::card_frame()
+            .fill(theme::palette().bg)
+            .stroke(Stroke::new(1.0, theme::palette().border))
+            .corner_radius(theme::RADIUS)
+            .inner_margin(10)
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.style_mut().interaction.selectable_labels = true;
+                if let Some(announce) = &subscription.announce {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(provider_text(
+                                ui,
+                                state,
+                                announce,
+                                egui::TextStyle::Small,
+                            ))
+                            .small()
+                            .color(theme::palette().text_muted),
+                        )
+                        .wrap(),
+                    );
+                }
+                for notice in &subscription.notices {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(provider_text(ui, state, notice, egui::TextStyle::Small))
+                                .small()
+                                .color(theme::palette().text_muted),
+                        )
+                        .wrap(),
+                    );
+                }
+            });
+    }
+    let shown_link =
+        |link| rosetun_core::provider_link(link, &subscription.url).map(|shown| (link, shown));
+    let support = subscription.support_url.as_deref().and_then(shown_link);
+    let web_page = subscription.web_page_url.as_deref().and_then(shown_link);
+    if support.is_some() || web_page.is_some() {
+        ui.horizontal(|ui| {
+            if let Some((link, shown)) = &support {
+                provider_link(ui, state, &tr!("support"), link, shown);
+            }
+            if let Some((link, shown)) = &web_page {
+                provider_link(ui, state, &tr!("website"), link, shown);
+            }
+        });
+    }
+    if let Some(UpdateOutcome::Success(report)) = state.subscriptions.outcomes.get(&subscription.id)
+    {
+        ui.add(
+            egui::Label::new(
+                RichText::new(crate::i18n::updated(
+                    report.added,
+                    report.removed,
+                    report.retained,
+                ))
+                .color(theme::palette().accent_light),
+            )
+            .wrap(),
+        );
+        if report.selection_cleared {
+            ui.add(
+                egui::Label::new(RichText::new(tr!("selection-cleared")).color(theme::ERROR))
+                    .wrap(),
+            );
+        }
+        for (reason, count) in &report.skipped {
+            ui.add(
+                egui::Label::new(state.text(&crate::i18n::skipped(
+                    *count,
+                    &errors::skip_reason(crate::i18n::language(), reason),
+                )))
+                .wrap(),
+            );
+        }
+    }
+    egui::Sides::new().shrink_left().show(
+        ui,
+        |ui| {
+            ui.label(
+                RichText::new(tr!("servers-heading"))
+                    .small()
+                    .color(theme::palette().text_dim),
+            );
+        },
+        |ui| {
+            let checking = state.operations.pinging.contains(&subscription.id);
+            if checking {
+                ui.label(
+                    RichText::new(tr!("ping-checking"))
+                        .small()
+                        .color(theme::palette().text_dim),
+                );
+            } else {
+                let enabled = state.config_ready
+                    && !subscription.nodes.is_empty()
+                    && !state.subscription_busy(&subscription.id);
+                let menu =
+                    menu_link(ui, &tr!("check-menu"), enabled).on_hover_text(tr!("check-hint"));
+                widgets::menu_popup(&menu).show(|ui| {
+                    check_menu_items(ui, state, subscription, None, enabled, actions);
+                });
+            }
+        },
+    );
+    if subscription.nodes.is_empty() {
+        ui.colored_label(theme::palette().text_dim, tr!("no-servers"));
+    }
+    let show_flags = subscription
+        .nodes
+        .iter()
+        .any(|node| display::leading_flag(&node.name).0.is_some());
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let ping_width = subscription
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            state
+                .subscriptions
+                .pings
+                .get(&(subscription.id.clone(), node.id.clone()))
+                .map(|&result| (node, result))
+        })
+        .map(|(node, result)| {
+            let (label, _, _) =
+                ping_label(result, matches!(&node.outbound, Outbound::Hysteria2(_)));
+            ui.painter()
+                .layout_no_wrap(label, font.clone(), theme::palette().text_dim)
+                .size()
+                .x
+        })
+        .reduce(f32::max)
+        .map(|width| width.max(70.0));
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for node in &subscription.nodes {
+            ui.push_id(node.id.as_str(), |ui| {
+                server_row(
+                    ui,
+                    state,
+                    subscription,
+                    node,
+                    show_flags,
+                    ping_width,
+                    actions,
+                );
+            });
+        }
+    });
+    let xray_count = subscription
+        .nodes
+        .iter()
+        .filter(|node| rosetun_core::uses_xray(node, state.config.settings.xray))
+        .count();
+    if xray_count > 0 {
+        ui.add(egui::Label::new(
+            RichText::new(tr!(
+                "xray-server-count",
+                used = xray_count.to_string(),
+                total = subscription.nodes.len().to_string()
+            ))
+            .small()
+            .color(theme::palette().text_dim),
+        ));
+    }
 }
 
 fn expiry_color(expire: u64, now: u64) -> Color32 {

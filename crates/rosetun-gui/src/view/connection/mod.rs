@@ -91,16 +91,24 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
                 }
             },
         );
-        if expanded && let Some(error) = &state.helper_error {
-            ui.add_space(10.0);
-            ui.add(
-                egui::Label::new(
-                    RichText::new(state.text(&errors::client(crate::i18n::language(), error)))
-                        .small()
-                        .color(theme::palette().text_dim),
-                )
-                .wrap(),
-            );
+        let open = widgets::reveal_progress(
+            ui.ctx(),
+            id.with("open"),
+            expanded,
+            state.config.interface.reduce_motion,
+        );
+        if let Some(error) = &state.helper_error {
+            widgets::reveal(ui, id.with("body"), open, |ui| {
+                ui.add_space(10.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(state.text(&errors::client(crate::i18n::language(), error)))
+                            .small()
+                            .color(theme::palette().text_dim),
+                    )
+                    .wrap(),
+                );
+            });
         }
     });
 }

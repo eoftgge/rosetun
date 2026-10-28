@@ -333,99 +333,97 @@ pub(crate) fn add_dialog(
     actions: &mut Vec<Action>,
 ) {
     let busy = dialog.busy || dialog.browsing;
-    let response = egui::Modal::new(egui::Id::new("add_list"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
-            ui.set_width(520.0);
-            ui.heading(tr!("add-list"));
-            ui.add_space(14.0);
-            if let Some((format, categories, entries)) = dialog.result {
-                let summary = if format.has_categories() {
-                    tr!(
-                        "list-added-categories",
-                        format = format_name(format),
-                        count = categories,
-                        n = categories.to_string()
-                    )
-                } else if let Some(entries) = entries {
-                    tr!(
-                        "list-added-entries",
-                        format = format_name(format),
-                        count = entries,
-                        n = entries.to_string()
-                    )
-                } else {
-                    format_name(format)
-                };
-                ui.label(summary);
-                ui.add_space(18.0);
-                if widgets::button_fill(ui, tr!("done"), true).clicked() {
-                    actions.push(Action::CancelAddList);
-                }
-                return;
-            }
-            ui.label(tr!("list-url"));
-            let mut value = dialog.url.clone();
-            let input = ui.add_enabled(
-                !busy,
-                egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY),
-            );
-            if dialog.focus_url {
-                input.request_focus();
-                dialog.focus_url = false;
-            }
-            if input.changed() {
-                dialog.update_url(value);
-            }
-            ui.add_space(10.0);
-            if widgets::outline_button(ui, tr!("choose-list-file"), !busy).clicked() {
-                actions.push(Action::BrowseListFile);
-            }
-            if let Some(path) = &dialog.file {
-                ui.label(tr!(
-                    "list-selected-file",
-                    name = display::safe_text(&source_file_name(path))
-                ));
-            }
-            ui.add_space(14.0);
-            ui.label(tr!("name"));
-            if ui
-                .add_enabled(
-                    !busy,
-                    egui::TextEdit::singleline(&mut dialog.name).desired_width(f32::INFINITY),
+    let response = widgets::show_modal(ctx, egui::Modal::new(egui::Id::new("add_list")), |ui| {
+        ui.set_width(520.0);
+        ui.heading(tr!("add-list"));
+        ui.add_space(14.0);
+        if let Some((format, categories, entries)) = dialog.result {
+            let summary = if format.has_categories() {
+                tr!(
+                    "list-added-categories",
+                    format = format_name(format),
+                    count = categories,
+                    n = categories.to_string()
                 )
-                .changed()
-            {
-                dialog.name_manual = true;
-                dialog.error = None;
-            }
-            if let Some(error) = &dialog.error {
-                ui.add_space(10.0);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(errors::list(i18n::language(), error)).color(theme::ERROR),
-                    )
-                    .wrap(),
-                );
-            }
+            } else if let Some(entries) = entries {
+                tr!(
+                    "list-added-entries",
+                    format = format_name(format),
+                    count = entries,
+                    n = entries.to_string()
+                )
+            } else {
+                format_name(format)
+            };
+            ui.label(summary);
             ui.add_space(18.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::button_fill(
-                    ui,
-                    if busy { tr!("adding") } else { tr!("add") },
-                    !busy
-                        && !dialog.name.trim().is_empty()
-                        && (dialog.file.is_some() || !dialog.url.trim().is_empty()),
+            if widgets::button_fill(ui, tr!("done"), true).clicked() {
+                actions.push(Action::CancelAddList);
+            }
+            return;
+        }
+        ui.label(tr!("list-url"));
+        let mut value = dialog.url.clone();
+        let input = ui.add_enabled(
+            !busy,
+            egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY),
+        );
+        if dialog.focus_url {
+            input.request_focus();
+            dialog.focus_url = false;
+        }
+        if input.changed() {
+            dialog.update_url(value);
+        }
+        ui.add_space(10.0);
+        if widgets::outline_button(ui, tr!("choose-list-file"), !busy).clicked() {
+            actions.push(Action::BrowseListFile);
+        }
+        if let Some(path) = &dialog.file {
+            ui.label(tr!(
+                "list-selected-file",
+                name = display::safe_text(&source_file_name(path))
+            ));
+        }
+        ui.add_space(14.0);
+        ui.label(tr!("name"));
+        if ui
+            .add_enabled(
+                !busy,
+                egui::TextEdit::singleline(&mut dialog.name).desired_width(f32::INFINITY),
+            )
+            .changed()
+        {
+            dialog.name_manual = true;
+            dialog.error = None;
+        }
+        if let Some(error) = &dialog.error {
+            ui.add_space(10.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(errors::list(i18n::language(), error)).color(theme::ERROR),
                 )
-                .clicked()
-                {
-                    actions.push(Action::SubmitAddList);
-                }
-                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                    actions.push(Action::CancelAddList);
-                }
-            });
+                .wrap(),
+            );
+        }
+        ui.add_space(18.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if widgets::button_fill(
+                ui,
+                if busy { tr!("adding") } else { tr!("add") },
+                !busy
+                    && !dialog.name.trim().is_empty()
+                    && (dialog.file.is_some() || !dialog.url.trim().is_empty()),
+            )
+            .clicked()
+            {
+                actions.push(Action::SubmitAddList);
+            }
+            if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
+                actions.push(Action::CancelAddList);
+            }
         });
+    });
     if !busy && response.should_close() {
         actions.push(Action::CancelAddList);
     }

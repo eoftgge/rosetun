@@ -12,9 +12,10 @@ pub(crate) fn show(
     dialog: &mut AddDialog,
     actions: &mut Vec<Action>,
 ) {
-    let response = egui::Modal::new(egui::Id::new("add_subscription"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
+    let response = widgets::show_modal(
+        ctx,
+        egui::Modal::new(egui::Id::new("add_subscription")),
+        |ui| {
             ui.set_width(520.0);
             ui.heading(tr!("add-subscription"));
             ui.colored_label(theme::palette().text_muted, tr!("add-subtitle"));
@@ -162,7 +163,8 @@ pub(crate) fn show(
                     actions.push(Action::CancelAdd);
                 }
             });
-        });
+        },
+    );
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAdd);
     }
@@ -181,7 +183,7 @@ fn qr_menu(ui: &mut egui::Ui, dialog: &AddDialog, enabled: bool, actions: &mut V
         icons::paint(
             ui.painter(),
             egui::pos2(response.rect.right() - 14.0, response.rect.center().y),
-            Icon::Chevron { open: true },
+            Icon::Chevron { open: 1.0 },
             if enabled {
                 theme::palette().text_dim
             } else {

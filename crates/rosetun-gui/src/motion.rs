@@ -1,15 +1,24 @@
 //! Shared timing for animations. Short transitions run at the monitor's
 //! rate through egui's `animate_*`; continuous ones ask for frames here.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use eframe::egui;
 
+/// A short transition: content fading in, a dialog appearing.
+pub(crate) const FAST: f32 = 0.14;
 /// A transition that moves something larger: a list opening, a chart settling.
 pub(crate) const NORMAL: f32 = 0.22;
 
 const FOCUSED_FRAME: Duration = Duration::from_millis(16);
 const UNFOCUSED_FRAME: Duration = Duration::from_millis(33);
+/// A section taller than this grows by this much only and shows the rest at
+/// once: a hundred servers would otherwise crawl open off screen.
+const MAX_REVEAL_HEIGHT: f32 = 400.0;
+
+/// `interface.reduce_motion` for widgets that see no state, set between frames.
+static REDUCED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WindowView {
@@ -26,6 +35,14 @@ impl WindowView {
             focused: input.focused,
         })
     }
+}
+
+pub(crate) fn set_reduced(reduced: bool) {
+    REDUCED.store(reduced, Ordering::Relaxed);
+}
+
+pub(crate) fn reduced() -> bool {
+    REDUCED.load(Ordering::Relaxed)
 }
 
 /// Cubic ease-out: fast at first, slowing to a stop.
@@ -48,6 +65,16 @@ pub(crate) fn continuous_frame(window: WindowView, reduce_motion: bool) -> Optio
         Some(FOCUSED_FRAME)
     } else {
         Some(UNFOCUSED_FRAME)
+    }
+}
+
+/// How much of a section `full` points tall shows at `progress` of its
+/// opening.
+pub(crate) fn reveal_height(full: f32, progress: f32) -> f32 {
+    if progress >= 1.0 {
+        full
+    } else {
+        full.min(MAX_REVEAL_HEIGHT) * progress.max(0.0)
     }
 }
 
@@ -89,6 +116,21 @@ mod tests {
     #[test]
     fn reduced_motion_makes_every_transition_instant() {
         assert_eq!(duration(NORMAL, true), 0.0);
-        assert_eq!(duration(NORMAL, false), NORMAL);
+        assert_eq!(duration(FAST, true), 0.0);
+        assert_eq!(duration(FAST, false), FAST);
+    }
+
+    #[test]
+    fn a_short_section_grows_through_its_whole_height() {
+        assert_eq!(reveal_height(200.0, 0.0), 0.0);
+        assert_eq!(reveal_height(200.0, 0.5), 100.0);
+        assert_eq!(reveal_height(200.0, 1.0), 200.0);
+    }
+
+    #[test]
+    fn a_long_section_grows_by_at_most_the_cap_then_shows_the_rest() {
+        assert_eq!(reveal_height(3000.0, 0.5), 200.0);
+        assert_eq!(reveal_height(3000.0, 0.99), 396.0);
+        assert_eq!(reveal_height(3000.0, 1.0), 3000.0);
     }
 }

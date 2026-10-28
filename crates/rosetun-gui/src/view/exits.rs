@@ -383,73 +383,71 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
         return;
     };
     let busy = dialog.busy;
-    let response = egui::Modal::new(egui::Id::new("exit_dialog"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
-            ui.set_width(DIALOG_WIDTH);
-            ui.heading(if dialog.editing.is_some() {
-                tr!("edit-exit")
-            } else {
-                tr!("new-exit")
-            });
-            ui.add_space(14.0);
-            ui.label(tr!("exit-name"));
-            let input = ui.add_enabled(
-                !busy,
-                egui::TextEdit::singleline(&mut dialog.name).desired_width(f32::INFINITY),
-            );
-            if dialog.focus {
-                input.request_focus();
-                dialog.focus = false;
-            }
-            if input.changed() {
-                dialog.error = None;
-            }
-            ui.add_space(12.0);
-            if let Some(kind) = widgets::segmented(
-                ui,
-                "exit_kind",
-                dialog.kind,
-                &[
-                    (ExitKind::Country, tr!("exit-kind-country")),
-                    (ExitKind::Node, tr!("exit-kind-node")),
-                ],
-                true,
-                !busy,
-            ) {
-                dialog.kind = kind;
-                dialog.error = None;
-            }
-            ui.add_space(12.0);
-            match dialog.kind {
-                ExitKind::Country => country_picker(ui, dialog, config, busy),
-                ExitKind::Node => node_picker(ui, dialog, config, busy),
-            }
-            if dialog.editing.is_none() && full {
-                ui.add_space(8.0);
-                note(
-                    ui,
-                    tr!(
-                        "where-exits-full",
-                        count = rosetun_ipc::MAX_EXTRA_NODES.to_string()
-                    ),
-                    theme::WARNING,
-                );
-            }
-            if let Some(error) = &dialog.error {
-                ui.add_space(8.0);
-                ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
-            }
-            ui.add_space(18.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::button_fill(ui, tr!("save"), dialog.can_save(full)).clicked() {
-                    actions.push(Action::SubmitExitDialog);
-                }
-                if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                    actions.push(Action::CancelExitDialog);
-                }
-            });
+    let response = widgets::show_modal(ctx, egui::Modal::new(egui::Id::new("exit_dialog")), |ui| {
+        ui.set_width(DIALOG_WIDTH);
+        ui.heading(if dialog.editing.is_some() {
+            tr!("edit-exit")
+        } else {
+            tr!("new-exit")
         });
+        ui.add_space(14.0);
+        ui.label(tr!("exit-name"));
+        let input = ui.add_enabled(
+            !busy,
+            egui::TextEdit::singleline(&mut dialog.name).desired_width(f32::INFINITY),
+        );
+        if dialog.focus {
+            input.request_focus();
+            dialog.focus = false;
+        }
+        if input.changed() {
+            dialog.error = None;
+        }
+        ui.add_space(12.0);
+        if let Some(kind) = widgets::segmented(
+            ui,
+            "exit_kind",
+            dialog.kind,
+            &[
+                (ExitKind::Country, tr!("exit-kind-country")),
+                (ExitKind::Node, tr!("exit-kind-node")),
+            ],
+            true,
+            !busy,
+        ) {
+            dialog.kind = kind;
+            dialog.error = None;
+        }
+        ui.add_space(12.0);
+        match dialog.kind {
+            ExitKind::Country => country_picker(ui, dialog, config, busy),
+            ExitKind::Node => node_picker(ui, dialog, config, busy),
+        }
+        if dialog.editing.is_none() && full {
+            ui.add_space(8.0);
+            note(
+                ui,
+                tr!(
+                    "where-exits-full",
+                    count = rosetun_ipc::MAX_EXTRA_NODES.to_string()
+                ),
+                theme::WARNING,
+            );
+        }
+        if let Some(error) = &dialog.error {
+            ui.add_space(8.0);
+            ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
+        }
+        ui.add_space(18.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if widgets::button_fill(ui, tr!("save"), dialog.can_save(full)).clicked() {
+                actions.push(Action::SubmitExitDialog);
+            }
+            if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
+                actions.push(Action::CancelExitDialog);
+            }
+        });
+    });
     if !busy && response.should_close() {
         actions.push(Action::CancelExitDialog);
     }

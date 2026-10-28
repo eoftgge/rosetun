@@ -14,7 +14,7 @@ use crate::worker::WorkerEvent;
 /// long reads as a flicker.
 pub(crate) const SETTINGS_BUSY_SHOWN_AFTER_MS: u64 = 400;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub(crate) enum SettingsSection {
     #[default]
     General,

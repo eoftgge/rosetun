@@ -11,6 +11,7 @@ mod status_pill;
 mod swatches;
 mod tag;
 mod toggle;
+mod transitions;
 
 pub(crate) use buttons::{
     button_fill, button_fill_compact, link, outline_button, outline_button_compact,
@@ -31,3 +32,4 @@ pub(crate) use settings_card::settings_card;
 pub(crate) use status_pill::{status_pill, status_pill_width};
 pub(crate) use swatches::{Swatch, swatches};
 pub(crate) use toggle::{toggle, toggle_row};
+pub(crate) use transitions::{appear, appear_progress, reveal, reveal_progress, show_modal};

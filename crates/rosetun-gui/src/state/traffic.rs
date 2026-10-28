@@ -38,14 +38,14 @@ impl TrafficRange {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub(crate) enum ConnectionsTab {
     #[default]
     Active,
     Closed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub(crate) enum ConnectionsView {
     #[default]
     ByProgram,

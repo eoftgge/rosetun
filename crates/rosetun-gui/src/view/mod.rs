@@ -22,6 +22,12 @@ use crate::{theme, widgets};
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     let mut actions = Vec::new();
     let narrow = ui.available_width() < 800.0;
+    let screen_shown = widgets::appear_progress(
+        ui.ctx(),
+        egui::Id::new("screen_appear"),
+        state.screen,
+        state.config.interface.reduce_motion,
+    );
     egui::Panel::top("header")
         .exact_size(76.0)
         .show_separator_line(false)
@@ -46,7 +52,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                         bottom: 0,
                     }),
             )
-            .show(ui, |ui| subscriptions::show(ui, state, &mut actions));
+            .show(ui, |ui| {
+                widgets::appear(ui, screen_shown, |ui| {
+                    subscriptions::show(ui, state, &mut actions);
+                });
+            });
     }
     if state.screen == Screen::Settings {
         egui::Panel::left("settings_nav")
@@ -63,7 +73,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                         bottom: 28,
                     }),
             )
-            .show(ui, |ui| settings_nav(ui, state, &mut actions));
+            .show(ui, |ui| {
+                widgets::appear(ui, screen_shown, |ui| settings_nav(ui, state, &mut actions));
+            });
     }
     egui::CentralPanel::default()
         .frame(
@@ -114,12 +126,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                             actions.push(Action::RestoreMyEdits);
                         }
                     }
-                    match state.screen {
+                    widgets::appear(ui, screen_shown, |ui| match state.screen {
                         Screen::Connection => connection::show(ui, state, &mut actions),
                         Screen::Traffic => traffic::show(ui, state, &mut actions),
                         Screen::Rules => rules::show(ui, state, &mut actions),
                         Screen::Settings => settings::show(ui, state, &mut actions),
-                    }
+                    });
                 });
         });
 

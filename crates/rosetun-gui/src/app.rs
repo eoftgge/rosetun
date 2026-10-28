@@ -16,7 +16,7 @@ use crate::tray;
 #[cfg(windows)]
 use crate::window_memory::WindowMemory;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
-use crate::{brand, display, i18n, theme, view};
+use crate::{brand, display, i18n, motion, theme, view};
 
 #[cfg(windows)]
 /// Far outside every monitor: the first frame of a hidden start is drawn here.
@@ -492,6 +492,7 @@ impl eframe::App for App {
             i18n::set_language(language);
             ctx.request_repaint();
         }
+        motion::set_reduced(self.state.config.interface.reduce_motion);
         if self.state.config_ready && theme::set_accent(self.state.config.interface.accent) {
             theme::apply_style(ctx);
             ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(

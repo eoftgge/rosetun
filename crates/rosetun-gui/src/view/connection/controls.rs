@@ -308,7 +308,7 @@ fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         icons::paint(
             ui.painter(),
             egui::pos2(rect.left() + text_width + 12.0, rect.center().y),
-            Icon::Chevron { open: true },
+            Icon::Chevron { open: 1.0 },
             theme::palette().text_dim,
         );
     }

@@ -211,7 +211,7 @@ fn menu_link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
         icons::paint(
             ui.painter(),
             egui::pos2(rect.right() - 7.0, rect.center().y),
-            Icon::Chevron { open: true },
+            Icon::Chevron { open: 1.0 },
             color,
         );
         if enabled && response.hovered() {

@@ -1,3 +1,5 @@
+use std::f32::consts::FRAC_PI_2;
+
 use eframe::egui::{self, Color32};
 
 use crate::theme;
@@ -7,7 +9,10 @@ pub(crate) enum Icon {
     Grip,
     Check,
     Unknown,
-    Chevron { open: bool },
+    /// Points right when closed and turns to point down as `open` reaches one.
+    Chevron {
+        open: f32,
+    },
     Refresh,
     Clock,
     More,
@@ -115,19 +120,13 @@ pub(crate) fn paint(painter: &egui::Painter, center: egui::Pos2, icon: Icon, col
             painter.circle_stroke(center, 5.0, stroke);
         }
         Icon::Chevron { open } => {
-            let points = if open {
-                [
-                    center + egui::vec2(-4.0, -2.0),
-                    center + egui::vec2(0.0, 2.0),
-                    center + egui::vec2(4.0, -2.0),
-                ]
-            } else {
-                [
-                    center + egui::vec2(-2.0, -4.0),
-                    center + egui::vec2(2.0, 0.0),
-                    center + egui::vec2(-2.0, 4.0),
-                ]
-            };
+            let turn = egui::emath::Rot2::from_angle(open.clamp(0.0, 1.0) * FRAC_PI_2);
+            let points = [
+                egui::vec2(-2.0, -4.0),
+                egui::vec2(2.0, 0.0),
+                egui::vec2(-2.0, 4.0),
+            ]
+            .map(|point| center + turn * point);
             painter.add(egui::Shape::line(points.to_vec(), stroke));
         }
         Icon::Refresh => {

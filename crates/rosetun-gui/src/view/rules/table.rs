@@ -201,7 +201,7 @@ pub(super) fn target_button(
             icons::paint(
                 ui.painter(),
                 egui::pos2(rect.right() - 14.0, rect.center().y),
-                Icon::Chevron { open: true },
+                Icon::Chevron { open: 1.0 },
                 if enabled {
                     theme::palette().text_dim
                 } else {

@@ -8,7 +8,7 @@ use super::{Action, Job, State};
 use crate::errors;
 use crate::worker::WorkerEvent;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(crate) enum RulesTab {
     #[default]
     Rules,

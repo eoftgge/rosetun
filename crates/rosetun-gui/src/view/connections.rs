@@ -8,12 +8,11 @@ use crate::state::{
     Action, ConnectionRow, ConnectionsNotice, ConnectionsTab, ConnectionsView, ProgramGroup,
     RouteFilter, State,
 };
-use crate::{theme, widgets};
+use crate::{motion, theme, widgets};
 
 const GAP: f32 = 8.0;
 const TABLE_ROW_HEIGHT: f32 = 26.0;
-/// Program rows and the connection rows under them share one height, as
-/// `ScrollArea::show_rows` needs.
+/// Program rows and the connection rows under them share one height.
 const PROGRAM_ROW_HEIGHT: f32 = 34.0;
 /// A program's icon in its 24-point tile slot.
 const PROGRAM_ICON_SIDE: f32 = 20.0;
@@ -28,6 +27,20 @@ const DETAIL_LABEL_WIDTH: f32 = 88.0;
 /// The programs keep their places this long after the pointer left the list:
 /// the pointer often reaches a row across the edge.
 const HOLD_ORDER_AFTER_SECS: f64 = 1.5;
+
+/// A row of the program list at its place in the scrolled content.
+struct PlacedRow<'a> {
+    top: f32,
+    /// Where an opening program's block of connections is cut off.
+    bottom: f32,
+    row: Placed<'a>,
+}
+
+enum Placed<'a> {
+    /// A program with how far it has opened.
+    Program(&'a ProgramGroup<'a>, f32),
+    Connection(&'a LiveConnection),
+}
 
 /// The list, and the selected connection's details in a dialog over it.
 pub(super) fn section(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -52,9 +65,10 @@ fn details(
         connection.port,
     ));
     let mut dismissed = false;
-    let response = egui::Modal::new(egui::Id::new("connection_details"))
-        .frame(widgets::modal_frame())
-        .show(ctx, |ui| {
+    let response = widgets::show_modal(
+        ctx,
+        egui::Modal::new(egui::Id::new("connection_details")),
+        |ui| {
             ui.set_width(DETAILS_WIDTH);
             ui.horizontal(|ui| {
                 let close = 22.0;
@@ -234,7 +248,8 @@ fn details(
                         .color(theme::palette().text_dim),
                 );
             }
-        });
+        },
+    );
     if dismissed || response.should_close() {
         actions.push(Action::SelectConnection(None));
     }
@@ -321,10 +336,16 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             ui.add_space(18.0);
         } else {
             let now_ms = crate::display::now_unix().saturating_mul(1000);
-            match list.view {
+            let shown = widgets::appear_progress(
+                ui.ctx(),
+                egui::Id::new("connections_appear"),
+                (list.tab, list.view),
+                state.config.interface.reduce_motion,
+            );
+            widgets::appear(ui, shown, |ui| match list.view {
                 ConnectionsView::ByProgram => program_list(ui, state, now_ms, actions),
                 ConnectionsView::All => table(ui, state, &widths, now_ms, actions),
-            }
+            });
         }
         ui.add_space(10.0);
         ui.label(
@@ -527,19 +548,105 @@ fn divider(ui: &mut egui::Ui) {
 
 fn program_list(ui: &mut egui::Ui, state: &State, now_ms: u64, actions: &mut Vec<Action>) {
     let rows = state.traffic.connections.rows();
+    let stride = PROGRAM_ROW_HEIGHT + ui.spacing().item_spacing.y;
+    let reduce_motion = state.config.interface.reduce_motion;
+    // Rows are placed by hand rather than with `show_rows`, so a program's
+    // connections can slide open: they sit in a block clipped at `bottom`.
+    let mut placed = Vec::with_capacity(rows.len());
+    let mut height = 0.0;
+    let mut block = (0.0, 0.0, 0);
+    for row in &rows {
+        match row {
+            ConnectionRow::Program { group, expanded } => {
+                let open = widgets::reveal_progress(
+                    ui.ctx(),
+                    egui::Id::new(("program_open", group.path)),
+                    *expanded,
+                    reduce_motion,
+                );
+                placed.push(PlacedRow {
+                    top: height,
+                    bottom: f32::INFINITY,
+                    row: Placed::Program(group, open),
+                });
+                height += stride;
+                if open <= 0.0 {
+                    continue;
+                }
+                let shown = motion::reveal_height(group.connections.len() as f32 * stride, open);
+                block = (height, shown, 0);
+                height += shown;
+                // A closing program's connections are no longer among the rows.
+                if !*expanded {
+                    for (index, connection) in group.connections.iter().enumerate() {
+                        let top = block.0 + index as f32 * stride;
+                        if top >= block.0 + shown {
+                            break;
+                        }
+                        placed.push(PlacedRow {
+                            top,
+                            bottom: block.0 + shown,
+                            row: Placed::Connection(connection),
+                        });
+                    }
+                }
+            }
+            ConnectionRow::Connection(connection) => {
+                let (block_top, shown, index) = block;
+                block.2 += 1;
+                let top = block_top + index as f32 * stride;
+                if top < block_top + shown {
+                    placed.push(PlacedRow {
+                        top,
+                        bottom: block_top + shown,
+                        row: Placed::Connection(connection),
+                    });
+                }
+            }
+        }
+    }
     let area = ui.scope(|ui| {
         egui::ScrollArea::vertical()
             .id_salt("connection_programs")
             .max_height(LIST_HEIGHT)
             .auto_shrink([false, true])
-            .show_rows(ui, PROGRAM_ROW_HEIGHT, rows.len(), |ui, range| {
-                for row in &rows[range] {
-                    match row {
-                        ConnectionRow::Program { group, expanded } => {
-                            program_row(ui, state, group, *expanded, actions);
+            .show_viewport(ui, |ui, viewport| {
+                ui.set_height((height - ui.spacing().item_spacing.y).max(0.0));
+                let origin = ui.max_rect().min;
+                let width = ui.max_rect().width();
+                for placed in &placed {
+                    if placed.top + PROGRAM_ROW_HEIGHT < viewport.min.y
+                        || placed.top > viewport.max.y
+                    {
+                        continue;
+                    }
+                    let rect = egui::Rect::from_min_size(
+                        origin + egui::vec2(0.0, placed.top),
+                        egui::vec2(width, PROGRAM_ROW_HEIGHT),
+                    );
+                    let salt = match placed.row {
+                        Placed::Program(group, _) => egui::Id::new(("program", group.path)),
+                        Placed::Connection(connection) => {
+                            egui::Id::new(("connection", &connection.id))
                         }
-                        ConnectionRow::Connection(connection) => {
-                            program_connection_row(ui, state, connection, now_ms, actions);
+                    };
+                    let mut row_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .id_salt(salt)
+                            .max_rect(rect)
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                    );
+                    if placed.bottom.is_finite() {
+                        let mut clip = row_ui.clip_rect();
+                        clip.max.y = clip.max.y.min(origin.y + placed.bottom);
+                        row_ui.set_clip_rect(clip);
+                    }
+                    match placed.row {
+                        Placed::Program(group, open) => {
+                            program_row(&mut row_ui, state, group, open, actions);
+                        }
+                        Placed::Connection(connection) => {
+                            program_connection_row(&mut row_ui, state, connection, now_ms, actions);
                         }
                     }
                 }
@@ -624,7 +731,7 @@ fn program_row(
     ui: &mut egui::Ui,
     state: &State,
     group: &ProgramGroup<'_>,
-    expanded: bool,
+    open: f32,
     actions: &mut Vec<Action>,
 ) {
     let list = &state.traffic.connections;
@@ -640,7 +747,7 @@ fn program_row(
         icons::paint(
             ui.painter(),
             chevron.center(),
-            Icon::Chevron { open: expanded },
+            Icon::Chevron { open },
             theme::palette().text_dim,
         );
         program_tile(ui, group.path, &name);

@@ -14,14 +14,20 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         ui.colored_label(theme::palette().text_dim, tr!("loading"));
         return;
     }
-    match state.settings.screen.section {
+    let shown = widgets::appear_progress(
+        ui.ctx(),
+        egui::Id::new("settings_section_appear"),
+        state.settings.screen.section,
+        state.config.interface.reduce_motion,
+    );
+    widgets::appear(ui, shown, |ui| match state.settings.screen.section {
         SettingsSection::General => general(ui, state, actions),
         SettingsSection::Connection => connection(ui, state, actions),
         SettingsSection::Network => dns(ui, state, actions),
         SettingsSection::Advanced => advanced(ui, state, actions),
         SettingsSection::Service => service(ui, state, actions),
         SettingsSection::About => about(ui, state, actions),
-    }
+    });
 }
 
 fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
