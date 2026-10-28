@@ -1737,13 +1737,17 @@ function Stop-RosetunEngine {
 function Set-RosetunEngineAvailable {
     param([Parameter(Mandatory)][bool]$Available)
     # Hiding the binary is the simplest way to make the next engine start fail.
+    # The helper runs its copy in data\engines, made when it starts, so the
+    # copy is hidden as well; the installed one too, for a helper restart.
     Invoke-RosetunGuest -ScriptBlock {
         param($dir, $available)
-        if ($available) {
-            if (Test-Path "$dir\sing-box.exe.off") { Rename-Item "$dir\sing-box.exe.off" 'sing-box.exe' }
-        }
-        elseif (Test-Path "$dir\sing-box.exe") {
-            Rename-Item "$dir\sing-box.exe" 'sing-box.exe.off'
+        foreach ($folder in @($dir, (Join-Path $dir 'data\engines'))) {
+            if ($available) {
+                if (Test-Path "$folder\sing-box.exe.off") { Rename-Item "$folder\sing-box.exe.off" 'sing-box.exe' }
+            }
+            elseif (Test-Path "$folder\sing-box.exe") {
+                Rename-Item "$folder\sing-box.exe" 'sing-box.exe.off'
+            }
         }
     } -ArgumentList $script:Config.GuestDir, $Available
 }
