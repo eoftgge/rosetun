@@ -1902,7 +1902,7 @@ mod tests {
     }
 
     #[test]
-    fn category_checkboxes_are_square_with_distinct_selection_colours() {
+    fn category_checkboxes_have_rounded_corners_and_distinct_selection_colours() {
         use super::*;
 
         let ctx = egui::Context::default();
@@ -1924,12 +1924,12 @@ mod tests {
             })
             .collect();
         assert!(rectangles.iter().any(|rect| {
-            rect.corner_radius == egui::CornerRadius::same(0)
+            rect.corner_radius == egui::CornerRadius::same(3)
                 && rect.fill == theme::palette().card
                 && rect.stroke.color == theme::palette().border_strong
         }));
         assert!(rectangles.iter().any(|rect| {
-            rect.corner_radius == egui::CornerRadius::same(0)
+            rect.corner_radius == egui::CornerRadius::same(3)
                 && rect.fill == theme::palette().accent_base
         }));
         assert!(output.shapes.iter().any(|shape| matches!(

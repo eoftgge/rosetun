@@ -2,7 +2,7 @@ use eframe::egui::{self, Color32, Stroke};
 
 use crate::theme;
 
-/// A square checkbox in the brand colours: accent fill with a white tick when checked.
+/// A checkbox with 3 px corners in the brand colours: accent fill with a white tick when checked.
 pub(crate) fn checkbox(
     ui: &mut egui::Ui,
     checked: &mut bool,
@@ -32,7 +32,7 @@ pub(crate) fn checkbox(
             &mut widgets.hovered,
             &mut widgets.active,
         ] {
-            visuals.corner_radius = egui::CornerRadius::same(0);
+            visuals.corner_radius = egui::CornerRadius::same(3);
             visuals.bg_fill = fill;
             visuals.bg_stroke = Stroke::new(1.0, border);
             visuals.fg_stroke = Stroke::new(1.5, check);
