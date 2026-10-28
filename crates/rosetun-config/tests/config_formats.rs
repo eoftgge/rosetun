@@ -2,8 +2,8 @@ mod support;
 
 use rosetun_config::{
     AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId, ExitTarget,
-    FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId, Outbound,
-    RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
+    FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId, ListSource, Node, NodeId,
+    Outbound, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget, Selection, StreamSettings,
     SubscriptionId, TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange,
     XhttpXmux, from_json,
 };

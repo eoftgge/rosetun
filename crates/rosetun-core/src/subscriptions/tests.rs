@@ -293,8 +293,8 @@ fn a_re_added_subscription_gets_the_same_provider_id_each_time() {
     }
 
     assert_eq!(sent[0], sent[1]);
-    let machine = rosetun_hwid::hwid_from_machine_id("00000000-0000-4000-8000-000000000001")
-        .unwrap();
+    let machine =
+        rosetun_hwid::hwid_from_machine_id("00000000-0000-4000-8000-000000000001").unwrap();
     assert_ne!(sent[0], machine.as_str());
 }
 

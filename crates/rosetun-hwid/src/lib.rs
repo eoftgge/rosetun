@@ -233,8 +233,12 @@ mod tests {
     #[test]
     fn provider_hwid_normalizes_the_machine_id_as_v1() {
         assert_eq!(
-            hwid_for_provider(" ABCDEF-123456
-", "sub.example.com").unwrap(),
+            hwid_for_provider(
+                " ABCDEF-123456
+",
+                "sub.example.com"
+            )
+            .unwrap(),
             hwid_for_provider("abcdef-123456", "sub.example.com").unwrap()
         );
     }

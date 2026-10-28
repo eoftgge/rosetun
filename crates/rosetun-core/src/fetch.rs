@@ -845,7 +845,9 @@ mod tests {
         let hwid = |url: &str| {
             let mut subscription = subscription(url);
             subscription.hwid_scope = HwidScope::Provider;
-            request_device(&subscription, test_device_info).unwrap().hwid
+            request_device(&subscription, test_device_info)
+                .unwrap()
+                .hwid
         };
 
         let expected = hwid_for_provider(MACHINE_ID, "sub.example.com").unwrap();

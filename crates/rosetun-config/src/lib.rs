@@ -287,7 +287,10 @@ fn migrate_5_to_6(_config: &mut Map<String, Value>) {
 fn migrate_6_to_7(config: &mut Map<String, Value>) {
     // Subscriptions added before format 7 keep the machine-wide device ID, or the
     // provider's panel would count the computer as a new device.
-    let Some(subscriptions) = config.get_mut("subscriptions").and_then(Value::as_array_mut) else {
+    let Some(subscriptions) = config
+        .get_mut("subscriptions")
+        .and_then(Value::as_array_mut)
+    else {
         return;
     };
     for subscription in subscriptions.iter_mut().filter_map(Value::as_object_mut) {
