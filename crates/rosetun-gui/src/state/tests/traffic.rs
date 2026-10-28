@@ -18,6 +18,38 @@ fn arrived(
 }
 
 #[test]
+fn samples_remember_their_arrival_and_pace_until_the_tunnel_stops() {
+    let mut state = State {
+        helper_available: true,
+        ..State::default()
+    };
+    let connected = || {
+        WorkerEvent::Status(Status {
+            state: ConnectionState::Connected,
+            ..Status::default()
+        })
+    };
+    state.set_frame_time(10_000);
+    state.reduce(connected());
+    assert_eq!(state.traffic.sample_arrived_ms, Some(10_000));
+    assert_eq!(state.traffic.sample_interval_ms, None);
+    state.set_frame_time(11_100);
+    state.reduce(connected());
+    assert_eq!(state.traffic.sample_arrived_ms, Some(11_100));
+    assert_eq!(state.traffic.sample_interval_ms, Some(1_100));
+    // Two samples reduced in one frame after a pause keep the pace.
+    state.set_frame_time(20_000);
+    state.reduce(connected());
+    state.reduce(connected());
+    assert_eq!(state.traffic.sample_interval_ms, Some(1_100));
+    assert_eq!(state.traffic.samples_taken, 4);
+
+    state.reduce(WorkerEvent::Status(Status::default()));
+    assert_eq!(state.traffic.sample_arrived_ms, None);
+    assert_eq!(state.traffic.samples_taken, 4);
+}
+
+#[test]
 fn traffic_history_tracks_15_minutes_and_clears_when_tunnel_or_helper_stops() {
     let mut state = State {
         helper_available: true,

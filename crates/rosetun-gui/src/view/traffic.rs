@@ -1,10 +1,60 @@
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText};
 use rosetun_config::ConnectionState;
 
 use crate::state::{Action, State, TrafficRange};
-use crate::{theme, widgets};
+use crate::{motion, theme, widgets};
+
+const CHART_COLUMNS: usize = 60;
+const COLUMN_GAP: f32 = 2.0;
+/// Until two samples have arrived, the chart assumes the service's pace.
+const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 1_000;
+
+/// What the chart draws in one frame.
+struct Chart {
+    /// Oldest first; one more than fits while the columns move, for the one
+    /// sliding out on the left.
+    columns: Vec<(u64, u64)>,
+    scale: u64,
+    range: TrafficRange,
+    /// How far the columns have moved toward their places, `None` while they stand still.
+    travel: Option<f32>,
+    samples_taken: u64,
+    reduce_motion: bool,
+    /// The pace of continuous frames, `None` when nobody sees the chart move.
+    frame: Option<Duration>,
+}
+
+/// Displayed column heights, kept between frames so they ease to new values.
+#[derive(Clone, Default)]
+struct ChartMotion {
+    range: Option<TrafficRange>,
+    bars: Vec<BarMotion>,
+}
+
+#[derive(Clone, Copy)]
+struct BarMotion {
+    key: u64,
+    from: (f32, f32),
+    to: (f32, f32),
+    started: f64,
+}
+
+impl BarMotion {
+    fn at(&self, now: f64) -> (f32, f32) {
+        let progress = motion::ease_out(((now - self.started) / f64::from(motion::NORMAL)) as f32);
+        (
+            self.from.0 + (self.to.0 - self.from.0) * progress,
+            self.from.1 + (self.to.1 - self.from.1) * progress,
+        )
+    }
+
+    fn settled(&self, now: f64) -> bool {
+        now - self.started >= f64::from(motion::NORMAL)
+    }
+}
 
 pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let traffic = state.visible_status().and_then(|status| {
@@ -22,8 +72,45 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             traffic.up_total,
         )
     });
-    let columns = chart_columns(&state.traffic.traffic_history, state.traffic.traffic_range);
-    let peak = chart_peak(&columns);
+    let range = state.traffic.traffic_range;
+    let reduce_motion = state.config.interface.reduce_motion;
+    let travel = (!reduce_motion)
+        .then(|| {
+            chart_travel(
+                range,
+                state
+                    .traffic
+                    .sample_arrived_ms
+                    .map(|arrived| state.frame_time().saturating_sub(arrived)),
+                state
+                    .traffic
+                    .sample_interval_ms
+                    .unwrap_or(DEFAULT_SAMPLE_INTERVAL_MS),
+            )
+        })
+        .flatten();
+    let columns = chart_columns(
+        &state.traffic.traffic_history,
+        range,
+        CHART_COLUMNS + usize::from(travel.is_some()),
+    );
+    let visible = &columns[columns.len().saturating_sub(CHART_COLUMNS)..];
+    let peak = chart_peak(visible);
+    let scale = chart_scale(visible);
+    let chart = Chart {
+        columns,
+        scale,
+        range,
+        travel,
+        samples_taken: state.traffic.samples_taken,
+        reduce_motion,
+        frame: traffic.and_then(|_| {
+            motion::continuous_frame(
+                motion::WindowView::of(ui.ctx(), state.window_hidden()),
+                reduce_motion,
+            )
+        }),
+    };
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         let narrow = ui.available_width() < 620.0;
@@ -125,7 +212,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         },
                     );
                     ui.add_space(12.0);
-                    traffic_chart(ui, &columns);
+                    traffic_chart(ui, &chart);
                 });
             },
         );
@@ -164,9 +251,19 @@ fn traffic_row(ui: &mut egui::Ui, color: Color32, label: &str, rate: u64, connec
     });
 }
 
-fn chart_columns(history: &VecDeque<(u64, u64)>, range: TrafficRange) -> Vec<(u64, u64)> {
+/// The newest `count` columns of `history`, oldest first.
+fn chart_columns(
+    history: &VecDeque<(u64, u64)>,
+    range: TrafficRange,
+    count: usize,
+) -> Vec<(u64, u64)> {
     let samples = range.samples_per_bar();
-    let mut visible: Vec<_> = history.iter().rev().take(60 * samples).copied().collect();
+    let mut visible: Vec<_> = history
+        .iter()
+        .rev()
+        .take(count * samples)
+        .copied()
+        .collect();
     visible.reverse();
     visible
         .chunks(samples)
@@ -194,6 +291,21 @@ fn chart_scale(columns: &[(u64, u64)]) -> u64 {
     chart_peak(columns).max(1)
 }
 
+/// How far, from 0 to 1 column, the columns have moved left toward their
+/// places since the newest sample arrived `since_sample_ms` ago. Only where a
+/// column is one sample: wider columns stand still and change height only.
+fn chart_travel(
+    range: TrafficRange,
+    since_sample_ms: Option<u64>,
+    interval_ms: u64,
+) -> Option<f32> {
+    (range.samples_per_bar() == 1).then(|| {
+        since_sample_ms.map_or(1.0, |since| {
+            (since as f32 / interval_ms.max(1) as f32).min(1.0)
+        })
+    })
+}
+
 /// Pixel heights above and below the baseline.
 fn bar_heights(down: u64, up: u64, scale: u64) -> (f32, f32) {
     let scale = scale.max(1) as f64;
@@ -207,7 +319,8 @@ fn bar_heights(down: u64, up: u64, scale: u64) -> (f32, f32) {
     (height(down, 74.0), height(up, 45.0))
 }
 
-fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
+fn traffic_chart(ui: &mut egui::Ui, chart: &Chart) {
+    let columns = chart.columns.as_slice();
     let width = ui.available_width().max(0.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 120.0), egui::Sense::hover());
     let baseline = rect.top() + 74.0;
@@ -226,13 +339,17 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
         );
         return;
     }
-    let scale = chart_scale(columns);
-    let bar_width = ((width - 2.0 * 59.0) / 60.0).max(0.0);
-    for (index, &(down, up)) in columns.iter().enumerate() {
-        let x = rect.right() - bar_width - (columns.len() - 1 - index) as f32 * (bar_width + 2.0);
-        let (down_height, up_height) = bar_heights(down, up, scale);
+    let bar_width =
+        ((width - COLUMN_GAP * (CHART_COLUMNS - 1) as f32) / CHART_COLUMNS as f32).max(0.0);
+    let stride = bar_width + COLUMN_GAP;
+    // The newest column starts a whole column right of its place, past the edge.
+    let shift = chart.travel.map_or(0.0, |travel| (1.0 - travel) * stride);
+    let heights = displayed_heights(ui.ctx(), chart);
+    let painter = ui.painter_at(rect);
+    for (from_right, &(down_height, up_height)) in heights.iter().rev().enumerate() {
+        let x = rect.right() - bar_width - from_right as f32 * stride + shift;
         if bar_width > 0.0 && down_height > 0.0 {
-            ui.painter().rect_filled(
+            painter.rect_filled(
                 egui::Rect::from_min_size(
                     egui::pos2(x, baseline - down_height),
                     egui::vec2(bar_width, down_height),
@@ -242,7 +359,7 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
             );
         }
         if bar_width > 0.0 && up_height > 0.0 {
-            ui.painter().rect_filled(
+            painter.rect_filled(
                 egui::Rect::from_min_size(
                     egui::pos2(x, baseline + 1.0),
                     egui::vec2(bar_width, up_height),
@@ -255,7 +372,7 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
     if let Some(pos) = response.hover_pos()
         && bar_width > 0.0
     {
-        let slot = ((rect.right() - pos.x) / (bar_width + 2.0)).floor() as usize;
+        let slot = ((rect.right() + shift - pos.x) / stride).floor() as usize;
         if slot < columns.len() {
             let (down, up) = columns[columns.len() - 1 - slot];
             response.on_hover_text(format!(
@@ -269,11 +386,67 @@ fn traffic_chart(ui: &mut egui::Ui, columns: &[(u64, u64)]) {
     }
 }
 
+/// Column heights eased toward their real values, oldest first. Columns
+/// that move are told apart by their sample, fixed ones by their place.
+fn displayed_heights(ctx: &egui::Context, chart: &Chart) -> Vec<(f32, f32)> {
+    let id = egui::Id::new("traffic_chart_motion");
+    let now = ctx.input(|input| input.time);
+    let mut motion = ctx.data_mut(|data| data.get_temp::<ChartMotion>(id).unwrap_or_default());
+    if motion.range != Some(chart.range) {
+        motion.bars.clear();
+    }
+    let newest = chart.columns.len().saturating_sub(1);
+    let mut bars = Vec::with_capacity(chart.columns.len());
+    let mut heights = Vec::with_capacity(chart.columns.len());
+    for (index, &(down, up)) in chart.columns.iter().enumerate() {
+        let from_right = (newest - index) as u64;
+        let key = if chart.travel.is_some() {
+            chart.samples_taken.wrapping_sub(from_right)
+        } else {
+            from_right
+        };
+        let target = bar_heights(down, up, chart.scale);
+        let bar = match motion.bars.iter().find(|bar| bar.key == key) {
+            Some(bar) if bar.to == target => *bar,
+            Some(bar) if !chart.reduce_motion => BarMotion {
+                key,
+                from: bar.at(now),
+                to: target,
+                started: now,
+            },
+            _ => BarMotion {
+                key,
+                from: target,
+                to: target,
+                started: f64::NEG_INFINITY,
+            },
+        };
+        heights.push(bar.at(now));
+        bars.push(bar);
+    }
+    let settling = bars.iter().any(|bar| !bar.settled(now));
+    if let Some(frame) = chart.frame
+        && (settling || chart.travel.is_some())
+    {
+        ctx.request_repaint_after(frame);
+    }
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            id,
+            ChartMotion {
+                range: Some(chart.range),
+                bars,
+            },
+        );
+    });
+    heights
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
 
-    use super::{bar_heights, chart_columns, chart_peak, chart_scale};
+    use super::{CHART_COLUMNS, bar_heights, chart_columns, chart_peak, chart_scale, chart_travel};
     use crate::state::TrafficRange;
 
     #[test]
@@ -300,7 +473,7 @@ mod tests {
             (TrafficRange::FiveMinutes, (602, 603), (897, 898)),
             (TrafficRange::FifteenMinutes, (7, 8), (892, 893)),
         ] {
-            let columns = chart_columns(&history, range);
+            let columns = chart_columns(&history, range, CHART_COLUMNS);
             assert_eq!(columns.len(), 60);
             assert_eq!(columns.first(), Some(&first));
             assert_eq!(columns.last(), Some(&last));
@@ -308,19 +481,48 @@ mod tests {
     }
 
     #[test]
+    fn moving_columns_take_one_more_from_history_for_the_left_edge() {
+        let history = VecDeque::from_iter((0..900).map(|n| (n, n)));
+        let columns = chart_columns(&history, TrafficRange::OneMinute, CHART_COLUMNS + 1);
+        assert_eq!(columns.len(), 61);
+        assert_eq!(columns.first(), Some(&(839, 839)));
+        assert_eq!(columns.last(), Some(&(899, 899)));
+    }
+
+    #[test]
+    fn one_second_columns_travel_one_column_between_samples_and_start_over() {
+        let range = TrafficRange::OneMinute;
+        assert_eq!(chart_travel(range, Some(0), 1_000), Some(0.0));
+        assert_eq!(chart_travel(range, Some(250), 1_000), Some(0.25));
+        assert_eq!(chart_travel(range, Some(1_000), 1_000), Some(1.0));
+        assert_eq!(chart_travel(range, Some(1_700), 1_000), Some(1.0));
+        assert_eq!(chart_travel(range, Some(600), 1_200), Some(0.5));
+        assert_eq!(chart_travel(range, Some(0), 1_000), Some(0.0), "new sample");
+        assert_eq!(chart_travel(range, None, 1_000), Some(1.0));
+    }
+
+    #[test]
+    fn wider_columns_stand_still() {
+        for range in [TrafficRange::FiveMinutes, TrafficRange::FifteenMinutes] {
+            assert_eq!(chart_travel(range, Some(400), 1_000), None);
+            assert_eq!(chart_travel(range, None, 1_000), None);
+        }
+    }
+
+    #[test]
     fn averages_both_rates_and_handles_incomplete_last_interval() {
         let history = VecDeque::from([(10, 50), (20, 40), (30, 30), (40, 20), (50, 10), (90, 180)]);
         assert_eq!(
-            chart_columns(&history, TrafficRange::FiveMinutes),
+            chart_columns(&history, TrafficRange::FiveMinutes, CHART_COLUMNS),
             [(30, 30), (90, 180)]
         );
         assert_eq!(
-            chart_columns(&history, TrafficRange::FifteenMinutes),
+            chart_columns(&history, TrafficRange::FifteenMinutes, CHART_COLUMNS),
             [(40, 55)]
         );
         let history = VecDeque::from_iter((0..16).map(|n| (n, 2 * n)));
         assert_eq!(
-            chart_columns(&history, TrafficRange::FifteenMinutes),
+            chart_columns(&history, TrafficRange::FifteenMinutes, CHART_COLUMNS),
             [(7, 14), (15, 30)]
         );
     }
@@ -333,15 +535,27 @@ mod tests {
                 .map(|(index, value)| if index == 700 { (1000, 0) } else { value }),
         );
         assert_eq!(
-            chart_peak(&chart_columns(&history, TrafficRange::OneMinute)),
+            chart_peak(&chart_columns(
+                &history,
+                TrafficRange::OneMinute,
+                CHART_COLUMNS
+            )),
             20
         );
         assert_eq!(
-            chart_peak(&chart_columns(&history, TrafficRange::FiveMinutes)),
+            chart_peak(&chart_columns(
+                &history,
+                TrafficRange::FiveMinutes,
+                CHART_COLUMNS
+            )),
             208
         );
         assert_eq!(
-            chart_peak(&chart_columns(&history, TrafficRange::FifteenMinutes)),
+            chart_peak(&chart_columns(
+                &history,
+                TrafficRange::FifteenMinutes,
+                CHART_COLUMNS
+            )),
             76
         );
     }

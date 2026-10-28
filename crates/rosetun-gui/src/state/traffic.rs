@@ -19,6 +19,8 @@ const RATE_WINDOW_MS: u64 = 3_000;
 /// An answer this soon after the last measured one leaves the speed as it is:
 /// its bytes may be as old as the previous ones.
 const RATE_MIN_STEP_MS: u64 = 500;
+/// Gaps between status samples taken as their pace; others are pauses or bursts.
+const SAMPLE_GAPS_MS: std::ops::RangeInclusive<u64> = 500..=2_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum TrafficRange {
@@ -362,6 +364,13 @@ impl ConnectionsList {
 pub(crate) struct TrafficState {
     /// Rates of the last 15 minutes, one sample per status; newest last.
     pub(crate) traffic_history: VecDeque<(u64, u64)>,
+    /// When the newest sample arrived, by `display::monotonic_ms`.
+    pub(crate) sample_arrived_ms: Option<u64>,
+    /// The last measured gap between samples, for moving the chart between them.
+    pub(crate) sample_interval_ms: Option<u64>,
+    /// Samples taken since start, never reset: the chart tells its moving
+    /// columns apart by it.
+    pub(crate) samples_taken: u64,
     pub(crate) traffic_range: TrafficRange,
     pub(crate) connections: ConnectionsList,
     /// The running session's lists for explaining routes.
@@ -384,14 +393,25 @@ impl State {
             if self.traffic.traffic_history.len() > TRAFFIC_HISTORY {
                 self.traffic.traffic_history.pop_front();
             }
+            let now = self.frame_time();
+            // Samples reduced together after a pause say nothing about the pace.
+            if let Some(gap) = self
+                .traffic
+                .sample_arrived_ms
+                .map(|arrived| now.saturating_sub(arrived))
+                .filter(|gap| SAMPLE_GAPS_MS.contains(gap))
+            {
+                self.traffic.sample_interval_ms = Some(gap);
+            }
+            self.traffic.sample_arrived_ms = Some(now);
+            self.traffic.samples_taken += 1;
         } else {
-            self.traffic.traffic_history.clear();
-            self.traffic.connections.clear();
-            self.traffic.lists.forget();
+            self.clear_traffic_history();
         }
     }
 
     pub(super) fn clear_traffic_history(&mut self) {
+        self.traffic.sample_arrived_ms = None;
         self.traffic.traffic_history.clear();
         self.traffic.connections.clear();
         self.traffic.lists.forget();
