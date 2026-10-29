@@ -111,6 +111,25 @@ function Test-RosetunWfpFilters {
     }
 }
 
+# Nothing else in the matrix resolves bare example.com through the guest's
+# system resolver (the egress probes use www.example.com, the tunnel DNS check
+# asks a server directly), so an entry for it is the one seeded here, and its
+# absence right after a connect or disconnect means the cache was flushed.
+function Get-GuestDnsCacheEntries {
+    @(Invoke-RosetunGuest -ScriptBlock {
+        @(Get-DnsClientCache -Entry 'example.com' -ErrorAction SilentlyContinue |
+            ForEach-Object { "type $($_.Type) ttl $($_.TimeToLive)" })
+    })
+}
+
+# Resolves example.com with the system resolver so the cache holds it.
+function Set-GuestDnsCacheEntry {
+    Invoke-RosetunGuest -ScriptBlock {
+        $null = Resolve-DnsName 'example.com' -Type A -QuickTimeout -ErrorAction SilentlyContinue
+    }
+    @(Get-GuestDnsCacheEntries).Count -gt 0
+}
+
 function Get-NetworkWaitNote {
     param($Status)
     if ($null -eq $Status) {
@@ -605,9 +624,15 @@ if (-not $routeRestored) { throw 'The guest physical route did not return after 
 # An ActiveStore neighbor entry may not survive the adapter restart.
 Set-RosetunIpv6Neighbor -Created $ipv6Neighbors
 
+$cacheSeeded = Set-GuestDnsCacheEntry
+Test-Step 'connect' 'example.com is in the DNS cache before connect' { $cacheSeeded }
+
 Write-Host 'Connect...'
 Connect-RosetunTunnel | Out-Null
 Test-Step 'connect' 'state is Connected' { Wait-RosetunState 'Connected' }
+Test-Step 'connect' 'connecting flushes the DNS cache' {
+    $cacheSeeded -and (Wait-RosetunCondition { @(Get-GuestDnsCacheEntries).Count -eq 0 } -TimeoutSeconds 5)
+}
 $egress = Wait-RosetunTunnelEgress
 # Connected must mean usable: a tunnel that needs seconds before the first
 # request gets through looks broken to the user.
@@ -1704,6 +1729,8 @@ $attempt = Connect-RosetunTunnel -Quiet
 Test-Step 'graceful disconnect' 'connects' -Note "exit $($attempt.ExitCode)" {
     $attempt.ExitCode -eq 0 -and (Get-RosetunState) -eq 'Connected'
 }
+$tunnelCacheSeeded = Set-GuestDnsCacheEntry
+Test-Step 'graceful disconnect' 'example.com is in the DNS cache through the tunnel' { $tunnelCacheSeeded }
 $logMark = Get-RosetunHelperLogLength
 Disconnect-RosetunTunnel | Out-Null
 # Measured from when the disconnect call returned, inside the guest.
@@ -1717,6 +1744,9 @@ $adapterGoneMs = Invoke-RosetunGuest -ScriptBlock {
 }
 Test-Step 'graceful disconnect' 'adapter rosetun0 is gone within 2 s' -Note "$adapterGoneMs ms" {
     $null -ne $adapterGoneMs
+}
+Test-Step 'graceful disconnect' 'disconnecting flushes the DNS cache' {
+    $tunnelCacheSeeded -and (Wait-RosetunCondition { @(Get-GuestDnsCacheEntries).Count -eq 0 } -TimeoutSeconds 5)
 }
 $stopLine = [regex]::Match((Get-RosetunHelperLogSince $logMark), 'sing-box (stopped gracefully|did not stop in time|killed).*').Value
 Test-Step 'graceful disconnect' 'helper log shows a graceful sing-box stop' -Note $stopLine.Trim() {
