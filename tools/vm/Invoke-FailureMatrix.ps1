@@ -122,12 +122,32 @@ function Get-GuestDnsCacheEntries {
     })
 }
 
-# Resolves example.com with the system resolver so the cache holds it.
+# Resolves example.com with the system resolver so the cache holds it. The
+# Default Switch's own DNS often does not answer the guest, so the egress
+# adapter asks 1.1.1.1 (which the baseline checks) until Reset-GuestDnsServers.
 function Set-GuestDnsCacheEntry {
+    param([Parameter(Mandatory)][int]$InterfaceIndex)
     Invoke-RosetunGuest -ScriptBlock {
-        $null = Resolve-DnsName 'example.com' -Type A -QuickTimeout -ErrorAction SilentlyContinue
-    }
+        param($index)
+        Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses '1.1.1.1'
+        $deadline = (Get-Date).AddSeconds(15)
+        do {
+            $null = Resolve-DnsName 'example.com' -Type A -ErrorAction SilentlyContinue
+            if (@(Get-DnsClientCache -Entry 'example.com' -ErrorAction SilentlyContinue).Count -gt 0) { break }
+            Start-Sleep -Milliseconds 500
+        } while ((Get-Date) -lt $deadline)
+    } -ArgumentList $InterfaceIndex
     @(Get-GuestDnsCacheEntries).Count -gt 0
+}
+
+# Gives the egress adapter its DHCP DNS servers back; the Lockdown matrix's
+# name zone needs them.
+function Reset-GuestDnsServers {
+    param([Parameter(Mandatory)][int]$InterfaceIndex)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($index)
+        Set-DnsClientServerAddress -InterfaceIndex $index -ResetServerAddresses
+    } -ArgumentList $InterfaceIndex
 }
 
 function Get-NetworkWaitNote {
@@ -624,14 +644,19 @@ if (-not $routeRestored) { throw 'The guest physical route did not return after 
 # An ActiveStore neighbor entry may not survive the adapter restart.
 Set-RosetunIpv6Neighbor -Created $ipv6Neighbors
 
-$cacheSeeded = Set-GuestDnsCacheEntry
-Test-Step 'connect' 'example.com is in the DNS cache before connect' { $cacheSeeded }
+try {
+    $cacheSeeded = Set-GuestDnsCacheEntry -InterfaceIndex $networkAdapter.Index
+    Test-Step 'connect' 'example.com is in the DNS cache before connect' { $cacheSeeded }
 
-Write-Host 'Connect...'
-Connect-RosetunTunnel | Out-Null
-Test-Step 'connect' 'state is Connected' { Wait-RosetunState 'Connected' }
-Test-Step 'connect' 'connecting flushes the DNS cache' {
-    $cacheSeeded -and (Wait-RosetunCondition { @(Get-GuestDnsCacheEntries).Count -eq 0 } -TimeoutSeconds 5)
+    Write-Host 'Connect...'
+    Connect-RosetunTunnel | Out-Null
+    Test-Step 'connect' 'state is Connected' { Wait-RosetunState 'Connected' }
+    Test-Step 'connect' 'connecting flushes the DNS cache' {
+        $cacheSeeded -and (Wait-RosetunCondition { @(Get-GuestDnsCacheEntries).Count -eq 0 } -TimeoutSeconds 5)
+    }
+}
+finally {
+    Reset-GuestDnsServers -InterfaceIndex $networkAdapter.Index
 }
 $egress = Wait-RosetunTunnelEgress
 # Connected must mean usable: a tunnel that needs seconds before the first
