@@ -1,6 +1,8 @@
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows_sys::Win32::Foundation::{HWND, POINT};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
     MonitorFromPoint, MonitorFromWindow,
@@ -8,13 +10,23 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::UI::HiDpi::{
     GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI,
 };
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowW, GetSystemMetrics, GetWindowPlacement, IsIconic, IsWindowVisible, IsZoomed,
-    SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOZORDER, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
+    KillTimer, SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT,
+    WM_NCDESTROY, WM_QUERYOPEN, WM_SHOWWINDOW, WM_TIMER, WPF_RESTORETOMAXIMIZED,
 };
 
 use crate::first_start::{ScreenRect, first_start_rect};
+
+const CLOAK_SUBCLASS_ID: usize = 1;
+const UNCLOAK_TIMER_ID: usize = 0x5254_434C;
+/// A window that never appears is worse than a white frame.
+const CLOAK_LIMIT_MS: u32 = 500;
+
+/// Only the main window is subclassed, and only on its own thread.
+static CLOAKED: AtomicBool = AtomicBool::new(false);
 
 /// Where the window was. The rect is the normal (not maximized) one, in the
 /// coordinates that `GetWindowPlacement` and `SetWindowPlacement` use.
@@ -162,6 +174,87 @@ pub fn place_window(hwnd: isize, saved: Option<SavedWindow>) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Hides the window from the screen with a DWM cloak each time it is about to
+/// appear: shown from hidden (including eframe's own show after its first,
+/// unseen frame) or restored from minimized. Until a frame painted while the
+/// window is visible reaches DWM, the screen would show an empty white surface.
+/// The caller lifts the cloak with [`uncloak_window`] once such a frame is
+/// painted; a timer lifts it after `CLOAK_LIMIT_MS` regardless.
+///
+/// Call once, on the thread that owns the window.
+pub fn cloak_on_show(hwnd: isize) -> io::Result<()> {
+    // SAFETY: hwnd is the caller's live top-level window, owned by winit on this thread;
+    // the subclass procedure is a static function and is removed again on WM_NCDESTROY,
+    // so it never outlives the window. No reference data is passed.
+    if unsafe { SetWindowSubclass(hwnd as HWND, Some(cloak_proc), CLOAK_SUBCLASS_ID, 0) } == 0 {
+        return Err(io::Error::other("could not subclass the main window"));
+    }
+    Ok(())
+}
+
+/// Whether [`cloak_on_show`] has cloaked the window and it is still cloaked.
+pub fn window_cloaked() -> bool {
+    CLOAKED.load(Ordering::Relaxed)
+}
+
+pub fn uncloak_window(hwnd: isize) {
+    set_cloak(hwnd as HWND, false);
+}
+
+fn set_cloak(hwnd: HWND, cloaked: bool) {
+    let value = windows_sys::core::BOOL::from(cloaked);
+    // SAFETY: hwnd is borrowed for this ABI call; the pointer and size describe a BOOL on
+    // this stack frame, which is what DWMWA_CLOAK reads.
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK as u32,
+            (&raw const value).cast(),
+            std::mem::size_of_val(&value) as u32,
+        )
+    };
+    if cloaked {
+        if result < 0 {
+            return;
+        }
+        CLOAKED.store(true, Ordering::Relaxed);
+        // SAFETY: hwnd is borrowed; the timer posts WM_TIMER to the subclass procedure and
+        // is killed with the same id. Failure only loses the fallback.
+        unsafe { SetTimer(hwnd, UNCLOAK_TIMER_ID, CLOAK_LIMIT_MS, None) };
+    } else {
+        CLOAKED.store(false, Ordering::Relaxed);
+        // SAFETY: hwnd is borrowed; killing a timer that is not set is harmless.
+        unsafe { KillTimer(hwnd, UNCLOAK_TIMER_ID) };
+    }
+}
+
+unsafe extern "system" fn cloak_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    id: usize,
+    _data: usize,
+) -> LRESULT {
+    match message {
+        // Both arrive before the window becomes visible.
+        WM_SHOWWINDOW if wparam != 0 && !window_cloaked() => set_cloak(hwnd, true),
+        WM_QUERYOPEN if !window_cloaked() => set_cloak(hwnd, true),
+        WM_TIMER if wparam == UNCLOAK_TIMER_ID => {
+            set_cloak(hwnd, false);
+            return 0;
+        }
+        WM_NCDESTROY => {
+            // SAFETY: removes the subclass installed by `cloak_on_show` with the same
+            // procedure and id, on the window's own thread.
+            unsafe { RemoveWindowSubclass(hwnd, Some(cloak_proc), id) };
+        }
+        _ => {}
+    }
+    // SAFETY: forwards the message unchanged to the next procedure in the chain (winit's).
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
 /// Whether the Windows session is signing out or shutting down. winit leaves

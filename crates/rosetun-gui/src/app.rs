@@ -64,6 +64,9 @@ pub(crate) struct App {
     place_on_show: bool,
     #[cfg(windows)]
     window: Option<WindowMemory>,
+    /// The size of the last frame painted while the window was cloaked to appear.
+    #[cfg(windows)]
+    cloaked_frame: Option<egui::Vec2>,
     #[cfg(windows)]
     maximize_in: Option<u8>,
     #[cfg(windows)]
@@ -128,6 +131,8 @@ impl App {
             #[cfg(windows)]
             window: None,
             #[cfg(windows)]
+            cloaked_frame: None,
+            #[cfg(windows)]
             maximize_in: None,
             #[cfg(windows)]
             window_minimized: false,
@@ -163,6 +168,11 @@ impl App {
         };
         self.hide_on_start = start_hidden && self.tray.is_some();
         self.place_on_show = start_hidden;
+        if let Some(window) = &window
+            && let Err(error) = rosetun_shell::cloak_on_show(window.hwnd())
+        {
+            tracing::warn!(%error, "could not cloak the main window while it appears");
+        }
         self.window = window;
         if !start_hidden
             && let Some(window) = &mut self.window
@@ -274,6 +284,27 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(100));
         } else {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// Lifts the cloak once a frame painted while the window is visible has reached the
+    /// screen: the previous frame, if it had the current size.
+    #[cfg(windows)]
+    fn uncloak_when_painted(&mut self, ctx: &egui::Context) {
+        let Some(hwnd) = self.window.as_ref().map(WindowMemory::hwnd) else {
+            return;
+        };
+        if !rosetun_shell::window_cloaked() {
+            self.cloaked_frame = None;
+            return;
+        }
+        let size = ctx.content_rect().size();
+        if self.cloaked_frame == Some(size) {
+            rosetun_shell::uncloak_window(hwnd);
+            self.cloaked_frame = None;
+        } else {
+            self.cloaked_frame = Some(size);
+            ctx.request_repaint();
         }
     }
 
@@ -433,6 +464,10 @@ fn next_scale(applied: Option<u16>, configured: u16) -> Option<u16> {
 }
 
 impl eframe::App for App {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        theme::palette().bg.to_normalized_gamma_f32()
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(windows)]
         if let Some(frames) = self.maximize_in.as_mut() {
@@ -702,6 +737,8 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        #[cfg(windows)]
+        self.uncloak_when_painted(ui.ctx());
         // The root `Ui` copies the style before `logic` runs, so a new accent applied there
         // would otherwise paint one frame of old widget colours around the new palette.
         ui.set_style(ui.ctx().global_style());

@@ -37,6 +37,10 @@ impl WindowMemory {
         })
     }
 
+    pub(crate) fn hwnd(&self) -> isize {
+        self.hwnd
+    }
+
     /// Places the window and returns whether it should be maximized.
     pub(crate) fn place(&mut self) -> bool {
         let saved = match fs::read(&self.file) {
