@@ -6,8 +6,6 @@ use crate::motion;
 
 use super::modal_frame;
 
-/// How far new content travels up while it fades in.
-const APPEAR_RISE: f32 = 6.0;
 /// A dialog grows from this scale as it appears.
 const MODAL_START_SCALE: f32 = 0.98;
 /// `egui::Modal`'s own backdrop alpha.
@@ -119,15 +117,13 @@ pub(crate) fn appear_progress(
     progress
 }
 
-/// Fades content in and lifts it into place. Only the drawing moves, so
-/// clicks, scrolling and focus work the same during the fade.
+/// Fades content in where it stands.
 pub(crate) fn appear<R>(
     ui: &mut egui::Ui,
     progress: f32,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
-    let lift = TSTransform::from_translation(egui::vec2(0.0, APPEAR_RISE * (1.0 - progress)));
-    ui.with_visual_transform(lift, |ui| {
+    ui.scope(|ui| {
         if progress < 1.0 {
             ui.multiply_opacity(progress);
         }
