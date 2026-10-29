@@ -122,26 +122,32 @@ function Get-GuestDnsCacheEntries {
     })
 }
 
-# Resolves example.com with the system resolver so the cache holds it. The
-# Default Switch's own DNS often does not answer the guest, so the egress
-# adapter asks 1.1.1.1 (which the baseline checks) until Reset-GuestDnsServers.
+# Resolves example.com with the system resolver so the cache holds it,
+# retrying for up to 15 s.
 function Set-GuestDnsCacheEntry {
-    param([Parameter(Mandatory)][int]$InterfaceIndex)
     Invoke-RosetunGuest -ScriptBlock {
-        param($index)
-        Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses '1.1.1.1'
         $deadline = (Get-Date).AddSeconds(15)
         do {
             $null = Resolve-DnsName 'example.com' -Type A -ErrorAction SilentlyContinue
             if (@(Get-DnsClientCache -Entry 'example.com' -ErrorAction SilentlyContinue).Count -gt 0) { break }
             Start-Sleep -Milliseconds 500
         } while ((Get-Date) -lt $deadline)
-    } -ArgumentList $InterfaceIndex
+    }
     @(Get-GuestDnsCacheEntries).Count -gt 0
 }
 
-# Gives the egress adapter its DHCP DNS servers back; the Lockdown matrix's
-# name zone needs them.
+# The Default Switch's own DNS often does not answer the guest, so before
+# connect the egress adapter asks 1.1.1.1 (which the baseline checks) until
+# Reset-GuestDnsServers gives it the DHCP servers back; the Lockdown
+# matrix's name zone needs those.
+function Set-GuestPublicDns {
+    param([Parameter(Mandatory)][int]$InterfaceIndex)
+    Invoke-RosetunGuest -ScriptBlock {
+        param($index)
+        Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses '1.1.1.1'
+    } -ArgumentList $InterfaceIndex
+}
+
 function Reset-GuestDnsServers {
     param([Parameter(Mandatory)][int]$InterfaceIndex)
     Invoke-RosetunGuest -ScriptBlock {
@@ -645,7 +651,8 @@ if (-not $routeRestored) { throw 'The guest physical route did not return after 
 Set-RosetunIpv6Neighbor -Created $ipv6Neighbors
 
 try {
-    $cacheSeeded = Set-GuestDnsCacheEntry -InterfaceIndex $networkAdapter.Index
+    Set-GuestPublicDns -InterfaceIndex $networkAdapter.Index
+    $cacheSeeded = Set-GuestDnsCacheEntry
     Test-Step 'connect' 'example.com is in the DNS cache before connect' { $cacheSeeded }
 
     Write-Host 'Connect...'
