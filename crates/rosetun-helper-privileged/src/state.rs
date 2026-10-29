@@ -1,6 +1,7 @@
 mod apply;
 mod connections;
 mod dns;
+mod dns_cache;
 mod exits;
 mod lockdown;
 mod path;
@@ -1245,11 +1246,19 @@ impl Helper {
             .status
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = connection_state_name(&status.state);
+        let previous_state = status.state.clone();
         let result = apply(&mut status);
+        let previous = connection_state_name(&previous_state);
         let current = connection_state_name(&status.state);
         if previous != current {
             tracing::debug!(previous, current, "connection state changed");
+        }
+        let flush = dns_cache::flushes_dns_cache(&previous_state, &status.state);
+        // Outside the fast status lock: a client reading status must not wait
+        // for the DNS client service.
+        drop(status);
+        if flush {
+            dns_cache::flush();
         }
         result
     }
