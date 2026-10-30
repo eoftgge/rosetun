@@ -8,17 +8,21 @@
 mod windows;
 
 use std::io;
+#[cfg(any(windows, test))]
 use std::net::Ipv4Addr;
 
+#[cfg(any(windows, test))]
 #[derive(Debug)]
 struct Adapter {
     name: String,
     description: String,
+    #[cfg(windows)]
     luid: u64,
     interface_type: u32,
     up: bool,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Default, Clone, Copy)]
 struct DefaultRoutes {
     full: bool,
@@ -26,6 +30,7 @@ struct DefaultRoutes {
     upper_half: bool,
 }
 
+#[cfg(any(windows, test))]
 impl DefaultRoutes {
     fn observe(&mut self, address: Ipv4Addr, prefix: u8) {
         match (address.octets(), prefix) {
@@ -41,6 +46,7 @@ impl DefaultRoutes {
     }
 }
 
+#[cfg(any(windows, test))]
 fn is_other_tunnel(adapter: &Adapter, routes: DefaultRoutes, own_alias: &str) -> bool {
     let description = adapter.description.to_ascii_lowercase();
     adapter.up
@@ -60,6 +66,7 @@ fn is_other_tunnel(adapter: &Adapter, routes: DefaultRoutes, own_alias: &str) ->
         && routes.covers_default()
 }
 
+#[cfg(any(windows, test))]
 fn is_active_vpn_adapter(adapter: &Adapter, own_alias: &str) -> bool {
     let description = adapter.description.to_ascii_lowercase();
     adapter.up
@@ -105,6 +112,7 @@ mod tests {
         Adapter {
             name: name.into(),
             description: description.into(),
+            #[cfg(windows)]
             luid: 1,
             interface_type,
             up,
