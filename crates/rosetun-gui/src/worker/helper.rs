@@ -143,6 +143,7 @@ impl WorkerDispatcher {
                 .and_then(|config| run_lockdown_command(enabled, config.settings.allow_lan));
             match &result {
                 Ok(LockdownChange::Done) => tracing::info!(enabled, "Lockdown command succeeded"),
+                #[cfg(any(windows, test))]
                 Ok(LockdownChange::Declined) => {
                     tracing::info!("Lockdown command cancelled at the administrator prompt");
                 }
@@ -219,6 +220,7 @@ impl WorkerDispatcher {
 }
 
 /// `rosetun.exe lockdown …` from the GUI's folder, elevated through UAC.
+#[cfg(windows)]
 fn run_lockdown_command(
     enabled: bool,
     allow_lan: bool,
@@ -234,6 +236,18 @@ fn run_lockdown_command(
     }
 }
 
+#[cfg(not(windows))]
+fn run_lockdown_command(
+    _enabled: bool,
+    _allow_lan: bool,
+) -> Result<LockdownChange, HelperCommandError> {
+    Err(HelperCommandError::LockdownLaunch(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Lockdown is not supported on this platform",
+    )))
+}
+
+#[cfg(any(windows, test))]
 fn lockdown_arguments(enabled: bool, allow_lan: bool) -> String {
     if enabled {
         format!("lockdown on --lan {}", if allow_lan { "on" } else { "off" })
@@ -304,6 +318,21 @@ mod lockdown_command_tests {
         assert_eq!(lockdown_arguments(true, true), "lockdown on --lan on");
         assert_eq!(lockdown_arguments(true, false), "lockdown on --lan off");
         assert_eq!(lockdown_arguments(false, true), "lockdown off");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn lockdown_is_unsupported_for_every_lan_and_enabled_value() {
+        for enabled in [false, true] {
+            for allow_lan in [false, true] {
+                let error = super::run_lockdown_command(enabled, allow_lan).unwrap_err();
+                assert!(matches!(
+                    error,
+                    super::HelperCommandError::LockdownLaunch(error)
+                        if error.kind() == std::io::ErrorKind::Unsupported
+                ));
+            }
+        }
     }
 }
 

@@ -890,6 +890,17 @@ fn unreadable_settings_keep_their_error_and_close_the_window() {
     assert!(!state.close_hides_window());
 }
 
+#[cfg(not(windows))]
+#[test]
+fn reports_are_unavailable_even_with_loaded_or_unreadable_settings() {
+    let state = State {
+        config_ready: true,
+        ..State::default()
+    };
+    assert!(!state.can_save_report());
+    assert!(!state_with_unreadable_config().can_save_report());
+}
+
 #[test]
 fn a_short_save_leaves_the_settings_looking_available() {
     let mut state = State {

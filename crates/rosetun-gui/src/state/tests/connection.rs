@@ -698,6 +698,39 @@ fn cancelled_lockdown_sends_nothing() {
 }
 
 #[test]
+fn unsupported_lockdown_keeps_the_state_and_explains_unavailability() {
+    for enabled in [false, true] {
+        let mut state = state_with_lockdown(!enabled);
+        state.act(Action::RequestLockdown(enabled));
+        state.act(Action::ConfirmLockdown);
+        let error = HelperCommandError::LockdownLaunch(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "test",
+        ));
+        for (language, expected) in [
+            (
+                crate::i18n::Language::English,
+                "Lockdown is unavailable on this system.",
+            ),
+            (
+                crate::i18n::Language::Russian,
+                "Lockdown недоступен в этой системе.",
+            ),
+        ] {
+            assert_eq!(errors::helper_command(language, &error), expected);
+        }
+        state.reduce(WorkerEvent::SetLockdown {
+            enabled,
+            result: Err(error),
+        });
+        assert_eq!(state.status.lockdown, !enabled);
+        assert!(!state.operations.lockdown);
+        assert_eq!(state.lockdown_confirmation, Some(enabled));
+        assert!(state.operation_error.is_some());
+    }
+}
+
+#[test]
 fn failed_lockdown_keeps_the_dialog_and_the_state() {
     let mut state = state_with_lockdown(false);
     state.act(Action::RequestLockdown(true));

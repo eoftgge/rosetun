@@ -785,7 +785,16 @@ pub(crate) fn helper_command(language: Language, error: &HelperCommandError) -> 
             }
         },
         HelperCommandError::Client(error) => client(language, error),
-        HelperCommandError::LockdownLaunch(_) | HelperCommandError::LockdownCommand(_) => {
+        HelperCommandError::LockdownLaunch(error)
+            if error.kind() == std::io::ErrorKind::Unsupported =>
+        {
+            tr_in(language, "lockdown-unavailable", &FluentArgs::new())
+        }
+        HelperCommandError::LockdownLaunch(_) => {
+            tr_in(language, "lockdown-command-failed", &FluentArgs::new())
+        }
+        #[cfg(any(windows, test))]
+        HelperCommandError::LockdownCommand(_) => {
             tr_in(language, "lockdown-command-failed", &FluentArgs::new())
         }
     }

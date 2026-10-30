@@ -50,6 +50,7 @@ pub(crate) enum HelperCommandError {
     Client(#[from] ClientError),
     #[error("could not start the Lockdown command: {0}")]
     LockdownLaunch(std::io::Error),
+    #[cfg(any(windows, test))]
     #[error("the Lockdown command exited with code {0}")]
     LockdownCommand(u32),
 }
@@ -59,6 +60,7 @@ pub(crate) enum HelperCommandError {
 pub(crate) enum LockdownChange {
     Done,
     /// The user declined the UAC prompt.
+    #[cfg(any(windows, test))]
     Declined,
 }
 

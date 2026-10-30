@@ -251,6 +251,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                     }
                     let minimize = window_button(ui, WindowButton::Minimize, reduce_motion);
                     if minimize.clicked() {
+                        #[cfg(windows)]
                         actions.push(Action::WindowMinimized);
                         ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true));
                     }

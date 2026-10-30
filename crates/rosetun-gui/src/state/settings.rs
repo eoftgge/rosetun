@@ -264,17 +264,27 @@ impl State {
         !self.config_ready && self.config_error.is_some()
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn can_open_folders(&self) -> bool {
         (self.config_ready || self.config_unreadable())
             && !self.settings_busy_shown(self.settings.now_ms)
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn can_save_report(&self) -> bool {
-        (self.config_ready || self.config_unreadable()) && !self.settings.screen.report_running
+        #[cfg(windows)]
+        {
+            (self.config_ready || self.config_unreadable()) && !self.settings.screen.report_running
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
 
     /// Whether closing the window hides it to the tray. With unreadable
     /// settings there is nothing to keep running, so closing quits.
+    #[cfg(any(windows, test))]
     pub(crate) fn close_hides_window(&self) -> bool {
         if self.config_ready {
             self.config.interface.close_to_tray
