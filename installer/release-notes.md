@@ -1,8 +1,8 @@
 # Rosetun {{version}}
 
-**A beta of Rosetun 0.4.** It brings colour themes, a more useful tray, `rosetun://` subscription links, a device ID per provider, program icons, a smoother interface, update offers you can actually see, and a harder Lockdown. Both test matrices (failures and Lockdown) pass on this build; still, expect rough edges and please report them in [Issues](https://github.com/eoftgge/rosetun/issues), and vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+**Rosetun 0.4.0.** It brings colour themes, a more useful tray, `rosetun://` subscription links, a device ID per provider, program icons, a smoother interface, update offers you can actually see, DNS cache flushing on tunnel changes, and a harder Lockdown. Both test matrices (failures and Lockdown) pass on this build. Subsequent security fixes and small adjustments will come out in 0.4.x releases; please report bugs in [Issues](https://github.com/eoftgge/rosetun/issues), and vulnerabilities privately through [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-Install it over 0.3.x; settings and Lockdown are carried over. Rosetun 0.3.1 and 0.3.0 do not offer a beta as an update, so download it here; Rosetun 0.3.0-beta.1 and the 0.2.0 betas do offer it.
+Install it over 0.3.x or 0.4.0-beta.1; settings and Lockdown are carried over.
 
 **Going back to 0.3.** Turn Lockdown off in 0.4 first: 0.4 changes its filters, and 0.3 does not know the new ones. 0.3 also cannot read settings saved by 0.4. The previous file is kept as `%APPDATA%\Rosetun\config.v6.json`; close Rosetun and rename it to `config.json` (changes made in 0.4 are lost).
 
@@ -20,7 +20,8 @@ Install it over 0.3.x; settings and Lockdown are carried over. Rosetun 0.3.1 and
 - **A device ID per provider.** With **Send device ID** on (the default), new subscriptions get a device ID of their own for each subscription server, so different providers cannot match your device. Subscriptions added before 0.4 keep their ID, so a provider that limits devices does not count you twice.
 - **Program icons** on the Traffic tab, in the new rule dialog and in the rules table, taken from programs on local disks only; a program on a network drive keeps its coloured tile, so Windows never connects to another computer to fetch an icon.
 - **Traffic tab.** The program list holds its order while the pointer is on it, so a row does not move away from under the cursor. The chart moves smoothly instead of jumping each second.
-- **A smoother interface.** Subscriptions and programs open with an animation, screens and tabs fade in, dialogs appear softly, and the header's petals drift while connected. Continuous animations run at up to 60 frames per second while the window is in focus and 30 when it is not, and none while it is hidden. **Reduce motion** turns all of it off. Settings no longer flicker while they save, and quick changes in a row are all kept.
+- **A smoother interface.** Subscriptions, programs and the rule dialog's advanced section open with an animation, screens and tabs switch with a plain fade, dialogs appear softly, and the header's petals drift while connected. The window opens without a white flash, and a server's name keeps its room beside its check result. Continuous animations run at up to 60 frames per second while the window is in focus and 30 when it is not, and none while it is hidden. **Reduce motion** turns all of it off. Settings no longer flicker while they save, and quick changes in a row are all kept.
+- **DNS cache flushed on tunnel changes.** The service flushes the Windows DNS cache whenever the tunnel changes state, so Windows does not keep using addresses resolved before connecting.
 - **Lockdown hardening.**
   - Turning Lockdown on or off, and changing its local network access, now need administrator rights (UAC); `rosetun lockdown` needs a terminal opened as administrator.
   - **Fixed a way around the tunnel.** While connected, any account on the computer could start Rosetun's `sing-box.exe` and reach the internet outside the tunnel, even with Lockdown on: sing-box's own firewall permit for its executable overrode Rosetun's blocks. The service now runs sing-box from a copy in `data\engines` that only SYSTEM and Administrators can open, and permits the engines only for the service's own account.
@@ -32,8 +33,6 @@ Install it over 0.3.x; settings and Lockdown are carried over. Rosetun 0.3.1 and
 
 ## Known issues
 
-- **This is a beta.** The changes above passed both test matrices in a virtual machine and daily use on one computer, but not wide use yet.
-- **Windows 10 has not been tested**, only Windows 11. Rosetun may work on Windows 10; if something does not, please report it.
 - If you switch between networks (for example Wi-Fi and cable) while connected through Xray, the connection may stop until Rosetun reconnects.
 - **Lockdown is experimental**: tested on Windows 11 only, on a clean system and on one everyday computer, with restarts, power cuts and sleep in a virtual machine. Not tested yet: other firewalls or antivirus programs with their own network filters, hibernation and sleep on real hardware.
 - **With Lockdown on, Wi-Fi with a sign-in page** (a hotel or a café) cannot open its page, and **Windows cannot set the clock** without the tunnel. Turn Lockdown off for a moment, sign in or correct the clock, connect, and turn it on again.
@@ -41,7 +40,7 @@ Install it over 0.3.x; settings and Lockdown are carried over. Rosetun 0.3.1 and
 
 ## Install
 
-Windows 11, x64 (Windows 10 is not tested). Download `{{setup}}` from this release. [Code signing policy](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md): the installer is not code-signed yet; if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
+Windows 11, x64. Download `{{setup}}` from this release. [Code signing policy](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md): the installer is not code-signed yet; if SmartScreen says "Windows protected your PC", select **More info** and then **Run anyway**.
 
 ## Verify
 
@@ -57,9 +56,9 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ## Русский
 
-**Бета Rosetun 0.4.** В ней цветовые темы, полезный трей, ссылки `rosetun://` для подписок, свой ID устройства для каждого провайдера, значки программ, плавный интерфейс, заметные предложения обновиться и более строгий Lockdown. Обе тестовые матрицы (отказов и Lockdown) на этой сборке проходят; и всё же возможны шероховатости, сообщайте о них в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
+**Rosetun 0.4.0.** В нём цветовые темы, полезный трей, ссылки `rosetun://` для подписок, свой ID устройства для каждого провайдера, значки программ, плавный интерфейс, заметные предложения обновиться, сброс кэша DNS при переключении туннеля и более строгий Lockdown. Обе тестовые матрицы (отказов и Lockdown) на этой сборке проходят. Последующие исправления проблем с безопасностью и мелкие правки будут выходить в порядке 0.4.x; об ошибках сообщайте в [Issues](https://github.com/eoftgge/rosetun/issues), а об уязвимостях приватно через [Security](https://github.com/eoftgge/rosetun/security/advisories/new).
 
-Устанавливайте поверх 0.3.x; настройки и Lockdown сохраняются. Rosetun 0.3.1 и 0.3.0 не предлагают бету как обновление, скачайте её здесь; 0.3.0-beta.1 и беты 0.2.0 её предложат.
+Устанавливайте поверх 0.3.x или 0.4.0-beta.1; настройки и Lockdown сохраняются.
 
 **Возврат на 0.3.** Сначала выключите Lockdown в 0.4: 0.4 меняет его фильтры, а 0.3 не знает новых. Кроме того, 0.3 не читает настройки, сохранённые 0.4. Прежний файл лежит как `%APPDATA%\Rosetun\config.v6.json`; закройте Rosetun и переименуйте его в `config.json` (изменения, сделанные в 0.4, пропадут).
 
@@ -74,10 +73,11 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
   - **Уведомления**, когда VPN отключается, подключается снова или не может подключиться, без имён серверов: Windows показывает их на экране блокировки. Их нет, пока окно Rosetun на переднем плане, и когда вы отключаетесь сами. Выключаются в «Настройки › Основные › **Уведомления**».
 - **Новую версию трудно пропустить.** Полоса на экране подключения с кнопками **Скачать** и **Пропустить**, пункт **Обновить до …** в трее и одно уведомление на версию. Найденная версия запоминается и после перезапуска; раньше она показывалась только маленькой точкой в настройках и забывалась при перезапуске Rosetun. Когда лимит API GitHub исчерпан (так бывает за общим адресом VPN), Rosetun читает ленту релизов GitHub. Версии до 0.4 по-прежнему показывают обновление только той точкой.
 - **Ссылки `rosetun://` для подписок.** Кнопка на странице провайдера может открыть Rosetun с уже вписанной подпиской: `rosetun://add/<ссылка подписки>`, по желанию с `#имя`. Rosetun только показывает окно **Добавить подписку** со ссылкой, именем и адресом провайдера; ничего не скачивается и не добавляется, пока вы не нажмёте **Добавить**. Схему регистрирует установщик.
-- **Свой ID устройства для каждого провайдера.** Когда включено **Отправлять ID устройства** (по умолчанию) новые подписки получают свой ID для каждого сервера подписок, и разные провайдеры не могут сопоставить ваше устройство. Подписки, добавленные до 0.4, сохраняют прежний ID, чтобы провайдер с лимитом устройств не посчитал вас дважды.
+- **Свой ID устройства для каждого провайдера.** Когда включено **Отправлять ID устройства** (по умолчанию), новые подписки получают свой ID для каждого сервера подписок, и разные провайдеры не могут сопоставить ваше устройство. Подписки, добавленные до 0.4, сохраняют прежний ID, чтобы провайдер с лимитом устройств не посчитал вас дважды.
 - **Значки программ** на вкладке «Трафик», в окне нового правила и в таблице правил; только для программ на локальных дисках. Программа на сетевом диске остаётся с цветной плиткой, чтобы Windows не обращалась к чужому компьютеру за значком.
 - **Вкладка «Трафик».** Список программ не перестраивается, пока на нём указатель, и строка не уезжает из-под курсора. График движется плавно, а не скачет каждую секунду.
-- **Плавный интерфейс.** Подписки и программы раскрываются с анимацией, экраны и вкладки мягко проявляются, окна поверх появляются плавно, а лепестки в шапке дрейфуют при подключении. Непрерывные анимации идут не чаще 60 кадров в секунду, пока окно в фокусе, 30 без фокуса и не идут вовсе, пока окно скрыто. **Уменьшить анимацию** выключает всё это. Настройки больше не мигают при сохранении, а быстрые изменения подряд не теряются.
+- **Плавный интерфейс.** Подписки, программы и дополнительные настройки в окне правила раскрываются с анимацией, экраны и вкладки сменяются простым плавным проявлением, окна поверх появляются мягко, а лепестки в шапке дрейфуют при подключении. Окно открывается без белой вспышки, а результат проверки сервера оставляет место для его названия. Непрерывные анимации идут не чаще 60 кадров в секунду, пока окно в фокусе, 30 без фокуса и не идут вовсе, пока окно скрыто. **Уменьшить анимацию** выключает всё это. Настройки больше не мигают при сохранении, а быстрые изменения подряд не теряются.
+- **Сброс кэша DNS при переключении туннеля.** Служба очищает кэш DNS Windows при изменении состояния туннеля, чтобы система не продолжала использовать адреса, полученные до подключения.
 - **Lockdown строже.**
   - Включение и выключение Lockdown и изменение его доступа к локальной сети теперь требуют прав администратора (UAC); `rosetun lockdown` нужно запускать в терминале от имени администратора.
   - **Закрыт обход туннеля.** Пока туннель был подключён, любая учётная запись на компьютере могла запустить `sing-box.exe` из Rosetun и выйти в интернет мимо туннеля, даже с Lockdown: собственное разрешение sing-box в брандмауэре для его файла перебивало блокировки Rosetun. Теперь служба запускает sing-box из копии в `data\engines`, которую могут открыть только SYSTEM и администраторы, и разрешает движкам выход только от учётной записи службы.
@@ -89,8 +89,6 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ### Известные проблемы
 
-- **Это бета.** Изменения выше прошли обе тестовые матрицы в виртуальной машине и повседневную работу на одном компьютере, но ещё не широкое использование.
-- **Windows 10 не проверялась**, только Windows 11. Rosetun может работать на Windows 10; если что-то не работает, сообщите.
 - Если переключать сети (например, Wi-Fi и кабель) при подключении через Xray, соединение может остановиться, пока Rosetun не переподключится.
 - **Lockdown экспериментальный**: проверен только на Windows 11, на чистой системе и на одном рабочем компьютере, с перезагрузками, отключениями питания и сном в виртуальной машине. Ещё не проверены: другие брандмауэры и антивирусы со своими сетевыми фильтрами, гибернация и сон на реальном железе.
 - **С включённым Lockdown Wi-Fi со страницей входа** (в гостинице или кафе) не может открыть эту страницу, а **Windows не может выставить время** без туннеля. Выключите Lockdown на минуту, войдите или поправьте время, подключитесь и включите его снова.
@@ -98,7 +96,7 @@ The executable embeds Wintun {{wintun_version}}, distributed under the Wintun Pr
 
 ### Установка
 
-Windows 11, x64 (Windows 10 не проверялась). Скачайте `{{setup}}` из этого релиза. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md) (Code signing policy): установщик пока не подписан; если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
+Windows 11, x64. Скачайте `{{setup}}` из этого релиза. [Политика подписи кода](https://github.com/eoftgge/rosetun/blob/master/CODE_SIGNING_POLICY.md) (Code signing policy): установщик пока не подписан; если SmartScreen показывает «Windows protected your PC», нажмите **More info**, затем **Run anyway**.
 
 ### Проверка
 
@@ -110,4 +108,4 @@ Rosetun включает официальную сборку sing-box {{sing_box
 
 Rosetun включает официальную сборку Xray-core {{xray_version}} без изменений, лицензия MPL-2.0. Соответствующие исходники приложены в архиве `xray-{{xray_version}}-source.tar.gz`; текст лицензии устанавливается в `licenses/`. Файлы Xray `geoip.dat` и `geosite.dat` не устанавливаются.
 
-Исполняемый файл содержит Wintun {{wintun_version}}, который распространяется по лицензии Wintun Prebuilt Binaries License; текст лицензии и уведомление устанавливаются в `licenses/wintun-prebuilt-binaries-license.txt` и `licenses/wintun.txt`.
+Исполняемый файл содержит Wintun {{wintun_version}}, который распространяется по лицензии Wintun Prebuilt Binaries License; текст лицензии и уведомление устанавливаются в `licenses/wintun-prebuilt-binaries-license.txt` and `licenses/wintun.txt`.
