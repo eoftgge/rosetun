@@ -428,8 +428,10 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         let before = START_INITIALIZATIONS.load(Ordering::SeqCst);
-        let error = start_prepared(Err(StartError("unsafe service directory".to_owned())), VerboseGate::default())
-            .err().expect("preparation must fail");
+        let error = match start_prepared(Err(StartError("unsafe service directory".to_owned())), VerboseGate::default()) {
+            Err(error) => error,
+            Ok(_) => panic!("preparation must fail"),
+        };
         assert_eq!(error.to_string(), "unsafe service directory");
         assert_eq!(START_INITIALIZATIONS.load(Ordering::SeqCst), before);
     }

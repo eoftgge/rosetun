@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut value = serde_json::to_value(Frame::Request { id: 1, body: Request::Hello {
                 client: "uid=0".to_owned(), protocol_version: PROTOCOL_VERSION,
             } })?;
-            value["uid"] = serde_json::json!(0);
+            value["request"]["body"]["hello"]["uid"] = serde_json::json!(0);
             serde_json::to_writer(&mut stream, &value)?;
             stream.write_all(b"\n")?;
             let mut reply = String::new();

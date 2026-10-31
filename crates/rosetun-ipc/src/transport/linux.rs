@@ -319,7 +319,11 @@ mod tests {
         const CHILD_PATH: &str = "ROSETUN_TEST_CHILD_SOCKET";
         if let Some(path) = std::env::var_os(CHILD_PATH) {
             let mut stream = UnixStream::connect(path).unwrap();
-            stream.write_all(b"{\"uid\":0}\n").unwrap();
+            let value = serde_json::json!({"request": {"id": 1, "body": {"hello": {
+                "client": "uid=0", "protocol_version": crate::PROTOCOL_VERSION, "uid": 0
+            }}}});
+            serde_json::to_writer(&mut stream, &value).unwrap();
+            stream.write_all(b"\n").unwrap();
             return;
         }
         let fixture = Fixture::new();
@@ -332,9 +336,9 @@ mod tests {
         assert_eq!(accepted.identify_peer().unwrap().account(), identify_peer(&same_uid).unwrap().account());
         // A claimed JSON uid is merely data, not the source of identity.
         let before = accepted.identify_peer().unwrap();
-        let mut claimed_uid = String::new();
-        accepted.reader.read_line(&mut claimed_uid).unwrap();
-        assert_eq!(claimed_uid, "{\"uid\":0}\n");
+        assert!(matches!(accepted.read().unwrap(), Some(crate::Frame::Request {
+            body: crate::Request::Hello { .. }, ..
+        })));
         assert_eq!(accepted.identify_peer().unwrap().account(), before.account());
         assert!(child.wait().unwrap().success());
     }
