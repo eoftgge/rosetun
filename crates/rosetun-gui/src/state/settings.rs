@@ -356,6 +356,7 @@ impl State {
             }
             WorkerEvent::SkipVersion(result) => self.finish_settings(result),
             // A background record: its failure costs one more notice at most.
+            #[cfg(any(windows, test))]
             WorkerEvent::AnnounceUpdate => self.end_settings(None),
             WorkerEvent::SetDns(result) => {
                 if result.is_ok() {

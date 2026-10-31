@@ -415,6 +415,7 @@ pub(crate) enum Job {
     #[cfg(windows)]
     SetAutostart(bool),
     SkipVersion(String),
+    #[cfg(any(windows, test))]
     AnnounceUpdate(String),
     CheckUpdates,
     SetDns(DnsSettings),
@@ -602,10 +603,11 @@ impl State {
             | WorkerEvent::SetAccent(_)
             | WorkerEvent::Setting(_, _)
             | WorkerEvent::SkipVersion(_)
-            | WorkerEvent::AnnounceUpdate
             | WorkerEvent::SetDns(_)
             | WorkerEvent::ResetSettings(_)
             | WorkerEvent::SetVerboseLog(_)) => self.reduce_settings(event),
+            #[cfg(any(windows, test))]
+            WorkerEvent::AnnounceUpdate => self.reduce_settings(event),
             #[cfg(windows)]
             event @ (WorkerEvent::ReportSaved { .. }
             | WorkerEvent::AutostartLoaded(_)

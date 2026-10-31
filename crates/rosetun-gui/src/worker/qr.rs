@@ -29,8 +29,9 @@ impl WorkerDispatcher {
         });
     }
 
-    #[cfg_attr(not(windows), allow(unused_variables))]
     pub(crate) fn poll_screen_clip(&self, request: u64, sequence: u32) {
+        #[cfg(not(windows))]
+        let _ = sequence;
         self.spawn_task("rosetun-poll-screen-clip", move |publisher| {
             #[cfg(windows)]
             let event = {
@@ -91,4 +92,40 @@ fn open_screen_clip() -> Result<u32, QrError> {
     }
     #[cfg(not(windows))]
     Err(QrError::ScreenClipUnavailable)
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn screen_clip_requests_and_polls_report_unavailable() {
+        assert!(matches!(open_screen_clip(), Err(QrError::ScreenClipUnavailable)));
+        let (tx, rx) = mpsc::channel();
+        let workers = WorkerDispatcher {
+            publisher: ConfigPublisher {
+                store: Store::at(std::env::temp_dir().join("rosetun-screen-clip-unavailable")),
+                tx,
+                repaint: egui::Context::default(),
+                generation: Arc::default(),
+            },
+            connections: Arc::default(),
+        };
+        workers.read_qr(41, QrSource::ScreenClip);
+        workers.poll_screen_clip(42, 7);
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+                WorkerEvent::Qr {
+                    request,
+                    result: Some(Err(QrError::ScreenClipUnavailable)),
+                } => requests.push(request),
+                _ => panic!("unexpected screen clip event"),
+            }
+        }
+        requests.sort_unstable();
+        assert_eq!(requests, [41, 42]);
+    }
 }

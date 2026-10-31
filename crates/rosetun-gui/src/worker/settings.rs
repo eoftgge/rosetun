@@ -63,6 +63,7 @@ impl WorkerDispatcher {
         });
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn announce_update(&self, version: String) {
         self.spawn_complete("rosetun-announce-update", move |store| {
             if rosetun_core::record_update_announced(store, version).is_err() {

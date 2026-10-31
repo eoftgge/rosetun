@@ -353,6 +353,7 @@ impl App {
             #[cfg(windows)]
             Job::SetAutostart(enabled) => self.workers.set_autostart(enabled),
             Job::SkipVersion(version) => self.workers.skip_version(version),
+            #[cfg(any(windows, test))]
             Job::AnnounceUpdate(version) => self.workers.announce_update(version),
             Job::CheckUpdates => self.workers.check_updates(),
             Job::SetDns(dns) => self.workers.set_dns(dns),
