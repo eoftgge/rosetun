@@ -628,10 +628,14 @@ fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
 
 #[test]
 fn editing_a_path_rule_opens_advanced_and_rejects_templates() {
+    #[cfg(windows)]
+    let path = r"C:\Apps\Tool.exe";
+    #[cfg(not(windows))]
+    let path = "/opt/apps/Tool.exe";
     let mut state = state_with_rules();
     let id = state.config.rule_sets[1].rules[1].id.clone();
     state.config.rule_sets[1].rules[1].matcher =
-        RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(r"C:\Apps\Tool.exe")));
+        RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(path)));
     state.config.rule_sets[1].rules[2].matcher = RuleMatcher::Template(RuleTemplate::Youtube);
     assert!(
         AddRuleDialog::for_rule(
@@ -654,7 +658,7 @@ fn editing_a_path_rule_opens_advanced_and_rejects_templates() {
     assert_eq!(dialog.editing.as_ref(), Some(&id));
     assert_eq!(dialog.kind, RuleInputKind::Process);
     assert_eq!(dialog.process_filter, "Tool.exe");
-    assert_eq!(dialog.process, r"C:\Apps\Tool.exe");
+    assert_eq!(dialog.process, path);
     assert!(dialog.advanced);
     assert_eq!(dialog.match_mode, ProcessMatchMode::Path);
     assert!(dialog.selected_process.is_none());
