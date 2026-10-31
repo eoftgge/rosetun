@@ -288,8 +288,8 @@ mod platform {
     use std::thread::{self, JoinHandle};
 
     use windows_sys::Win32::Foundation::{
-        DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED, ERROR_NOT_FOUND, ERROR_PIPE_BUSY,
-        ERROR_PIPE_CONNECTED, ERROR_SERVICE_DOES_NOT_EXIST, GetLastError, HANDLE,
+        DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED, ERROR_NOT_FOUND,
+        ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_SERVICE_DOES_NOT_EXIST, GetLastError, HANDLE,
         INVALID_HANDLE_VALUE, LocalFree,
     };
     use windows_sys::Win32::Security::Authorization::{

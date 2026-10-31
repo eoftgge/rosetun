@@ -98,7 +98,8 @@ impl TestServer {
         #[cfg(windows)]
         let listener = Listener::bind(&endpoint).expect("bind test endpoint");
         #[cfg(target_os = "linux")]
-        let listener = Listener::bind_test_fixture(endpoint.parent().unwrap()).expect("bind owned fixture");
+        let listener =
+            Listener::bind_test_fixture(endpoint.parent().unwrap()).expect("bind owned fixture");
         let mut server = Server::new(false);
         server.read_timeouts = timeouts;
         server.status_delay = status_delay;
@@ -125,13 +126,18 @@ impl TestServer {
     }
 
     fn stop(&mut self) -> io::Result<()> {
-        let Some(thread) = self.thread.take() else { return Ok(()); };
+        let Some(thread) = self.thread.take() else {
+            return Ok(());
+        };
         self.shutdown.request();
         // Detach on timeout so a regression fails instead of hanging the test
         // runner. Neither a synthetic client nor unlink may wake the accept loop.
-        self.finished.recv_timeout(Duration::from_secs(4))
+        self.finished
+            .recv_timeout(Duration::from_secs(4))
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "serve did not stop"))?;
-        thread.join().map_err(|_| io::Error::other("server thread panicked"))?
+        thread
+            .join()
+            .map_err(|_| io::Error::other("server thread panicked"))?
     }
 
     fn connect(&self) -> Connection {
@@ -150,10 +156,13 @@ impl TestServer {
 impl Drop for TestServer {
     fn drop(&mut self) {
         let stopped = self.stop();
-        if !thread::panicking() { stopped.expect("server shutdown"); }
+        if !thread::panicking() {
+            stopped.expect("server shutdown");
+        }
         #[cfg(target_os = "linux")]
         if !thread::panicking() {
-            std::fs::remove_dir(self.endpoint.parent().unwrap()).expect("remove empty test directory");
+            std::fs::remove_dir(self.endpoint.parent().unwrap())
+                .expect("remove empty test directory");
         }
     }
 }
@@ -219,7 +228,8 @@ fn shutdown_without_clients_closes_listener_before_serve_returns() {
     #[cfg(target_os = "linux")]
     {
         assert!(!server.endpoint.exists(), "owned endpoint survived serve");
-        let rebound = Listener::bind_test_fixture(server.endpoint.parent().unwrap()).expect("rebind after shutdown");
+        let rebound = Listener::bind_test_fixture(server.endpoint.parent().unwrap())
+            .expect("rebind after shutdown");
         drop(rebound);
         assert!(!server.endpoint.exists());
     }
@@ -230,9 +240,12 @@ fn shutdown_without_clients_closes_listener_before_serve_returns() {
 #[test]
 fn shutdown_with_full_client_limit_and_concurrent_connect_does_not_wait_for_clients() {
     let mut server = TestServer::start(ReadTimeouts {
-        hello: Duration::from_secs(30), ..timeouts()
+        hello: Duration::from_secs(30),
+        ..timeouts()
     });
-    let connections: Vec<_> = (0..MAX_ACTIVE_CONNECTIONS).map(|_| server.connect()).collect();
+    let connections: Vec<_> = (0..MAX_ACTIVE_CONNECTIONS)
+        .map(|_| server.connect())
+        .collect();
     server.wait_active(MAX_ACTIVE_CONNECTIONS, Duration::from_secs(2));
     let endpoint = server.endpoint.clone();
     let (started_tx, started) = mpsc::channel();
@@ -241,10 +254,20 @@ fn shutdown_with_full_client_limit_and_concurrent_connect_does_not_wait_for_clie
         open_raw(&endpoint)
     });
     started.recv_timeout(Duration::from_secs(2)).unwrap();
-    server.stop().expect("shutdown must not wait for a free slot");
-    assert_eq!(server.active.load(Ordering::Acquire), MAX_ACTIVE_CONNECTIONS);
-    assert!(open_raw(&server.endpoint).is_err(), "accept survived shutdown");
-    drop(bounded(Duration::from_secs(4), move || racing_client.join().unwrap()));
+    server
+        .stop()
+        .expect("shutdown must not wait for a free slot");
+    assert_eq!(
+        server.active.load(Ordering::Acquire),
+        MAX_ACTIVE_CONNECTIONS
+    );
+    assert!(
+        open_raw(&server.endpoint).is_err(),
+        "accept survived shutdown"
+    );
+    drop(bounded(Duration::from_secs(4), move || {
+        racing_client.join().unwrap()
+    }));
     drop(connections);
     server.wait_active(0, Duration::from_secs(2));
 }
@@ -261,13 +284,19 @@ fn shutdown_cleanup_preserves_a_replacement_endpoint() {
         // Deliberate substitution is the tested attack, never shutdown teardown.
         std::fs::remove_file(&path).unwrap();
         let other_socket = match replacement {
-            "file" => { std::fs::write(&path, b"replacement").unwrap(); None },
-            "symlink" => { symlink("missing-fixture", &path).unwrap(); None },
+            "file" => {
+                std::fs::write(&path, b"replacement").unwrap();
+                None
+            }
+            "symlink" => {
+                symlink("missing-fixture", &path).unwrap();
+                None
+            }
             "socket" => {
                 let socket = UnixListener::bind(&path).unwrap();
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
                 Some(socket)
-            },
+            }
             _ => unreachable!(),
         };
         let original = std::fs::symlink_metadata(&path).unwrap();
@@ -283,7 +312,10 @@ fn shutdown_cleanup_preserves_a_replacement_endpoint() {
         } else if replacement == "file" {
             assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
         } else {
-            assert_eq!(std::fs::read_link(&path).unwrap(), Path::new("missing-fixture"));
+            assert_eq!(
+                std::fs::read_link(&path).unwrap(),
+                Path::new("missing-fixture")
+            );
         }
         // Only now remove the verified test replacement to leave an empty fixture
         // directory. stop() already joined the real accept worker and ran Drop.

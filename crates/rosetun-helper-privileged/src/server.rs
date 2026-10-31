@@ -86,9 +86,13 @@ struct AcceptThread {
 impl AcceptThread {
     fn stop(&mut self) -> io::Result<()> {
         self.stopping.store(true, Ordering::Release);
-        let Some(thread) = self.thread.take() else { return Ok(()); };
+        let Some(thread) = self.thread.take() else {
+            return Ok(());
+        };
         let interrupted = self.listener.interrupt_accept(&thread);
-        let joined = thread.join().map_err(|_| io::Error::other("helper accept thread panicked"));
+        let joined = thread
+            .join()
+            .map_err(|_| io::Error::other("helper accept thread panicked"));
         interrupted.and(joined)
     }
 }
@@ -149,11 +153,15 @@ impl Server {
             .spawn(move || {
                 let mut last_limit_warning: Option<Instant> = None;
                 loop {
-                    if accept_stopping.load(Ordering::Acquire) { break; }
+                    if accept_stopping.load(Ordering::Acquire) {
+                        break;
+                    }
                     let accepted = accept_listener.accept();
                     // Check before admission: shutdown never waits for a client
                     // slot, even when a real client wins the race with cancellation.
-                    if accept_stopping.load(Ordering::Acquire) { break; }
+                    if accept_stopping.load(Ordering::Acquire) {
+                        break;
+                    }
                     match accepted {
                         Ok(connection) => {
                             let accepted_at = Instant::now();
@@ -184,7 +192,11 @@ impl Server {
                     }
                 }
             })?;
-        let mut accept_thread = AcceptThread { listener, stopping, thread: Some(thread) };
+        let mut accept_thread = AcceptThread {
+            listener,
+            stopping,
+            thread: Some(thread),
+        };
 
         while let Ok(event) = self.rx.recv() {
             match event {
