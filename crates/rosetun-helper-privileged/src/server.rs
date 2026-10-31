@@ -420,7 +420,10 @@ fn dispatch(
         )),
         #[cfg(target_os = "linux")]
         Request::Shutdown if !caller.expect("caller checked").is_administrator() => {
-            Response::Error(HelperError::new(ErrorCode::AccessDenied, "shutdown requires an administrator"))
+            Response::Error(HelperError::new(
+                ErrorCode::AccessDenied,
+                "shutdown requires an administrator",
+            ))
         }
         Request::Shutdown => Response::Ok,
     }
@@ -494,11 +497,26 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_shutdown_rejects_an_authenticated_non_administrator() {
-        let helper = Helper::new(rosetun_engine::EngineRegistry::new(), rosetun_routing::backend(),
-            crate::log_gate::VerboseGate::default());
+        let helper = Helper::new(
+            rosetun_engine::EngineRegistry::new(),
+            rosetun_routing::backend(),
+            crate::log_gate::VerboseGate::default(),
+        );
         let caller = Caller::fake(b"ordinary", false);
-        assert!(matches!(dispatch(&Request::Shutdown, &helper, &mut true, Some(&caller), true, 0),
-            Response::Error(HelperError { code: ErrorCode::AccessDenied, .. })));
+        assert!(matches!(
+            dispatch(
+                &Request::Shutdown,
+                &helper,
+                &mut true,
+                Some(&caller),
+                true,
+                0
+            ),
+            Response::Error(HelperError {
+                code: ErrorCode::AccessDenied,
+                ..
+            })
+        ));
     }
 
     #[test]

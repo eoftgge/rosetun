@@ -122,7 +122,10 @@ impl Connection {
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
-            Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported peer authentication"))
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "unsupported peer authentication",
+            ))
         }
     }
 
@@ -252,12 +255,20 @@ mod platform {
         io::Error::new(io::ErrorKind::Unsupported, "unsupported IPC platform")
     }
 
-    pub fn connect(_: &Path) -> io::Result<Connection> { Err(unsupported()) }
+    pub fn connect(_: &Path) -> io::Result<Connection> {
+        Err(unsupported())
+    }
 
     impl Listener {
-        pub fn bind(_: &Path) -> io::Result<Self> { Err(unsupported()) }
-        pub fn accept(&self) -> io::Result<Connection> { Err(unsupported()) }
-        pub fn path(&self) -> &Path { Path::new("") }
+        pub fn bind(_: &Path) -> io::Result<Self> {
+            Err(unsupported())
+        }
+        pub fn accept(&self) -> io::Result<Connection> {
+            Err(unsupported())
+        }
+        pub fn path(&self) -> &Path {
+            Path::new("")
+        }
     }
 }
 
@@ -966,9 +977,9 @@ mod platform {
     }
 }
 
-pub use platform::{Listener, connect};
 #[cfg(target_os = "linux")]
 pub use platform::prepare_service_directories;
+pub use platform::{Listener, connect};
 
 #[cfg(test)]
 mod security_descriptor_tests {

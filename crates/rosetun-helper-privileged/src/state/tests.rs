@@ -6728,22 +6728,56 @@ fn lockdown_program_permits_leave_with_a_session_and_return_after_it() {
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_uids_preserve_session_and_owner_only_read_policies() {
-    let helper = Helper::new(EngineRegistry::new(), Box::new(UnusedRouting), VerboseGate::default());
-    let owner = Caller { account: AccountIdentity::LinuxUid(1000), administrator: false };
-    let other = Caller { account: AccountIdentity::LinuxUid(1001), administrator: false };
-    let admin = Caller { account: AccountIdentity::LinuxUid(0), administrator: true };
+    let helper = Helper::new(
+        EngineRegistry::new(),
+        Box::new(UnusedRouting),
+        VerboseGate::default(),
+    );
+    let owner = Caller {
+        account: AccountIdentity::LinuxUid(1000),
+        administrator: false,
+    };
+    let other = Caller {
+        account: AccountIdentity::LinuxUid(1001),
+        administrator: false,
+    };
+    let admin = Caller {
+        account: AccountIdentity::LinuxUid(0),
+        administrator: true,
+    };
     *helper.owner.lock().unwrap() = Some(owner.account.clone());
     *helper.last_owner.lock().unwrap() = Some(owner.account.clone());
     assert!(helper.connections_as(&owner).is_ok());
     assert!(helper.diagnostic_log_as(&owner).is_ok());
     for denied in [&other, &admin] {
-        assert_eq!(helper.connections_as(denied).unwrap_err().code, ErrorCode::AccessDenied);
-        assert_eq!(helper.diagnostic_log_as(denied).unwrap_err().code, ErrorCode::AccessDenied);
-        assert_eq!(helper.close_connection_as(denied, "fixture").unwrap_err().code, ErrorCode::AccessDenied);
+        assert_eq!(
+            helper.connections_as(denied).unwrap_err().code,
+            ErrorCode::AccessDenied
+        );
+        assert_eq!(
+            helper.diagnostic_log_as(denied).unwrap_err().code,
+            ErrorCode::AccessDenied
+        );
+        assert_eq!(
+            helper
+                .close_connection_as(denied, "fixture")
+                .unwrap_err()
+                .code,
+            ErrorCode::AccessDenied
+        );
     }
-    assert_eq!(helper.disconnect_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
-    assert_eq!(helper.temporary_rules_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
-    assert_eq!(helper.session_exits_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(
+        helper.disconnect_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert_eq!(
+        helper.temporary_rules_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
+    assert_eq!(
+        helper.session_exits_as(&other).unwrap_err().code,
+        ErrorCode::AccessDenied
+    );
     assert!(helper.temporary_rules_as(&admin).is_ok());
     assert!(helper.session_exits_as(&admin).is_ok());
     helper.disconnect_as(&admin).unwrap();

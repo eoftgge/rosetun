@@ -127,7 +127,9 @@ pub(crate) struct Caller {
 
 #[cfg(target_os = "linux")]
 impl Caller {
-    pub(crate) fn is_administrator(&self) -> bool { self.administrator }
+    pub(crate) fn is_administrator(&self) -> bool {
+        self.administrator
+    }
 }
 
 #[cfg(test)]

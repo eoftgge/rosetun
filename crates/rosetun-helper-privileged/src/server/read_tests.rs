@@ -27,7 +27,10 @@ fn unique_endpoint() -> PathBuf {
         use std::os::unix::fs::DirBuilderExt;
 
         let directory = std::env::temp_dir().join(suffix);
-        std::fs::DirBuilder::new().mode(0o700).create(&directory).expect("private test directory");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .expect("private test directory");
         directory.join("helper.sock")
     }
 }

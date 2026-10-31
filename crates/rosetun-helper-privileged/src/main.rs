@@ -296,12 +296,16 @@ struct PreparedStart {
 fn prepare_start(_run_dir: &Path) -> Result<PreparedStart, StartError> {
     let endpoint = rosetun_ipc::default_endpoint();
     let listener = Listener::bind(&endpoint).map_err(|error| {
-        StartError(format!("failed to bind socket {}: {error}", endpoint.display()))
+        StartError(format!(
+            "failed to bind socket {}: {error}",
+            endpoint.display()
+        ))
     })?;
     #[cfg(target_os = "linux")]
     {
-        rosetun_ipc::transport::prepare_service_directories()
-            .map_err(|error| StartError(format!("failed to prepare service directories: {error}")))?;
+        rosetun_ipc::transport::prepare_service_directories().map_err(|error| {
+            StartError(format!("failed to prepare service directories: {error}"))
+        })?;
         Ok(PreparedStart {
             listener,
             run_dir: "/run/rosetun/private".into(),
@@ -310,9 +314,14 @@ fn prepare_start(_run_dir: &Path) -> Result<PreparedStart, StartError> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let data_dir = _run_dir.parent()
+        let data_dir = _run_dir
+            .parent()
             .ok_or_else(|| StartError("engine run directory has no data directory".to_owned()))?;
-        Ok(PreparedStart { listener, run_dir: _run_dir.to_owned(), data_dir: data_dir.to_owned() })
+        Ok(PreparedStart {
+            listener,
+            run_dir: _run_dir.to_owned(),
+            data_dir: data_dir.to_owned(),
+        })
     }
 }
 
@@ -321,15 +330,25 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
 }
 
 #[cfg(test)]
-static START_INITIALIZATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static START_INITIALIZATIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
-fn start_prepared(prepared: Result<PreparedStart, StartError>, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), StartError> {
-    let PreparedStart { listener, run_dir, data_dir } = prepared?;
+fn start_prepared(
+    prepared: Result<PreparedStart, StartError>,
+    gate: VerboseGate,
+) -> Result<(Listener, Arc<Helper>), StartError> {
+    let PreparedStart {
+        listener,
+        run_dir,
+        data_dir,
+    } = prepared?;
     #[cfg(test)]
     START_INITIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     #[cfg(windows)]
     process_job::install().map_err(|error| {
-        StartError(format!("failed to install helper process-lifetime job: {error}"))
+        StartError(format!(
+            "failed to install helper process-lifetime job: {error}"
+        ))
     })?;
     let run_dir = run_dir.as_path();
     let data_dir = data_dir.as_path();
@@ -428,9 +447,11 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         let before = START_INITIALIZATIONS.load(Ordering::SeqCst);
-        let error = match start_prepared(Err(StartError("unsafe service directory".to_owned())), VerboseGate::default()) {
-            Err(error) => error,
-            Ok(_) => panic!("preparation must fail"),
+        let Err(error) = start_prepared(
+            Err(StartError("unsafe service directory".to_owned())),
+            VerboseGate::default(),
+        ) else {
+            panic!("preparation must fail");
         };
         assert_eq!(error.to_string(), "unsafe service directory");
         assert_eq!(START_INITIALIZATIONS.load(Ordering::SeqCst), before);

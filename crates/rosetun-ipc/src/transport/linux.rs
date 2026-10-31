@@ -1,6 +1,9 @@
 //! Linux credentials and descriptor-anchored service paths.
 
-#![expect(unsafe_code, reason = "Linux libc calls use owned descriptors and checked ABI buffers")]
+#![expect(
+    unsafe_code,
+    reason = "Linux libc calls use owned descriptors and checked ABI buffers"
+)]
 
 use std::ffi::CString;
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions};
@@ -25,10 +28,17 @@ pub(super) fn identify_peer(stream: &UnixStream) -> io::Result<PeerIdentity> {
     // SAFETY: Linux SO_PEERCRED writes a ucred into the correctly sized output.
     // The stream owns the descriptor for the entire call; no ownership is transferred.
     let result = unsafe {
-        libc::getsockopt(stream.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED,
-            credentials.as_mut_ptr().cast(), &mut length)
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            credentials.as_mut_ptr().cast(),
+            &mut length,
+        )
     };
-    if result != 0 { return Err(io::Error::last_os_error()); }
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
     if length as usize != size_of::<libc::ucred>() {
         return Err(denied("invalid SO_PEERCRED length"));
     }
@@ -48,10 +58,18 @@ fn pin_socket_inode(path: &Path) -> io::Result<File> {
     // SAFETY: The arguments match Linux openat's syscall ABI. The C path stays
     // alive for the call. O_PATH opens only an inode reference, without following
     // the final symlink or opening the socket for I/O; CLOEXEC prevents inheritance.
-    let descriptor = unsafe { libc::syscall(libc::SYS_openat, libc::AT_FDCWD as libc::c_long,
-        path.as_ptr(), (libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC) as libc::c_long,
-        0 as libc::c_long) };
-    if descriptor < 0 { return Err(io::Error::last_os_error()); }
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_openat,
+            libc::AT_FDCWD as libc::c_long,
+            path.as_ptr(),
+            (libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC) as libc::c_long,
+            0 as libc::c_long,
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
     // SAFETY: Successful openat returned a new owned descriptor, transferred
     // exactly once to File, which closes it after the listener's Drop check.
     Ok(unsafe { File::from_raw_fd(descriptor as libc::c_int) })
@@ -64,16 +82,27 @@ fn group_id() -> io::Result<u32> {
         let mut found = std::ptr::null_mut();
         // SAFETY: getgrnam_r borrows the NUL-terminated name and writable buffers
         // for this call only. The returned group points into buffer, which stays alive.
-        let result = unsafe { libc::getgrnam_r(c"rosetun".as_ptr(), group.as_mut_ptr(),
-            buffer.as_mut_ptr().cast(), buffer.len(), &mut found) };
+        let result = unsafe {
+            libc::getgrnam_r(
+                c"rosetun".as_ptr(),
+                group.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut found,
+            )
+        };
         if result == libc::ERANGE && buffer.len() < 1024 * 1024 {
             buffer.resize(buffer.len() * 2, 0);
             continue;
         }
-        if result != 0 { return Err(io::Error::from_raw_os_error(result)); }
+        if result != 0 {
+            return Err(io::Error::from_raw_os_error(result));
+        }
         if found.is_null() {
-            return Err(io::Error::new(io::ErrorKind::NotFound,
-                "required group 'rosetun' is missing; ask an administrator to provision it"));
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "required group 'rosetun' is missing; ask an administrator to provision it",
+            ));
         }
         // SAFETY: Successful getgrnam_r with non-null found initialized group.
         return Ok(unsafe { group.assume_init() }.gr_gid);
@@ -87,21 +116,31 @@ fn fd_path(file: &File) -> PathBuf {
 }
 
 fn validate_directory(metadata: &Metadata, uid: u32, private: bool) -> io::Result<()> {
-    if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o022 != 0
-        || (private && metadata.mode() & 0o077 != 0) {
-        return Err(denied("service directory has an unsafe type, owner or mode"));
+    if !metadata.is_dir()
+        || metadata.uid() != uid
+        || metadata.mode() & 0o022 != 0
+        || (private && metadata.mode() & 0o077 != 0)
+    {
+        return Err(denied(
+            "service directory has an unsafe type, owner or mode",
+        ));
     }
     Ok(())
 }
 
 fn open_directory(path: &Path) -> io::Result<File> {
-    OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW).open(path)
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(path)
 }
 
 fn root_directory(path: &Path, create_mode: Option<u32>) -> io::Result<File> {
     use std::path::Component;
 
-    if !path.is_absolute() { return Err(denied("service path must be absolute")); }
+    if !path.is_absolute() {
+        return Err(denied("service path must be absolute"));
+    }
     let mut directory = open_directory(Path::new("/"))?;
     validate_directory(&directory.metadata()?, 0, false)?;
     let components: Vec<_> = path.components().collect();
@@ -113,13 +152,17 @@ fn root_directory(path: &Path, create_mode: Option<u32>) -> io::Result<File> {
         let last = index + 1 == components.len();
         if last && let Some(mode) = create_mode {
             match DirBuilder::new().mode(mode).create(&next) {
-                Ok(()) => {},
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {},
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
             }
         }
         directory = open_directory(&next)?;
-        validate_directory(&directory.metadata()?, 0, last && create_mode == Some(0o700))?;
+        validate_directory(
+            &directory.metadata()?,
+            0,
+            last && create_mode == Some(0o700),
+        )?;
     }
     Ok(directory)
 }
@@ -136,9 +179,14 @@ pub fn prepare_service_directories() -> io::Result<()> {
 }
 
 fn validate_socket(metadata: &Metadata, uid: u32, gid: u32) -> io::Result<()> {
-    if !metadata.file_type().is_socket() || metadata.uid() != uid
-        || metadata.gid() != gid || metadata.mode() & 0o7777 != 0o660 {
-        return Err(denied("helper socket must have the trusted owner, group and mode 0660"));
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != uid
+        || metadata.gid() != gid
+        || metadata.mode() & 0o7777 != 0o660
+    {
+        return Err(denied(
+            "helper socket must have the trusted owner, group and mode 0660",
+        ));
     }
     Ok(())
 }
@@ -151,8 +199,12 @@ fn verify_server(stream: &UnixStream) -> io::Result<()> {
 }
 
 pub fn connect(endpoint: &Path) -> io::Result<Connection> {
-    let parent = endpoint.parent().ok_or_else(|| denied("missing endpoint directory"))?;
-    let name = endpoint.file_name().ok_or_else(|| denied("missing endpoint name"))?;
+    let parent = endpoint
+        .parent()
+        .ok_or_else(|| denied("missing endpoint directory"))?;
+    let name = endpoint
+        .file_name()
+        .ok_or_else(|| denied("missing endpoint name"))?;
     let directory = root_directory(parent, None)?;
     let path = fd_path(&directory).join(name);
     let gid = group_id()?;
@@ -204,12 +256,20 @@ impl Listener {
         validate_directory(&directory.metadata()?, uid, false)?;
         let destination = fd_path(&directory).join("helper.sock");
         match fs::symlink_metadata(&destination) {
-            Ok(_) => return Err(io::Error::new(io::ErrorKind::AddrInUse,
-                "helper endpoint exists; administrator must inspect and remove a stale socket while helper is stopped")),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "helper endpoint exists; administrator must inspect and remove a stale socket while helper is stopped",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        let stage_name = format!(".socket-{}-{}", std::process::id(), NEXT_STAGE.fetch_add(1, Ordering::Relaxed));
+        let stage_name = format!(
+            ".socket-{}-{}",
+            std::process::id(),
+            NEXT_STAGE.fetch_add(1, Ordering::Relaxed)
+        );
         let stage_path = fd_path(&directory).join(&stage_name);
         DirBuilder::new().mode(0o700).create(&stage_path)?;
         let stage = Stage(stage_path);
@@ -231,24 +291,48 @@ impl Listener {
         // SAFETY: Both C strings remain alive; syscall arguments match the Linux
         // renameat2 ABI (descriptor integers, path pointers, flags). NOREPLACE
         // publishes our private inode atomically and never overwrites any endpoint.
-        if unsafe { libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD as libc::c_long, socket_c.as_ptr(),
-            libc::AT_FDCWD as libc::c_long, destination_c.as_ptr(), libc::RENAME_NOREPLACE as libc::c_long) } != 0 {
+        if unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                libc::AT_FDCWD as libc::c_long,
+                socket_c.as_ptr(),
+                libc::AT_FDCWD as libc::c_long,
+                destination_c.as_ptr(),
+                libc::RENAME_NOREPLACE as libc::c_long,
+            )
+        } != 0
+        {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self { inner, path, owned: Some(OwnedEndpoint { directory, socket, uid, gid }) })
+        Ok(Self {
+            inner,
+            path,
+            owned: Some(OwnedEndpoint {
+                directory,
+                socket,
+                uid,
+                gid,
+            }),
+        })
     }
 
     /// Adopt an already bound listener without claiming ownership of its path.
     /// This does not weaken client verification or manufacture peer credentials.
     pub fn from_unix_listener(inner: UnixListener, path: PathBuf) -> Self {
-        Self { inner, path, owned: None }
+        Self {
+            inner,
+            path,
+            owned: None,
+        }
     }
 
     pub fn accept(&self) -> io::Result<Connection> {
         Connection::from_unix_stream(self.inner.accept()?.0)
     }
 
-    pub fn path(&self) -> &Path { &self.path }
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 impl Drop for Listener {
@@ -258,11 +342,17 @@ impl Drop for Listener {
             // Pinned root-owned directories exclude mutation by the client group.
             // As with the rest of the service, trusted root is outside the threat
             // model. If root widened directory permissions, leave the path alone.
-            let safe_directory = owned.directory.metadata().and_then(|m| validate_directory(&m, owned.uid, false));
-            if safe_directory.is_ok() && let Ok(original) = owned.socket.metadata()
-                && fs::symlink_metadata(&path).is_ok_and(|m|
+            let safe_directory = owned
+                .directory
+                .metadata()
+                .and_then(|m| validate_directory(&m, owned.uid, false));
+            if safe_directory.is_ok()
+                && let Ok(original) = owned.socket.metadata()
+                && fs::symlink_metadata(&path).is_ok_and(|m| {
                     validate_socket(&m, owned.uid, owned.gid).is_ok()
-                    && (m.dev(), m.ino()) == (original.dev(), original.ino())) {
+                        && (m.dev(), m.ino()) == (original.dev(), original.ino())
+                })
+            {
                 let _ = fs::remove_file(path);
             }
         }
@@ -288,18 +378,28 @@ mod tests {
     struct Fixture(PathBuf);
     impl Fixture {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("rosetun-l2-{}-{}",
-                std::process::id(), NEXT_STAGE.fetch_add(1, Ordering::Relaxed)));
+            let path = std::env::temp_dir().join(format!(
+                "rosetun-l2-{}-{}",
+                std::process::id(),
+                NEXT_STAGE.fetch_add(1, Ordering::Relaxed)
+            ));
             DirBuilder::new().mode(0o700).create(&path).unwrap();
             Self(path)
         }
         fn bind(&self) -> io::Result<Listener> {
             let metadata = fs::metadata(&self.0)?;
-            Listener::bind_in(open_directory(&self.0)?, self.0.join("helper.sock"), metadata.uid(), metadata.gid())
+            Listener::bind_in(
+                open_directory(&self.0)?,
+                self.0.join("helper.sock"),
+                metadata.uid(),
+                metadata.gid(),
+            )
         }
     }
     impl Drop for Fixture {
-        fn drop(&mut self) { fs::remove_dir_all(&self.0).unwrap(); }
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
     }
 
     #[test]
@@ -307,7 +407,10 @@ mod tests {
         let (stream, other) = UnixStream::pair().unwrap();
         let connection = Connection::from_unix_stream(stream).unwrap();
         let uid = fs::metadata("/proc/self").unwrap().uid();
-        assert_eq!(connection.identify_peer().unwrap().account(), &AccountIdentity::LinuxUid(uid));
+        assert_eq!(
+            connection.identify_peer().unwrap().account(),
+            &AccountIdentity::LinuxUid(uid)
+        );
         assert_eq!(identify_peer(&other).unwrap().is_administrator(), uid == 0);
     }
 
@@ -343,17 +446,32 @@ mod tests {
         let fixture = Fixture::new();
         let listener = fixture.bind().unwrap();
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "transport::platform::tests::another_process_of_the_same_uid_has_the_same_account"])
-            .env(CHILD_PATH, listener.path()).spawn().unwrap();
+            .args([
+                "--exact",
+                "transport::platform::tests::another_process_of_the_same_uid_has_the_same_account",
+            ])
+            .env(CHILD_PATH, listener.path())
+            .spawn()
+            .unwrap();
         let mut accepted = listener.accept().unwrap();
         let (same_uid, _other) = UnixStream::pair().unwrap();
-        assert_eq!(accepted.identify_peer().unwrap().account(), identify_peer(&same_uid).unwrap().account());
+        assert_eq!(
+            accepted.identify_peer().unwrap().account(),
+            identify_peer(&same_uid).unwrap().account()
+        );
         // A claimed JSON uid is merely data, not the source of identity.
         let before = accepted.identify_peer().unwrap();
-        assert!(matches!(accepted.read().unwrap(), Some(crate::Frame::Request {
-            body: crate::Request::Hello { .. }, ..
-        })));
-        assert_eq!(accepted.identify_peer().unwrap().account(), before.account());
+        assert!(matches!(
+            accepted.read().unwrap(),
+            Some(crate::Frame::Request {
+                body: crate::Request::Hello { .. },
+                ..
+            })
+        ));
+        assert_eq!(
+            accepted.identify_peer().unwrap().account(),
+            before.account()
+        );
         assert!(child.wait().unwrap().success());
     }
 
@@ -364,7 +482,10 @@ mod tests {
         let listener = UnixListener::bind(&path).unwrap();
         listener.set_nonblocking(true).unwrap();
         assert!(crate::HelperClient::connect(&path, "fixture").is_err());
-        assert_eq!(listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
     }
 
     #[test]
@@ -408,7 +529,10 @@ mod tests {
         fs::remove_file(listener.path()).unwrap();
         fs::write(listener.path(), b"replacement").unwrap();
         drop(listener);
-        assert_eq!(fs::read(fixture.0.join("helper.sock")).unwrap(), b"replacement");
+        assert_eq!(
+            fs::read(fixture.0.join("helper.sock")).unwrap(),
+            b"replacement"
+        );
     }
 
     #[test]
@@ -453,7 +577,9 @@ mod tests {
         let original = fs::metadata(&path).unwrap();
         assert!(validate_socket(&original, original.uid(), original.gid()).is_err());
         assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o666);
-        assert!(validate_socket(&original, original.uid().wrapping_add(1), original.gid()).is_err());
+        assert!(
+            validate_socket(&original, original.uid().wrapping_add(1), original.gid()).is_err()
+        );
         assert!(root_directory(&fixture.0, None).is_err());
     }
 
