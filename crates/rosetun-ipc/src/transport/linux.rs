@@ -394,6 +394,35 @@ mod tests {
     }
 
     #[test]
+    fn drop_preserves_symlinks_and_other_sockets() {
+        let fixture = Fixture::new();
+        let listener = fixture.bind().unwrap();
+        fs::remove_file(listener.path()).unwrap();
+        symlink("missing", listener.path()).unwrap();
+        drop(listener);
+        let path = fixture.0.join("helper.sock");
+        assert_eq!(fs::read_link(&path).unwrap(), Path::new("missing"));
+        fs::remove_file(&path).unwrap();
+        let listener = fixture.bind().unwrap();
+        fs::remove_file(&path).unwrap();
+        let replacement = UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
+        let inode = fs::metadata(&path).unwrap().ino();
+        drop(listener);
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+        drop(replacement);
+    }
+
+    #[test]
+    fn symlink_directories_are_not_followed() {
+        let fixture = Fixture::new();
+        let link = fixture.0.join("link");
+        symlink(&fixture.0, &link).unwrap();
+        assert!(open_directory(&link).is_err());
+        assert_eq!(fs::read_link(&link).unwrap(), fixture.0);
+    }
+
+    #[test]
     fn unsafe_directories_and_socket_modes_are_rejected_without_repair() {
         let fixture = Fixture::new();
         fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o777)).unwrap();
