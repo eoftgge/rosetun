@@ -5,7 +5,7 @@
 use std::ffi::CString;
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions};
 use std::mem::{MaybeUninit, size_of};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,6 +41,20 @@ pub(super) fn identify_peer(stream: &UnixStream) -> io::Result<PeerIdentity> {
         account: AccountIdentity::LinuxUid(credentials.uid),
         administrator: credentials.uid == 0,
     })
+}
+
+fn pin_socket_inode(path: &Path) -> io::Result<File> {
+    let path = CString::new(path.as_os_str().as_encoded_bytes())?;
+    // SAFETY: The arguments match Linux openat's syscall ABI. The C path stays
+    // alive for the call. O_PATH opens only an inode reference, without following
+    // the final symlink or opening the socket for I/O; CLOEXEC prevents inheritance.
+    let descriptor = unsafe { libc::syscall(libc::SYS_openat, libc::AT_FDCWD as libc::c_long,
+        path.as_ptr(), (libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC) as libc::c_long,
+        0 as libc::c_long) };
+    if descriptor < 0 { return Err(io::Error::last_os_error()); }
+    // SAFETY: Successful openat returned a new owned descriptor, transferred
+    // exactly once to File, which closes it after the listener's Drop check.
+    Ok(unsafe { File::from_raw_fd(descriptor as libc::c_int) })
 }
 
 fn group_id() -> io::Result<u32> {
@@ -210,7 +224,7 @@ impl Listener {
             return Err(io::Error::last_os_error());
         }
         fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o660))?;
-        let socket = OpenOptions::new().read(true).custom_flags(libc::O_PATH | libc::O_NOFOLLOW).open(&socket_path)?;
+        let socket = pin_socket_inode(&socket_path)?;
         let metadata = socket.metadata()?;
         validate_socket(&metadata, uid, gid)?;
         let destination_c = CString::new(destination.as_os_str().as_encoded_bytes())?;
