@@ -163,11 +163,14 @@ fn sample(
         #[cfg(any(windows, test))]
         RoseIcon::Tray(_) => theme::DISCONNECTED,
     };
-    let opacity = match icon {
-        #[cfg(any(windows, test))]
-        RoseIcon::Tray(TrayState::ServiceUnavailable) => 140,
-        _ => 255,
+    #[cfg(any(windows, test))]
+    let opacity = if matches!(icon, RoseIcon::Tray(TrayState::ServiceUnavailable)) {
+        140
+    } else {
+        255
     };
+    #[cfg(not(any(windows, test)))]
+    let opacity = 255;
     inside.then_some((color, opacity))
 }
 
@@ -186,7 +189,7 @@ fn scanline(y: f32, intersections: &mut Vec<f32>) {
     intersections.sort_unstable_by(f32::total_cmp);
 }
 
-/// Straight-alpha RGBA of the icon, `size`×`size`, in the colours of `palette`.
+/// Straight-alpha RGBA of the icon, `size`Г—`size`, in the colours of `palette`.
 pub(crate) fn rose_icon_rgba(size: u32, icon: RoseIcon, palette: &Palette) -> Vec<u8> {
     let plate = (icon != RoseIcon::Emblem).then(|| back(size, icon, palette));
     rasterize(size, icon, plate.as_deref(), palette)
