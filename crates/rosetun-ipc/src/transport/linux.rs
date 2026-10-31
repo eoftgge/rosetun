@@ -114,7 +114,10 @@ fn root_directory(path: &Path, create_mode: Option<u32>) -> io::Result<File> {
 /// Existing objects are validated, never repaired or migrated.
 pub fn prepare_service_directories() -> io::Result<()> {
     root_directory(Path::new("/var/lib/rosetun"), Some(0o700))?;
+    root_directory(Path::new("/var/lib/rosetun/lists"), Some(0o700))?;
     root_directory(Path::new("/run/rosetun/private"), Some(0o700))?;
+    root_directory(Path::new("/run/rosetun/private/sing-box"), Some(0o700))?;
+    root_directory(Path::new("/run/rosetun/private/xray"), Some(0o700))?;
     Ok(())
 }
 

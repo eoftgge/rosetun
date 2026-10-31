@@ -287,20 +287,57 @@ impl std::fmt::Display for StartError {
     }
 }
 
+struct PreparedStart {
+    listener: Listener,
+    run_dir: std::path::PathBuf,
+    data_dir: std::path::PathBuf,
+}
+
+fn prepare_start(_run_dir: &Path) -> Result<PreparedStart, StartError> {
+    let endpoint = rosetun_ipc::default_endpoint();
+    let listener = Listener::bind(&endpoint).map_err(|error| {
+        StartError(format!("failed to bind socket {}: {error}", endpoint.display()))
+    })?;
+    #[cfg(target_os = "linux")]
+    {
+        rosetun_ipc::transport::prepare_service_directories()
+            .map_err(|error| StartError(format!("failed to prepare service directories: {error}")))?;
+        Ok(PreparedStart {
+            listener,
+            run_dir: "/run/rosetun/private".into(),
+            data_dir: "/var/lib/rosetun".into(),
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let data_dir = _run_dir.parent()
+            .ok_or_else(|| StartError("engine run directory has no data directory".to_owned()))?;
+        Ok(PreparedStart { listener, run_dir: _run_dir.to_owned(), data_dir: data_dir.to_owned() })
+    }
+}
+
 fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), StartError> {
+    start_prepared(prepare_start(run_dir), gate)
+}
+
+#[cfg(test)]
+static START_INITIALIZATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn start_prepared(prepared: Result<PreparedStart, StartError>, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), StartError> {
+    let PreparedStart { listener, run_dir, data_dir } = prepared?;
+    #[cfg(test)]
+    START_INITIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     #[cfg(windows)]
     process_job::install().map_err(|error| {
-        StartError(format!(
-            "failed to install helper process-lifetime job: {error}"
-        ))
+        StartError(format!("failed to install helper process-lifetime job: {error}"))
     })?;
-
-    let data_dir = run_dir
-        .parent()
-        .ok_or_else(|| StartError("engine run directory has no data directory".to_owned()))?;
+    let run_dir = run_dir.as_path();
+    let data_dir = data_dir.as_path();
     let mut engines = EngineRegistry::new();
     let singbox = singbox_backend(run_dir, data_dir);
     let xray = XrayHelper::new(run_dir.join("xray"));
+    let lists = list_store::ListStore::open(data_dir.join("lists"))
+        .map_err(|error| StartError(format!("failed to initialize list storage: {error}")))?;
     let warmup = singbox.clone();
     let xray_warmup = xray.clone();
     std::thread::Builder::new()
@@ -335,8 +372,6 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
         .map_err(|error| StartError(format!("failed to start engine warmup thread: {error}")))?;
     engines.register(Box::new(singbox));
 
-    let lists = list_store::ListStore::open(data_dir.join("lists"))
-        .map_err(|error| StartError(format!("failed to initialize list storage: {error}")))?;
     let helper = Arc::new(
         Helper::new(engines, rosetun_routing::backend(), gate)
             .with_xray(xray)
@@ -347,13 +382,6 @@ fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), S
         .map_err(|error| StartError(format!("failed to start list cleanup thread: {error}")))?;
     state::spawn_supervisor(Arc::clone(&helper)).map_err(|error| {
         StartError(format!("failed to start engine supervisor thread: {error}"))
-    })?;
-    let endpoint = rosetun_ipc::default_endpoint();
-    let listener = Listener::bind(&endpoint).map_err(|error| {
-        StartError(format!(
-            "failed to bind socket {}: {error}",
-            endpoint.display()
-        ))
     })?;
     Ok((listener, helper))
 }
@@ -394,6 +422,17 @@ fn backend_from_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_path_preparation_never_initializes_engines_or_background_workers() {
+        use std::sync::atomic::Ordering;
+
+        let before = START_INITIALIZATIONS.load(Ordering::SeqCst);
+        let error = start_prepared(Err(StartError("unsafe service directory".to_owned())), VerboseGate::default())
+            .err().expect("preparation must fail");
+        assert_eq!(error.to_string(), "unsafe service directory");
+        assert_eq!(START_INITIALIZATIONS.load(Ordering::SeqCst), before);
+    }
 
     #[cfg(windows)]
     #[test]
