@@ -29,6 +29,7 @@ fn server_trusted(
 }
 
 pub fn default_endpoint() -> PathBuf {
+    #[cfg(windows)]
     if let Some(custom) = std::env::var_os(ENDPOINT_ENV) {
         return PathBuf::from(custom);
     }
@@ -53,8 +54,15 @@ pub struct Connection {
     read_socket: Option<std::os::unix::net::UnixStream>,
 }
 
+/// An account authenticated by the operating system, never by protocol data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AccountIdentity {
+    WindowsSid(Vec<u8>),
+    LinuxUid(u32),
+}
+
 pub struct PeerIdentity {
-    user_sid: Vec<u8>,
+    account: AccountIdentity,
     administrator: bool,
 }
 
@@ -67,8 +75,8 @@ impl std::fmt::Debug for PeerIdentity {
 }
 
 impl PeerIdentity {
-    pub fn user_sid(&self) -> &[u8] {
-        &self.user_sid
+    pub fn account(&self) -> &AccountIdentity {
+        &self.account
     }
 
     pub fn is_administrator(&self) -> bool {
@@ -105,14 +113,27 @@ impl Connection {
                 .ok_or_else(|| io::Error::other("not a server pipe connection"))?;
             platform::identify_peer(pipe)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
         {
-            // Unix transport is for development only; releases use Windows named pipes.
-            Ok(PeerIdentity {
-                user_sid: b"development-user".to_vec(),
-                administrator: false,
-            })
+            let stream = self.read_socket.as_ref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::PermissionDenied, "no authenticated socket")
+            })?;
+            platform::identify_peer(stream)
         }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported peer authentication"))
+        }
+    }
+
+    /// Wrap a real connected Unix stream; credentials remain bound to this socket.
+    #[cfg(target_os = "linux")]
+    pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> io::Result<Self> {
+        let writer = stream.try_clone()?;
+        let read_socket = stream.try_clone()?;
+        let mut connection = Self::new(Box::new(stream), Box::new(writer));
+        connection.read_socket = Some(read_socket);
+        Ok(connection)
     }
 
     pub fn read(&mut self) -> Result<Option<crate::Frame>, crate::CodecError> {
@@ -216,59 +237,27 @@ fn read_timed_out() -> io::Error {
     io::Error::new(io::ErrorKind::TimedOut, "helper pipe read deadline elapsed")
 }
 
-#[cfg(unix)]
-mod platform {
-    use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(target_os = "linux")]
+#[path = "transport/linux.rs"]
+mod platform;
 
+#[cfg(all(unix, not(target_os = "linux")))]
+mod platform {
     use super::*;
 
-    pub fn connect(endpoint: &Path) -> io::Result<Connection> {
-        let stream = UnixStream::connect(endpoint)?;
-        let writer = stream.try_clone()?;
-        Ok(Connection::new(Box::new(stream), Box::new(writer)))
+    #[derive(Debug)]
+    pub struct Listener;
+
+    fn unsupported() -> io::Error {
+        io::Error::new(io::ErrorKind::Unsupported, "unsupported IPC platform")
     }
 
-    #[derive(Debug)]
-    pub struct Listener {
-        inner: UnixListener,
-        path: PathBuf,
-    }
+    pub fn connect(_: &Path) -> io::Result<Connection> { Err(unsupported()) }
 
     impl Listener {
-        pub fn bind(endpoint: &Path) -> io::Result<Self> {
-            if let Some(parent) = endpoint.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            match std::fs::remove_file(endpoint) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
-            let inner = UnixListener::bind(endpoint)?;
-            Ok(Self {
-                inner,
-                path: endpoint.to_path_buf(),
-            })
-        }
-
-        pub fn accept(&self) -> io::Result<Connection> {
-            let (stream, _addr) = self.inner.accept()?;
-            let writer = stream.try_clone()?;
-            let read_socket = stream.try_clone()?;
-            let mut connection = Connection::new(Box::new(stream), Box::new(writer));
-            connection.read_socket = Some(read_socket);
-            Ok(connection)
-        }
-
-        pub fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for Listener {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.path);
-        }
+        pub fn bind(_: &Path) -> io::Result<Self> { Err(unsupported()) }
+        pub fn accept(&self) -> io::Result<Connection> { Err(unsupported()) }
+        pub fn path(&self) -> &Path { Path::new("") }
     }
 }
 
@@ -645,7 +634,7 @@ mod platform {
         drop(impersonation);
         let (user_sid, administrator) = token_identity(&result?)?;
         Ok(PeerIdentity {
-            user_sid,
+            account: AccountIdentity::WindowsSid(user_sid),
             administrator,
         })
     }
@@ -978,6 +967,8 @@ mod platform {
 }
 
 pub use platform::{Listener, connect};
+#[cfg(target_os = "linux")]
+pub use platform::prepare_service_directories;
 
 #[cfg(test)]
 mod security_descriptor_tests {

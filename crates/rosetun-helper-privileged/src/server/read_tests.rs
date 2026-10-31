@@ -24,7 +24,11 @@ fn unique_endpoint() -> PathBuf {
     }
     #[cfg(unix)]
     {
-        std::env::temp_dir().join(format!("{suffix}.sock"))
+        use std::os::unix::fs::DirBuilderExt;
+
+        let directory = std::env::temp_dir().join(suffix);
+        std::fs::DirBuilder::new().mode(0o700).create(&directory).expect("private test directory");
+        directory.join("helper.sock")
     }
 }
 
@@ -87,7 +91,13 @@ impl TestServer {
 
     fn start_with_status_delay(timeouts: ReadTimeouts, status_delay: Duration) -> Self {
         let endpoint = unique_endpoint();
+        #[cfg(windows)]
         let listener = Listener::bind(&endpoint).expect("bind test endpoint");
+        #[cfg(target_os = "linux")]
+        let listener = Listener::from_unix_listener(
+            std::os::unix::net::UnixListener::bind(&endpoint).expect("bind test endpoint"),
+            endpoint.clone(),
+        );
         let mut server = Server::new(false);
         server.read_timeouts = timeouts;
         server.status_delay = status_delay;
@@ -132,6 +142,11 @@ impl Drop for TestServer {
         // The accept loop has its own thread and exits after the closed event
         // channel rejects the next accepted connection.
         let _ = open_raw(&self.endpoint);
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::remove_file(&self.endpoint).expect("remove test socket");
+            std::fs::remove_dir(self.endpoint.parent().unwrap()).expect("remove test directory");
+        }
     }
 }
 

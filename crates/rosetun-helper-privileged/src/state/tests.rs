@@ -2572,7 +2572,7 @@ fn administrator_takes_over_a_protected_session() {
     let (helper, _, _, _) = protected_helper(Box::new(StubEngine));
     let owner = Caller::fake(b"owner", false);
     let admin = Caller::fake(b"admin", true);
-    *helper.owner.lock().unwrap() = Some(owner.sid.clone());
+    *helper.owner.lock().unwrap() = Some(owner.account.clone());
 
     helper
         .connect_as(&admin, &protected_request())
@@ -2593,7 +2593,7 @@ fn failed_protected_connect_keeps_the_previous_owner() {
     let owner = Caller::fake(b"owner", false);
     let other = Caller::fake(b"other", false);
     let admin = Caller::fake(b"admin", true);
-    *helper.owner.lock().unwrap() = Some(owner.sid.clone());
+    *helper.owner.lock().unwrap() = Some(owner.account.clone());
 
     helper
         .connect_as(&admin, &protected_request())
@@ -2606,7 +2606,7 @@ fn failed_protected_connect_keeps_the_previous_owner() {
         helper.disconnect_as(&other).unwrap_err().code,
         ErrorCode::AccessDenied
     );
-    assert_eq!(*helper.owner.lock().unwrap(), Some(owner.sid.clone()));
+    assert_eq!(*helper.owner.lock().unwrap(), Some(owner.account.clone()));
     assert!(helper.temporary_rules_as(&admin).is_ok());
     helper
         .disconnect_as(&owner)
@@ -6723,4 +6723,28 @@ fn lockdown_program_permits_leave_with_a_session_and_return_after_it() {
         assert!(with_programs(&after[1 + synced]));
         assert!(!helper.session().unwrap().programs_withdrawn);
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_uids_preserve_session_and_owner_only_read_policies() {
+    let helper = Helper::new(EngineRegistry::new(), Box::new(UnusedRouting), VerboseGate::default());
+    let owner = Caller { account: AccountIdentity::LinuxUid(1000), administrator: false };
+    let other = Caller { account: AccountIdentity::LinuxUid(1001), administrator: false };
+    let admin = Caller { account: AccountIdentity::LinuxUid(0), administrator: true };
+    *helper.owner.lock().unwrap() = Some(owner.account.clone());
+    *helper.last_owner.lock().unwrap() = Some(owner.account.clone());
+    assert!(helper.connections_as(&owner).is_ok());
+    assert!(helper.diagnostic_log_as(&owner).is_ok());
+    for denied in [&other, &admin] {
+        assert_eq!(helper.connections_as(denied).unwrap_err().code, ErrorCode::AccessDenied);
+        assert_eq!(helper.diagnostic_log_as(denied).unwrap_err().code, ErrorCode::AccessDenied);
+        assert_eq!(helper.close_connection_as(denied, "fixture").unwrap_err().code, ErrorCode::AccessDenied);
+    }
+    assert_eq!(helper.disconnect_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(helper.temporary_rules_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(helper.session_exits_as(&other).unwrap_err().code, ErrorCode::AccessDenied);
+    assert!(helper.temporary_rules_as(&admin).is_ok());
+    assert!(helper.session_exits_as(&admin).is_ok());
+    helper.disconnect_as(&admin).unwrap();
 }

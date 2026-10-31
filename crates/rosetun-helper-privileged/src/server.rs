@@ -267,7 +267,7 @@ fn handle(
             }
         }
 
-        tracing::debug!(request = ?body, "handling helper request");
+        tracing::debug!("handling helper request");
         let response = dispatch(
             &body,
             &helper,
@@ -316,7 +316,7 @@ fn dispatch(
 ) -> Response {
     match request {
         Request::Hello {
-            client,
+            client: _,
             protocol_version,
         } => {
             if *protocol_version != PROTOCOL_VERSION {
@@ -328,7 +328,7 @@ fn dispatch(
                 ));
             }
             *greeted = true;
-            tracing::info!(%client, "client connected");
+            tracing::info!("client connected");
             Response::Hello {
                 helper_version: HELPER_VERSION.to_owned(),
                 protocol_version: PROTOCOL_VERSION,
@@ -341,7 +341,7 @@ fn dispatch(
         Request::Status => Response::Status(helper.status()),
         _ if caller.is_none() => Response::Error(HelperError::new(
             ErrorCode::AccessDenied,
-            "the Windows account for this connection could not be verified",
+            "the account for this connection could not be verified",
         )),
         Request::TemporaryRules => match helper.temporary_rules_as(caller.expect("caller checked"))
         {
@@ -418,6 +418,10 @@ fn dispatch(
             ErrorCode::InvalidState,
             "the helper runs as a service; stop the Rosetun service instead",
         )),
+        #[cfg(target_os = "linux")]
+        Request::Shutdown if !caller.expect("caller checked").is_administrator() => {
+            Response::Error(HelperError::new(ErrorCode::AccessDenied, "shutdown requires an administrator"))
+        }
         Request::Shutdown => Response::Ok,
     }
 }
@@ -452,14 +456,14 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_is_rejected_only_in_service_mode() {
+    fn shutdown_requires_the_platform_policy() {
         let helper = Helper::new(
             rosetun_engine::EngineRegistry::new(),
             rosetun_routing::backend(),
             crate::log_gate::VerboseGate::default(),
         );
         let mut greeted = true;
-        let caller = Caller::fake(b"owner", false);
+        let caller = Caller::fake(b"owner", true);
         assert!(matches!(
             dispatch(
                 &Request::Shutdown,
@@ -485,6 +489,16 @@ mod tests {
             ),
             Response::Ok
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_shutdown_rejects_an_authenticated_non_administrator() {
+        let helper = Helper::new(rosetun_engine::EngineRegistry::new(), rosetun_routing::backend(),
+            crate::log_gate::VerboseGate::default());
+        let caller = Caller::fake(b"ordinary", false);
+        assert!(matches!(dispatch(&Request::Shutdown, &helper, &mut true, Some(&caller), true, 0),
+            Response::Error(HelperError { code: ErrorCode::AccessDenied, .. })));
     }
 
     #[test]

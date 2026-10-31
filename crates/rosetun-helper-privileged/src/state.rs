@@ -27,7 +27,7 @@ use rosetun_engine::{
     TrafficProbe, TrafficTotals, UrlTestTarget, errors::EngineError, url_test_any,
 };
 use rosetun_engine_xray::{SocksEndpoint, XrayHelper};
-use rosetun_ipc::transport::PeerIdentity;
+use rosetun_ipc::transport::{AccountIdentity, PeerIdentity};
 use rosetun_ipc::{
     ConnectRequest, ErrorCode, HelperError, ListFormat, MAX_EXTRA_NODES, MAX_TEMPORARY_RULES,
     SessionExit,
@@ -121,15 +121,20 @@ fn connection_state_name(state: &ConnectionState) -> &'static str {
 }
 
 pub(crate) struct Caller {
-    sid: Vec<u8>,
+    account: AccountIdentity,
     administrator: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl Caller {
+    pub(crate) fn is_administrator(&self) -> bool { self.administrator }
 }
 
 #[cfg(test)]
 impl Caller {
     pub(crate) fn fake(sid: &[u8], administrator: bool) -> Self {
         Self {
-            sid: sid.to_vec(),
+            account: AccountIdentity::WindowsSid(sid.to_vec()),
             administrator,
         }
     }
@@ -138,7 +143,7 @@ impl Caller {
 impl From<PeerIdentity> for Caller {
     fn from(peer: PeerIdentity) -> Self {
         Self {
-            sid: peer.user_sid().to_vec(),
+            account: peer.account().clone(),
             administrator: peer.is_administrator(),
         }
     }
@@ -148,8 +153,8 @@ pub struct Helper {
     status: Arc<Mutex<Status>>,
     connections: Arc<Mutex<ConnectionBook>>,
     session: Mutex<Session>,
-    owner: Arc<Mutex<Option<Vec<u8>>>>,
-    last_owner: Mutex<Option<Vec<u8>>>,
+    owner: Arc<Mutex<Option<AccountIdentity>>>,
+    last_owner: Mutex<Option<AccountIdentity>>,
     engines: Arc<EngineRegistry>,
     xray: Option<Arc<dyn XrayRunner>>,
     physical_interface: fn(&str) -> Option<String>,
@@ -256,7 +261,7 @@ struct Session {
     /// Whether the running session started Xray for any node.
     xray_chain: bool,
     request: Option<ConnectRequest>,
-    owner: Arc<Mutex<Option<Vec<u8>>>>,
+    owner: Arc<Mutex<Option<AccountIdentity>>>,
     reconnect: Option<Reconnect>,
     missing_route_ticks: u8,
     missing_route_since: Option<Instant>,
@@ -584,7 +589,7 @@ impl Helper {
         let owner = self.owner.lock().map_err(|_| access_denied())?;
         match owner.as_ref() {
             None => Ok(false),
-            Some(sid) if sid == &caller.sid => Ok(true),
+            Some(account) if account == &caller.account => Ok(true),
             Some(_) => Err(HelperError::new(
                 ErrorCode::AccessDenied,
                 "only the account that connected the tunnel can read its connections",
@@ -629,7 +634,7 @@ impl Helper {
         let owner = self.owner.lock().map_err(|_| access_denied())?;
         let last_owner = self.last_owner.lock().map_err(|_| access_denied())?;
         let expected = owner.as_ref().or(last_owner.as_ref());
-        if expected != Some(&caller.sid) {
+        if expected != Some(&caller.account) {
             return Err(HelperError::new(
                 ErrorCode::AccessDenied,
                 "only the account that started the most recent session can read the diagnostic log",
@@ -1082,7 +1087,7 @@ impl Helper {
                 if caller.administrator
                     && previous_owner
                         .as_ref()
-                        .is_some_and(|previous| previous != &caller.sid)
+                        .is_some_and(|previous| previous != &caller.account)
                 {
                     tracing::info!("session owner changed by an administrator");
                 }
@@ -1155,7 +1160,7 @@ impl Helper {
                     let owner = self.owner.lock().map_err(|_| access_denied())?;
                     if owner
                         .as_ref()
-                        .is_some_and(|sid| sid != &caller.sid && !caller.administrator)
+                        .is_some_and(|account| account != &caller.account && !caller.administrator)
                         || (owner.is_none() && status.state.is_transitional())
                     {
                         return Err(access_denied());
@@ -1267,18 +1272,18 @@ impl Helper {
         let owner = self.owner.lock().map_err(|_| access_denied())?;
         if owner
             .as_ref()
-            .is_some_and(|sid| sid != &caller.sid && !caller.administrator)
+            .is_some_and(|account| account != &caller.account && !caller.administrator)
         {
             return Err(access_denied());
         }
         Ok(())
     }
 
-    fn begin_connect(&self, caller: &Caller) -> Result<Option<Vec<u8>>, HelperError> {
+    fn begin_connect(&self, caller: &Caller) -> Result<Option<AccountIdentity>, HelperError> {
         self.with_status(|status| {
             let mut owner = self.owner.lock().map_err(|_| access_denied())?;
-            let previous = owner.replace(caller.sid.clone());
-            *self.last_owner.lock().map_err(|_| access_denied())? = Some(caller.sid.clone());
+            let previous = owner.replace(caller.account.clone());
+            *self.last_owner.lock().map_err(|_| access_denied())? = Some(caller.account.clone());
             self.cancelled.store(false, Ordering::Release);
             if self.shutting_down.load(Ordering::Acquire) {
                 self.cancelled.store(true, Ordering::Release);
@@ -1330,7 +1335,7 @@ fn test_caller() -> Caller {
 pub(crate) fn access_denied() -> HelperError {
     HelperError::new(
         ErrorCode::AccessDenied,
-        "the tunnel belongs to another Windows account; only that account or an administrator can control it",
+        "the tunnel belongs to another account; only that account or an administrator can control it",
     )
 }
 
