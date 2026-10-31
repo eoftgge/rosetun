@@ -102,7 +102,10 @@ mod tests {
 
     #[test]
     fn screen_clip_requests_and_polls_report_unavailable() {
-        assert!(matches!(open_screen_clip(), Err(QrError::ScreenClipUnavailable)));
+        assert!(matches!(
+            open_screen_clip(),
+            Err(QrError::ScreenClipUnavailable)
+        ));
         let (tx, rx) = mpsc::channel();
         let workers = WorkerDispatcher {
             publisher: ConfigPublisher {

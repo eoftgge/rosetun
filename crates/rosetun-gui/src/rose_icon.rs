@@ -380,16 +380,15 @@ fn rasterize(size: u32, icon: RoseIcon, plate: Option<&[bool]>, palette: &Palett
                     while crossing < intersections.len() && intersections[crossing] <= sample_x {
                         crossing += 1;
                     }
-                    let foreground =
-                        sample(
-                #[cfg(any(windows, test))]
-                (sample_x, sample_y),
-                icon,
-                crossing % 2 == 1,
-                #[cfg(any(windows, test))]
-                grid,
-                palette,
-            );
+                    let foreground = sample(
+                        #[cfg(any(windows, test))]
+                        (sample_x, sample_y),
+                        icon,
+                        crossing % 2 == 1,
+                        #[cfg(any(windows, test))]
+                        grid,
+                        palette,
+                    );
                     let backed = plate.is_some_and(|plate| {
                         plate[(y as usize * SAMPLES_PER_AXIS + j) * sample_side
                             + x * SAMPLES_PER_AXIS
