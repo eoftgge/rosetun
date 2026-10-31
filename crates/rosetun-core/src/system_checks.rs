@@ -233,6 +233,7 @@ fn other_vpn_result(
     }
 }
 
+#[cfg(any(windows, test))]
 fn proxy_result(
     enabled: Option<u32>,
     server: Option<String>,

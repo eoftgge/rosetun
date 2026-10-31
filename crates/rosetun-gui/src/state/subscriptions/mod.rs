@@ -423,6 +423,7 @@ impl State {
                 self.subscriptions.reveal = None;
                 self.subscriptions.reveal_card = None;
             }
+            #[cfg(any(windows, test))]
             Action::OpenLink(link) => return self.open_link(link),
             Action::ToggleExpanded(id) => {
                 if !self.subscriptions.expanded.remove(&id) {

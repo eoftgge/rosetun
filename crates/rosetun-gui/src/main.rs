@@ -125,17 +125,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Before the window and its icon exist, so a non-rose preset never flashes rose.
     theme::set_accent(app::initial_accent(&store));
-    let mut viewport = eframe::egui::ViewportBuilder::default()
+    let viewport = eframe::egui::ViewportBuilder::default()
         .with_title(constants::TITLE)
         .with_icon(std::sync::Arc::new(brand::window_icon(theme::palette())))
         .with_decorations(!view::header::CUSTOM_FRAME)
         .with_inner_size([1200.0, 780.0])
         .with_min_inner_size([960.0, 640.0]);
     #[cfg(windows)]
-    if start_hidden {
+    let viewport = if start_hidden {
         // eframe shows the window after its first frame; keep that frame off every screen.
-        viewport = viewport.with_position(app::OFFSCREEN).with_active(false);
-    }
+        viewport.with_position(app::OFFSCREEN).with_active(false)
+    } else {
+        viewport
+    };
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,

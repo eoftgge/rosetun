@@ -107,9 +107,10 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::ConfirmResetSettings
         | Action::SetVerboseLog(_)
         | Action::SkipVersion
-        | Action::AnnounceUpdate(_)
         | Action::Apply
         | Action::RestoreMyEdits => true,
+        #[cfg(any(windows, test))]
+        Action::AnnounceUpdate(_) => true,
         #[cfg(windows)]
         Action::SetAutostart(_)
         | Action::SetCloseToTray(_)

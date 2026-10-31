@@ -15,7 +15,9 @@ use rosetun_processes::RunningProcess;
 
 use crate::actions::PrimaryAction;
 use crate::errors;
-use crate::rules::{ProcessGroup, ProcessMatchMode};
+#[cfg(windows)]
+use crate::rules::ProcessGroup;
+use crate::rules::ProcessMatchMode;
 use crate::worker::{HelperCommandError, LockdownChange};
 
 fn main_delay(proxy: ProbeOutcome) -> rosetun_ipc::TunnelDelays {

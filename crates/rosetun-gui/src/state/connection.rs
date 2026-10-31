@@ -130,6 +130,7 @@ impl State {
 
     /// The tray says what a connect waits for only while it checks the
     /// engine, the one stage that can take a minute without a fault.
+    #[cfg(any(windows, test))]
     pub(crate) fn tray_stage_label(&self) -> Option<String> {
         let status = self
             .visible_status()
@@ -687,6 +688,7 @@ impl State {
                     return Some(Job::SelectNode(subscription, node));
                 }
             }
+            #[cfg(any(windows, test))]
             Action::SelectNodeFromTray(subscription, node) => {
                 let disconnected = matches!(
                     self.visible_status().map(|status| &status.state),

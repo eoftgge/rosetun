@@ -129,6 +129,7 @@ impl State {
                     return self.start_settings(Job::SkipVersion(release.version.clone()));
                 }
             }
+            #[cfg(any(windows, test))]
             Action::AnnounceUpdate(version) => {
                 if self.config_ready
                     && self.config.interface.announced_update.as_deref() != Some(version.as_str())

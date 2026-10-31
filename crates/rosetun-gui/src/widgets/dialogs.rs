@@ -48,6 +48,7 @@ pub(crate) fn confirm_modal(
     }
 }
 
+#[cfg(windows)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThreeWayChoice {
     None,
@@ -57,6 +58,7 @@ pub(crate) enum ThreeWayChoice {
 }
 
 /// A confirmation with a second way forward between Cancel and the main button.
+#[cfg(windows)]
 pub(crate) struct ThreeWayModal {
     pub(crate) id: &'static str,
     pub(crate) title: String,
@@ -65,6 +67,7 @@ pub(crate) struct ThreeWayModal {
     pub(crate) confirm: String,
 }
 
+#[cfg(windows)]
 pub(crate) fn three_way_modal(
     ctx: &egui::Context,
     options: ThreeWayModal,

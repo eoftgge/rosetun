@@ -244,6 +244,7 @@ impl RoutingGuard {
         Self::new_with_reconnector(|_, _| Ok(()), |_| Ok(()), || Ok(()))
     }
 
+    #[cfg(windows)]
     pub(crate) fn from_session(session: impl ProtectionSession + 'static) -> Self {
         Self {
             session: Some(Box::new(session)),

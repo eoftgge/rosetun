@@ -87,6 +87,7 @@ pub(crate) struct Server {
     status_delay: Duration,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone)]
 pub(crate) struct ShutdownHandle(Sender<ServerEvent>);
 
@@ -104,6 +105,7 @@ impl Server {
         }
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn shutdown_handle(&self) -> ShutdownHandle {
         ShutdownHandle(self.tx.clone())
     }
@@ -188,6 +190,7 @@ impl Server {
     }
 }
 
+#[cfg(any(windows, test))]
 impl ShutdownHandle {
     pub(crate) fn request(&self) {
         let _ = self.0.send(ServerEvent::Shutdown);

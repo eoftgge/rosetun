@@ -45,9 +45,11 @@ use session::SessionState;
 pub(crate) use session::{ExitInputs, SessionPart};
 use settings::SettingsState;
 pub(crate) use settings::{AboutFolder, SettingsSection};
+#[cfg(any(windows, test))]
+pub(crate) use subscriptions::OpenedLink;
 use subscriptions::SubscriptionsState;
 pub(crate) use subscriptions::{
-    AddDialog, OpenedLink, PingResult, QrSource, QrStage, UpdateOutcome, shared_auto_update_hours,
+    AddDialog, PingResult, QrSource, QrStage, UpdateOutcome, shared_auto_update_hours,
 };
 use system_checks::SystemChecksState;
 use traffic::TrafficState;
@@ -250,6 +252,7 @@ pub(crate) enum Action {
     CheckUpdatesNow,
     SkipVersion,
     /// The tray announced this version; saved so it is announced once.
+    #[cfg(any(windows, test))]
     AnnounceUpdate(String),
     SaveDns,
     SelectCustomDns,
@@ -346,6 +349,7 @@ pub(crate) enum Action {
     ConfirmProtectionOff,
     SelectNode(SubscriptionId, NodeId),
     /// The tray's server list: as `SelectNode`, and a disconnected tunnel connects.
+    #[cfg(any(windows, test))]
     SelectNodeFromTray(SubscriptionId, NodeId),
     RevealServer,
     RevealDone,
@@ -360,6 +364,7 @@ pub(crate) enum Action {
     ToggleExpanded(SubscriptionId),
     DropSubscription(SubscriptionId, usize),
     OpenAdd,
+    #[cfg(any(windows, test))]
     OpenLink(OpenedLink),
     CancelAdd,
     SubmitAdd,
@@ -643,7 +648,6 @@ impl State {
             | Action::KeepBlocked
             | Action::ConfirmProtectionOff
             | Action::SelectNode(_, _)
-            | Action::SelectNodeFromTray(_, _)
             | Action::ToggleExitReveal
             | Action::ToggleFailureDetails
             | Action::MeasureDelay
@@ -652,6 +656,8 @@ impl State {
             | Action::RequestLockdown(_)
             | Action::CancelLockdown
             | Action::ConfirmLockdown) => return self.act_connection(action),
+            #[cfg(any(windows, test))]
+            action @ Action::SelectNodeFromTray(_, _) => return self.act_connection(action),
             action @ (Action::OpenTraffic
             | Action::SetTrafficRange(_)
             | Action::SetConnectionsTab(_)
@@ -701,8 +707,9 @@ impl State {
             | Action::OpenFolder(_)) => {
                 return self.act_settings(action);
             }
-            action
-            @ (Action::CheckUpdatesNow | Action::SkipVersion | Action::AnnounceUpdate(_)) => {
+            #[cfg(any(windows, test))]
+            action @ Action::AnnounceUpdate(_) => return self.act_updates(action),
+            action @ (Action::CheckUpdatesNow | Action::SkipVersion) => {
                 return self.act_updates(action);
             }
             action @ (Action::ShowLists
@@ -779,7 +786,9 @@ impl State {
             action @ (Action::ReadQr(_) | Action::CancelQr | Action::ChooseQrLink(_)) => {
                 return self.act_qr(action);
             }
-            action @ (Action::RevealServer | Action::RevealDone | Action::OpenLink(_)) => {
+            #[cfg(any(windows, test))]
+            action @ Action::OpenLink(_) => return self.act_subscriptions(action),
+            action @ (Action::RevealServer | Action::RevealDone) => {
                 return self.act_subscriptions(action);
             }
             action @ (Action::ToggleExpanded(_)
