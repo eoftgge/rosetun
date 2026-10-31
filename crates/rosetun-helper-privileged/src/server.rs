@@ -1,5 +1,5 @@
 use std::io;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -77,6 +77,30 @@ impl Drop for UploadOwner {
     }
 }
 
+struct AcceptThread {
+    listener: Arc<Listener>,
+    stopping: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AcceptThread {
+    fn stop(&mut self) -> io::Result<()> {
+        self.stopping.store(true, Ordering::Release);
+        let Some(thread) = self.thread.take() else { return Ok(()); };
+        let interrupted = self.listener.interrupt_accept(&thread);
+        let joined = thread.join().map_err(|_| io::Error::other("helper accept thread panicked"));
+        interrupted.and(joined)
+    }
+}
+
+impl Drop for AcceptThread {
+    fn drop(&mut self) {
+        if let Err(error) = self.stop() {
+            tracing::error!(%error, "failed to stop helper accept thread");
+        }
+    }
+}
+
 pub(crate) struct Server {
     tx: Sender<ServerEvent>,
     rx: Receiver<ServerEvent>,
@@ -116,12 +140,21 @@ impl Server {
         let accept_tx = self.tx.clone();
         let active = Arc::clone(&self.active);
         let last_timeout_warning = Arc::new(Mutex::new(None));
-        std::thread::Builder::new()
+        let listener = Arc::new(listener);
+        let accept_listener = Arc::clone(&listener);
+        let stopping = Arc::new(AtomicBool::new(false));
+        let accept_stopping = Arc::clone(&stopping);
+        let thread = std::thread::Builder::new()
             .name("rosetun-ipc-accept".to_owned())
             .spawn(move || {
                 let mut last_limit_warning: Option<Instant> = None;
                 loop {
-                    match listener.accept() {
+                    if accept_stopping.load(Ordering::Acquire) { break; }
+                    let accepted = accept_listener.accept();
+                    // Check before admission: shutdown never waits for a client
+                    // slot, even when a real client wins the race with cancellation.
+                    if accept_stopping.load(Ordering::Acquire) { break; }
+                    match accepted {
                         Ok(connection) => {
                             let accepted_at = Instant::now();
                             let Some(permit) = ConnectionPermit::acquire(&active) else {
@@ -151,6 +184,7 @@ impl Server {
                     }
                 }
             })?;
+        let mut accept_thread = AcceptThread { listener, stopping, thread: Some(thread) };
 
         while let Ok(event) = self.rx.recv() {
             match event {
@@ -179,6 +213,7 @@ impl Server {
                 }
                 ServerEvent::Shutdown => {
                     helper.shutdown();
+                    accept_thread.stop()?;
                     tracing::info!("helper shutdown completed");
                     return Ok(());
                 }
@@ -186,6 +221,7 @@ impl Server {
         }
 
         helper.shutdown();
+        accept_thread.stop()?;
         Err(io::Error::other("helper event channel closed unexpectedly"))
     }
 }

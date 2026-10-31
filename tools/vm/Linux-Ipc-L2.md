@@ -4,6 +4,48 @@ This is a transport-only exercise for an isolated Debian 13 VM. It never starts
 Rosetun's privileged helper, engines, VPN, firewall or network tests. Run the
 privileged steps yourself. Do not run this on a machine with an active helper.
 
+## Server lifecycle regressions (unprivileged)
+
+The transport fixture below owns a Listener directly. It does **not** exercise
+`Server::serve`, its accept worker, or service shutdown. Passing that fixture
+alone cannot establish that Server joins its accept thread or cleans its endpoint.
+
+Run these real Server regressions as an ordinary user, without starting the
+helper binary, engines, services, firewall or a root matrix:
+
+```sh
+cargo +1.96.0 test -q -p rosetun-helper-privileged --locked server::read_tests::shutdown
+```
+
+The tests construct Server with an empty engine registry and no active tunnel:
+
+- `shutdown_without_clients_closes_listener_before_serve_returns`: request
+  ShutdownHandle shutdown without connecting a client; wait for serve to return,
+  then require failed connect, removed owned socket, and successful owned rebind.
+- `shutdown_with_full_client_limit_and_concurrent_connect_does_not_wait_for_clients`:
+  keep every admitted client alive with a long handshake deadline, race another
+  connection with shutdown, and require bounded completion while slots remain full.
+- `shutdown_cleanup_preserves_a_replacement_endpoint`: substitute a file, symlink
+  and another socket in turn, stop the original Server, and verify the replacement
+  inode/content survives. The foreign socket must still accept its own client.
+
+Linux tests opt into the IPC `test-support` build feature through a dev-dependency.
+It exposes an owned-listener fixture limited to a private directory owned by the
+current test account. Production bind still accepts only the fixed root endpoint;
+client trust checks remain enabled. No runtime setting bypasses those policies.
+
+Server test teardown sends ShutdownHandle and waits at most four seconds for
+serve to return before joining. It never connects a synthetic client to unblock
+accept and never unlinks the endpoint to make shutdown appear successful. Only
+an empty fixture directory is removed by teardown. In substitution tests, the
+verified replacement is explicitly removed **after** shutdown assertions, solely
+to clean up that test-created object. A regression times out and fails rather
+than hanging the runner. Client workers retain their existing bounded read
+lifecycle; shutdown joins the accept worker and closes the listener independently
+of those workers and of the connection admission limit.
+
+## Privileged transport fixture prerequisites
+
 Prerequisites: Rust 1.96.0 and a C linker; an existing `rosetun` group; two
 existing ordinary test accounts (`ipc_owner`, `ipc_other`) with distinct UIDs,
 both allowed to connect through that group. Provision these deliberately before

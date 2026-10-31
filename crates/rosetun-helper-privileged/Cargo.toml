@@ -23,5 +23,8 @@ tracing-subscriber.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_WindowsProgramming", "Win32_UI_WindowsAndMessaging"] }
 
+[dev-dependencies]
+rosetun-ipc = { workspace = true, features = ["test-support"] }
+
 [lints]
 workspace = true

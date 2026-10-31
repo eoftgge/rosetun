@@ -330,6 +330,30 @@ impl Listener {
         Connection::from_unix_stream(self.inner.accept()?.0)
     }
 
+    /// Wake a blocked accept on this socket without connecting through its path.
+    /// The caller must stop its accept loop before interrupting and then join it.
+    pub fn interrupt_accept(&self, _thread: &std::thread::JoinHandle<()>) -> io::Result<()> {
+        // SAFETY: The listener owns this live Linux socket throughout the call.
+        // shutdown transfers no descriptor ownership and disables future accepts,
+        // so a stop racing an accept cannot miss its wakeup.
+        if unsafe { libc::shutdown(self.inner.as_raw_fd(), libc::SHUT_RDWR) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Bind an owned fixture in a private directory belonging to the test user.
+    /// Production bind and client server-verification policy remain unchanged.
+    #[cfg(feature = "test-support")]
+    pub fn bind_test_fixture(directory: &Path) -> io::Result<Self> {
+        let opened = open_directory(directory)?;
+        // SAFETY: geteuid has no arguments, ownership or lifetime requirements.
+        let uid = unsafe { libc::geteuid() };
+        let metadata = opened.metadata()?;
+        validate_directory(&metadata, uid, true)?;
+        Self::bind_in(opened, directory.join("helper.sock"), uid, metadata.gid())
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }

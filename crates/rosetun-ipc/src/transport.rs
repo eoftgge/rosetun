@@ -266,6 +266,9 @@ mod platform {
         pub fn accept(&self) -> io::Result<Connection> {
             Err(unsupported())
         }
+        pub fn interrupt_accept(&self, _: &std::thread::JoinHandle<()>) -> io::Result<()> {
+            Err(unsupported())
+        }
         pub fn path(&self) -> &Path {
             Path::new("")
         }
@@ -285,7 +288,7 @@ mod platform {
     use std::thread::{self, JoinHandle};
 
     use windows_sys::Win32::Foundation::{
-        DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY,
+        DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED, ERROR_NOT_FOUND, ERROR_PIPE_BUSY,
         ERROR_PIPE_CONNECTED, ERROR_SERVICE_DOES_NOT_EXIST, GetLastError, HANDLE,
         INVALID_HANDLE_VALUE, LocalFree,
     };
@@ -969,6 +972,25 @@ mod platform {
             drop(slot);
 
             connection_from_handle(pending, true)
+        }
+
+        /// Cancel synchronous accept until the stopped worker has exited.
+        /// Repetition covers shutdown racing entry into ConnectNamedPipe.
+        pub fn interrupt_accept(&self, thread: &std::thread::JoinHandle<()>) -> io::Result<()> {
+            // A std thread handle remains owned by JoinHandle until join. This
+            // listener does not close it or transfer it to another owner.
+            while !thread.is_finished() {
+                // SAFETY: The borrowed handle refers to the accept thread created
+                // by std. Only its synchronous I/O is cancelled; no thread is killed.
+                if unsafe { CancelSynchronousIo(thread.as_raw_handle() as HANDLE) } == 0 {
+                    let error = last_error();
+                    if error.raw_os_error() != Some(ERROR_NOT_FOUND as i32) {
+                        return Err(error);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(())
         }
 
         pub fn path(&self) -> &Path {

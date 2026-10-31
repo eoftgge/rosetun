@@ -7,6 +7,10 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Test-only owned endpoint fixtures; never changes production bind or connect.
+test-support = []
+
 [dependencies]
 rosetun-config.workspace = true
 serde.workspace = true
