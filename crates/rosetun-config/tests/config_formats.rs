@@ -277,6 +277,16 @@ fn with_machine_scope(mut config: Value) -> Value {
 }
 
 #[test]
+fn version_seven_migration_changes_only_the_version() {
+    let (config, migrated_from) = from_json(V7).unwrap();
+    assert_eq!(migrated_from, Some(7));
+    assert_eq!(config, format_seven_config());
+    let mut expected = value(V7);
+    expected["version"] = json!(8);
+    assert_eq!(serde_json::to_value(config).unwrap(), expected);
+}
+
+#[test]
 fn version_five_loads_and_saves_as_version_seven() {
     let (config, migrated_from) = from_json(V5).expect("version five should migrate");
     assert_eq!(migrated_from, Some(5));

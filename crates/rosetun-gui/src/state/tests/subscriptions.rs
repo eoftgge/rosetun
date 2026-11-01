@@ -987,8 +987,7 @@ fn a_link_opened_before_the_settings_load_waits_for_them() {
 }
 #[test]
 fn manual_proxy_submission_and_edit_keep_the_credentials() {
-    let mut state = State::default();
-    state.config_ready = true;
+    let mut state = State { config_ready: true, ..Default::default() };
     let node = rosetun_core::parse_proxy_uri("https://fixture-user:fixture-password@proxy.example.com:443#Example").unwrap();
     state.subscriptions.add = Some(AddDialog { proxy: Some(node.clone()), ..AddDialog::default() });
     let Some(Job::SaveProxy(None, submitted)) = state.act(Action::SubmitAdd) else { panic!("expected proxy save") };

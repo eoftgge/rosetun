@@ -140,9 +140,8 @@ impl fmt::Debug for ProxyCredentials {
 impl Node {
     /// Validates external proxies at both the storage and engine boundaries.
     pub fn validate_proxy(&self) -> Result<(), &'static str> {
-        let credentials = match &self.outbound {
-            Outbound::Http(credentials) | Outbound::Socks5(credentials) => credentials,
-            _ => return Ok(()),
+        let (Outbound::Http(credentials) | Outbound::Socks5(credentials)) = &self.outbound else {
+            return Ok(());
         };
         let valid_host = |server: &str| {
             let host = server.strip_suffix('.').unwrap_or(server);

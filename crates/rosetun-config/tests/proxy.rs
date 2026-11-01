@@ -42,3 +42,25 @@ fn reports_remove_proxy_credentials_and_uris() {
     assert!(!report.contains("fixture-user"));
     assert!(!report.contains("fixture-password"));
 }
+
+#[test]
+fn protocol_credentials_and_tls_names_are_validated_before_rendering() {
+    for (socks, username, password) in [
+        (false, "", "password"), (false, "user:name", "password"),
+        (false, "user", "line\nsecret"), (true, "user", ""),
+        (true, "", "password"), (true, "user\0name", "password"),
+    ] {
+        let mut node = proxy(socks);
+        let credentials = ProxyCredentials { username: username.into(), password: password.into() };
+        node.outbound = if socks { Outbound::Socks5(credentials) } else { Outbound::Http(credentials) };
+        assert!(node.validate_proxy().is_err());
+    }
+    for name in ["", "bad name", "bad!name", "example.com/path"] {
+        let mut node = proxy(false);
+        node.stream.tls = TlsMode::Tls(TlsParams { sni: Some(name.into()), ..Default::default() });
+        assert!(node.validate_proxy().is_err());
+    }
+    let mut node = proxy(true);
+    if let Outbound::Socks5(credentials) = &mut node.outbound { credentials.username = "я".repeat(128); }
+    assert!(node.validate_proxy().is_err());
+}
