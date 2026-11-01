@@ -12,7 +12,7 @@ pub(crate) fn show(
     dialog: &mut AddDialog,
     actions: &mut Vec<Action>,
 ) {
-    if dialog.proxy.is_some() {
+    if dialog.proxy_tab {
         show_proxy(ctx, dialog, actions);
         return;
     }
@@ -22,16 +22,7 @@ pub(crate) fn show(
         |ui| {
             ui.set_width(520.0);
             ui.heading(tr!("add-subscription"));
-            if widgets::outline_button(ui, tr!("proxy-add"), !dialog.busy).clicked() {
-                dialog.proxy = Some(rosetun_config::Node {
-                    id: rosetun_config::NodeId::new("pending"), name: String::new(),
-                    server: String::new(), port: 8080,
-                    outbound: rosetun_config::Outbound::Http(Default::default()),
-                    stream: Default::default(), raw: None,
-                });
-                dialog.url.clear();
-                dialog.error = None;
-            }
+            if import_tabs(ui, dialog) { return; }
             ui.colored_label(theme::palette().text_muted, tr!("add-subtitle"));
             ui.add_space(18.0);
             if let Some(host) = &dialog.from_link {
@@ -184,12 +175,24 @@ pub(crate) fn show(
     }
 }
 
+fn import_tabs(ui: &mut egui::Ui, dialog: &mut AddDialog) -> bool {
+    ui.add_space(12.0);
+    let selected = widgets::segmented(
+        ui, "server_import_tabs", dialog.proxy_tab,
+        &[(false, tr!("import-tab-subscription")), (true, tr!("import-tab-proxy"))],
+        true, !dialog.busy && !dialog.qr.busy() && dialog.editing_proxy.is_none(),
+    );
+    ui.add_space(12.0);
+    selected.is_some_and(|proxy| dialog.select_proxy_tab(proxy))
+}
+
 fn show_proxy(ctx: &egui::Context, dialog: &mut AddDialog, actions: &mut Vec<Action>) {
     use rosetun_config::{Outbound, TlsMode, TlsParams};
 
-    let response = widgets::show_modal(ctx, egui::Modal::new(egui::Id::new("proxy_editor")), |ui| {
+    let response = widgets::show_modal(ctx, egui::Modal::new(egui::Id::new("add_subscription")), |ui| {
         ui.set_width(520.0);
-        ui.heading(tr!("proxy-add"));
+        ui.heading(if dialog.editing_proxy.is_some() { tr!("proxy-edit") } else { tr!("proxy-add") });
+        if import_tabs(ui, dialog) { return; }
         let Some(node) = &mut dialog.proxy else { return; };
         ui.add_enabled_ui(!dialog.busy, |ui| {
             let mut protocol = match (&node.outbound, &node.stream.tls) {
@@ -230,10 +233,10 @@ fn show_proxy(ctx: &egui::Context, dialog: &mut AddDialog, actions: &mut Vec<Act
                 if sni.is_empty() { tls.sni = None; }
             }
             ui.label(tr!("proxy-uri"));
-            ui.add(egui::TextEdit::singleline(&mut dialog.url).password(true));
-            if widgets::outline_button(ui, tr!("proxy-import"), !dialog.url.is_empty()).clicked() {
-                match rosetun_core::parse_proxy_uri(dialog.url.trim()) {
-                    Ok(imported) => { *node = imported; dialog.url.clear(); dialog.error = None; }
+            ui.add(egui::TextEdit::singleline(&mut dialog.proxy_uri).password(true));
+            if widgets::outline_button(ui, tr!("proxy-import"), !dialog.proxy_uri.is_empty()).clicked() {
+                match rosetun_core::parse_proxy_uri(dialog.proxy_uri.trim()) {
+                    Ok(imported) => { *node = imported; dialog.proxy_uri.clear(); dialog.error = None; }
                     Err(_) => dialog.error = Some(rosetun_core::AddFromUrlError::Proxy),
                 }
             }
@@ -244,7 +247,7 @@ fn show_proxy(ctx: &egui::Context, dialog: &mut AddDialog, actions: &mut Vec<Act
             ui.colored_label(theme::ERROR, errors::add_subscription(crate::i18n::language(), error));
         }
         ui.horizontal(|ui| {
-            if widgets::button_fill(ui, tr!("save"), !dialog.busy && valid).clicked() {
+            if widgets::button_fill(ui, if dialog.editing_proxy.is_some() { tr!("save") } else { tr!("add") }, !dialog.busy && valid).clicked() {
                 actions.push(Action::SubmitAdd);
             }
             if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {

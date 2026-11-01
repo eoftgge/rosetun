@@ -79,6 +79,8 @@ impl fmt::Debug for OpenedLink {
 }
 
 pub(crate) struct AddDialog {
+    pub(crate) proxy_tab: bool,
+    pub(crate) proxy_uri: String,
     pub(crate) proxy: Option<rosetun_config::Node>,
     pub(crate) editing_proxy: Option<SubscriptionId>,
     pub(crate) url: String,
@@ -97,6 +99,8 @@ pub(crate) struct AddDialog {
 impl Default for AddDialog {
     fn default() -> Self {
         Self {
+            proxy_tab: false,
+            proxy_uri: String::new(),
             proxy: None,
             editing_proxy: None,
             url: String::new(),
@@ -109,6 +113,25 @@ impl Default for AddDialog {
             from_link: None,
             link_error: false,
         }
+    }
+}
+
+impl AddDialog {
+    pub(crate) fn select_proxy_tab(&mut self, proxy: bool) -> bool {
+        if self.busy || self.qr.busy() || self.editing_proxy.is_some() || self.proxy_tab == proxy {
+            return false;
+        }
+        if proxy && self.proxy.is_none() {
+            self.proxy = Some(rosetun_config::Node {
+                id: rosetun_config::NodeId::new("pending"), name: String::new(),
+                server: String::new(), port: 8080,
+                outbound: rosetun_config::Outbound::Http(Default::default()),
+                stream: Default::default(), raw: None,
+            });
+        }
+        self.proxy_tab = proxy;
+        self.error = None;
+        true
     }
 }
 
@@ -468,7 +491,8 @@ impl State {
                     && !dialog.busy
                     && !dialog.qr.busy()
                 {
-                    if let Some(node) = &dialog.proxy {
+                    if dialog.proxy_tab {
+                        let Some(node) = &dialog.proxy else { return None; };
                         if node.validate_proxy().is_err() {
                             dialog.error = Some(AddFromUrlError::Proxy);
                             return None;
@@ -554,7 +578,7 @@ impl State {
                     && let Some(node) = subscription.nodes.first()
                 {
                     self.subscriptions.add = Some(AddDialog {
-                        proxy: Some(node.clone()), editing_proxy: Some(id), ..AddDialog::default()
+                        proxy_tab: true, proxy: Some(node.clone()), editing_proxy: Some(id), ..AddDialog::default()
                     });
                     return None;
                 }

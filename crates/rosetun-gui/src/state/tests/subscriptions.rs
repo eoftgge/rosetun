@@ -989,7 +989,7 @@ fn a_link_opened_before_the_settings_load_waits_for_them() {
 fn manual_proxy_submission_and_edit_keep_the_credentials() {
     let mut state = State { config_ready: true, ..Default::default() };
     let node = rosetun_core::parse_proxy_uri("https://fixture-user:fixture-password@proxy.example.com:443#Example").unwrap();
-    state.subscriptions.add = Some(AddDialog { proxy: Some(node.clone()), ..AddDialog::default() });
+    state.subscriptions.add = Some(AddDialog { proxy_tab: true, proxy: Some(node.clone()), ..AddDialog::default() });
     let Some(Job::SaveProxy(None, submitted)) = state.act(Action::SubmitAdd) else { panic!("expected proxy save") };
     assert_eq!(*submitted, node);
     assert!(state.subscriptions.add.as_ref().unwrap().busy);
@@ -1002,4 +1002,27 @@ fn manual_proxy_submission_and_edit_keep_the_credentials() {
     let dialog = state.subscriptions.add.as_ref().unwrap();
     assert_eq!(dialog.proxy.as_ref(), Some(&node));
     assert_eq!(dialog.editing_proxy, Some(SubscriptionId::new("1")));
+}
+
+#[test]
+fn import_tabs_keep_independent_drafts_and_submit_the_selected_kind() {
+    let mut state = State { config_ready: true, ..Default::default() };
+    let mut dialog = AddDialog { url: "https://example.com/subscription".into(), name: "Subscription draft".into(), ..Default::default() };
+    assert!(dialog.select_proxy_tab(true));
+    dialog.proxy = Some(rosetun_core::parse_proxy_uri("https://fixture-user:fixture-password@proxy.example.com:443#Proxy").unwrap());
+    dialog.proxy_uri = "socks5://192.0.2.1:1080".into();
+    let saved_proxy = dialog.proxy.clone();
+    assert!(dialog.select_proxy_tab(false));
+    assert_eq!(dialog.url, "https://example.com/subscription");
+    assert_eq!(dialog.name, "Subscription draft");
+    assert_eq!(dialog.proxy, saved_proxy);
+    assert_eq!(dialog.proxy_uri, "socks5://192.0.2.1:1080");
+    state.subscriptions.add = Some(dialog);
+    assert!(matches!(state.act(Action::SubmitAdd), Some(Job::Add { .. })));
+    let dialog = state.subscriptions.add.as_mut().unwrap();
+    assert!(!dialog.select_proxy_tab(true));
+    dialog.busy = false;
+    assert!(dialog.select_proxy_tab(true));
+    assert_eq!(dialog.proxy, saved_proxy);
+    assert!(matches!(state.act(Action::SubmitAdd), Some(Job::SaveProxy(None, _))));
 }
