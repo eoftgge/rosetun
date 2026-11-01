@@ -22,7 +22,7 @@ tracing.workspace = true
 windows-sys.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = "=0.2.190"
+libc.workspace = true
 
 [lints]
 workspace = true

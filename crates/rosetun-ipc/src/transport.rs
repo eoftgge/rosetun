@@ -4,6 +4,9 @@ use std::time::{Duration, Instant};
 
 pub const ENDPOINT_ENV: &str = "ROSETUN_HELPER_ENDPOINT";
 
+#[cfg(unix)]
+const UNIX_ENDPOINT: &str = "/run/rosetun/helper.sock";
+
 // Generic write includes FILE_CREATE_PIPE_INSTANCE (0x4). Authenticated
 // clients may exchange frames, but only SYSTEM, Administrators and the pipe
 // owner may create instances. Owner rights also allow an unprivileged console
@@ -35,7 +38,7 @@ pub fn default_endpoint() -> PathBuf {
     }
     #[cfg(unix)]
     {
-        PathBuf::from("/run/rosetun/helper.sock")
+        PathBuf::from(UNIX_ENDPOINT)
     }
     #[cfg(windows)]
     {

@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
 
-const ENDPOINT: &str = "/run/rosetun/helper.sock";
 static NEXT_STAGE: AtomicU64 = AtomicU64::new(0);
 
 fn denied(message: &str) -> io::Error {
@@ -55,16 +54,16 @@ pub(super) fn identify_peer(stream: &UnixStream) -> io::Result<PeerIdentity> {
 
 fn pin_socket_inode(path: &Path) -> io::Result<File> {
     let path = CString::new(path.as_os_str().as_encoded_bytes())?;
-    // SAFETY: The arguments match Linux openat's syscall ABI. The C path stays
-    // alive for the call. O_PATH opens only an inode reference, without following
-    // the final symlink or opening the socket for I/O; CLOEXEC prevents inheritance.
+    // SAFETY: The arguments match the C openat prototype: a directory descriptor,
+    // a NUL-terminated path that stays alive for the call, and flags. O_PATH
+    // opens only an inode reference, without following the final symlink or
+    // opening the socket for I/O; CLOEXEC prevents inheritance. No mode is
+    // passed because none of the flags can create a file.
     let descriptor = unsafe {
-        libc::syscall(
-            libc::SYS_openat,
-            libc::AT_FDCWD as libc::c_long,
+        libc::openat(
+            libc::AT_FDCWD,
             path.as_ptr(),
-            (libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC) as libc::c_long,
-            0 as libc::c_long,
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         )
     };
     if descriptor < 0 {
@@ -72,7 +71,7 @@ fn pin_socket_inode(path: &Path) -> io::Result<File> {
     }
     // SAFETY: Successful openat returned a new owned descriptor, transferred
     // exactly once to File, which closes it after the listener's Drop check.
-    Ok(unsafe { File::from_raw_fd(descriptor as libc::c_int) })
+    Ok(unsafe { File::from_raw_fd(descriptor) })
 }
 
 fn group_id() -> io::Result<u32> {
@@ -240,7 +239,7 @@ struct OwnedEndpoint {
 
 impl Listener {
     pub fn bind(endpoint: &Path) -> io::Result<Self> {
-        if endpoint != Path::new(ENDPOINT) {
+        if endpoint != Path::new(UNIX_ENDPOINT) {
             return Err(denied("Linux helper requires /run/rosetun/helper.sock"));
         }
         // SAFETY: geteuid has no arguments or ownership/lifetime requirements.
