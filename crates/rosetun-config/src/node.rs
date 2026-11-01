@@ -28,7 +28,10 @@ fn xray_supports(outbound: &Outbound) -> bool {
     match outbound {
         Outbound::Vmess(params) => params.alter_id == 0,
         Outbound::Vless(_) | Outbound::Trojan(_) | Outbound::Shadowsocks(_) => true,
-        Outbound::Http(_) | Outbound::Socks5(_) | Outbound::Hysteria2(_) | Outbound::Unknown { .. } => false,
+        Outbound::Http(_)
+        | Outbound::Socks5(_)
+        | Outbound::Hysteria2(_)
+        | Outbound::Unknown { .. } => false,
     }
 }
 
@@ -146,14 +149,22 @@ impl Node {
         let valid_host = |server: &str| {
             let host = server.strip_suffix('.').unwrap_or(server);
             server.parse::<std::net::IpAddr>().is_ok()
-            || (!host.is_empty() && host.len() <= 253 && host.split('.').all(|label| {
-                !label.is_empty() && label.len() <= 63
-                    && !label.starts_with('-') && !label.ends_with('-')
-                    && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-            }))
+                || (!host.is_empty()
+                    && host.len() <= 253
+                    && host.split('.').all(|label| {
+                        !label.is_empty()
+                            && label.len() <= 63
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                            && label
+                                .bytes()
+                                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                    }))
         };
         if !valid_host(&self.server) || self.port == 0 {
-            return Err("proxy requires a valid DNS name or IP address and a port between 1 and 65535");
+            return Err(
+                "proxy requires a valid DNS name or IP address and a port between 1 and 65535",
+            );
         }
         if self.stream.transport != Transport::Tcp {
             return Err("proxy requires TCP transport");
@@ -161,17 +172,24 @@ impl Node {
         match (&self.outbound, &self.stream.tls) {
             (Outbound::Http(_), TlsMode::Tls(tls)) => {
                 if tls.allow_insecure || tls.sni.as_ref().is_some_and(|name| !valid_host(name)) {
-                    return Err("HTTPS proxy requires certificate verification and a valid TLS server name");
+                    return Err(
+                        "HTTPS proxy requires certificate verification and a valid TLS server name",
+                    );
                 }
             }
             (_, TlsMode::Plain) => {}
             _ => return Err("proxy TLS mode is not supported"),
         }
-        if credentials.username.chars().chain(credentials.password.chars()).any(char::is_control)
+        if credentials
+            .username
+            .chars()
+            .chain(credentials.password.chars())
+            .any(char::is_control)
             || (credentials.username.is_empty() && !credentials.password.is_empty())
             || (matches!(self.outbound, Outbound::Http(_)) && credentials.username.contains(':'))
             || (matches!(self.outbound, Outbound::Socks5(_))
-                && (credentials.username.len() > 255 || credentials.password.len() > 255
+                && (credentials.username.len() > 255
+                    || credentials.password.len() > 255
                     || (!credentials.username.is_empty() && credentials.password.is_empty())))
         {
             return Err("proxy credentials are invalid for the selected protocol");

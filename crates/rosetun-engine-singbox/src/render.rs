@@ -221,7 +221,8 @@ fn socks_outbound(socks: SocksProxy<'_>, tag: &str) -> Value {
 }
 
 fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
-    node.validate_proxy().map_err(|message| EngineError::Unsupported(message.into()))?;
+    node.validate_proxy()
+        .map_err(|message| EngineError::Unsupported(message.into()))?;
     let mut outbound = Map::new();
     outbound.insert("tag".into(), tag.into());
     outbound.insert("server".into(), node.server.clone().into());

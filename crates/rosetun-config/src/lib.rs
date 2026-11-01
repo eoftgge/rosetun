@@ -22,11 +22,13 @@ pub use list_validation::{
     validate_srs,
 };
 pub use node::{
-    Hysteria2Params, Node, Outbound, ProxyCredentials, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
-    TlsParams, Transport, TrojanParams, VlessParams, VmessParams, XhttpExtra, XhttpMode,
-    XhttpRange, XhttpXmux, node_country, uses_xray,
+    Hysteria2Params, Node, Outbound, ProxyCredentials, RealityParams, ShadowsocksParams,
+    StreamSettings, TlsMode, TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
+    XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, node_country, uses_xray,
 };
-pub use report::{hide_public_addresses, ip_literals, is_public_ip, redact_report_text, redact_log_credentials};
+pub use report::{
+    hide_public_addresses, ip_literals, is_public_ip, redact_log_credentials, redact_report_text,
+};
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{
     ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind, LiveConnection,
@@ -390,8 +392,13 @@ fn migrate_6_to_7(config: &mut Map<String, Value>) {
 
 impl AppConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
-        for node in self.subscriptions.iter().flat_map(|subscription| &subscription.nodes) {
-            node.validate_proxy().map_err(|_| ConfigError::InvalidProxy)?;
+        for node in self
+            .subscriptions
+            .iter()
+            .flat_map(|subscription| &subscription.nodes)
+        {
+            node.validate_proxy()
+                .map_err(|_| ConfigError::InvalidProxy)?;
         }
         if self.version > CONFIG_VERSION {
             return Err(ConfigError::UnsupportedVersion {

@@ -116,15 +116,46 @@ fn sing_box_check_validates_local_rule_set_config() {
     std::fs::write(&config_path, config.body).unwrap();
     for protocol in ["http", "https", "socks5"] {
         let mut proxy = node.clone();
-        let credentials = rosetun_config::ProxyCredentials { username: "fixture-user".into(), password: "fixture-password:@/%".into() };
-        proxy.outbound = if protocol == "socks5" { Outbound::Socks5(credentials) } else { Outbound::Http(credentials) };
+        let credentials = rosetun_config::ProxyCredentials {
+            username: "fixture-user".into(),
+            password: "fixture-password:@/%".into(),
+        };
+        proxy.outbound = if protocol == "socks5" {
+            Outbound::Socks5(credentials)
+        } else {
+            Outbound::Http(credentials)
+        };
         if protocol == "https" {
-            proxy.stream.tls = rosetun_config::TlsMode::Tls(rosetun_config::TlsParams { sni: Some("proxy.example.com".into()), ..Default::default() });
+            proxy.stream.tls = rosetun_config::TlsMode::Tls(rosetun_config::TlsParams {
+                sni: Some("proxy.example.com".into()),
+                ..Default::default()
+            });
         }
-        let rendered = SingBoxBackend::new(&directory.0).render(&RenderRequest { node: &proxy, socks: None, extra: &[], rules: &rules, lists: &lists, settings: &settings, control: None, verbose_log: false }).unwrap();
+        let rendered = SingBoxBackend::new(&directory.0)
+            .render(&RenderRequest {
+                node: &proxy,
+                socks: None,
+                extra: &[],
+                rules: &rules,
+                lists: &lists,
+                settings: &settings,
+                control: None,
+                verbose_log: false,
+            })
+            .unwrap();
         let path = directory.0.join(format!("{protocol}.json"));
         std::fs::write(&path, rendered.body).unwrap();
-        assert!(Command::new(&binary).arg("check").arg("-c").arg(&path).current_dir(&directory.0).status().unwrap().success(), "proxy configuration rejected: {protocol}");
+        assert!(
+            Command::new(&binary)
+                .arg("check")
+                .arg("-c")
+                .arg(&path)
+                .current_dir(&directory.0)
+                .status()
+                .unwrap()
+                .success(),
+            "proxy configuration rejected: {protocol}"
+        );
     }
     for (path, body) in [
         (config_path, None),

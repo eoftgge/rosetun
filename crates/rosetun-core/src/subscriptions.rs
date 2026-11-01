@@ -439,8 +439,10 @@ pub fn save_proxy(
     id: Option<&SubscriptionId>,
     mut node: rosetun_config::Node,
 ) -> Result<(Subscription, UpdateReport), AddFromUrlError> {
-    if !matches!(node.outbound, rosetun_config::Outbound::Http(_) | rosetun_config::Outbound::Socks5(_))
-        || node.validate_proxy().is_err()
+    if !matches!(
+        node.outbound,
+        rosetun_config::Outbound::Http(_) | rosetun_config::Outbound::Socks5(_)
+    ) || node.validate_proxy().is_err()
     {
         return Err(AddFromUrlError::Proxy);
     }
@@ -450,11 +452,17 @@ pub fn save_proxy(
     }
     store.modify(|config| {
         let report = UpdateReport {
-            added: usize::from(id.is_none()), removed: 0, retained: usize::from(id.is_some()),
-            selection_cleared: false, skipped: Default::default(), notices: Vec::new(),
+            added: usize::from(id.is_none()),
+            removed: 0,
+            retained: usize::from(id.is_some()),
+            selection_cleared: false,
+            skipped: Default::default(),
+            notices: Vec::new(),
         };
         if let Some(id) = id {
-            let subscription = config.subscriptions.iter_mut()
+            let subscription = config
+                .subscriptions
+                .iter_mut()
                 .find(|subscription| &subscription.id == id && is_local_proxy(subscription))
                 .ok_or(AddFromUrlError::Proxy)?;
             let previous = subscription.nodes.first().ok_or(AddFromUrlError::Proxy)?;
@@ -464,18 +472,31 @@ pub fn save_proxy(
             return Ok((subscription.clone(), report));
         }
         let mut candidate = 1_u64;
-        while config.subscriptions.iter().any(|subscription| subscription.id.as_str() == candidate.to_string()) {
+        while config
+            .subscriptions
+            .iter()
+            .any(|subscription| subscription.id.as_str() == candidate.to_string())
+        {
             candidate = candidate.checked_add(1).ok_or(AddFromUrlError::Proxy)?;
         }
         let id = SubscriptionId::new(candidate.to_string());
         node.id = rosetun_config::NodeId::new("proxy");
         let subscription = Subscription {
-            url: format!("local-proxy://{}", id.as_str()), id,
-            name: node.name.clone(), nodes: vec![node.clone()], auto_update: false,
-            updated_at_unix: None, user_agent: None, send_hwid: false,
-            hwid_scope: rosetun_config::HwidScope::Provider, info: None,
-            update_interval_hours: None, support_url: None, web_page_url: None,
-            announce: None, notices: Vec::new(),
+            url: format!("local-proxy://{}", id.as_str()),
+            id,
+            name: node.name.clone(),
+            nodes: vec![node.clone()],
+            auto_update: false,
+            updated_at_unix: None,
+            user_agent: None,
+            send_hwid: false,
+            hwid_scope: rosetun_config::HwidScope::Provider,
+            info: None,
+            update_interval_hours: None,
+            support_url: None,
+            web_page_url: None,
+            announce: None,
+            notices: Vec::new(),
         };
         config.subscriptions.push(subscription.clone());
         Ok((subscription, report))

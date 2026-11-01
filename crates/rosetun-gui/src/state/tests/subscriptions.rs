@@ -987,10 +987,22 @@ fn a_link_opened_before_the_settings_load_waits_for_them() {
 }
 #[test]
 fn manual_proxy_submission_and_edit_keep_the_credentials() {
-    let mut state = State { config_ready: true, ..Default::default() };
-    let node = rosetun_core::parse_proxy_uri("https://fixture-user:fixture-password@proxy.example.com:443#Example").unwrap();
-    state.subscriptions.add = Some(AddDialog { proxy_tab: true, proxy: Some(node.clone()), ..AddDialog::default() });
-    let Some(Job::SaveProxy(None, submitted)) = state.act(Action::SubmitAdd) else { panic!("expected proxy save") };
+    let mut state = State {
+        config_ready: true,
+        ..Default::default()
+    };
+    let node = rosetun_core::parse_proxy_uri(
+        "https://fixture-user:fixture-password@proxy.example.com:443#Example",
+    )
+    .unwrap();
+    state.subscriptions.add = Some(AddDialog {
+        proxy_tab: true,
+        proxy: Some(node.clone()),
+        ..AddDialog::default()
+    });
+    let Some(Job::SaveProxy(None, submitted)) = state.act(Action::SubmitAdd) else {
+        panic!("expected proxy save")
+    };
     assert_eq!(*submitted, node);
     assert!(state.subscriptions.add.as_ref().unwrap().busy);
     state.subscriptions.add = None;
@@ -1006,10 +1018,22 @@ fn manual_proxy_submission_and_edit_keep_the_credentials() {
 
 #[test]
 fn import_tabs_keep_independent_drafts_and_submit_the_selected_kind() {
-    let mut state = State { config_ready: true, ..Default::default() };
-    let mut dialog = AddDialog { url: "https://example.com/subscription".into(), name: "Subscription draft".into(), ..Default::default() };
+    let mut state = State {
+        config_ready: true,
+        ..Default::default()
+    };
+    let mut dialog = AddDialog {
+        url: "https://example.com/subscription".into(),
+        name: "Subscription draft".into(),
+        ..Default::default()
+    };
     assert!(dialog.select_proxy_tab(true));
-    dialog.proxy = Some(rosetun_core::parse_proxy_uri("https://fixture-user:fixture-password@proxy.example.com:443#Proxy").unwrap());
+    dialog.proxy = Some(
+        rosetun_core::parse_proxy_uri(
+            "https://fixture-user:fixture-password@proxy.example.com:443#Proxy",
+        )
+        .unwrap(),
+    );
     dialog.proxy_uri = "socks5://192.0.2.1:1080".into();
     let saved_proxy = dialog.proxy.clone();
     assert!(dialog.select_proxy_tab(false));
@@ -1018,11 +1042,17 @@ fn import_tabs_keep_independent_drafts_and_submit_the_selected_kind() {
     assert_eq!(dialog.proxy, saved_proxy);
     assert_eq!(dialog.proxy_uri, "socks5://192.0.2.1:1080");
     state.subscriptions.add = Some(dialog);
-    assert!(matches!(state.act(Action::SubmitAdd), Some(Job::Add { .. })));
+    assert!(matches!(
+        state.act(Action::SubmitAdd),
+        Some(Job::Add { .. })
+    ));
     let dialog = state.subscriptions.add.as_mut().unwrap();
     assert!(!dialog.select_proxy_tab(true));
     dialog.busy = false;
     assert!(dialog.select_proxy_tab(true));
     assert_eq!(dialog.proxy, saved_proxy);
-    assert!(matches!(state.act(Action::SubmitAdd), Some(Job::SaveProxy(None, _))));
+    assert!(matches!(
+        state.act(Action::SubmitAdd),
+        Some(Job::SaveProxy(None, _))
+    ));
 }

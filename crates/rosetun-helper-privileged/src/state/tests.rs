@@ -36,7 +36,10 @@ fn invalid_proxy_apply_is_rejected_before_the_running_session_changes() {
     let mut invalid = request.clone();
     invalid.node.outbound = Outbound::Socks5(Default::default());
     invalid.node.stream.tls = rosetun_config::TlsMode::Tls(Default::default());
-    assert_eq!(helper.apply_as(&test_caller(), &invalid).unwrap_err().code, ErrorCode::InvalidRequest);
+    assert_eq!(
+        helper.apply_as(&test_caller(), &invalid).unwrap_err().code,
+        ErrorCode::InvalidRequest
+    );
     assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
     assert_eq!(helper.status().state, ConnectionState::Connected);
 }
@@ -46,10 +49,15 @@ fn resolved_https_proxy_keeps_the_original_certificate_name() {
     let mut node = connect_request().node;
     node.server = "proxy.example.com".into();
     node.outbound = Outbound::Http(Default::default());
-    node.stream = rosetun_config::StreamSettings { tls: rosetun_config::TlsMode::Tls(Default::default()), ..Default::default() };
+    node.stream = rosetun_config::StreamSettings {
+        tls: rosetun_config::TlsMode::Tls(Default::default()),
+        ..Default::default()
+    };
     let resolved = node_with_endpoint(&node, "2001:db8::1".parse().unwrap());
     assert_eq!(resolved.server, "2001:db8::1");
-    let rosetun_config::TlsMode::Tls(tls) = resolved.stream.tls else { panic!() };
+    let rosetun_config::TlsMode::Tls(tls) = resolved.stream.tls else {
+        panic!()
+    };
     assert_eq!(tls.sni.as_deref(), Some("proxy.example.com"));
     assert!(!tls.allow_insecure);
 }

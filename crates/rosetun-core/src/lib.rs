@@ -37,7 +37,9 @@ pub use lists::{
 };
 pub use ping::{PING_PARALLEL, PING_TIMEOUT, Ping, ping_all, tcp_ping};
 pub use resolve::follow_service_status;
-pub use rosetun_subscription::{ParseError, SkipReason, Skipped, UnsupportedTransport, parse_proxy_uri};
+pub use rosetun_subscription::{
+    ParseError, SkipReason, Skipped, UnsupportedTransport, parse_proxy_uri,
+};
 pub use rules::{
     AddedRules, AppliedSnapshot, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,
     RuleDestination, RuleInputError, RuleSetError, add_rule, add_rules, create_rule_set,
@@ -66,9 +68,9 @@ pub use subscriptions::{
     AddFromUrlError, AddOptions, AddSubscriptionError, CommitUpdateError, MoveSubscriptionError,
     PreparedSubscription, RemoveSubscriptionError, RenameSubscriptionError,
     SUBSCRIPTION_NAME_LIMIT, SubscriptionUpdateResult, UpdateSubscriptionError,
-    add_prepared_subscription, add_subscription, commit_subscription_update, move_subscription,
-    prepare_subscription, remove_subscription, rename_subscription, update_all,
-    update_subscription, save_proxy, is_local_proxy,
+    add_prepared_subscription, add_subscription, commit_subscription_update, is_local_proxy,
+    move_subscription, prepare_subscription, remove_subscription, rename_subscription, save_proxy,
+    update_all, update_subscription,
 };
 pub use system_checks::{CheckDetail, CheckKind, CheckResult, CheckStatus, check_system};
 pub use text::{

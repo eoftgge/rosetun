@@ -485,11 +485,17 @@ fn safe_output_line<'a>(
 ) -> Option<Cow<'a, str>> {
     if now_unix < until_unix.load(Ordering::Acquire) {
         let redacted = rosetun_config::redact_log_credentials(line);
-        Some(if redacted == line { Cow::Borrowed(line) } else { Cow::Owned(redacted) })
+        Some(if redacted == line {
+            Cow::Borrowed(line)
+        } else {
+            Cow::Owned(redacted)
+        })
     } else if output::is_connection_line(line) {
         None
     } else {
-        Some(Cow::Owned(output::hide_destinations(&rosetun_config::redact_log_credentials(line))))
+        Some(Cow::Owned(output::hide_destinations(
+            &rosetun_config::redact_log_credentials(line),
+        )))
     }
 }
 

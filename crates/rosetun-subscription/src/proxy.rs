@@ -1,4 +1,6 @@
-use rosetun_config::{Node, NodeId, Outbound, ProxyCredentials, StreamSettings, TlsMode, TlsParams};
+use rosetun_config::{
+    Node, NodeId, Outbound, ProxyCredentials, StreamSettings, TlsMode, TlsParams,
+};
 use url::{Host, Url};
 
 use crate::SkipReason;
@@ -6,7 +8,11 @@ use crate::SkipReason;
 /// Parses a proxy URI only in a context explicitly expecting a server, never a subscription URL.
 pub fn parse_proxy_uri(input: &str) -> Result<Node, SkipReason> {
     let invalid = || SkipReason::InvalidRecord;
-    if input.chars().any(|ch| ch.is_control() || ch.is_whitespace()) || input.contains('\\') {
+    if input
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+        || input.contains('\\')
+    {
         return Err(invalid());
     }
     let (scheme, rest) = input.split_once("://").ok_or_else(invalid)?;
@@ -14,11 +20,19 @@ pub fn parse_proxy_uri(input: &str) -> Result<Node, SkipReason> {
         return Err(SkipReason::UnsupportedProtocol);
     }
     let authority = rest.split(['/', '?', '#']).next().ok_or_else(invalid)?;
-    if authority.matches('@').count() > 1 { return Err(invalid()); }
+    if authority.matches('@').count() > 1 {
+        return Err(invalid());
+    }
     let endpoint = authority.rsplit('@').next().ok_or_else(invalid)?;
     let (_, port) = endpoint.rsplit_once(':').ok_or(SkipReason::InvalidPort)?;
-    if !port.bytes().all(|byte| byte.is_ascii_digit()) { return Err(SkipReason::InvalidPort); }
-    let port = port.parse::<u16>().ok().filter(|port| *port != 0).ok_or(SkipReason::InvalidPort)?;
+    if !port.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(SkipReason::InvalidPort);
+    }
+    let port = port
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
+        .ok_or(SkipReason::InvalidPort)?;
     let url = Url::parse(input).map_err(|_| invalid())?;
     if !matches!(url.path(), "" | "/") || url.query().is_some() {
         return Err(invalid());
@@ -37,9 +51,17 @@ pub fn parse_proxy_uri(input: &str) -> Result<Node, SkipReason> {
         name: decode(url.fragment().unwrap_or(scheme))?,
         server,
         port,
-        outbound: if scheme == "socks5" { Outbound::Socks5(credentials) } else { Outbound::Http(credentials) },
+        outbound: if scheme == "socks5" {
+            Outbound::Socks5(credentials)
+        } else {
+            Outbound::Http(credentials)
+        },
         stream: StreamSettings {
-            tls: if scheme == "https" { TlsMode::Tls(TlsParams::default()) } else { TlsMode::Plain },
+            tls: if scheme == "https" {
+                TlsMode::Tls(TlsParams::default())
+            } else {
+                TlsMode::Plain
+            },
             ..StreamSettings::default()
         },
         raw: None,
@@ -60,7 +82,9 @@ fn decode(value: &str) -> Result<String, SkipReason> {
                 (Some(high), Some(low)) => (high * 16 + low) as u8,
                 _ => return Err(SkipReason::InvalidRecord),
             }
-        } else { byte });
+        } else {
+            byte
+        });
     }
     String::from_utf8(decoded).map_err(|_| SkipReason::InvalidRecord)
 }

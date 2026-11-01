@@ -226,11 +226,29 @@ fn released_configurations_migrate_to_the_expected_configuration() {
 fn current_configuration_fixture_guards_the_serialized_format() {
     let mut expected = format_seven_config();
     for (protocol, tls) in [("http", false), ("https", true), ("socks5", false)] {
-        let credentials = rosetun_config::ProxyCredentials { username: "fixture-user".into(), password: "fixture-password".into() };
+        let credentials = rosetun_config::ProxyCredentials {
+            username: "fixture-user".into(),
+            password: "fixture-password".into(),
+        };
         expected.subscriptions[1].nodes.push(Node {
-            id: NodeId::new(protocol), name: protocol.into(), server: "2001:db8::1".into(), port: 8080,
-            outbound: if protocol == "socks5" { Outbound::Socks5(credentials) } else { Outbound::Http(credentials) },
-            stream: StreamSettings { tls: if tls { TlsMode::Tls(TlsParams::default()) } else { TlsMode::Plain }, ..Default::default() }, raw: None,
+            id: NodeId::new(protocol),
+            name: protocol.into(),
+            server: "2001:db8::1".into(),
+            port: 8080,
+            outbound: if protocol == "socks5" {
+                Outbound::Socks5(credentials)
+            } else {
+                Outbound::Http(credentials)
+            },
+            stream: StreamSettings {
+                tls: if tls {
+                    TlsMode::Tls(TlsParams::default())
+                } else {
+                    TlsMode::Plain
+                },
+                ..Default::default()
+            },
+            raw: None,
         });
     }
     let (loaded, migrated_from) = from_json(V8).expect("current fixture should load");

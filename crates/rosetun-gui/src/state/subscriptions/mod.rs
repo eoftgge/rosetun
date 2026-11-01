@@ -123,10 +123,13 @@ impl AddDialog {
         }
         if proxy && self.proxy.is_none() {
             self.proxy = Some(rosetun_config::Node {
-                id: rosetun_config::NodeId::new("pending"), name: String::new(),
-                server: String::new(), port: 8080,
+                id: rosetun_config::NodeId::new("pending"),
+                name: String::new(),
+                server: String::new(),
+                port: 8080,
                 outbound: rosetun_config::Outbound::Http(Default::default()),
-                stream: Default::default(), raw: None,
+                stream: Default::default(),
+                raw: None,
             });
         }
         self.proxy_tab = proxy;
@@ -492,13 +495,18 @@ impl State {
                     && !dialog.qr.busy()
                 {
                     if dialog.proxy_tab {
-                        let Some(node) = &dialog.proxy else { return None; };
+                        let Some(node) = &dialog.proxy else {
+                            return None;
+                        };
                         if node.validate_proxy().is_err() {
                             dialog.error = Some(AddFromUrlError::Proxy);
                             return None;
                         }
                         dialog.busy = true;
-                        return Some(Job::SaveProxy(dialog.editing_proxy.clone(), Box::new(node.clone())));
+                        return Some(Job::SaveProxy(
+                            dialog.editing_proxy.clone(),
+                            Box::new(node.clone()),
+                        ));
                     }
                     match rosetun_core::normalize_subscription_url(&dialog.url) {
                         Ok(input) => {
@@ -520,7 +528,9 @@ impl State {
                 }
             }
             Action::Update(id) => {
-                if self.config.subscriptions.iter().any(|subscription| subscription.id == id && rosetun_core::is_local_proxy(subscription)) {
+                if self.config.subscriptions.iter().any(|subscription| {
+                    subscription.id == id && rosetun_core::is_local_proxy(subscription)
+                }) {
                     return self.act_subscriptions(Action::RequestRename(id));
                 }
                 if !self.subscription_busy(&id) {
@@ -573,12 +583,19 @@ impl State {
                 }
             }
             Action::RequestRename(id) => {
-                if self.config_ready && self.subscriptions.add.is_none()
-                    && let Some(subscription) = self.config.subscriptions.iter().find(|subscription| subscription.id == id && rosetun_core::is_local_proxy(subscription))
+                if self.config_ready
+                    && self.subscriptions.add.is_none()
+                    && let Some(subscription) =
+                        self.config.subscriptions.iter().find(|subscription| {
+                            subscription.id == id && rosetun_core::is_local_proxy(subscription)
+                        })
                     && let Some(node) = subscription.nodes.first()
                 {
                     self.subscriptions.add = Some(AddDialog {
-                        proxy_tab: true, proxy: Some(node.clone()), editing_proxy: Some(id), ..AddDialog::default()
+                        proxy_tab: true,
+                        proxy: Some(node.clone()),
+                        editing_proxy: Some(id),
+                        ..AddDialog::default()
                     });
                     return None;
                 }
