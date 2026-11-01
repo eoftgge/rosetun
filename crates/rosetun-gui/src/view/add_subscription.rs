@@ -12,160 +12,28 @@ pub(crate) fn show(
     dialog: &mut AddDialog,
     actions: &mut Vec<Action>,
 ) {
-    if dialog.proxy_tab {
-        show_proxy(ctx, dialog, actions);
-        return;
-    }
     let response = widgets::show_modal(
         ctx,
         egui::Modal::new(egui::Id::new("add_subscription")),
         |ui| {
             ui.set_width(520.0);
-            ui.heading(tr!("add-subscription"));
-            if import_tabs(ui, dialog) { return; }
-            ui.colored_label(theme::palette().text_muted, tr!("add-subtitle"));
-            ui.add_space(18.0);
-            if let Some(host) = &dialog.from_link {
-                ui.colored_label(
-                    theme::palette().text_muted,
-                    tr!(
-                        "subscriptions-add-from-link",
-                        host = display::safe_text(host)
-                    ),
-                );
-                ui.add_space(6.0);
-            }
-            ui.label(tr!("subscription-url"));
-            let editable = !dialog.busy && !dialog.qr.busy();
-            ui.horizontal(|ui| {
-                let input = ui.add_enabled(
-                    editable,
-                    egui::TextEdit::singleline(&mut dialog.url)
-                        .id(egui::Id::new("subscription_url_input"))
-                        .hint_text(constants::URL_PLACEHOLDER)
-                        .desired_width((ui.available_width() - 210.0).max(120.0)),
-                );
-                if dialog.focus_url {
-                    input.request_focus();
-                    dialog.focus_url = false;
-                }
-                if input.changed() {
-                    dialog.error = None;
-                    dialog.qr.error = None;
-                    dialog.link_error = false;
-                    // The host line names where the link came from, not what is typed now.
-                    dialog.from_link = None;
-                }
-                if widgets::outline_button(ui, tr!("paste"), editable).clicked() {
-                    input.request_focus();
-                    ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                }
-                qr_menu(ui, dialog, editable, actions);
+            ui.heading(if dialog.editing_proxy.is_some() {
+                tr!("proxy-edit")
+            } else {
+                tr!("add-server")
             });
-            qr_status(ui, dialog, actions);
-            if dialog.link_error {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(tr!("error-open-link-invalid")).color(theme::ERROR),
-                    )
-                    .wrap(),
-                );
-            }
-            ui.add(
-                egui::Label::new(RichText::new(tr!("url-help")).color(theme::palette().text_dim))
-                    .wrap(),
+            import_tabs(ui, dialog);
+            let shown = widgets::appear_progress(
+                ui.ctx(),
+                egui::Id::new("server_import_body"),
+                dialog.proxy_tab,
+                crate::motion::reduced(),
             );
-            let normalized = rosetun_core::normalize_subscription_url(&dialog.url);
-            if !dialog.url.trim().is_empty() {
-                match &normalized {
-                    Ok(url) if uses_plain_http(url) => {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(tr!("http-warning")).color(theme::ERROR),
-                            )
-                            .wrap(),
-                        );
-                    }
-                    Err(error) => {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(form_error(
-                                    config,
-                                    dialog,
-                                    &errors::subscription_url(crate::i18n::language(), error),
-                                ))
-                                .color(theme::ERROR),
-                            )
-                            .wrap(),
-                        );
-                    }
-                    Ok(_) => {
-                        if let Some(note) = assumed_https_note(&dialog.url) {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(note).color(theme::palette().text_dim),
-                                )
-                                .wrap(),
-                            );
-                        }
-                    }
-                }
-            }
-            ui.add_space(16.0);
-            ui.label(tr!("name"));
-            if ui
-                .add_enabled(
-                    !dialog.busy,
-                    egui::TextEdit::singleline(&mut dialog.name)
-                        .hint_text(tr!("name-placeholder"))
-                        .desired_width(f32::INFINITY),
-                )
-                .changed()
-            {
-                dialog.error = None;
-            }
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                widgets::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
-                ui.label(tr!("send-device-id"));
-            });
-            ui.add(
-                egui::Label::new(
-                    RichText::new(tr!("device-id-explanation")).color(theme::palette().text_dim),
-                )
-                .wrap(),
-            );
-            if let Some(error) = &dialog.error {
-                ui.add_space(12.0);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(form_error(
-                            config,
-                            dialog,
-                            &errors::add_subscription(crate::i18n::language(), error),
-                        ))
-                        .color(theme::ERROR),
-                    )
-                    .wrap(),
-                );
-            }
-            ui.add_space(22.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::button_fill(
-                    ui,
-                    if dialog.busy {
-                        tr!("adding")
-                    } else {
-                        tr!("add")
-                    },
-                    editable && normalized.is_ok(),
-                )
-                .clicked()
-                {
-                    actions.push(Action::SubmitAdd);
-                }
-                if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
-                    actions.push(Action::CancelAdd);
+            widgets::appear(ui, shown, |ui| {
+                if dialog.proxy_tab {
+                    proxy_body(ui, dialog, actions);
+                } else {
+                    subscription_body(ui, ctx, config, dialog, actions);
                 }
             });
         },
@@ -175,87 +43,289 @@ pub(crate) fn show(
     }
 }
 
-fn import_tabs(ui: &mut egui::Ui, dialog: &mut AddDialog) -> bool {
-    ui.add_space(12.0);
-    let selected = widgets::segmented(
-        ui, "server_import_tabs", dialog.proxy_tab,
-        &[(false, tr!("import-tab-subscription")), (true, tr!("import-tab-proxy"))],
-        true, !dialog.busy && !dialog.qr.busy() && dialog.editing_proxy.is_none(),
+fn subscription_body(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    config: &AppConfig,
+    dialog: &mut AddDialog,
+    actions: &mut Vec<Action>,
+) {
+    ui.colored_label(theme::palette().text_muted, tr!("add-subtitle"));
+    ui.add_space(18.0);
+    if let Some(host) = &dialog.from_link {
+        ui.colored_label(
+            theme::palette().text_muted,
+            tr!(
+                "subscriptions-add-from-link",
+                host = display::safe_text(host)
+            ),
+        );
+        ui.add_space(6.0);
+    }
+    ui.label(tr!("subscription-url"));
+    let editable = !dialog.busy && !dialog.qr.busy();
+    ui.horizontal(|ui| {
+        let input = ui.add_enabled(
+            editable,
+            egui::TextEdit::singleline(&mut dialog.url)
+                .id(egui::Id::new("subscription_url_input"))
+                .hint_text(constants::URL_PLACEHOLDER)
+                .desired_width((ui.available_width() - 210.0).max(120.0)),
+        );
+        if dialog.focus_url {
+            input.request_focus();
+            dialog.focus_url = false;
+        }
+        if input.changed() {
+            dialog.error = None;
+            dialog.qr.error = None;
+            dialog.link_error = false;
+            // The host line names where the link came from, not what is typed now.
+            dialog.from_link = None;
+        }
+        if widgets::outline_button(ui, tr!("paste"), editable).clicked() {
+            input.request_focus();
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        }
+        qr_menu(ui, dialog, editable, actions);
+    });
+    qr_status(ui, dialog, actions);
+    if dialog.link_error {
+        ui.add(
+            egui::Label::new(RichText::new(tr!("error-open-link-invalid")).color(theme::ERROR))
+                .wrap(),
+        );
+    }
+    ui.add(
+        egui::Label::new(RichText::new(tr!("url-help")).color(theme::palette().text_dim)).wrap(),
     );
-    ui.add_space(12.0);
-    selected.is_some_and(|proxy| dialog.select_proxy_tab(proxy))
+    let normalized = rosetun_core::normalize_subscription_url(&dialog.url);
+    if !dialog.url.trim().is_empty() {
+        match &normalized {
+            Ok(url) if uses_plain_http(url) => {
+                ui.add(
+                    egui::Label::new(RichText::new(tr!("http-warning")).color(theme::ERROR)).wrap(),
+                );
+            }
+            Err(error) => {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(form_error(
+                            config,
+                            dialog,
+                            &errors::subscription_url(crate::i18n::language(), error),
+                        ))
+                        .color(theme::ERROR),
+                    )
+                    .wrap(),
+                );
+            }
+            Ok(_) => {
+                if let Some(note) = assumed_https_note(&dialog.url) {
+                    ui.add(
+                        egui::Label::new(RichText::new(note).color(theme::palette().text_dim))
+                            .wrap(),
+                    );
+                }
+            }
+        }
+    }
+    ui.add_space(16.0);
+    ui.label(tr!("name"));
+    if ui
+        .add_enabled(
+            !dialog.busy,
+            egui::TextEdit::singleline(&mut dialog.name)
+                .hint_text(tr!("name-placeholder"))
+                .desired_width(f32::INFINITY),
+        )
+        .changed()
+    {
+        dialog.error = None;
+    }
+    ui.add_space(16.0);
+    ui.horizontal(|ui| {
+        widgets::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
+        ui.label(tr!("send-device-id"));
+    });
+    ui.add(
+        egui::Label::new(
+            RichText::new(tr!("device-id-explanation")).color(theme::palette().text_dim),
+        )
+        .wrap(),
+    );
+    if let Some(error) = &dialog.error {
+        ui.add_space(12.0);
+        ui.add(
+            egui::Label::new(
+                RichText::new(form_error(
+                    config,
+                    dialog,
+                    &errors::add_subscription(crate::i18n::language(), error),
+                ))
+                .color(theme::ERROR),
+            )
+            .wrap(),
+        );
+    }
+    ui.add_space(22.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if widgets::button_fill(
+            ui,
+            if dialog.busy {
+                tr!("adding")
+            } else {
+                tr!("add")
+            },
+            editable && normalized.is_ok(),
+        )
+        .clicked()
+        {
+            actions.push(Action::SubmitAdd);
+        }
+        if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
+            actions.push(Action::CancelAdd);
+        }
+    });
 }
 
-fn show_proxy(ctx: &egui::Context, dialog: &mut AddDialog, actions: &mut Vec<Action>) {
+fn import_tabs(ui: &mut egui::Ui, dialog: &mut AddDialog) {
+    ui.add_space(12.0);
+    let selected = widgets::segmented(
+        ui,
+        "server_import_tabs",
+        dialog.proxy_tab,
+        &[
+            (false, tr!("import-tab-subscription")),
+            (true, tr!("import-tab-proxy")),
+        ],
+        true,
+        !dialog.busy && !dialog.qr.busy() && dialog.editing_proxy.is_none(),
+    );
+    ui.add_space(12.0);
+    if let Some(proxy) = selected {
+        dialog.select_proxy_tab(proxy);
+    }
+}
+
+fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Action>) {
     use rosetun_config::{Outbound, TlsMode, TlsParams};
 
-    let response = widgets::show_modal(ctx, egui::Modal::new(egui::Id::new("add_subscription")), |ui| {
-        ui.set_width(520.0);
-        ui.heading(if dialog.editing_proxy.is_some() { tr!("proxy-edit") } else { tr!("proxy-add") });
-        if import_tabs(ui, dialog) { return; }
-        let Some(node) = &mut dialog.proxy else { return; };
-        ui.add_enabled_ui(!dialog.busy, |ui| {
-            let mut protocol = match (&node.outbound, &node.stream.tls) {
-                (Outbound::Socks5(_), _) => 2,
-                (_, TlsMode::Tls(_)) => 1,
-                _ => 0,
-            };
-            let previous = protocol;
-            egui::ComboBox::from_id_salt("proxy_protocol").selected_text(["HTTP", "HTTPS", "SOCKS5"][protocol]).show_ui(ui, |ui| {
+    let Some(node) = &mut dialog.proxy else {
+        return;
+    };
+    ui.add_enabled_ui(!dialog.busy, |ui| {
+        let mut protocol = match (&node.outbound, &node.stream.tls) {
+            (Outbound::Socks5(_), _) => 2,
+            (_, TlsMode::Tls(_)) => 1,
+            _ => 0,
+        };
+        let previous = protocol;
+        ui.label(tr!("proxy-protocol"));
+        egui::ComboBox::from_id_salt("proxy_protocol")
+            .width(ui.available_width())
+            .selected_text(["HTTP", "HTTPS", "SOCKS5"][protocol])
+            .show_ui(ui, |ui| {
                 ui.selectable_value(&mut protocol, 0, "HTTP");
                 ui.selectable_value(&mut protocol, 1, "HTTPS");
                 ui.selectable_value(&mut protocol, 2, "SOCKS5");
             });
-            if previous != protocol {
-                let credentials = match &node.outbound {
-                    Outbound::Http(credentials) | Outbound::Socks5(credentials) => credentials.clone(),
-                    _ => Default::default(),
-                };
-                node.outbound = if protocol == 2 { Outbound::Socks5(credentials) } else { Outbound::Http(credentials) };
-                node.stream.tls = if protocol == 1 { TlsMode::Tls(TlsParams::default()) } else { TlsMode::Plain };
-            }
-            ui.label(tr!("name"));
-            ui.text_edit_singleline(&mut node.name);
-            ui.label(tr!("proxy-server"));
-            ui.text_edit_singleline(&mut node.server);
-            ui.label(tr!("proxy-port"));
-            ui.add(egui::DragValue::new(&mut node.port).range(1..=65535));
-            if let Outbound::Http(credentials) | Outbound::Socks5(credentials) = &mut node.outbound {
-                ui.label(tr!("proxy-username"));
-                ui.text_edit_singleline(&mut credentials.username);
-                ui.label(tr!("proxy-password"));
-                ui.add(egui::TextEdit::singleline(&mut credentials.password).password(true));
-            }
-            if let TlsMode::Tls(tls) = &mut node.stream.tls {
-                ui.label(tr!("proxy-sni"));
-                let sni = tls.sni.get_or_insert_default();
-                ui.text_edit_singleline(sni);
-                if sni.is_empty() { tls.sni = None; }
-            }
-            ui.label(tr!("proxy-uri"));
-            ui.add(egui::TextEdit::singleline(&mut dialog.proxy_uri).password(true));
-            if widgets::outline_button(ui, tr!("proxy-import"), !dialog.proxy_uri.is_empty()).clicked() {
-                match rosetun_core::parse_proxy_uri(dialog.proxy_uri.trim()) {
-                    Ok(imported) => { *node = imported; dialog.proxy_uri.clear(); dialog.error = None; }
-                    Err(_) => dialog.error = Some(rosetun_core::AddFromUrlError::Proxy),
-                }
-            }
-        });
-        ui.label(tr!("proxy-details")).on_hover_text(tr!("proxy-limitations"));
-        let valid = node.validate_proxy().is_ok();
-        if let Some(error) = &dialog.error {
-            ui.colored_label(theme::ERROR, errors::add_subscription(crate::i18n::language(), error));
+        if previous != protocol {
+            let credentials = match &node.outbound {
+                Outbound::Http(credentials) | Outbound::Socks5(credentials) => credentials.clone(),
+                _ => Default::default(),
+            };
+            node.outbound = if protocol == 2 {
+                Outbound::Socks5(credentials)
+            } else {
+                Outbound::Http(credentials)
+            };
+            node.stream.tls = if protocol == 1 {
+                TlsMode::Tls(TlsParams::default())
+            } else {
+                TlsMode::Plain
+            };
         }
-        ui.horizontal(|ui| {
-            if widgets::button_fill(ui, if dialog.editing_proxy.is_some() { tr!("save") } else { tr!("add") }, !dialog.busy && valid).clicked() {
-                actions.push(Action::SubmitAdd);
+        ui.add_space(16.0);
+        ui.label(tr!("name"));
+        ui.add(egui::TextEdit::singleline(&mut node.name).desired_width(f32::INFINITY));
+        ui.add_space(12.0);
+        ui.label(tr!("proxy-server"));
+        ui.add(egui::TextEdit::singleline(&mut node.server).desired_width(f32::INFINITY));
+        ui.add_space(12.0);
+        ui.label(tr!("proxy-port"));
+        ui.add(egui::DragValue::new(&mut node.port).range(1..=65535));
+        ui.add_space(12.0);
+        if let Outbound::Http(credentials) | Outbound::Socks5(credentials) = &mut node.outbound {
+            ui.label(tr!("proxy-username"));
+            ui.add(
+                egui::TextEdit::singleline(&mut credentials.username).desired_width(f32::INFINITY),
+            );
+            ui.add_space(12.0);
+            ui.label(tr!("proxy-password"));
+            ui.add(
+                egui::TextEdit::singleline(&mut credentials.password)
+                    .password(true)
+                    .desired_width(f32::INFINITY),
+            );
+            ui.add_space(12.0);
+        }
+        if let TlsMode::Tls(tls) = &mut node.stream.tls {
+            ui.label(tr!("proxy-sni"));
+            let sni = tls.sni.get_or_insert_default();
+            ui.add(egui::TextEdit::singleline(sni).desired_width(f32::INFINITY));
+            ui.add_space(12.0);
+            if sni.is_empty() {
+                tls.sni = None;
             }
-            if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
-                actions.push(Action::CancelAdd);
+        }
+        ui.label(tr!("proxy-uri"));
+        ui.add(
+            egui::TextEdit::singleline(&mut dialog.proxy_uri)
+                .password(true)
+                .desired_width(f32::INFINITY),
+        );
+        ui.add_space(8.0);
+        if widgets::outline_button(ui, tr!("proxy-import"), !dialog.proxy_uri.is_empty()).clicked()
+        {
+            match rosetun_core::parse_proxy_uri(dialog.proxy_uri.trim()) {
+                Ok(imported) => {
+                    *node = imported;
+                    dialog.proxy_uri.clear();
+                    dialog.error = None;
+                }
+                Err(_) => dialog.error = Some(rosetun_core::AddFromUrlError::Proxy),
             }
-        });
+        }
     });
-    if !dialog.busy && response.should_close() { actions.push(Action::CancelAdd); }
+    ui.label(tr!("proxy-details"))
+        .on_hover_text(tr!("proxy-limitations"));
+    let valid = node.validate_proxy().is_ok();
+    if let Some(error) = &dialog.error {
+        ui.colored_label(
+            theme::ERROR,
+            errors::add_subscription(crate::i18n::language(), error),
+        );
+    }
+    ui.add_space(22.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if widgets::button_fill(
+            ui,
+            if dialog.editing_proxy.is_some() {
+                tr!("save")
+            } else {
+                tr!("add")
+            },
+            !dialog.busy && valid,
+        )
+        .clicked()
+        {
+            actions.push(Action::SubmitAdd);
+        }
+        if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
+            actions.push(Action::CancelAdd);
+        }
+    });
 }
 
 fn qr_menu(ui: &mut egui::Ui, dialog: &AddDialog, enabled: bool, actions: &mut Vec<Action>) {
