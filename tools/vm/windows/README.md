@@ -61,7 +61,7 @@ The Lockdown sublayer sits at `-LockdownWeight` (default `0xC000`) and its persi
 .\tools\vm\Invoke-PowerCutConnectProbe.ps1 -SingBoxPath .\tools\sing-box.exe -RequestPath .\tools\vm\request-local.json -UseHostNode -Build *>&1 | Tee-Object -FilePath .\target\power-cut-probe-1.14.3.txt
 ```
 
-To compare with another sing-box version, download its `sing-box-<version>-windows-amd64.zip` from the SagerNet releases by hand and check `sing-box.exe` against the hash pinned for that version in the history of `installer/build.ps1` (`git log -p -- installer/build.ps1`; 1.14.1 is `B838DE45BD0B2E6DDBED1977E4745622F7DFFAB3B293807FF4C6B1B640FED909`). The service accepts only `SUPPORTED_SING_BOX_VERSION`, and the probe refuses to start on a mismatch: set it in `crates/rosetun-engine-singbox/src/version.rs` to the other version locally, run with `-Build`, and revert it afterwards (never commit it). With `-UseHostNode` the host node runs the same binary.
+To compare with another sing-box version, download its `sing-box-<version>-windows-amd64.zip` from the SagerNet releases by hand and check `sing-box.exe` against the hash pinned for that version in the history of `../../../installer/build.ps1` (`git log -p -- installer/build.ps1`; 1.14.1 is `B838DE45BD0B2E6DDBED1977E4745622F7DFFAB3B293807FF4C6B1B640FED909`). The service accepts only `SUPPORTED_SING_BOX_VERSION`, and the probe refuses to start on a mismatch: set it in `crates/rosetun-engine-singbox/src/version.rs` to the other version locally, run with `-Build`, and revert it afterwards (never commit it). With `-UseHostNode` the host node runs the same binary.
 
 ```powershell
 (Get-FileHash .\tools\sing-box-1.14.1.exe -Algorithm SHA256).Hash
