@@ -109,7 +109,10 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let workers = WorkerDispatcher {
             publisher: ConfigPublisher {
-                store: Store::at(std::env::temp_dir().join("rosetun-screen-clip-unavailable")),
+                store: Store::at(std::env::temp_dir().join(format!(
+                    "rosetun-screen-clip-unavailable-{}",
+                    std::process::id()
+                ))),
                 tx,
                 repaint: egui::Context::default(),
                 generation: Arc::default(),
