@@ -1,5 +1,8 @@
 # Linux L2 transport review fixture
 
+The automated version of this exercise is the Linux L2 stand in `tools/vm/linux/README.md`.
+The manual steps below stay valid for a single-step investigation.
+
 This is a transport-only exercise for an isolated Debian 13 VM. It never starts
 Rosetun's privileged helper, engines, VPN, firewall or network tests. Run the
 privileged steps yourself. Do not run this on a machine with an active helper.

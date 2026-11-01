@@ -14,6 +14,7 @@ walks through the kill-switch failure scenarios, printing a PASS/FAIL table.
 |---|---|
 | `vm/RosetunVm.psm1` | Module with every building block: VM session, deploy, helper task, CLI, probes |
 | `vm/Invoke-FailureMatrix.ps1` | The failure matrix |
+| `vm/linux/` | Separate Linux L2 stand for a Debian VM over SSH; see `vm/linux/README.md`. The Windows matrices do not use it |
 | `vm/test-node.json` | sing-box config for a Shadowsocks test node running on the host |
 | `vm/request-local.json` | `ConnectRequest` pointing at the test node, with the test password |
 | `sing-box.exe` | The pinned sing-box build (currently 1.14.3). Not committed: `Install-RosetunSingBox` downloads it from the sing-box GitHub releases and checks its SHA-256 |
