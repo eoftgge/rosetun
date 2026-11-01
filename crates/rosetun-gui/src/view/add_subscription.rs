@@ -6,6 +6,8 @@ use crate::icons::{self, Icon};
 use crate::state::{Action, AddDialog, QrSource, QrStage, redact};
 use crate::{constants, display, theme, widgets};
 
+const ACTION_ROW_HEIGHT: f32 = 40.0;
+
 pub(crate) fn show(
     ctx: &egui::Context,
     config: &AppConfig,
@@ -169,7 +171,7 @@ fn subscription_body(
         );
     }
     ui.add_space(22.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), ACTION_ROW_HEIGHT), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if widgets::button_fill(
             ui,
             if dialog.busy {
@@ -308,7 +310,7 @@ fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Actio
         );
     }
     ui.add_space(22.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), ACTION_ROW_HEIGHT), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if widgets::button_fill(
             ui,
             if dialog.editing_proxy.is_some() {
@@ -443,6 +445,36 @@ fn form_error(config: &AppConfig, dialog: &AddDialog, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn switching_import_tabs_restores_the_subscription_height() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut dialog = AddDialog::default();
+        let config = AppConfig::default();
+        let mut frame = 0;
+        let mut height = |dialog: &mut AddDialog| {
+            for _ in 0..8 {
+                frame += 1;
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 1000.0))),
+                    time: Some(f64::from(frame) * 0.1),
+                    ..Default::default()
+                }, |ui| show(ui.ctx(), &config, dialog, &mut Vec::new()));
+                output.textures_delta.clear();
+            }
+            ctx.memory(|memory| memory.area_rect(egui::Id::new("add_subscription"))).unwrap().height()
+        };
+        let original = height(&mut dialog);
+        for _ in 0..3 {
+            assert!(dialog.select_proxy_tab(true));
+            dialog.proxy.as_mut().unwrap().stream.tls = rosetun_config::TlsMode::Tls(Default::default());
+            height(&mut dialog);
+            assert!(dialog.select_proxy_tab(false));
+            let restored = height(&mut dialog);
+            assert!((restored - original).abs() < 1.0, "subscription height grew from {original} to {restored}");
+        }
+    }
 
     #[test]
     fn qr_choices_show_the_host_and_hide_the_token() {
