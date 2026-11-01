@@ -397,6 +397,7 @@ impl App {
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
             Job::SetLockdown(enabled) => self.workers.set_lockdown(enabled),
             Job::Add { input, options } => self.workers.add(input, options),
+            Job::SaveProxy(id, node) => self.workers.save_proxy(id, *node),
             Job::ReadQr { request, source } => self.workers.read_qr(request, source),
             Job::PollScreenClip { request, sequence } => {
                 self.workers.poll_screen_clip(request, sequence);

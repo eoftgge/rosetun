@@ -1,6 +1,11 @@
 use super::*;
 
 impl WorkerDispatcher {
+    pub(crate) fn save_proxy(&self, id: Option<SubscriptionId>, node: Node) {
+        self.spawn_complete("rosetun-save-proxy", move |store| {
+            WorkerEvent::Add(rosetun_core::save_proxy(store, id.as_ref(), node))
+        });
+    }
     pub(crate) fn select_node(&self, subscription: SubscriptionId, node: NodeId) {
         self.spawn_complete("rosetun-select-node", move |store| {
             WorkerEvent::SelectNode(select_node(store, &subscription, &node))

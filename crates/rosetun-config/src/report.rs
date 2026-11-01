@@ -2,6 +2,7 @@ use std::net::IpAddr;
 use std::ops::Range;
 
 const SECRET_KEYS: &[&str] = &[
+    "username",
     "password",
     "uuid",
     "public_key",
@@ -33,6 +34,11 @@ pub fn redact_report_text(text: &str) -> String {
     let text = redact_urls(&text);
     let text = redact_emails(&text);
     redact_addresses(&text)
+}
+
+/// Removes credential fields and full URLs even when detailed engine logging is enabled.
+pub fn redact_log_credentials(text: &str) -> String {
+    redact_urls(&redact_secrets(text))
 }
 
 fn redact_profiles(text: &str) -> String {

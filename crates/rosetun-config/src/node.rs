@@ -28,7 +28,7 @@ fn xray_supports(outbound: &Outbound) -> bool {
     match outbound {
         Outbound::Vmess(params) => params.alter_id == 0,
         Outbound::Vless(_) | Outbound::Trojan(_) | Outbound::Shadowsocks(_) => true,
-        Outbound::Hysteria2(_) | Outbound::Unknown { .. } => false,
+        Outbound::Http(_) | Outbound::Socks5(_) | Outbound::Hysteria2(_) | Outbound::Unknown { .. } => false,
     }
 }
 
@@ -80,8 +80,8 @@ impl fmt::Debug for Node {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Node")
             .field("id", &self.id)
-            .field("name", &self.name)
-            .field("server", &self.server)
+            .field("name", &"[redacted]")
+            .field("server", &"[redacted]")
             .field("port", &self.port)
             .field("outbound", &self.outbound)
             .field("stream", &self.stream)
@@ -93,6 +93,8 @@ impl fmt::Debug for Node {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outbound {
+    Http(ProxyCredentials),
+    Socks5(ProxyCredentials),
     Vless(VlessParams),
     Vmess(VmessParams),
     Trojan(TrojanParams),
@@ -107,6 +109,8 @@ pub enum Outbound {
 impl fmt::Debug for Outbound {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Http(params) => f.debug_tuple("Http").field(params).finish(),
+            Self::Socks5(params) => f.debug_tuple("Socks5").field(params).finish(),
             Self::Vless(params) => f.debug_tuple("Vless").field(params).finish(),
             Self::Vmess(params) => f.debug_tuple("Vmess").field(params).finish(),
             Self::Trojan(params) => f.debug_tuple("Trojan").field(params).finish(),
@@ -118,6 +122,62 @@ impl fmt::Debug for Outbound {
                 .field("params_count", &params.len())
                 .finish(),
         }
+    }
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyCredentials {
+    pub username: String,
+    pub password: String,
+}
+
+impl fmt::Debug for ProxyCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ProxyCredentials([redacted])")
+    }
+}
+
+impl Node {
+    /// Validates external proxies at both the storage and engine boundaries.
+    pub fn validate_proxy(&self) -> Result<(), &'static str> {
+        let credentials = match &self.outbound {
+            Outbound::Http(credentials) | Outbound::Socks5(credentials) => credentials,
+            _ => return Ok(()),
+        };
+        let valid_host = |server: &str| {
+            let host = server.strip_suffix('.').unwrap_or(server);
+            server.parse::<std::net::IpAddr>().is_ok()
+            || (!host.is_empty() && host.len() <= 253 && host.split('.').all(|label| {
+                !label.is_empty() && label.len() <= 63
+                    && !label.starts_with('-') && !label.ends_with('-')
+                    && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            }))
+        };
+        if !valid_host(&self.server) || self.port == 0 {
+            return Err("proxy requires a valid DNS name or IP address and a port between 1 and 65535");
+        }
+        if self.stream.transport != Transport::Tcp {
+            return Err("proxy requires TCP transport");
+        }
+        match (&self.outbound, &self.stream.tls) {
+            (Outbound::Http(_), TlsMode::Tls(tls)) => {
+                if tls.allow_insecure || tls.sni.as_ref().is_some_and(|name| !valid_host(name)) {
+                    return Err("HTTPS proxy requires certificate verification and a valid TLS server name");
+                }
+            }
+            (_, TlsMode::Plain) => {}
+            _ => return Err("proxy TLS mode is not supported"),
+        }
+        if credentials.username.chars().chain(credentials.password.chars()).any(char::is_control)
+            || (credentials.username.is_empty() && !credentials.password.is_empty())
+            || (matches!(self.outbound, Outbound::Http(_)) && credentials.username.contains(':'))
+            || (matches!(self.outbound, Outbound::Socks5(_))
+                && (credentials.username.len() > 255 || credentials.password.len() > 255
+                    || (!credentials.username.is_empty() && credentials.password.is_empty())))
+        {
+            return Err("proxy credentials are invalid for the selected protocol");
+        }
+        Ok(())
     }
 }
 

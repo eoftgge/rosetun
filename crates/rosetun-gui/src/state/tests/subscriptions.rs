@@ -985,3 +985,22 @@ fn a_link_opened_before_the_settings_load_waits_for_them() {
         "https://other.example.com/sub"
     );
 }
+#[test]
+fn manual_proxy_submission_and_edit_keep_the_credentials() {
+    let mut state = State::default();
+    state.config_ready = true;
+    let node = rosetun_core::parse_proxy_uri("https://fixture-user:fixture-password@proxy.example.com:443#Example").unwrap();
+    state.subscriptions.add = Some(AddDialog { proxy: Some(node.clone()), ..AddDialog::default() });
+    let Some(Job::SaveProxy(None, submitted)) = state.act(Action::SubmitAdd) else { panic!("expected proxy save") };
+    assert_eq!(*submitted, node);
+    assert!(state.subscriptions.add.as_ref().unwrap().busy);
+    state.subscriptions.add = None;
+    let mut subscription = subscription("1");
+    subscription.url = "local-proxy://1".into();
+    subscription.nodes = vec![node.clone()];
+    state.config.subscriptions.push(subscription);
+    state.act(Action::RequestRename(SubscriptionId::new("1")));
+    let dialog = state.subscriptions.add.as_ref().unwrap();
+    assert_eq!(dialog.proxy.as_ref(), Some(&node));
+    assert_eq!(dialog.editing_proxy, Some(SubscriptionId::new("1")));
+}

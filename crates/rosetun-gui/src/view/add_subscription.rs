@@ -12,12 +12,26 @@ pub(crate) fn show(
     dialog: &mut AddDialog,
     actions: &mut Vec<Action>,
 ) {
+    if dialog.proxy.is_some() {
+        show_proxy(ctx, dialog, actions);
+        return;
+    }
     let response = widgets::show_modal(
         ctx,
         egui::Modal::new(egui::Id::new("add_subscription")),
         |ui| {
             ui.set_width(520.0);
             ui.heading(tr!("add-subscription"));
+            if widgets::outline_button(ui, tr!("proxy-add"), !dialog.busy).clicked() {
+                dialog.proxy = Some(rosetun_config::Node {
+                    id: rosetun_config::NodeId::new("pending"), name: String::new(),
+                    server: String::new(), port: 8080,
+                    outbound: rosetun_config::Outbound::Http(Default::default()),
+                    stream: Default::default(), raw: None,
+                });
+                dialog.url.clear();
+                dialog.error = None;
+            }
             ui.colored_label(theme::palette().text_muted, tr!("add-subtitle"));
             ui.add_space(18.0);
             if let Some(host) = &dialog.from_link {
@@ -168,6 +182,77 @@ pub(crate) fn show(
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAdd);
     }
+}
+
+fn show_proxy(ctx: &egui::Context, dialog: &mut AddDialog, actions: &mut Vec<Action>) {
+    use rosetun_config::{Outbound, TlsMode, TlsParams};
+
+    let response = widgets::show_modal(ctx, egui::Modal::new(egui::Id::new("proxy_editor")), |ui| {
+        ui.set_width(520.0);
+        ui.heading(tr!("proxy-add"));
+        let Some(node) = &mut dialog.proxy else { return; };
+        ui.add_enabled_ui(!dialog.busy, |ui| {
+            let mut protocol = match (&node.outbound, &node.stream.tls) {
+                (Outbound::Socks5(_), _) => 2,
+                (_, TlsMode::Tls(_)) => 1,
+                _ => 0,
+            };
+            let previous = protocol;
+            egui::ComboBox::from_id_salt("proxy_protocol").selected_text(["HTTP", "HTTPS", "SOCKS5"][protocol]).show_ui(ui, |ui| {
+                ui.selectable_value(&mut protocol, 0, "HTTP");
+                ui.selectable_value(&mut protocol, 1, "HTTPS");
+                ui.selectable_value(&mut protocol, 2, "SOCKS5");
+            });
+            if previous != protocol {
+                let credentials = match &node.outbound {
+                    Outbound::Http(credentials) | Outbound::Socks5(credentials) => credentials.clone(),
+                    _ => Default::default(),
+                };
+                node.outbound = if protocol == 2 { Outbound::Socks5(credentials) } else { Outbound::Http(credentials) };
+                node.stream.tls = if protocol == 1 { TlsMode::Tls(TlsParams::default()) } else { TlsMode::Plain };
+            }
+            ui.label(tr!("name"));
+            ui.text_edit_singleline(&mut node.name);
+            ui.label(tr!("proxy-server"));
+            ui.text_edit_singleline(&mut node.server);
+            ui.label(tr!("proxy-port"));
+            ui.add(egui::DragValue::new(&mut node.port).range(1..=65535));
+            if let Outbound::Http(credentials) | Outbound::Socks5(credentials) = &mut node.outbound {
+                ui.label(tr!("proxy-username"));
+                ui.text_edit_singleline(&mut credentials.username);
+                ui.label(tr!("proxy-password"));
+                ui.add(egui::TextEdit::singleline(&mut credentials.password).password(true));
+            }
+            if let TlsMode::Tls(tls) = &mut node.stream.tls {
+                ui.label(tr!("proxy-sni"));
+                let sni = tls.sni.get_or_insert_default();
+                ui.text_edit_singleline(sni);
+                if sni.is_empty() { tls.sni = None; }
+            }
+            ui.label(tr!("proxy-uri"));
+            ui.add(egui::TextEdit::singleline(&mut dialog.url).password(true));
+            if widgets::outline_button(ui, tr!("proxy-import"), !dialog.url.is_empty()).clicked() {
+                match rosetun_core::parse_proxy_uri(dialog.url.trim()) {
+                    Ok(imported) => { *node = imported; dialog.url.clear(); dialog.error = None; }
+                    Err(_) => dialog.error = Some(rosetun_core::AddFromUrlError::Proxy),
+                }
+            }
+        });
+        ui.label(tr!("proxy-details")).on_hover_text(tr!("proxy-limitations"));
+        let valid = node.validate_proxy().is_ok();
+        if let Some(error) = &dialog.error {
+            ui.colored_label(theme::ERROR, errors::add_subscription(crate::i18n::language(), error));
+        }
+        ui.horizontal(|ui| {
+            if widgets::button_fill(ui, tr!("save"), !dialog.busy && valid).clicked() {
+                actions.push(Action::SubmitAdd);
+            }
+            if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
+                actions.push(Action::CancelAdd);
+            }
+        });
+    });
+    if !dialog.busy && response.should_close() { actions.push(Action::CancelAdd); }
 }
 
 fn qr_menu(ui: &mut egui::Ui, dialog: &AddDialog, enabled: bool, actions: &mut Vec<Action>) {

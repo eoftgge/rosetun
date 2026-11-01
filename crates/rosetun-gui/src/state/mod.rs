@@ -460,6 +460,7 @@ pub(crate) enum Job {
         input: String,
         options: AddOptions,
     },
+    SaveProxy(Option<SubscriptionId>, Box<rosetun_config::Node>),
     ReadQr {
         request: u64,
         source: QrSource,

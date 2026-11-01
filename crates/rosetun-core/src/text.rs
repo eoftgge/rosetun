@@ -153,6 +153,9 @@ pub fn traffic_text(info: &SubscriptionInfo) -> String {
 
 pub fn node_protocol(node: &Node) -> &'static str {
     match &node.outbound {
+        Outbound::Http(_) if matches!(node.stream.tls, rosetun_config::TlsMode::Tls(_)) => "https",
+        Outbound::Http(_) => "http",
+        Outbound::Socks5(_) => "socks5",
         Outbound::Vless(_) => "vless",
         Outbound::Vmess(_) => "vmess",
         Outbound::Trojan(_) => "trojan",

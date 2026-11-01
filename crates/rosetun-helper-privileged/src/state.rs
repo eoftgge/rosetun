@@ -1364,6 +1364,9 @@ fn validate_tun_name(name: &str) -> Result<(), HelperError> {
 }
 
 fn validate_request(request: &ConnectRequest) -> Result<(), HelperError> {
+    for node in std::iter::once(&request.node).chain(request.extra_nodes.iter().map(|extra| &extra.node)) {
+        node.validate_proxy().map_err(|message| HelperError::new(ErrorCode::InvalidRequest, message))?;
+    }
     validate_tun_name(&request.settings.tun.name)?;
     if request
         .rule_set

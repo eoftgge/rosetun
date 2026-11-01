@@ -18,6 +18,7 @@ const V4: &[u8] = include_bytes!("fixtures/v4.json");
 const V5: &[u8] = include_bytes!("fixtures/v5.json");
 const V6: &[u8] = include_bytes!("fixtures/v6.json");
 const V7: &[u8] = include_bytes!("fixtures/v7.json");
+const V8: &[u8] = include_bytes!("fixtures/v8.json");
 
 fn current_config() -> AppConfig {
     let mut config = support::legacy_config();
@@ -199,7 +200,7 @@ fn value(bytes: &[u8]) -> Value {
 #[test]
 fn released_configurations_migrate_to_the_expected_configuration() {
     assert_eq!(
-        CONFIG_VERSION, 7,
+        CONFIG_VERSION, 8,
         "released fixtures require format version seven"
     );
     let expected = expected_migrated_legacy_config();
@@ -223,8 +224,16 @@ fn released_configurations_migrate_to_the_expected_configuration() {
 
 #[test]
 fn current_configuration_fixture_guards_the_serialized_format() {
-    let expected = format_seven_config();
-    let (loaded, migrated_from) = from_json(V7).expect("current fixture should load");
+    let mut expected = format_seven_config();
+    for (protocol, tls) in [("http", false), ("https", true), ("socks5", false)] {
+        let credentials = rosetun_config::ProxyCredentials { username: "fixture-user".into(), password: "fixture-password".into() };
+        expected.subscriptions[1].nodes.push(Node {
+            id: NodeId::new(protocol), name: protocol.into(), server: "2001:db8::1".into(), port: 8080,
+            outbound: if protocol == "socks5" { Outbound::Socks5(credentials) } else { Outbound::Http(credentials) },
+            stream: StreamSettings { tls: if tls { TlsMode::Tls(TlsParams::default()) } else { TlsMode::Plain }, ..Default::default() }, raw: None,
+        });
+    }
+    let (loaded, migrated_from) = from_json(V8).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
     assert_eq!(loaded, expected);
@@ -255,8 +264,8 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     );
     assert_eq!(
         serde_json::to_value(&expected).expect("serialize expected configuration"),
-        value(V7),
-        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v7.json"
+        value(V8),
+        "the serialized configuration shape changed; bump CONFIG_VERSION, add a migration, and add a new fixture instead of changing v8.json"
     );
 }
 
@@ -274,7 +283,7 @@ fn version_five_loads_and_saves_as_version_seven() {
     assert_eq!(config, format_five_config());
 
     let mut expected = with_machine_scope(value(V5));
-    expected["version"] = json!(7);
+    expected["version"] = json!(8);
     expected["interface"]["accent"] = json!("rose");
     expected["interface"]["notifications"] = json!(true);
     expected["interface"]["quit_action"] = json!("ask");
@@ -297,7 +306,7 @@ fn version_six_keeps_the_machine_id_of_every_subscription() {
     );
 
     let mut expected = with_machine_scope(value(V6));
-    expected["version"] = json!(7);
+    expected["version"] = json!(8);
     expected["interface"]["accent"] = json!("rose");
     expected["interface"]["notifications"] = json!(true);
     expected["interface"]["quit_action"] = json!("ask");
@@ -326,7 +335,7 @@ fn a_format_seven_subscription_without_hwid_scope_keeps_the_machine_id() {
 
     let (config, migrated_from) =
         from_json(&serde_json::to_vec(&input).unwrap()).expect("hand-edited format seven");
-    assert_eq!(migrated_from, None);
+    assert_eq!(migrated_from, Some(7));
     assert_eq!(config.subscriptions[1].hwid_scope, HwidScope::Machine);
 }
 
@@ -337,7 +346,7 @@ fn a_format_seven_interface_without_accent_reads_as_rose() {
 
     let (config, migrated_from) =
         from_json(&serde_json::to_vec(&input).unwrap()).expect("format seven without accent");
-    assert_eq!(migrated_from, None);
+    assert_eq!(migrated_from, Some(7));
     assert_eq!(config.interface.accent, AccentPreset::Rose);
 }
 
@@ -351,7 +360,7 @@ fn a_format_seven_interface_without_notifications_shows_them() {
 
     let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap())
         .expect("format seven without notifications");
-    assert_eq!(migrated_from, None);
+    assert_eq!(migrated_from, Some(7));
     assert!(config.interface.notifications);
 }
 
@@ -369,7 +378,7 @@ fn a_format_seven_interface_without_a_found_release_has_none() {
 
     let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap())
         .expect("format seven without a found release");
-    assert_eq!(migrated_from, None);
+    assert_eq!(migrated_from, Some(7));
     assert_eq!(config.interface.newest_release, None);
     assert_eq!(config.interface.announced_update, None);
     let saved = serde_json::to_value(&config).unwrap();
@@ -390,7 +399,7 @@ fn a_format_seven_interface_without_recent_servers_has_none() {
 
     let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap())
         .expect("format seven without recent servers");
-    assert_eq!(migrated_from, None);
+    assert_eq!(migrated_from, Some(7));
     assert!(config.interface.recent_servers.is_empty());
     assert!(
         serde_json::to_value(&config).unwrap()["interface"]
@@ -447,7 +456,7 @@ fn a_format_seven_interface_without_a_quit_action_asks() {
 
     let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap())
         .expect("format seven without a quit action");
-    assert_eq!(migrated_from, None);
+    assert_eq!(migrated_from, Some(7));
     assert_eq!(config.interface.quit_action, QuitAction::Ask);
 }
 

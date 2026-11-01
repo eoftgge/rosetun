@@ -323,6 +323,8 @@ pub(crate) fn is_service(node: &Node) -> bool {
 
 pub(crate) fn stable_id(node: &Node) -> String {
     let protocol = match &node.outbound {
+        Outbound::Http(_) => "http",
+        Outbound::Socks5(_) => "socks5",
         Outbound::Vless(_) => "vless",
         Outbound::Vmess(_) => "vmess",
         Outbound::Trojan(_) => "trojan",

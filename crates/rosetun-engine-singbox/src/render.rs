@@ -221,12 +221,24 @@ fn socks_outbound(socks: SocksProxy<'_>, tag: &str) -> Value {
 }
 
 fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
+    node.validate_proxy().map_err(|message| EngineError::Unsupported(message.into()))?;
     let mut outbound = Map::new();
     outbound.insert("tag".into(), tag.into());
     outbound.insert("server".into(), node.server.clone().into());
     outbound.insert("server_port".into(), node.port.into());
 
     match &node.outbound {
+        Outbound::Http(credentials) | Outbound::Socks5(credentials) => {
+            let socks = matches!(node.outbound, Outbound::Socks5(_));
+            outbound.insert("type".into(), if socks { "socks" } else { "http" }.into());
+            if socks {
+                outbound.insert("version".into(), "5".into());
+            }
+            if !credentials.username.is_empty() {
+                outbound.insert("username".into(), credentials.username.clone().into());
+                outbound.insert("password".into(), credentials.password.clone().into());
+            }
+        }
         Outbound::Vless(params) => {
             outbound.insert("type".into(), "vless".into());
             outbound.insert("uuid".into(), params.uuid.clone().into());
@@ -300,7 +312,7 @@ fn proxy_outbound(node: &Node, tag: &str) -> Result<Value, EngineError> {
 
     if let Some(tls) = tls_section(
         &node.stream.tls,
-        !matches!(&node.outbound, Outbound::Hysteria2(_)),
+        !matches!(&node.outbound, Outbound::Hysteria2(_) | Outbound::Http(_)),
     ) {
         outbound.insert("tls".into(), tls);
     }

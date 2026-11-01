@@ -16,6 +16,7 @@ pub(crate) fn parse(line: &str) -> Record {
         return (safe_scheme, Entry::Notice(notice));
     }
     let result = match scheme.as_str() {
+        "http" | "https" | "socks5" => crate::parse_proxy_uri(line),
         "vless" | "trojan" => ordinary(line, &scheme),
         "hysteria2" | "hy2" => hysteria2(rest),
         "vmess" => vmess(rest),

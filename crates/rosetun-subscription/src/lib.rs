@@ -4,12 +4,15 @@ mod common;
 mod json;
 mod links;
 mod meta;
+mod proxy;
 mod xhttp;
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use rosetun_config::{Node, SubscriptionInfo};
+
+pub use proxy::parse_proxy_uri;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {

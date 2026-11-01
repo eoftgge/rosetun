@@ -78,6 +78,7 @@ pub(crate) fn store(language: Language, error: &StoreError) -> String {
 
 fn config(language: Language, error: &ConfigError) -> String {
     match error {
+        ConfigError::InvalidProxy => tr_in(language, "error-proxy-invalid", &FluentArgs::new()),
         ConfigError::UnsupportedVersion { .. } => {
             tr_in(language, "error-config-version", &FluentArgs::new())
         }
@@ -576,6 +577,7 @@ pub(crate) fn qr(language: Language, error: QrError) -> String {
 
 pub(crate) fn add_subscription(language: Language, error: &AddFromUrlError) -> String {
     match error {
+        AddFromUrlError::Proxy => tr_in(language, "error-proxy-invalid", &FluentArgs::new()),
         AddFromUrlError::Url(error) => subscription_url(language, error),
         AddFromUrlError::Store(error) => store(language, error),
         AddFromUrlError::AlreadyExists(id) => tr_in(

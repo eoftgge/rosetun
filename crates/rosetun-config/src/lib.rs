@@ -22,11 +22,11 @@ pub use list_validation::{
     validate_srs,
 };
 pub use node::{
-    Hysteria2Params, Node, Outbound, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
+    Hysteria2Params, Node, Outbound, ProxyCredentials, RealityParams, ShadowsocksParams, StreamSettings, TlsMode,
     TlsParams, Transport, TrojanParams, VlessParams, VmessParams, XhttpExtra, XhttpMode,
     XhttpRange, XhttpXmux, node_country, uses_xray,
 };
-pub use report::{hide_public_addresses, ip_literals, is_public_ip, redact_report_text};
+pub use report::{hide_public_addresses, ip_literals, is_public_ip, redact_report_text, redact_log_credentials};
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{
     ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind, LiveConnection,
@@ -41,7 +41,7 @@ use serde_json::{Map, Value};
 
 /// Bump for every serialized format change, including defaulted fields older releases drop on save.
 /// Add a Value migration and a new fixture; never edit fixtures of released formats.
-pub const CONFIG_VERSION: u32 = 7;
+pub const CONFIG_VERSION: u32 = 8;
 
 pub const EXIT_TRACE_IP: &str = "1.1.1.1";
 pub const EXIT_TRACE_PORT: u16 = 443;
@@ -264,6 +264,8 @@ impl AppConfig {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+    #[error("invalid external proxy configuration")]
+    InvalidProxy,
     #[error(
         "configuration version {found} is not supported (expected to be no higher than {expected})"
     )]
@@ -327,6 +329,7 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
             4 => migrate_4_to_5(config),
             5 => migrate_5_to_6(config),
             6 => migrate_6_to_7(config),
+            7 => migrate_7_to_8(config),
             _ => return Err(FormatError::UnexpectedValue),
         }
         version += 1;
@@ -340,6 +343,10 @@ pub fn from_json(bytes: &[u8]) -> Result<(AppConfig, Option<u32>), FormatError> 
         config,
         (original_version < CONFIG_VERSION).then_some(original_version),
     ))
+}
+
+fn migrate_7_to_8(_config: &mut Map<String, Value>) {
+    // Format 8 adds external proxy outbounds; older writers must refuse this file.
 }
 
 fn migrate_1_to_2(_config: &mut Map<String, Value>) {
@@ -383,6 +390,9 @@ fn migrate_6_to_7(config: &mut Map<String, Value>) {
 
 impl AppConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
+        for node in self.subscriptions.iter().flat_map(|subscription| &subscription.nodes) {
+            node.validate_proxy().map_err(|_| ConfigError::InvalidProxy)?;
+        }
         if self.version > CONFIG_VERSION {
             return Err(ConfigError::UnsupportedVersion {
                 found: self.version,

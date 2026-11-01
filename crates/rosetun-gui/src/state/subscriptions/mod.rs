@@ -79,6 +79,8 @@ impl fmt::Debug for OpenedLink {
 }
 
 pub(crate) struct AddDialog {
+    pub(crate) proxy: Option<rosetun_config::Node>,
+    pub(crate) editing_proxy: Option<SubscriptionId>,
     pub(crate) url: String,
     pub(crate) name: String,
     pub(crate) send_hwid: bool,
@@ -95,6 +97,8 @@ pub(crate) struct AddDialog {
 impl Default for AddDialog {
     fn default() -> Self {
         Self {
+            proxy: None,
+            editing_proxy: None,
             url: String::new(),
             name: String::new(),
             send_hwid: true,
@@ -464,6 +468,14 @@ impl State {
                     && !dialog.busy
                     && !dialog.qr.busy()
                 {
+                    if let Some(node) = &dialog.proxy {
+                        if node.validate_proxy().is_err() {
+                            dialog.error = Some(AddFromUrlError::Proxy);
+                            return None;
+                        }
+                        dialog.busy = true;
+                        return Some(Job::SaveProxy(dialog.editing_proxy.clone(), Box::new(node.clone())));
+                    }
                     match rosetun_core::normalize_subscription_url(&dialog.url) {
                         Ok(input) => {
                             dialog.busy = true;
@@ -484,6 +496,9 @@ impl State {
                 }
             }
             Action::Update(id) => {
+                if self.config.subscriptions.iter().any(|subscription| subscription.id == id && rosetun_core::is_local_proxy(subscription)) {
+                    return self.act_subscriptions(Action::RequestRename(id));
+                }
                 if !self.subscription_busy(&id) {
                     self.operations.updating.insert(id.clone());
                     self.subscriptions.outcomes.remove(&id);
@@ -534,6 +549,15 @@ impl State {
                 }
             }
             Action::RequestRename(id) => {
+                if self.config_ready && self.subscriptions.add.is_none()
+                    && let Some(subscription) = self.config.subscriptions.iter().find(|subscription| subscription.id == id && rosetun_core::is_local_proxy(subscription))
+                    && let Some(node) = subscription.nodes.first()
+                {
+                    self.subscriptions.add = Some(AddDialog {
+                        proxy: Some(node.clone()), editing_proxy: Some(id), ..AddDialog::default()
+                    });
+                    return None;
+                }
                 if self.config_ready
                     && self.subscriptions.rename.is_none()
                     && self.subscriptions.remove.is_none()

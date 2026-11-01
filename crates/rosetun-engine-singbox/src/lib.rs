@@ -484,11 +484,12 @@ fn safe_output_line<'a>(
     now_unix: u64,
 ) -> Option<Cow<'a, str>> {
     if now_unix < until_unix.load(Ordering::Acquire) {
-        Some(Cow::Borrowed(line))
+        let redacted = rosetun_config::redact_log_credentials(line);
+        Some(if redacted == line { Cow::Borrowed(line) } else { Cow::Owned(redacted) })
     } else if output::is_connection_line(line) {
         None
     } else {
-        Some(Cow::Owned(output::hide_destinations(line)))
+        Some(Cow::Owned(output::hide_destinations(&rosetun_config::redact_log_credentials(line))))
     }
 }
 
@@ -591,6 +592,16 @@ impl Drop for SingBoxProcess {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn proxy_credentials_are_hidden_with_detailed_logging_on_or_off() {
+        let deadline = std::sync::atomic::AtomicU64::new(100);
+        let line = "WARN username=fixture-user password=fixture-password https://fixture-user:fixture-password@proxy.example.com:443";
+        for now in [99, 100] {
+            let safe = super::safe_output_line(line, &deadline, now).unwrap();
+            assert!(!safe.contains("fixture-user"));
+            assert!(!safe.contains("fixture-password"));
+        }
+    }
     use super::*;
     use rosetun_config::{
         DomainMatch, LogLevel, Node, NodeId, Outbound, ProcessMatch, RealityParams, Rule, RuleId,

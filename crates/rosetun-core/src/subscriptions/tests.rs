@@ -5,6 +5,31 @@ use super::*;
 
 static NEXT_DIRECTORY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+#[test]
+fn manual_proxy_edit_preserves_selection_and_never_fetches_a_subscription() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let node = crate::parse_proxy_uri("https://fixture-user:fixture-password@proxy.example.com:443#Example").unwrap();
+    let (subscription, _) = save_proxy(&store, None, node).unwrap();
+    let node_id = subscription.nodes[0].id.clone();
+    assert!(is_local_proxy(&subscription));
+    assert!(!subscription.url.contains("fixture-password"));
+    crate::select_node(&store, &subscription.id, &node_id).unwrap();
+    let mut edited = subscription.nodes[0].clone();
+    edited.port = 8443;
+    edited.server = "2001:db8::1".into();
+    let (saved, _) = save_proxy(&store, Some(&subscription.id), edited.clone()).unwrap();
+    assert_eq!(saved.nodes[0].id, node_id);
+    assert_eq!(saved.nodes[0].outbound, edited.outbound);
+    assert_eq!(saved.nodes[0].stream, edited.stream);
+    assert_eq!(store.load().unwrap().active_node().unwrap().1, &saved.nodes[0]);
+    let mut calls = 0;
+    let results = update_all_with(&store, Timeouts::default(), |_, _| { calls += 1; panic!("manual proxies must not fetch") }).unwrap();
+    assert_eq!(calls, 0);
+    assert!(results.is_empty());
+    assert!(crate::prepare_subscription(&store, "https://example.com/subscription", AddOptions::default()).is_ok());
+}
+
 struct TestDirectory(std::path::PathBuf);
 
 impl TestDirectory {

@@ -129,7 +129,7 @@ pub(super) fn subscription_card(
                             !state.subscription_busy(&subscription.id),
                             28.0,
                         )
-                        .on_hover_text(format!("{}\n{updated}", tr!("update")));
+                        .on_hover_text(if rosetun_core::is_local_proxy(subscription) { tr!("proxy-edit") } else { format!("{}\n{updated}", tr!("update")) });
                         if refresh.clicked() {
                             actions.push(Action::Update(subscription.id.clone()));
                         }
@@ -152,7 +152,7 @@ pub(super) fn subscription_card(
                         if widgets::menu_item(
                             ui,
                             widgets::MenuItem {
-                                label: &tr!("rename"),
+                                label: &if rosetun_core::is_local_proxy(subscription) { tr!("proxy-edit") } else { tr!("rename") },
                                 enabled: state.config_ready
                                     && !state.operations.renaming
                                     && state.subscriptions.rename.is_none()

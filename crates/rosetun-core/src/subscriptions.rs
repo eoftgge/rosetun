@@ -45,6 +45,8 @@ impl PreparedSubscription {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AddFromUrlError {
+    #[error("invalid proxy configuration")]
+    Proxy,
     #[error("{0}")]
     Url(SubscriptionUrlError),
     #[error(transparent)]
@@ -185,6 +187,10 @@ fn update_subscription_with(
         .find(|subscription| &subscription.id == id)
         .ok_or(UpdateSubscriptionError::NotFound)?;
 
+    if is_local_proxy(requested) {
+        return Err(UpdateSubscriptionError::NotFound);
+    }
+
     let parsed = fetch_subscription(requested, timeouts).map_err(|source| {
         let message = crate::fetch_error_message(&source, &requested.url);
         UpdateSubscriptionError::Fetch { source, message }
@@ -217,6 +223,7 @@ pub(crate) fn update_all_with(
         .load()?
         .subscriptions
         .into_iter()
+        .filter(|subscription| !is_local_proxy(subscription))
         .map(|subscription| subscription.id)
         .collect();
 
@@ -419,6 +426,59 @@ pub fn add_subscription(
 
         let report = apply_update(config, &id, parsed, now_unix);
         Ok((config.subscriptions[index].clone(), report))
+    })
+}
+
+pub fn is_local_proxy(subscription: &Subscription) -> bool {
+    subscription.url == format!("local-proxy://{}", subscription.id.as_str())
+}
+
+/// Saves a manual proxy in the existing subscription/node store without a fetchable URL.
+pub fn save_proxy(
+    store: &Store,
+    id: Option<&SubscriptionId>,
+    mut node: rosetun_config::Node,
+) -> Result<(Subscription, UpdateReport), AddFromUrlError> {
+    if !matches!(node.outbound, rosetun_config::Outbound::Http(_) | rosetun_config::Outbound::Socks5(_))
+        || node.validate_proxy().is_err()
+    {
+        return Err(AddFromUrlError::Proxy);
+    }
+    node.raw = None;
+    if node.name.trim().is_empty() {
+        node.name = crate::node_protocol(&node).to_ascii_uppercase();
+    }
+    store.modify(|config| {
+        let report = UpdateReport {
+            added: usize::from(id.is_none()), removed: 0, retained: usize::from(id.is_some()),
+            selection_cleared: false, skipped: Default::default(), notices: Vec::new(),
+        };
+        if let Some(id) = id {
+            let subscription = config.subscriptions.iter_mut()
+                .find(|subscription| &subscription.id == id && is_local_proxy(subscription))
+                .ok_or(AddFromUrlError::Proxy)?;
+            let previous = subscription.nodes.first().ok_or(AddFromUrlError::Proxy)?;
+            node.id = previous.id.clone();
+            subscription.name = node.name.clone();
+            subscription.nodes = vec![node.clone()];
+            return Ok((subscription.clone(), report));
+        }
+        let mut candidate = 1_u64;
+        while config.subscriptions.iter().any(|subscription| subscription.id.as_str() == candidate.to_string()) {
+            candidate = candidate.checked_add(1).ok_or(AddFromUrlError::Proxy)?;
+        }
+        let id = SubscriptionId::new(candidate.to_string());
+        node.id = rosetun_config::NodeId::new("proxy");
+        let subscription = Subscription {
+            url: format!("local-proxy://{}", id.as_str()), id,
+            name: node.name.clone(), nodes: vec![node.clone()], auto_update: false,
+            updated_at_unix: None, user_agent: None, send_hwid: false,
+            hwid_scope: rosetun_config::HwidScope::Provider, info: None,
+            update_interval_hours: None, support_url: None, web_page_url: None,
+            announce: None, notices: Vec::new(),
+        };
+        config.subscriptions.push(subscription.clone());
+        Ok((subscription, report))
     })
 }
 
