@@ -1,0 +1,35 @@
+id	required	evidence	group	detail	title
+preflight.identity	yes	infrastructure	preflight	-	the guest is the designated test machine on the expected boot, x86_64, with systemd
+preflight.accounts	yes	infrastructure	preflight	-	group rosetun and two distinct ordinary accounts exist, both in the group, neither an administrator
+preflight.no-foreign-service	yes	infrastructure	preflight	-	no Rosetun unit or helper process is running
+preflight.endpoint-free	yes	infrastructure	preflight	-	/run/rosetun does not exist
+credentials.endpoint-directory	yes	transport-fixture	credentials	-	/run/rosetun is owned by root without group or other write access
+credentials.socket-mode	yes	transport-fixture	credentials	-	the socket is root:rosetun with mode 0660
+credentials.owner-uid	yes	transport-fixture	credentials	-	the first account authenticates with its own UID and is not an administrator
+credentials.spoofed-hello	yes	transport-fixture	credentials	-	a Hello claiming UID 0 keeps the first account's real UID and is not an administrator
+credentials.endpoint-env-ignored	yes	transport-fixture	credentials	-	ROSETUN_HELPER_ENDPOINT does not redirect the default endpoint
+credentials.other-uid	yes	transport-fixture	credentials	-	the second account authenticates with its own, different UID and is not an administrator
+credentials.root-uid	yes	transport-fixture	credentials	-	root authenticates as UID 0 and as an administrator
+credentials.clean-exit	yes	transport-fixture	credentials	-	the fixture exits normally and removes its own socket
+untrusted-server.client-refused	yes	transport-fixture	untrusted	-	the client refuses a server that an ordinary account runs
+untrusted-server.no-bytes-sent	yes	transport-fixture	untrusted	-	the untrusted server receives no request bytes
+exclusivity.second-bind-refused	yes	transport-fixture	exclusivity	-	a second bind on an occupied endpoint is refused
+exclusivity.inode-unchanged	yes	transport-fixture	exclusivity	-	the refused bind leaves the running endpoint's inode unchanged
+exclusivity.original-still-serves	yes	transport-fixture	exclusivity	-	the original listener still serves a client after the refused bind
+exclusivity.original-clean-exit	yes	transport-fixture	exclusivity	-	the original listener exits normally and removes its own socket
+stale.restart-refused	yes	transport-fixture	stale	-	after a forced kill a restart refuses the stale socket
+stale.socket-preserved	yes	transport-fixture	stale	-	the refused restart leaves the stale socket in place
+stale.verified-removal	yes	infrastructure	stale	-	the stale socket is removed by the stand only after process and object identity checks
+occupied.regular-file-preserved	yes	transport-fixture	occupied	-	a regular file at the endpoint path is refused and keeps its content and inode
+occupied.symlink-preserved	yes	transport-fixture	occupied	-	a symlink at the endpoint path is refused and stays untouched
+unit.server-shutdown-without-clients	yes	helper-unit-stub-backends	unit_helper	helper:server::read_tests::shutdown_without_clients_closes_listener_before_serve_returns	shutdown without clients closes the listener before serve returns
+unit.server-shutdown-full-client-limit	yes	helper-unit-stub-backends	unit_helper	helper:server::read_tests::shutdown_with_full_client_limit_and_concurrent_connect_does_not_wait_for_clients	shutdown with every client slot taken does not wait for clients
+unit.server-shutdown-preserves-replacement	yes	helper-unit-stub-backends	unit_helper	helper:server::read_tests::shutdown_cleanup_preserves_a_replacement_endpoint	shutdown cleanup keeps a replacement endpoint
+unit.helper-uid-policies	yes	helper-unit-stub-backends	unit_helper	helper:state::tests::linux_uids_preserve_session_and_owner_only_read_policies	Linux UIDs keep session ownership and owner-only read policies
+unit.helper-shutdown-non-admin	yes	helper-unit-stub-backends	unit_helper	helper:server::tests::linux_shutdown_rejects_an_authenticated_non_administrator	an authenticated non-administrator cannot shut the helper down
+unit.ipc-untrusted-server-before-write	yes	ipc-unit-tests	unit_ipc	ipc:transport::platform::tests::peer_credentials_reject_an_ordinary_server_before_any_write	peer credentials reject an ordinary server before any write
+unit.ipc-drop-preserves-replacement	yes	ipc-unit-tests	unit_ipc	ipc:transport::platform::tests::drop_preserves_a_replacement_endpoint	dropping a listener keeps a replacement endpoint
+unit.ipc-drop-preserves-foreign-objects	yes	ipc-unit-tests	unit_ipc	ipc:transport::platform::tests::drop_preserves_symlinks_and_other_sockets	dropping a listener keeps symlinks and other sockets
+unit.ipc-symlink-directories	yes	ipc-unit-tests	unit_ipc	ipc:transport::platform::tests::symlink_directories_are_not_followed	symlinked service directories are not followed
+unit.ipc-unsafe-directories	yes	ipc-unit-tests	unit_ipc	ipc:transport::platform::tests::unsafe_directories_and_socket_modes_are_rejected_without_repair	unsafe directories and socket modes are rejected without repair
+missing-group.refusal	no	not-run	missing_group	-	a server without group rosetun names the group and creates no socket
