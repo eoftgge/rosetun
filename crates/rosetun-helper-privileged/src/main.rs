@@ -293,7 +293,14 @@ struct PreparedStart {
     data_dir: std::path::PathBuf,
 }
 
-fn prepare_start(_run_dir: &Path) -> Result<PreparedStart, StartError> {
+#[cfg_attr(
+    target_os = "linux",
+    expect(
+        unused_variables,
+        reason = "the Linux service directories are fixed, so the caller's run directory is not used"
+    )
+)]
+fn prepare_start(run_dir: &Path) -> Result<PreparedStart, StartError> {
     let endpoint = rosetun_ipc::default_endpoint();
     let listener = Listener::bind(&endpoint).map_err(|error| {
         StartError(format!(
@@ -314,36 +321,41 @@ fn prepare_start(_run_dir: &Path) -> Result<PreparedStart, StartError> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let data_dir = _run_dir
+        let data_dir = run_dir
             .parent()
             .ok_or_else(|| StartError("engine run directory has no data directory".to_owned()))?;
         Ok(PreparedStart {
             listener,
-            run_dir: _run_dir.to_owned(),
+            run_dir: run_dir.to_owned(),
             data_dir: data_dir.to_owned(),
         })
     }
 }
 
 fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), StartError> {
-    start_prepared(prepare_start(run_dir), gate)
+    start_prepared(prepare_start(run_dir), |prepared| {
+        initialize(prepared, gate)
+    })
 }
 
-#[cfg(test)]
-static START_INITIALIZATIONS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-fn start_prepared(
+/// Runs `initialize` only when path preparation succeeded: engines and
+/// background threads must never start on a directory that failed its checks.
+fn start_prepared<T>(
     prepared: Result<PreparedStart, StartError>,
+    initialize: impl FnOnce(PreparedStart) -> Result<T, StartError>,
+) -> Result<T, StartError> {
+    initialize(prepared?)
+}
+
+fn initialize(
+    prepared: PreparedStart,
     gate: VerboseGate,
 ) -> Result<(Listener, Arc<Helper>), StartError> {
     let PreparedStart {
         listener,
         run_dir,
         data_dir,
-    } = prepared?;
-    #[cfg(test)]
-    START_INITIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    } = prepared;
     #[cfg(windows)]
     process_job::install().map_err(|error| {
         StartError(format!(
@@ -444,17 +456,18 @@ mod tests {
 
     #[test]
     fn failed_path_preparation_never_initializes_engines_or_background_workers() {
-        use std::sync::atomic::Ordering;
-
-        let before = START_INITIALIZATIONS.load(Ordering::SeqCst);
+        let mut initialized = false;
         let Err(error) = start_prepared(
             Err(StartError("unsafe service directory".to_owned())),
-            VerboseGate::default(),
+            |_| {
+                initialized = true;
+                Ok(())
+            },
         ) else {
             panic!("preparation must fail");
         };
         assert_eq!(error.to_string(), "unsafe service directory");
-        assert_eq!(START_INITIALIZATIONS.load(Ordering::SeqCst), before);
+        assert!(!initialized);
     }
 
     #[cfg(windows)]

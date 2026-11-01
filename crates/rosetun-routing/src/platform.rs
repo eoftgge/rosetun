@@ -80,11 +80,7 @@ pub(super) fn lockdown_disable() -> Result<bool, crate::RoutingError> {
     }
 }
 
-#[cfg(target_os = "linux")]
-const PLATFORM_NAME: &str = "linux-netlink";
-#[cfg(target_os = "macos")]
-const PLATFORM_NAME: &str = "macos-pf";
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(windows))]
 const PLATFORM_NAME: &str = "unsupported";
 
 #[cfg(not(windows))]
