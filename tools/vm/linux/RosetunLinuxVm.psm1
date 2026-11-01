@@ -1,0 +1,594 @@
+#Requires -Version 7.0
+# Drives a separate Debian test VM for the Linux L2 stand over SSH/SCP. The Windows
+# module (RosetunVm.psm1) is not used: it talks PowerShell Direct to the Windows
+# guest and stays untouched. Nothing here stores a password or a private key; the
+# key file is only referenced by path.
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$script:ReportSchema = 1
+$script:RunIdPattern = '^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$'
+$script:SafeValuePattern = '^[A-Za-z0-9._:@/+=-]+$'
+$script:AccountPattern = '^[a-z_][a-z0-9_-]{0,31}$'
+$script:ArtifactNames = @('l2_transport_fixture', 'rosetun_helper_privileged_tests', 'rosetun_ipc_tests')
+$script:ResultNames = @('PASS', 'FAIL', 'SKIP', 'ERROR')
+# The Windows test VM and its credential file are never a Linux stand.
+$script:ForbiddenVmNames = @('rosetun-test')
+
+function Get-RosetunLinuxRoot {
+    $PSScriptRoot
+}
+
+function New-RosetunLinuxRunId {
+    $bytes = [byte[]]::new(4)
+    [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $suffix = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+    '{0}-{1}' -f [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'), $suffix
+}
+
+function Test-RosetunLinuxRunId {
+    param([string]$RunId)
+    $RunId -match $script:RunIdPattern
+}
+
+function Get-RosetunLinuxFileSha256 {
+    param([Parameter(Mandatory)][string]$Path)
+    (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-RosetunLinuxTextSha256 {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+    $hash = [Security.Cryptography.SHA256]::HashData($bytes)
+    -join ($hash | ForEach-Object { $_.ToString('x2') })
+}
+
+# Runs a native program with a hard time limit. A program that outlives it is
+# killed with its children and the call throws; a hang can never pass as success.
+function Invoke-RosetunLinuxProcess {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [int]$TimeoutSeconds = 60,
+        [int]$MaxOutputChars = 8MB
+    )
+    $info = [Diagnostics.ProcessStartInfo]::new($FilePath)
+    foreach ($argument in $ArgumentList) { $info.ArgumentList.Add($argument) }
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($info)
+    try {
+        $process.StandardInput.Close()
+        $outTask = $process.StandardOutput.ReadToEndAsync()
+        $errTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill($true) } catch { Write-Verbose "kill failed: $_" }
+            throw "TIMEOUT: $([IO.Path]::GetFileName($FilePath)) did not finish within $TimeoutSeconds s"
+        }
+        $process.WaitForExit()
+        $text = { param($task) $value = $task.Result; if ($value.Length -gt $MaxOutputChars) { $value.Substring(0, $MaxOutputChars) } else { $value } }
+        [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Output   = (& $text $outTask)
+            Error    = (& $text $errTask)
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Find-RosetunLinuxTool {
+    param([Parameter(Mandatory)][string]$Name)
+    # The Windows OpenSSH client first: Git's MSYS ssh reads Windows paths differently.
+    $system = Join-Path $env:SystemRoot "System32\OpenSSH\$Name.exe"
+    if (Test-Path -LiteralPath $system) { return $system }
+    $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $command) { throw "$Name was not found. Install the Windows OpenSSH client." }
+    $command.Source
+}
+
+function New-RosetunLinuxTarget {
+    param(
+        [Parameter(Mandatory)][string]$HostName,
+        [Parameter(Mandatory)][string]$User,
+        [Parameter(Mandatory)][string]$KnownHostsPath,
+        [Parameter(Mandatory)][string]$IdentityFile,
+        [ValidateRange(1, 65535)][int]$Port = 22
+    )
+    if ($HostName -notmatch '^[A-Za-z0-9._:-]+$') { throw "Unsafe SSH host name '$HostName'." }
+    if ($User -notmatch $script:AccountPattern) { throw "Unsafe SSH user name '$User'." }
+    if (-not (Test-Path -LiteralPath $KnownHostsPath -PathType Leaf)) {
+        throw "The known_hosts file '$KnownHostsPath' does not exist. Create it from a fingerprint you checked on the VM console (see the stand guide)."
+    }
+    if (-not (Test-Path -LiteralPath $IdentityFile -PathType Leaf)) {
+        throw "The SSH identity file '$IdentityFile' does not exist."
+    }
+    $item = Get-Item -LiteralPath $KnownHostsPath
+    if ($item.Length -eq 0) { throw "The known_hosts file '$KnownHostsPath' is empty." }
+    [pscustomobject]@{
+        HostName       = $HostName
+        User           = $User
+        Port           = $Port
+        KnownHostsPath = (Resolve-Path -LiteralPath $KnownHostsPath).ProviderPath
+        IdentityFile   = (Resolve-Path -LiteralPath $IdentityFile).ProviderPath
+    }
+}
+
+# Common ssh/scp options. Host keys are always verified against the pinned file;
+# there is no way to switch verification off from this module.
+function Get-RosetunLinuxSshOptions {
+    param([Parameter(Mandatory)]$Target)
+    $known = $Target.KnownHostsPath.Replace('\', '/')
+    $identity = $Target.IdentityFile.Replace('\', '/')
+    @(
+        '-o', 'BatchMode=yes',
+        '-o', 'StrictHostKeyChecking=yes',
+        '-o', "UserKnownHostsFile=$known",
+        '-o', "GlobalKnownHostsFile=$known",
+        '-o', 'PasswordAuthentication=no',
+        '-o', 'KbdInteractiveAuthentication=no',
+        '-o', 'PreferredAuthentications=publickey',
+        '-o', 'IdentitiesOnly=yes',
+        '-o', "IdentityFile=$identity",
+        '-o', 'ForwardAgent=no',
+        '-o', 'ClearAllForwardings=yes',
+        '-o', 'ControlMaster=no',
+        '-o', 'ConnectTimeout=15',
+        '-o', 'ServerAliveInterval=5',
+        '-o', 'ServerAliveCountMax=3',
+        '-o', 'LogLevel=ERROR'
+    )
+}
+
+function Test-RosetunLinuxHostKeyPinned {
+    param([Parameter(Mandatory)]$Target)
+    $name = if ($Target.Port -eq 22) { $Target.HostName } else { "[$($Target.HostName)]:$($Target.Port)" }
+    $keygen = Find-RosetunLinuxTool 'ssh-keygen'
+    $result = Invoke-RosetunLinuxProcess -FilePath $keygen -ArgumentList @('-F', $name, '-f', $Target.KnownHostsPath) -TimeoutSeconds 15
+    if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.Output)) {
+        throw "No host key for $name in '$($Target.KnownHostsPath)'. Add the key only after comparing its fingerprint on the VM console."
+    }
+}
+
+function Invoke-RosetunLinuxSsh {
+    param(
+        [Parameter(Mandatory)]$Target,
+        [Parameter(Mandatory)][string]$Command,
+        [int]$TimeoutSeconds = 60
+    )
+    $arguments = @('-T', '-p', "$($Target.Port)") + (Get-RosetunLinuxSshOptions $Target) +
+        @('--', "$($Target.User)@$($Target.HostName)", $Command)
+    Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxTool 'ssh') -ArgumentList $arguments -TimeoutSeconds $TimeoutSeconds
+}
+
+function Copy-RosetunLinuxToGuest {
+    param(
+        [Parameter(Mandatory)]$Target,
+        [Parameter(Mandatory)][string]$LocalDirectory,
+        [Parameter(Mandatory)][string]$RemoteParent,
+        [int]$TimeoutSeconds = 600
+    )
+    $arguments = @('-B', '-r', '-P', "$($Target.Port)") + (Get-RosetunLinuxSshOptions $Target) +
+        @('--', $LocalDirectory, "$($Target.User)@$($Target.HostName):$RemoteParent/")
+    $result = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxTool 'scp') -ArgumentList $arguments -TimeoutSeconds $TimeoutSeconds
+    if ($result.ExitCode -ne 0) { throw "scp to the guest failed (exit $($result.ExitCode)): $($result.Error.Trim())" }
+}
+
+# Reads one small text file of the guest through ssh with a size cap.
+function Read-RosetunLinuxGuestFile {
+    param(
+        [Parameter(Mandatory)]$Target,
+        [Parameter(Mandatory)][string]$Path,
+        [int]$MaxBytes = 4MB,
+        [int]$TimeoutSeconds = 30
+    )
+    if ($Path -notmatch $script:SafeValuePattern) { throw "Unsafe guest path '$Path'." }
+    $result = Invoke-RosetunLinuxSsh -Target $Target -Command "head -c $MaxBytes -- $Path" -TimeoutSeconds $TimeoutSeconds
+    if ($result.ExitCode -ne 0) { return $null }
+    $result.Output
+}
+
+# ------------------------------------------------------------------ VM identity
+
+function Get-RosetunLinuxVmIdentity {
+    param(
+        [Parameter(Mandatory)][string]$VmName,
+        [Parameter(Mandatory)][guid]$VmId
+    )
+    if ($script:ForbiddenVmNames -contains $VmName) {
+        throw "'$VmName' is the Windows test VM. The Linux stand needs its own VM."
+    }
+    $vm = @(Get-VM -Name $VmName -ErrorAction Stop)
+    if ($vm.Count -ne 1) { throw "Expected exactly one VM named '$VmName', found $($vm.Count)." }
+    if ($vm[0].VMId -ne $VmId) {
+        throw "VM '$VmName' has id $($vm[0].VMId), not the expected $VmId. Wrong machine; nothing was done."
+    }
+    $setting = @(Get-CimInstance -Namespace 'root/virtualization/v2' -ClassName Msvm_VirtualSystemSettingData `
+            -Filter "VirtualSystemIdentifier='$($VmId.ToString().ToUpperInvariant())' AND VirtualSystemType='Microsoft:Hyper-V:System:Realized'")
+    if ($setting.Count -ne 1 -or [string]::IsNullOrWhiteSpace($setting[0].BIOSGUID)) {
+        throw "Could not read the BIOS GUID of VM '$VmName' from Hyper-V."
+    }
+    [pscustomobject]@{
+        Name     = $vm[0].Name
+        VmId     = $vm[0].VMId.ToString()
+        BiosGuid = $setting[0].BIOSGUID.Trim('{', '}').ToLowerInvariant()
+        State    = [string]$vm[0].State
+    }
+}
+
+function Restore-RosetunLinuxCheckpoint {
+    param(
+        [Parameter(Mandatory)][string]$VmName,
+        [Parameter(Mandatory)][string]$CheckpointName
+    )
+    $found = @(Get-VMCheckpoint -VMName $VmName -Name $CheckpointName -ErrorAction Stop)
+    if ($found.Count -ne 1) {
+        throw "Expected exactly one checkpoint named '$CheckpointName' on '$VmName', found $($found.Count). Nothing was restored."
+    }
+    $found[0] | Restore-VMCheckpoint -Confirm:$false
+    if ((Get-VM -Name $VmName).State -ne 'Running') { Start-VM -Name $VmName }
+}
+
+function Wait-RosetunLinuxSsh {
+    param([Parameter(Mandatory)]$Target, [int]$TimeoutSeconds = 300)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $last = ''
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $probe = Invoke-RosetunLinuxSsh -Target $Target -Command 'true' -TimeoutSeconds 25
+            if ($probe.ExitCode -eq 0) { return }
+            $last = $probe.Error.Trim()
+            # A refused host key is a security answer, not a boot delay.
+            if ($last -match 'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed') {
+                throw "SSH host key verification failed: $last"
+            }
+        }
+        catch {
+            if ("$_" -match 'host key') { throw }
+            $last = "$_"
+        }
+        Start-Sleep -Seconds 3
+    }
+    throw "The guest did not accept SSH within $TimeoutSeconds s. Last answer: $last"
+}
+
+# ------------------------------------------------------------------ source and artifacts
+
+function Get-RosetunLinuxSource {
+    param([Parameter(Mandatory)][string]$RepoRoot)
+    $git = Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    $run = { param($arguments) Invoke-RosetunLinuxProcess -FilePath $git.Source -ArgumentList (@('-C', $RepoRoot) + $arguments) -TimeoutSeconds 60 }
+    $head = & $run @('rev-parse', 'HEAD')
+    if ($head.ExitCode -ne 0 -or $head.Output.Trim() -notmatch '^[0-9a-f]{40}$') { throw "git rev-parse HEAD failed in '$RepoRoot'." }
+    $status = & $run @('status', '--porcelain=v1', '-uall', '--no-renames')
+    $diff = & $run @('diff', 'HEAD', '--binary', '--no-ext-diff')
+    if ($status.ExitCode -ne 0 -or $diff.ExitCode -ne 0) { throw "git status failed in '$RepoRoot'." }
+    $entries = @($status.Output -split "`n" | Where-Object { $_.Trim() -ne '' })
+    [pscustomobject]@{
+        Sha           = $head.Output.Trim()
+        Dirty         = ($entries.Count -gt 0)
+        DirtyEntries  = $entries.Count
+        DirtyDigest   = Get-RosetunLinuxTextSha256 ($status.Output.Replace("`r`n", "`n") + "`n--`n" + $diff.Output.Replace("`r`n", "`n"))
+    }
+}
+
+# True only for a 64-bit little-endian x86-64 ELF executable or PIE: not a PE file,
+# not a script, not another architecture.
+function Test-RosetunLinuxElf {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [pscustomobject]@{ Ok = $false; Reason = 'the file does not exist' }
+    }
+    $header = [byte[]]::new(20)
+    $stream = [IO.File]::OpenRead($Path)
+    try { $read = $stream.Read($header, 0, 20) } finally { $stream.Dispose() }
+    $reason = if ($read -lt 20) { 'the file is too short to be an executable' }
+    elseif ($header[0] -eq 0x4D -and $header[1] -eq 0x5A) { 'this is a Windows PE file, not a Linux build' }
+    elseif ($header[0] -ne 0x7F -or $header[1] -ne 0x45 -or $header[2] -ne 0x4C -or $header[3] -ne 0x46) { 'this is not an ELF file' }
+    elseif ($header[4] -ne 2) { 'this is not a 64-bit ELF file' }
+    elseif ($header[5] -ne 1) { 'this is not a little-endian ELF file' }
+    elseif (($header[16] -ne 2 -and $header[16] -ne 3) -or $header[17] -ne 0) { 'this ELF file is not an executable' }
+    elseif ($header[18] -ne 0x3E -or $header[19] -ne 0) { 'this ELF file is not built for x86-64' }
+    else { $null }
+    [pscustomobject]@{ Ok = ($null -eq $reason); Reason = $reason }
+}
+
+# Validates the artifact directory made by build-artifacts.sh and returns the
+# provenance the report will carry. Origin counts as confirmed only when the
+# build recorded the same checkout state the host sees now.
+function Get-RosetunLinuxArtifacts {
+    param(
+        [Parameter(Mandatory)][string]$ArtifactDir,
+        [Parameter(Mandatory)]$Source
+    )
+    if (-not (Test-Path -LiteralPath $ArtifactDir -PathType Container)) { throw "Artifact directory '$ArtifactDir' does not exist." }
+    $provenancePath = Join-Path $ArtifactDir 'provenance.json'
+    if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf)) {
+        throw "provenance.json is missing in '$ArtifactDir'. Build the artifacts with tools/vm/linux/build-artifacts.sh inside Debian."
+    }
+    $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
+    if ($provenance.schema -ne 1 -or $provenance.target -ne 'x86_64-unknown-linux-gnu') {
+        throw 'provenance.json has an unexpected schema or target.'
+    }
+    $entries = [ordered]@{}
+    foreach ($name in $script:ArtifactNames) {
+        $path = Join-Path $ArtifactDir $name
+        $elf = Test-RosetunLinuxElf $path
+        if (-not $elf.Ok) { throw "Artifact '$name': $($elf.Reason)." }
+        $hash = Get-RosetunLinuxFileSha256 $path
+        $recorded = $provenance.artifacts.PSObject.Properties[$name]
+        if ($null -eq $recorded -or $recorded.Value.sha256 -ne $hash) {
+            throw "Artifact '$name' does not match the hash its build recorded; it was replaced after the build."
+        }
+        $entries[$name] = $hash
+    }
+    $buildSha = [string]$provenance.source_sha
+    $buildDirty = $provenance.source_dirty
+    $confirmed = ($buildSha -match '^[0-9a-f]{40}$') -and ($buildSha -eq $Source.Sha) -and
+        ($buildDirty -is [bool]) -and ($buildDirty -eq $Source.Dirty) -and
+        ([string]$provenance.source_dirty_digest -eq $Source.DirtyDigest)
+    $note = if ($confirmed) { 'the build recorded the same commit and working tree state as the host checkout' }
+    elseif ($buildSha -notmatch '^[0-9a-f]{40}$') { 'the build did not record a commit (git was missing in the build environment)' }
+    elseif ($buildSha -ne $Source.Sha) { 'the build recorded a different commit than the host checkout' }
+    else { 'the working tree differs from the one the build recorded' }
+    [pscustomobject]@{
+        Hashes          = $entries
+        BuildSourceSha  = $buildSha
+        BuildDirty      = $buildDirty
+        Confirmed       = $confirmed
+        Note            = $note
+        Toolchain       = $provenance.toolchain
+        BuiltOn         = $provenance.built_on
+    }
+}
+
+# ------------------------------------------------------------------ scenarios and staging
+
+function Get-RosetunLinuxScenarios {
+    param([string]$Path = (Join-Path (Get-RosetunLinuxRoot) 'scenarios.tsv'))
+    $lines = @(Get-Content -LiteralPath $Path | Where-Object { $_.Trim() -ne '' })
+    if ($lines.Count -lt 2 -or $lines[0] -ne "id`trequired`tevidence`tgroup`tdetail`ttitle") {
+        throw "scenarios.tsv has an unexpected header."
+    }
+    $seen = @{}
+    foreach ($line in $lines | Select-Object -Skip 1) {
+        $parts = $line -split "`t"
+        if ($parts.Count -ne 6) { throw "Malformed scenario line: $line" }
+        if ($seen.ContainsKey($parts[0])) { throw "Duplicate scenario id $($parts[0])." }
+        $seen[$parts[0]] = $true
+        [pscustomobject]@{
+            Id = $parts[0]; Required = ($parts[1] -eq 'yes'); Evidence = $parts[2]
+            Group = $parts[3]; Detail = $parts[4]; Title = $parts[5]
+        }
+    }
+}
+
+function New-RosetunLinuxJobEnv {
+    param(
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][string]$StandId,
+        [Parameter(Mandatory)][string]$BootId,
+        [Parameter(Mandatory)][string]$UserA,
+        [Parameter(Mandatory)][string]$UserB,
+        [Parameter(Mandatory)][string]$BiosGuid,
+        [int]$ScenarioTimeoutSeconds = 30,
+        [int]$UnitTimeoutSeconds = 180,
+        [int]$JobTimeoutSeconds = 900
+    )
+    if (-not (Test-RosetunLinuxRunId $RunId)) { throw "Invalid run id '$RunId'." }
+    foreach ($pair in @(@('stand id', $StandId), @('boot id', $BootId), @('BIOS GUID', $BiosGuid))) {
+        if ($pair[1] -notmatch $script:SafeValuePattern) { throw "Unsafe $($pair[0]) '$($pair[1])'." }
+    }
+    foreach ($account in @($UserA, $UserB)) {
+        if ($account -notmatch $script:AccountPattern) { throw "Unsafe account name '$account'." }
+    }
+    if ($UserA -eq $UserB) { throw 'The two test accounts must be different.' }
+    foreach ($seconds in @($ScenarioTimeoutSeconds, $UnitTimeoutSeconds, $JobTimeoutSeconds)) {
+        if ($seconds -lt 10 -or $seconds -gt 86400) { throw 'A time limit is outside 10..86400 seconds.' }
+    }
+    @(
+        "RUN_ID=$RunId", "STAND_ID=$StandId", "EXPECTED_BOOT_ID=$BootId",
+        "USER_A=$UserA", "USER_B=$UserB", "BIOS_GUID=$BiosGuid",
+        "SCENARIO_TIMEOUT_SECONDS=$ScenarioTimeoutSeconds", "UNIT_TIMEOUT_SECONDS=$UnitTimeoutSeconds",
+        "JOB_TIMEOUT_SECONDS=$JobTimeoutSeconds"
+    ) -join "`n"
+}
+
+function Write-RosetunLinuxLfFile {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Text)
+    [IO.File]::WriteAllText($Path, ($Text.Replace("`r`n", "`n").TrimEnd("`n") + "`n"), [Text.UTF8Encoding]::new($false))
+}
+
+# Builds the staging tree of one run on the host: guest scripts, the scenario list,
+# the job description, the artifacts and a manifest of SHA-256 sums. The manifest
+# hash printed to the owner is the trust anchor typed into the guest.
+function New-RosetunLinuxStage {
+    param(
+        [Parameter(Mandatory)][string]$StageRoot,
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][string]$ArtifactDir,
+        [Parameter(Mandatory)][string]$JobEnv
+    )
+    if (-not (Test-RosetunLinuxRunId $RunId)) { throw "Invalid run id '$RunId'." }
+    $root = Join-Path $StageRoot $RunId
+    if (Test-Path -LiteralPath $root) { throw "Stage directory '$root' already exists; a run id is used once." }
+    $null = New-Item -ItemType Directory -Path (Join-Path $root 'guest'), (Join-Path $root 'artifacts')
+    $linux = Get-RosetunLinuxRoot
+    foreach ($script in @('lib.sh', 'run-l2.sh', 'start.sh')) {
+        Write-RosetunLinuxLfFile -Path (Join-Path $root "guest/$script") -Text (Get-Content -LiteralPath (Join-Path $linux "guest/$script") -Raw)
+    }
+    Write-RosetunLinuxLfFile -Path (Join-Path $root 'scenarios.tsv') -Text (Get-Content -LiteralPath (Join-Path $linux 'scenarios.tsv') -Raw)
+    Write-RosetunLinuxLfFile -Path (Join-Path $root 'job.env') -Text $JobEnv
+    foreach ($name in $script:ArtifactNames + @('provenance.json')) {
+        Copy-Item -LiteralPath (Join-Path $ArtifactDir $name) -Destination (Join-Path $root "artifacts/$name")
+    }
+    $files = @(Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
+            $_.FullName.Substring($root.Length + 1).Replace('\', '/')
+        } | Sort-Object -Culture ([Globalization.CultureInfo]::InvariantCulture) -CaseSensitive)
+    $lines = foreach ($relative in $files) {
+        '{0}  {1}' -f (Get-RosetunLinuxFileSha256 (Join-Path $root $relative)), $relative
+    }
+    Write-RosetunLinuxLfFile -Path (Join-Path $root 'manifest.sha256') -Text ($lines -join "`n")
+    [pscustomobject]@{
+        Directory    = $root
+        ManifestHash = Get-RosetunLinuxFileSha256 (Join-Path $root 'manifest.sha256')
+        Files        = $files
+    }
+}
+
+# ------------------------------------------------------------------ report verdict
+
+# Property of a parsed JSON value, or $null. A truncated or foreign report must
+# become an ERROR in the verdict, not an exception under strict mode.
+function Get-RosetunLinuxMember {
+    param($Object, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    $property.Value
+}
+
+# Judges a guest report on the host. The summary the guest wrote is never trusted:
+# the verdict is recomputed from the scenario lines, the host's scenario list and
+# the stage record. Anything missing, foreign, unfinished or inconsistent is ERROR.
+function Test-RosetunLinuxReport {
+    param(
+        $Report,
+        $Status,
+        [Parameter(Mandatory)]$Stage,
+        [Parameter(Mandatory)][object[]]$Scenarios
+    )
+    $member = { param($object, $name) Get-RosetunLinuxMember -Object $object -Name $name }
+    $problems = [System.Collections.Generic.List[string]]::new()
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $counts = @{ PASS = 0; FAIL = 0; SKIP = 0; ERROR = 0 }
+
+    if ($null -eq $Status) { $problems.Add('status.json is missing or unreadable') }
+    elseif ((& $member $Status 'run_id') -ne $Stage.RunId) { $problems.Add('status.json belongs to another run') }
+    elseif ((& $member $Status 'state') -ne 'finished') {
+        $problems.Add("the job has not finished (state: $(& $member $Status 'state'), last scenario: $(& $member $Status 'current'))")
+    }
+
+    if ($null -eq $Report) {
+        $problems.Add('report.json is missing, empty or not valid JSON')
+        return [pscustomobject]@{ Verdict = 'ERROR'; Coverage = 'none'; Problems = @($problems); Rows = @(); Counts = $counts; CleanupStatus = 'unknown' }
+    }
+    if ((& $member $Report 'schema') -ne $script:ReportSchema) { $problems.Add("unsupported report schema '$(& $member $Report 'schema')'") }
+    if ((& $member $Report 'run_id') -ne $Stage.RunId) { $problems.Add("the report belongs to run '$(& $member $Report 'run_id')', not '$($Stage.RunId)'") }
+    $guest = & $member $Report 'guest'
+    if ($null -eq $guest -or (& $member $guest 'boot_id') -ne $Stage.BootId) {
+        $problems.Add('the guest boot id differs from the one recorded at staging; the guest restarted')
+    }
+    elseif ((& $member $guest 'boot_id_at_end') -ne $Stage.BootId) {
+        $problems.Add('the guest rebooted during the run')
+    }
+
+    $byId = @{}
+    foreach ($entry in @(& $member $Report 'scenarios')) {
+        $entryId = [string](& $member $entry 'id')
+        if ([string]::IsNullOrEmpty($entryId)) { $problems.Add('a scenario line has no id'); continue }
+        if ($byId.ContainsKey($entryId)) { $problems.Add("scenario $entryId is reported twice"); continue }
+        $byId[$entryId] = $entry
+    }
+    $known = @{}
+    $reportedCounts = @{ PASS = 0; FAIL = 0; SKIP = 0; ERROR = 0 }
+    foreach ($entry in $byId.Values) {
+        $raw = [string](& $member $entry 'result')
+        if ($reportedCounts.ContainsKey($raw)) { $reportedCounts[$raw]++ }
+    }
+    foreach ($scenario in $Scenarios) {
+        $known[$scenario.Id] = $true
+        $entry = $byId[$scenario.Id]
+        if ($null -eq $entry) {
+            $problems.Add("scenario $($scenario.Id) has no result")
+            $rows.Add([pscustomobject]@{ Result = 'ERROR'; Scenario = $scenario.Id; Evidence = $scenario.Evidence; Expectation = $scenario.Title; Reason = 'no result was reported'; DurationMs = 0 })
+            $counts['ERROR']++
+            continue
+        }
+        $result = [string](& $member $entry 'result')
+        if ($script:ResultNames -notcontains $result) {
+            $problems.Add("scenario $($scenario.Id) has an unknown result '$result'")
+            $result = 'ERROR'
+        }
+        if ((& $member $entry 'evidence') -ne $scenario.Evidence) {
+            $problems.Add("scenario $($scenario.Id) reports evidence '$(& $member $entry 'evidence')' instead of '$($scenario.Evidence)'")
+            $result = 'ERROR'
+        }
+        if ($scenario.Required -and $result -eq 'SKIP') {
+            $problems.Add("required scenario $($scenario.Id) was skipped")
+            $result = 'ERROR'
+        }
+        if ($scenario.Evidence -eq 'not-run' -and $result -eq 'PASS') {
+            $problems.Add("scenario $($scenario.Id) has no check but reports PASS")
+            $result = 'ERROR'
+        }
+        $counts[$result]++
+        $duration = 0L
+        $null = [long]::TryParse([string](& $member $entry 'duration_ms'), [ref]$duration)
+        $rows.Add([pscustomobject]@{
+                Result = $result; Scenario = $scenario.Id; Evidence = $scenario.Evidence
+                Expectation = $scenario.Title; Reason = [string](& $member $entry 'reason'); DurationMs = $duration
+            })
+    }
+    foreach ($id in $byId.Keys) {
+        if (-not $known.ContainsKey($id)) { $problems.Add("the report contains unknown scenario $id") }
+    }
+
+    $summary = & $member $Report 'summary'
+    if ($null -eq $summary) { $problems.Add('the report has no summary') }
+    else {
+        foreach ($pair in @(@('PASS', 'pass'), @('FAIL', 'fail'), @('SKIP', 'skip'), @('ERROR', 'error'))) {
+            $claimed = & $member $summary $pair[1]
+            if ("$claimed" -ne "$($reportedCounts[$pair[0]])") {
+                $problems.Add("the summary counts '$claimed' $($pair[0]) but the scenario lines hold $($reportedCounts[$pair[0]])")
+            }
+        }
+    }
+
+    $cleanupSection = & $member $Report 'cleanup'
+    $cleanup = if ($null -ne $cleanupSection) { [string](& $member $cleanupSection 'status') } else { 'missing' }
+    if ($cleanup -ne 'PASS') {
+        $detail = if ($null -ne $cleanupSection) { [string](& $member $cleanupSection 'problems') } else { '' }
+        $problems.Add("cleanup did not succeed ($cleanup): $detail")
+    }
+
+    $verdict = if ($problems.Count -gt 0 -or $counts['ERROR'] -gt 0) { 'ERROR' }
+    elseif ($counts['FAIL'] -gt 0) { 'FAIL' }
+    else { 'PASS' }
+    if ($null -ne $summary -and (& $member $summary 'overall') -eq 'PASS' -and $verdict -ne 'PASS') {
+        $problems.Add("the guest claims PASS but the host recomputed $verdict")
+    }
+    $coverage = if ($verdict -ne 'PASS') { 'none' } elseif ($counts['SKIP'] -gt 0) { 'partial' } else { 'complete' }
+    [pscustomobject]@{
+        Verdict = $verdict; Coverage = $coverage; Problems = @($problems); Rows = @($rows)
+        Counts = $counts; CleanupStatus = $cleanup
+    }
+}
+
+function Format-RosetunLinuxReport {
+    param([Parameter(Mandatory)]$Judgement, [Parameter(Mandatory)]$Stage)
+    $builder = [Text.StringBuilder]::new()
+    $null = $builder.AppendLine("Linux L2 stand run $($Stage.RunId)")
+    $null = $builder.AppendLine("Source:      $($Stage.Source.Sha) dirty=$($Stage.Source.Dirty) ($($Stage.Source.DirtyEntries) changed paths)")
+    $origin = if ($Stage.Artifacts.Confirmed) { 'confirmed' } else { "UNCONFIRMED: $($Stage.Artifacts.Note)" }
+    $null = $builder.AppendLine("Build origin: $origin")
+    foreach ($name in $Stage.Artifacts.Hashes.Keys) { $null = $builder.AppendLine("  $($Stage.Artifacts.Hashes[$name])  $name") }
+    $null = $builder.AppendLine("Boot id:     $($Stage.BootId)")
+    $null = $builder.AppendLine()
+    $table = $Judgement.Rows | Select-Object Result, Scenario, Evidence, Expectation, Reason, DurationMs | Format-Table -AutoSize -Wrap | Out-String -Width 220
+    $null = $builder.Append($table)
+    if ($Judgement.Problems.Count -gt 0) {
+        $null = $builder.AppendLine('Problems:')
+        foreach ($problem in $Judgement.Problems) { $null = $builder.AppendLine("  - $problem") }
+    }
+    $null = $builder.AppendLine("Cleanup:     $($Judgement.CleanupStatus)")
+    $null = $builder.AppendLine("Result:      $($Judgement.Verdict) (coverage: $($Judgement.Coverage); PASS $($Judgement.Counts['PASS']), FAIL $($Judgement.Counts['FAIL']), SKIP $($Judgement.Counts['SKIP']), ERROR $($Judgement.Counts['ERROR']))")
+    $builder.ToString()
+}
+
+Export-ModuleMember -Function *-Rosetun*
