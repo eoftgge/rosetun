@@ -10,8 +10,8 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
 
 use rosetun_config::{
-    ConnectionState, DomainMatch, FailureKind, NodeId, ProcessMatch, Rule, RuleMatcher, RuleTarget,
-    Status, SubscriptionId, XrayUse,
+    ConnectionState, DomainMatch, FailureKind, NodeId, ProcessMatch, ProtectionCapabilities, Rule,
+    RuleMatcher, RuleTarget, Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{ListOperation, PreparedConnection, terminal_text};
 use rosetun_ipc::{
@@ -210,7 +210,12 @@ fn send_connection(
             ListOperation::Connect => client.connect_tunnel(request),
             ListOperation::Apply => client.apply_tunnel(request),
         },
-        PreparedCliRequest::Lists(prepared) => {
+        PreparedCliRequest::Lists(mut prepared) => {
+            let (limited, warning) = limit_to_protection(prepared.request, client.protection());
+            prepared.request = limited;
+            if let Some(warning) = warning {
+                eprintln!("{warning}");
+            }
             let cached = prepared.missing_categories.len() - prepared.skipped_categories.len();
             if cached > 0 {
                 eprintln!(
@@ -226,6 +231,30 @@ fn send_connection(
             rosetun_core::send_prepared(client, &prepared, operation)
         }
     }
+}
+
+const KILL_SWITCH_LEFT_OUT: &str =
+    "warning: the kill switch is not available on this system and is left off";
+
+const LOCKDOWN_UNAVAILABLE: &str = "Lockdown is not available on this system";
+
+/// Why a Lockdown change is not even sent: the helper has no Lockdown.
+fn lockdown_refusal(protection: ProtectionCapabilities) -> Option<&'static str> {
+    (!protection.lockdown).then_some(LOCKDOWN_UNAVAILABLE)
+}
+
+/// A request built from the saved configuration, as the helper can serve it,
+/// and the warning to print when the saved kill switch is left out. The
+/// setting itself is not changed. A request file given by the user is sent
+/// as written and the helper refuses what it cannot give.
+fn limit_to_protection(
+    request: ConnectRequest,
+    protection: ProtectionCapabilities,
+) -> (ConnectRequest, Option<&'static str>) {
+    let saved = request.settings.kill_switch;
+    let request = request.limited_to(protection);
+    let warning = (saved && !request.settings.kill_switch).then_some(KILL_SWITCH_LEFT_OUT);
+    (request, warning)
 }
 
 fn probe(client: &mut HelperClient, request: ConnectRequest) -> ExitCode {
@@ -601,6 +630,10 @@ fn saved_allow_lan() -> Result<bool, String> {
 }
 
 fn lockdown(client: &mut HelperClient, enabled: bool, allow_lan: bool) -> ExitCode {
+    if let Some(message) = lockdown_refusal(client.protection()) {
+        eprintln!("{message}");
+        return ExitCode::FAILURE;
+    }
     match client.set_lockdown(enabled, allow_lan) {
         Ok(()) => {
             println!("lockdown {}", if enabled { "on" } else { "off" });
@@ -1108,6 +1141,57 @@ mod tests {
         let request = super::apply_request(&config, Vec::new(), pinned).unwrap();
         assert_eq!(request.extra_nodes.len(), 1);
         assert_eq!(request.extra_nodes[0].selection, selection("nl-2"));
+    }
+
+    #[test]
+    fn a_saved_kill_switch_is_left_out_with_one_warning_where_the_helper_has_none() {
+        use rosetun_config::ProtectionCapabilities;
+
+        let full = ProtectionCapabilities {
+            kill_switch: true,
+            lockdown: true,
+        };
+        let mut config = crate::exits::tests::config();
+        config.settings.kill_switch = true;
+        let request = super::apply_request(&config, Vec::new(), Vec::new()).unwrap();
+
+        let (kept, warning) = super::limit_to_protection(request.clone(), full);
+        assert_eq!(kept, request);
+        assert_eq!(warning, None);
+
+        let (left, warning) = super::limit_to_protection(request.clone(), ProtectionCapabilities::default());
+        assert!(!left.settings.kill_switch);
+        assert_eq!(
+            warning,
+            Some("warning: the kill switch is not available on this system and is left off")
+        );
+        assert!(config.settings.kill_switch, "the saved setting is kept");
+
+        config.settings.kill_switch = false;
+        let request = super::apply_request(&config, Vec::new(), Vec::new()).unwrap();
+        let (left, warning) = super::limit_to_protection(request, ProtectionCapabilities::default());
+        assert!(!left.settings.kill_switch);
+        assert_eq!(warning, None, "nothing was asked for, so nothing is left out");
+    }
+
+    #[test]
+    fn lockdown_is_refused_before_the_helper_is_asked_where_there_is_none() {
+        use rosetun_config::ProtectionCapabilities;
+
+        assert_eq!(
+            super::lockdown_refusal(ProtectionCapabilities {
+                kill_switch: true,
+                lockdown: false,
+            }),
+            Some("Lockdown is not available on this system")
+        );
+        assert_eq!(
+            super::lockdown_refusal(ProtectionCapabilities {
+                kill_switch: true,
+                lockdown: true,
+            }),
+            None
+        );
     }
 
     #[test]
