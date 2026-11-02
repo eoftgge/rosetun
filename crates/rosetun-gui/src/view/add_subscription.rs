@@ -743,7 +743,10 @@ mod tests {
 
     fn link_row(ctx: &egui::Context, field_id: &str) -> LinkRow {
         let field_id = egui::Id::new(field_id);
-        let field = ctx.read_response(field_id).expect("the field was shown").rect;
+        let field = ctx
+            .read_response(field_id)
+            .expect("the field was shown")
+            .rect;
         let clickable: Vec<_> = ctx.viewport(|viewport| {
             viewport
                 .prev_pass
@@ -841,10 +844,7 @@ mod tests {
             i18n::in_language(language, || {
                 let (ctx, shapes) =
                     settled_frame(&mut AddDialog::default(), egui::vec2(1440.0, 1000.0));
-                let button = *link_row(&ctx, SUBSCRIPTION_URL_ID)
-                    .buttons
-                    .last()
-                    .unwrap();
+                let button = *link_row(&ctx, SUBSCRIPTION_URL_ID).buttons.last().unwrap();
                 let shapes = painted(&shapes);
                 let label = tr!("qr-code");
                 let texts: Vec<_> = shapes
@@ -863,7 +863,8 @@ mod tests {
                     .iter()
                     .filter_map(|shape| match shape {
                         egui::Shape::Path(path)
-                            if path.points.len() == 3 && button.intersects(path.visual_bounding_rect()) =>
+                            if path.points.len() == 3
+                                && button.intersects(path.visual_bounding_rect()) =>
                         {
                             Some(path.visual_bounding_rect())
                         }
@@ -921,13 +922,14 @@ mod tests {
             i18n::in_language(language, || {
                 let mut dialog = proxy_dialog("https://user:pass@proxy.example.com:443");
                 // A newer settings file is the longest message a save can answer with.
-                let failure = rosetun_core::AddFromUrlError::Store(rosetun_core::StoreError::Invalid {
-                    path: "settings.json".into(),
-                    source: rosetun_config::ConfigError::UnsupportedVersion {
-                        found: 99,
-                        expected: 8,
-                    },
-                });
+                let failure =
+                    rosetun_core::AddFromUrlError::Store(rosetun_core::StoreError::Invalid {
+                        path: "settings.json".into(),
+                        source: rosetun_config::ConfigError::UnsupportedVersion {
+                            found: 99,
+                            expected: 8,
+                        },
+                    });
                 let error = errors::add_subscription(language, &failure);
                 dialog.error = Some(failure);
                 let (ctx, shapes) = settled_frame(&mut dialog, size);

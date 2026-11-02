@@ -60,17 +60,20 @@ pub(crate) fn outline_button_menu(
     enabled: bool,
 ) -> egui::Response {
     let id = egui::Id::new("menu_button_chevron");
-    let button = egui::Button::new((text.into(), egui::Atom::custom(id, egui::vec2(CHEVRON_WIDTH, 0.0))))
-        .fill(Color32::TRANSPARENT)
-        .gap(theme::space::S)
-        .stroke(Stroke::new(
-            theme::stroke::HAIRLINE,
-            if enabled {
-                theme::palette().border_strong
-            } else {
-                theme::palette().border
-            },
-        ));
+    let button = egui::Button::new((
+        text.into(),
+        egui::Atom::custom(id, egui::vec2(CHEVRON_WIDTH, 0.0)),
+    ))
+    .fill(Color32::TRANSPARENT)
+    .gap(theme::space::S)
+    .stroke(Stroke::new(
+        theme::stroke::HAIRLINE,
+        if enabled {
+            theme::palette().border_strong
+        } else {
+            theme::palette().border
+        },
+    ));
     let shown = ui
         .scope(|ui| {
             ui.visuals_mut().widgets.inactive.bg_stroke.width = 1.0;

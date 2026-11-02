@@ -783,9 +783,11 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::Panel::top("header").exact_size(super::HEIGHT).show(ctx, |ui| {
-                        rects = Some(show_with_rects(ui, &state, &mut Vec::new()));
-                    });
+                    egui::Panel::top("header")
+                        .exact_size(super::HEIGHT)
+                        .show(ctx, |ui| {
+                            rects = Some(show_with_rects(ui, &state, &mut Vec::new()));
+                        });
                 },
             );
             output.textures_delta.clear();
