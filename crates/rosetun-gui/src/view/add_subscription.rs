@@ -9,7 +9,6 @@ use crate::{constants, display, i18n, theme, widgets};
 
 use super::header;
 
-const ACTION_ROW_HEIGHT: f32 = 40.0;
 const SUBSCRIPTION_URL_ID: &str = "subscription_url_input";
 
 pub(crate) fn show(
@@ -18,11 +17,9 @@ pub(crate) fn show(
     dialog: &mut AddDialog,
     actions: &mut Vec<Action>,
 ) {
-    let response = widgets::show_modal(
+    let response = widgets::Dialog::new("add_subscription", widgets::DialogWidth::Standard).show(
         ctx,
-        egui::Modal::new(egui::Id::new("add_subscription")),
         |ui| {
-            ui.set_width(520.0);
             ui.heading(if dialog.editing_proxy.is_some() {
                 tr!("proxy-edit")
             } else {
@@ -178,29 +175,29 @@ fn subscription_body(
             .wrap(),
         );
     }
-    ui.add_space(theme::space::XL);
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), ACTION_ROW_HEIGHT),
-        egui::Layout::right_to_left(egui::Align::Center),
-        |ui| {
-            if widgets::button_fill(
-                ui,
-                if dialog.busy {
-                    tr!("adding")
-                } else {
-                    tr!("add")
-                },
-                editable && normalized.is_ok(),
-            )
-            .clicked()
-            {
-                actions.push(Action::SubmitAdd);
-            }
-            if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
-                actions.push(Action::CancelAdd);
-            }
+    let footer = widgets::DialogFooter::new(
+        if dialog.busy {
+            tr!("adding")
+        } else {
+            tr!("add")
         },
-    );
+        tr!("cancel"),
+    )
+    .primary_enabled(editable && normalized.is_ok())
+    .busy(dialog.busy);
+    submit_or_cancel(ui, footer, actions);
+}
+
+fn submit_or_cancel(
+    ui: &mut egui::Ui,
+    footer: widgets::DialogFooter<'_>,
+    actions: &mut Vec<Action>,
+) {
+    match widgets::dialog_footer(ui, footer).choice() {
+        widgets::FooterChoice::Primary => actions.push(Action::SubmitAdd),
+        widgets::FooterChoice::Cancel => actions.push(Action::CancelAdd),
+        widgets::FooterChoice::Other | widgets::FooterChoice::None => {}
+    }
 }
 
 fn import_tabs(ui: &mut egui::Ui, dialog: &mut AddDialog) {
@@ -268,9 +265,9 @@ impl ProxyProtocol {
 }
 
 /// What the dialog takes outside the scrolling form: its frame, the heading, the tabs, an error
-/// of up to two lines and the buttons. Measured at 292 in Russian with a two-line error, kept
+/// of up to two lines and the buttons. Measured at 288 in Russian with a two-line error, kept
 /// 4 above that; a test with the longest form fails when the dialog outgrows it.
-const PROXY_DIALOG_CHROME: f32 = 296.0;
+const PROXY_DIALOG_CHROME: f32 = 292.0;
 /// The form never scrolls in less than this, however small the window.
 const MIN_PROXY_FORM: f32 = 160.0;
 const PORT_FIELD_WIDTH: f32 = 96.0;
@@ -304,29 +301,17 @@ fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Actio
             .wrap(),
         );
     }
-    ui.add_space(theme::space::XL);
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), ACTION_ROW_HEIGHT),
-        egui::Layout::right_to_left(egui::Align::Center),
-        |ui| {
-            if widgets::button_fill(
-                ui,
-                if dialog.editing_proxy.is_some() {
-                    tr!("save")
-                } else {
-                    tr!("add")
-                },
-                !busy && ready,
-            )
-            .clicked()
-            {
-                actions.push(Action::SubmitAdd);
-            }
-            if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                actions.push(Action::CancelAdd);
-            }
+    let footer = widgets::DialogFooter::new(
+        if dialog.editing_proxy.is_some() {
+            tr!("save")
+        } else {
+            tr!("add")
         },
-    );
+        tr!("cancel"),
+    )
+    .primary_enabled(!busy && ready)
+    .busy(busy);
+    submit_or_cancel(ui, footer, actions);
 }
 
 fn proxy_fields(ui: &mut egui::Ui, dialog: &mut AddDialog) {

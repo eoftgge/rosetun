@@ -195,7 +195,7 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
             confirm: tr!("turn-off-protection"),
             busy: state.operations.helper,
             confirm_enabled: state.helper_available && !state.operations.helper,
-            button_gap: 20.0,
+            width: widgets::DialogWidth::Standard,
         },
         |ui| {
             ui.add_space(theme::space::M);
@@ -272,7 +272,7 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
             confirm,
             busy: state.operations.lockdown,
             confirm_enabled: state.can_change_lockdown(),
-            button_gap: 20.0,
+            width: widgets::DialogWidth::Standard,
         },
         |ui| {
             ui.add_space(theme::space::M);

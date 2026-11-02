@@ -57,7 +57,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             confirm: tr!("delete"),
             busy,
             confirm_enabled: !busy,
-            button_gap: 18.0,
+            width: widgets::DialogWidth::Standard,
         },
         |ui| match dialog {
             DeleteDialog::Set(id) => {

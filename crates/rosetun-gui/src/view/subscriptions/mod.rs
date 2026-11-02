@@ -291,7 +291,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             },
             busy: state.operations.removing,
             confirm_enabled: !state.operations.removing,
-            button_gap: 20.0,
+            width: widgets::DialogWidth::Standard,
         },
         |ui| {
             if let Some(subscription) = state

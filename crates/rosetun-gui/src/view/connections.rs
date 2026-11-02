@@ -21,7 +21,6 @@ const PROGRAM_COLUMNS: [f32; 4] = [96.0, 56.0, 92.0, 76.0];
 const PROGRAM_LEAD: f32 = 16.0 + theme::space::S + 24.0 + theme::space::S;
 const ROUTE_FILTER_WIDTH: f32 = 180.0;
 const LIST_HEIGHT: f32 = 360.0;
-const DETAILS_WIDTH: f32 = 480.0;
 const DETAIL_LABEL_WIDTH: f32 = 88.0;
 /// The programs keep their places this long after the pointer left the list:
 /// the pointer often reaches a row across the edge.
@@ -64,16 +63,14 @@ fn details(
         connection.port,
     ));
     let mut dismissed = false;
-    let response = widgets::show_modal(
+    let response = widgets::Dialog::new("connection_details", widgets::DialogWidth::Standard).show(
         ctx,
-        egui::Modal::new(egui::Id::new("connection_details")),
         |ui| {
-            ui.set_width(DETAILS_WIDTH);
             ui.horizontal(|ui| {
                 let close = 22.0;
                 ui.add_sized(
                     egui::vec2(
-                        (ui.available_width() - close - theme::space::S).max(0.0),
+                        (ui.available_width() - close - ui.spacing().item_spacing.x).max(0.0),
                         close,
                     ),
                     egui::Label::new(RichText::new(&destination).monospace().strong()).truncate(),
@@ -1194,5 +1191,32 @@ mod toolbar_tests {
             assert_eq!(rects.tabs.left(), moved.tabs.left(), "{width} {scale}");
         }
         assert!(!layout(&few, 1920.0, 1.0).two_rows);
+    }
+
+    #[test]
+    fn the_details_dialog_has_the_standard_width() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let state = State::default();
+        let open = connection(0);
+        for frame in 1..=10 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 1000.0),
+                    )),
+                    time: Some(f64::from(frame) * 0.1),
+                    ..Default::default()
+                },
+                |ui| details(ui.ctx(), &state, &open, &mut Vec::new()),
+            );
+            output.textures_delta.clear();
+        }
+        let area = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("connection_details")))
+            .unwrap();
+        let chrome = widgets::modal_frame().total_margin().sum().x;
+        assert_eq!(area.width() - chrome, widgets::DialogWidth::Standard.points());
     }
 }

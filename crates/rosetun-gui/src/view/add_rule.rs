@@ -12,7 +12,6 @@ use crate::state::{Action, AddRuleDialog, RuleInputKind};
 use crate::view::rules::{destination_color, destination_label, target_color, target_label};
 use crate::{constants, destinations, i18n, theme, widgets};
 
-const DIALOG_WIDTH: f32 = 640.0;
 const DIALOG_TOP: f32 = 100.0;
 const COMPACT_DIALOG_HEIGHT: f32 = 632.0;
 const ERROR_HEIGHT: f32 = 28.0;
@@ -24,7 +23,6 @@ const CATEGORY_VIEW_HEIGHT: f32 = 120.0;
 const MIN_PROCESS_LIST: f32 = 2.0 * PROCESS_ROW_HEIGHT + PROCESS_ROW_GAP;
 const MAX_PROCESS_LIST: f32 = 5.0 * PROCESS_ROW_HEIGHT + 4.0 * PROCESS_ROW_GAP;
 const PROCESS_FOOTER_HEIGHT: f32 = 80.0;
-const BUTTON_ROW_HEIGHT: f32 = 40.0;
 const ADVANCED_HEADER_HEIGHT: f32 = 32.0;
 const ADVANCED_ROW_HEIGHT: f32 = 44.0;
 const DIVIDER_HEIGHT: f32 = 16.0;
@@ -101,26 +99,6 @@ fn advanced_progress(ctx: &egui::Context, dialog: &AddRuleDialog, reduce_motion:
     )
 }
 
-fn footer_buttons(
-    ui: &mut egui::Ui,
-    label: &str,
-    can_submit: bool,
-    can_cancel: bool,
-    reason: Option<&str>,
-) -> (egui::Response, egui::Response) {
-    ui.horizontal(|ui| {
-        let submit = widgets::button_fill(ui, label, can_submit);
-        let submit = if let Some(reason) = reason {
-            submit.on_disabled_hover_text(reason)
-        } else {
-            submit
-        };
-        let cancel = widgets::outline_button(ui, tr!("cancel"), can_cancel);
-        (submit, cancel)
-    })
-    .inner
-}
-
 pub(crate) fn show(
     ctx: &egui::Context,
     dialog: &mut AddRuleDialog,
@@ -133,7 +111,6 @@ pub(crate) fn show(
     if !can_temporary {
         dialog.temporary_only = false;
     }
-    let id = egui::Id::new("add_rule");
     let error_height = if dialog.error.is_some() {
         ERROR_HEIGHT
     } else {
@@ -141,16 +118,11 @@ pub(crate) fn show(
     } + destination_hint_height(dialog);
     let top = DIALOG_TOP
         .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0));
-    let dialog_width = DIALOG_WIDTH.min((ctx.content_rect().width() - 144.0).max(320.0));
+    let dialog_width = widgets::DialogWidth::Wide.within(ctx.content_rect().width());
     let advanced = advanced_progress(ctx, dialog, config.interface.reduce_motion);
-    let response = widgets::show_modal(
-        ctx,
-        egui::Modal::new(id).area(
-            egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, top)),
-        ),
-        |ui| {
-            ui.set_width(dialog_width);
-            ui.set_max_width(dialog_width);
+    let response = widgets::Dialog::new("add_rule", widgets::DialogWidth::Wide)
+        .top(top)
+        .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = theme::space::XS;
             ui.heading(if dialog.editing.is_some() {
                 tr!("edit-rule")
@@ -194,7 +166,7 @@ pub(crate) fn show(
                     let limit = ui.ctx().content_rect().bottom()
                         - BOTTOM_GAP
                         - (frame.inner_margin.bottom as f32 + frame.stroke.width)
-                        - BUTTON_ROW_HEIGHT
+                        - widgets::field_height(ui)
                         - DIVIDER_HEIGHT
                         - 104.0
                         - advanced_height(dialog, advanced)
@@ -335,50 +307,44 @@ pub(crate) fn show(
                     RuleInputKind::Ip => tr!("enter-ip"),
                 })
             };
-            egui::Sides::new().show(
-                ui,
-                |ui| {
-                    if let Some(reason) = &reason {
-                        ui.label(
-                            RichText::new(reason)
-                                .small()
-                                .color(theme::palette().text_dim),
-                        );
-                    }
-                },
-                |ui| {
-                    let label = if dialog.busy {
-                        if dialog.editing.is_some() {
-                            tr!("saving").to_owned()
-                        } else {
-                            tr!("adding-rule").to_owned()
-                        }
-                    } else if dialog.editing.is_some() {
-                        tr!("save").to_owned()
-                    } else if dialog.kind == RuleInputKind::Domain {
-                        let domains =
-                            rosetun_core::parse_domain_lines(&dialog.domains, dialog.subdomains);
-                        crate::i18n::add_rules(domains.domains.len())
-                    } else if dialog.kind == RuleInputKind::Ip {
-                        let ips = rosetun_core::parse_ip_lines(&dialog.ips);
-                        crate::i18n::add_rules(ips.addresses.len())
-                    } else if dialog.kind == RuleInputKind::List
-                        && dialog.selected_categories.len() > 1
-                    {
-                        crate::i18n::add_rules(dialog.selected_categories.len())
-                    } else {
-                        tr!("add-rule").to_owned()
-                    };
-                    let (submit, cancel) =
-                        footer_buttons(ui, &label, can_submit, !dialog.busy, reason.as_deref());
-                    if submit.clicked() {
-                        actions.push(Action::SubmitAddRule);
-                    }
-                    if cancel.clicked() {
-                        actions.push(Action::CancelAddRule);
-                    }
-                },
-            );
+            let label = if dialog.busy {
+                if dialog.editing.is_some() {
+                    tr!("saving").to_owned()
+                } else {
+                    tr!("adding-rule").to_owned()
+                }
+            } else if dialog.editing.is_some() {
+                tr!("save").to_owned()
+            } else if dialog.kind == RuleInputKind::Domain {
+                let domains = rosetun_core::parse_domain_lines(&dialog.domains, dialog.subdomains);
+                crate::i18n::add_rules(domains.domains.len())
+            } else if dialog.kind == RuleInputKind::Ip {
+                let ips = rosetun_core::parse_ip_lines(&dialog.ips);
+                crate::i18n::add_rules(ips.addresses.len())
+            } else if dialog.kind == RuleInputKind::List && dialog.selected_categories.len() > 1 {
+                crate::i18n::add_rules(dialog.selected_categories.len())
+            } else {
+                tr!("add-rule").to_owned()
+            };
+            let footer = widgets::DialogFooter::new(label, tr!("cancel"))
+                .primary_enabled(can_submit)
+                .primary_hint(reason.as_deref())
+                .busy(dialog.busy)
+                .under_divider();
+            let answered = widgets::dialog_footer_with_note(ui, footer, |ui| {
+                if let Some(reason) = &reason {
+                    ui.label(
+                        RichText::new(reason)
+                            .small()
+                            .color(theme::palette().text_dim),
+                    );
+                }
+            });
+            match answered.choice() {
+                widgets::FooterChoice::Primary => actions.push(Action::SubmitAddRule),
+                widgets::FooterChoice::Cancel => actions.push(Action::CancelAddRule),
+                widgets::FooterChoice::Other | widgets::FooterChoice::None => {}
+            }
         },
     );
     if !dialog.busy && response.should_close() {
@@ -1923,7 +1889,7 @@ mod tests {
         let mut height = 0.0;
         let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                ui.set_width(DIALOG_WIDTH);
+                ui.set_width(widgets::DialogWidth::Wide.points());
                 height = category_view(ui, &mut dialog, &matches, false)
                     .rect
                     .height();
@@ -1982,7 +1948,7 @@ mod tests {
         dialog.selected_categories.push("alpha".into());
         let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                ui.set_width(DIALOG_WIDTH);
+                ui.set_width(widgets::DialogWidth::Wide.points());
                 category_row(ui, &mut dialog, "alpha", false);
             });
         });
@@ -1990,25 +1956,6 @@ mod tests {
             &shape.shape,
             egui::Shape::Rect(rect) if rect.fill == theme::palette().input && rect.rect.width() > 100.0
         )));
-        output.textures_delta.clear();
-    }
-
-    #[test]
-    fn primary_action_is_rightmost() {
-        use super::*;
-
-        let ctx = egui::Context::default();
-        theme::apply(&ctx);
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let ((), (submit, cancel)) = egui::Sides::new().show(
-                    ui,
-                    |_| {},
-                    |ui| footer_buttons(ui, &tr!("add-rule"), true, true, None),
-                );
-                assert!(cancel.rect.right() < submit.rect.left());
-            });
-        });
         output.textures_delta.clear();
     }
 

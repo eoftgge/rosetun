@@ -13,7 +13,6 @@ const CARD_HEIGHT: f32 = theme::RULE_ROW;
 const CARD_CONTENT_HEIGHT: f32 =
     CARD_HEIGHT - 2.0 * theme::stroke::HAIRLINE - 2.0 * theme::space::XS;
 const RIGHT_WIDTH: f32 = 230.0;
-const DIALOG_WIDTH: f32 = 520.0;
 const MAX_NODE_LIST: f32 = 168.0;
 const MIN_NODE_LIST: f32 = 66.0;
 // Everything else in the node form at its tallest, plus room above and below the dialog.
@@ -388,8 +387,7 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
         return;
     };
     let busy = dialog.busy;
-    let response = widgets::show_modal(ctx, egui::Modal::new(egui::Id::new("exit_dialog")), |ui| {
-        ui.set_width(DIALOG_WIDTH);
+    let response = widgets::Dialog::new("exit_dialog", widgets::DialogWidth::Standard).show(ctx, |ui| {
         ui.heading(if dialog.editing.is_some() {
             tr!("edit-exit")
         } else {
@@ -443,15 +441,14 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
             ui.add_space(theme::space::S);
             ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
         }
-        ui.add_space(theme::space::L);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if widgets::button_fill(ui, tr!("save"), dialog.can_save(full)).clicked() {
-                actions.push(Action::SubmitExitDialog);
-            }
-            if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                actions.push(Action::CancelExitDialog);
-            }
-        });
+        let footer = widgets::DialogFooter::new(tr!("save"), tr!("cancel"))
+            .primary_enabled(dialog.can_save(full))
+            .busy(busy);
+        match widgets::dialog_footer(ui, footer).choice() {
+            widgets::FooterChoice::Primary => actions.push(Action::SubmitExitDialog),
+            widgets::FooterChoice::Cancel => actions.push(Action::CancelExitDialog),
+            widgets::FooterChoice::Other | widgets::FooterChoice::None => {}
+        }
     });
     if !busy && response.should_close() {
         actions.push(Action::CancelExitDialog);
@@ -496,7 +493,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             confirm: tr!("delete"),
             busy: dialog.busy,
             confirm_enabled: !dialog.busy,
-            button_gap: 20.0,
+            width: widgets::DialogWidth::Narrow,
         },
         |ui| {
             if let Some(exit) = state.config.exits.iter().find(|exit| exit.id == dialog.id) {

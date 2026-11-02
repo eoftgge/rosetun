@@ -338,8 +338,7 @@ pub(crate) fn add_dialog(
     actions: &mut Vec<Action>,
 ) {
     let busy = dialog.busy || dialog.browsing;
-    let response = widgets::show_modal(ctx, egui::Modal::new(egui::Id::new("add_list")), |ui| {
-        ui.set_width(520.0);
+    let response = widgets::Dialog::new("add_list", widgets::DialogWidth::Standard).show(ctx, |ui| {
         ui.heading(tr!("add-list"));
         ui.add_space(theme::space::L);
         if let Some((format, categories, entries)) = dialog.result {
@@ -411,23 +410,21 @@ pub(crate) fn add_dialog(
                 .wrap(),
             );
         }
-        ui.add_space(theme::space::L);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if widgets::button_fill(
-                ui,
-                if busy { tr!("adding") } else { tr!("add") },
-                !busy
-                    && !dialog.name.trim().is_empty()
-                    && (dialog.file.is_some() || !dialog.url.trim().is_empty()),
-            )
-            .clicked()
-            {
-                actions.push(Action::SubmitAddList);
-            }
-            if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
-                actions.push(Action::CancelAddList);
-            }
-        });
+        let footer = widgets::DialogFooter::new(
+            if busy { tr!("adding") } else { tr!("add") },
+            tr!("cancel"),
+        )
+        .primary_enabled(
+            !busy
+                && !dialog.name.trim().is_empty()
+                && (dialog.file.is_some() || !dialog.url.trim().is_empty()),
+        )
+        .busy(busy);
+        match widgets::dialog_footer(ui, footer).choice() {
+            widgets::FooterChoice::Primary => actions.push(Action::SubmitAddList),
+            widgets::FooterChoice::Cancel => actions.push(Action::CancelAddList),
+            widgets::FooterChoice::Other | widgets::FooterChoice::None => {}
+        }
     });
     if !busy && response.should_close() {
         actions.push(Action::CancelAddList);
@@ -472,7 +469,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             confirm: tr!("delete"),
             busy: dialog.busy,
             confirm_enabled: !dialog.busy,
-            button_gap: 20.0,
+            width: widgets::DialogWidth::Standard,
         },
         |ui| {
             if let Some(list) = state.config.lists.iter().find(|list| list.id == dialog.id) {

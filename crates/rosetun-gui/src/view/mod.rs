@@ -12,6 +12,9 @@ pub(crate) mod subscriptions;
 pub(crate) mod traffic;
 mod window_frame;
 
+#[cfg(test)]
+mod tests;
+
 use eframe::egui::{self, Align, RichText, Stroke};
 use rosetun_config::ConnectionState;
 

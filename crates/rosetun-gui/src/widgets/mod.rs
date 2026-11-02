@@ -22,7 +22,10 @@ pub(crate) use buttons::{
 pub(crate) use checkbox::checkbox;
 pub(crate) use choice_card::choice_card;
 pub(crate) use combo::filter_combo;
-pub(crate) use dialogs::{ConfirmModal, ModalChoice, NameModal, confirm_modal, name_modal};
+pub(crate) use dialogs::{
+    ConfirmModal, Dialog, DialogFooter, DialogWidth, FooterChoice, ModalChoice, NameModal,
+    confirm_modal, dialog_footer, dialog_footer_with_note, name_modal,
+};
 #[cfg(windows)]
 pub(crate) use dialogs::{ThreeWayChoice, ThreeWayModal, three_way_modal};
 pub(crate) use frames::{
@@ -37,6 +40,6 @@ pub(crate) use segmented::{segmented, segmented_width};
 pub(crate) use settings_card::{SettingsCard, settings_card};
 pub(crate) use status_pill::{status_pill, status_pill_width};
 pub(crate) use swatches::{Swatch, swatches};
-pub(crate) use text_field::{TextField, field_row};
+pub(crate) use text_field::{TextField, field_height, field_row};
 pub(crate) use toggle::{toggle, toggle_row, toggle_row_with_detail};
 pub(crate) use transitions::{appear, appear_progress, reveal, reveal_progress, show_modal};

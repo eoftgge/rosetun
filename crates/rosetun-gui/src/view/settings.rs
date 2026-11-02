@@ -870,7 +870,7 @@ pub(crate) fn reset_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec
             confirm: tr!("reset-to-default"),
             busy: state.settings_busy_shown(state.frame_time()),
             confirm_enabled: state.can_reset_settings(),
-            button_gap: 20.0,
+            width: widgets::DialogWidth::Standard,
         },
         |ui| {
             ui.add_space(theme::space::M);
