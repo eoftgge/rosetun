@@ -79,10 +79,10 @@ A button on a provider's page can open Rosetun with a subscription filled in: `r
 
 ## Troubleshooting
 
-- **The window fails to open or draws incorrectly after an update (Windows)**: fully quit Rosetun from the tray, then run it from PowerShell with `$env:ROSETUN_RENDERER='glow'; & 'C:\Program Files\Rosetun\rosetun-gui.exe'`. Adjust the path if needed. Use **Collect report** and send the report with a description of the problem. For comparison, set the value to `wgpu`; remove the override with `Remove-Item Env:ROSETUN_RENDERER`. Windows uses Direct3D 12 with DirectComposition by default and falls back to OpenGL if graphics initialization fails; Linux uses OpenGL.
 - Run **System check** (Settings → Service and log) first: it finds other VPN clients, Zapret or WinDivert, a system proxy and a wrong clock. It also runs by itself after a failed connection and shows the first finding under the error.
 - Another VPN client in TUN mode can prevent the tunnel from starting. Disconnect it and retry.
 - Traffic-modifying programs such as zapret can disrupt the connection to the VPN server. Exclude the server addresses in that program's settings.
+- **The window fails to open or draws incorrectly after an update (Windows)**: quit Rosetun from the tray, then run `$env:ROSETUN_RENDERER='glow'; & 'C:\Program Files\Rosetun\rosetun-gui.exe'` in PowerShell (adjust the path if needed). Use **Collect report** and send the report with a description of the problem.
 - If setup stops because standard users can change a folder under `C:\Program Files\Rosetun`, this usually follows **Continue** in File Explorer, which gives your account permanent access to a protected Rosetun folder such as `data`. Uninstall Rosetun and install it again. To read the service log, use **Collect report** or an editor run as administrator instead.
 - **A site does not open right after connecting**: Rosetun clears the Windows DNS cache when it connects and disconnects, but browsers keep their own. Restart the browser.
 - **No network connection** means Windows has no working network, so the server is not to blame. Connecting fails at once. While connected, a short network change does not break the session; with **Reconnect automatically** on, Rosetun waits for the network and reconnects when it returns, and the kill switch keeps the internet closed meanwhile.
