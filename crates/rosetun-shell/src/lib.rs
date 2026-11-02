@@ -95,9 +95,9 @@ pub use instance::{Activation, Instance, acquire};
 pub use language::user_language;
 #[cfg(windows)]
 pub use link_pipe::{LinkListener, MAX_LINK_BYTES, send_link};
+pub use mapped_file::{MappedFile, map_protected_file};
 #[cfg(windows)]
 pub use program_icon::ComApartment;
-pub use mapped_file::{MappedFile, map_protected_file};
 pub use program_icon::{IconImage, program_icon};
 #[cfg(windows)]
 pub use screen_clip::{clipboard_sequence, start_screen_clip};
