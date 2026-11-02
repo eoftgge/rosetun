@@ -1,11 +1,11 @@
-//! Keeps spacing, type, corner and colour literals out of the views and widgets: they
-//! take their values from the scales in `theme`.
+//! Keeps spacing, margin, type, corner, opacity and colour literals out of the views and
+//! widgets: they take their values from the scales in `theme`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Calls whose arguments must hold no number but zero.
-const WATCHED_CALLS: [&str; 8] = [
+const WATCHED_CALLS: [&str; 14] = [
     "add_space(",
     "FontId::new(",
     "FontId::monospace(",
@@ -14,7 +14,19 @@ const WATCHED_CALLS: [&str; 8] = [
     "CornerRadius::same(",
     "Stroke::new(",
     "item_spacing",
+    "Margin::same(",
+    "Margin::symmetric(",
+    "Margin {",
+    "inner_margin(",
+    "outer_margin(",
+    "gamma_multiply(",
 ];
+
+/// The label of a violation by a named constant, as in `const ICON_GAP: f32 = 12.0;`.
+const NAMED_GAP: &str = "const ";
+
+/// A constant whose name holds one of these is a spacing, so it takes a `theme::space` step.
+const GAP_WORDS: [&str; 5] = ["GAP", "PADDING", "INSET", "MARGIN", "SPACING"];
 
 /// Calls that must not appear at all: a colour is a `Palette` field or a constant of `theme`.
 const FORBIDDEN_CALLS: [&str; 3] = [
@@ -27,25 +39,46 @@ const FORBIDDEN_CALLS: [&str; 3] = [
 struct Allowed {
     /// Path below `src`, with `/`.
     file: &'static str,
-    /// The watched call, as in `WATCHED_CALLS`.
+    /// The watched call, as in `WATCHED_CALLS`, or `NAMED_GAP`.
     call: &'static str,
-    /// The call's arguments without whitespace.
-    arguments: &'static str,
+    /// The function that holds the call; `None` for any.
+    function: Option<&'static str>,
+    /// The call's arguments without whitespace (`NAME=value` for a constant); `None` for any.
+    arguments: Option<&'static str>,
     reason: &'static str,
 }
 
-const ALLOWED: [Allowed; 1] = [Allowed {
-    file: "view/rules/table.rs",
-    call: "add_space(",
-    arguments: "((theme::RULE_ROW-content_height)/2.0).max(0.0)",
-    reason: "half of the free height of a row, not a step",
-}];
+const ALLOWED: [Allowed; 3] = [
+    Allowed {
+        file: "view/rules/table.rs",
+        call: "add_space(",
+        function: None,
+        arguments: Some("((theme::RULE_ROW-content_height)/2.0).max(0.0)"),
+        reason: "half of the free height of a row, not a step",
+    },
+    Allowed {
+        file: "view/rose_button.rs",
+        call: "gamma_multiply(",
+        function: Some("params"),
+        arguments: None,
+        reason: "the layers of the rose per phase: an illustration, not interface elements",
+    },
+    Allowed {
+        file: "view/connection/hero.rs",
+        call: NAMED_GAP,
+        function: None,
+        arguments: Some("BUTTON_TEXT_GAP=36.0"),
+        reason: "the layout of the hero: the connect button beside the state line",
+    },
+];
 
 #[derive(Debug, PartialEq, Eq)]
 struct Violation {
     line: usize,
     call: &'static str,
     arguments: String,
+    /// The innermost function that holds it.
+    function: Option<String>,
 }
 
 fn is_identifier_char(c: char) -> bool {
@@ -299,6 +332,51 @@ fn has_number(text: &str) -> bool {
     false
 }
 
+/// The name of the innermost `fn` whose item holds `offset`.
+fn enclosing_fn(code: &[char], offset: usize) -> Option<String> {
+    let mut found = None;
+    for at in find_all(code, "fn ") {
+        if at > 0 && is_identifier_char(code[at - 1]) {
+            continue;
+        }
+        let start = at + 3;
+        let end = (start..code.len())
+            .find(|&i| !is_identifier_char(code[i]))
+            .unwrap_or(code.len());
+        if at < offset && offset <= item_end(code, end) {
+            found = Some(code[start..end].iter().collect());
+        }
+    }
+    found
+}
+
+/// The constants named like a spacing: where each starts, its name and its value.
+fn gap_constants(code: &[char]) -> Vec<(usize, String, String)> {
+    let mut found = Vec::new();
+    for at in find_all(code, "const ") {
+        if at > 0 && is_identifier_char(code[at - 1]) {
+            continue;
+        }
+        let start = at + "const ".len();
+        let mut end = start;
+        while code.get(end).is_some_and(|c| is_identifier_char(*c)) {
+            end += 1;
+        }
+        let name: String = code[start..end].iter().collect();
+        while code.get(end).is_some_and(|c| c.is_whitespace()) {
+            end += 1;
+        }
+        if code.get(end) != Some(&':') || !GAP_WORDS.iter().any(|word| name.contains(word)) {
+            continue;
+        }
+        let item: String = code[end..item_end(code, end)].iter().collect();
+        if let Some((_, value)) = item.split_once('=') {
+            found.push((at, name, value.to_owned()));
+        }
+    }
+    found
+}
+
 fn violations(source: &str) -> Vec<Violation> {
     let code = without_test_items(mask(source));
     let line_of = |offset: usize| code[..offset].iter().filter(|c| **c == '\n').count() + 1;
@@ -319,8 +397,20 @@ fn violations(source: &str) -> Vec<Violation> {
                     line: line_of(at),
                     call,
                     arguments: arguments.split_whitespace().collect(),
+                    function: enclosing_fn(&code, at),
                 });
             }
+        }
+    }
+    for (at, name, value) in gap_constants(&code) {
+        if has_number(&value) {
+            let value: String = value.split_whitespace().collect();
+            found.push(Violation {
+                line: line_of(at),
+                call: NAMED_GAP,
+                arguments: format!("{name}={value}"),
+                function: enclosing_fn(&code, at),
+            });
         }
     }
     for call in FORBIDDEN_CALLS {
@@ -329,11 +419,25 @@ fn violations(source: &str) -> Vec<Violation> {
                 line: line_of(at),
                 call,
                 arguments: String::new(),
+                function: enclosing_fn(&code, at),
             });
         }
     }
     found.sort_by_key(|violation| violation.line);
     found
+}
+
+fn is_allowed(allowed: &[Allowed], file: &str, violation: &Violation) -> bool {
+    allowed.iter().any(|rule| {
+        rule.file == file
+            && rule.call == violation.call
+            && rule
+                .function
+                .is_none_or(|name| violation.function.as_deref() == Some(name))
+            && rule
+                .arguments
+                .is_none_or(|arguments| arguments == violation.arguments)
+    })
 }
 
 fn rust_files(directory: &Path, files: &mut Vec<PathBuf>) {
@@ -376,12 +480,7 @@ fn views_and_widgets_take_their_layout_from_the_theme_scales() {
             .replace('\\', "/");
         let source = fs::read_to_string(&path).unwrap();
         for violation in violations(&source) {
-            let allowed = ALLOWED.iter().any(|allowed| {
-                allowed.file == relative
-                    && allowed.call == violation.call
-                    && allowed.arguments == violation.arguments
-            });
-            if !allowed {
+            if !is_allowed(&ALLOWED, &relative, &violation) {
                 report.push(format!(
                     "{relative}:{}: {}{}",
                     violation.line, violation.call, violation.arguments
@@ -391,7 +490,7 @@ fn views_and_widgets_take_their_layout_from_the_theme_scales() {
     }
     assert!(
         report.is_empty(),
-        "literals outside the scales in `theme` (space, font, radius, stroke, alpha, colours):\n{}",
+        "literals outside the scales in `theme` (space, margin, font, radius, stroke, alpha, colours):\n{}",
         report.join("\n")
     );
 }
@@ -459,6 +558,20 @@ fn view(ui: &mut Ui) {
     let size = galley.size().x;
     let radius = CornerRadius::same(theme::RADIUS);
     let stroke = Stroke::new(theme::stroke::HAIRLINE * scale, color);
+    let frame = Frame::new()
+        .inner_margin(theme::margin::same(theme::space::L))
+        .inner_margin(0)
+        .outer_margin(theme::margin::symmetric(theme::space::M, 0.0))
+        .fill(color.gamma_multiply(theme::alpha::MUTED));
+    let a = egui::Margin::same(0);
+    let b = egui::Margin::symmetric(side, 0);
+    let c = egui::Margin {
+        left: theme::margin::side(theme::space::L),
+        right: if narrow { theme::margin::side(theme::space::S) } else { 0 },
+        top: 0,
+        bottom: margin,
+    };
+    let fade = color.gamma_multiply(alpha * glow);
 }
 ";
     assert_eq!(violations(source), []);
@@ -469,10 +582,12 @@ fn the_fence_skips_comments_strings_and_raw_strings() {
     let source = r##"
 // ui.add_space(12.0);
 /* ui.add_space(12.0); /* nested */ ui.add_space(12.0); */
+// const ICON_GAP: f32 = 12.0; and .inner_margin(12)
 /// `Color32::from_rgb(1, 2, 3)` in a doc comment.
 fn view() {
     let text = "ui.add_space(12.0) and \" ui.add_space(8.0)";
     let raw = r#"ui.add_space(12.0) "quoted" Stroke::new(1.0, c)"#;
+    let named = "const ROW_GAP: f32 = 12.0; Margin::same(4)";
     let brace = '{';
     let quote = '"';
     ui.add_space(theme::space::S);
@@ -525,4 +640,130 @@ fn the_fence_reads_crlf_and_lf_sources_alike() {
     let crlf = lf.replace('\n', "\r\n");
     assert_eq!(violations(lf), violations(&crlf));
     assert_eq!(violations(&crlf).len(), 1);
+}
+
+#[test]
+fn the_fence_catches_a_number_in_a_margin_or_an_opacity() {
+    let source = "\
+fn view(color: Color32) {
+    let a = Frame::new().inner_margin(12);
+    let b = Frame::new().outer_margin(egui::Margin::same(4));
+    let c = Margin::symmetric(8, 0);
+    let d = color.gamma_multiply(0.5);
+    let e = TextEdit::singleline(text).margin(egui::Margin::symmetric(theme::space::M, 6));
+}
+";
+    let found: Vec<_> = violations(source)
+        .into_iter()
+        .map(|violation| (violation.line, violation.call))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (2, "inner_margin("),
+            (3, "Margin::same("),
+            (3, "outer_margin("),
+            (4, "Margin::symmetric("),
+            (5, "gamma_multiply("),
+            (6, "Margin::symmetric("),
+        ]
+    );
+}
+
+#[test]
+fn the_fence_catches_a_number_in_a_margin_literal() {
+    let source = "\
+fn view(narrow: bool) {
+    let a = egui::Margin {
+        left: theme::margin::side(theme::space::L),
+        right: 12,
+        top: 0,
+        bottom: theme::margin::side(theme::space::S),
+    };
+    let b = egui::Margin {
+        left: if narrow { theme::margin::side(theme::space::L) } else { 36 },
+        right: 0,
+        top: 0,
+        bottom: 0,
+    };
+}
+";
+    let found: Vec<_> = violations(source)
+        .into_iter()
+        .map(|violation| (violation.line, violation.call))
+        .collect();
+    assert_eq!(found, [(2, "Margin {"), (8, "Margin {")]);
+}
+
+#[test]
+fn the_fence_catches_a_gap_constant_set_by_a_number() {
+    let source = "\
+const ICON_GAP: f32 = 12.0;
+pub(crate) const ROW_PADDING: f32 = 10.0;
+const ROW_INSET: f32 = theme::space::M;
+const MENU_MARGIN: f32 = 2.0 * theme::space::M;
+const NO_GAP: f32 = 0.0;
+const ITEM_SPACING: f32 = 6.0;
+const ROW_HEIGHT: f32 = 58.0;
+const fn gap() -> f32 {
+    4.0
+}
+#[cfg(test)]
+const TEST_GAP: f32 = 3.0;
+";
+    let found: Vec<_> = violations(source)
+        .into_iter()
+        .map(|violation| (violation.line, violation.arguments))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (1, "ICON_GAP=12.0".to_owned()),
+            (2, "ROW_PADDING=10.0".to_owned()),
+            (4, "MENU_MARGIN=2.0*theme::space::M".to_owned()),
+            (6, "ITEM_SPACING=6.0".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn the_fence_lets_through_only_the_listed_exceptions() {
+    let rose = "\
+fn params(phase: RosePhase) -> RoseParams {
+    let layer = color.gamma_multiply(0.20);
+}
+fn paint(color: Color32) {
+    let ring = color.gamma_multiply(0.6);
+}
+";
+    let found = violations(rose);
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].function.as_deref(), Some("params"));
+    assert!(is_allowed(&ALLOWED, "view/rose_button.rs", &found[0]));
+    assert!(!is_allowed(&ALLOWED, "view/rose_button.rs", &found[1]));
+    assert!(!is_allowed(&ALLOWED, "view/rules/mod.rs", &found[0]));
+
+    let hero = violations("const BUTTON_TEXT_GAP: f32 = 36.0;\nconst ICON_GAP: f32 = 36.0;\n");
+    assert_eq!(hero.len(), 2);
+    assert!(is_allowed(&ALLOWED, "view/connection/hero.rs", &hero[0]));
+    assert!(!is_allowed(&ALLOWED, "view/connection/hero.rs", &hero[1]));
+    assert!(!is_allowed(&ALLOWED, "view/settings.rs", &hero[0]));
+}
+
+#[test]
+fn the_fence_reads_crlf_margin_literals_and_constants_like_lf() {
+    let lf = "\
+const ICON_GAP: f32 = 12.0;
+fn view() {
+    let margin = egui::Margin {
+        left: 12,
+        right: 0,
+        top: 0,
+        bottom: 0,
+    };
+}
+";
+    let crlf = lf.replace('\n', "\r\n");
+    assert_eq!(violations(lf), violations(&crlf));
+    assert_eq!(violations(&crlf).len(), 2);
 }

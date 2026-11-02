@@ -6,6 +6,8 @@ use rosetun_config::ConnectionState;
 use crate::theme;
 
 const RING_RADIUS: f32 = 96.0;
+/// How strong the accent of the ring is while the pointer is over the button.
+const RING_HOVER_FACTOR: f32 = 0.6;
 const PETAL_STROKE: f32 = 1.4;
 const TRANSITION_SECONDS: f64 = 0.8;
 const OUTER: usize = 0;
@@ -470,7 +472,7 @@ pub(crate) fn rose_button(
             Stroke::new(
                 theme::stroke::HAIRLINE,
                 if hovered {
-                    theme::palette().accent_base.gamma_multiply(0.6)
+                    theme::palette().accent_base.gamma_multiply(RING_HOVER_FACTOR)
                 } else {
                     visible.ring
                 },
