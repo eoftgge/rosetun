@@ -203,7 +203,27 @@ pub fn uncloak_window(hwnd: isize) {
     set_cloak(hwnd as HWND, false);
 }
 
-fn set_cloak(hwnd: HWND, cloaked: bool) {
+/// Hides the window from the screen just before it is hidden or closed: with
+/// `DWMWA_CLOAK` set, DWM has nothing to play a disappearing animation over and
+/// the empty surface behind the composited picture never shows.
+///
+/// No timer is set: the window is about to leave. The next time it appears,
+/// `cloak_on_show` cloaks it afresh, sets the timer and the caller lifts the
+/// cloak once a frame is painted, so a window shown after this one is not
+/// left invisible.
+pub fn cloak_window(hwnd: isize) {
+    let hwnd = hwnd as HWND;
+    if !apply_cloak(hwnd, true) {
+        return;
+    }
+    // A cloak for showing, if one was pending, ends with the window it was for.
+    CLOAKED.store(false, Ordering::Relaxed);
+    // SAFETY: hwnd is borrowed; killing a timer that is not set is harmless.
+    unsafe { KillTimer(hwnd, UNCLOAK_TIMER_ID) };
+}
+
+/// Sets `DWMWA_CLOAK`; whether DWM accepted it.
+fn apply_cloak(hwnd: HWND, cloaked: bool) -> bool {
     let value = windows_sys::core::BOOL::from(cloaked);
     // SAFETY: hwnd is borrowed for this ABI call; the pointer and size describe a BOOL on
     // this stack frame, which is what DWMWA_CLOAK reads.
@@ -215,8 +235,13 @@ fn set_cloak(hwnd: HWND, cloaked: bool) {
             std::mem::size_of_val(&value) as u32,
         )
     };
+    result >= 0
+}
+
+fn set_cloak(hwnd: HWND, cloaked: bool) {
+    let accepted = apply_cloak(hwnd, cloaked);
     if cloaked {
-        if result < 0 {
+        if !accepted {
             return;
         }
         CLOAKED.store(true, Ordering::Relaxed);
@@ -289,7 +314,80 @@ pub fn taskbar_small_icon_size() -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::SavedWindow;
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, KillTimer, WS_POPUP,
+    };
+
+    use super::{SavedWindow, UNCLOAK_TIMER_ID, cloak_window, set_cloak, window_cloaked};
+
+    /// A window that is never shown, owned by the test's thread.
+    struct Hidden(HWND);
+
+    impl Hidden {
+        fn new() -> Self {
+            let class: Vec<u16> = "STATIC ".encode_utf16().collect();
+            // SAFETY: a predefined class, no parent, menu, instance or creation data; the
+            // window is destroyed on the same thread in `Drop`.
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    class.as_ptr(),
+                    WS_POPUP,
+                    0,
+                    0,
+                    10,
+                    10,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                )
+            };
+            assert!(!hwnd.is_null(), "no test window");
+            Self(hwnd)
+        }
+
+        /// Whether the unhide timer was set, clearing it.
+        fn timer_was_set(&self) -> bool {
+            // SAFETY: the window is this thread's; a timer that is not set gives 0.
+            unsafe { KillTimer(self.0, UNCLOAK_TIMER_ID) != 0 }
+        }
+    }
+
+    impl Drop for Hidden {
+        fn drop(&mut self) {
+            // SAFETY: the window was created by `new` on this thread.
+            unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    // One test: the cloak state is process-wide.
+    #[test]
+    fn cloaking_a_window_to_hide_it_sets_no_timer_and_showing_it_does() {
+        let window = Hidden::new();
+        let hwnd = window.0 as isize;
+
+        set_cloak(window.0, true);
+        assert!(window_cloaked());
+        assert!(window.timer_was_set(), "a cloak for showing has a timer");
+
+        set_cloak(window.0, true);
+        cloak_window(hwnd);
+        assert!(!window.timer_was_set(), "hiding left the timer running");
+        assert!(
+            !window_cloaked(),
+            "the cloak for showing outlived the window it was for"
+        );
+
+        // The next show cloaks afresh and sets its own timer.
+        set_cloak(window.0, true);
+        assert!(window_cloaked());
+        assert!(window.timer_was_set());
+        set_cloak(window.0, false);
+        assert!(!window_cloaked());
+    }
 
     #[test]
     fn saved_window_requires_reasonable_positive_dimensions() {

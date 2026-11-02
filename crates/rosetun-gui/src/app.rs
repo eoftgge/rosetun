@@ -22,6 +22,25 @@ use crate::{brand, display, i18n, motion, theme, view};
 /// Far outside every monitor: the first frame of a hidden start is drawn here.
 pub(crate) const OFFSCREEN: egui::Pos2 = egui::pos2(-32000.0, -32000.0);
 
+/// How the window goes away.
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Leave {
+    /// Out of sight, still running (the tray, or a quit waiting for the service).
+    Hide,
+    Close,
+}
+
+/// Cloaks the window with `cloak`, then asks for it to be hidden or closed.
+#[cfg(windows)]
+fn send_leaving(ctx: &egui::Context, how: Leave, cloak: impl FnOnce()) {
+    cloak();
+    ctx.send_viewport_cmd(match how {
+        Leave::Hide => egui::ViewportCommand::Visible(false),
+        Leave::Close => egui::ViewportCommand::Close,
+    });
+}
+
 #[cfg(windows)]
 fn centered_position(monitor: Option<egui::Vec2>, window: egui::Vec2) -> egui::Pos2 {
     monitor.map_or(egui::pos2(80.0, 80.0), |monitor| {
@@ -256,7 +275,24 @@ impl App {
         }
         let _ = self.state.act(Action::CancelQuit);
         self.window_hidden = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        self.leave_window(ctx, Leave::Hide);
+    }
+
+    /// The one place the window is hidden or closed from: under a DWM cloak, so that the
+    /// empty surface behind the composited picture never shows while it goes. Minimizing is
+    /// left alone: the cloak would take its animation away.
+    #[cfg(windows)]
+    fn leave_window(&self, ctx: &egui::Context, how: Leave) {
+        send_leaving(ctx, how, || self.cloak_before_leaving());
+    }
+
+    /// For a window that is closing without a command of ours: eframe closes it once the
+    /// close request goes unanswered.
+    #[cfg(windows)]
+    fn cloak_before_leaving(&self) {
+        if let Some(window) = &self.window {
+            rosetun_shell::cloak_window(window.hwnd());
+        }
     }
 
     /// Hides the window and closes it once the service has the last request,
@@ -278,12 +314,12 @@ impl App {
             if let Some(window) = &self.window {
                 window.save();
             }
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.leave_window(ctx, Leave::Hide);
             self.quit_disconnecting = disconnect;
             self.quit_apply_deadline = Some(Instant::now() + Duration::from_secs(10));
             ctx.request_repaint_after(Duration::from_millis(100));
         } else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.leave_window(ctx, Leave::Close);
         }
     }
 
@@ -644,7 +680,7 @@ impl eframe::App for App {
             if let Some(deadline) = self.quit_apply_deadline {
                 if self.state.quit_settled(self.quit_disconnecting) || Instant::now() >= deadline {
                     self.quit_apply_deadline = None;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    self.leave_window(ctx, Leave::Close);
                 } else {
                     ctx.request_repaint_after(
                         deadline
@@ -734,6 +770,8 @@ impl eframe::App for App {
                 if let Some(window) = &self.window {
                     window.save();
                 }
+                #[cfg(windows)]
+                self.cloak_before_leaving();
             }
         }
     }
@@ -804,6 +842,48 @@ mod tests {
         let debug = format!("{event:?}");
         assert!(!debug.contains("private-token"));
         assert!(!debug.contains("example.com"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn leaving_cloaks_the_window_before_it_asks_to_hide_or_close_it() {
+        for (how, expected) in [
+            (super::Leave::Hide, egui::ViewportCommand::Visible(false)),
+            (super::Leave::Close, egui::ViewportCommand::Close),
+        ] {
+            let ctx = egui::Context::default();
+            let mut cloaked = Vec::new();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+                super::send_leaving(ctx, how, || cloaked.push(how));
+            });
+            output.textures_delta.clear();
+            assert_eq!(cloaked, [how]);
+            let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|command| **command == expected)
+                    .count(),
+                1,
+                "{commands:?}"
+            );
+        }
+    }
+
+    /// The window is hidden and closed in `leave_window` only, so no way out skips the cloak.
+    #[cfg(windows)]
+    #[test]
+    fn the_window_is_hidden_and_closed_in_one_place() {
+        let source = include_str!("app.rs");
+        let source = &source[..source
+            .find(
+                "#[cfg(test)]
+mod tests",
+            )
+            .unwrap_or(source.len())];
+        assert_eq!(source.matches("ViewportCommand::Visible(false)").count(), 1);
+        assert_eq!(source.matches("ViewportCommand::Close,").count(), 1);
+        assert_eq!(source.matches("ViewportCommand::Close)").count(), 0);
     }
 
     #[cfg(windows)]
