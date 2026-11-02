@@ -13,6 +13,8 @@ param(
     [string]$NodeBindInterface,
     [string]$RealityCoverSite,
     [switch]$KeepNode,
+    # How many applies the `apply series` scenario runs in a row.
+    [ValidateRange(1, 10000)][int]$ApplySeriesCount = 20,
     # Builds the workspace first, so a forgotten build cannot deploy stale binaries.
     [switch]$Build
 )
@@ -1564,7 +1566,7 @@ finally {
 # Each apply kills sing-box and starts a new one at once; on some Windows 10
 # machines the old Wintun adapter is then still being removed and the helper
 # has to retry the start instead of rolling the change back.
-Write-Host 'Twenty settings applies in a row...'
+Write-Host "$ApplySeriesCount settings applies in a row..."
 $seriesConfigPath = Join-Path (Get-RosetunGuestDir) 'apply-series\config.json'
 $seriesWatchActive = $false
 try {
@@ -1597,7 +1599,7 @@ try {
     Start-RosetunEgressWatch
     $seriesWatchActive = $true
     $failedApplies = [System.Collections.Generic.List[string]]::new()
-    for ($round = 1; $round -le 20; $round++) {
+    for ($round = 1; $round -le $ApplySeriesCount; $round++) {
         Invoke-RosetunGuest -ScriptBlock {
             param($configPath, $round)
             $config = Get-Content -Path $configPath -Raw | ConvertFrom-Json
@@ -1622,7 +1624,7 @@ try {
     }
     $watch = Stop-RosetunEgressWatch
     $seriesWatchActive = $false
-    Test-Step 'apply series' 'all 20 applies succeed and stay Connected' `
+    Test-Step 'apply series' "all $ApplySeriesCount applies succeed and stay Connected" `
         -Note ($failedApplies -join '; ') { $failedApplies.Count -eq 0 }
     $seriesLog = Get-RosetunHelperLogSince $seriesLogMark
     if ($failedApplies.Count -gt 0) {
