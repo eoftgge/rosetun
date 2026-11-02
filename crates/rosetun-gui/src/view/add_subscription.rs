@@ -1,10 +1,12 @@
 use eframe::egui::{self, RichText};
 use rosetun_config::AppConfig;
 
+use rosetun_config::{Node, Outbound, TlsMode, TlsParams};
+
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::state::{Action, AddDialog, QrSource, QrStage, redact};
-use crate::{constants, display, theme, widgets};
+use crate::{constants, display, i18n, theme, widgets};
 
 const ACTION_ROW_HEIGHT: f32 = 40.0;
 
@@ -214,103 +216,88 @@ fn import_tabs(ui: &mut egui::Ui, dialog: &mut AddDialog) {
     }
 }
 
-fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Action>) {
-    use rosetun_config::{Outbound, TlsMode, TlsParams};
+/// The proxy kinds the form offers; HTTPS is HTTP over TLS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProxyProtocol {
+    Http,
+    Https,
+    Socks5,
+}
 
-    let Some(node) = &mut dialog.proxy else {
-        return;
-    };
-    ui.add_enabled_ui(!dialog.busy, |ui| {
-        let mut protocol = match (&node.outbound, &node.stream.tls) {
-            (Outbound::Socks5(_), _) => 2,
-            (_, TlsMode::Tls(_)) => 1,
-            _ => 0,
+impl ProxyProtocol {
+    fn of(node: &Node) -> Self {
+        match (&node.outbound, &node.stream.tls) {
+            (Outbound::Socks5(_), _) => Self::Socks5,
+            (_, TlsMode::Tls(_)) => Self::Https,
+            _ => Self::Http,
+        }
+    }
+
+    /// Switches the node to this protocol and keeps its login.
+    fn apply(self, node: &mut Node) {
+        let credentials = match &node.outbound {
+            Outbound::Http(credentials) | Outbound::Socks5(credentials) => credentials.clone(),
+            _ => Default::default(),
         };
-        let previous = protocol;
-        ui.label(tr!("proxy-protocol"));
-        egui::ComboBox::from_id_salt("proxy_protocol")
-            .width(ui.available_width())
-            .selected_text(["HTTP", "HTTPS", "SOCKS5"][protocol])
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut protocol, 0, "HTTP");
-                ui.selectable_value(&mut protocol, 1, "HTTPS");
-                ui.selectable_value(&mut protocol, 2, "SOCKS5");
-            });
-        if previous != protocol {
-            let credentials = match &node.outbound {
-                Outbound::Http(credentials) | Outbound::Socks5(credentials) => credentials.clone(),
-                _ => Default::default(),
-            };
-            node.outbound = if protocol == 2 {
-                Outbound::Socks5(credentials)
-            } else {
-                Outbound::Http(credentials)
-            };
-            node.stream.tls = if protocol == 1 {
-                TlsMode::Tls(TlsParams::default())
-            } else {
-                TlsMode::Plain
-            };
+        node.outbound = if self == Self::Socks5 {
+            Outbound::Socks5(credentials)
+        } else {
+            Outbound::Http(credentials)
+        };
+        node.stream.tls = if self == Self::Https {
+            TlsMode::Tls(TlsParams::default())
+        } else {
+            TlsMode::Plain
+        };
+    }
+
+    /// What this protocol cannot carry, as one line under the form.
+    fn note(self, language: i18n::Language) -> String {
+        let args = fluent_bundle::FluentArgs::new();
+        match self {
+            Self::Http | Self::Https => i18n::tr_in(language, "proxy-note-tcp", &args),
+            Self::Socks5 => i18n::tr_in(language, "proxy-note-socks5", &args),
         }
-        ui.add_space(theme::space::L);
-        ui.label(tr!("name"));
-        ui.add(egui::TextEdit::singleline(&mut node.name).desired_width(f32::INFINITY));
-        ui.add_space(theme::space::M);
-        ui.label(tr!("proxy-server"));
-        ui.add(egui::TextEdit::singleline(&mut node.server).desired_width(f32::INFINITY));
-        ui.add_space(theme::space::M);
-        ui.label(tr!("proxy-port"));
-        ui.add(egui::DragValue::new(&mut node.port).range(1..=65535));
-        ui.add_space(theme::space::M);
-        if let Outbound::Http(credentials) | Outbound::Socks5(credentials) = &mut node.outbound {
-            ui.label(tr!("proxy-username"));
-            ui.add(
-                egui::TextEdit::singleline(&mut credentials.username).desired_width(f32::INFINITY),
-            );
-            ui.add_space(theme::space::M);
-            ui.label(tr!("proxy-password"));
-            ui.add(
-                egui::TextEdit::singleline(&mut credentials.password)
-                    .password(true)
-                    .desired_width(f32::INFINITY),
-            );
-            ui.add_space(theme::space::M);
-        }
-        if let TlsMode::Tls(tls) = &mut node.stream.tls {
-            ui.label(tr!("proxy-sni"));
-            let sni = tls.sni.get_or_insert_default();
-            ui.add(egui::TextEdit::singleline(sni).desired_width(f32::INFINITY));
-            ui.add_space(theme::space::M);
-            if sni.is_empty() {
-                tls.sni = None;
-            }
-        }
-        ui.label(tr!("proxy-uri"));
-        ui.add(
-            egui::TextEdit::singleline(&mut dialog.proxy_uri)
-                .password(true)
-                .desired_width(f32::INFINITY),
-        );
-        ui.add_space(theme::space::S);
-        if widgets::outline_button(ui, tr!("proxy-import"), !dialog.proxy_uri.is_empty()).clicked()
-        {
-            match rosetun_core::parse_proxy_uri(dialog.proxy_uri.trim()) {
-                Ok(imported) => {
-                    *node = imported;
-                    dialog.proxy_uri.clear();
-                    dialog.error = None;
-                }
-                Err(_) => dialog.error = Some(rosetun_core::AddFromUrlError::Proxy),
-            }
-        }
+    }
+}
+
+/// The window's header is this high. A dialog is centred, so it keeps this much clear above
+/// and below.
+const HEADER_HEIGHT: f32 = 76.0;
+/// What the dialog takes outside the scrolling form: its frame, the heading, the tabs, an error
+/// of up to two lines and the buttons.
+const PROXY_DIALOG_CHROME: f32 = 290.0;
+/// The form never scrolls in less than this, however small the window.
+const MIN_PROXY_FORM: f32 = 160.0;
+const PORT_FIELD_WIDTH: f32 = 96.0;
+const PROXY_LINK_ID: &str = "proxy_link_input";
+
+fn proxy_form_height(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() - 2.0 * HEADER_HEIGHT - PROXY_DIALOG_CHROME).max(MIN_PROXY_FORM)
+}
+
+fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Action>) {
+    if dialog.proxy.is_none() {
+        return;
+    }
+    let busy = dialog.busy;
+    let height = proxy_form_height(ui.ctx());
+    ui.add_enabled_ui(!busy, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("proxy_form")
+            .max_height(height)
+            .auto_shrink([false, true])
+            .show(ui, |ui| proxy_fields(ui, dialog));
     });
-    ui.label(tr!("proxy-details"))
-        .on_hover_text(tr!("proxy-limitations"));
-    let valid = node.validate_proxy().is_ok();
+    let ready = dialog.proxy_ready();
     if let Some(error) = &dialog.error {
-        ui.colored_label(
-            theme::ERROR,
-            errors::add_subscription(crate::i18n::language(), error),
+        ui.add_space(theme::space::S);
+        ui.add(
+            egui::Label::new(
+                RichText::new(errors::add_subscription(crate::i18n::language(), error))
+                    .color(theme::ERROR),
+            )
+            .wrap(),
         );
     }
     ui.add_space(theme::space::XL);
@@ -325,17 +312,192 @@ fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Actio
                 } else {
                     tr!("add")
                 },
-                !dialog.busy && valid,
+                !busy && ready,
             )
             .clicked()
             {
                 actions.push(Action::SubmitAdd);
             }
-            if widgets::outline_button(ui, tr!("cancel"), !dialog.busy).clicked() {
+            if widgets::outline_button(ui, tr!("cancel"), !busy).clicked() {
                 actions.push(Action::CancelAdd);
             }
         },
     );
+}
+
+fn proxy_fields(ui: &mut egui::Ui, dialog: &mut AddDialog) {
+    // A label sits close to its field; the groups are set apart by the gaps below.
+    ui.spacing_mut().item_spacing.y = theme::space::XS;
+    proxy_link_row(ui, dialog);
+    ui.add_space(theme::space::L);
+    let port_invalid = dialog.proxy_port_value().is_none();
+    let AddDialog {
+        proxy: Some(node),
+        proxy_port,
+        error,
+        ..
+    } = dialog
+    else {
+        return;
+    };
+    let mut edited = false;
+
+    ui.label(tr!("proxy-protocol"));
+    let current = ProxyProtocol::of(node);
+    let options = [
+        (ProxyProtocol::Http, "HTTP"),
+        (ProxyProtocol::Https, "HTTPS"),
+        (ProxyProtocol::Socks5, "SOCKS5"),
+    ];
+    if let Some(chosen) = widgets::segmented(ui, "proxy_protocol", current, &options, true, true) {
+        chosen.apply(node);
+        edited = true;
+    }
+    ui.add_space(theme::space::L);
+
+    let (server, port) = columns(
+        ui,
+        Some(PORT_FIELD_WIDTH),
+        |ui, width| {
+            ui.label(tr!("proxy-server"));
+            ui.add(widgets::TextField::new(&mut node.server).width(width))
+                .changed()
+        },
+        |ui, width| {
+            ui.label(tr!("proxy-port"));
+            ui.add(
+                widgets::TextField::new(proxy_port)
+                    .width(width)
+                    .invalid(port_invalid),
+            )
+            .changed()
+        },
+    );
+    edited |= server || port;
+    if port {
+        ui.ctx().request_repaint();
+    }
+    ui.add_space(theme::space::L);
+
+    if let Outbound::Http(credentials) | Outbound::Socks5(credentials) = &mut node.outbound {
+        let (username, password) = columns(
+            ui,
+            None,
+            |ui, width| {
+                ui.label(tr!("proxy-username"));
+                ui.add(widgets::TextField::new(&mut credentials.username).width(width))
+                    .changed()
+            },
+            |ui, width| {
+                ui.label(tr!("proxy-password"));
+                ui.add(
+                    widgets::TextField::new(&mut credentials.password)
+                        .password(true)
+                        .width(width),
+                )
+                .changed()
+            },
+        );
+        edited |= username || password;
+        caption(ui, &tr!("proxy-credentials-note"));
+        ui.add_space(theme::space::L);
+    }
+
+    if let TlsMode::Tls(tls) = &mut node.stream.tls {
+        ui.label(tr!("proxy-sni"));
+        let sni = tls.sni.get_or_insert_default();
+        edited |= ui.add(widgets::TextField::new(sni)).changed();
+        if sni.is_empty() {
+            tls.sni = None;
+        }
+        caption(ui, &tr!("proxy-sni-note"));
+        ui.add_space(theme::space::L);
+    }
+
+    // `save_proxy` names an unnamed proxy after its protocol, so that is what the field hints.
+    let default_name = rosetun_core::node_protocol(node).to_ascii_uppercase();
+    ui.label(tr!("proxy-name"));
+    edited |= ui
+        .add(widgets::TextField::new(&mut node.name).hint(&default_name))
+        .changed();
+    ui.add_space(theme::space::L);
+
+    caption(ui, &ProxyProtocol::of(node).note(i18n::language()));
+    if edited {
+        *error = None;
+    }
+}
+
+/// The link field with its button, and the line that points on to the fields. Enter in the
+/// field does what the button does.
+fn proxy_link_row(ui: &mut egui::Ui, dialog: &mut AddDialog) {
+    ui.label(tr!("proxy-link"));
+    let mut fill = false;
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), widgets::field_height(ui)),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let filled = !dialog.proxy_uri.trim().is_empty();
+            fill = widgets::outline_button(ui, tr!("proxy-fill"), filled).clicked();
+            let width = ui.available_width();
+            let field = ui.add(
+                widgets::TextField::new(&mut dialog.proxy_uri)
+                    .id(egui::Id::new(PROXY_LINK_ID))
+                    .password(true)
+                    .hint(constants::PROXY_URI_PLACEHOLDER)
+                    .width(width),
+            );
+            if field.changed() {
+                dialog.error = None;
+            }
+            fill |= field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        },
+    );
+    caption(ui, &tr!("proxy-or-fill"));
+    if fill && !dialog.proxy_uri.trim().is_empty() {
+        dialog.fill_from_proxy_uri();
+    }
+}
+
+/// Two fields side by side, each under its own label. The right one is `right_width` wide, or
+/// the row is split in half. Returns what each side returned.
+fn columns<L, R>(
+    ui: &mut egui::Ui,
+    right_width: Option<f32>,
+    left: impl FnOnce(&mut egui::Ui, f32) -> L,
+    right: impl FnOnce(&mut egui::Ui, f32) -> R,
+) -> (L, R) {
+    let gap = ui.spacing().item_spacing.x;
+    let total = ui.available_width();
+    let right_width = right_width.unwrap_or((total - gap) / 2.0);
+    let left_width = total - gap - right_width;
+    let (mut left_out, mut right_out) = (None, None);
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(left_width, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_width(left_width);
+                left_out = Some(left(ui, left_width));
+            },
+        );
+        ui.allocate_ui_with_layout(
+            egui::vec2(right_width, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_width(right_width);
+                right_out = Some(right(ui, right_width));
+            },
+        );
+    });
+    (
+        left_out.expect("the left column ran"),
+        right_out.expect("the right column ran"),
+    )
+}
+
+fn caption(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(RichText::new(text).small().color(theme::palette().text_dim)).wrap());
 }
 
 fn qr_menu(ui: &mut egui::Ui, dialog: &AddDialog, enabled: bool, actions: &mut Vec<Action>) {
@@ -493,6 +655,169 @@ mod tests {
                 (restored - original).abs() < 1.0,
                 "subscription height grew from {original} to {restored}"
             );
+        }
+    }
+
+    /// The height the proxy tab for HTTP had before the form was reworked.
+    const OLD_HTTP_PROXY_HEIGHT: f32 = 841.0;
+
+    fn show_frames(
+        ctx: &egui::Context,
+        dialog: &mut AddDialog,
+        size: egui::Vec2,
+        frames: std::ops::RangeInclusive<u32>,
+        events: impl Fn(u32) -> Vec<egui::Event>,
+    ) {
+        let config = AppConfig::default();
+        for frame in frames {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    time: Some(f64::from(frame) * 0.1),
+                    events: events(frame),
+                    ..Default::default()
+                },
+                |ui| show(ui.ctx(), &config, dialog, &mut Vec::new()),
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    fn settled_area(dialog: &mut AddDialog, size: egui::Vec2) -> egui::Rect {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        show_frames(&ctx, dialog, size, 1..=10, |_| Vec::new());
+        ctx.memory(|memory| memory.area_rect(egui::Id::new("add_subscription")))
+            .unwrap()
+    }
+
+    fn proxy_dialog(uri: &str) -> AddDialog {
+        let mut dialog = AddDialog {
+            proxy_tab: true,
+            ..AddDialog::default()
+        };
+        dialog.set_proxy(rosetun_core::parse_proxy_uri(uri).unwrap());
+        dialog
+    }
+
+    #[test]
+    fn the_http_proxy_tab_is_shorter_than_the_old_form() {
+        let mut dialog = AddDialog::default();
+        assert!(dialog.select_proxy_tab(true));
+        let height = settled_area(&mut dialog, egui::vec2(1440.0, 1000.0)).height();
+        assert!(
+            height < OLD_HTTP_PROXY_HEIGHT - 100.0,
+            "{height} against {OLD_HTTP_PROXY_HEIGHT}"
+        );
+    }
+
+    #[test]
+    fn the_proxy_dialog_stays_below_the_header_at_the_smallest_window() {
+        let size = egui::vec2(960.0, 640.0);
+        for uri in [
+            "http://192.0.2.10:8080",
+            "https://user:pass@proxy.example.com:443",
+            "socks5://user:pass@[2001:db8::1]:1080",
+        ] {
+            let mut dialog = proxy_dialog(uri);
+            dialog.error = Some(rosetun_core::AddFromUrlError::Proxy);
+            let area = settled_area(&mut dialog, size);
+            assert!(area.top() >= HEADER_HEIGHT, "{uri}: top {}", area.top());
+            assert!(
+                area.bottom() <= size.y - HEADER_HEIGHT,
+                "{uri}: bottom {}",
+                area.bottom()
+            );
+        }
+    }
+
+    #[test]
+    fn the_proxy_form_grows_with_the_window_up_to_its_own_height() {
+        let mut dialog = proxy_dialog("https://user:pass@proxy.example.com:443");
+        let small = settled_area(&mut dialog, egui::vec2(960.0, 640.0)).height();
+        let large = settled_area(&mut dialog, egui::vec2(1440.0, 1400.0)).height();
+        assert!(large > small, "{small} then {large}");
+    }
+
+    #[test]
+    fn enter_in_the_link_field_fills_the_form_like_the_button() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut dialog = AddDialog::default();
+        assert!(dialog.select_proxy_tab(true));
+        dialog.proxy_uri = "socks5://user:pass@192.0.2.10:1080".into();
+        let size = egui::vec2(1440.0, 1000.0);
+        show_frames(&ctx, &mut dialog, size, 1..=3, |_| Vec::new());
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(PROXY_LINK_ID)));
+        show_frames(&ctx, &mut dialog, size, 4..=5, |_| Vec::new());
+        let enter = |pressed| egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: Some(egui::Key::Enter),
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        show_frames(&ctx, &mut dialog, size, 6..=7, |frame| {
+            vec![enter(frame == 6)]
+        });
+        let node = dialog.proxy.as_ref().unwrap();
+        assert_eq!(node.server, "192.0.2.10");
+        assert_eq!(dialog.proxy_port, "1080");
+        assert!(dialog.proxy_uri.is_empty());
+        assert_eq!(ProxyProtocol::of(node), ProxyProtocol::Socks5);
+    }
+
+    #[test]
+    fn switching_the_protocol_keeps_the_login() {
+        let mut node = rosetun_core::parse_proxy_uri("http://user:pass@192.0.2.10:8080").unwrap();
+        for protocol in [
+            ProxyProtocol::Https,
+            ProxyProtocol::Socks5,
+            ProxyProtocol::Http,
+            ProxyProtocol::Socks5,
+            ProxyProtocol::Https,
+        ] {
+            protocol.apply(&mut node);
+            assert_eq!(ProxyProtocol::of(&node), protocol);
+            let (Outbound::Http(credentials) | Outbound::Socks5(credentials)) = &node.outbound
+            else {
+                panic!("a proxy keeps a proxy outbound");
+            };
+            assert_eq!(credentials.username, "user");
+            assert_eq!(credentials.password, "pass");
+            assert_eq!(
+                matches!(node.stream.tls, TlsMode::Tls(_)),
+                protocol == ProxyProtocol::Https
+            );
+            assert!(node.validate_proxy().is_ok(), "{protocol:?}");
+        }
+    }
+
+    #[test]
+    fn the_protocol_line_changes_with_the_protocol_in_both_languages() {
+        use crate::i18n::Language::{English, Russian};
+
+        let tcp = |language| ProxyProtocol::Http.note(language);
+        assert_eq!(tcp(English), ProxyProtocol::Https.note(English));
+        assert_eq!(tcp(Russian), ProxyProtocol::Https.note(Russian));
+        assert_eq!(
+            ProxyProtocol::Http.note(English),
+            "Calls and games will not work through this proxy."
+        );
+        assert_eq!(
+            ProxyProtocol::Socks5.note(English),
+            "Calls and games work if the server supports it."
+        );
+        assert_eq!(
+            ProxyProtocol::Http.note(Russian),
+            "Звонки и игры через такой прокси не заработают."
+        );
+        assert_eq!(
+            ProxyProtocol::Socks5.note(Russian),
+            "Звонки и игры работают, если сервер это поддерживает."
+        );
+        for language in [English, Russian] {
+            assert_ne!(tcp(language), ProxyProtocol::Socks5.note(language));
         }
     }
 

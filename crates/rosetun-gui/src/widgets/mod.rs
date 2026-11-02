@@ -11,6 +11,7 @@ mod settings_card;
 mod status_pill;
 mod swatches;
 mod tag;
+mod text_field;
 mod toggle;
 mod transitions;
 
@@ -35,5 +36,6 @@ pub(crate) use segmented::{segmented, segmented_width};
 pub(crate) use settings_card::{SettingsCard, settings_card};
 pub(crate) use status_pill::{status_pill, status_pill_width};
 pub(crate) use swatches::{Swatch, swatches};
+pub(crate) use text_field::{TextField, field_height};
 pub(crate) use toggle::{toggle, toggle_row};
 pub(crate) use transitions::{appear, appear_progress, reveal, reveal_progress, show_modal};

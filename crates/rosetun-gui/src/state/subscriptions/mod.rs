@@ -88,6 +88,9 @@ pub(crate) struct AddDialog {
     pub(crate) proxy_tab: bool,
     pub(crate) proxy_uri: String,
     pub(crate) proxy: Option<rosetun_config::Node>,
+    /// The port as typed. Only digits that make 1 to 65535 count; the node takes the
+    /// number when the dialog saves.
+    pub(crate) proxy_port: String,
     pub(crate) editing_proxy: Option<SubscriptionId>,
     pub(crate) url: String,
     pub(crate) name: String,
@@ -108,6 +111,7 @@ impl Default for AddDialog {
             proxy_tab: false,
             proxy_uri: String::new(),
             proxy: None,
+            proxy_port: String::new(),
             editing_proxy: None,
             url: String::new(),
             name: String::new(),
@@ -122,13 +126,21 @@ impl Default for AddDialog {
     }
 }
 
+/// A port typed in the proxy form: digits only, 1 to 65535.
+pub(crate) fn parse_proxy_port(text: &str) -> Option<u16> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse::<u16>().ok().filter(|port| *port != 0)
+}
+
 impl AddDialog {
     pub(crate) fn select_proxy_tab(&mut self, proxy: bool) -> bool {
         if self.busy || self.qr.busy() || self.editing_proxy.is_some() || self.proxy_tab == proxy {
             return false;
         }
         if proxy && self.proxy.is_none() {
-            self.proxy = Some(rosetun_config::Node {
+            self.set_proxy(rosetun_config::Node {
                 id: rosetun_config::NodeId::new("pending"),
                 name: String::new(),
                 server: String::new(),
@@ -141,6 +153,45 @@ impl AddDialog {
         self.proxy_tab = proxy;
         self.error = None;
         true
+    }
+
+    /// Puts a server in the proxy form, port draft included.
+    pub(crate) fn set_proxy(&mut self, node: rosetun_config::Node) {
+        self.proxy_port = node.port.to_string();
+        self.proxy = Some(node);
+    }
+
+    pub(crate) fn proxy_port_value(&self) -> Option<u16> {
+        parse_proxy_port(&self.proxy_port)
+    }
+
+    /// Whether the form may be saved: a valid port draft and a server `validate_proxy` accepts.
+    pub(crate) fn proxy_ready(&self) -> bool {
+        self.proxy_port_value().is_some_and(|port| {
+            self.proxy.as_ref().is_some_and(|node| {
+                let mut node = node.clone();
+                node.port = port;
+                node.validate_proxy().is_ok()
+            })
+        })
+    }
+
+    /// Fills the form from the link in `proxy_uri`. A link that does not parse leaves every
+    /// field as it was and sets the error.
+    pub(crate) fn fill_from_proxy_uri(&mut self) {
+        let Ok(mut imported) = rosetun_core::parse_proxy_uri(self.proxy_uri.trim()) else {
+            self.error = Some(AddFromUrlError::Proxy);
+            return;
+        };
+        if let Some(current) = &self.proxy {
+            // Without a fragment the parser names the node after its scheme: keep what was typed.
+            if imported.name == rosetun_core::node_protocol(&imported) {
+                imported.name.clone_from(&current.name);
+            }
+        }
+        self.set_proxy(imported);
+        self.proxy_uri.clear();
+        self.error = None;
     }
 }
 
@@ -501,9 +552,15 @@ impl State {
                     && !dialog.qr.busy()
                 {
                     if dialog.proxy_tab {
-                        let Some(node) = &dialog.proxy else {
+                        let port = dialog.proxy_port_value();
+                        let Some(node) = &mut dialog.proxy else {
                             return None;
                         };
+                        let Some(port) = port else {
+                            dialog.error = Some(AddFromUrlError::Proxy);
+                            return None;
+                        };
+                        node.port = port;
                         if node.validate_proxy().is_err() {
                             dialog.error = Some(AddFromUrlError::Proxy);
                             return None;
@@ -597,12 +654,13 @@ impl State {
                         })
                     && let Some(node) = subscription.nodes.first()
                 {
-                    self.subscriptions.add = Some(AddDialog {
+                    let mut dialog = AddDialog {
                         proxy_tab: true,
-                        proxy: Some(node.clone()),
                         editing_proxy: Some(id),
                         ..AddDialog::default()
-                    });
+                    };
+                    dialog.set_proxy(node.clone());
+                    self.subscriptions.add = Some(dialog);
                     return None;
                 }
                 if self.config_ready

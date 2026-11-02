@@ -1034,11 +1034,12 @@ fn manual_proxy_submission_and_edit_keep_the_credentials() {
         "https://fixture-user:fixture-password@proxy.example.com:443#Example",
     )
     .unwrap();
-    state.subscriptions.add = Some(AddDialog {
+    let mut dialog = AddDialog {
         proxy_tab: true,
-        proxy: Some(node.clone()),
         ..AddDialog::default()
-    });
+    };
+    dialog.set_proxy(node.clone());
+    state.subscriptions.add = Some(dialog);
     let Some(Job::SaveProxy(None, submitted)) = state.act(Action::SubmitAdd) else {
         panic!("expected proxy save")
     };
@@ -1067,7 +1068,7 @@ fn import_tabs_keep_independent_drafts_and_submit_the_selected_kind() {
         ..Default::default()
     };
     assert!(dialog.select_proxy_tab(true));
-    dialog.proxy = Some(
+    dialog.set_proxy(
         rosetun_core::parse_proxy_uri(
             "https://fixture-user:fixture-password@proxy.example.com:443#Proxy",
         )
@@ -1094,4 +1095,191 @@ fn import_tabs_keep_independent_drafts_and_submit_the_selected_kind() {
         state.act(Action::SubmitAdd),
         Some(Job::SaveProxy(None, _))
     ));
+}
+
+fn proxy_dialog_state(uri: &str) -> State {
+    let mut state = State {
+        config_ready: true,
+        ..Default::default()
+    };
+    let mut dialog = AddDialog {
+        proxy_tab: true,
+        ..AddDialog::default()
+    };
+    dialog.set_proxy(rosetun_core::parse_proxy_uri(uri).unwrap());
+    state.subscriptions.add = Some(dialog);
+    state
+}
+
+#[test]
+fn the_proxy_port_must_be_plain_digits_from_1_to_65535() {
+    for (text, valid) in [
+        ("", false),
+        ("0", false),
+        ("65536", false),
+        ("80a", false),
+        (" 8080 ", false),
+        ("-1", false),
+        ("+80", false),
+        ("1", true),
+        ("65535", true),
+        ("8080", true),
+    ] {
+        let mut state = proxy_dialog_state("http://192.0.2.10:3128");
+        state.subscriptions.add.as_mut().unwrap().proxy_port = text.into();
+        assert_eq!(
+            state.subscriptions.add.as_ref().unwrap().proxy_ready(),
+            valid,
+            "ready with {text:?}"
+        );
+        let job = state.act(Action::SubmitAdd);
+        let dialog = state.subscriptions.add.as_ref().unwrap();
+        if valid {
+            let Some(Job::SaveProxy(None, node)) = job else {
+                panic!("a port of {text:?} should save");
+            };
+            assert_eq!(node.port.to_string(), text);
+            assert!(dialog.busy);
+        } else {
+            assert!(job.is_none(), "a port of {text:?} must not save");
+            assert!(!dialog.busy);
+            assert!(matches!(dialog.error, Some(AddFromUrlError::Proxy)));
+        }
+    }
+}
+
+#[test]
+fn a_bad_port_draft_leaves_the_last_good_port_in_the_node() {
+    let mut state = proxy_dialog_state("http://192.0.2.10:3128");
+    let dialog = state.subscriptions.add.as_mut().unwrap();
+    dialog.proxy_port = "70000".into();
+    assert!(!dialog.proxy_ready());
+    assert_eq!(dialog.proxy.as_ref().unwrap().port, 3128);
+}
+
+#[test]
+fn filling_from_a_link_sets_protocol_server_port_login_and_the_port_draft() {
+    for (uri, server, port, user, tls, socks) in [
+        (
+            "socks5://fixture-user:fixture-password@192.0.2.10:1080",
+            "192.0.2.10",
+            1080,
+            "fixture-user",
+            false,
+            true,
+        ),
+        (
+            "https://fixture-user:fixture-password@proxy.example.com:8443",
+            "proxy.example.com",
+            8443,
+            "fixture-user",
+            true,
+            false,
+        ),
+        (
+            "socks5://fixture-user:fixture-password@[2001:db8::1]:1081",
+            "2001:db8::1",
+            1081,
+            "fixture-user",
+            false,
+            true,
+        ),
+    ] {
+        let mut dialog = AddDialog::default();
+        assert!(dialog.select_proxy_tab(true));
+        dialog.proxy_uri = format!("  {uri} ");
+        dialog.error = Some(AddFromUrlError::Proxy);
+        dialog.fill_from_proxy_uri();
+        let node = dialog.proxy.as_ref().unwrap();
+        assert_eq!(node.server, server);
+        assert_eq!(node.port, port);
+        assert_eq!(dialog.proxy_port, port.to_string());
+        assert_eq!(matches!(node.stream.tls, rosetun_config::TlsMode::Tls(_)), tls);
+        assert_eq!(matches!(node.outbound, Outbound::Socks5(_)), socks);
+        let (Outbound::Http(credentials) | Outbound::Socks5(credentials)) = &node.outbound else {
+            panic!("a proxy keeps a proxy outbound");
+        };
+        assert_eq!(credentials.username, user);
+        assert_eq!(credentials.password, "fixture-password");
+        assert!(dialog.proxy_uri.is_empty());
+        assert!(dialog.error.is_none());
+        assert!(dialog.proxy_ready());
+    }
+}
+
+#[test]
+fn filling_from_a_link_keeps_the_name_typed_unless_the_link_names_one() {
+    let mut dialog = AddDialog::default();
+    assert!(dialog.select_proxy_tab(true));
+    dialog.proxy.as_mut().unwrap().name = "Office".into();
+    dialog.proxy_uri = "socks5://192.0.2.10:1080".into();
+    dialog.fill_from_proxy_uri();
+    assert_eq!(dialog.proxy.as_ref().unwrap().name, "Office");
+    dialog.proxy_uri = "socks5://192.0.2.10:1080#Backup".into();
+    dialog.fill_from_proxy_uri();
+    assert_eq!(dialog.proxy.as_ref().unwrap().name, "Backup");
+}
+
+#[test]
+fn a_bad_link_shows_an_error_and_touches_no_field() {
+    for uri in ["socks5://192.0.2.10", "ftp://192.0.2.10:21", "not a link", "http://:80"] {
+        let mut dialog = AddDialog::default();
+        assert!(dialog.select_proxy_tab(true));
+        dialog.proxy.as_mut().unwrap().server = "198.51.100.7".into();
+        dialog.proxy.as_mut().unwrap().name = "Office".into();
+        dialog.proxy_port = "9999".into();
+        dialog.proxy_uri = uri.into();
+        let before = dialog.proxy.clone();
+        dialog.fill_from_proxy_uri();
+        assert!(matches!(dialog.error, Some(AddFromUrlError::Proxy)), "{uri}");
+        assert_eq!(dialog.proxy, before, "{uri}");
+        assert_eq!(dialog.proxy_port, "9999", "{uri}");
+        assert_eq!(dialog.proxy_uri, uri, "the link stays to be corrected");
+    }
+}
+
+#[test]
+fn editing_a_manual_proxy_fills_every_field_and_keeps_its_id_and_selection() {
+    let mut state = State {
+        config_ready: true,
+        ..Default::default()
+    };
+    let node = rosetun_core::parse_proxy_uri(
+        "https://fixture-user:fixture-password@proxy.example.com:8443#Example",
+    )
+    .unwrap();
+    let mut proxy = subscription("7");
+    proxy.url = "local-proxy://7".into();
+    proxy.name = "Example".into();
+    proxy.nodes = vec![node.clone()];
+    state.config.subscriptions.push(proxy);
+    state.config.active = Some(Selection {
+        subscription: SubscriptionId::new("7"),
+        node: node.id.clone(),
+    });
+    state.act(Action::RequestRename(SubscriptionId::new("7")));
+    let dialog = state.subscriptions.add.as_ref().unwrap();
+    assert!(dialog.proxy_tab);
+    assert_eq!(dialog.editing_proxy, Some(SubscriptionId::new("7")));
+    assert_eq!(dialog.proxy.as_ref(), Some(&node));
+    assert_eq!(dialog.proxy_port, "8443");
+    assert!(dialog.proxy_ready());
+    let Some(Job::SaveProxy(Some(id), saved)) = state.act(Action::SubmitAdd) else {
+        panic!("expected the edit to save");
+    };
+    assert_eq!(id, SubscriptionId::new("7"));
+    assert_eq!(saved.id, node.id);
+    assert_eq!(
+        state.config.active.as_ref().map(|selection| &selection.node),
+        Some(&node.id)
+    );
+}
+
+#[test]
+fn a_new_proxy_form_starts_with_the_default_port_in_its_draft() {
+    let mut dialog = AddDialog::default();
+    assert!(dialog.select_proxy_tab(true));
+    assert_eq!(dialog.proxy_port, "8080");
+    assert_eq!(dialog.proxy.as_ref().unwrap().port, 8080);
+    assert!(!dialog.proxy_ready(), "the server is still empty");
 }

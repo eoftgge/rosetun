@@ -10,6 +10,7 @@ pub(crate) const DNS_PRESETS: [(&str, &str); 3] = [
 ];
 pub(crate) const LOG_FILE_NAME: &str = "rosetun-gui.log";
 pub(crate) const ERROR_MARK: &str = "!";
+pub(crate) const PROXY_URI_PLACEHOLDER: &str = "socks5://host:port";
 pub(crate) const URL_PLACEHOLDER: &str = "https://provider.example/subscription";
 pub(crate) const SITES_EXAMPLE: &str = "youtube.com\ninstagram.com\nchatgpt.com";
 pub(crate) const EXPAND: &str = "+";
