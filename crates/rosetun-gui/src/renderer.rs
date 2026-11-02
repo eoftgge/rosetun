@@ -130,7 +130,9 @@ fn failure_kind(error: Option<&eframe::Error>) -> &'static str {
 }
 
 #[cfg(windows)]
-fn surface_status_handler() -> std::sync::Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> eframe::egui_wgpu::SurfaceErrorAction + Send + Sync> {
+fn surface_status_handler() -> std::sync::Arc<
+    dyn Fn(&wgpu::CurrentSurfaceTexture) -> eframe::egui_wgpu::SurfaceErrorAction + Send + Sync,
+> {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
@@ -148,8 +150,15 @@ fn surface_status_handler() -> std::sync::Arc<dyn Fn(&wgpu::CurrentSurfaceTextur
             SurfaceErrorAction::RecreateSurface
         }
         CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Validation => {
-            let (index, event) = if matches!(status, CurrentSurfaceTexture::Timeout) { (0, "timeout") } else { (1, "validation") };
-            let count = warnings.lock().unwrap_or_else(std::sync::PoisonError::into_inner)[index].observe(Instant::now());
+            let (index, event) = if matches!(status, CurrentSurfaceTexture::Timeout) {
+                (0, "timeout")
+            } else {
+                (1, "validation")
+            };
+            let count = warnings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)[index]
+                .observe(Instant::now());
             if let Some(count) = count {
                 tracing::warn!(event, count, "dropped graphics frames");
             }

@@ -104,9 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     // HTTP diagnostics can contain credentials regardless of the selected level.
-    let safe_targets = filter_fn(|metadata| {
-        logging::allows(metadata.target(), *metadata.level())
-    });
+    let safe_targets = filter_fn(|metadata| logging::allows(metadata.target(), *metadata.level()));
     tracing_subscriber::registry()
         .with(env_filter)
         .with(
