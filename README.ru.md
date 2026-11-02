@@ -2,7 +2,11 @@
 
 <p align="center"><img src=".github/assets/banner.svg" alt="Rosetun: VPN client for Windows" width="100%"></p>
 
-<p align="center"><a href="https://eoftgge.github.io/rosetun/ru/">Сайт проекта</a> · <a href="https://eoftgge.github.io/rosetun/ru/help/">Помощь</a> · <a href="https://eoftgge.github.io/rosetun/ru/providers/">Для провайдеров</a></p>
+<p align="center">
+  <a href="https://eoftgge.github.io/rosetun/ru/"><img src="https://img.shields.io/badge/%D0%A1%D0%B0%D0%B9%D1%82%20%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82%D0%B0-8C2338?style=for-the-badge" alt="Сайт проекта"></a>
+  <a href="https://eoftgge.github.io/rosetun/ru/help/"><img src="https://img.shields.io/badge/%D0%9F%D0%BE%D0%BC%D0%BE%D1%89%D1%8C-432D36?style=for-the-badge" alt="Помощь"></a>
+  <a href="https://eoftgge.github.io/rosetun/ru/providers/"><img src="https://img.shields.io/badge/%D0%94%D0%BB%D1%8F%20%D0%BF%D1%80%D0%BE%D0%B2%D0%B0%D0%B9%D0%B4%D0%B5%D1%80%D0%BE%D0%B2-432D36?style=for-the-badge" alt="Для провайдеров"></a>
+</p>
 
 <p align="center">
   <a href="https://github.com/eoftgge/rosetun/releases/latest"><img src=".github/assets/download-ru.svg" alt="Download Rosetun for Windows" height="56"></a>
