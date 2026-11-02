@@ -78,7 +78,7 @@ pub(crate) fn three_way_modal(
         ui.set_width(520.0);
         ui.heading(options.title);
         body(ui);
-        ui.add_space(20.0);
+        ui.add_space(theme::space::XL);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if button_fill(ui, options.confirm, true).clicked() {
                 choice = ThreeWayChoice::Confirm;

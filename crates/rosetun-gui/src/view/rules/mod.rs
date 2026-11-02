@@ -98,7 +98,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     if let Some(action) = selected_tab {
         actions.push(action);
     }
-    ui.add_space(20.0);
+    ui.add_space(theme::space::XL);
     let shown = widgets::appear_progress(
         ui.ctx(),
         egui::Id::new("rules_tab_appear"),
@@ -130,14 +130,14 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             .wrap(),
     );
     if pending_apply {
-        ui.add_space(6.0);
+        ui.add_space(theme::space::XS);
         let (_, link) = apply_notice(ui, can_apply);
         apply_clicked = link.is_some_and(|link| link.clicked());
     }
     if apply_clicked {
         actions.push(Action::Apply);
     }
-    ui.add_space(20.0);
+    ui.add_space(theme::space::XL);
     if !state.config_ready {
         ui.colored_label(theme::palette().text_dim, tr!("loading"));
         return;
@@ -161,7 +161,7 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         return;
     };
     template_section(ui, state, set, actions);
-    ui.add_space(20.0);
+    ui.add_space(theme::space::XL);
     let temporary = if state.config.active_rule_set.as_ref() == Some(&set.id) {
         state.session.temporary_rules.as_slice()
     } else {
@@ -214,7 +214,7 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         running: running_programs(state),
     };
     ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.spacing_mut().item_spacing.y = theme::space::S;
         for (_, rule) in visible_temporary {
             ui.push_id(("temporary", rule.id.as_str()), |ui| {
                 rule_row(ui, state, &rows, rule, None, value_width, actions);

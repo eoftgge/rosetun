@@ -217,7 +217,7 @@ fn list_card(
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_min_height(CARD_CONTENT_HEIGHT);
-                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.spacing_mut().item_spacing.x = theme::space::S;
                     icons::icon_badge(ui, Icon::List, 32.0);
                     let width = (ui.available_width() - 170.0).max(100.0);
                     ui.allocate_ui_with_layout(
@@ -336,7 +336,7 @@ pub(crate) fn add_dialog(
     let response = widgets::show_modal(ctx, egui::Modal::new(egui::Id::new("add_list")), |ui| {
         ui.set_width(520.0);
         ui.heading(tr!("add-list"));
-        ui.add_space(14.0);
+        ui.add_space(theme::space::L);
         if let Some((format, categories, entries)) = dialog.result {
             let summary = if format.has_categories() {
                 tr!(
@@ -356,7 +356,7 @@ pub(crate) fn add_dialog(
                 format_name(format)
             };
             ui.label(summary);
-            ui.add_space(18.0);
+            ui.add_space(theme::space::L);
             if widgets::button_fill(ui, tr!("done"), true).clicked() {
                 actions.push(Action::CancelAddList);
             }
@@ -375,7 +375,7 @@ pub(crate) fn add_dialog(
         if input.changed() {
             dialog.update_url(value);
         }
-        ui.add_space(10.0);
+        ui.add_space(theme::space::S);
         if widgets::outline_button(ui, tr!("choose-list-file"), !busy).clicked() {
             actions.push(Action::BrowseListFile);
         }
@@ -385,7 +385,7 @@ pub(crate) fn add_dialog(
                 name = display::safe_text(&source_file_name(path))
             ));
         }
-        ui.add_space(14.0);
+        ui.add_space(theme::space::L);
         ui.label(tr!("name"));
         if ui
             .add_enabled(
@@ -398,7 +398,7 @@ pub(crate) fn add_dialog(
             dialog.error = None;
         }
         if let Some(error) = &dialog.error {
-            ui.add_space(10.0);
+            ui.add_space(theme::space::S);
             ui.add(
                 egui::Label::new(
                     RichText::new(errors::list(i18n::language(), error)).color(theme::ERROR),
@@ -406,7 +406,7 @@ pub(crate) fn add_dialog(
                 .wrap(),
             );
         }
-        ui.add_space(18.0);
+        ui.add_space(theme::space::L);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if widgets::button_fill(
                 ui,

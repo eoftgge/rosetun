@@ -346,7 +346,7 @@ pub(super) fn server_row(
                 badge.center(),
                 egui::Align2::CENTER_CENTER,
                 code,
-                egui::FontId::monospace(11.0),
+                theme::font::mono_small(),
                 theme::palette().text_muted,
             );
         }

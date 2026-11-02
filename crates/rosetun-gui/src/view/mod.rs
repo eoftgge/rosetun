@@ -236,7 +236,7 @@ fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         ui.add_space(theme::space::M);
         ui.heading(tr!("settings"));
     });
-    ui.add_space(10.0);
+    ui.add_space(theme::space::M);
     for (section, title) in [
         (SettingsSection::General, tr!("section-general")),
         (SettingsSection::Connection, tr!("connection")),

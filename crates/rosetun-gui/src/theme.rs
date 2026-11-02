@@ -265,7 +265,6 @@ pub(crate) mod space {
 /// Type scale. `CAPTION`, `BODY`, `HEADING` and `MONO` are the sizes of
 /// `TextStyle::Small`, `Body`, `Heading` and `Monospace`; use the text style
 /// where one fits and a size here for the other cases.
-#[expect(dead_code, reason = "the views adopt the scale in the next change")]
 pub(crate) mod font {
     use eframe::egui::{FontFamily, FontId};
 
@@ -314,7 +313,6 @@ pub(crate) mod stroke {
 }
 
 /// Opacity levels, by role.
-#[expect(dead_code, reason = "the views adopt the scale in the next change")]
 pub(crate) mod alpha {
     use eframe::egui::Color32;
 

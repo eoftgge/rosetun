@@ -53,7 +53,7 @@ fn subscription_body(
     actions: &mut Vec<Action>,
 ) {
     ui.colored_label(theme::palette().text_muted, tr!("add-subtitle"));
-    ui.add_space(18.0);
+    ui.add_space(theme::space::L);
     if let Some(host) = &dialog.from_link {
         ui.colored_label(
             theme::palette().text_muted,
@@ -62,7 +62,7 @@ fn subscription_body(
                 host = display::safe_text(host)
             ),
         );
-        ui.add_space(6.0);
+        ui.add_space(theme::space::XS);
     }
     ui.label(tr!("subscription-url"));
     let editable = !dialog.busy && !dialog.qr.busy();
@@ -170,7 +170,7 @@ fn subscription_body(
             .wrap(),
         );
     }
-    ui.add_space(22.0);
+    ui.add_space(theme::space::XL);
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), ACTION_ROW_HEIGHT),
         egui::Layout::right_to_left(egui::Align::Center),
@@ -313,7 +313,7 @@ fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Actio
             errors::add_subscription(crate::i18n::language(), error),
         );
     }
-    ui.add_space(22.0);
+    ui.add_space(theme::space::XL);
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), ACTION_ROW_HEIGHT),
         egui::Layout::right_to_left(egui::Align::Center),
@@ -391,7 +391,7 @@ fn qr_menu(ui: &mut egui::Ui, dialog: &AddDialog, enabled: bool, actions: &mut V
 /// The screen clip wait, the links to choose from and a QR error, right under the link field.
 fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
     if matches!(dialog.qr.stage, QrStage::ScreenClip(_)) {
-        ui.add_space(6.0);
+        ui.add_space(theme::space::XS);
         ui.horizontal(|ui| {
             ui.colored_label(theme::palette().text_muted, tr!("qr-select-region"));
             if widgets::outline_button(ui, tr!("cancel"), true).clicked() {
@@ -408,7 +408,7 @@ fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
         );
     }
     if !dialog.qr.choices.is_empty() {
-        ui.add_space(6.0);
+        ui.add_space(theme::space::XS);
         ui.colored_label(theme::palette().text_muted, tr!("qr-choose-link"));
         for (index, link) in dialog.qr.choices.iter().enumerate() {
             if widgets::outline_button(ui, choice_label(index, link), !dialog.busy).clicked() {

@@ -16,7 +16,7 @@ pub(crate) fn tag(ui: &mut egui::Ui, text: &str) -> egui::Response {
     if ui.is_rect_visible(rect) {
         ui.painter().rect_stroke(
             rect,
-            CornerRadius::same(9),
+            CornerRadius::same(theme::capsule(rect.height())),
             Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong),
             egui::StrokeKind::Inside,
         );

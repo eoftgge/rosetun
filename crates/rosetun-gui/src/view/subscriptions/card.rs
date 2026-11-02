@@ -301,7 +301,7 @@ fn details(
     now: u64,
     actions: &mut Vec<Action>,
 ) {
-    ui.add_space(6.0);
+    ui.add_space(theme::space::XS);
     if let Some(info) = &subscription.info {
         let used = crate::i18n::bytes(info.upload.saturating_add(info.download));
         let traffic = info.total.map_or_else(

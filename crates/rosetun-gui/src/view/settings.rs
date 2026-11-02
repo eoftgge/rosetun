@@ -441,10 +441,7 @@ fn dns_choice(
         ui.vertical_centered(|ui| {
             ui.label(
                 RichText::new(title)
-                    .font(egui::FontId::new(
-                        13.0,
-                        egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
-                    ))
+                    .font(theme::font::semibold(theme::font::CAPTION))
                     .color(theme::palette().text),
             );
             ui.add(
@@ -919,7 +916,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     .color(theme::palette().text),
             );
             if let Some(release) = state.available_update() {
-                ui.add_space(14.0);
+                ui.add_space(theme::space::L);
                 let width = ui.available_width();
                 egui::Frame::new()
                     .fill(theme::palette().input)
@@ -929,7 +926,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     .show(ui, |ui| {
                         ui.set_min_width((width - 32.0).max(0.0));
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 14.0;
+                            ui.spacing_mut().item_spacing.x = theme::space::M;
                             let (icon, _) = ui
                                 .allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
                             let center = icon.center();
@@ -961,10 +958,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             ui.vertical(|ui| {
                                 ui.label(
                                     RichText::new(crate::i18n::update_available(&release.version))
-                                        .font(egui::FontId::new(
-                                            16.0,
-                                            egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
-                                        ))
+                                        .font(theme::font::title())
                                         .color(theme::palette().text),
                                 );
                                 let detail = format!(

@@ -71,7 +71,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             if add {
                 actions.push(Action::OpenAdd);
             }
-            ui.add_space(6.0);
+            ui.add_space(theme::space::S);
             let width = ui.available_width();
             ui.allocate_ui_with_layout(
                 egui::vec2(width, 18.0),

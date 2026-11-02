@@ -6,7 +6,7 @@ fn primary_fill(enabled: bool) -> Color32 {
     if enabled {
         theme::palette().accent_base
     } else {
-        theme::palette().accent_dark.gamma_multiply(0.65)
+        theme::palette().accent_dark.gamma_multiply(theme::alpha::MUTED)
     }
 }
 
@@ -143,7 +143,7 @@ mod tests {
         assert_ne!(primary_fill(false), theme::palette().card);
         assert_eq!(
             primary_fill(false),
-            theme::palette().accent_dark.gamma_multiply(0.65)
+            theme::palette().accent_dark.gamma_multiply(theme::alpha::MUTED)
         );
         let ctx = egui::Context::default();
         theme::apply(&ctx);

@@ -197,15 +197,15 @@ fn details(
                 );
             });
 
-            ui.add_space(6.0);
+            ui.add_space(theme::space::S);
             divider(ui);
-            ui.add_space(10.0);
+            ui.add_space(theme::space::M);
             ui.label(
                 RichText::new(tr!("connections-create-rule"))
                     .small()
                     .color(theme::palette().text_dim),
             );
-            ui.add_space(6.0);
+            ui.add_space(theme::space::XS);
             let can_add = state.can_edit_rules();
             ui.spacing_mut().item_spacing.y = GAP;
             let site = tr!("connections-rule-site", host = host.as_str());
@@ -278,7 +278,7 @@ fn detail_row(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui))
             value(ui);
         });
     });
-    ui.add_space(6.0);
+    ui.add_space(theme::space::XS);
 }
 
 fn close_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
@@ -309,9 +309,9 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.label(RichText::new(tr!("connections-title")).strong());
-        ui.add_space(10.0);
+        ui.add_space(theme::space::M);
         toolbar(ui, state, actions);
-        ui.add_space(10.0);
+        ui.add_space(theme::space::M);
         let widths = table_widths(ui.available_width());
         if list.view == ConnectionsView::All {
             table_header(ui, &widths);
@@ -329,11 +329,11 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 ConnectionsNotice::NoRouteMatch => tr!("connections-no-route-match"),
                 ConnectionsNotice::NoMatch => tr!("connections-no-match"),
             };
-            ui.add_space(18.0);
+            ui.add_space(theme::space::L);
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new(text).small().color(theme::palette().text_dim));
             });
-            ui.add_space(18.0);
+            ui.add_space(theme::space::L);
         } else {
             let now_ms = crate::display::now_unix().saturating_mul(1000);
             let shown = widgets::appear_progress(
@@ -347,7 +347,7 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 ConnectionsView::All => table(ui, state, &widths, now_ms, actions),
             });
         }
-        ui.add_space(10.0);
+        ui.add_space(theme::space::M);
         ui.label(
             RichText::new(tr!("connections-note"))
                 .small()
@@ -761,7 +761,7 @@ fn program_row(
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.set_width(width);
-                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.spacing_mut().item_spacing.x = theme::space::XS;
                 let response = ui.add(
                     egui::Label::new(RichText::new(&name).color(theme::palette().text)).truncate(),
                 );
@@ -904,7 +904,7 @@ fn program_tile(ui: &mut egui::Ui, path: Option<&str>, name: &str) {
         rect.center(),
         egui::Align2::CENTER_CENTER,
         letter,
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(theme::font::CAPTION),
         theme::palette().text_muted,
     );
 }

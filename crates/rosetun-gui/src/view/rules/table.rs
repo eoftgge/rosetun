@@ -405,7 +405,7 @@ pub(super) fn rule_row(
     if dragged {
         frame = frame.fill(theme::alpha::fade(fill, theme::alpha::DISABLED_ALPHA));
     } else if !rule.enabled {
-        frame = frame.fill(fill.gamma_multiply(0.72));
+        frame = frame.fill(fill.gamma_multiply(theme::alpha::MUTED));
     } else {
         frame = frame.fill(fill);
     }

@@ -61,7 +61,7 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "!",
-                        egui::FontId::new(18.0, egui::FontFamily::Name(theme::UI_SEMIBOLD.into())),
+                        theme::font::title(),
                         theme::ERROR,
                     );
                     ui.vertical(|ui| {
@@ -105,7 +105,7 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
         );
         if let Some(error) = &state.helper_error {
             widgets::reveal(ui, id.with("body"), open, |ui| {
-                ui.add_space(10.0);
+                ui.add_space(theme::space::S);
                 ui.add(
                     egui::Label::new(
                         RichText::new(state.text(&errors::client(crate::i18n::language(), error)))

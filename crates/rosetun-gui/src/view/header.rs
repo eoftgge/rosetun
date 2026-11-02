@@ -233,7 +233,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.add_space(18.0);
+                ui.add_space(theme::space::L);
                 if CUSTOM_FRAME {
                     let close = window_button(ui, WindowButton::Close, reduce_motion);
                     if close.clicked() {
@@ -468,7 +468,7 @@ fn window_button(ui: &mut egui::Ui, kind: WindowButton, reduce_motion: bool) -> 
         .lerp_to_gamma(theme::palette().text, hover);
         let glyph = Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0));
         let point = |x: f32, y: f32| glyph.min + egui::vec2(x, y);
-        let stroke = Stroke::new(1.3, color);
+        let stroke = Stroke::new(theme::stroke::GLYPH, color);
         let line = |a: (f32, f32), b: (f32, f32)| {
             ui.painter()
                 .line_segment([point(a.0, a.1), point(b.0, b.1)], stroke);

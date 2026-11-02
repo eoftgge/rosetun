@@ -148,7 +148,7 @@ fn exit_row(
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_min_height(CARD_CONTENT_HEIGHT);
-                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.spacing_mut().item_spacing.x = theme::space::S;
                     icons::icon_badge_colored(ui, Icon::Globe, 32.0, theme::EXIT);
                     let width = (ui.available_width() - RIGHT_WIDTH).max(100.0);
                     ui.allocate_ui_with_layout(
@@ -390,7 +390,7 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
         } else {
             tr!("new-exit")
         });
-        ui.add_space(14.0);
+        ui.add_space(theme::space::L);
         ui.label(tr!("exit-name"));
         let input = ui.add_enabled(
             !busy,
@@ -438,7 +438,7 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
             ui.add_space(theme::space::S);
             ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
         }
-        ui.add_space(18.0);
+        ui.add_space(theme::space::L);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if widgets::button_fill(ui, tr!("save"), dialog.can_save(full)).clicked() {
                 actions.push(Action::SubmitExitDialog);

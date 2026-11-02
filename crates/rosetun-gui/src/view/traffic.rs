@@ -133,7 +133,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                             down,
                             traffic.is_some(),
                         );
-                        ui.add_space(10.0);
+                        ui.add_space(theme::space::S);
                         traffic_row(
                             ui,
                             theme::palette().accent_dark,
@@ -141,7 +141,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                             up,
                             traffic.is_some(),
                         );
-                        ui.add_space(14.0);
+                        ui.add_space(theme::space::L);
                         let (line, _) =
                             ui.allocate_exact_size(egui::vec2(232.0, 1.0), egui::Sense::hover());
                         ui.painter().hline(
@@ -149,7 +149,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                             line.center().y,
                             egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().border),
                         );
-                        ui.add_space(10.0);
+                        ui.add_space(theme::space::M);
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(tr!("traffic-session"))

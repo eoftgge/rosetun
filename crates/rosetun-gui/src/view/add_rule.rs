@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use eframe::egui::{self, Color32, FontFamily, FontId, RichText, Stroke};
+use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{AppConfig, ExitTarget, List, ListId, ProcessMatch, RuleTarget};
 use rosetun_core::{NewExit, RuleDestination};
 
@@ -297,7 +297,7 @@ pub(crate) fn show(
                 );
             }
             if let Some(error) = &dialog.error {
-                ui.add_space(6.0);
+                ui.add_space(theme::space::XS);
                 ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
             }
             ui.add_space(theme::space::S);
@@ -1174,7 +1174,6 @@ fn process_row(
         egui::pos2(rect.left() + 10.0, rect.center().y - 14.0),
         egui::vec2(PROCESS_TILE_SIDE, PROCESS_TILE_SIDE),
     );
-    let semibold = FontFamily::Name(theme::UI_SEMIBOLD.into());
     if !tile
         .icon
         .is_some_and(|path| crate::program_icons::paint(ui, tile_rect, PROCESS_TILE_SIDE, path))
@@ -1188,7 +1187,7 @@ fn process_row(
             tile_rect.center(),
             egui::Align2::CENTER_CENTER,
             tile.letter,
-            FontId::new(13.0, semibold.clone()),
+            theme::font::semibold(theme::font::CAPTION),
             theme::palette().text,
         );
     }
@@ -1200,7 +1199,7 @@ fn process_row(
         egui::pos2(tile_rect.right() + 10.0, rect.top() + 13.0),
         egui::Align2::LEFT_CENTER,
         name,
-        FontId::new(13.0, semibold),
+        theme::font::semibold(theme::font::CAPTION),
         if selected {
             theme::palette().accent_light
         } else {

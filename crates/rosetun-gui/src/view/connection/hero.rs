@@ -113,7 +113,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                     });
                     ui.vertical(|ui| {
                         ui.set_min_width(ui.available_width());
-                        ui.spacing_mut().item_spacing.y = 14.0;
+                        ui.spacing_mut().item_spacing.y = theme::space::L;
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = theme::space::XS;
                             ui.label(RichText::new(label).size(theme::font::STATE_LINE).color(color));
@@ -466,7 +466,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                 matches!(status.state, ConnectionState::Connected)
                             }) {
                                 detail_row(ui, tr!("delay"), |ui| {
-                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    ui.spacing_mut().item_spacing.x = theme::space::XS;
                                     let (text, color) = match state.tunnel_delay.proxy() {
                                         Some(ProbeOutcome::Works { millis }) => (
                                             tr!("ping-ms", ms = millis.max(1).to_string()),
@@ -730,7 +730,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         code,
-                        egui::FontId::monospace(13.0),
+                        theme::font::mono_small(),
                         if verified {
                             theme::palette().accent_light
                         } else {

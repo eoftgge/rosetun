@@ -66,7 +66,7 @@ pub(super) fn template_card(
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 10.0;
+                        ui.spacing_mut().item_spacing.x = theme::space::S;
                         let badge = icons::icon_badge(ui, template_icon(template), 30.0);
                         if redundant {
                             badge.on_hover_text(tr!("template-redundant"));
@@ -113,12 +113,12 @@ pub(super) fn template_card(
                                 });
                         },
                     );
-                    ui.add_space(10.0);
+                    ui.add_space(theme::space::S);
                     egui::Sides::new().shrink_left().height(30.0).show(
                         ui,
                         |ui| {
                             ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 6.0;
+                                ui.spacing_mut().item_spacing.x = theme::space::XS;
                                 let (rect, dot) = ui.allocate_exact_size(
                                     egui::vec2(7.0, 7.0),
                                     egui::Sense::hover(),
