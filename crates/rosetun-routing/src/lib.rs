@@ -2,6 +2,7 @@ pub mod errors;
 pub mod platform;
 
 pub use errors::RoutingError;
+pub use rosetun_config::ProtectionCapabilities;
 pub use platform::backend;
 pub use platform::tunnel_adapter_present;
 
@@ -92,6 +93,12 @@ pub struct LockdownApps {
 
 pub trait RoutingBackend: std::fmt::Debug + Send {
     fn name(&self) -> &'static str;
+
+    /// What this backend implements, which the helper reports to clients.
+    /// No default: a new backend has to answer, and answer for what it
+    /// does, not for whether `preflight` passes at this moment.
+    fn capabilities(&self) -> ProtectionCapabilities;
+
     fn preflight(&self) -> Result<(), RoutingError>;
 
     /// Installs bootstrap protection before the engine starts. The returned

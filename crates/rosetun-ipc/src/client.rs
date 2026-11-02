@@ -4,7 +4,7 @@ use crate::{
     ConnectRequest, Connection, Frame, HelperError, ListFormat, PROTOCOL_VERSION, ProbeRequest,
     ProbeResult, Request, Response, SessionExit, TunnelDelays,
 };
-use rosetun_config::{LiveConnection, Rule, Status};
+use rosetun_config::{LiveConnection, ProtectionCapabilities, Rule, Status};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -25,6 +25,7 @@ pub struct HelperClient {
     helper_version: String,
     sing_box_version: Option<String>,
     xray_version: Option<String>,
+    protection: ProtectionCapabilities,
 }
 
 impl HelperClient {
@@ -37,6 +38,7 @@ impl HelperClient {
             helper_version: String::new(),
             sing_box_version: None,
             xray_version: None,
+            protection: ProtectionCapabilities::default(),
         };
         match client.request(Request::Hello {
             client: client_name.to_owned(),
@@ -46,11 +48,13 @@ impl HelperClient {
                 helper_version,
                 sing_box_version,
                 xray_version,
+                protection,
                 ..
             } => {
                 client.helper_version = helper_version;
                 client.sing_box_version = sing_box_version;
                 client.xray_version = xray_version;
+                client.protection = protection;
                 Ok(client)
             }
             _ => Err(ClientError::Unexpected),
@@ -59,6 +63,11 @@ impl HelperClient {
 
     pub fn helper_version(&self) -> &str {
         &self.helper_version
+    }
+
+    /// What the helper's routing can give, as it said in `Hello`.
+    pub fn protection(&self) -> ProtectionCapabilities {
+        self.protection
     }
 
     pub fn engine_versions(&self) -> (Option<&str>, Option<&str>) {

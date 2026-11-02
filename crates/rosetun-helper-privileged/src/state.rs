@@ -19,8 +19,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
-    ConnectionState, ExitId, ListRef, LiveConnection, Node, Rule, RuleMatcher, RuleTarget, Status,
-    Traffic, list_tag, uses_xray,
+    ConnectionState, ExitId, ListRef, LiveConnection, Node, ProtectionCapabilities, Rule,
+    RuleMatcher, RuleTarget, Status, Traffic, list_tag, uses_xray,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
@@ -166,6 +166,8 @@ pub struct Helper {
     resumed: AtomicBool,
     cancelled: Arc<AtomicBool>,
     lockdown: lockdown::SharedLockdown,
+    /// What the routing backend implements, read once when the helper is built.
+    protection: ProtectionCapabilities,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,7 +319,9 @@ impl Helper {
         let owner = Arc::new(Mutex::new(None));
         let lockdown = lockdown::SharedLockdown::default();
         let connections = Arc::new(Mutex::new(ConnectionBook::default()));
+        let protection = routing.capabilities();
         Self {
+            protection,
             lockdown: Arc::clone(&lockdown),
             status: Arc::clone(&status),
             connections: Arc::clone(&connections),
@@ -477,6 +481,26 @@ impl Helper {
         if let Ok(mut store) = self.list_store() {
             store.expire(now);
         }
+    }
+
+    /// The protection this system can give; clients learn it from `Hello`.
+    pub fn protection_capabilities(&self) -> ProtectionCapabilities {
+        self.protection
+    }
+
+    /// Refuses a request for a kill switch this system cannot give, before
+    /// anything of the session is touched. A connect never goes ahead
+    /// silently without the protection it was asked for; Lockdown asks for
+    /// the kill switch too.
+    fn require_protection(&self, request: &ConnectRequest) -> Result<(), HelperError> {
+        let wanted = request.settings.kill_switch || lockdown::read(&self.lockdown).enabled;
+        if wanted && !self.protection.kill_switch {
+            return Err(HelperError::new(
+                ErrorCode::ProtectionUnavailable,
+                "the kill switch is not available on this system",
+            ));
+        }
+        Ok(())
     }
 
     pub fn status(&self) -> Status {
@@ -1030,6 +1054,7 @@ impl Helper {
         let mut session = self.session()?;
         self.check_owner(caller)?;
         validate_request(request)?;
+        self.require_protection(request)?;
         let state = self.with_status(|status| status.state.clone());
 
         let mode = match state {

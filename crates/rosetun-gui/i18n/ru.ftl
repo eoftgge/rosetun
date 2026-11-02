@@ -113,6 +113,7 @@ error-code-server-name-unresolved = Не удалось найти адрес с
 error-code-cancelled = подключение отменено
 error-code-engine-not-ready = Ядро не успело запуститься
 error-code-routing-failed = не удалось настроить маршрутизацию
+error-code-protection-unavailable = Kill switch недоступен в этой системе.
 error-code-busy = служба занята другой операцией
 error-code-invalid-state = в текущем состоянии туннеля это невозможно
 error-code-unsupported-rules = ядро не поддерживает эти правила

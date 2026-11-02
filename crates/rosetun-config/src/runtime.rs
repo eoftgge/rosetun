@@ -86,6 +86,27 @@ pub struct Traffic {
     pub down_total: u64,
 }
 
+/// The protection the helper's routing backend implements, reported in
+/// `Hello` (protocol 14). It says what exists, not whether it works right
+/// now: a Windows service that cannot reach the firewall still has a kill
+/// switch, and a connect that needs it fails with its own error. Nothing
+/// is available by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ProtectionCapabilities {
+    #[serde(default)]
+    pub kill_switch: bool,
+    #[serde(default)]
+    pub lockdown: bool,
+}
+
+impl ProtectionCapabilities {
+    /// The kill switch a request asks for: the saved setting, where the
+    /// helper can give it. The saved setting itself stays as the user left it.
+    pub fn effective_kill_switch(self, saved: bool) -> bool {
+        saved && self.kill_switch
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Status {
     pub state: ConnectionState,
@@ -174,7 +195,7 @@ impl std::fmt::Debug for LiveConnection {
 
 #[cfg(test)]
 mod failure_tests {
-    use super::{ConnectStage, ConnectionState, FailureKind, Status};
+    use super::{ConnectStage, ConnectionState, FailureKind, ProtectionCapabilities, Status};
 
     #[test]
     fn an_unknown_connect_stage_reads_as_none_and_keeps_the_status() {
@@ -263,5 +284,33 @@ mod failure_tests {
                 .unwrap()
                 .xray
         );
+    }
+
+    #[test]
+    fn protection_is_unavailable_unless_the_helper_says_otherwise() {
+        let none = ProtectionCapabilities::default();
+        assert!(!none.kill_switch && !none.lockdown);
+        assert_eq!(
+            serde_json::from_str::<ProtectionCapabilities>("{}").unwrap(),
+            none
+        );
+        assert!(
+            !serde_json::from_str::<ProtectionCapabilities>(r#"{"lockdown":true}"#)
+                .unwrap()
+                .kill_switch
+        );
+    }
+
+    #[test]
+    fn the_effective_kill_switch_needs_both_the_setting_and_the_capability() {
+        let full = ProtectionCapabilities {
+            kill_switch: true,
+            lockdown: true,
+        };
+        let none = ProtectionCapabilities::default();
+        assert!(full.effective_kill_switch(true));
+        assert!(!full.effective_kill_switch(false));
+        assert!(!none.effective_kill_switch(true));
+        assert!(!none.effective_kill_switch(false));
     }
 }

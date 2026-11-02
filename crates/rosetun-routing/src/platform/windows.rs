@@ -17,7 +17,8 @@ pub(super) fn physical_default_interface(exclude_alias: &str) -> Option<String> 
 
 use crate::platform::windows::session::WfpProtectionSession;
 use crate::{
-    LockdownApps, LockdownStatus, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan,
+    LockdownApps, LockdownStatus, ProtectionCapabilities, RoutingBackend, RoutingError,
+    RoutingGuard, RoutingPlan,
 };
 
 #[derive(Debug, Default)]
@@ -32,6 +33,13 @@ impl WfpBackend {
 impl RoutingBackend for WfpBackend {
     fn name(&self) -> &'static str {
         "windows-wfp"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        ProtectionCapabilities {
+            kill_switch: true,
+            lockdown: true,
+        }
     }
 
     fn preflight(&self) -> Result<(), RoutingError> {

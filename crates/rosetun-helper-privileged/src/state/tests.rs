@@ -25,6 +25,12 @@ static ROUTE_SCRIPT: Mutex<VecDeque<bool>> = Mutex::new(VecDeque::new());
 static ROUTE_CHECKS: AtomicUsize = AtomicUsize::new(0);
 static NETWORK_PRESENT: AtomicBool = AtomicBool::new(true);
 
+/// What a backend with a working kill switch and Lockdown reports.
+const FULL_PROTECTION: ProtectionCapabilities = ProtectionCapabilities {
+    kill_switch: true,
+    lockdown: true,
+};
+
 #[test]
 fn invalid_proxy_apply_is_rejected_before_the_running_session_changes() {
     let mut engines = EngineRegistry::new();
@@ -246,6 +252,10 @@ impl RoutingBackend for BlockingRouting {
         "test-blocking"
     }
 
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
     fn preflight(&self) -> Result<(), RoutingError> {
         Ok(())
     }
@@ -275,6 +285,10 @@ impl RoutingBackend for UnusedRouting {
         "test-unused"
     }
 
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
     fn preflight(&self) -> Result<(), RoutingError> {
         panic!("routing must not run without the kill switch or a tunnel DNS server");
     }
@@ -288,6 +302,33 @@ impl RoutingBackend for UnusedRouting {
     }
 }
 
+/// A system without a kill switch, like a platform with a stub backend: any
+/// use of routing is a bug in the caller.
+#[derive(Debug)]
+struct NoProtectionRouting;
+
+impl RoutingBackend for NoProtectionRouting {
+    fn name(&self) -> &'static str {
+        "test-no-protection"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        ProtectionCapabilities::default()
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        panic!("a backend without a kill switch must not be asked for one");
+    }
+
+    fn begin_protection(
+        &mut self,
+        _plan: &RoutingPlan,
+        _engine_binaries: &[&Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        panic!("a backend without a kill switch must not be asked for one");
+    }
+}
+
 #[derive(Debug)]
 struct AuthorizingRouting {
     spawned: Option<Receiver<()>>,
@@ -297,6 +338,10 @@ struct AuthorizingRouting {
 impl RoutingBackend for AuthorizingRouting {
     fn name(&self) -> &'static str {
         "test-authorizing"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
     }
 
     fn preflight(&self) -> Result<(), RoutingError> {
@@ -812,6 +857,10 @@ impl RoutingBackend for ReconnectRouting {
         "test-reconnect"
     }
 
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
     fn preflight(&self) -> Result<(), RoutingError> {
         Ok(())
     }
@@ -881,6 +930,17 @@ fn supervised_helper_with_dns(
     )
 }
 
+fn unprotected_helper() -> (Helper, Arc<EngineControls>) {
+    let controls = Arc::new(EngineControls::default());
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(ControlledEngine {
+        controls: Arc::clone(&controls),
+        dns_server: None,
+    }));
+    let helper = Helper::new(engines, Box::new(NoProtectionRouting), VerboseGate::default());
+    (helper, controls)
+}
+
 #[derive(Debug)]
 struct CountingRouting {
     reverted: Arc<AtomicUsize>,
@@ -889,6 +949,10 @@ struct CountingRouting {
 impl RoutingBackend for CountingRouting {
     fn name(&self) -> &'static str {
         "test-counting"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
     }
 
     fn preflight(&self) -> Result<(), RoutingError> {
@@ -922,6 +986,10 @@ impl RoutingBackend for RejectingTunnelRouting {
         "test-rejecting-tunnel"
     }
 
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
     fn preflight(&self) -> Result<(), RoutingError> {
         Ok(())
     }
@@ -948,6 +1016,10 @@ struct FailingRouting;
 impl RoutingBackend for FailingRouting {
     fn name(&self) -> &'static str {
         "test-failing"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
     }
 
     fn preflight(&self) -> Result<(), RoutingError> {
@@ -4007,6 +4079,10 @@ impl RoutingBackend for RecordingRouting {
         "test-chain"
     }
 
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
     fn preflight(&self) -> Result<(), RoutingError> {
         Ok(())
     }
@@ -6672,6 +6748,10 @@ impl RoutingBackend for LockdownSessionRouting {
         "test-lockdown-session"
     }
 
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
     fn preflight(&self) -> Result<(), RoutingError> {
         Ok(())
     }
@@ -6818,4 +6898,104 @@ fn linux_uids_preserve_session_and_owner_only_read_policies() {
     assert!(helper.temporary_rules_as(&admin).is_ok());
     assert!(helper.session_exits_as(&admin).is_ok());
     helper.disconnect_as(&admin).unwrap();
+}
+
+#[test]
+fn the_helper_reports_the_protection_its_backend_implements() {
+    let none = Helper::new(
+        EngineRegistry::new(),
+        Box::new(NoProtectionRouting),
+        VerboseGate::default(),
+    );
+    assert_eq!(
+        none.protection_capabilities(),
+        ProtectionCapabilities {
+            kill_switch: false,
+            lockdown: false,
+        }
+    );
+
+    // A backend whose preflight fails right now still implements the kill switch.
+    let full = Helper::new(
+        EngineRegistry::new(),
+        Box::new(FailingRouting),
+        VerboseGate::default(),
+    );
+    assert_eq!(full.protection_capabilities(), FULL_PROTECTION);
+}
+
+#[test]
+fn a_kill_switch_connect_without_the_capability_is_refused_before_the_engine_starts() {
+    let (helper, controls) = unprotected_helper();
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+
+    let error = helper.connect(&request).expect_err("no kill switch here");
+
+    assert_eq!(error.code, ErrorCode::ProtectionUnavailable);
+    assert_eq!(controls.spawns(), 0);
+    assert_eq!(helper.status().state, ConnectionState::Disconnected);
+    let session = helper.session().unwrap();
+    assert!(session.request.is_none());
+    assert!(session.guard.is_none());
+}
+
+#[test]
+fn lockdown_without_the_capability_refuses_a_connect_even_without_the_kill_switch() {
+    let (helper, controls) = unprotected_helper();
+    *helper.lockdown.lock().unwrap() = lockdown::LockdownState {
+        enabled: true,
+        allow_lan: false,
+    };
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+
+    let error = helper.connect(&request).expect_err("Lockdown needs it");
+
+    assert_eq!(error.code, ErrorCode::ProtectionUnavailable);
+    assert_eq!(controls.spawns(), 0);
+}
+
+#[test]
+fn a_connect_without_the_kill_switch_still_works_where_none_exists() {
+    let (helper, controls) = unprotected_helper();
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+
+    helper.connect(&request).expect("connect without protection");
+
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
+}
+
+#[test]
+fn a_connect_with_the_kill_switch_still_works_where_it_exists() {
+    let (helper, controls, prepared, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+
+    helper.connect(&request).expect("connect with protection");
+
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(controls.spawns(), 1);
+    assert_eq!(prepared.load(Ordering::Acquire), 0);
+    assert!(helper.session().unwrap().guard.is_some());
+}
+
+#[test]
+fn an_apply_that_turns_the_kill_switch_on_is_refused_and_leaves_the_session_alone() {
+    let (helper, controls) = unprotected_helper();
+    let mut request = connect_request();
+    request.settings.kill_switch = false;
+    helper.connect(&request).expect("connect without protection");
+    let mut changed = request_with_new_rules(&request);
+    changed.settings.kill_switch = true;
+
+    let error = helper.apply(&changed).expect_err("no kill switch here");
+
+    assert_eq!(error.code, ErrorCode::ProtectionUnavailable);
+    assert_eq!(controls.spawns(), 1);
+    assert!(matches!(helper.status().state, ConnectionState::Connected));
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
 }

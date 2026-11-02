@@ -2,7 +2,7 @@
 mod windows;
 
 #[cfg(not(windows))]
-use crate::{RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
+use crate::{ProtectionCapabilities, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
 
 pub fn backend() -> Box<dyn crate::RoutingBackend> {
     #[cfg(windows)]
@@ -95,6 +95,10 @@ impl RoutingBackend for Stub {
         self.name
     }
 
+    fn capabilities(&self) -> ProtectionCapabilities {
+        ProtectionCapabilities::default()
+    }
+
     fn preflight(&self) -> Result<(), RoutingError> {
         Err(RoutingError::Unsupported)
     }
@@ -105,5 +109,31 @@ impl RoutingBackend for Stub {
         _engine_binaries: &[&std::path::Path],
     ) -> Result<RoutingGuard, RoutingError> {
         Err(RoutingError::Unsupported)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ProtectionCapabilities;
+
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_backend_has_the_kill_switch_and_lockdown() {
+        assert_eq!(
+            super::backend().capabilities(),
+            ProtectionCapabilities {
+                kill_switch: true,
+                lockdown: true,
+            }
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_platform_without_routing_has_no_protection() {
+        assert_eq!(
+            super::backend().capabilities(),
+            ProtectionCapabilities::default()
+        );
     }
 }

@@ -21,6 +21,7 @@ impl Helper {
         let mut session = self.session()?;
         self.check_owner(caller)?;
         validate_request(request)?;
+        self.require_protection(request)?;
         if !matches!(
             self.with_status(|status| status.state.clone()),
             ConnectionState::Connected

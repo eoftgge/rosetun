@@ -32,7 +32,7 @@ pub use report::{
 pub use rule::{DomainMatch, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 pub use runtime::{
     ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind, LiveConnection,
-    Status, Traffic,
+    ProtectionCapabilities, Status, Traffic,
 };
 pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings, XrayUse};
 pub use subscription::{HwidScope, Selection, Subscription, SubscriptionInfo};

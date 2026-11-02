@@ -113,6 +113,7 @@ error-code-server-name-unresolved = Could not find the server's address
 error-code-cancelled = connection cancelled
 error-code-engine-not-ready = The engine did not start in time
 error-code-routing-failed = routing setup failed
+error-code-protection-unavailable = Kill switch is not available on this system.
 error-code-busy = the service is busy with another operation
 error-code-invalid-state = the tunnel is not in a state that allows this
 error-code-unsupported-rules = the engine does not support these rules

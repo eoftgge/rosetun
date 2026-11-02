@@ -743,6 +743,11 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                 ErrorCode::RoutingFailed => {
                     tr_in(language, "error-code-routing-failed", &FluentArgs::new())
                 }
+                ErrorCode::ProtectionUnavailable => tr_in(
+                    language,
+                    "error-code-protection-unavailable",
+                    &FluentArgs::new(),
+                ),
                 ErrorCode::Busy => tr_in(language, "error-code-busy", &FluentArgs::new()),
                 ErrorCode::InvalidState | ErrorCode::InvalidRequest => {
                     tr_in(language, "error-code-invalid-state", &FluentArgs::new())
@@ -765,7 +770,12 @@ pub(crate) fn client(language: Language, error: &ClientError) -> String {
                     "error-code-engine-failed-hint",
                     &FluentArgs::new(),
                 )
-            } else if error.message.is_empty() || error.code == ErrorCode::AccessDenied {
+            } else if error.message.is_empty()
+                || matches!(
+                    error.code,
+                    ErrorCode::AccessDenied | ErrorCode::ProtectionUnavailable
+                )
+            {
                 title.to_owned()
             } else {
                 format!("{title}: {}", error.message)
@@ -1208,6 +1218,18 @@ mod tests {
         assert_eq!(
             client(Language::English, &routing),
             "routing setup failed: boom"
+        );
+        let unavailable = ClientError::Helper(HelperError::new(
+            ErrorCode::ProtectionUnavailable,
+            "the kill switch is not available on this system",
+        ));
+        assert_eq!(
+            client(Language::English, &unavailable),
+            "Kill switch is not available on this system."
+        );
+        assert_eq!(
+            client(Language::Russian, &unavailable),
+            "Kill switch недоступен в этой системе."
         );
         let transport = ClientError::Transport("x".to_owned());
         assert_eq!(

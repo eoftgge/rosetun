@@ -1158,6 +1158,7 @@ mod tests {
                     protocol_version: crate::PROTOCOL_VERSION,
                     sing_box_version: None,
                     xray_version: None,
+                    protection: Default::default(),
                 },
             })
         );
@@ -1191,6 +1192,7 @@ mod tests {
                             protocol_version: crate::PROTOCOL_VERSION,
                             sing_box_version: None,
                             xray_version: None,
+                            protection: Default::default(),
                         },
                     })
                     .expect("response is written");
@@ -1242,6 +1244,7 @@ mod tests {
                         protocol_version: crate::PROTOCOL_VERSION,
                         sing_box_version: None,
                         xray_version: None,
+                        protection: Default::default(),
                     },
                 })
                 .expect("second response is written");

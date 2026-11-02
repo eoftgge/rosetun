@@ -384,6 +384,7 @@ fn dispatch(
                     rosetun_engine_singbox::SUPPORTED_SING_BOX_VERSION.to_owned(),
                 ),
                 xray_version: Some(rosetun_engine_xray::SUPPORTED_XRAY_VERSION.to_owned()),
+                protection: helper.protection_capabilities(),
             }
         }
         Request::Status => Response::Status(helper.status()),
@@ -575,23 +576,28 @@ mod tests {
             crate::log_gate::VerboseGate::default(),
         );
         let mut greeted = false;
-        assert!(matches!(
-            dispatch(
-                &Request::Hello {
-                    client: "test".to_owned(),
-                    protocol_version: PROTOCOL_VERSION,
-                },
-                &helper,
-                &mut greeted,
-                None,
-                false,
-                0,
-            ),
-            Response::Hello {
+        let Response::Hello {
+            protocol_version,
+            protection,
+            ..
+        } = dispatch(
+            &Request::Hello {
+                client: "test".to_owned(),
                 protocol_version: PROTOCOL_VERSION,
-                ..
-            }
-        ));
+            },
+            &helper,
+            &mut greeted,
+            None,
+            false,
+            0,
+        )
+        else {
+            panic!("an unidentified client gets a hello");
+        };
+        assert_eq!(protocol_version, PROTOCOL_VERSION);
+        assert_eq!(protection, helper.protection_capabilities());
+        assert_eq!(protection.kill_switch, cfg!(windows));
+        assert_eq!(protection.lockdown, cfg!(windows));
         assert!(greeted);
         assert!(matches!(
             dispatch(&Request::Status, &helper, &mut greeted, None, false, 0),

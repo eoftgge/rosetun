@@ -505,8 +505,8 @@ mod tests {
     use rosetun_engine::EngineRegistry;
     use rosetun_ipc::ErrorCode;
     use rosetun_routing::{
-        LockdownApps, LockdownStatus, ProtectionScope, RoutingBackend, RoutingError, RoutingGuard,
-        RoutingPlan,
+        LockdownApps, LockdownStatus, ProtectionCapabilities, ProtectionScope, RoutingBackend,
+        RoutingError, RoutingGuard, RoutingPlan,
     };
 
     use super::protection_scope;
@@ -556,6 +556,13 @@ mod tests {
     impl RoutingBackend for LockdownRouting {
         fn name(&self) -> &'static str {
             "test-lockdown"
+        }
+
+        fn capabilities(&self) -> ProtectionCapabilities {
+            ProtectionCapabilities {
+                kill_switch: true,
+                lockdown: true,
+            }
         }
 
         fn preflight(&self) -> Result<(), RoutingError> {

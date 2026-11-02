@@ -1,12 +1,13 @@
 use rosetun_config::{
-    AppConfig, ExitId, LiveConnection, LogLevel, Node, NodeId, Rule, RuleId, RuleSet, RuleSetId,
-    RuleTarget, RuleTemplate, Selection, Settings, Status, Traffic, resolve_exits,
+    AppConfig, ExitId, LiveConnection, LogLevel, Node, NodeId, ProtectionCapabilities, Rule,
+    RuleId, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection, Settings, Status, Traffic,
+    resolve_exits,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_EXTRA_NODES: usize = 16;
@@ -403,6 +404,10 @@ pub enum Response {
         sing_box_version: Option<String>,
         #[serde(default)]
         xray_version: Option<String>,
+        /// What the helper's routing can give (protocol 14). A helper that
+        /// does not say gives nothing.
+        #[serde(default)]
+        protection: ProtectionCapabilities,
     },
     Status(Status),
     TemporaryRules(Vec<Rule>),
@@ -487,6 +492,9 @@ pub enum ErrorCode {
     Cancelled,
     EngineNotReady,
     RoutingFailed,
+    /// The request asks for protection this helper cannot give, such as a
+    /// kill switch on a system without one (protocol 14).
+    ProtectionUnavailable,
     Busy,
     InvalidState,
     InvalidRequest,
@@ -512,6 +520,7 @@ mod tests {
             super::ErrorCode::ServerClosed,
             super::ErrorCode::DnsTimeout,
             super::ErrorCode::ServerNameUnresolved,
+            super::ErrorCode::ProtectionUnavailable,
         ] {
             let value = serde_json::to_string(&code).unwrap();
             assert_eq!(
@@ -523,7 +532,11 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 13);
+        assert_eq!(super::PROTOCOL_VERSION, 14);
+        assert_eq!(
+            serde_json::to_string(&super::ErrorCode::ProtectionUnavailable).unwrap(),
+            "\"protection_unavailable\""
+        );
         let lockdown = super::Request::SetLockdown {
             enabled: true,
             allow_lan: false,
@@ -538,6 +551,43 @@ mod tests {
             lockdown
         );
     }
+
+    #[test]
+    fn hello_carries_the_protection_the_helper_can_give() {
+        let hello = super::Response::Hello {
+            helper_version: "test".to_owned(),
+            protocol_version: super::PROTOCOL_VERSION,
+            sing_box_version: None,
+            xray_version: None,
+            protection: super::ProtectionCapabilities {
+                kill_switch: true,
+                lockdown: false,
+            },
+        };
+        let encoded = serde_json::to_value(&hello).unwrap();
+        assert_eq!(
+            encoded["hello"]["protection"],
+            serde_json::json!({"kill_switch": true, "lockdown": false})
+        );
+        assert_eq!(
+            serde_json::from_value::<super::Response>(encoded).unwrap(),
+            hello
+        );
+    }
+
+    #[test]
+    fn a_hello_without_the_protection_field_gives_nothing() {
+        let hello: super::Response = serde_json::from_str(
+            r#"{"hello":{"helper_version":"test","protocol_version":14}}"#,
+        )
+        .unwrap();
+        let super::Response::Hello { protection, .. } = hello else {
+            panic!("expected a hello");
+        };
+        assert_eq!(protection, super::ProtectionCapabilities::default());
+        assert!(!protection.kill_switch && !protection.lockdown);
+    }
+
     use rosetun_config::{
         AppConfig, CountryCode, EngineKind, Exit, ExitId, ExitTarget, Node, NodeId, Outbound, Rule,
         RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget, RuleTemplate, Selection,

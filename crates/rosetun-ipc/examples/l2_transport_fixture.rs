@@ -27,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 connection.write(&Frame::Response { id, body: Response::Hello {
                     helper_version: format!("fixture authenticated uid={uid} admin={}", identity.is_administrator()),
                     protocol_version: PROTOCOL_VERSION, sing_box_version: None, xray_version: None,
+                    protection: Default::default(),
                 } })?;
             }
         }
