@@ -207,8 +207,8 @@ fn list_card(
             theme::palette().border,
         ))
         .inner_margin(egui::Margin {
-            left: 12,
-            right: 12,
+            left: theme::margin::side(theme::space::M),
+            right: theme::margin::side(theme::space::M),
             top: 5,
             bottom: 6,
         })

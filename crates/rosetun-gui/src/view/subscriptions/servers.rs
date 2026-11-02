@@ -6,7 +6,7 @@ const FLAG_WIDTH: f32 = 38.0;
 const RESULT_GAP: f32 = 10.0;
 /// The quality bars and their gap to the latency.
 const BARS_WIDTH: f32 = 13.0 + 8.0;
-const BADGE_GAP: f32 = 8.0;
+const BADGE_GAP: f32 = theme::space::S;
 const BADGE_PADDING: f32 = 14.0;
 
 /// What every row of one subscription card shares.

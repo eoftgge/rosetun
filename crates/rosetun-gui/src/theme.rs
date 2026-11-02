@@ -262,6 +262,27 @@ pub(crate) mod space {
     pub(crate) const XL: f32 = 24.0;
 }
 
+/// `egui::Margin` built from the `space` steps. egui keeps margins in `i8`; the
+/// conversion lives here, so a view never repeats a step as a whole number.
+pub(crate) mod margin {
+    use eframe::egui::Margin;
+
+    /// A step as one side of a margin.
+    pub(crate) const fn side(step: f32) -> i8 {
+        step as i8
+    }
+
+    /// The same step on all four sides.
+    pub(crate) const fn same(step: f32) -> Margin {
+        Margin::same(side(step))
+    }
+
+    /// `x` on the left and right, `y` on the top and bottom.
+    pub(crate) const fn symmetric(x: f32, y: f32) -> Margin {
+        Margin::symmetric(side(x), side(y))
+    }
+}
+
 /// Type scale. `CAPTION`, `BODY`, `HEADING` and `MONO` are the sizes of
 /// `TextStyle::Small`, `Body`, `Heading` and `Monospace`; use the text style
 /// where one fits and a size here for the other cases.
@@ -494,6 +515,31 @@ mod tests {
         ];
         assert!(steps.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(steps.contains(&SECTION_GAP));
+    }
+
+    #[test]
+    fn every_spacing_step_becomes_a_margin_of_the_same_size() {
+        for step in [
+            0.0,
+            space::XXS,
+            space::XS,
+            space::S,
+            space::M,
+            space::L,
+            space::XL,
+        ] {
+            assert_eq!(f32::from(margin::side(step)), step);
+            assert_eq!(margin::same(step), egui::Margin::same(margin::side(step)));
+        }
+        assert_eq!(
+            margin::symmetric(space::M, space::XS),
+            egui::Margin {
+                left: 12,
+                right: 12,
+                top: 4,
+                bottom: 4,
+            }
+        );
     }
 
     #[test]

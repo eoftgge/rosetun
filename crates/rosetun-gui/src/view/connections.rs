@@ -10,7 +10,6 @@ use crate::state::{
 };
 use crate::{motion, theme, widgets};
 
-const GAP: f32 = 8.0;
 const TABLE_ROW_HEIGHT: f32 = 26.0;
 /// Program rows and the connection rows under them share one height.
 const PROGRAM_ROW_HEIGHT: f32 = 34.0;
@@ -19,7 +18,7 @@ const PROGRAM_ICON_SIDE: f32 = 20.0;
 /// Right of the name: connections or network, routes, speed, transferred or time.
 const PROGRAM_COLUMNS: [f32; 4] = [96.0, 56.0, 92.0, 76.0];
 /// Chevron and letter tile with their gaps; connection rows start after it.
-const PROGRAM_LEAD: f32 = 16.0 + GAP + 24.0 + GAP;
+const PROGRAM_LEAD: f32 = 16.0 + theme::space::S + 24.0 + theme::space::S;
 const ROUTE_FILTER_WIDTH: f32 = 180.0;
 const LIST_HEIGHT: f32 = 360.0;
 const DETAILS_WIDTH: f32 = 480.0;
@@ -73,7 +72,7 @@ fn details(
             ui.horizontal(|ui| {
                 let close = 22.0;
                 ui.add_sized(
-                    egui::vec2((ui.available_width() - close - GAP).max(0.0), close),
+                    egui::vec2((ui.available_width() - close - theme::space::S).max(0.0), close),
                     egui::Label::new(RichText::new(&destination).monospace().strong()).truncate(),
                 )
                 .on_hover_text(&destination);
@@ -207,7 +206,7 @@ fn details(
             );
             ui.add_space(theme::space::XS);
             let can_add = state.can_edit_rules();
-            ui.spacing_mut().item_spacing.y = GAP;
+            ui.spacing_mut().item_spacing.y = theme::space::S;
             let site = tr!("connections-rule-site", host = host.as_str());
             if widgets::outline_button_full(ui, &site, can_add)
                 .on_hover_text(&host)
@@ -395,7 +394,7 @@ fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> Toolb
         two_rows: false,
     };
     ui.scope(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+        ui.spacing_mut().item_spacing = egui::vec2(theme::space::S, theme::space::S);
         let view_width = widgets::segmented_width(ui, &views);
         // Measured with the largest counts the service sends, so a changing
         // count never moves the break between one and two rows.
@@ -407,7 +406,7 @@ fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> Toolb
             ),
         );
         rects.two_rows =
-            widgets::SEARCH_WIDTH + view_width + tabs_width + ROUTE_FILTER_WIDTH + 3.0 * GAP
+            widgets::SEARCH_WIDTH + view_width + tabs_width + ROUTE_FILTER_WIDTH + 3.0 * theme::space::S
                 > ui.available_width();
         let primary = |ui: &mut egui::Ui,
                        search_width: f32,
@@ -721,7 +720,7 @@ fn row_frame(
         }
         ui.horizontal(|ui| {
             ui.set_height(height);
-            ui.spacing_mut().item_spacing.x = GAP;
+            ui.spacing_mut().item_spacing.x = theme::space::S;
             add(ui);
         });
     })
@@ -730,7 +729,7 @@ fn row_frame(
 
 /// The name's share of a grouped row once the fixed columns are placed.
 fn program_name_width(ui: &egui::Ui) -> f32 {
-    (ui.available_width() - PROGRAM_COLUMNS.iter().sum::<f32>() - GAP * 4.0).max(80.0)
+    (ui.available_width() - PROGRAM_COLUMNS.iter().sum::<f32>() - theme::space::S * 4.0).max(80.0)
 }
 
 fn program_row(
@@ -970,7 +969,7 @@ fn mono(text: &str) -> RichText {
 
 /// Program, destination, route, speed, down, up and time.
 fn table_widths(available: f32) -> [f32; 7] {
-    let spacing = GAP * 6.0;
+    let spacing = theme::space::S * 6.0;
     let fixed = [92.0, 76.0, 76.0, 64.0];
     let flexible = (available - spacing - fixed.iter().sum::<f32>()).max(120.0);
     [
@@ -995,7 +994,7 @@ fn table_header(ui: &mut egui::Ui, widths: &[f32; 7]) {
         tr!("connections-duration"),
     ];
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = GAP;
+        ui.spacing_mut().item_spacing.x = theme::space::S;
         for (title, width) in titles.into_iter().zip(widths) {
             cell(
                 ui,

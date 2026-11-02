@@ -396,7 +396,7 @@ pub(super) fn rule_row(
         && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| {
             *id == rule.id || (selected && state.rules.screen.selected_rules.contains(&*id))
         });
-    let mut frame = widgets::card_frame().inner_margin(egui::Margin::symmetric(12, 0));
+    let mut frame = widgets::card_frame().inner_margin(theme::margin::symmetric(theme::space::M, 0.0));
     let fill = if selected {
         theme::palette().input
     } else {
@@ -800,7 +800,7 @@ pub(super) fn default_rule(
     let response = ui.push_id("default_rule", |ui| {
         widgets::card_frame()
             .fill(theme::palette().panel)
-            .inner_margin(egui::Margin::symmetric(12, 0))
+            .inner_margin(theme::margin::symmetric(theme::space::M, 0.0))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {

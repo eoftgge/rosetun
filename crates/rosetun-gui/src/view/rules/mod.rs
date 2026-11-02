@@ -20,11 +20,11 @@ const TARGET_CHEVRON_SPACE: f32 = 28.0;
 const TARGET_MENU_WIDTH: f32 = 240.0;
 const TOGGLE_WIDTH: f32 = 38.0;
 const MENU_WIDTH: f32 = 32.0;
-const ROW_INSET: f32 = 12.0;
+const ROW_INSET: f32 = theme::space::M;
 const HANDLE_GAP: f32 = 10.0;
-const ICON_GAP: f32 = 12.0;
-const TARGET_GAP: f32 = 16.0;
-const MENU_GAP: f32 = 12.0;
+const ICON_GAP: f32 = theme::space::M;
+const TARGET_GAP: f32 = theme::space::L;
+const MENU_GAP: f32 = theme::space::M;
 const TARGET_FILTER_WIDTH: f32 = 166.0;
 
 #[cfg_attr(

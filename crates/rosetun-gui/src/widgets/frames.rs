@@ -10,7 +10,7 @@ pub(crate) fn card_frame() -> egui::Frame {
             theme::palette().border,
         ))
         .corner_radius(CornerRadius::same(RADIUS))
-        .inner_margin(egui::Margin::same(16))
+        .inner_margin(theme::margin::same(theme::space::L))
 }
 
 pub(crate) fn modal_frame() -> egui::Frame {
@@ -21,7 +21,7 @@ pub(crate) fn modal_frame() -> egui::Frame {
             theme::palette().border_strong,
         ))
         .corner_radius(CornerRadius::same(RADIUS))
-        .inner_margin(egui::Margin::same(24))
+        .inner_margin(theme::margin::same(theme::space::XL))
 }
 
 pub(crate) fn dismissible_error(ui: &mut egui::Ui, message: &str) -> bool {

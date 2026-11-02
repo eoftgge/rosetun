@@ -128,7 +128,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                 for (index, subscription) in state.config.subscriptions.iter().enumerate() {
                     ui.push_id(subscription.id.as_str(), |ui| {
                         let response = egui::Frame::new()
-                            .inner_margin(egui::Margin::symmetric(0, 4))
+                            .inner_margin(theme::margin::symmetric(0.0, theme::space::XS))
                             .show(ui, |ui| {
                                 ui.spacing_mut().item_spacing.y = item_spacing;
                                 subscription_card(ui, state, subscription, actions)

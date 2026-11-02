@@ -49,9 +49,9 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                         theme::palette().border,
                     ))
                     .inner_margin(egui::Margin {
-                        left: 16,
-                        right: 16,
-                        top: 16,
+                        left: theme::margin::side(theme::space::L),
+                        right: theme::margin::side(theme::space::L),
+                        top: theme::margin::side(theme::space::L),
                         bottom: 0,
                     }),
             )
@@ -73,8 +73,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                         theme::palette().border,
                     ))
                     .inner_margin(egui::Margin {
-                        left: 16,
-                        right: 16,
+                        left: theme::margin::side(theme::space::L),
+                        right: theme::margin::side(theme::space::L),
                         top: 28,
                         bottom: 28,
                     }),
@@ -88,8 +88,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             egui::Frame::new()
                 .fill(theme::palette().bg)
                 .inner_margin(egui::Margin {
-                    left: if narrow { 16 } else { 36 },
-                    right: if narrow { 16 } else { 36 },
+                    left: if narrow { theme::margin::side(theme::space::L) } else { 36 },
+                    right: if narrow { theme::margin::side(theme::space::L) } else { 36 },
                     top: 28,
                     bottom: 32,
                 }),

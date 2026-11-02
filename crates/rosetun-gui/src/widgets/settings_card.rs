@@ -82,8 +82,8 @@ impl SettingsCard<'_> {
             .inner_margin(egui::Margin {
                 left: 20,
                 right: 20,
-                top: 16,
-                bottom: 16,
+                top: theme::margin::side(theme::space::L),
+                bottom: theme::margin::side(theme::space::L),
             })
             .show(self.ui, |ui| {
                 ui.set_min_width((width - 40.0).max(0.0));
@@ -183,8 +183,8 @@ impl SettingsCard<'_> {
             .inner_margin(egui::Margin {
                 left: 20,
                 right: 20,
-                top: 16,
-                bottom: 16,
+                top: theme::margin::side(theme::space::L),
+                bottom: theme::margin::side(theme::space::L),
             })
             .show(self.ui, |ui| {
                 ui.set_min_width((width - 40.0).max(0.0));

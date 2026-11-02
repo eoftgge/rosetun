@@ -41,7 +41,7 @@ fn search_field_inner(
     suffix: Option<&str>,
 ) -> egui::Response {
     let font = egui::TextStyle::Small.resolve(ui.style());
-    let right_margin = suffix.map_or(8, |suffix| {
+    let right_margin = suffix.map_or(theme::margin::side(theme::space::S), |suffix| {
         (ui.painter()
             .layout_no_wrap(suffix.to_owned(), font.clone(), theme::palette().text_dim)
             .size()
@@ -58,8 +58,8 @@ fn search_field_inner(
             .margin(egui::Margin {
                 left: 32,
                 right: right_margin,
-                top: 8,
-                bottom: 8,
+                top: theme::margin::side(theme::space::S),
+                bottom: theme::margin::side(theme::space::S),
             }),
     );
     icons::paint(

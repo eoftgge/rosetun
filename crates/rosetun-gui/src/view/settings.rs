@@ -926,7 +926,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         theme::palette().accent_dark,
                     ))
                     .corner_radius(theme::RADIUS)
-                    .inner_margin(16)
+                    .inner_margin(theme::margin::same(theme::space::L))
                     .show(ui, |ui| {
                         ui.set_min_width((width - 32.0).max(0.0));
                         ui.horizontal(|ui| {

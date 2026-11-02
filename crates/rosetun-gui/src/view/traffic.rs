@@ -8,7 +8,7 @@ use crate::state::{Action, State, TrafficRange};
 use crate::{motion, theme, widgets};
 
 const CHART_COLUMNS: usize = 60;
-const COLUMN_GAP: f32 = 2.0;
+const COLUMN_GAP: f32 = theme::space::XXS;
 /// Until two samples have arrived, the chart assumes the service's pace.
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 1_000;
 

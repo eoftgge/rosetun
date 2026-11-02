@@ -18,7 +18,7 @@ const COMPACT_DIALOG_HEIGHT: f32 = 632.0;
 const ERROR_HEIGHT: f32 = 28.0;
 const PROCESS_ROW_HEIGHT: f32 = 44.0;
 const PROCESS_TILE_SIDE: f32 = 28.0;
-const PROCESS_ROW_GAP: f32 = 4.0;
+const PROCESS_ROW_GAP: f32 = theme::space::XS;
 const CATEGORY_ROW_HEIGHT: f32 = 22.0;
 const CATEGORY_VIEW_HEIGHT: f32 = 120.0;
 const MIN_PROCESS_LIST: f32 = 2.0 * PROCESS_ROW_HEIGHT + PROCESS_ROW_GAP;
@@ -28,10 +28,10 @@ const BUTTON_ROW_HEIGHT: f32 = 40.0;
 const ADVANCED_HEADER_HEIGHT: f32 = 32.0;
 const ADVANCED_ROW_HEIGHT: f32 = 44.0;
 const DIVIDER_HEIGHT: f32 = 16.0;
-const BOTTOM_GAP: f32 = 24.0;
+const BOTTOM_GAP: f32 = theme::space::XL;
 const DESTINATION_HEIGHT: f32 = 36.0;
 const DESTINATION_HINT_HEIGHT: f32 = 18.0;
-const DESTINATION_POPUP_MARGIN: f32 = 24.0;
+const DESTINATION_POPUP_MARGIN: f32 = theme::space::XL;
 const MIN_DESTINATION_POPUP: f32 = 120.0;
 
 /// The frame the rule dialog was last shown in and how many times it has
@@ -552,7 +552,7 @@ fn category_row(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, category: &str, a
             theme::palette().card
         })
         .corner_radius(theme::RADIUS_INNER)
-        .inner_margin(egui::Margin::symmetric(4, 0))
+        .inner_margin(theme::margin::symmetric(theme::space::XS, 0.0))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.set_min_height(CATEGORY_ROW_HEIGHT);
@@ -593,7 +593,7 @@ fn category_view(
             theme::palette().border,
         ))
         .corner_radius(theme::RADIUS)
-        .inner_margin(egui::Margin::same(4))
+        .inner_margin(theme::margin::same(theme::space::XS))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;
