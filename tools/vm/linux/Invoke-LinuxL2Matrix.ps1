@@ -33,7 +33,7 @@ param(
     [Parameter(ParameterSetName = 'Collect', Mandatory)][string]$RunId,
     [Parameter(ParameterSetName = 'Collect')][ValidateRange(0, 7200)][int]$WaitSeconds = 0,
 
-    [string]$LogRoot = (Join-Path $PSScriptRoot '..\logs\linux')
+    [string]$LogRoot = (Join-Path $PSScriptRoot 'logs')
 )
 
 Set-StrictMode -Version Latest

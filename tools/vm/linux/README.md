@@ -32,7 +32,7 @@ integration of Rosetun, engines or Lockdown. Those are later stages (below).
 | `scenarios.tsv` | The scenario list, shared by the guest and the host |
 | `tests/` | Unprivileged self-tests of the stand (not a VM run) |
 
-Reports go to `tools/vm/logs/linux/<run id>/` (git-ignored): `stage.json`,
+Reports go to `tools/vm/linux/logs/<run id>/` (git-ignored): `stage.json`,
 `report.json`, `report.txt`. The guest keeps its own copy in
 `/var/lib/rosetun-l2/<run id>/report/`.
 

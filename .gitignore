@@ -3,5 +3,6 @@
 /.zed
 /tools/vm/logs/
 /tools/vm/windows/logs/
+/tools/vm/linux/logs/
 /tools/rules/
 *.exe
