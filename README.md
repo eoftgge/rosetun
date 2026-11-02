@@ -79,6 +79,7 @@ A button on a provider's page can open Rosetun with a subscription filled in: `r
 
 ## Troubleshooting
 
+- **The window fails to open or draws incorrectly after an update (Windows)**: fully quit Rosetun from the tray, then run it from PowerShell with `$env:ROSETUN_RENDERER='glow'; & 'C:\Program Files\Rosetun\rosetun-gui.exe'`. Adjust the path if needed. Use **Collect report** and send the report with a description of the problem. For comparison, set the value to `wgpu`; remove the override with `Remove-Item Env:ROSETUN_RENDERER`. Windows uses Direct3D 12 with DirectComposition by default and falls back to OpenGL if graphics initialization fails; Linux uses OpenGL.
 - Run **System check** (Settings → Service and log) first: it finds other VPN clients, Zapret or WinDivert, a system proxy and a wrong clock. It also runs by itself after a failed connection and shows the first finding under the error.
 - Another VPN client in TUN mode can prevent the tunnel from starting. Disconnect it and retry.
 - Traffic-modifying programs such as zapret can disrupt the connection to the VPN server. Exclude the server addresses in that program's settings.
