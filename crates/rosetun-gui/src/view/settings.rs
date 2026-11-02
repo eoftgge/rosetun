@@ -58,10 +58,12 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             let saved = state.config.interface.language;
             let mut selected = saved;
             ui.add_enabled_ui(state.can_edit_settings(), |ui| {
-                egui::ComboBox::from_id_salt("interface_language")
-                    .width(200.0)
-                    .selected_text(language_label(selected))
-                    .show_ui(ui, |ui| {
+                widgets::drop_down(
+                    ui,
+                    "interface_language",
+                    Some(200.0),
+                    language_label(selected),
+                    |ui| {
                         for language in [
                             LanguageSetting::System,
                             LanguageSetting::English,
@@ -69,7 +71,8 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         ] {
                             ui.selectable_value(&mut selected, language, language_label(language));
                         }
-                    });
+                    },
+                );
             });
             if selected != saved && state.can_edit_settings() {
                 actions.push(Action::SetLanguage(selected));
@@ -188,10 +191,12 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             let saved = state.config.interface.quit_action;
             let mut selected = saved;
             ui.add_enabled_ui(editable, |ui| {
-                egui::ComboBox::from_id_salt("quit_action")
-                    .width(240.0)
-                    .selected_text(quit_action_label(selected))
-                    .show_ui(ui, |ui| {
+                widgets::drop_down(
+                    ui,
+                    "quit_action",
+                    Some(240.0),
+                    quit_action_label(selected),
+                    |ui| {
                         for action in [
                             QuitAction::Ask,
                             QuitAction::Disconnect,
@@ -199,7 +204,8 @@ fn windows(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         ] {
                             ui.selectable_value(&mut selected, action, quit_action_label(action));
                         }
-                    });
+                    },
+                );
             });
             if selected != saved && editable {
                 actions.push(Action::SetOnQuit(selected));
@@ -1460,5 +1466,59 @@ mod lockdown_switch_tests {
                 actions.len()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod drop_down_tests {
+    use super::*;
+    use crate::i18n::{self, Language};
+    use crate::test_ui::TestScreen;
+
+    fn screen() -> TestScreen {
+        TestScreen::new(egui::vec2(960.0, 640.0))
+    }
+
+    #[test]
+    fn choosing_a_language_asks_for_that_language() {
+        i18n::in_language(Language::English, || {
+            let mut state = State::default();
+            state.config_ready = true;
+            let mut actions = Vec::new();
+            let mut screen = screen();
+            let mut show = |ui: &mut egui::Ui| {
+                egui::CentralPanel::default().show(ui, |ui| general(ui, &state, &mut actions));
+            };
+            screen.click_text(&tr!("language-system"), &mut show);
+            screen.click_text(constants::RUSSIAN, &mut show);
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| matches!(action, Action::SetLanguage(LanguageSetting::Russian))),
+                "{}",
+                actions.len()
+            );
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn choosing_what_quitting_does_asks_for_that_action() {
+        i18n::in_language(Language::English, || {
+            let mut state = State::default();
+            state.config_ready = true;
+            let mut actions = Vec::new();
+            let mut screen = screen();
+            let mut show = |ui: &mut egui::Ui| {
+                egui::CentralPanel::default().show(ui, |ui| windows(ui, &state, &mut actions));
+            };
+            screen.click_text(&tr!("quit-action-ask"), &mut show);
+            screen.click_text(&tr!("quit-action-keep"), &mut show);
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| matches!(action, Action::SetOnQuit(QuitAction::KeepConnected)))
+            );
+        });
     }
 }

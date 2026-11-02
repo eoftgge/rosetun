@@ -543,11 +543,10 @@ fn action_filter_button_matches_the_search_field_height() {
     let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let response = target_filter(ui, &RuleFilter::default(), &[], &mut Vec::new());
-            assert!(
-                (response.rect.height() - 38.0).abs() < 1.0,
-                "action filter: {:?}",
-                response.rect
-            );
+            let mut query = String::new();
+            let search = widgets::search_field(ui, &mut query, "", widgets::SEARCH_WIDTH);
+            assert_eq!(response.rect.height(), search.rect.height());
+            assert_eq!(response.rect.height(), widgets::field_height(ui));
         });
     });
     output.textures_delta.clear();

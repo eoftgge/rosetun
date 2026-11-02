@@ -275,19 +275,16 @@ fn country_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig
         .as_ref()
         .map_or_else(|| tr!("exit-country-pick"), country_label);
     ui.add_enabled_ui(!busy, |ui| {
-        egui::ComboBox::from_id_salt("exit_country")
-            .width(ui.available_width())
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                for code in countries {
-                    let label = country_label(&code);
-                    let picked = dialog.country.as_ref() == Some(&code);
-                    if ui.selectable_label(picked, label).clicked() {
-                        dialog.country = Some(code);
-                        dialog.error = None;
-                    }
+        widgets::drop_down(ui, "exit_country", None, selected, |ui| {
+            for code in countries {
+                let label = country_label(&code);
+                let picked = dialog.country.as_ref() == Some(&code);
+                if ui.selectable_label(picked, label).clicked() {
+                    dialog.country = Some(code);
+                    dialog.error = None;
                 }
-            });
+            }
+        });
     });
     ui.add_space(theme::space::S);
     note(ui, tr!("exit-country-hint"), theme::palette().text_muted);
@@ -576,6 +573,30 @@ mod tests {
             )),
             ..egui::RawInput::default()
         }
+    }
+
+    #[test]
+    fn choosing_a_country_in_the_drop_down_sets_the_countrys_exit() {
+        use crate::test_ui::TestScreen;
+
+        i18n::in_language(Language::English, || {
+            let mut state = State::default();
+            state.config_ready = true;
+            state.config = config(&[("nl", "NL One")], Vec::new());
+            state.act(Action::OpenNewExit);
+            let mut screen = TestScreen::new(egui::vec2(1200.0, 780.0));
+            let show = |state: &mut State, ui: &mut egui::Ui| {
+                exit_dialog(ui.ctx(), state, &mut Vec::new());
+            };
+            let wanted = country_label(&country("NL"));
+            let open = screen.click_text(&tr!("exit-country-pick"), |ui| show(&mut state, ui));
+            assert!(open.iter().any(|(text, _)| *text == wanted), "{open:?}");
+            screen.click_text(&wanted, |ui| show(&mut state, ui));
+            assert_eq!(
+                state.exits.dialog.as_ref().unwrap().country,
+                Some(country("NL"))
+            );
+        });
     }
 
     #[test]

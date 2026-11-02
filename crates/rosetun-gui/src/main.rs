@@ -34,6 +34,8 @@ mod rose_icon;
 mod rose_shape;
 mod rules;
 mod state;
+#[cfg(test)]
+mod test_ui;
 mod theme;
 #[cfg(windows)]
 mod tray;

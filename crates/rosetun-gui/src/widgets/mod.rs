@@ -21,7 +21,7 @@ pub(crate) use buttons::{
 };
 pub(crate) use checkbox::checkbox;
 pub(crate) use choice_card::choice_card;
-pub(crate) use combo::filter_combo;
+pub(crate) use combo::{drop_down, filter_combo};
 pub(crate) use dialogs::{
     ConfirmModal, Dialog, DialogFooter, DialogWidth, FooterChoice, ModalChoice, NameModal,
     confirm_modal, dialog_footer, dialog_footer_with_note, name_modal,

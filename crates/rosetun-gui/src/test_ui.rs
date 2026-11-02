@@ -1,0 +1,94 @@
+//! A headless window to click through in tests: it runs frames, tells what was painted and
+//! presses where a text stands.
+
+use eframe::egui;
+
+use crate::theme;
+
+/// What one frame painted: each text with the rectangle it fills.
+pub(crate) type Texts = Vec<(String, egui::Rect)>;
+
+pub(crate) struct TestScreen {
+    ctx: egui::Context,
+    size: egui::Vec2,
+    frame: u32,
+}
+
+fn flatten(shape: &egui::Shape, out: &mut Texts) {
+    match shape {
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| flatten(shape, out)),
+        egui::Shape::Text(text) => out.push((
+            text.galley.text().to_owned(),
+            text.galley.rect.translate(text.pos.to_vec2()),
+        )),
+        _ => {}
+    }
+}
+
+impl TestScreen {
+    pub(crate) fn new(size: egui::Vec2) -> Self {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        Self {
+            ctx,
+            size,
+            frame: 0,
+        }
+    }
+
+    /// Runs one frame with `events` and returns what it painted.
+    pub(crate) fn run(
+        &mut self,
+        events: Vec<egui::Event>,
+        mut show: impl FnMut(&mut egui::Ui),
+    ) -> Texts {
+        self.frame += 1;
+        let mut output = self.ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
+                time: Some(f64::from(self.frame) * 0.1),
+                events,
+                ..Default::default()
+            },
+            &mut show,
+        );
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            flatten(&clipped.shape, &mut texts);
+        }
+        texts
+    }
+
+    /// Runs frames until what is shown has settled (layouts that need a second pass, fades).
+    pub(crate) fn settle(&mut self, mut show: impl FnMut(&mut egui::Ui)) -> Texts {
+        let mut texts = Vec::new();
+        for _ in 0..8 {
+            texts = self.run(Vec::new(), &mut show);
+        }
+        texts
+    }
+
+    /// Presses and releases the primary button on the middle of the text `label` and settles.
+    pub(crate) fn click_text(
+        &mut self,
+        label: &str,
+        mut show: impl FnMut(&mut egui::Ui),
+    ) -> Texts {
+        let shown = self.settle(&mut show);
+        let (_, rect) = shown
+            .iter()
+            .find(|(text, _)| text == label)
+            .unwrap_or_else(|| panic!("no text {label:?} on the screen"));
+        let pos = rect.center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        self.run(vec![egui::Event::PointerMoved(pos), button(true)], &mut show);
+        self.run(vec![button(false)], &mut show);
+        self.settle(&mut show)
+    }
+}
