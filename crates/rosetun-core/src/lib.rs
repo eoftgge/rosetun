@@ -42,13 +42,12 @@ pub use rosetun_subscription::{
 };
 pub use rules::{
     AddedRules, AppliedSnapshot, DomainLineError, DomainLines, IpCidrError, IpLineError, IpLines,
-    RuleDestination, RuleInputError, RuleSetError, add_rule, add_rules, create_rule_set,
-    delete_rule_set, ip_lines_have_local_address, move_rule, move_rules, parse_domain_input,
-    parse_domain_lines, parse_ip_cidr, parse_ip_lines, parse_process_input, remove_rule,
-    remove_rules, rename_rule_set, restore_rule_sets, restore_rules_and_dns, rule_value_ascii,
-    rule_value_text, RestoredRuleSets, RuleSetsSnapshot, SetSnapshot,
-    set_default_target, set_rule_enabled, set_rule_target, temporary_rules, update_rule,
-    validate_list_matcher,
+    RestoredRuleSets, RuleDestination, RuleInputError, RuleSetError, RuleSetsSnapshot, SetSnapshot,
+    add_rule, add_rules, create_rule_set, delete_rule_set, ip_lines_have_local_address, move_rule,
+    move_rules, parse_domain_input, parse_domain_lines, parse_ip_cidr, parse_ip_lines,
+    parse_process_input, remove_rule, remove_rules, rename_rule_set, restore_rule_sets,
+    restore_rules_and_dns, rule_value_ascii, rule_value_text, set_default_target, set_rule_enabled,
+    set_rule_target, temporary_rules, update_rule, validate_list_matcher,
 };
 pub use selection::{
     MAX_RECENT_SERVERS, SelectNodeError, SelectRuleSetError, select_node, select_rule_set,

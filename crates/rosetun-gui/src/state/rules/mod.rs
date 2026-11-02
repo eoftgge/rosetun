@@ -14,9 +14,9 @@ mod history;
 
 pub(crate) use dialog::{AddRuleDialog, RuleInputKind};
 use history::RuleHistory;
+pub(crate) use history::UndoNotice;
 #[cfg(test)]
 pub(crate) use history::{MAX_UNDO_RULES, MAX_UNDO_STEPS, UNDO_NOTICE_MS};
-pub(crate) use history::UndoNotice;
 
 pub(crate) enum NameDialogKind {
     Create,
@@ -157,7 +157,12 @@ impl State {
         visible[last + 1..]
             .iter()
             .find(|id| !deleted.contains(id))
-            .or_else(|| visible[..last].iter().rev().find(|id| !deleted.contains(id)))
+            .or_else(|| {
+                visible[..last]
+                    .iter()
+                    .rev()
+                    .find(|id| !deleted.contains(id))
+            })
             .cloned()
     }
 

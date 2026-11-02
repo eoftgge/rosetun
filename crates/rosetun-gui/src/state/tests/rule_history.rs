@@ -45,56 +45,55 @@ impl Saved {
 
     fn run(&mut self, state: &mut State, job: Option<Job>) {
         let store = &self.store;
-        let event = match job.expect("the action starts a job") {
-            Job::SelectRuleSet(id) => {
-                WorkerEvent::SelectRuleSet(rosetun_core::select_rule_set(store, id.as_ref()))
-            }
-            Job::CreateRuleSet(name) => WorkerEvent::CreateRuleSet(rosetun_core::create_rule_set(
-                store,
-                &name,
-                RuleTarget::Proxy,
-            )),
-            Job::RenameRuleSet(id, name) => {
-                WorkerEvent::RenameRuleSet(rosetun_core::rename_rule_set(store, &id, &name))
-            }
-            Job::DeleteRuleSet(id) => {
-                WorkerEvent::DeleteRuleSet(rosetun_core::delete_rule_set(store, &id))
-            }
-            Job::SetDefaultTarget(id, target) => {
-                WorkerEvent::SetDefaultTarget(rosetun_core::set_default_target(store, &id, target))
-            }
-            Job::AddRule(set, matcher, target) => {
-                WorkerEvent::AddRule(rosetun_core::add_rule(store, &set, matcher, &target))
-            }
-            Job::AddRules(set, matchers, target) => {
-                WorkerEvent::AddRules(rosetun_core::add_rules(store, &set, matchers, &target))
-            }
-            Job::UpdateRule(set, rule, matcher, target) => WorkerEvent::UpdateRule(
-                rosetun_core::update_rule(store, &set, &rule, matcher, &target),
-            ),
-            Job::SetRuleTarget(set, rule, target) => WorkerEvent::SetRuleTarget(
-                rosetun_core::set_rule_target(store, &set, &rule, &target),
-            ),
-            Job::SetRuleEnabled(set, rule, enabled) => WorkerEvent::SetRuleEnabled(
-                rosetun_core::set_rule_enabled(store, &set, &rule, enabled),
-            ),
-            Job::MoveRule(set, rule, to) => {
-                WorkerEvent::MoveRule(rosetun_core::move_rule(store, &set, &rule, to))
-            }
-            Job::MoveRules(set, rules, to) => {
-                WorkerEvent::MoveRules(rosetun_core::move_rules(store, &set, &rules, to))
-            }
-            Job::RemoveRule(set, rule) => {
-                WorkerEvent::RemoveRule(rosetun_core::remove_rule(store, &set, &rule))
-            }
-            Job::RemoveRules(set, rules) => {
-                WorkerEvent::RemoveRules(rosetun_core::remove_rules(store, &set, &rules))
-            }
-            Job::RestoreRuleSets(snapshot) => {
-                WorkerEvent::RestoreRuleSets(rosetun_core::restore_rule_sets(store, &snapshot))
-            }
-            _ => panic!("not a rule job"),
-        };
+        let event =
+            match job.expect("the action starts a job") {
+                Job::SelectRuleSet(id) => {
+                    WorkerEvent::SelectRuleSet(rosetun_core::select_rule_set(store, id.as_ref()))
+                }
+                Job::CreateRuleSet(name) => WorkerEvent::CreateRuleSet(
+                    rosetun_core::create_rule_set(store, &name, RuleTarget::Proxy),
+                ),
+                Job::RenameRuleSet(id, name) => {
+                    WorkerEvent::RenameRuleSet(rosetun_core::rename_rule_set(store, &id, &name))
+                }
+                Job::DeleteRuleSet(id) => {
+                    WorkerEvent::DeleteRuleSet(rosetun_core::delete_rule_set(store, &id))
+                }
+                Job::SetDefaultTarget(id, target) => WorkerEvent::SetDefaultTarget(
+                    rosetun_core::set_default_target(store, &id, target),
+                ),
+                Job::AddRule(set, matcher, target) => {
+                    WorkerEvent::AddRule(rosetun_core::add_rule(store, &set, matcher, &target))
+                }
+                Job::AddRules(set, matchers, target) => {
+                    WorkerEvent::AddRules(rosetun_core::add_rules(store, &set, matchers, &target))
+                }
+                Job::UpdateRule(set, rule, matcher, target) => WorkerEvent::UpdateRule(
+                    rosetun_core::update_rule(store, &set, &rule, matcher, &target),
+                ),
+                Job::SetRuleTarget(set, rule, target) => WorkerEvent::SetRuleTarget(
+                    rosetun_core::set_rule_target(store, &set, &rule, &target),
+                ),
+                Job::SetRuleEnabled(set, rule, enabled) => WorkerEvent::SetRuleEnabled(
+                    rosetun_core::set_rule_enabled(store, &set, &rule, enabled),
+                ),
+                Job::MoveRule(set, rule, to) => {
+                    WorkerEvent::MoveRule(rosetun_core::move_rule(store, &set, &rule, to))
+                }
+                Job::MoveRules(set, rules, to) => {
+                    WorkerEvent::MoveRules(rosetun_core::move_rules(store, &set, &rules, to))
+                }
+                Job::RemoveRule(set, rule) => {
+                    WorkerEvent::RemoveRule(rosetun_core::remove_rule(store, &set, &rule))
+                }
+                Job::RemoveRules(set, rules) => {
+                    WorkerEvent::RemoveRules(rosetun_core::remove_rules(store, &set, &rules))
+                }
+                Job::RestoreRuleSets(snapshot) => {
+                    WorkerEvent::RestoreRuleSets(rosetun_core::restore_rule_sets(store, &snapshot))
+                }
+                _ => panic!("not a rule job"),
+            };
         self.generation += 1;
         state.reduce(WorkerEvent::Config {
             generation: self.generation,
@@ -187,14 +186,26 @@ fn rule_edits() -> Vec<(&'static str, Prepare, Action)> {
             no_preparation,
             Action::SetRuleTarget(RuleId::new("1"), RuleDestination::Block),
         ),
-        ("drag", no_preparation, Action::DropRule(RuleId::new("2"), 0)),
-        ("to top", no_preparation, Action::MoveRuleToTop(RuleId::new("2"))),
+        (
+            "drag",
+            no_preparation,
+            Action::DropRule(RuleId::new("2"), 0),
+        ),
+        (
+            "to top",
+            no_preparation,
+            Action::MoveRuleToTop(RuleId::new("2")),
+        ),
         (
             "move selected",
             select_first_and_last,
             Action::MoveSelectedRulesToEnd,
         ),
-        ("delete", no_preparation, Action::DeleteRule(RuleId::new("1"))),
+        (
+            "delete",
+            no_preparation,
+            Action::DeleteRule(RuleId::new("1")),
+        ),
         ("delete key", select_first, Action::DeleteSelectedRules),
         (
             "delete selected",
@@ -289,7 +300,10 @@ fn several_steps_undo_one_by_one_in_reverse_and_redo_forward() {
 
     saved.act(&mut state, Action::UndoRules);
     saved.act(&mut state, Action::SetRuleEnabled(RuleId::new("2"), false));
-    assert!(!state.can_redo_rules(), "a new edit drops the steps to redo");
+    assert!(
+        !state.can_redo_rules(),
+        "a new edit drops the steps to redo"
+    );
 }
 
 #[test]
@@ -317,7 +331,10 @@ fn history_drops_the_oldest_steps_beyond_its_rule_budget() {
     }
     let mut saved = Saved::new(&state);
     for enabled in [false, true, false] {
-        saved.act(&mut state, Action::SetRuleEnabled(RuleId::new("0"), enabled));
+        saved.act(
+            &mut state,
+            Action::SetRuleEnabled(RuleId::new("0"), enabled),
+        );
     }
     assert_eq!(state.rules.history.undo_len(), 1);
 }
@@ -390,7 +407,10 @@ fn deleting_shows_an_undo_notice_until_it_expires() {
     assert!(state.rule_notice().is_none(), "a toggle needs no notice");
     saved.act(&mut state, Action::AddTemplate(RuleTemplate::Youtube));
     saved.act(&mut state, Action::RemoveTemplate(RuleTemplate::Youtube));
-    assert!(state.rule_notice().is_none(), "a template card is its own undo");
+    assert!(
+        state.rule_notice().is_none(),
+        "a template card is its own undo"
+    );
 
     open_delete_set(&mut state);
     saved.act(&mut state, Action::ConfirmDeleteSet);

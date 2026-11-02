@@ -283,7 +283,11 @@ fn apply_notice(
     ui: &mut egui::Ui,
     can_apply: bool,
     can_revert: bool,
-) -> (egui::Response, Option<egui::Response>, Option<egui::Response>) {
+) -> (
+    egui::Response,
+    Option<egui::Response>,
+    Option<egui::Response>,
+) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = theme::space::S;
         let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());

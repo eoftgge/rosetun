@@ -193,7 +193,10 @@ fn restoring_a_set_snapshot_writes_the_file_as_it_was_before_the_edit() {
 
     assert_eq!(fs::read(store.path()).unwrap(), before);
     assert_eq!(restored.dropped, 0);
-    assert_eq!(restored.previous.sets[0].set.as_ref().unwrap().rules.len(), 1);
+    assert_eq!(
+        restored.previous.sets[0].set.as_ref().unwrap().rules.len(),
+        1
+    );
     restore_rule_sets(&store, &restored.previous).unwrap();
     assert_eq!(store.load().unwrap().rule_sets[0].rules.len(), 1);
 }
