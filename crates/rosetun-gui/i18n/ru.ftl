@@ -890,7 +890,6 @@ open-tab = Открытые
 all-processes = Все процессы · { $n }
 found = Найдено · { $n }
 typed-process = Введено вручную
-more-errors = И ещё { $k }
 add-rules-one = Добавить { $n } правило
 add-rules-few = Добавить { $n } правила
 add-rules-many = Добавить { $n } правил

@@ -163,14 +163,14 @@ fn open_new_domain(state: &mut State) {
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Address));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.addresses = "new.example".into();
+    dialog.set_addresses("new.example");
     dialog.subdomains = false;
 }
 
 fn open_edit_first(state: &mut State) {
     state.act(Action::OpenEditRule(RuleId::new("0")));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.addresses = "changed.example".into();
+    dialog.set_addresses("changed.example");
     dialog.subdomains = false;
 }
 

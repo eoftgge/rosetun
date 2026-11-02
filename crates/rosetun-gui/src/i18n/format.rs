@@ -108,10 +108,6 @@ pub(crate) fn item_error(item: &str, error: &str) -> String {
     format!("{item}: {error}")
 }
 
-pub(crate) fn more_errors(count: usize) -> String {
-    tr!("more-errors", k = count.to_string())
-}
-
 pub(crate) fn selected_rule_count(count: usize) -> String {
     tr!("selected-rule-count", n = count.to_string())
 }

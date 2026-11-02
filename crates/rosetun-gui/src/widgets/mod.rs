@@ -1,6 +1,7 @@
 mod action_notice;
 mod buttons;
 mod checkbox;
+mod chips_field;
 mod choice_card;
 mod combo;
 mod dialogs;
@@ -22,6 +23,9 @@ pub(crate) use buttons::{
     outline_button_full, outline_button_menu,
 };
 pub(crate) use checkbox::checkbox;
+pub(crate) use chips_field::{Chip, ChipsEvent, ChipsField};
+#[cfg(test)]
+pub(crate) use chips_field::chips_input_id;
 pub(crate) use choice_card::choice_card;
 pub(crate) use combo::{drop_down, filter_combo};
 pub(crate) use dialogs::{

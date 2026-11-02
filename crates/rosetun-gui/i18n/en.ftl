@@ -873,7 +873,6 @@ open-tab = Open
 all-processes = All processes · { $n }
 found = Found · { $n }
 typed-process = Typed in
-more-errors = And { $k } more
 add-rules-one = Add { $n } rule
 add-rules-few = Add { $n } rules
 add-rules-many = Add { $n } rules

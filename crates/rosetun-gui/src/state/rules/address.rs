@@ -38,6 +38,52 @@ impl Address {
             Self::Ip(cidr) => RuleMatcher::IpCidr(cidr.clone()),
         }
     }
+
+    /// The text of the item as it will be stored: a domain in Unicode without `*.` when
+    /// subdomains are on anyway, a single address without its full-length prefix.
+    pub(crate) fn label(&self, subdomains: bool) -> String {
+        match self {
+            Self::Domain(_) => {
+                let text = rosetun_core::rule_value_text(&self.matcher(subdomains));
+                if subdomains {
+                    text.strip_prefix("*.").map_or_else(|| text.clone(), str::to_owned)
+                } else {
+                    text
+                }
+            }
+            Self::Ip(cidr) => cidr
+                .strip_suffix("/32")
+                .filter(|ip| ip.contains('.'))
+                .or_else(|| cidr.strip_suffix("/128").filter(|ip| ip.contains(':')))
+                .unwrap_or(cidr)
+                .to_owned(),
+        }
+    }
+}
+
+/// One item of the field: the text as it came, and what it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AddressChip {
+    pub(crate) text: String,
+    pub(crate) parsed: Result<Address, AddressError>,
+}
+
+impl AddressChip {
+    pub(crate) fn new(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            parsed: parse_address(text),
+        }
+    }
+
+    /// The same rule as `other`, or the same bad text.
+    pub(crate) fn repeats(&self, other: &Self, subdomains: bool) -> bool {
+        match (&self.parsed, &other.parsed) {
+            (Ok(this), Ok(other)) => this.matcher(subdomains) == other.matcher(subdomains),
+            (Err(_), Err(_)) => self.text.eq_ignore_ascii_case(&other.text),
+            _ => false,
+        }
+    }
 }
 
 /// The items of `text`, split at any of `ADDRESS_SEPARATORS`.
@@ -132,20 +178,39 @@ mod tests {
             parsed[4].as_ref().unwrap().matcher(true),
             RuleMatcher::Domain(DomainMatch::Suffix("example.com".into()))
         );
+        let labels: Vec<_> = parsed
+            .iter()
+            .map(|item| item.as_ref().unwrap().label(true))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "youtube.com",
+                "192.0.2.1",
+                "198.51.100.0/24",
+                "2001:db8::1",
+                "example.com"
+            ]
+        );
     }
 
     #[test]
-    fn a_domain_is_stored_in_punycode_and_keeps_an_explicit_zone() {
+    fn a_domain_is_stored_in_punycode_shown_in_unicode_and_keeps_an_explicit_zone() {
+        let domain = parse_address("xn--e1afmkfd.example").unwrap();
+        assert_eq!(domain.label(true), "пример.example");
         assert_eq!(
             parse_address("пример.example").unwrap().matcher(true),
             RuleMatcher::Domain(DomainMatch::Suffix("xn--e1afmkfd.example".into()))
         );
         let zone = parse_address("*.example").unwrap();
+        assert_eq!(zone.label(false), "*.example");
         assert_eq!(
             zone.matcher(false),
             RuleMatcher::Domain(DomainMatch::Suffix("example".into()))
         );
         let www = parse_address("www.example.com").unwrap();
+        assert_eq!(www.label(false), "www.example.com");
+        assert_eq!(www.label(true), "example.com");
         assert_eq!(
             www.matcher(false),
             RuleMatcher::Domain(DomainMatch::Exact("www.example.com".into()))
@@ -195,6 +260,16 @@ mod tests {
                 RuleMatcher::IpCidr("192.0.2.1/32".into()),
             ]
         );
+    }
+
+    #[test]
+    fn a_chip_repeats_another_by_its_rule_or_by_its_bad_text() {
+        let chip = AddressChip::new;
+        assert!(chip("www.example.com").repeats(&chip("https://example.com/a"), true));
+        assert!(!chip("www.example.com").repeats(&chip("example.com"), false));
+        assert!(chip("192.0.2.1").repeats(&chip("192.0.2.1/32"), true));
+        assert!(chip("Bad..Domain").repeats(&chip("bad..domain"), true));
+        assert!(!chip("bad..domain").repeats(&chip("example.com"), true));
     }
 
     #[test]

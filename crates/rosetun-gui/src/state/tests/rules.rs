@@ -488,12 +488,10 @@ fn an_address_batch_requires_every_item_to_be_valid_and_obeys_the_subdomain_choi
         );
         state.act(Action::SelectRuleInput(RuleInputKind::Address));
         let dialog = state.rules.screen.add.as_mut().unwrap();
-        dialog.addresses =
-            "https://www.youtube.com/watch?v=1\n192.0.2.1\nbad..domain\ninstagram.com".into();
+        dialog.set_addresses("https://www.youtube.com/watch?v=1\n192.0.2.1\nbad..domain\ninstagram.com");
         dialog.subdomains = subdomains;
         assert!(state.act(Action::SubmitAddRule).is_none());
-        state.rules.screen.add.as_mut().unwrap().addresses =
-            "https://www.youtube.com/watch?v=1, 192.0.2.1; instagram.com".into();
+        state.rules.screen.add.as_mut().unwrap().set_addresses("https://www.youtube.com/watch?v=1, 192.0.2.1; instagram.com");
         assert!(matches!(
             state.act(Action::SubmitAddRule),
             Some(Job::AddRules(_, matchers, RuleDestination::Proxy)) if matchers == expected
@@ -508,17 +506,16 @@ fn the_address_field_adds_multiple_addresses_and_corrects_host_bits() {
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Address));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.addresses = "192.0.2.5/24\nbad..domain\n2001:db8::1\n198.51.100.0/24".into();
+    dialog.set_addresses("192.0.2.5/24\nbad..domain\n2001:db8::1\n198.51.100.0/24");
     assert!(state.act(Action::SubmitAddRule).is_none());
     state.act(Action::CorrectRuleIps);
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(
-        dialog.addresses,
+        dialog.address_text(),
         "192.0.2.0/24\nbad..domain\n2001:db8::1\n198.51.100.0/24"
     );
     assert!(state.act(Action::SubmitAddRule).is_none());
-    state.rules.screen.add.as_mut().unwrap().addresses =
-        "192.0.2.0/24\n2001:db8::1\n198.51.100.0/24\n192.0.2.0/24".into();
+    state.rules.screen.add.as_mut().unwrap().set_addresses("192.0.2.0/24\n2001:db8::1\n198.51.100.0/24\n192.0.2.0/24");
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::AddRules(_, matchers, RuleDestination::Proxy))
@@ -539,11 +536,11 @@ fn editing_an_ip_rule_opens_the_address_kind_and_updates_one_rule() {
     state.act(Action::OpenEditRule(id.clone()));
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.kind, RuleInputKind::Address);
-    assert_eq!(dialog.addresses, "192.0.2.0/24");
+    assert_eq!(dialog.address_text(), "192.0.2.0/24");
     assert!(state.act(Action::SubmitAddRule).is_none());
     assert!(state.rules.screen.add.is_none());
     state.act(Action::OpenEditRule(id.clone()));
-    state.rules.screen.add.as_mut().unwrap().addresses = "203.0.113.1".into();
+    state.rules.screen.add.as_mut().unwrap().set_addresses("203.0.113.1");
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::UpdateRule(_, rule, RuleMatcher::IpCidr(cidr), RuleDestination::Proxy))
@@ -557,7 +554,7 @@ fn ip_local_setting_link_closes_dialog_and_opens_connection_settings() {
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Address));
-    state.rules.screen.add.as_mut().unwrap().addresses = "192.0.2.1".into();
+    state.rules.screen.add.as_mut().unwrap().set_addresses("192.0.2.1");
     assert!(!state.rules.screen.add.as_ref().unwrap().local_ip_warning());
     state.act(Action::OpenLanSettings);
     assert!(state.rules.screen.add.is_none());
@@ -577,7 +574,7 @@ fn editing_a_suffix_rule_populates_the_site_form_and_saves_only_changes() {
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.editing.as_ref(), Some(&id));
     assert_eq!(dialog.kind, RuleInputKind::Address);
-    assert_eq!(dialog.addresses, "example.com");
+    assert_eq!(dialog.address_text(), "example.com");
     assert!(dialog.subdomains);
     state.act(Action::SelectRuleInput(RuleInputKind::Process));
     assert_eq!(
@@ -613,7 +610,7 @@ fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
             RuleMatcher::Domain(DomainMatch::Suffix(domain.into()));
         state.act(Action::OpenRules);
         state.act(Action::OpenEditRule(id.clone()));
-        assert_eq!(state.rules.screen.add.as_ref().unwrap().addresses, domain);
+        assert_eq!(state.rules.screen.add.as_ref().unwrap().address_text(), domain);
         assert!(state.act(Action::SubmitAddRule).is_none());
         assert!(state.rules.screen.add.is_none());
         state.act(Action::OpenEditRule(id.clone()));
@@ -676,7 +673,7 @@ fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
     assert!(state.act(Action::SubmitAddRule).is_none());
     state.act(Action::SelectRuleInput(RuleInputKind::Address));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.addresses = "*.example.com".into();
+    dialog.set_addresses("*.example.com");
     dialog.target = RuleDestination::Direct;
     assert!(matches!(
         state.act(Action::SubmitAddRule),
@@ -686,7 +683,7 @@ fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
     assert!(state.act(Action::CancelAddRule).is_none());
     state.reduce(WorkerEvent::AddRules(Err(RuleSetError::DuplicateRule)));
     let dialog = state.rules.screen.add.as_ref().unwrap();
-    assert_eq!(dialog.addresses, "*.example.com");
+    assert_eq!(dialog.address_text(), "*.example.com");
     assert_eq!(
         dialog.error.as_deref(),
         Some("this rule is already in the set")
@@ -936,7 +933,7 @@ fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Address));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.addresses = "new.example".into();
+    dialog.set_addresses("new.example");
     dialog.subdomains = false;
     dialog.target = RuleDestination::Block;
     assert!(matches!(
@@ -981,7 +978,7 @@ fn editing_an_exit_rule_keeps_its_exit() {
     assert!(state.rules.screen.add.is_none());
 
     state.act(Action::OpenEditRule(id.clone()));
-    state.rules.screen.add.as_mut().unwrap().addresses = "example.org".into();
+    state.rules.screen.add.as_mut().unwrap().set_addresses("example.org");
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::UpdateRule(_, rule, _, RuleDestination::Exit(kept))) if rule == id && kept == exit

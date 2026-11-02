@@ -48,7 +48,7 @@ pub(crate) fn style_field(ui: &mut egui::Ui, invalid: bool) {
 }
 
 /// An input on the palette's field colour with a hairline border, red when the value is not
-/// acceptable. One line, or several when it is given `rows`.
+/// acceptable.
 #[must_use = "a field does nothing until it is added to a Ui"]
 pub(crate) struct TextField<'a> {
     text: &'a mut String,
@@ -58,9 +58,7 @@ pub(crate) struct TextField<'a> {
     enabled: bool,
     width: f32,
     id: Option<egui::Id>,
-    rows: Option<usize>,
     char_limit: Option<usize>,
-    monospace: bool,
 }
 
 impl<'a> TextField<'a> {
@@ -73,9 +71,7 @@ impl<'a> TextField<'a> {
             enabled: true,
             width: f32::INFINITY,
             id: None,
-            rows: None,
             char_limit: None,
-            monospace: false,
         }
     }
 
@@ -113,21 +109,9 @@ impl<'a> TextField<'a> {
         self
     }
 
-    /// Several lines of input, this many rows high before the text scrolls.
-    pub(crate) fn rows(mut self, rows: usize) -> Self {
-        self.rows = Some(rows);
-        self
-    }
-
     /// The most characters the field takes.
     pub(crate) fn char_limit(mut self, limit: usize) -> Self {
         self.char_limit = Some(limit);
-        self
-    }
-
-    /// Monospace text, for addresses and domain names.
-    pub(crate) fn monospace(mut self, monospace: bool) -> Self {
-        self.monospace = monospace;
         self
     }
 }
@@ -144,11 +128,8 @@ impl egui::Widget for TextField<'_> {
         let vertical = field_vertical_margin(ui, height);
         ui.scope(|ui| {
             style_field(ui, self.invalid);
-            let edit = match self.rows {
-                Some(rows) => egui::TextEdit::multiline(self.text).desired_rows(rows),
-                None => egui::TextEdit::singleline(self.text),
-            }
-            .hint_text(self.hint)
+            let edit = egui::TextEdit::singleline(self.text)
+                .hint_text(self.hint)
             .password(self.password)
             .desired_width(width)
             .min_size(egui::vec2(width, height))
@@ -156,11 +137,6 @@ impl egui::Widget for TextField<'_> {
             let edit = match self.char_limit {
                 Some(limit) => edit.char_limit(limit),
                 None => edit,
-            };
-            let edit = if self.monospace {
-                edit.font(egui::TextStyle::Monospace)
-            } else {
-                edit
             };
             ui.add_enabled(
                 self.enabled,
@@ -271,47 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn a_multiline_field_has_the_width_and_frame_of_a_one_line_field() {
-        for invalid in [false, true] {
-            let (rects, shapes) = laid_out(|ui| {
-                let (mut one, mut many) = (
-                    String::from("192.0.2.1"),
-                    String::from(
-                        "192.0.2.1
-",
-                    ),
-                );
-                let single = ui.add(TextField::new(&mut one).invalid(invalid));
-                let multi = ui.add(TextField::new(&mut many).rows(4).invalid(invalid));
-                vec![single.rect, multi.rect]
-            });
-            assert_eq!(rects[0].width(), rects[1].width());
-            assert!(rects[1].height() > rects[0].height());
-            let frames = painted_frames(&shapes, &rects);
-            assert_eq!(frames[0], frames[1], "invalid: {invalid}");
-            if invalid {
-                assert_eq!(frames[1].stroke.color, theme::ERROR);
-            }
-        }
-    }
-
-    #[test]
-    fn a_multiline_field_is_as_many_rows_high_as_it_is_given() {
-        let (rects, _) = laid_out(|ui| {
-            let mut text = String::new();
-            [3, 4, 5]
-                .map(|rows| ui.add(TextField::new(&mut text).rows(rows)).rect)
-                .to_vec()
-        });
-        let row = rects[1].height() - rects[0].height();
-        assert!(row > 0.0);
-        assert!((rects[2].height() - rects[1].height() - row).abs() < 0.5);
-        assert!(rects[0].height() >= 3.0 * row);
-    }
-
-    #[test]
     fn a_field_takes_no_more_characters_than_its_limit() {
-        for rows in [None, Some(3)] {
             let ctx = egui::Context::default();
             theme::apply(&ctx);
             let id = egui::Id::unique("limited");
@@ -327,18 +263,13 @@ mod tests {
                     },
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
-                            let mut field = TextField::new(&mut text).id(id).char_limit(4);
-                            if let Some(rows) = rows {
-                                field = field.rows(rows);
-                            }
-                            ui.add(field);
+                            ui.add(TextField::new(&mut text).id(id).char_limit(4));
                         });
                     },
                 );
                 output.textures_delta.clear();
             }
-            assert_eq!(text, "abcd", "rows: {rows:?}");
-        }
+            assert_eq!(text, "abcd");
     }
 
     #[test]

@@ -27,10 +27,10 @@ const MIN_CONTENT_HEIGHT: f32 = 160.0;
 const DIALOG_CHROME: f32 = 300.0;
 /// The row under the program list: the match mode beside "Choose file…".
 const MATCH_MODE_HEIGHT: f32 = 38.0;
+/// The rows of chips the address field grows to before it scrolls.
+const ADDRESS_ROWS: usize = 5;
 const DESTINATION_POPUP_MARGIN: f32 = theme::space::XL;
 const MIN_DESTINATION_POPUP: f32 = 120.0;
-/// How many errors of the address field are listed before "and N more".
-const SHOWN_ADDRESS_ERRORS: usize = 3;
 
 /// A process row's tile: the program's icon, else a letter on a colour.
 struct ProcessTile<'a> {
@@ -595,50 +595,76 @@ fn list_input(
 }
 
 fn address_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) -> bool {
+    let subdomains = dialog.subdomains;
+    let shown: Vec<(String, Icon, Option<String>)> = dialog
+        .addresses
+        .iter()
+        .map(|chip| match &chip.parsed {
+            Ok(address) => (
+                display::safe_text(&address.label(subdomains)),
+                address_icon(address.is_domain()),
+                None,
+            ),
+            Err(error) => (
+                display::safe_text(&chip.text),
+                address_icon(matches!(error, AddressError::Domain(_))),
+                Some(sentence(address_error_text(error))),
+            ),
+        })
+        .collect();
+    let chips: Vec<_> = shown
+        .iter()
+        .map(|(label, icon, error)| widgets::Chip {
+            label,
+            icon: *icon,
+            error: error.as_deref(),
+        })
+        .collect();
     let hint = tr!("address-hint");
-    let field = widgets::TextField::new(&mut dialog.addresses)
-        .enabled(!dialog.busy)
-        .hint(&hint)
-        .monospace(true);
-    let input = if dialog.editing.is_some() {
-        ui.add(field)
-    } else {
-        ui.add(field.rows(4))
-    };
+    let has_domain = dialog.has_domain();
+    let accepts_input = dialog.editing.is_none() || dialog.addresses.is_empty();
+    let busy = dialog.busy;
+    let output = ui
+        .with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            let response = ui
+                .scope(|ui| {
+                    ui.spacing_mut().interact_size.y = widgets::field_height(ui);
+                    widgets::checkbox(
+                        ui,
+                        &mut dialog.subdomains,
+                        tr!("include-subdomains"),
+                        has_domain && !busy,
+                    )
+                })
+                .inner;
+            if has_domain {
+                response.on_hover_text(tr!("include-subdomains-detail"));
+            } else {
+                response.on_disabled_hover_text(tr!("include-subdomains-detail"));
+            }
+            ui.add_space(theme::space::M);
+            let width = ui.available_width();
+            widgets::ChipsField::new("rule_addresses", &chips, &mut dialog.address_input)
+                .hint(&hint)
+                .enabled(!busy)
+                .accepts_input(accepts_input)
+                .max_rows(ADDRESS_ROWS)
+                .width(width)
+                .show(ui)
+        })
+        .inner;
     if dialog.focus_input {
-        input.request_focus();
+        if let Some(input) = &output.input {
+            input.request_focus();
+        }
         dialog.focus_input = false;
     }
-    if input.changed() {
-        dialog.error = None;
-    }
-    let has_domain = dialog.has_domain();
-    let response = widgets::checkbox(
-        ui,
-        &mut dialog.subdomains,
-        tr!("include-subdomains"),
-        has_domain && !dialog.busy,
-    );
-    if has_domain {
-        response.on_hover_text(tr!("include-subdomains-detail"));
-    }
-    let errors = dialog.address_errors();
-    for (item, error) in errors.iter().take(SHOWN_ADDRESS_ERRORS) {
-        ui.label(
-            RichText::new(i18n::item_error(
-                &display::safe_text(item),
-                &address_error_text(error),
-            ))
-            .small()
-            .color(theme::ERROR),
-        );
-    }
-    if errors.len() > SHOWN_ADDRESS_ERRORS {
-        ui.label(
-            RichText::new(i18n::more_errors(errors.len() - SHOWN_ADDRESS_ERRORS))
-                .small()
-                .color(theme::ERROR),
-        );
+    for event in output.events {
+        match event {
+            widgets::ChipsEvent::Add(text) => dialog.add_addresses(&text),
+            widgets::ChipsEvent::Remove(index) => dialog.remove_address(index),
+            widgets::ChipsEvent::RemoveLast => dialog.remove_last_address(),
+        }
     }
     if dialog.too_many_addresses() {
         ui.label(
@@ -647,7 +673,8 @@ fn address_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 .color(theme::ERROR),
         );
     }
-    if errors
+    if dialog
+        .address_errors()
         .iter()
         .any(|(_, error)| matches!(error, AddressError::Ip(IpCidrError::HostBits { .. })))
         && widgets::link(ui, &tr!("ip-fix"), !dialog.busy).clicked()
@@ -668,6 +695,20 @@ fn address_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         }
     }
     dialog.address_rules().is_some()
+}
+
+/// A domain's chip shows a globe, an address's the icon of IP rules.
+fn address_icon(domain: bool) -> Icon {
+    if domain { Icon::Globe } else { Icon::Stack }
+}
+
+/// An error message as a hint of its own: with a capital letter.
+fn sentence(text: String) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => text,
+    }
 }
 
 fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) -> bool {
@@ -1474,9 +1515,10 @@ mod tests {
         variants.push(("address", dialog, config.clone()));
         let mut dialog = new();
         dialog.kind = RuleInputKind::Address;
-        dialog.addresses = "youtube.com 192.168.1.5/24 ru bad..domain 198.51.100.0/33 example. \
-                            2001:db8::1/32 a..b c..d"
-            .into();
+        dialog.add_addresses(
+            "youtube.com 192.168.1.5/24 ru bad..domain 198.51.100.0/33 example. 2001:db8::1/32",
+        );
+        dialog.address_input = "a..b".into();
         dialog.target = RuleDestination::NewExit(NewExit::Country {
             code: rosetun_config::CountryCode::parse("DE").unwrap(),
             name: "Germany".into(),
@@ -1484,10 +1526,13 @@ mod tests {
         variants.push(("address with errors", dialog, config.clone()));
         let mut dialog = new();
         dialog.kind = RuleInputKind::Address;
-        dialog.addresses = (0..=MAX_ADDRESSES)
-            .map(|index| format!("site{index}.example"))
-            .collect::<Vec<_>>()
-            .join(" ");
+        dialog.add_addresses(
+            &(0..=MAX_ADDRESSES)
+                .map(|index| format!("site{index}.example"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        assert!(dialog.too_many_addresses());
         variants.push(("too many addresses", dialog, config.clone()));
         let mut dialog = new();
         dialog.kind = RuleInputKind::List;
@@ -1506,8 +1551,9 @@ mod tests {
         variants.push(("no lists", dialog, AppConfig::default()));
         let mut dialog = new();
         dialog.kind = RuleInputKind::Address;
-        dialog.addresses = "example.com".into();
         dialog.editing = Some(RuleId::new("1"));
+        dialog.add_addresses("example.com example.org");
+        assert_eq!(dialog.addresses.len(), 1, "an edit holds one item");
         variants.push(("editing an address", dialog, config));
         variants
     }
@@ -1589,7 +1635,7 @@ mod tests {
         let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
         assert_eq!(submit_label(&dialog), tr!("add"));
         dialog.kind = RuleInputKind::Address;
-        dialog.addresses = "youtube.com www.youtube.com 192.0.2.1 bad..domain".into();
+        dialog.set_addresses("youtube.com www.youtube.com 192.0.2.1 bad..domain");
         assert_eq!(submit_label(&dialog), i18n::add_rules(2));
         dialog.subdomains = false;
         assert_eq!(submit_label(&dialog), i18n::add_rules(3));
@@ -1598,6 +1644,82 @@ mod tests {
         assert_eq!(submit_label(&dialog), i18n::add_rules(2));
         dialog.editing = Some(RuleId::new("1"));
         assert_eq!(submit_label(&dialog), tr!("save"));
+    }
+
+    #[test]
+    fn a_paste_into_the_address_field_makes_one_chip_per_item_of_its_kind() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.kind = RuleInputKind::Address;
+        let run = |dialog: &mut AddRuleDialog, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, REGULAR)),
+                    events,
+                    ..egui::RawInput::default()
+                },
+                |ctx| show(ctx, dialog, &AppConfig::default(), true, 0, &mut Vec::new()),
+            );
+            output.textures_delta.clear();
+        };
+        run(&mut dialog, Vec::new());
+        assert!(ctx.memory(|memory| memory.has_focus(widgets::chips_input_id("rule_addresses"))));
+        run(
+            &mut dialog,
+            vec![egui::Event::Paste(
+                "youtube.com, 192.0.2.1\n198.51.100.0/24; 2001:db8::1 https://www.example.com/path"
+                    .into(),
+            )],
+        );
+        let chips: Vec<_> = dialog
+            .addresses
+            .iter()
+            .map(|chip| {
+                let address = chip.parsed.as_ref().expect("every item is good");
+                (address.is_domain(), address.label(dialog.subdomains))
+            })
+            .collect();
+        assert_eq!(
+            chips,
+            [
+                (true, "youtube.com".to_owned()),
+                (false, "192.0.2.1".to_owned()),
+                (false, "198.51.100.0/24".to_owned()),
+                (false, "2001:db8::1".to_owned()),
+                (true, "example.com".to_owned()),
+            ]
+        );
+        assert!(dialog.address_input.is_empty());
+        assert_eq!(submit_label(&dialog), i18n::add_rules(5));
+    }
+
+    #[test]
+    fn a_bad_item_is_a_red_chip_and_keeps_add_disabled_with_its_reason() {
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.kind = RuleInputKind::Address;
+        dialog.add_addresses("youtube.com bad..domain youtube.com https://youtube.com/");
+        assert_eq!(dialog.addresses.len(), 2, "the repeats are not added");
+        assert!(dialog.addresses[1].parsed.is_err());
+        assert!(dialog.address_rules().is_none());
+        let reason = address_reason(&dialog);
+        assert!(reason.starts_with("bad..domain: "), "{reason}");
+        let (_, texts) = shown(&mut dialog, &AppConfig::default(), true, REGULAR);
+        assert!(texts.iter().any(|(text, _)| text == "bad..domain"));
+        dialog.remove_last_address();
+        assert_eq!(dialog.addresses.len(), 1);
+        assert!(dialog.address_rules().is_some());
+        assert_eq!(submit_label(&dialog), tr!("add"));
+    }
+
+    #[test]
+    fn subdomains_apply_only_when_the_field_has_a_domain() {
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.kind = RuleInputKind::Address;
+        dialog.add_addresses("192.0.2.1 198.51.100.0/24");
+        assert!(!dialog.has_domain());
+        dialog.add_addresses("example.com");
+        assert!(dialog.has_domain());
     }
 
     #[test]

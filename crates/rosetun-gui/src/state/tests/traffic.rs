@@ -949,7 +949,7 @@ fn creating_a_rule_from_a_connection_opens_the_filled_dialog() {
     assert!(job.is_none());
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.kind, RuleInputKind::Address);
-    assert_eq!(dialog.addresses, "www.example.com");
+    assert_eq!(dialog.address_text(), "www.example.com");
     assert!(dialog.subdomains);
     assert_eq!(dialog.editing, None);
     assert_eq!(dialog.target, rosetun_core::RuleDestination::Proxy);
@@ -957,7 +957,7 @@ fn creating_a_rule_from_a_connection_opens_the_filled_dialog() {
     let (state, _) = open(crate::state::site_rule("192.0.2.10"));
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.kind, RuleInputKind::Address);
-    assert_eq!(dialog.addresses, "192.0.2.10/32");
+    assert_eq!(dialog.address_text(), "192.0.2.10/32");
 
     let (state, job) = open(crate::state::program_rule(path));
     assert!(matches!(job, Some(Job::LoadProcesses(_))));

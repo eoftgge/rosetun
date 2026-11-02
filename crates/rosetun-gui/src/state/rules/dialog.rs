@@ -6,7 +6,7 @@ use rosetun_core::RuleDestination;
 
 use super::super::{Action, Job, State};
 use super::address::{
-    Address, AddressError, MAX_ADDRESSES, address_matchers, has_local_address, parse_address,
+    Address, AddressChip, AddressError, MAX_ADDRESSES, address_matchers, has_local_address,
     split_addresses,
 };
 use crate::errors;
@@ -32,7 +32,11 @@ pub(crate) struct AddRuleDialog {
     pub(crate) node_search: String,
     /// A temporary rule's new exit was saved; submit again with it.
     pub(crate) resubmit: bool,
-    pub(crate) addresses: String,
+    pub(crate) addresses: Vec<AddressChip>,
+    /// The text typed after the chips, not yet an item.
+    pub(crate) address_input: String,
+    /// An item was dropped for `MAX_ADDRESSES`.
+    pub(crate) address_overflow: bool,
     pub(crate) list: Option<ListId>,
     pub(crate) selected_categories: Vec<String>,
     pub(crate) category_filter: String,
@@ -66,7 +70,9 @@ impl AddRuleDialog {
             target: RuleDestination::Proxy,
             node_search: String::new(),
             resubmit: false,
-            addresses: String::new(),
+            addresses: Vec::new(),
+            address_input: String::new(),
+            address_overflow: false,
             list: None,
             selected_categories: Vec::new(),
             category_filter: String::new(),
@@ -112,9 +118,9 @@ impl AddRuleDialog {
             RuleMatcher::Domain(domain) => {
                 dialog.kind = RuleInputKind::Address;
                 dialog.subdomains = matches!(domain, DomainMatch::Suffix(_));
-                dialog.addresses = rosetun_core::rule_value_text(matcher)
-                    .trim_start_matches("*.")
-                    .to_owned();
+                dialog.addresses = vec![AddressChip::new(
+                    rosetun_core::rule_value_text(matcher).trim_start_matches("*."),
+                )];
             }
             RuleMatcher::List { list, category } => {
                 dialog.kind = RuleInputKind::List;
@@ -123,7 +129,7 @@ impl AddRuleDialog {
             }
             RuleMatcher::IpCidr(cidr) => {
                 dialog.kind = RuleInputKind::Address;
-                dialog.addresses = cidr.clone();
+                dialog.addresses = vec![AddressChip::new(cidr)];
             }
             RuleMatcher::Process(process) => {
                 dialog.process = rosetun_core::rule_value_text(matcher);
@@ -147,15 +153,68 @@ impl AddRuleDialog {
         Some(self)
     }
 
+    /// Adds the items of `text` as chips: each once, the one item of an edit, no more than
+    /// `MAX_ADDRESSES`.
+    pub(crate) fn add_addresses(&mut self, text: &str) {
+        for item in split_addresses(text) {
+            if self.editing.is_some() && !self.addresses.is_empty() {
+                break;
+            }
+            let chip = AddressChip::new(item);
+            if self
+                .addresses
+                .iter()
+                .any(|old| old.repeats(&chip, self.subdomains))
+            {
+                continue;
+            }
+            if self.addresses.len() >= MAX_ADDRESSES {
+                self.address_overflow = true;
+                break;
+            }
+            self.addresses.push(chip);
+        }
+        self.error = None;
+    }
+
+    /// Turns the text still being typed into chips.
+    pub(crate) fn commit_address_input(&mut self) {
+        let text = std::mem::take(&mut self.address_input);
+        self.add_addresses(&text);
+    }
+
+    pub(crate) fn remove_address(&mut self, index: usize) {
+        if index < self.addresses.len() {
+            self.addresses.remove(index);
+            self.address_overflow = false;
+            self.error = None;
+        }
+    }
+
+    pub(crate) fn remove_last_address(&mut self) {
+        if self.addresses.pop().is_some() {
+            self.address_overflow = false;
+            self.error = None;
+        }
+    }
+
+    /// The chips and the items still being typed after them.
+    fn all_addresses(&self) -> impl Iterator<Item = AddressChip> + '_ {
+        self.addresses
+            .iter()
+            .cloned()
+            .chain(split_addresses(&self.address_input).map(AddressChip::new))
+    }
+
     /// Each item of the address field, parsed.
     pub(crate) fn parsed_addresses(&self) -> Vec<Result<Address, AddressError>> {
-        split_addresses(&self.addresses).map(parse_address).collect()
+        self.all_addresses().map(|chip| chip.parsed).collect()
     }
 
     /// The items that are neither a domain nor an address, with why.
     pub(crate) fn address_errors(&self) -> Vec<(String, AddressError)> {
-        split_addresses(&self.addresses)
-            .filter_map(|item| parse_address(item).err().map(|error| (item.to_owned(), error)))
+        self.all_addresses()
+            .filter_map(|chip| chip.parsed.err().map(|error| (chip.text, error)))
             .collect()
     }
 
@@ -171,7 +230,7 @@ impl AddRuleDialog {
 
     /// More items than one dialog adds.
     pub(crate) fn too_many_addresses(&self) -> bool {
-        split_addresses(&self.addresses).count() > MAX_ADDRESSES
+        self.address_overflow || self.all_addresses().count() > MAX_ADDRESSES
     }
 
     /// Whether the address field has a domain, so "and subdomains" applies.
@@ -187,15 +246,16 @@ impl AddRuleDialog {
         if let Some(original) = self.unchanged_domain() {
             return Some(vec![RuleMatcher::Domain(original)]);
         }
+        if self.too_many_addresses() {
+            return None;
+        }
         let parsed: Option<Vec<Address>> = self
             .parsed_addresses()
             .into_iter()
             .map(Result::ok)
             .collect();
         let parsed = parsed.filter(|parsed| {
-            !parsed.is_empty()
-                && parsed.len() <= MAX_ADDRESSES
-                && (self.editing.is_none() || parsed.len() == 1)
+            !parsed.is_empty() && (self.editing.is_none() || parsed.len() == 1)
         })?;
         Some(address_matchers(&parsed, self.subdomains))
     }
@@ -205,27 +265,45 @@ impl AddRuleDialog {
         let matcher = RuleMatcher::Domain(original.clone());
         let value = rosetun_core::rule_value_text(&matcher);
         let value = value.strip_prefix("*.").unwrap_or(&value);
-        (self.addresses.trim() == value
+        let items: Vec<_> = self.all_addresses().collect();
+        (items.len() == 1
+            && items[0].text == value
             && self.subdomains == matches!(original, DomainMatch::Suffix(_)))
         .then(|| original.clone())
     }
 
     /// Replaces each subnet with host bits by the subnet it starts.
     pub(crate) fn correct_ip_host_bits(&mut self) {
-        self.addresses = split_addresses(&self.addresses)
-            .map(|item| match parse_address(item) {
-                Err(AddressError::Ip(rosetun_core::IpCidrError::HostBits { corrected })) => {
-                    corrected
-                }
-                _ => item.to_owned(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        self.commit_address_input();
+        for chip in &mut self.addresses {
+            if let Err(AddressError::Ip(rosetun_core::IpCidrError::HostBits { corrected })) =
+                &chip.parsed
+            {
+                *chip = AddressChip::new(&corrected.clone());
+            }
+        }
         self.error = None;
     }
 
     pub(crate) fn local_ip_warning(&self) -> bool {
         has_local_address(&self.parsed_addresses())
+    }
+
+    /// Replaces the address field with `text`, not yet turned into chips.
+    #[cfg(test)]
+    pub(crate) fn set_addresses(&mut self, text: &str) {
+        self.addresses.clear();
+        self.address_overflow = false;
+        self.address_input = text.to_owned();
+    }
+
+    /// The items of the address field, one per line.
+    #[cfg(test)]
+    pub(crate) fn address_text(&self) -> String {
+        self.all_addresses()
+            .map(|chip| chip.text)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub(crate) fn select_list(&mut self, list: ListId) {
@@ -480,6 +558,12 @@ impl State {
                 }
             }
             Action::SubmitAddRule => {
+                if let Some(dialog) = &mut self.rules.screen.add
+                    && dialog.kind == RuleInputKind::Address
+                    && !dialog.busy
+                {
+                    dialog.commit_address_input();
+                }
                 if self.can_edit_rules()
                     && let Some(dialog) = &self.rules.screen.add
                     && !dialog.busy
