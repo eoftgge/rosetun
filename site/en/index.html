@@ -6,7 +6,7 @@
   <meta name="description" content="Rosetun. VPN client for Windows. Subscriptions, rules and connection protection.">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
-  <title>Rosetun · Rosetun</title>
+  <title>Rosetun</title>
   <link rel="stylesheet" href="../assets/site.css">
   <link rel="icon" href="../assets/rose.svg" type="image/svg+xml">
   <link rel="alternate" hreflang="ru" href="../ru/">
@@ -17,20 +17,21 @@
 <header class="wrap"><a class="brand" href="../en/"><img src="../assets/rose.svg" width="40" height="40" alt="">Rosetun</a>
 <nav aria-label="Navigation"><a href="../en/">Home</a><a href="../en/providers/">For providers</a><a href="../en/help/">Help</a><a href="../ru/" lang="ru" hreflang="ru">Русский</a></nav></header>
 <main id="main" class="wrap">
-<div class="masthead"><img src="../assets/banner.svg" width="1280" height="400" alt="Rosetun: VPN client for Windows"></div>
-<section class="hero"><div><p class="eyebrow">WINDOWS · OPEN SOURCE</p><h1>Your traffic.<br>Your rules.</h1><p class="lead">VPN client for Windows: subscriptions, rules, kill switch and Lockdown.</p>
-<a class="button" href="@@DOWNLOAD_URL@@">Download for Windows</a>
-<p class="release">@@VERSION@@ · <a href="https://github.com/eoftgge/rosetun/releases">All releases</a></p>
-<p class="muted">Windows 11 · x64<br>Windows 10 is untested. Linux: coming soon.</p></div>
+<section class="hero" aria-labelledby="hero-title">
+<div class="masthead"><img src="../assets/banner.svg" width="1280" height="400" alt="Rosetun"><p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p></div>
+<div class="hero-content"><h1 id="hero-title">Your traffic. Your rules.</h1><p class="lead">VPN client for Windows: subscriptions, rules, kill switch and Lockdown.</p>
+<div class="download-row"><a class="button" href="https://github.com/eoftgge/rosetun/releases/latest" data-release-href="@@DOWNLOAD_URL@@"><span aria-hidden="true">↓</span> Download for Windows</a><div class="download-meta"><span class="release" data-release-text="@@VERSION@@">Latest release</span><span class="muted">Windows 11 · x64</span></div></div>
+<div class="download-links"><a href="https://github.com/eoftgge/rosetun/releases">All releases <span aria-hidden="true">↗</span></a><a href="#verify">Verify download <span aria-hidden="true">↓</span></a></div>
+<p class="compatibility">Windows 10 is untested. Linux: coming soon.</p></div>
 </section>
 <section><p class="eyebrow">MADE FOR YOUR ROUTINE</p><h2>One connection. More choice.</h2><div class="features"><article><span class="number">01</span><h3>Connection protection</h3><p>The kill switch blocks traffic when the tunnel drops while the service is running. Experimental Lockdown keeps traffic blocked without a connection and after a restart.</p></article><article><span class="number">02</span><h3>Your rules</h3><p>Send apps, websites and IP addresses through the VPN, connect directly or block them. Use GeoIP, GeoSite and your own lists. Temporary rules last until you disconnect.</p></article><article><span class="number">03</span><h3>More than one exit</h3><p>Choose another country or server for an individual rule. If its exit server disappears, that traffic is blocked and never falls back to a direct connection.</p></article><article><span class="number">04</span><h3>Subscriptions at hand</h3><p>Add a subscription with a link, a QR code or a rosetun:// button on your provider’s site. You can turn off device ID sharing for each subscription.</p></article><article><span class="number">05</span><h3>Connection choices</h3><p>VLESS, VMess, Trojan, Shadowsocks and Hysteria2. sing-box and Xray engines, REALITY and XHTTP. See the provider page for transports and limitations.</p></article><article><span class="number">06</span><h3>Privacy without promises</h3><p>No telemetry. The app contacts your provider, servers, DNS, lists, GitHub and network check services. Connections stay in memory until you disconnect and are not written to disk.</p></article></div>
 <p class="note">Rosetun protects against accidental leaks, not malware running under your account. Without Lockdown, a service crash removes the block. Lockdown has only been tested on Windows 11; third-party firewalls, antivirus software, sleep and hibernation are untested. <a href="https://github.com/eoftgge/rosetun/blob/master/README.md">Network requests and protection model</a></p></section>
 <section><h2>A look at the interface</h2><p>Screenshots will follow once examples without personal data are ready.</p><div class="screens"><figure><div class="placeholder" aria-hidden="true"><span>01</span></div><figcaption>Connection and protection<small>Screenshot coming here</small></figcaption></figure><figure><div class="placeholder" aria-hidden="true"><span>02</span></div><figcaption>Rules and exits<small>Screenshot coming here</small></figcaption></figure><figure><div class="placeholder" aria-hidden="true"><span>03</span></div><figcaption>Subscriptions and servers<small>Screenshot coming here</small></figcaption></figure><figure><div class="placeholder" aria-hidden="true"><span>04</span></div><figcaption>Traffic and connections<small>Screenshot coming here</small></figcaption></figure></div></section>
 <section id="verify" class="verification"><p class="eyebrow">DOWNLOAD</p><h2>Verify the installer</h2>
 <p>The installer has no Windows code-signing certificate yet. Compare its SHA-256 with the line below and SHA256SUMS.txt from the release.</p>
-<pre><code>Get-FileHash .\@@INSTALLER@@ -Algorithm SHA256</code></pre><p><a href="@@CHECKSUM_URL@@">SHA256SUMS.txt</a></p><pre><code>@@SHA256_LINE@@</code></pre>
+<pre><code data-release-text="Get-FileHash .\@@INSTALLER@@ -Algorithm SHA256">Get-FileHash .\rosetun-VERSION-setup.exe -Algorithm SHA256</code></pre><p><a href="https://github.com/eoftgge/rosetun/releases/latest" data-release-href="@@CHECKSUM_URL@@">SHA256SUMS.txt</a></p><pre><code data-release-text="@@SHA256_LINE@@">SHA256SUMS.txt: checksum is listed in the release file</code></pre>
 <p>For public tagged releases, the workflow creates an installer provenance attestation. Verify it with GitHub CLI. This verifies build provenance; it is not a Windows code signature.</p>
-<pre><code>gh attestation verify .\@@INSTALLER@@ --repo eoftgge/rosetun</code></pre>
+<pre><code data-release-text="gh attestation verify .\@@INSTALLER@@ --repo eoftgge/rosetun">gh attestation verify .\rosetun-VERSION-setup.exe --repo eoftgge/rosetun</code></pre>
 <p><a href="help/">Installation and first launch</a></p></section>
 </main>
 <footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="https://github.com/eoftgge/rosetun/blob/master/LICENSE">GPL-3.0-or-later</a><a href="https://github.com/eoftgge/rosetun/security/policy">Report a vulnerability</a><a href="../ru/" lang="ru" hreflang="ru">Русский</a></footer>

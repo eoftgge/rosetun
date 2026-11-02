@@ -69,6 +69,10 @@ def render(source, output, values):
             raise ValueError(f'incomplete markers in {path}')
         for key, value in values.items():
             text = text.replace(f'@@{key}@@', html.escape(value, quote=True))
+        text = re.sub(r'href="[^"]*" data-release-href="([^"]*)"',
+                      lambda match: f'href="{match[1]}"', text)
+        text = re.sub(r'<(span|code)([^>]*?) data-release-text="([^"]*)">.*?</\1>',
+                      lambda match: f'<{match[1]}{match[2]}>{match[3]}</{match[1]}>', text)
         if '@@' in text:
             raise ValueError(f'unresolved marker in {path}')
         path.write_text(text, encoding='utf-8', newline='\n')

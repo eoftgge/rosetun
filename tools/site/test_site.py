@@ -43,6 +43,10 @@ class SiteChecks(unittest.TestCase):
                 check(output, rendered=True)
             page = output / 'en/index.html'
             original = page.read_text(encoding='utf-8')
+            self.assertNotIn('data-release-', original)
+            self.assertIn(f'href="{RELEASES}v1.2.3/rosetun-1.2.3-setup.exe"', original)
+            self.assertIn('<span class="release">1.2.3</span>', original)
+            self.assertIn('Get-FileHash .\\rosetun-1.2.3-setup.exe', original)
             for extra in (
                 '<a href="missing/">Missing</a>',
                 '<a href="#missing">Missing</a>',

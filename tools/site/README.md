@@ -4,6 +4,9 @@ The source is plain HTML and CSS in `site/`. Both languages are edited directly.
 Keep the release markers in both landing pages; the Pages job fills them at
 publication time using the latest stable GitHub release, its installer asset and
 the matching line in `SHA256SUMS.txt`. No API calls run in a visitor's browser.
+Release markers live in `data-release-href` and `data-release-text` attributes.
+The source pages show readable fallback text and link to the latest release;
+publication replaces the fallback links and text and removes those attributes.
 
 Run from the repository root:
 
