@@ -10,7 +10,7 @@
 param(
     [Parameter(Mandatory)][string]$SingBoxPath,
     [Parameter(Mandatory)][string]$RequestPath,
-    [string]$BuildDir = (Join-Path $PSScriptRoot '..\..\target\release'),
+    [string]$BuildDir,
     [switch]$RestoreCheckpoint,
     [switch]$UseHostNode,
     [string]$NodeBindInterface,
@@ -25,6 +25,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot 'target\release' }
 Import-Module (Join-Path $PSScriptRoot 'RosetunVm.psm1') -Force
 Assert-RosetunHostLockdownOff
 
@@ -42,7 +44,7 @@ function Get-SingBoxVersion {
 function Assert-SingBoxSupported {
     # The service refuses any sing-box but the one it pins, so comparing
     # versions needs a local build pinned to the other one.
-    $versionFile = Join-Path $PSScriptRoot '..\..\crates\rosetun-engine-singbox\src\version.rs'
+    $versionFile = Join-Path $RepoRoot 'crates\rosetun-engine-singbox\src\version.rs'
     if ((Get-Content -Raw -LiteralPath $versionFile) -notmatch 'SUPPORTED_SING_BOX_VERSION: &str = "([^"]+)"') {
         throw "Cannot find SUPPORTED_SING_BOX_VERSION in $versionFile."
     }
@@ -141,7 +143,7 @@ function Invoke-Pass {
         $row.ServiceSeconds = $stages.ServiceSeconds
         $row.Stages = $stages.Stages
         # Every pass, not only a failed one: a slow pass needs its log too.
-        $kept = Join-Path $PSScriptRoot ("logs\power-cut-probe-{0:yyyyMMdd-HHmmss}-{1}-{2}.log" -f (Get-Date), $Mode, $Pass)
+        $kept = Join-Path (Get-RosetunLogRoot) ('power-cut-probe-{0:yyyyMMdd-HHmmss}-{1}-{2}.log' -f (Get-Date), $Mode, $Pass)
         [IO.File]::WriteAllText($kept, $log)
         if ($connected) {
             $row.Result = 'PASS'
@@ -178,7 +180,7 @@ $version = $null
 try {
     if ($Build) {
         Write-Host 'Building...'
-        & cargo build -q --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
+        & cargo build -q --release --manifest-path (Join-Path $RepoRoot 'Cargo.toml')
         $exitCode = $LASTEXITCODE
         $global:LASTEXITCODE = 0
         if ($exitCode -ne 0) { throw "cargo build failed with exit code $exitCode." }

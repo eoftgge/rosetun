@@ -4,12 +4,12 @@
 #
 # Lockdown's persistent filters survive the script and would leave the guest
 # offline; `finally` runs `--reset-firewall` whatever happens. If the run is
-# killed before that, see tools/vm/README.md.
+# killed before that, see tools/vm/windows/README.md.
 
 param(
     [Parameter(Mandatory)][string]$SingBoxPath,
     [Parameter(Mandatory)][string]$RequestPath,
-    [string]$BuildDir = (Join-Path $PSScriptRoot '..\..\target\release'),
+    [string]$BuildDir,
     [switch]$RestoreCheckpoint,
     [switch]$UseHostNode,
     [string]$NodeBindInterface,
@@ -26,6 +26,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot 'target\release' }
 Import-Module (Join-Path $PSScriptRoot 'RosetunVm.psm1') -Force
 Assert-RosetunHostLockdownOff
 
@@ -606,7 +608,7 @@ $standardFetchWorks = $false
 try {
     if ($Build) {
         Write-Host 'Building...'
-        & cargo build -q --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
+        & cargo build -q --release --manifest-path (Join-Path $RepoRoot 'Cargo.toml')
         $exitCode = $LASTEXITCODE
         $global:LASTEXITCODE = 0
         if ($exitCode -ne 0) { throw "cargo build failed with exit code $exitCode." }
@@ -919,7 +921,7 @@ try {
     $connectMark = Get-RosetunHelperLogLength
     $connect = Connect-RosetunTunnel
     if ($connect.ExitCode -ne 0) {
-        $kept = Join-Path $PSScriptRoot ("logs\lockdown-first-connect-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+        $kept = Join-Path (Get-RosetunLogRoot) ('lockdown-first-connect-{0:yyyyMMdd-HHmmss}.log' -f (Get-Date))
         Get-RosetunHelperLogSince $connectMark | Set-Content -LiteralPath $kept -Encoding UTF8
         Add-Info '8 off, connected' 'the first connect after the power cuts failed; helper log kept' -Note $kept
     }

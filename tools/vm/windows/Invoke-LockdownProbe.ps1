@@ -5,10 +5,10 @@
 # the IPv6 neighbors on both sides like the failure matrix.
 #
 # The probe's persistent objects survive the script; `finally` removes them
-# whatever happens. If the run is killed before that, see tools/vm/README.md.
+# whatever happens. If the run is killed before that, see tools/vm/windows/README.md.
 
 param(
-    [string]$ProbePath = (Join-Path $PSScriptRoot '..\..\target\release\examples\lockdown_probe.exe'),
+    [string]$ProbePath,
     # Builds the example first, so a forgotten build cannot deploy a stale probe.
     [switch]$Build,
     # Step 7 reboots the guest three times, more with -PowerCut; skip it for a
@@ -29,7 +29,7 @@ param(
     # The Lockdown sublayer weight passed to `persistent install`.
     [string]$LockdownWeight = '0xC000',
     # The host test node whose IPv6 port the IPv6 checks connect to.
-    [string]$SingBoxPath = (Join-Path $PSScriptRoot '..\sing-box.exe'),
+    [string]$SingBoxPath,
     [switch]$SkipIpv6,
     # Must match ProbeUrl in RosetunVm.psm1: reachable from the guest directly.
     [string]$ProbeUrl = 'https://1.1.1.1'
@@ -37,6 +37,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+if (-not $ProbePath) { $ProbePath = Join-Path $RepoRoot 'target\release\examples\lockdown_probe.exe' }
+if (-not $SingBoxPath) { $SingBoxPath = Join-Path $RepoRoot 'tools\sing-box.exe' }
 Import-Module (Join-Path $PSScriptRoot 'RosetunVm.psm1') -Force
 Assert-RosetunHostLockdownOff
 

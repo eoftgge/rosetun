@@ -52,11 +52,20 @@ $script:Session = $null
 # Second cold starts Restart-RosetunGuest needed in this session of the module.
 $script:ColdStartRetries = 0
 
+# The module sits in tools\vm\windows. Every host-side log of the rig goes to
+# tools\vm\logs, the folder the Linux rig and .gitignore share.
+$script:RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+$script:LogRoot = Join-Path $script:RepoRoot 'tools\vm\logs'
+
+function Get-RosetunLogRoot {
+    $script:LogRoot
+}
+
 function Install-RosetunSingBox {
     # Downloads the pinned sing-box build into tools\ and checks it, so the
     # 80 MB binary does not have to live in git. Update both values together
     # with SUPPORTED_SING_BOX_VERSION in rosetun-engine-singbox.
-    param([string]$Destination = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\sing-box.exe')))
+    param([string]$Destination = [IO.Path]::GetFullPath((Join-Path $script:RepoRoot 'tools\sing-box.exe')))
 
     $version = '1.14.3'
     $expectedHash = '5C19BB3F8C12D4E85B3D47FE63123A7624B314B58DD7A8E32F51004F1C4D2FAF'
@@ -96,13 +105,13 @@ function Install-RosetunSingBox {
 function Install-RosetunXray {
     $version = '26.10.21'
     $expectedHash = 'FC58C39EE2F2717B4C54D28D374362389E5319B20AE44AEA76EA45A5243EC827'
-    $installer = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\installer\build.ps1') -Raw
+    $installer = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'installer\build.ps1') -Raw
     if ($installer -notmatch ('(?m)^\$xrayVersion = ''{0}''\r?$' -f $version) -or
         $installer -notmatch ('(?m)^\$xrayArchiveHash = ''{0}''\r?$' -f $expectedHash)) {
         throw 'The VM Xray archive pin differs from installer/build.ps1.'
     }
 
-    $logDir = Join-Path $PSScriptRoot 'logs'
+    $logDir = $script:LogRoot
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     $archive = Join-Path $logDir "Xray-windows-64-$version.zip"
     if (-not (Test-Path -LiteralPath $archive)) {
@@ -265,9 +274,9 @@ function Stop-RosetunXrayTestNode {
 }
 
 function Start-RosetunTestNode {
-    # Runs the TCP and UDP test nodes on the host with a log kept under vm\logs.
+    # Runs the TCP and UDP test nodes on the host with a log kept under tools\vm\logs.
     param(
-        [string]$SingBoxPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\sing-box.exe')),
+        [string]$SingBoxPath = [IO.Path]::GetFullPath((Join-Path $script:RepoRoot 'tools\sing-box.exe')),
         # Sends the node's own traffic out of this adapter, past a VPN client
         # running in TUN mode on the host. Such a client accepts TCP itself and
         # can leave the node with open connections that never carry data.
@@ -318,7 +327,7 @@ function Start-RosetunTestNode {
         }
     }
 
-    $logDir = Join-Path $PSScriptRoot 'logs'
+    $logDir = $script:LogRoot
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     if (-not $tcpOnly) {
         $keyPath = Join-Path $logDir 'test-node.key'
@@ -401,7 +410,7 @@ function Get-RosetunTestNodeConnections {
     param([switch]$ExitNode)
 
     $name = if ($ExitNode) { 'test-node-exit.log' } else { 'test-node.log' }
-    $log = Join-Path (Join-Path $PSScriptRoot 'logs') $name
+    $log = Join-Path $script:LogRoot $name
     if (-not (Test-Path $log)) {
         return 0
     }
@@ -836,12 +845,12 @@ function Update-Rosetun {
     param(
         [Parameter(Mandatory)][string]$SingBoxPath,
         [Parameter(Mandatory)][string]$RequestPath,
-        [string]$BuildDir = (Join-Path $PSScriptRoot '..\..\target\release'),
+        [string]$BuildDir = (Join-Path $script:RepoRoot 'target\release'),
         [switch]$UseHostNode,
         [switch]$Build
     )
     if ($Build) {
-        & cargo build --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
+        & cargo build --release --manifest-path (Join-Path $script:RepoRoot 'Cargo.toml')
         $exitCode = $LASTEXITCODE
         $global:LASTEXITCODE = 0
         if ($exitCode -ne 0) {
@@ -1841,7 +1850,7 @@ function Test-RosetunProxyPath {
 function Save-RosetunLogs {
     # Copies every helper log from the guest, the current one and those of
     # earlier helper runs, into a fresh folder on the host.
-    param([string]$Destination = (Join-Path $PSScriptRoot ("logs\" + (Get-Date -Format 'yyyyMMdd-HHmmss'))))
+    param([string]$Destination = (Join-Path $script:LogRoot (Get-Date -Format 'yyyyMMdd-HHmmss')))
 
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     # The running helper keeps helper.log open, so Copy-Item cannot read it
@@ -1877,7 +1886,7 @@ function Save-RosetunLogs {
         } -ArgumentList $snapshot
     }
     # The host-side node log, written when the node runs via Start-RosetunTestNode.
-    Copy-Item -Path (Join-Path $PSScriptRoot 'logs\test-node.log') -Destination $Destination -ErrorAction SilentlyContinue
+    Copy-Item -Path (Join-Path $script:LogRoot 'test-node.log') -Destination $Destination -ErrorAction SilentlyContinue
     return $Destination
 }
 
@@ -2426,7 +2435,7 @@ function Save-RosetunGuestScreenshot {
             }
         }
         finally { $bitmap.UnlockBits($data) }
-        $dir = Join-Path $PSScriptRoot 'logs'
+        $dir = $script:LogRoot
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         $path = Join-Path $dir "guest-stuck-$(Get-Date -Format 'yyyyMMdd-HHmmss').png"
         $bitmap.Save($path, [Drawing.Imaging.ImageFormat]::Png)

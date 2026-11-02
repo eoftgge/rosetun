@@ -4,7 +4,7 @@
 param(
     [Parameter(Mandatory)][string]$SingBoxPath,
     [Parameter(Mandatory)][string]$RequestPath,
-    [string]$BuildDir = (Join-Path $PSScriptRoot '..\..\target\release'),
+    [string]$BuildDir,
     [switch]$UseHostNode,
     [string]$NodeBindInterface,
     [switch]$KeepNode,
@@ -13,6 +13,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot 'target\release' }
 Import-Module (Join-Path $PSScriptRoot 'RosetunVm.psm1') -Force
 
 $results = [System.Collections.Generic.List[object]]::new()
@@ -68,7 +70,7 @@ function Invoke-ListCli {
 $nodeStartedByMatrix = $false
 try {
 if ($Build) {
-    & cargo build -q --release --manifest-path (Join-Path $PSScriptRoot '..\..\Cargo.toml')
+    & cargo build -q --release --manifest-path (Join-Path $RepoRoot 'Cargo.toml')
     $exitCode = $LASTEXITCODE
     $global:LASTEXITCODE = 0
     if ($exitCode -ne 0) {
