@@ -12,7 +12,7 @@
 .hero{padding:28px 0 48px}
 .masthead{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:20px;background:#171014}
 .masthead img{display:block;width:100%;height:auto}
-.header-brand{display:flex;align-items:center;flex-wrap:wrap;gap:6px 20px}.platform-label{margin:0;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.12em}
+.header-brand{position:relative;display:grid;gap:4px;padding-left:50px}.header-brand .brand{line-height:1}.header-brand .brand img{position:absolute;left:0;top:50%;transform:translateY(-50%)}.platform-label{margin:0;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.12em}
 .platform-label span{padding-inline:4px}
 .hero-content{text-align:center;padding:32px 24px 0}
 .hero h1{font-size:clamp(38px,5.1vw,66px);letter-spacing:-.035em;margin-bottom:14px}
@@ -21,12 +21,14 @@
 .button{display:inline-flex;align-items:center;justify-content:center;gap:12px;min-height:56px;box-shadow:0 6px 24px #8c233826}
 .button:hover{background:#a62b43;color:#fff}
 .button span{font-size:22px;line-height:1}
-.download-meta{display:flex;flex-direction:column;text-align:left;font-size:13px;line-height:1.8}
-.download-meta .release{margin:0;font-size:14px;font-weight:600}
+
+
 .download-links{display:flex;justify-content:center;flex-wrap:wrap;gap:12px 24px;margin-top:20px;font-size:13px}
 .download-links a{display:inline-flex;align-items:center;gap:8px}
 .compatibility{font-size:12px;color:var(--muted);margin:16px 0 0}
 nav a{padding:6px 0;color:var(--muted)}nav a:hover{color:var(--accent)}
 .prose p a,.note a,.verification p a{font-weight:600}
 @media(max-width:800px){.hero h1{font-size:clamp(36px,5.1vw,48px)}}
-@media(max-width:560px){.hero{padding-top:20px}.masthead{border-radius:12px}.header-brand{gap:6px 14px}.platform-label{font-size:9px;letter-spacing:.08em}.hero-content{padding:26px 0 0}.hero h1{font-size:38px;text-wrap:balance}.hero .lead{font-size:16px}.download-row{flex-direction:column;gap:12px}.download-row .button{width:100%}.download-meta{flex-direction:row;gap:12px;text-align:center;align-items:center}.download-links{margin-top:16px}}
+@media(max-width:560px){.hero{padding-top:20px}.masthead{border-radius:12px}.header-brand{gap:4px}.platform-label{font-size:9px;letter-spacing:.08em}.hero-content{padding:26px 0 0}.hero h1{font-size:38px;text-wrap:balance}.hero .lead{font-size:16px}.download-row{flex-direction:column;gap:12px}.download-row .button{width:100%}.download-links{margin-top:16px}}
+
+.download-platform{margin:12px 0 0;font-size:13px;color:var(--muted)}.release-detail{font-size:14px;color:var(--muted)}
