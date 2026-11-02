@@ -1,8 +1,6 @@
 use std::{sync::OnceLock, time::Duration};
 
-use eframe::egui::{
-    self, Color32, Id, Pos2, Rect, Sense, Shape, Stroke, WidgetInfo, WidgetType,
-};
+use eframe::egui::{self, Color32, Id, Pos2, Rect, Sense, Shape, Stroke, WidgetInfo, WidgetType};
 use rosetun_config::ConnectionState;
 
 use crate::theme;
@@ -470,7 +468,8 @@ pub(crate) fn rose_button(
             center,
             RING_RADIUS,
             Stroke::new(
-                theme::stroke::HAIRLINE, if hovered {
+                theme::stroke::HAIRLINE,
+                if hovered {
                     theme::palette().accent_base.gamma_multiply(0.6)
                 } else {
                     visible.ring

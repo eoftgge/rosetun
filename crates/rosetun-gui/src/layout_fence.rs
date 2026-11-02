@@ -361,7 +361,11 @@ fn views_and_widgets_take_their_layout_from_the_theme_scales() {
     for directory in ["view", "widgets"] {
         rust_files(&src.join(directory), &mut files);
     }
-    assert!(files.len() > 20, "the fence found only {} files", files.len());
+    assert!(
+        files.len() > 20,
+        "the fence found only {} files",
+        files.len()
+    );
     assert!(ALLOWED.iter().all(|allowed| !allowed.reason.is_empty()));
     let mut report = Vec::new();
     for path in files {

@@ -5,7 +5,10 @@ use crate::theme::{self, ERROR, RADIUS};
 pub(crate) fn card_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(theme::palette().card)
-        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
+        .stroke(Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().border,
+        ))
         .corner_radius(CornerRadius::same(RADIUS))
         .inner_margin(egui::Margin::same(16))
 }
@@ -13,7 +16,10 @@ pub(crate) fn card_frame() -> egui::Frame {
 pub(crate) fn modal_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(theme::palette().modal)
-        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong))
+        .stroke(Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().border_strong,
+        ))
         .corner_radius(CornerRadius::same(RADIUS))
         .inner_margin(egui::Margin::same(24))
 }

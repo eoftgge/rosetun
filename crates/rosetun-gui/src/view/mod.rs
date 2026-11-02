@@ -44,7 +44,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             .frame(
                 egui::Frame::new()
                     .fill(theme::palette().panel)
-                    .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
+                    .stroke(Stroke::new(
+                        theme::stroke::HAIRLINE,
+                        theme::palette().border,
+                    ))
                     .inner_margin(egui::Margin {
                         left: 16,
                         right: 16,
@@ -65,7 +68,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             .frame(
                 egui::Frame::new()
                     .fill(theme::palette().panel)
-                    .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
+                    .stroke(Stroke::new(
+                        theme::stroke::HAIRLINE,
+                        theme::palette().border,
+                    ))
                     .inner_margin(egui::Margin {
                         left: 16,
                         right: 16,

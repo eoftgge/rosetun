@@ -436,7 +436,8 @@ fn list_picker(
             theme::RADIUS,
             theme::palette().input,
             Stroke::new(
-                theme::stroke::HAIRLINE, if response.hovered() && enabled {
+                theme::stroke::HAIRLINE,
+                if response.hovered() && enabled {
                     theme::palette().border_strong
                 } else {
                     theme::palette().border
@@ -587,7 +588,10 @@ fn category_view(
 ) -> egui::Response {
     egui::Frame::new()
         .fill(theme::palette().card)
-        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
+        .stroke(Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().border,
+        ))
         .corner_radius(theme::RADIUS)
         .inner_margin(egui::Margin::same(4))
         .show(ui, |ui| {
@@ -1162,7 +1166,8 @@ fn process_row(
         egui::CornerRadius::same(theme::RADIUS),
         fill,
         Stroke::new(
-            theme::stroke::HAIRLINE, if selected {
+            theme::stroke::HAIRLINE,
+            if selected {
                 theme::palette().accent_dark
             } else {
                 theme::palette().border
@@ -1288,7 +1293,8 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             theme::RADIUS,
             theme::palette().input,
             Stroke::new(
-                theme::stroke::HAIRLINE, if open {
+                theme::stroke::HAIRLINE,
+                if open {
                     theme::palette().accent_base
                 } else if response.hovered() && enabled {
                     theme::palette().border_strong

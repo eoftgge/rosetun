@@ -116,7 +116,11 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                         ui.spacing_mut().item_spacing.y = theme::space::L;
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = theme::space::XS;
-                            ui.label(RichText::new(label).size(theme::font::STATE_LINE).color(color));
+                            ui.label(
+                                RichText::new(label)
+                                    .size(theme::font::STATE_LINE)
+                                    .color(color),
+                            );
                             let session = visible_status
                                 .and_then(|status| status.since_unix)
                                 .map_or_else(
@@ -695,15 +699,17 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
     let width = ui.available_width();
     let response = egui::Frame::new()
         .fill(theme::palette().input)
-        .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong))
+        .stroke(egui::Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().border_strong,
+        ))
         .corner_radius(theme::RADIUS)
         .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
             ui.set_min_width(width - 28.0);
             ui.horizontal(|ui| {
                 let badge_height = 26.0;
-                let name_font =
-                    theme::font::title();
+                let name_font = theme::font::title();
                 let badge = country
                     .map(|code| (code, true))
                     .or_else(|| flag.as_deref().map(|code| (code, false)));
@@ -718,7 +724,8 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                         rect,
                         theme::RADIUS_INNER,
                         egui::Stroke::new(
-                            theme::stroke::HAIRLINE, if verified {
+                            theme::stroke::HAIRLINE,
+                            if verified {
                                 theme::palette().accent_dark
                             } else {
                                 theme::palette().border_strong

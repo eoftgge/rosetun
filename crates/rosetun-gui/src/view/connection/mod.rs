@@ -125,7 +125,10 @@ fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     };
     egui::Frame::new()
         .fill(theme::palette().input)
-        .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_base))
+        .stroke(egui::Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().accent_base,
+        ))
         .corner_radius(theme::RADIUS)
         .inner_margin(egui::Margin::symmetric(16, 10))
         .show(ui, |ui| {

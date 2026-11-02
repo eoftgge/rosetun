@@ -25,10 +25,15 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.min_rect().width(), 30.0), sense);
     if ui.is_rect_visible(rect) {
         let radius = item_radius(ui.ctx().pixels_per_point());
-        let selected_fill = theme::palette().accent_dark.gamma_multiply(theme::alpha::SELECTED);
+        let selected_fill = theme::palette()
+            .accent_dark
+            .gamma_multiply(theme::alpha::SELECTED);
         if enabled && item.danger && response.hovered() {
-            ui.painter()
-                .rect_filled(rect, radius, theme::ERROR.gamma_multiply(theme::alpha::TINT));
+            ui.painter().rect_filled(
+                rect,
+                radius,
+                theme::ERROR.gamma_multiply(theme::alpha::TINT),
+            );
         } else if item.selected {
             ui.painter().rect_filled(rect, radius, selected_fill);
         } else if enabled && response.hovered() {

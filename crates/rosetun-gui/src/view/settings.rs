@@ -557,7 +557,8 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 radio.center(),
                                 7.0,
                                 egui::Stroke::new(
-                                    theme::stroke::GLYPH, if selected == setting {
+                                    theme::stroke::GLYPH,
+                                    if selected == setting {
                                         theme::palette().accent_light
                                     } else {
                                         theme::palette().text_dim
@@ -920,7 +921,10 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 let width = ui.available_width();
                 egui::Frame::new()
                     .fill(theme::palette().input)
-                    .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_dark))
+                    .stroke(egui::Stroke::new(
+                        theme::stroke::HAIRLINE,
+                        theme::palette().accent_dark,
+                    ))
                     .corner_radius(theme::RADIUS)
                     .inner_margin(16)
                     .show(ui, |ui| {
@@ -934,7 +938,10 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             painter.circle_stroke(
                                 center,
                                 15.5,
-                                egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_base),
+                                egui::Stroke::new(
+                                    theme::stroke::HAIRLINE,
+                                    theme::palette().accent_base,
+                                ),
                             );
                             for (start, end) in [
                                 (
@@ -952,7 +959,10 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             ] {
                                 painter.line_segment(
                                     [start, end],
-                                    egui::Stroke::new(theme::stroke::GLYPH, theme::palette().accent_light),
+                                    egui::Stroke::new(
+                                        theme::stroke::GLYPH,
+                                        theme::palette().accent_light,
+                                    ),
                                 );
                             }
                             ui.vertical(|ui| {

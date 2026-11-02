@@ -133,7 +133,10 @@ fn exit_row(
     let rules = state.exit_rules(&exit.id);
     let can_edit = state.can_edit_rules();
     widgets::card_frame()
-        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
+        .stroke(Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().border,
+        ))
         .inner_margin(egui::Margin {
             left: 12,
             right: 12,

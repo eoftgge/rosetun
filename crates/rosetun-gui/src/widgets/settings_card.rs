@@ -9,7 +9,10 @@ pub(crate) fn settings_card(ui: &mut egui::Ui, add_rows: impl FnOnce(&mut Settin
     let width = ui.available_width();
     egui::Frame::new()
         .fill(theme::palette().card)
-        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
+        .stroke(Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().border,
+        ))
         .corner_radius(RADIUS)
         .inner_margin(0)
         .show(ui, |ui| {

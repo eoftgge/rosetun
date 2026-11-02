@@ -202,7 +202,10 @@ fn list_card(
         tr!("list-used-rules", count = count, n = count.to_string())
     };
     widgets::card_frame()
-        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
+        .stroke(Stroke::new(
+            theme::stroke::HAIRLINE,
+            theme::palette().border,
+        ))
         .inner_margin(egui::Margin {
             left: 12,
             right: 12,

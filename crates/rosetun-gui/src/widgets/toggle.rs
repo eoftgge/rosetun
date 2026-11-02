@@ -61,7 +61,10 @@ pub(super) fn paint_toggle(
         if on {
             Stroke::NONE
         } else {
-            Stroke::new(theme::stroke::HAIRLINE, faded(theme::palette().border_strong))
+            Stroke::new(
+                theme::stroke::HAIRLINE,
+                faded(theme::palette().border_strong),
+            )
         },
         egui::StrokeKind::Inside,
     );

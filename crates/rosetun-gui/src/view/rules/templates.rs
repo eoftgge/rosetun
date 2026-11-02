@@ -56,7 +56,8 @@ pub(super) fn template_card(
             ui.set_width(width);
             ui.set_max_width(width);
             let frame = widgets::card_frame().inner_margin(14).stroke(Stroke::new(
-                theme::stroke::HAIRLINE, if rule.is_some() {
+                theme::stroke::HAIRLINE,
+                if rule.is_some() {
                     theme::palette().accent_dark
                 } else {
                     theme::palette().border

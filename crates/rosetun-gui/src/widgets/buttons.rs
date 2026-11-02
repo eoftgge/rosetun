@@ -6,7 +6,9 @@ fn primary_fill(enabled: bool) -> Color32 {
     if enabled {
         theme::palette().accent_base
     } else {
-        theme::palette().accent_dark.gamma_multiply(theme::alpha::MUTED)
+        theme::palette()
+            .accent_dark
+            .gamma_multiply(theme::alpha::MUTED)
     }
 }
 
@@ -32,7 +34,8 @@ pub(crate) fn outline_button(
     let button = egui::Button::new(text)
         .fill(Color32::TRANSPARENT)
         .stroke(Stroke::new(
-            theme::stroke::HAIRLINE, if enabled {
+            theme::stroke::HAIRLINE,
+            if enabled {
                 theme::palette().border_strong
             } else {
                 theme::palette().border
@@ -82,7 +85,8 @@ fn compact_button(
     };
     let button = if outlined {
         button.fill(Color32::TRANSPARENT).stroke(Stroke::new(
-            theme::stroke::HAIRLINE, if enabled {
+            theme::stroke::HAIRLINE,
+            if enabled {
                 theme::palette().border_strong
             } else {
                 theme::palette().border
@@ -143,7 +147,9 @@ mod tests {
         assert_ne!(primary_fill(false), theme::palette().card);
         assert_eq!(
             primary_fill(false),
-            theme::palette().accent_dark.gamma_multiply(theme::alpha::MUTED)
+            theme::palette()
+                .accent_dark
+                .gamma_multiply(theme::alpha::MUTED)
         );
         let ctx = egui::Context::default();
         theme::apply(&ctx);

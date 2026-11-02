@@ -33,9 +33,10 @@ pub(super) fn subscription_card(
         || tr!("never-updated").to_owned(),
         |timestamp| crate::i18n::last_updated(&crate::i18n::updated_ago(timestamp, now)),
     );
-    let mut frame = widgets::card_frame()
-        .inner_margin(12)
-        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border));
+    let mut frame = widgets::card_frame().inner_margin(12).stroke(Stroke::new(
+        theme::stroke::HAIRLINE,
+        theme::palette().border,
+    ));
     // The grip is drawn in this margin, left of the header row.
     let grip_margin = f32::from(frame.inner_margin.left) + frame.stroke.width;
     if dragged {
@@ -353,7 +354,10 @@ fn details(
     if subscription.announce.is_some() || !subscription.notices.is_empty() {
         widgets::card_frame()
             .fill(theme::palette().bg)
-            .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
+            .stroke(Stroke::new(
+                theme::stroke::HAIRLINE,
+                theme::palette().border,
+            ))
             .corner_radius(theme::RADIUS)
             .inner_margin(10)
             .show(ui, |ui| {

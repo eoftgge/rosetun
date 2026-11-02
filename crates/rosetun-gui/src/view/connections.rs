@@ -298,8 +298,10 @@ fn close_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
         (egui::vec2(-half, -half), egui::vec2(half, half)),
         (egui::vec2(-half, half), egui::vec2(half, -half)),
     ] {
-        ui.painter()
-            .line_segment([center + from, center + to], egui::Stroke::new(theme::stroke::GLYPH, color));
+        ui.painter().line_segment(
+            [center + from, center + to],
+            egui::Stroke::new(theme::stroke::GLYPH, color),
+        );
     }
     response
 }

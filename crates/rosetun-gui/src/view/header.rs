@@ -2,8 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use eframe::egui::{
     self, Align, Color32, FontFamily, FontId, Id, Layout, PointerButton, Rect, Response, Sense,
-    Shape, Stroke, TextFormat, TextStyle, ViewportCommand, WidgetInfo, WidgetType,
-    text::LayoutJob,
+    Shape, Stroke, TextFormat, TextStyle, ViewportCommand, WidgetInfo, WidgetType, text::LayoutJob,
 };
 use rosetun_config::ConnectionState;
 

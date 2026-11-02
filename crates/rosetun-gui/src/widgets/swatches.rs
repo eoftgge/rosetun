@@ -113,7 +113,10 @@ fn paint<T>(
         center,
         radius - 1.0,
         fade(swatch.ring),
-        Stroke::new(theme::stroke::HAIRLINE, fade(theme::palette().border_strong)),
+        Stroke::new(
+            theme::stroke::HAIRLINE,
+            fade(theme::palette().border_strong),
+        ),
     );
     painter.circle_filled(center, radius - 6.0, fade(swatch.fill));
     if active {
