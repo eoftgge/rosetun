@@ -120,14 +120,26 @@ fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
         UndoNotice::RulesMoved(count) => i18n::rules_moved(count),
         UndoNotice::Reverted => tr!("rules-reverted"),
     };
-    if widgets::action_notice(
-        ctx,
-        "rules_undo_notice",
-        &text,
-        &tr!("undo"),
-        state.can_undo_rules(),
-    ) {
-        actions.push(Action::UndoRules);
+    let undo = tr!("undo");
+    let apply = tr!("apply");
+    let apply_hint = tr!("apply-hint");
+    let mut choices = vec![widgets::NoticeAction {
+        label: &undo,
+        hint: None,
+        enabled: state.can_undo_rules(),
+    }];
+    // The change waits for the running connection, as the line under the title says.
+    if state.can_apply() && state.pending_reconnect(SessionPart::Rules) {
+        choices.push(widgets::NoticeAction {
+            label: &apply,
+            hint: Some(&apply_hint),
+            enabled: true,
+        });
+    }
+    match widgets::action_notice(ctx, "rules_undo_notice", &text, &choices) {
+        Some(0) => actions.push(Action::UndoRules),
+        Some(_) => actions.push(Action::Apply),
+        None => {}
     }
 }
 
