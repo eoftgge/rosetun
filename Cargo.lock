@@ -3053,6 +3053,7 @@ dependencies = [
 name = "rosetun-shell"
 version = "0.5.0-alpha.1"
 dependencies = [
+ "memmap2",
  "serde",
  "windows-sys 0.61.2",
 ]

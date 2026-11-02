@@ -26,6 +26,11 @@ mod instance;
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
 mod link_pipe;
+#[expect(
+    unsafe_code,
+    reason = "a file mapping; the unsafe block carries a SAFETY comment"
+)]
+mod mapped_file;
 #[cfg_attr(
     windows,
     expect(
@@ -92,6 +97,7 @@ pub use language::user_language;
 pub use link_pipe::{LinkListener, MAX_LINK_BYTES, send_link};
 #[cfg(windows)]
 pub use program_icon::ComApartment;
+pub use mapped_file::{MappedFile, map_protected_file};
 pub use program_icon::{IconImage, program_icon};
 #[cfg(windows)]
 pub use screen_clip::{clipboard_sequence, start_screen_clip};

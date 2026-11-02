@@ -5,7 +5,7 @@
 //! Nothing is read at start. egui asks [`SystemFonts`] the first time a character has no
 //! glyph in any configured font of a family, and appends the font found then to that family,
 //! after Manrope and egui's fonts, so the look of Latin, Cyrillic and egui's symbols stays.
-//! Font files are read, never copied, and their paths are not logged.
+//! System font files are mapped into memory, not copied, and their paths are not logged.
 
 use std::collections::HashMap;
 #[cfg(not(windows))]
@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eframe::egui::{FallbackRequest, FontData, FontInsert, FontProvider};
+use eframe::epaint::text::Blob;
 use skrifa::MetadataProvider as _;
 
 /// The largest font file read; the largest known one, Microsoft JhengHei, is about 21 MB.
@@ -330,31 +331,38 @@ fn parse_fontconfig_match(output: &[u8]) -> Option<Location> {
 }
 
 fn read_face(location: &Location) -> Option<FontData> {
-    let file = match std::fs::File::open(&location.path) {
-        Ok(file) => file,
+    let bytes = match font_bytes(&location.path) {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
         Err(error) => {
-            tracing::debug!(kind = ?error.kind(), "could not open a fallback font");
+            tracing::debug!(kind = ?error.kind(), "could not read a fallback font");
             return None;
         }
     };
-    let mut bytes = Vec::new();
-    if let Err(error) = std::io::Read::read_to_end(
-        &mut std::io::Read::take(file, MAX_FONT_BYTES + 1),
-        &mut bytes,
-    ) {
-        tracing::debug!(kind = ?error.kind(), "could not read a fallback font");
-        return None;
-    }
-    if bytes.len() as u64 > MAX_FONT_BYTES {
+    let data = FontData::from_blob(bytes, location.index);
+    if data.bytes().len() as u64 > MAX_FONT_BYTES {
         tracing::debug!("skipped a fallback font larger than the limit");
         return None;
     }
-    if skrifa::FontRef::from_index(&bytes, location.index).is_err() {
+    if skrifa::FontRef::from_index(data.bytes(), data.index).is_err() {
         tracing::debug!("skipped a fallback font that could not be parsed");
         return None;
     }
-    Some(FontData::from_blob(Arc::new(bytes), location.index))
+    Some(data)
+}
+
+/// The file mapped into memory when only an administrator can change it, as system fonts,
+/// else read into memory.
+fn font_bytes(path: &std::path::Path) -> std::io::Result<Blob> {
+    if let Some(mapped) = rosetun_shell::map_protected_file(path)? {
+        return Ok(Arc::new(mapped));
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(std::fs::File::open(path)?, MAX_FONT_BYTES + 1),
+        &mut bytes,
+    )?;
+    Ok(Arc::new(bytes))
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ rosetun-config.workspace = true
 rosetun-core.workspace = true
 rosetun-ipc.workspace = true
 rosetun-processes.workspace = true
+rosetun-shell.workspace = true
 rqrr.workspace = true
 skrifa.workspace = true
 thiserror.workspace = true
@@ -36,7 +37,6 @@ qrcode.workspace = true
 eframe = { workspace = true, features = ["wgpu_no_default_features"] }
 wgpu = { workspace = true, features = ["dx12", "wgsl"] }
 raw-window-handle.workspace = true
-rosetun-shell.workspace = true
 serde_json.workspace = true
 tray-icon.workspace = true
 rfd.workspace = true
