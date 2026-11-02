@@ -103,11 +103,19 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn a_file_the_user_can_change_is_not_mapped() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
         let path = temp_file("user", b"font bytes");
+        // The new file belongs to the effective user, so its owner says whether
+        // the tests run as root. A root-owned file nobody else can write is
+        // exactly what the check accepts, so as root the test checks that side.
+        let as_root = std::fs::metadata(&path).unwrap().uid() == 0;
+        if as_root {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
         let mapped = map_protected_file(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
-        // Tests do not run as root, so the file is the user's.
-        assert!(mapped.is_none());
+        assert_eq!(mapped.is_some(), as_root);
     }
 
     #[test]
