@@ -1,8 +1,8 @@
 use std::fmt::Write;
 
 use rosetun_config::{
-    AppConfig, ConnectionState, EngineKind, FailureKind, LanguageSetting, Status, XrayUse,
-    redact_report_text,
+    AppConfig, ConnectionState, EngineKind, FailureKind, LanguageSetting, Status, TlsFragment,
+    XrayUse, redact_report_text,
 };
 use rosetun_core::{CheckKind, CheckResult, CheckStatus, DnsPreset};
 
@@ -13,6 +13,8 @@ pub(crate) struct ReportSnapshot {
     lockdown: Option<bool>,
     allow_lan: bool,
     xray_mode: XrayUse,
+    tls_fragment: TlsFragment,
+    fragmented: bool,
     dns_preset: Option<DnsPreset>,
     verbose_log: bool,
     language: LanguageSetting,
@@ -90,6 +92,8 @@ impl ReportSnapshot {
             lockdown: helper_available.then_some(status.lockdown),
             allow_lan: config.settings.allow_lan,
             xray_mode: config.settings.xray,
+            tls_fragment: config.settings.tls_fragment,
+            fragmented: helper_available && status.fragmented,
             dns_preset: DnsPreset::matching(&config.settings.dns),
             verbose_log: config.settings.verbose_log_active(now),
             language: config.interface.language,
@@ -209,6 +213,21 @@ impl ReportSnapshot {
                 XrayUse::Always => report_label!("xray-always"),
             }
         );
+        let fragment = &self.tls_fragment;
+        let _ = write!(
+            text,
+            "{}: {}",
+            report_label!("fragment-title"),
+            switch(fragment.enabled)
+        );
+        if fragment.enabled {
+            let _ = write!(
+                text,
+                " · {} · {} · {}",
+                fragment.packets, fragment.length, fragment.interval
+            );
+        }
+        let _ = writeln!(text);
         let dns = match self.dns_preset {
             Some(DnsPreset::Cloudflare) => "Cloudflare".to_owned(),
             Some(DnsPreset::Google) => "Google".to_owned(),
@@ -291,6 +310,12 @@ impl ReportSnapshot {
             "{}: {}",
             report_label!("report-through-xray"),
             switch(self.xray)
+        );
+        let _ = writeln!(
+            text,
+            "{}: {}",
+            report_label!("report-fragmented"),
+            switch(self.fragmented)
         );
 
         let _ = writeln!(text, "\n[{}]", report_label!("system-check-title"));

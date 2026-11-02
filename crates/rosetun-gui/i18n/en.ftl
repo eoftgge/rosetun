@@ -338,6 +338,7 @@ report-failure-dns = DnsTimeout
 report-failure-name = ServerNameUnresolved
 report-engine = Engine
 report-through-xray = Through Xray
+report-fragmented = Server connection fragmented
 report-warning = Warning
 report-not-checked = Not checked
 report-unavailable = Unavailable
