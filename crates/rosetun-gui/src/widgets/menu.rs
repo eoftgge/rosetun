@@ -98,12 +98,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, item: MenuItem<'_>) -> egui::Response
         );
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::Role::Button,
-            enabled,
-            item.selected,
-            item.label,
-        )
+        egui::WidgetInfo::selected(egui::Role::Button, enabled, item.selected, item.label)
     });
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)

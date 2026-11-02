@@ -1059,9 +1059,8 @@ fn process_tab(ui: &mut egui::Ui, label: &str, selected: bool, enabled: bool) ->
             );
         }
     }
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, label)
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, label));
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {

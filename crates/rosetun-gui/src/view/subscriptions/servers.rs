@@ -283,12 +283,7 @@ pub(super) fn server_row(
         ))
     };
     response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::Role::Button,
-            enabled,
-            selected,
-            &full_name,
-        )
+        egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, &full_name)
     });
     let response = if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)

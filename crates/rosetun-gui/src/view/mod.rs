@@ -352,9 +352,7 @@ fn settings_nav_item(
             theme::palette().accent_light,
         );
     }
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Button, true, selected, label)
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()

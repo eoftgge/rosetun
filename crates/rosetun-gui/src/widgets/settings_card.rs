@@ -163,9 +163,8 @@ impl SettingsCard<'_> {
             *on = !*on;
             response.mark_changed();
         }
-        response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, *on, title)
-        });
+        response
+            .widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, *on, title));
         let progress = self.ui.ctx().animate_bool_with_time(response.id, *on, 0.1);
         paint_toggle(self.ui, switch, *on, progress, enabled);
         if enabled {

@@ -22,8 +22,7 @@ pub(crate) fn toggle(ui: &mut egui::Ui, on: &mut bool, enabled: bool) -> egui::R
         *on = next;
         response.mark_changed();
     }
-    response
-        .widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, *on, ""));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, *on, ""));
     let progress = ui.ctx().animate_bool_with_time(response.id, *on, 0.1);
     paint_toggle(ui, rect, *on, progress, enabled);
     if enabled {
@@ -148,9 +147,7 @@ pub(crate) fn toggle_row_with_detail(
         *on = next;
         response.mark_changed();
     }
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, *on, title)
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, *on, title));
     let progress = ui.ctx().animate_bool_with_time(response.id, *on, 0.1);
     paint_toggle(ui, row.inner, *on, progress, enabled);
     if enabled {

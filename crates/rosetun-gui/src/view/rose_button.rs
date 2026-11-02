@@ -1,6 +1,6 @@
 use std::{sync::OnceLock, time::Duration};
 
-use eframe::egui::{self, Color32, Id, Pos2, Rect, Sense, Shape, Stroke, WidgetInfo, Role};
+use eframe::egui::{self, Color32, Id, Pos2, Rect, Role, Sense, Shape, Stroke, WidgetInfo};
 use rosetun_config::ConnectionState;
 
 use crate::theme;

@@ -653,7 +653,11 @@ pub(super) fn rule_row(
             egui::pos2(left, response.rect.top()),
             egui::pos2(right.max(left), response.rect.bottom()),
         );
-        let click = ui.interact(body, ui.scope_id().with("select_rule"), egui::Sense::click());
+        let click = ui.interact(
+            body,
+            ui.scope_id().with("select_rule"),
+            egui::Sense::click(),
+        );
         if click.clicked() {
             let modifiers = ui.input(|input| input.modifiers);
             actions.push(Action::SelectRule {

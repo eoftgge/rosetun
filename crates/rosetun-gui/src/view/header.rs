@@ -1,8 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use eframe::egui::{
-    self, Align, Color32, FontFamily, FontId, Id, Layout, PointerButton, Rect, Response, Sense,
-    Shape, Stroke, TextFormat, TextStyle, ViewportCommand, WidgetInfo, Role, text::LayoutJob,
+    self, Align, Color32, FontFamily, FontId, Id, Layout, PointerButton, Rect, Response, Role,
+    Sense, Shape, Stroke, TextFormat, TextStyle, ViewportCommand, WidgetInfo, text::LayoutJob,
 };
 use rosetun_config::ConnectionState;
 
@@ -565,8 +565,7 @@ fn tab(
         egui::vec2(tab_width(ui, label, icons_only), ui.max_rect().height()),
         Sense::click(),
     );
-    response
-        .widget_info(|| WidgetInfo::selected(Role::Button, true, selected, label));
+    response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, label));
     let t = ui.ctx().animate_bool_with_time(
         response.id,
         selected || response.hovered(),

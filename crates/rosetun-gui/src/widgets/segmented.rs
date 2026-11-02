@@ -104,12 +104,7 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
         );
         let active = *value == selected;
         response.widget_info(|| {
-            egui::WidgetInfo::selected(
-                egui::Role::Button,
-                enabled,
-                active,
-                label.as_ref(),
-            )
+            egui::WidgetInfo::selected(egui::Role::Button, enabled, active, label.as_ref())
         });
         if enabled && response.clicked() && !active {
             clicked = Some(*value);
