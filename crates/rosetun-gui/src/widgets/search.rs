@@ -3,6 +3,8 @@ use eframe::egui;
 use crate::icons::{self, Icon};
 use crate::theme;
 
+use super::text_field::{field_height, field_vertical_margin, style_field};
+
 /// Search fields over the rules and connections lists share these widths.
 pub(crate) const SEARCH_WIDTH: f32 = 260.0;
 pub(crate) const MIN_SEARCH_WIDTH: f32 = 120.0;
@@ -50,18 +52,25 @@ fn search_field_inner(
             .ceil()
             .clamp(8.0, 120.0) as i8
     });
-    let search = ui.add(
-        egui::TextEdit::singleline(text)
-            .hint_text(hint)
-            .desired_width(width)
-            .min_size(egui::vec2(width, 38.0))
-            .margin(egui::Margin {
-                left: theme::margin::side(theme::space::XXL),
-                right: right_margin,
-                top: theme::margin::side(theme::space::S),
-                bottom: theme::margin::side(theme::space::S),
-            }),
-    );
+    let height = field_height(ui);
+    let vertical = field_vertical_margin(ui, height);
+    let search = ui
+        .scope(|ui| {
+            style_field(ui, false);
+            ui.add(
+                egui::TextEdit::singleline(text)
+                    .hint_text(hint)
+                    .desired_width(width)
+                    .min_size(egui::vec2(width, height))
+                    .margin(egui::Margin {
+                        left: theme::margin::side(theme::space::XXL),
+                        right: right_margin,
+                        top: vertical,
+                        bottom: vertical,
+                    }),
+            )
+        })
+        .inner;
     icons::paint(
         ui.painter(),
         egui::pos2(search.rect.left() + 16.0, search.rect.center().y),

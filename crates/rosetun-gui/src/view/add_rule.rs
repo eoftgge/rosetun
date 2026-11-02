@@ -690,20 +690,12 @@ fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Act
             .small()
             .color(theme::palette().text_dim),
     );
+    let example = tr!("ip-example");
+    let field = widgets::TextField::new(&mut dialog.ips).enabled(!dialog.busy);
     let input = if dialog.editing.is_some() {
-        ui.add_enabled(
-            !dialog.busy,
-            egui::TextEdit::singleline(&mut dialog.ips).desired_width(ui.available_width()),
-        )
+        ui.add(field)
     } else {
-        ui.add_enabled(
-            !dialog.busy,
-            egui::TextEdit::multiline(&mut dialog.ips)
-                .desired_width(ui.available_width())
-                .desired_rows(4)
-                .font(egui::TextStyle::Monospace)
-                .hint_text(tr!("ip-example")),
-        )
+        ui.add(field.rows(4).monospace(true).hint(&example))
     };
     if dialog.focus_input {
         input.request_focus();
@@ -772,19 +764,15 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
             .small()
             .color(theme::palette().text_dim),
     );
+    let field = widgets::TextField::new(&mut dialog.domains).enabled(!dialog.busy);
     let input = if dialog.editing.is_some() {
-        ui.add_enabled(
-            !dialog.busy,
-            egui::TextEdit::singleline(&mut dialog.domains).desired_width(ui.available_width()),
-        )
+        ui.add(field)
     } else {
-        ui.add_enabled(
-            !dialog.busy,
-            egui::TextEdit::multiline(&mut dialog.domains)
-                .desired_width(ui.available_width())
-                .desired_rows(5)
-                .font(egui::TextStyle::Monospace)
-                .hint_text(constants::SITES_EXAMPLE),
+        ui.add(
+            field
+                .rows(5)
+                .monospace(true)
+                .hint(constants::SITES_EXAMPLE),
         )
     };
     if dialog.focus_input {
@@ -1478,12 +1466,10 @@ fn destination_menu(
         if full {
             exits_full_note(ui);
         }
-        ui.add_enabled(
-            !full,
-            egui::TextEdit::singleline(&mut dialog.node_search)
-                .desired_width(ui.available_width())
-                .hint_text(tr!("where-node-search")),
-        );
+        let width = ui.available_width();
+        ui.add_enabled_ui(!full, |ui| {
+            widgets::search_field(ui, &mut dialog.node_search, &tr!("where-node-search"), width)
+        });
         let nodes = destinations::matching_nodes(config, &dialog.node_search);
         if nodes.is_empty() {
             destination_note(ui, tr!("where-node-none"));

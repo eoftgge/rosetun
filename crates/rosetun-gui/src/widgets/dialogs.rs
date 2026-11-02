@@ -2,7 +2,7 @@ use eframe::egui;
 
 use crate::theme;
 
-use super::{button_fill, field_height, outline_button, show_modal};
+use super::{TextField, button_fill, field_height, outline_button, show_modal};
 
 /// The room a wide dialog leaves at the sides of a narrow window.
 const WIDE_SIDE_ROOM: f32 = 144.0;
@@ -312,11 +312,11 @@ pub(crate) fn name_modal(ctx: &egui::Context, options: NameModal<'_>) -> ModalCh
         ui.heading(options.title);
         ui.add_space(theme::space::M);
         ui.label(options.label);
-        let mut edit = egui::TextEdit::singleline(options.name).desired_width(f32::INFINITY);
+        let mut field = TextField::new(options.name).enabled(!options.busy);
         if let Some(limit) = options.char_limit {
-            edit = edit.char_limit(limit);
+            field = field.char_limit(limit);
         }
-        let input = ui.add_enabled(!options.busy, edit);
+        let input = ui.add(field);
         if *options.focus {
             input.request_focus();
             *options.focus = false;

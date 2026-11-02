@@ -368,10 +368,7 @@ pub(crate) fn add_dialog(
         }
         ui.label(tr!("list-url"));
         let mut value = dialog.url.clone();
-        let input = ui.add_enabled(
-            !busy,
-            egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY),
-        );
+        let input = ui.add(widgets::TextField::new(&mut value).enabled(!busy));
         if dialog.focus_url {
             input.request_focus();
             dialog.focus_url = false;
@@ -392,10 +389,7 @@ pub(crate) fn add_dialog(
         ui.add_space(theme::space::L);
         ui.label(tr!("name"));
         if ui
-            .add_enabled(
-                !busy,
-                egui::TextEdit::singleline(&mut dialog.name).desired_width(f32::INFINITY),
-            )
+            .add(widgets::TextField::new(&mut dialog.name).enabled(!busy))
             .changed()
         {
             dialog.name_manual = true;

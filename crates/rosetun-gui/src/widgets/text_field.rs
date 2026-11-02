@@ -14,8 +14,42 @@ pub(crate) fn field_height(ui: &egui::Ui) -> f32 {
     (text + 2.0 * ui.spacing().button_padding.y).max(ui.spacing().interact_size.y)
 }
 
-/// A one-line input on the palette's field colour with a hairline border, red when the
-/// value is not acceptable.
+/// The space above and below a field's text, so a line of text stands in the middle of a field
+/// `height` high.
+pub(crate) fn field_vertical_margin(ui: &egui::Ui, height: f32) -> i8 {
+    ((height
+        - ui.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Body.resolve(ui.style()))))
+        / 2.0)
+        .max(0.0) as i8
+}
+
+/// Gives the text inputs in `ui` the look of a field: the palette's field colour, a hairline
+/// border that rises on hover, rounded corners, and red when the value is not acceptable. A
+/// search field and a field in a form take their look from here.
+pub(crate) fn style_field(ui: &mut egui::Ui, invalid: bool) {
+    let palette = theme::palette();
+    let (rest, raised, focused) = if invalid {
+        (theme::ERROR, theme::ERROR, theme::ERROR)
+    } else {
+        (palette.border_strong, palette.text_dim, palette.accent_base)
+    };
+    let visuals = ui.visuals_mut();
+    visuals.extreme_bg_color = palette.input;
+    visuals.widgets.inactive.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, rest);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, raised);
+    visuals.widgets.active.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, raised);
+    visuals.selection.stroke = Stroke::new(theme::stroke::HAIRLINE, focused);
+    for state in [
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+    ] {
+        state.corner_radius = CornerRadius::same(RADIUS);
+    }
+}
+
+/// An input on the palette's field colour with a hairline border, red when the value is not
+/// acceptable. One line, or several when it is given `rows`.
 #[must_use = "a field does nothing until it is added to a Ui"]
 pub(crate) struct TextField<'a> {
     text: &'a mut String,
@@ -25,6 +59,9 @@ pub(crate) struct TextField<'a> {
     enabled: bool,
     width: f32,
     id: Option<egui::Id>,
+    rows: Option<usize>,
+    char_limit: Option<usize>,
+    monospace: bool,
 }
 
 impl<'a> TextField<'a> {
@@ -37,6 +74,9 @@ impl<'a> TextField<'a> {
             enabled: true,
             width: f32::INFINITY,
             id: None,
+            rows: None,
+            char_limit: None,
+            monospace: false,
         }
     }
 
@@ -73,11 +113,28 @@ impl<'a> TextField<'a> {
         self.width = width;
         self
     }
+
+    /// Several lines of input, this many rows high before the text scrolls.
+    pub(crate) fn rows(mut self, rows: usize) -> Self {
+        self.rows = Some(rows);
+        self
+    }
+
+    /// The most characters the field takes.
+    pub(crate) fn char_limit(mut self, limit: usize) -> Self {
+        self.char_limit = Some(limit);
+        self
+    }
+
+    /// Monospace text, for addresses and domain names.
+    pub(crate) fn monospace(mut self, monospace: bool) -> Self {
+        self.monospace = monospace;
+        self
+    }
 }
 
 impl egui::Widget for TextField<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        let palette = theme::palette();
         let height = field_height(ui);
         let width = if self.width.is_finite() {
             self.width
@@ -85,45 +142,27 @@ impl egui::Widget for TextField<'_> {
             ui.available_width()
         };
         let horizontal = theme::space::M as i8;
-        let vertical = ((height
-            - ui.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Body.resolve(ui.style()))))
-            / 2.0)
-            .max(0.0) as i8;
+        let vertical = field_vertical_margin(ui, height);
         ui.scope(|ui| {
-            let rest = if self.invalid {
-                theme::ERROR
-            } else {
-                palette.border_strong
-            };
-            let raised = if self.invalid {
-                theme::ERROR
-            } else {
-                palette.text_dim
-            };
-            let focused = if self.invalid {
-                theme::ERROR
-            } else {
-                palette.accent_base
-            };
-            let visuals = ui.visuals_mut();
-            visuals.extreme_bg_color = palette.input;
-            visuals.widgets.inactive.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, rest);
-            visuals.widgets.hovered.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, raised);
-            visuals.widgets.active.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, raised);
-            visuals.selection.stroke = Stroke::new(theme::stroke::HAIRLINE, focused);
-            for state in [
-                &mut visuals.widgets.inactive,
-                &mut visuals.widgets.hovered,
-                &mut visuals.widgets.active,
-            ] {
-                state.corner_radius = CornerRadius::same(RADIUS);
+            style_field(ui, self.invalid);
+            let edit = match self.rows {
+                Some(rows) => egui::TextEdit::multiline(self.text).desired_rows(rows),
+                None => egui::TextEdit::singleline(self.text),
             }
-            let edit = egui::TextEdit::singleline(self.text)
-                .hint_text(self.hint)
-                .password(self.password)
-                .desired_width(width)
-                .min_size(egui::vec2(width, height))
-                .margin(egui::Margin::symmetric(horizontal, vertical));
+            .hint_text(self.hint)
+            .password(self.password)
+            .desired_width(width)
+            .min_size(egui::vec2(width, height))
+            .margin(egui::Margin::symmetric(horizontal, vertical));
+            let edit = match self.char_limit {
+                Some(limit) => edit.char_limit(limit),
+                None => edit,
+            };
+            let edit = if self.monospace {
+                edit.font(egui::TextStyle::Monospace)
+            } else {
+                edit
+            };
             ui.add_enabled(
                 self.enabled,
                 match self.id {
@@ -171,6 +210,146 @@ mod tests {
             });
         });
         output.textures_delta.clear();
+    }
+
+    /// What a field looks like once painted: the fill, border and corners of the shape that
+    /// frames `rect`.
+    #[derive(Debug, PartialEq)]
+    struct Frame {
+        fill: egui::Color32,
+        stroke: egui::epaint::Stroke,
+        corner_radius: CornerRadius,
+    }
+
+    fn painted_frames(
+        shapes: &[egui::epaint::ClippedShape],
+        rects: &[egui::Rect],
+    ) -> Vec<Frame> {
+        fn collect(shape: &egui::Shape, out: &mut Vec<egui::epaint::RectShape>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+                egui::Shape::Rect(rect) => out.push(rect.clone()),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for clipped in shapes {
+            collect(&clipped.shape, &mut found);
+        }
+        rects
+            .iter()
+            .map(|rect| {
+                let shape = found
+                    .iter()
+                    .find(|shape| (shape.rect.min - rect.min).length() < 1.5
+                        && (shape.rect.max - rect.max).length() < 1.5
+                        && shape.stroke.width > 0.0)
+                    .unwrap_or_else(|| panic!("no frame painted around {rect:?}"));
+                Frame {
+                    fill: shape.fill,
+                    stroke: shape.stroke,
+                    corner_radius: shape.corner_radius,
+                }
+            })
+            .collect()
+    }
+
+    fn laid_out(
+        add: impl FnOnce(&mut egui::Ui) -> Vec<egui::Rect>,
+    ) -> (Vec<egui::Rect>, Vec<egui::epaint::ClippedShape>) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut rects = Vec::new();
+        let mut add = Some(add);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                if let Some(add) = add.take() {
+                    rects = add(ui);
+                }
+            });
+        });
+        output.textures_delta.clear();
+        (rects, output.shapes)
+    }
+
+    #[test]
+    fn a_multiline_field_has_the_width_and_frame_of_a_one_line_field() {
+        for invalid in [false, true] {
+            let (rects, shapes) = laid_out(|ui| {
+                let (mut one, mut many) = (String::from("192.0.2.1"), String::from("192.0.2.1
+"));
+                let single = ui.add(TextField::new(&mut one).invalid(invalid));
+                let multi = ui.add(TextField::new(&mut many).rows(4).invalid(invalid));
+                vec![single.rect, multi.rect]
+            });
+            assert_eq!(rects[0].width(), rects[1].width());
+            assert!(rects[1].height() > rects[0].height());
+            let frames = painted_frames(&shapes, &rects);
+            assert_eq!(frames[0], frames[1], "invalid: {invalid}");
+            if invalid {
+                assert_eq!(frames[1].stroke.color, theme::ERROR);
+            }
+        }
+    }
+
+    #[test]
+    fn a_multiline_field_is_as_many_rows_high_as_it_is_given() {
+        let (rects, _) = laid_out(|ui| {
+            let mut text = String::new();
+            [3, 4, 5]
+                .map(|rows| ui.add(TextField::new(&mut text).rows(rows)).rect)
+                .to_vec()
+        });
+        let row = rects[1].height() - rects[0].height();
+        assert!(row > 0.0);
+        assert!((rects[2].height() - rects[1].height() - row).abs() < 0.5);
+        assert!(rects[0].height() >= 3.0 * row);
+    }
+
+    #[test]
+    fn a_field_takes_no_more_characters_than_its_limit() {
+        for rows in [None, Some(3)] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let id = egui::Id::new("limited");
+            let mut text = String::new();
+            for events in [Vec::new(), vec![egui::Event::Text("abcdefgh".to_owned())]] {
+                if events.is_empty() {
+                    ctx.memory_mut(|memory| memory.request_focus(id));
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let mut field = TextField::new(&mut text).id(id).char_limit(4);
+                            if let Some(rows) = rows {
+                                field = field.rows(rows);
+                            }
+                            ui.add(field);
+                        });
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(text, "abcd", "rows: {rows:?}");
+        }
+    }
+
+    #[test]
+    fn a_search_field_is_framed_and_as_high_as_a_text_field() {
+        let (rects, shapes) = laid_out(|ui| {
+            let mut text = String::new();
+            let field = ui.add(TextField::new(&mut text).width(260.0));
+            let mut query = String::new();
+            let search = crate::widgets::search_field(ui, &mut query, "Search", 260.0);
+            vec![field.rect, search.rect]
+        });
+        assert_eq!(rects[0].size(), rects[1].size());
+        let frames = painted_frames(&shapes, &rects);
+        assert_eq!(frames[0], frames[1]);
     }
 
     #[test]

@@ -16,7 +16,7 @@ const RIGHT_WIDTH: f32 = 230.0;
 const MAX_NODE_LIST: f32 = 168.0;
 const MIN_NODE_LIST: f32 = 66.0;
 // Everything else in the node form at its tallest, plus room above and below the dialog.
-const NODE_FORM_REST: f32 = 540.0;
+const NODE_FORM_REST: f32 = 550.0;
 
 pub(crate) fn exit_title(exit: &Exit) -> String {
     let name = display::safe_text(&exit.name);
@@ -295,12 +295,10 @@ fn country_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig
 
 fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, busy: bool) {
     ui.label(tr!("exit-node"));
-    ui.add_enabled(
-        !busy,
-        egui::TextEdit::singleline(&mut dialog.node_search)
-            .desired_width(f32::INFINITY)
-            .hint_text(tr!("where-node-search")),
-    );
+    let width = ui.available_width();
+    ui.add_enabled_ui(!busy, |ui| {
+        widgets::search_field(ui, &mut dialog.node_search, &tr!("where-node-search"), width)
+    });
     let nodes = destinations::matching_nodes(config, &dialog.node_search);
     let mut picked = None;
     egui::ScrollArea::vertical()
@@ -395,10 +393,7 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
         });
         ui.add_space(theme::space::L);
         ui.label(tr!("exit-name"));
-        let input = ui.add_enabled(
-            !busy,
-            egui::TextEdit::singleline(&mut dialog.name).desired_width(f32::INFINITY),
-        );
+        let input = ui.add(widgets::TextField::new(&mut dialog.name).enabled(!busy));
         if dialog.focus {
             input.request_focus();
             dialog.focus = false;

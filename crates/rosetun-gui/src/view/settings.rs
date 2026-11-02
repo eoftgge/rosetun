@@ -487,36 +487,49 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     })
     .fold(0.0, f32::max);
     let input_width = (ui.available_width() - label_width - 16.0).clamp(120.0, 300.0);
+    let parsed = form.parsed_dns();
     egui::Grid::new("dns_settings_fields")
         .num_columns(2)
         .spacing([16.0, 10.0])
         .show(ui, |ui| {
-            for (label, value, hint) in [
-                (tr!("resolver-ip"), &mut form.server, ""),
-                (tr!("tls-name"), &mut form.server_name, ""),
-                (tr!("port"), &mut form.port, constants::PORT_PLACEHOLDER),
+            for (label, value, hint, failure) in [
+                (
+                    tr!("resolver-ip"),
+                    &mut form.server,
+                    "",
+                    rosetun_core::DnsInputError::InvalidServer,
+                ),
+                (
+                    tr!("tls-name"),
+                    &mut form.server_name,
+                    "",
+                    rosetun_core::DnsInputError::InvalidServerName,
+                ),
+                (
+                    tr!("port"),
+                    &mut form.port,
+                    constants::PORT_PLACEHOLDER,
+                    rosetun_core::DnsInputError::InvalidPort,
+                ),
                 (
                     tr!("dns-path"),
                     &mut form.path,
                     constants::DNS_PATH_PLACEHOLDER,
+                    rosetun_core::DnsInputError::InvalidPath,
                 ),
             ] {
                 ui.label(label);
-                if ui
-                    .add_enabled(
-                        editable,
-                        egui::TextEdit::singleline(value)
-                            .hint_text(hint)
-                            .desired_width(input_width),
-                    )
-                    .changed()
-                {
+                let field = widgets::TextField::new(value)
+                    .hint(hint)
+                    .width(input_width)
+                    .enabled(editable)
+                    .invalid(parsed.as_ref().err() == Some(&failure));
+                if ui.add(field).changed() {
                     form.dirty = true;
                 }
                 ui.end_row();
             }
         });
-    let parsed = form.parsed_dns();
     if let Err(error) = &parsed {
         ui.colored_label(
             theme::ERROR,
