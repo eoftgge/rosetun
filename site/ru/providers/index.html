@@ -1,27 +1,210 @@
 <!doctype html>
 <html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Для провайдеров. VPN-клиент для Windows. Подписки, правила и защита соединения.">
-  <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
-  <title>Для провайдеров · Rosetun</title>
-  <link rel="stylesheet" href="../../assets/site.css">
-  <link rel="icon" href="../../assets/rose.svg" type="image/svg+xml">
-  <link rel="alternate" hreflang="ru" href="../../ru/providers/">
-  <link rel="alternate" hreflang="en" href="../../en/providers/">
-</head>
-<body>
-<a class="skip" href="#main">К содержанию</a>
-<header class="wrap"><div class="header-brand"><a class="brand" href="../../ru/"><img src="../../assets/rose.svg" width="40" height="40" alt="">Rosetun</a><p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p></div>
-<nav aria-label="Навигация"><a href="../../ru/">Главная</a><a href="../../ru/providers/">Для провайдеров</a><a href="../../ru/help/">Помощь</a><a href="../../en/providers/" lang="en" hreflang="en">English</a></nav></header>
-<main id="main" class="wrap"><div class="prose"><p class="eyebrow">ROSETUN ДЛЯ ВАШИХ ПОЛЬЗОВАТЕЛЕЙ</p><h1>Для провайдеров</h1><p class="lead">Обычная подписка. Одна кнопка для добавления.</p>
-<section><h2>Кнопка на вашем сайте</h2><p>Формат: <code>rosetun://add/&lt;ссылка подписки&gt;#имя</code>. Ссылка HTTP(S) может быть сырой или целиком percent-encoded. Имя необязательно, декодируется из percent-encoding и ограничивается 64 символами. Вся ссылка: не больше 8192 байт.</p><pre><code>&lt;a href=&quot;rosetun://add/https%3A%2F%2Fprovider.example%2Fsubscription%2Fdemo#Example&quot;&gt;Добавить в Rosetun&lt;/a&gt;</code></pre><p>После установки Rosetun Windows открывает такую ссылку в приложении. Пользователь видит окно добавления с хостом провайдера. Загрузка и добавление начинаются только после подтверждения. Если подписка уже есть, открывается её карточка; ссылка не заменяет уже открытый диалог.</p><p>Используйте HTTPS. В HTTP-ссылке токен передаётся без шифрования. В сыром HTML экранируйте амперсанды как <code>&amp;amp;</code>.</p></section>
-<section><h2>Форматы и серверы</h2><p>Список URI по одному на строку, обычный или base64. Xray JSON: объект конфигурации или массив конфигураций; из каждой берётся поддерживаемый outbound с тегом proxy, иначе первый поддерживаемый. sing-box JSON: объект с outbounds; служебные selector, urltest, direct, block и dns пропускаются. Это импорт серверов, а не всей конфигурации маршрутизации.</p><p>VLESS, VMess, Trojan, Shadowsocks, Hysteria2. TCP, WebSocket, gRPC, HTTPUpgrade; XHTTP (SplitHTTP) через Xray. Без шифрования транспорта, TLS и REALITY. Для Hysteria2: QUIC поверх UDP, Salamander и смена портов.</p><p>Не поддерживаются: Clash YAML, зашифрованные ссылки Happ, XHTTP с отдельным сервером загрузки, mKCP, QUIC-транспорт для TCP-протоколов, HTTP/2, шифрование VLESS и плагины Shadowsocks. Неподдерживаемые узлы пропускаются; причины доступны в отчёте импорта в карточке. Если подходящих узлов нет, добавление завершается ошибкой. Ответ подписки ограничен 5 МиБ после распаковки.</p></section>
-<section><h2>Заголовки ответа</h2><table><thead><tr><th>Заголовок</th><th>Обработка</th></tr></thead><tbody><tr><th scope="row"><code>subscription-userinfo</code></th><td>upload и download: байты; total: лимит в байтах; expire: Unix-время в секундах. Нулевые total и expire означают отсутствие лимита и срока. Трафик и срок видны в карточке подписки.</td></tr><tr><th scope="row"><code>profile-title</code></th><td>Название подписки, до 128 символов. Обычный текст или base64:…; используется при добавлении, если пользователь не задал имя.</td></tr><tr><th scope="row"><code>content-disposition</code></th><td>Резервное название из filename или UTF-8 filename*. До 128 символов; profile-title имеет приоритет.</td></tr><tr><th scope="row"><code>profile-update-interval</code></th><td>Целое число часов. Автообновление ограничивает интервал диапазоном 1–168 часов; по умолчанию 12 часов. Пользователь может выключить автообновление.</td></tr><tr><th scope="row"><code>support-url / profile-web-page-url</code></th><td>Ссылки поддержки и личного кабинета в карточке. Только HTTP(S), текст ограничен 2048 символами перед проверкой URL.</td></tr><tr><th scope="row"><code>announce</code></th><td>Объявление в карточке подписки: обычный текст или base64:…, до 1000 символов.</td></tr><tr><th scope="row"><code>x-hwid-max-devices-reached / x-hwid-not-supported / x-hwid-limit</code></th><td>Значение true без учёта регистра останавливает разбор с ошибкой ограничения устройства; announce передаётся вместе с ошибкой.</td></tr></tbody></table><p>У отображаемого текста удаляются управляющие символы и знаки направления текста. Некорректные значения метаданных игнорируются. Эти же метаданные читаются из строк <code># ключ: значение</code> списка ссылок. Заголовок <code>routing</code> не обрабатывается и не устанавливает правила.</p></section>
-<section><h2>Что получает ваш сервер</h2><p>По умолчанию <code>User-Agent: Rosetun/&lt;версия&gt;</code>; пользователь может задать другой User-Agent. При включённом «Отправлять ID устройства» запрос добавляет <code>x-hwid</code>, <code>x-device-os</code>, <code>x-ver-os</code>, <code>x-device-model</code>. Если сведения об устройстве получить не удалось, запрос идёт без них.</p><p>Отправка включена по умолчанию и выключается для каждой подписки, в CLI через <code>--no-hwid</code>. Новые подписки получают ID, свой для каждого хоста сервера подписок: путь, токен и порт его не меняют. Разные хосты получают разные ID. У подписок, добавленных до 0.4, сохраняется прежний общий ID. Версия ОС и модель ограничены 64 печатными ASCII-символами; остальные символы заменяются на ?.</p></section>
-<section><h2>Проверьте подписку</h2><ol><li>Установите текущий выпуск и откройте кнопку добавления.</li><li>Проверьте хост, подтвердите добавление и проверьте серверы, название, трафик, срок и ссылки карточки.</li><li>Обновите подписку. При ошибке откройте её карточку и подробности отчёта импорта.</li><li>Для воспроизведения подготовьте обезличенный пример ответа и заголовков. Укажите версию Rosetun, ожидаемое поведение и текст ошибки. Не отправляйте токен, HWID, настоящие адреса или ключи.</li></ol><p><a href="https://github.com/eoftgge/rosetun/issues">Сообщить о проблеме</a> · <a href="../help/">Как собрать отчёт</a></p></section></div></main>
-<footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="https://github.com/eoftgge/rosetun/blob/master/LICENSE">GPL-3.0-or-later</a><a href="https://github.com/eoftgge/rosetun/security/policy">Сообщить об уязвимости</a><a href="../../en/providers/" lang="en" hreflang="en">English</a></footer>
-</body>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta
+            name="description"
+            content="Для провайдеров. VPN-клиент для Windows. Подписки, правила и защита соединения."
+        />
+        <meta name="referrer" content="no-referrer" />
+        <meta
+            http-equiv="Content-Security-Policy"
+            content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'"
+        />
+        <title>Для провайдеров · Rosetun</title>
+        <link rel="stylesheet" href="../../assets/site.css" />
+        <link rel="icon" href="../../assets/rose.svg" type="image/svg+xml" />
+        <link rel="alternate" hreflang="ru" href="../../ru/providers/" />
+        <link rel="alternate" hreflang="en" href="../../en/providers/" />
+    </head>
+    <body>
+        <a class="skip" href="#main">К содержанию</a>
+        <header class="wrap">
+            <div class="header-brand">
+                <a class="brand" href="../../ru/"
+                    ><img src="../../assets/rose.svg" width="40" height="40" alt="" />Rosetun</a
+                >
+                <p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p>
+            </div>
+            <nav aria-label="Навигация">
+                <a href="../../ru/">Главная</a><a href="../../ru/providers/">Для провайдеров</a
+                ><a href="../../ru/help/">Помощь</a
+                ><a href="../../en/providers/" lang="en" hreflang="en">English</a>
+            </nav>
+        </header>
+        <main id="main" class="wrap">
+            <div class="prose">
+                <p class="eyebrow">ROSETUN ДЛЯ ВАШИХ ПОЛЬЗОВАТЕЛЕЙ</p>
+                <h1>Для провайдеров</h1>
+                <p class="lead">Обычная подписка. Одна кнопка для добавления.</p>
+                <section>
+                    <h2>Кнопка на вашем сайте</h2>
+                    <p>
+                        Формат: <code>rosetun://add/&lt;ссылка подписки&gt;#имя</code>. Ссылка
+                        HTTP(S) может быть сырой или целиком percent-encoded. Имя необязательно,
+                        декодируется из percent-encoding и ограничивается 64 символами. Вся ссылка:
+                        не больше 8192 байт.
+                    </p>
+                    <pre><code>&lt;a href=&quot;rosetun://add/https%3A%2F%2Fprovider.example%2Fsubscription%2Fdemo#Example&quot;&gt;Добавить в Rosetun&lt;/a&gt;</code></pre>
+                    <p>
+                        После установки Rosetun Windows открывает такую ссылку в приложении.
+                        Пользователь видит окно добавления с хостом провайдера. Загрузка и
+                        добавление начинаются только после подтверждения. Если подписка уже есть,
+                        открывается её карточка; ссылка не заменяет уже открытый диалог.
+                    </p>
+                    <p>
+                        Используйте HTTPS. В HTTP-ссылке токен передаётся без шифрования. В сыром
+                        HTML экранируйте амперсанды как <code>&amp;amp;</code>.
+                    </p>
+                </section>
+                <section>
+                    <h2>Форматы и серверы</h2>
+                    <p>
+                        Список URI по одному на строку, обычный или base64. Xray JSON: объект
+                        конфигурации или массив конфигураций; из каждой берётся поддерживаемый
+                        outbound с тегом proxy, иначе первый поддерживаемый. sing-box JSON: объект с
+                        outbounds; служебные selector, urltest, direct, block и dns пропускаются.
+                        Это импорт серверов, а не всей конфигурации маршрутизации.
+                    </p>
+                    <p>
+                        VLESS, VMess, Trojan, Shadowsocks, Hysteria2. TCP, WebSocket, gRPC,
+                        HTTPUpgrade; XHTTP (SplitHTTP) через Xray. Без шифрования транспорта, TLS и
+                        REALITY. Для Hysteria2: QUIC поверх UDP, Salamander и смена портов.
+                    </p>
+                    <p>
+                        Не поддерживаются: Clash YAML, зашифрованные ссылки Happ, XHTTP с отдельным
+                        сервером загрузки, mKCP, QUIC-транспорт для TCP-протоколов, HTTP/2,
+                        шифрование VLESS и плагины Shadowsocks. Неподдерживаемые узлы пропускаются;
+                        причины доступны в отчёте импорта в карточке. Если подходящих узлов нет,
+                        добавление завершается ошибкой. Ответ подписки ограничен 5 МиБ после
+                        распаковки.
+                    </p>
+                </section>
+                <section>
+                    <h2>Заголовки ответа</h2>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Заголовок</th>
+                                <th>Обработка</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <th scope="row"><code>subscription-userinfo</code></th>
+                                <td>
+                                    upload и download: байты; total: лимит в байтах; expire:
+                                    Unix-время в секундах. Нулевые total и expire означают
+                                    отсутствие лимита и срока. Трафик и срок видны в карточке
+                                    подписки.
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>profile-title</code></th>
+                                <td>
+                                    Название подписки, до 128 символов. Обычный текст или base64:…;
+                                    используется при добавлении, если пользователь не задал имя.
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>content-disposition</code></th>
+                                <td>
+                                    Резервное название из filename или UTF-8 filename*. До 128
+                                    символов; profile-title имеет приоритет.
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>profile-update-interval</code></th>
+                                <td>
+                                    Целое число часов. Автообновление ограничивает интервал
+                                    диапазоном 1–168 часов; по умолчанию 12 часов. Пользователь
+                                    может выключить автообновление.
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>support-url / profile-web-page-url</code></th>
+                                <td>
+                                    Ссылки поддержки и личного кабинета в карточке. Только HTTP(S),
+                                    текст ограничен 2048 символами перед проверкой URL.
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>announce</code></th>
+                                <td>
+                                    Объявление в карточке подписки: обычный текст или base64:…, до
+                                    1000 символов.
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row">
+                                    <code
+                                        >x-hwid-max-devices-reached / x-hwid-not-supported /
+                                        x-hwid-limit</code
+                                    >
+                                </th>
+                                <td>
+                                    Значение true без учёта регистра останавливает разбор с ошибкой
+                                    ограничения устройства; announce передаётся вместе с ошибкой.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <p>
+                        У отображаемого текста удаляются управляющие символы и знаки направления
+                        текста. Некорректные значения метаданных игнорируются. Эти же метаданные
+                        читаются из строк <code># ключ: значение</code> списка ссылок. Заголовок
+                        <code>routing</code> не обрабатывается и не устанавливает правила.
+                    </p>
+                </section>
+                <section>
+                    <h2>Что получает ваш сервер</h2>
+                    <p>
+                        По умолчанию <code>User-Agent: Rosetun/&lt;версия&gt;</code>; пользователь
+                        может задать другой User-Agent. При включённом «Отправлять ID устройства»
+                        запрос добавляет <code>x-hwid</code>, <code>x-device-os</code>,
+                        <code>x-ver-os</code>, <code>x-device-model</code>. Если сведения об
+                        устройстве получить не удалось, запрос идёт без них.
+                    </p>
+                    <p>
+                        Отправка включена по умолчанию и выключается для каждой подписки, в CLI
+                        через <code>--no-hwid</code>. Новые подписки получают ID, свой для каждого
+                        хоста сервера подписок: путь, токен и порт его не меняют. Разные хосты
+                        получают разные ID. У подписок, добавленных до 0.4, сохраняется прежний
+                        общий ID. Версия ОС и модель ограничены 64 печатными ASCII-символами;
+                        остальные символы заменяются на ?.
+                    </p>
+                </section>
+                <section>
+                    <h2>Проверьте подписку</h2>
+                    <ol>
+                        <li>Установите текущий выпуск и откройте кнопку добавления.</li>
+                        <li>
+                            Проверьте хост, подтвердите добавление и проверьте серверы, название,
+                            трафик, срок и ссылки карточки.
+                        </li>
+                        <li>
+                            Обновите подписку. При ошибке откройте её карточку и подробности отчёта
+                            импорта.
+                        </li>
+                        <li>
+                            Для воспроизведения подготовьте обезличенный пример ответа и заголовков.
+                            Укажите версию Rosetun, ожидаемое поведение и текст ошибки. Не
+                            отправляйте токен, HWID, настоящие адреса или ключи.
+                        </li>
+                    </ol>
+                    <p>
+                        <a href="https://github.com/eoftgge/rosetun/issues">Сообщить о проблеме</a>
+                        · <a href="../help/">Как собрать отчёт</a>
+                    </p>
+                </section>
+            </div>
+        </main>
+        <footer class="wrap">
+            <span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a
+            ><a href="https://github.com/eoftgge/rosetun/blob/master/LICENSE">GPL-3.0-or-later</a
+            ><a href="https://github.com/eoftgge/rosetun/security/policy">Сообщить об уязвимости</a
+            ><a href="../../en/providers/" lang="en" hreflang="en">English</a>
+        </footer>
+    </body>
 </html>
