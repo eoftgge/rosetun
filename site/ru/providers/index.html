@@ -14,7 +14,7 @@
 </head>
 <body>
 <a class="skip" href="#main">К содержанию</a>
-<header class="wrap"><a class="brand" href="../../ru/"><img src="../../assets/rose.svg" width="40" height="40" alt="">Rosetun</a>
+<header class="wrap"><div class="header-brand"><a class="brand" href="../../ru/"><img src="../../assets/rose.svg" width="40" height="40" alt="">Rosetun</a><p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p></div>
 <nav aria-label="Навигация"><a href="../../ru/">Главная</a><a href="../../ru/providers/">Для провайдеров</a><a href="../../ru/help/">Помощь</a><a href="../../en/providers/" lang="en" hreflang="en">English</a></nav></header>
 <main id="main" class="wrap"><div class="prose"><p class="eyebrow">ROSETUN ДЛЯ ВАШИХ ПОЛЬЗОВАТЕЛЕЙ</p><h1>Для провайдеров</h1><p class="lead">Обычная подписка. Одна кнопка для добавления.</p>
 <section><h2>Кнопка на вашем сайте</h2><p>Формат: <code>rosetun://add/&lt;ссылка подписки&gt;#имя</code>. Ссылка HTTP(S) может быть сырой или целиком percent-encoded. Имя необязательно, декодируется из percent-encoding и ограничивается 64 символами. Вся ссылка: не больше 8192 байт.</p><pre><code>&lt;a href=&quot;rosetun://add/https%3A%2F%2Fprovider.example%2Fsubscription%2Fdemo#Example&quot;&gt;Добавить в Rosetun&lt;/a&gt;</code></pre><p>После установки Rosetun Windows открывает такую ссылку в приложении. Пользователь видит окно добавления с хостом провайдера. Загрузка и добавление начинаются только после подтверждения. Если подписка уже есть, открывается её карточка; ссылка не заменяет уже открытый диалог.</p><p>Используйте HTTPS. В HTTP-ссылке токен передаётся без шифрования. В сыром HTML экранируйте амперсанды как <code>&amp;amp;</code>.</p></section>

@@ -14,7 +14,7 @@
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="wrap"><a class="brand" href="../../en/"><img src="../../assets/rose.svg" width="40" height="40" alt="">Rosetun</a>
+<header class="wrap"><div class="header-brand"><a class="brand" href="../../en/"><img src="../../assets/rose.svg" width="40" height="40" alt="">Rosetun</a><p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p></div>
 <nav aria-label="Navigation"><a href="../../en/">Home</a><a href="../../en/providers/">For providers</a><a href="../../en/help/">Help</a><a href="../../ru/providers/" lang="ru" hreflang="ru">Русский</a></nav></header>
 <main id="main" class="wrap"><div class="prose"><p class="eyebrow">ROSETUN FOR YOUR USERS</p><h1>For providers</h1><p class="lead">A regular subscription. One button to add it.</p>
 <section><h2>A button on your website</h2><p>Format: <code>rosetun://add/&lt;subscription URL&gt;#name</code>. The HTTP(S) URL can be raw or percent-encoded as a whole. The optional name is percent-decoded and limited to 64 characters. The full link is limited to 8192 bytes.</p><pre><code>&lt;a href=&quot;rosetun://add/https%3A%2F%2Fprovider.example%2Fsubscription%2Fdemo#Example&quot;&gt;Add to Rosetun&lt;/a&gt;</code></pre><p>Once Rosetun is installed, Windows opens the link in the app. Users see an add dialog with the provider host. Fetching and adding start only after confirmation. An existing subscription opens its card; a link does not replace an open dialog.</p><p>Use HTTPS. An HTTP subscription sends its token without encryption. Escape ampersands as <code>&amp;amp;</code> in raw HTML.</p></section>
