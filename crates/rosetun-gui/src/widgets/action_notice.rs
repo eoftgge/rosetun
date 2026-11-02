@@ -80,10 +80,10 @@ mod tests {
         };
         let shown = screen.settle(&mut show);
         let left = |label: &str| {
-            shown
-                .iter()
-                .find(|(text, _)| text == label)
-                .map_or_else(|| panic!("no {label:?} in {shown:?}"), |(_, rect)| rect.left())
+            shown.iter().find(|(text, _)| text == label).map_or_else(
+                || panic!("no {label:?} in {shown:?}"),
+                |(_, rect)| rect.left(),
+            )
         };
         assert!(left("Rule deleted") < left("Undo"));
         assert!(left("Undo") < left("Apply"));
