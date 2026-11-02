@@ -70,11 +70,7 @@ impl TestScreen {
     }
 
     /// Presses and releases the primary button on the middle of the text `label` and settles.
-    pub(crate) fn click_text(
-        &mut self,
-        label: &str,
-        mut show: impl FnMut(&mut egui::Ui),
-    ) -> Texts {
+    pub(crate) fn click_text(&mut self, label: &str, mut show: impl FnMut(&mut egui::Ui)) -> Texts {
         let shown = self.settle(&mut show);
         let (_, rect) = shown
             .iter()
@@ -87,7 +83,10 @@ impl TestScreen {
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        self.run(vec![egui::Event::PointerMoved(pos), button(true)], &mut show);
+        self.run(
+            vec![egui::Event::PointerMoved(pos), button(true)],
+            &mut show,
+        );
         self.run(vec![button(false)], &mut show);
         self.settle(&mut show)
     }

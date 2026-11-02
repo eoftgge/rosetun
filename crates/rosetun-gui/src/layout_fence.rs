@@ -959,10 +959,7 @@ fn the_fence_catches_a_constant_that_carries_a_dialog_width() {
         .iter()
         .map(|violation| (violation.line, violation.arguments.as_str()))
         .collect();
-    assert_eq!(
-        found,
-        [(1, "DIALOG_WIDTH=520.0"), (3, "MODAL_WIDTH=400.0")]
-    );
+    assert_eq!(found, [(1, "DIALOG_WIDTH=520.0"), (3, "MODAL_WIDTH=400.0")]);
 }
 
 #[test]
@@ -978,6 +975,14 @@ fn the_fence_lets_through_only_the_listed_widths() {
     let menu = view_violations("fn exit_menu() {\n    ui.set_width(210.0);\n}\n");
     assert_eq!(menu.len(), 1);
     assert!(is_allowed(&ALLOWED, "view/exits.rs", &menu[0]));
-    assert!(!is_allowed(&ALLOWED, "view/lists.rs", &view_violations("fn other() {\n    ui.set_width(520.0);\n}\n")[0]));
-    assert!(!is_allowed(&ALLOWED, "view/exits.rs", &view_violations("fn exit_dialog() {\n    ui.set_width(210.0);\n}\n")[0]));
+    assert!(!is_allowed(
+        &ALLOWED,
+        "view/lists.rs",
+        &view_violations("fn other() {\n    ui.set_width(520.0);\n}\n")[0]
+    ));
+    assert!(!is_allowed(
+        &ALLOWED,
+        "view/exits.rs",
+        &view_violations("fn exit_dialog() {\n    ui.set_width(210.0);\n}\n")[0]
+    ));
 }

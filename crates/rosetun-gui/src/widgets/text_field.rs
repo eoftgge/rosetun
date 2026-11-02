@@ -17,8 +17,7 @@ pub(crate) fn field_height(ui: &egui::Ui) -> f32 {
 /// The space above and below a field's text, so a line of text stands in the middle of a field
 /// `height` high.
 pub(crate) fn field_vertical_margin(ui: &egui::Ui, height: f32) -> i8 {
-    ((height
-        - ui.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Body.resolve(ui.style()))))
+    ((height - ui.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Body.resolve(ui.style()))))
         / 2.0)
         .max(0.0) as i8
 }
@@ -221,10 +220,7 @@ mod tests {
         corner_radius: CornerRadius,
     }
 
-    fn painted_frames(
-        shapes: &[egui::epaint::ClippedShape],
-        rects: &[egui::Rect],
-    ) -> Vec<Frame> {
+    fn painted_frames(shapes: &[egui::epaint::ClippedShape], rects: &[egui::Rect]) -> Vec<Frame> {
         fn collect(shape: &egui::Shape, out: &mut Vec<egui::epaint::RectShape>) {
             match shape {
                 egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
@@ -241,9 +237,11 @@ mod tests {
             .map(|rect| {
                 let shape = found
                     .iter()
-                    .find(|shape| (shape.rect.min - rect.min).length() < 1.5
-                        && (shape.rect.max - rect.max).length() < 1.5
-                        && shape.stroke.width > 0.0)
+                    .find(|shape| {
+                        (shape.rect.min - rect.min).length() < 1.5
+                            && (shape.rect.max - rect.max).length() < 1.5
+                            && shape.stroke.width > 0.0
+                    })
                     .unwrap_or_else(|| panic!("no frame painted around {rect:?}"));
                 Frame {
                     fill: shape.fill,
@@ -276,8 +274,13 @@ mod tests {
     fn a_multiline_field_has_the_width_and_frame_of_a_one_line_field() {
         for invalid in [false, true] {
             let (rects, shapes) = laid_out(|ui| {
-                let (mut one, mut many) = (String::from("192.0.2.1"), String::from("192.0.2.1
-"));
+                let (mut one, mut many) = (
+                    String::from("192.0.2.1"),
+                    String::from(
+                        "192.0.2.1
+",
+                    ),
+                );
                 let single = ui.add(TextField::new(&mut one).invalid(invalid));
                 let multi = ui.add(TextField::new(&mut many).rows(4).invalid(invalid));
                 vec![single.rect, multi.rect]

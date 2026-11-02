@@ -294,7 +294,12 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
     ui.label(tr!("exit-node"));
     let width = ui.available_width();
     ui.add_enabled_ui(!busy, |ui| {
-        widgets::search_field(ui, &mut dialog.node_search, &tr!("where-node-search"), width)
+        widgets::search_field(
+            ui,
+            &mut dialog.node_search,
+            &tr!("where-node-search"),
+            width,
+        )
     });
     let nodes = destinations::matching_nodes(config, &dialog.node_search);
     let mut picked = None;
@@ -382,66 +387,67 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
         return;
     };
     let busy = dialog.busy;
-    let response = widgets::Dialog::new("exit_dialog", widgets::DialogWidth::Standard).show(ctx, |ui| {
-        ui.heading(if dialog.editing.is_some() {
-            tr!("edit-exit")
-        } else {
-            tr!("new-exit")
-        });
-        ui.add_space(theme::space::L);
-        ui.label(tr!("exit-name"));
-        let input = ui.add(widgets::TextField::new(&mut dialog.name).enabled(!busy));
-        if dialog.focus {
-            input.request_focus();
-            dialog.focus = false;
-        }
-        if input.changed() {
-            dialog.error = None;
-        }
-        ui.add_space(theme::space::M);
-        if let Some(kind) = widgets::segmented(
-            ui,
-            "exit_kind",
-            dialog.kind,
-            &[
-                (ExitKind::Country, tr!("exit-kind-country")),
-                (ExitKind::Node, tr!("exit-kind-node")),
-            ],
-            true,
-            !busy,
-        ) {
-            dialog.kind = kind;
-            dialog.error = None;
-        }
-        ui.add_space(theme::space::M);
-        match dialog.kind {
-            ExitKind::Country => country_picker(ui, dialog, config, busy),
-            ExitKind::Node => node_picker(ui, dialog, config, busy),
-        }
-        if dialog.editing.is_none() && full {
-            ui.add_space(theme::space::S);
-            note(
+    let response =
+        widgets::Dialog::new("exit_dialog", widgets::DialogWidth::Standard).show(ctx, |ui| {
+            ui.heading(if dialog.editing.is_some() {
+                tr!("edit-exit")
+            } else {
+                tr!("new-exit")
+            });
+            ui.add_space(theme::space::L);
+            ui.label(tr!("exit-name"));
+            let input = ui.add(widgets::TextField::new(&mut dialog.name).enabled(!busy));
+            if dialog.focus {
+                input.request_focus();
+                dialog.focus = false;
+            }
+            if input.changed() {
+                dialog.error = None;
+            }
+            ui.add_space(theme::space::M);
+            if let Some(kind) = widgets::segmented(
                 ui,
-                tr!(
-                    "where-exits-full",
-                    count = rosetun_ipc::MAX_EXTRA_NODES.to_string()
-                ),
-                theme::WARNING,
-            );
-        }
-        if let Some(error) = &dialog.error {
-            ui.add_space(theme::space::S);
-            ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
-        }
-        let footer = widgets::DialogFooter::new(tr!("save"), tr!("cancel"))
-            .primary_enabled(dialog.can_save(full))
-            .busy(busy);
-        match widgets::dialog_footer(ui, footer).choice() {
-            widgets::FooterChoice::Primary => actions.push(Action::SubmitExitDialog),
-            widgets::FooterChoice::Cancel => actions.push(Action::CancelExitDialog),
-            widgets::FooterChoice::Other | widgets::FooterChoice::None => {}
-        }
-    });
+                "exit_kind",
+                dialog.kind,
+                &[
+                    (ExitKind::Country, tr!("exit-kind-country")),
+                    (ExitKind::Node, tr!("exit-kind-node")),
+                ],
+                true,
+                !busy,
+            ) {
+                dialog.kind = kind;
+                dialog.error = None;
+            }
+            ui.add_space(theme::space::M);
+            match dialog.kind {
+                ExitKind::Country => country_picker(ui, dialog, config, busy),
+                ExitKind::Node => node_picker(ui, dialog, config, busy),
+            }
+            if dialog.editing.is_none() && full {
+                ui.add_space(theme::space::S);
+                note(
+                    ui,
+                    tr!(
+                        "where-exits-full",
+                        count = rosetun_ipc::MAX_EXTRA_NODES.to_string()
+                    ),
+                    theme::WARNING,
+                );
+            }
+            if let Some(error) = &dialog.error {
+                ui.add_space(theme::space::S);
+                ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
+            }
+            let footer = widgets::DialogFooter::new(tr!("save"), tr!("cancel"))
+                .primary_enabled(dialog.can_save(full))
+                .busy(busy);
+            match widgets::dialog_footer(ui, footer).choice() {
+                widgets::FooterChoice::Primary => actions.push(Action::SubmitExitDialog),
+                widgets::FooterChoice::Cancel => actions.push(Action::CancelExitDialog),
+                widgets::FooterChoice::Other | widgets::FooterChoice::None => {}
+            }
+        });
     if !busy && response.should_close() {
         actions.push(Action::CancelExitDialog);
     }

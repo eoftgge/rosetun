@@ -43,10 +43,10 @@ pub(crate) use lists::{RemoveListDialog, RenameListDialog};
 pub(crate) use quit::QuitDecision;
 #[cfg(windows)]
 use quit::QuitState;
-use rules::RulesState;
-pub(crate) use rules::{AddRuleDialog, DeleteDialog, NameDialogKind, RuleInputKind};
 #[cfg(test)]
 pub(crate) use rules::NameDialog;
+use rules::RulesState;
+pub(crate) use rules::{AddRuleDialog, DeleteDialog, NameDialogKind, RuleInputKind};
 use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};
 use settings::SettingsState;
@@ -54,11 +54,11 @@ pub(crate) use settings::{AboutFolder, SettingsSection};
 #[cfg(any(windows, test))]
 pub(crate) use subscriptions::OpenedLink;
 use subscriptions::SubscriptionsState;
-#[cfg(test)]
-pub(crate) use subscriptions::{RemoveDialog, RenameDialog};
 pub(crate) use subscriptions::{
     AddDialog, PingResult, QrSource, QrStage, UpdateOutcome, shared_auto_update_hours,
 };
+#[cfg(test)]
+pub(crate) use subscriptions::{RemoveDialog, RenameDialog};
 use system_checks::SystemChecksState;
 use traffic::TrafficState;
 pub(crate) use traffic::{

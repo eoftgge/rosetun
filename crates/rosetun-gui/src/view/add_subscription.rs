@@ -17,9 +17,8 @@ pub(crate) fn show(
     dialog: &mut AddDialog,
     actions: &mut Vec<Action>,
 ) {
-    let response = widgets::Dialog::new("add_subscription", widgets::DialogWidth::Standard).show(
-        ctx,
-        |ui| {
+    let response =
+        widgets::Dialog::new("add_subscription", widgets::DialogWidth::Standard).show(ctx, |ui| {
             ui.heading(if dialog.editing_proxy.is_some() {
                 tr!("proxy-edit")
             } else {
@@ -39,8 +38,7 @@ pub(crate) fn show(
                     subscription_body(ui, ctx, config, dialog, actions);
                 }
             });
-        },
-    );
+        });
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAdd);
     }

@@ -1217,6 +1217,9 @@ mod toolbar_tests {
             .memory(|memory| memory.area_rect(egui::Id::new("connection_details")))
             .unwrap();
         let chrome = widgets::modal_frame().total_margin().sum().x;
-        assert_eq!(area.width() - chrome, widgets::DialogWidth::Standard.points());
+        assert_eq!(
+            area.width() - chrome,
+            widgets::DialogWidth::Standard.points()
+        );
     }
 }

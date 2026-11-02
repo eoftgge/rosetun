@@ -345,8 +345,7 @@ pub(crate) fn show(
                 widgets::FooterChoice::Cancel => actions.push(Action::CancelAddRule),
                 widgets::FooterChoice::Other | widgets::FooterChoice::None => {}
             }
-        },
-    );
+        });
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAddRule);
     }
@@ -768,12 +767,7 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
     let input = if dialog.editing.is_some() {
         ui.add(field)
     } else {
-        ui.add(
-            field
-                .rows(5)
-                .monospace(true)
-                .hint(constants::SITES_EXAMPLE),
-        )
+        ui.add(field.rows(5).monospace(true).hint(constants::SITES_EXAMPLE))
     };
     if dialog.focus_input {
         input.request_focus();
@@ -1468,7 +1462,12 @@ fn destination_menu(
         }
         let width = ui.available_width();
         ui.add_enabled_ui(!full, |ui| {
-            widgets::search_field(ui, &mut dialog.node_search, &tr!("where-node-search"), width)
+            widgets::search_field(
+                ui,
+                &mut dialog.node_search,
+                &tr!("where-node-search"),
+                width,
+            )
         });
         let nodes = destinations::matching_nodes(config, &dialog.node_search);
         if nodes.is_empty() {
