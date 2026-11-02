@@ -5,6 +5,8 @@ use super::*;
 
 /// The spinner that takes the place of the refresh button while a subscription updates.
 const SPINNER_SIZE: f32 = 18.0;
+/// The refresh button, and the gap a manual proxy leaves in its place.
+const REFRESH_SLOT: f32 = 28.0;
 
 pub(super) fn subscription_card(
     ui: &mut egui::Ui,
@@ -121,20 +123,17 @@ pub(super) fn subscription_card(
                         )
                         .response
                         .on_hover_text(format!("{}\n{updated}", tr!("updating")));
+                    } else if rosetun_core::is_local_proxy(subscription) {
+                        // Nothing to fetch: the slot stays empty so the menu button keeps its column.
+                        ui.allocate_space(egui::vec2(REFRESH_SLOT, REFRESH_SLOT));
                     } else {
                         let refresh = icons::icon_button_sized(
                             ui,
                             Icon::Refresh,
                             !state.subscription_busy(&subscription.id),
-                            28.0,
+                            REFRESH_SLOT,
                         )
-                        .on_hover_text(
-                            if rosetun_core::is_local_proxy(subscription) {
-                                tr!("proxy-edit")
-                            } else {
-                                format!("{}\n{updated}", tr!("update"))
-                            },
-                        );
+                        .on_hover_text(format!("{}\n{updated}", tr!("update")));
                         if refresh.clicked() {
                             actions.push(Action::Update(subscription.id.clone()));
                         }
@@ -145,9 +144,7 @@ pub(super) fn subscription_card(
                         ui.set_width(180.0);
                         ui.add(
                             egui::Label::new(
-                                RichText::new(display::safe_text(
-                                    &rosetun_core::redacted_subscription_url(&subscription.url),
-                                ))
+                                RichText::new(menu_title(i18n::language(), subscription))
                                 .small()
                                 .color(theme::palette().text_dim),
                             )
@@ -521,6 +518,25 @@ fn details(
     }
 }
 
+/// The menu's first line: the provider's host, or the protocol of a manual proxy, whose
+/// address and login are not shown.
+fn menu_title(language: i18n::Language, subscription: &Subscription) -> String {
+    if !rosetun_core::is_local_proxy(subscription) {
+        return display::safe_text(&rosetun_core::redacted_subscription_url(&subscription.url));
+    }
+    let mut args = fluent_bundle::FluentArgs::new();
+    match subscription.nodes.first() {
+        Some(node) => {
+            args.set(
+                "protocol",
+                rosetun_core::node_protocol(node).to_ascii_uppercase(),
+            );
+            i18n::tr_in(language, "proxy-menu-title", &args)
+        }
+        None => i18n::tr_in(language, "import-tab-proxy", &args),
+    }
+}
+
 fn expiry_color(expire: u64, now: u64) -> Color32 {
     if expire <= now {
         theme::EXPIRED
@@ -776,6 +792,79 @@ mod tests {
                 .any(|action| matches!(action, Action::Update(id) if *id == subscription.id))
         );
         assert!(egui::DragAndDrop::payload::<SubscriptionId>(&ctx).is_none());
+    }
+
+    fn manual_proxy(uri: &str) -> Subscription {
+        Subscription {
+            url: "local-proxy://card".into(),
+            nodes: vec![rosetun_core::parse_proxy_uri(uri).unwrap()],
+            ..card_subscription()
+        }
+    }
+
+    #[test]
+    fn a_manual_proxy_menu_names_the_protocol_in_both_languages() {
+        let cases = [
+            ("http://192.0.2.1:8080", "HTTP"),
+            ("https://proxy.example.com:443", "HTTPS"),
+            ("socks5://user:secret@[2001:db8::1]:1080", "SOCKS5"),
+        ];
+        for (uri, protocol) in cases {
+            let subscription = manual_proxy(uri);
+            assert_eq!(
+                menu_title(i18n::Language::English, &subscription),
+                format!("Proxy · {protocol}")
+            );
+            assert_eq!(
+                menu_title(i18n::Language::Russian, &subscription),
+                format!("Прокси · {protocol}")
+            );
+            for language in [i18n::Language::English, i18n::Language::Russian] {
+                let title = menu_title(language, &subscription);
+                assert!(!title.contains("redacted") && !title.contains('‹'), "{title}");
+                assert!(!title.contains("secret"), "{title}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_subscription_menu_keeps_showing_its_host() {
+        let subscription = card_subscription();
+        for language in [i18n::Language::English, i18n::Language::Russian] {
+            assert_eq!(
+                menu_title(language, &subscription),
+                display::safe_text(&rosetun_core::redacted_subscription_url(&subscription.url))
+            );
+        }
+    }
+
+    #[test]
+    fn a_manual_proxy_has_no_refresh_button_and_its_menu_stays_in_place() {
+        let mut state = State::default();
+        state.config_ready = true;
+        let regular = card_subscription();
+        let proxy = manual_proxy("socks5://192.0.2.1:1080");
+        let click = |subscription: &Subscription, pos: egui::Pos2| {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            card_frame_actions(&ctx, &state, subscription, Vec::new());
+            card_frame_actions(
+                &ctx,
+                &state,
+                subscription,
+                vec![egui::Event::PointerMoved(pos), press(pos, true)],
+            );
+            let actions = card_frame_actions(&ctx, &state, subscription, vec![press(pos, false)]);
+            card_frame_actions(&ctx, &state, subscription, Vec::new());
+            (actions, egui::Popup::is_any_open(&ctx))
+        };
+        let points = header_points(&egui::Context::default());
+        let (refresh, menu) = (points[1].0, points[2].0);
+        assert!(!click(&regular, refresh).0.is_empty());
+        let (actions, popup) = click(&proxy, refresh);
+        assert!(actions.is_empty() && !popup);
+        assert!(click(&regular, menu).1);
+        assert!(click(&proxy, menu).1);
     }
 
     #[test]

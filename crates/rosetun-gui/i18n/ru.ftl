@@ -1228,6 +1228,7 @@ import-tab-subscription = Подписка
 import-tab-proxy = Прокси
 proxy-details = Ограничения протокола
 proxy-edit = Изменить прокси
+proxy-menu-title = Прокси · { $protocol }
 proxy-server = Адрес сервера
 proxy-port = Порт
 proxy-username = Логин (необязательно)

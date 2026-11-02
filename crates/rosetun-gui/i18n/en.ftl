@@ -1197,6 +1197,7 @@ import-tab-subscription = Subscription
 import-tab-proxy = Proxy
 proxy-details = Protocol limits
 proxy-edit = Edit proxy
+proxy-menu-title = Proxy · { $protocol }
 proxy-server = Server address
 proxy-port = Port
 proxy-username = Username (optional)
