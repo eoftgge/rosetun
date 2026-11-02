@@ -2,6 +2,7 @@ use rosetun_config::Rule;
 
 use super::*;
 use crate::rules::RuleCaption;
+use crate::state::SettingsSection;
 
 pub(super) fn control_cards(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if ui.available_width() < 520.0 {
@@ -41,14 +42,27 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         ui.colored_label(theme::palette().text_dim, tr!("protection"));
         let lockdown = state.lockdown_active();
         let mut kill_switch = state.config.settings.kill_switch || lockdown;
-        if widgets::toggle_row(
+        let dim = theme::palette().text_dim;
+        if widgets::toggle_row_with_detail(
             ui,
             tr!("kill-switch"),
             None,
-            if lockdown {
-                tr!("kill-switch-lockdown")
-            } else {
-                tr!("kill-switch-detail")
+            |ui| {
+                if !lockdown {
+                    ui.add(
+                        egui::Label::new(RichText::new(tr!("kill-switch-detail")).small().color(dim))
+                            .wrap(),
+                    );
+                    return;
+                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(RichText::new(tr!("kill-switch-lockdown")).small().color(dim));
+                    ui.label(RichText::new(tr!("apply-separator")).small().color(dim));
+                    if widgets::link(ui, &tr!("settings"), true).clicked() {
+                        actions.push(Action::OpenSettingsSection(SettingsSection::Connection));
+                    }
+                });
             },
             &mut kill_switch,
             state.config_ready
@@ -60,25 +74,6 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         {
             actions.push(Action::SetKillSwitch(kill_switch));
         }
-        row_divider(ui);
-        let mut lockdown_on = lockdown;
-        if widgets::toggle_row(
-            ui,
-            tr!("lockdown"),
-            Some(&tr!("experimental")),
-            tr!("lockdown-short"),
-            &mut lockdown_on,
-            state.can_change_lockdown(),
-        )
-        .changed()
-        {
-            actions.push(Action::RequestLockdown(lockdown_on));
-        }
-        ui.label(
-            RichText::new(tr!("lockdown-administrator"))
-                .small()
-                .color(theme::palette().text_dim),
-        );
         row_divider(ui);
         let mut connect_on_start = state.config.interface.connect_on_start;
         if widgets::toggle_row(
@@ -449,6 +444,26 @@ mod tests {
         elided: bool,
     }
 
+    struct Frame {
+        shown: Vec<Shown>,
+        /// The cards' outlines in drawing order; the last two are the visible ones.
+        cards: Vec<egui::Rect>,
+        actions: Vec<Action>,
+    }
+
+    impl Frame {
+        fn find(&self, text: &str) -> &Shown {
+            self.shown
+                .iter()
+                .find(|found| found.text == text)
+                .unwrap_or_else(|| panic!("{text:?} not drawn"))
+        }
+
+        fn has(&self, text: &str) -> bool {
+            self.shown.iter().any(|found| found.text == text)
+        }
+    }
+
     fn rule(id: &str, matcher: RuleMatcher, target: RuleTarget, exit: Option<&str>) -> Rule {
         Rule {
             id: RuleId::new(id),
@@ -486,13 +501,24 @@ mod tests {
         state
     }
 
-    fn render(state: &State, window: egui::Vec2, column: f32) -> (Vec<Shown>, Vec<Action>) {
-        let ctx = egui::Context::default();
-        theme::apply(&ctx);
+    fn with_lockdown(lockdown: bool) -> State {
+        let mut state = state(EXIT_NAME);
+        state.status.lockdown = lockdown;
+        state
+    }
+
+    fn run(
+        ctx: &egui::Context,
+        state: &State,
+        window: egui::Vec2,
+        column: f32,
+        events: Vec<egui::Event>,
+    ) -> Frame {
         let mut actions = Vec::new();
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, window)),
+                events,
                 ..egui::RawInput::default()
             },
             |ctx| {
@@ -505,26 +531,58 @@ mod tests {
             },
         );
         output.textures_delta.clear();
-        let shown = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(Shown {
+        let mut shown = Vec::new();
+        let mut cards = Vec::new();
+        for shape in &output.shapes {
+            match &shape.shape {
+                egui::Shape::Text(text) => shown.push(Shown {
                     text: text.galley.text().to_owned(),
                     rect: text.galley.rect.translate(text.pos.to_vec2()),
                     elided: text.galley.elided,
                 }),
-                _ => None,
-            })
-            .collect();
-        (shown, actions)
+                egui::Shape::Rect(rect) if rect.fill == theme::palette().card => {
+                    cards.push(rect.rect);
+                }
+                _ => {}
+            }
+        }
+        Frame {
+            shown,
+            cards,
+            actions,
+        }
     }
 
-    fn find<'a>(shown: &'a [Shown], text: &str) -> &'a Shown {
-        shown
-            .iter()
-            .find(|found| found.text == text)
-            .unwrap_or_else(|| panic!("{text:?} not drawn"))
+    fn themed(state: &State, window: egui::Vec2, column: f32) -> Frame {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        run(&ctx, state, window, column, Vec::new())
+    }
+
+    /// Draws the screen, then presses and releases the pointer on the end of `text`.
+    fn click(state: &State, window: egui::Vec2, text: &str) -> Vec<Action> {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        // The first frame lays the card out before it knows its own size.
+        run(&ctx, state, window, 944.0, Vec::new());
+        // Text wrapped after other text has the space before it in its rectangle, so aim at
+        // the end of it.
+        let rect = run(&ctx, state, window, 944.0, Vec::new()).find(text).rect;
+        let pos = egui::pos2(rect.right() - 4.0, rect.center().y);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(
+            &ctx,
+            state,
+            window,
+            944.0,
+            vec![egui::Event::PointerMoved(pos), button(true)],
+        );
+        run(&ctx, state, window, 944.0, vec![button(false)]).actions
     }
 
     #[test]
@@ -534,17 +592,17 @@ mod tests {
                 let state = state(EXIT_NAME);
                 let exit_target = tr!("target-exit", name = EXIT_NAME);
                 let direct = tr!("direct");
-                for (window, column) in [(960.0, 944.0), (960.0, TWO_COLUMN_WIDTH)] {
-                    let (shown, _) = render(&state, egui::vec2(window, 640.0), column);
+                for column in [944.0, TWO_COLUMN_WIDTH] {
+                    let frame = themed(&state, egui::vec2(960.0, 640.0), column);
                     let place = format!("{language:?}, column {column}");
-                    let value = find(&shown, FILE_NAME);
-                    let target = find(&shown, &exit_target);
+                    let value = frame.find(FILE_NAME);
+                    let target = frame.find(&exit_target);
                     assert!(!value.rect.intersects(target.rect), "{place}");
                     assert!(!target.elided, "{place}: target cut");
                     assert!(value.rect.right() <= target.rect.left(), "{place}");
                     assert_eq!(value.elided, column == TWO_COLUMN_WIDTH, "{place}");
-                    let domain = find(&shown, "example.com");
-                    let direct = find(&shown, &direct);
+                    let domain = frame.find("example.com");
+                    let direct = frame.find(&direct);
                     assert!(!domain.rect.intersects(direct.rect), "{place}");
                     assert!(!domain.elided && !direct.elided, "{place}");
                 }
@@ -558,17 +616,76 @@ mod tests {
             i18n::in_language(language, || {
                 let name = "An exit whose name is far longer than any card can hold";
                 let state = state(name);
-                let (shown, _) = render(
-                    &state,
-                    egui::vec2(960.0, 640.0),
-                    TWO_COLUMN_WIDTH,
-                );
-                let value = find(&shown, FILE_NAME);
-                let target = find(&shown, &tr!("target-exit", name = name));
+                let frame = themed(&state, egui::vec2(960.0, 640.0), TWO_COLUMN_WIDTH);
+                let value = frame.find(FILE_NAME);
+                let target = frame.find(&tr!("target-exit", name = name));
                 assert!(target.elided, "{language:?}");
                 assert!(value.elided, "{language:?}");
                 assert!(value.rect.width() > 0.0, "{language:?}");
                 assert!(value.rect.right() <= target.rect.left(), "{language:?}");
+            });
+        }
+    }
+
+    #[test]
+    fn the_connection_screen_has_no_lockdown_switch() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                for lockdown in [false, true] {
+                    let frame = themed(&with_lockdown(lockdown), egui::vec2(960.0, 640.0), 944.0);
+                    let place = format!("{language:?}, lockdown {lockdown}");
+                    assert!(!frame.has(&tr!("lockdown")), "{place}");
+                    assert!(!frame.has(&tr!("experimental")), "{place}");
+                    assert!(frame.has(&tr!("kill-switch")), "{place}");
+                    assert!(frame.has(&tr!("connect-on-start")), "{place}");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn a_kill_switch_held_by_lockdown_links_to_the_settings() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                let window = egui::vec2(960.0, 640.0);
+                let on = with_lockdown(true);
+                let frame = themed(&on, window, 944.0);
+                assert!(frame.has(&tr!("kill-switch-lockdown")), "{language:?}");
+                assert!(!frame.has(&tr!("kill-switch-detail")), "{language:?}");
+                let actions = click(&on, window, &tr!("settings"));
+                assert!(
+                    matches!(
+                        actions.as_slice(),
+                        [Action::OpenSettingsSection(SettingsSection::Connection)]
+                    ),
+                    "{language:?}: {} actions",
+                    actions.len()
+                );
+                let off = with_lockdown(false);
+                let frame = themed(&off, window, 944.0);
+                assert!(!frame.has(&tr!("settings")), "{language:?}");
+                assert!(!frame.has(&tr!("kill-switch-lockdown")), "{language:?}");
+                assert!(frame.has(&tr!("kill-switch-detail")), "{language:?}");
+            });
+        }
+    }
+
+    #[test]
+    fn both_cards_are_as_tall_as_the_taller_one() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                for lockdown in [false, true] {
+                    for column in [944.0, TWO_COLUMN_WIDTH] {
+                        let frame =
+                            themed(&with_lockdown(lockdown), egui::vec2(960.0, 640.0), column);
+                        let place = format!("{language:?}, lockdown {lockdown}, column {column}");
+                        // The sizing passes that measure the cards draw them too.
+                        let [left, right] = frame.cards[frame.cards.len() - 2..] else {
+                            panic!("{place}: two cards expected");
+                        };
+                        assert!((left.height() - right.height()).abs() < 0.5, "{place}");
+                    }
+                }
             });
         }
     }

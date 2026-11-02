@@ -1262,3 +1262,79 @@ mod update_status_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod lockdown_switch_tests {
+    use super::*;
+    use crate::worker::WorkerEvent;
+
+    fn state(lockdown: bool) -> State {
+        let mut state = State::default();
+        state.config_ready = true;
+        state.reduce(WorkerEvent::HelperAvailable {
+            version: "0.9.0".into(),
+        });
+        state.reduce(WorkerEvent::Status(rosetun_config::Status {
+            lockdown,
+            ..rosetun_config::Status::default()
+        }));
+        state
+    }
+
+    /// Draws the Connection section, then clicks the Lockdown row beside its title: a click on
+    /// the title's text itself goes to the selectable label.
+    fn click_lockdown(state: &State) -> Vec<Action> {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let run = |events: Vec<egui::Event>| {
+            let mut actions = Vec::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(960.0, 640.0),
+                    )),
+                    events,
+                    ..egui::RawInput::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        connection(ui, state, &mut actions);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            let title = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == tr!("lockdown") => {
+                    let rect = text.galley.rect.translate(text.pos.to_vec2());
+                    Some(egui::pos2(rect.right() + 200.0, rect.center().y))
+                }
+                _ => None,
+            });
+            (actions, title)
+        };
+        // The first frame lays the card out before it knows its own size.
+        run(Vec::new());
+        let pos = run(Vec::new()).1.expect("the Lockdown switch is drawn");
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(vec![egui::Event::PointerMoved(pos), button(true)]);
+        run(vec![button(false)]).0
+    }
+
+    #[test]
+    fn the_settings_keep_the_lockdown_switch_and_ask_to_confirm() {
+        for (lockdown, expected) in [(false, true), (true, false)] {
+            let actions = click_lockdown(&state(lockdown));
+            assert!(
+                matches!(actions.as_slice(), [Action::RequestLockdown(asked)] if *asked == expected),
+                "lockdown {lockdown}: {} actions",
+                actions.len()
+            );
+        }
+    }
+}

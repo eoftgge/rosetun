@@ -89,15 +89,12 @@ pub(crate) fn toggle_row(
     on: &mut bool,
     enabled: bool,
 ) -> egui::Response {
-    let title = title.as_ref();
     let detail = detail.as_ref();
-    let enabled = enabled && ui.is_enabled();
-    let id = ui.next_auto_id();
-    let row = ui.horizontal(|ui| {
-        let text_width = ui.available_width() - TOGGLE_SIZE.x - ui.spacing().item_spacing.x;
-        ui.vertical(|ui| {
-            ui.set_max_width(text_width);
-            title_with_tag(ui, title.into(), tag);
+    toggle_row_with_detail(
+        ui,
+        title,
+        tag,
+        |ui| {
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(detail)
@@ -106,6 +103,31 @@ pub(crate) fn toggle_row(
                 )
                 .wrap(),
             );
+        },
+        on,
+        enabled,
+    )
+}
+
+/// `toggle_row` with the detail drawn by the caller, for a detail that holds more than
+/// text, such as a link. A disabled row senses no click, so a link in it stays clickable.
+pub(crate) fn toggle_row_with_detail(
+    ui: &mut egui::Ui,
+    title: impl AsRef<str>,
+    tag: Option<&str>,
+    detail: impl FnOnce(&mut egui::Ui),
+    on: &mut bool,
+    enabled: bool,
+) -> egui::Response {
+    let title = title.as_ref();
+    let enabled = enabled && ui.is_enabled();
+    let id = ui.next_auto_id();
+    let row = ui.horizontal(|ui| {
+        let text_width = ui.available_width() - TOGGLE_SIZE.x - ui.spacing().item_spacing.x;
+        ui.vertical(|ui| {
+            ui.set_max_width(text_width);
+            title_with_tag(ui, title.into(), tag);
+            detail(ui);
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.allocate_space(TOGGLE_SIZE).1
