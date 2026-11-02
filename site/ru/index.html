@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Rosetun. VPN-клиент для Windows. Подписки, правила и защита соединения.">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Rosetun · Rosetun</title>
+  <link rel="stylesheet" href="../assets/site.css">
+  <link rel="icon" href="../assets/rose.svg" type="image/svg+xml">
+  <link rel="alternate" hreflang="ru" href="../ru/">
+  <link rel="alternate" hreflang="en" href="../en/">
+</head>
+<body>
+<a class="skip" href="#main">К содержанию</a>
+<header class="wrap"><a class="brand" href="../ru/"><img src="../assets/rose.svg" width="40" height="40" alt="">Rosetun</a>
+<nav aria-label="Навигация"><a href="../ru/">Главная</a><a href="../ru/providers/">Для провайдеров</a><a href="../ru/help/">Помощь</a><a href="../en/" lang="en" hreflang="en">English</a></nav></header>
+<main id="main" class="wrap">
+<section class="hero"><div><p class="eyebrow">WINDOWS · OPEN SOURCE</p><h1>Ваш трафик.<br>Ваши правила.</h1><p class="lead">VPN-клиент для Windows: подписки, правила, kill switch и Lockdown.</p>
+<a class="button" href="@@DOWNLOAD_URL@@">Скачать для Windows</a>
+<p class="release">@@VERSION@@ · <a href="https://github.com/eoftgge/rosetun/releases">Все выпуски</a></p>
+<p class="muted">Windows 11 · x64<br>Windows 10 не проверялась. Linux: скоро.</p></div>
+<div class="hero-art"><img src="../assets/rose.svg" width="280" height="280" alt=""><span>Rosetun</span></div></section>
+<section><p class="eyebrow">ПОД ВАШИ ЗАДАЧИ</p><h2>Одно подключение. Больше выбора.</h2><div class="features"><article><span class="number">01</span><h3>Подключение под защитой</h3><p>Kill switch блокирует трафик при потере туннеля, пока работает служба. Экспериментальный Lockdown сохраняет блокировку без подключения и после перезагрузки.</p></article><article><span class="number">02</span><h3>Ваши правила</h3><p>Отправляйте программы, сайты и IP через VPN, напрямую или блокируйте. Используйте GeoIP, GeoSite и свои списки. Временные правила действуют до отключения.</p></article><article><span class="number">03</span><h3>Несколько направлений</h3><p>Выберите другую страну или сервер для отдельного правила. Если сервер направления исчезнет, его трафик блокируется и не выходит напрямую.</p></article><article><span class="number">04</span><h3>Подписки под рукой</h3><p>Добавляйте подписку ссылкой, QR-кодом или кнопкой rosetun:// на сайте провайдера. Отправку ID устройства можно выключить для каждой подписки.</p></article><article><span class="number">05</span><h3>Выбор соединения</h3><p>VLESS, VMess, Trojan, Shadowsocks и Hysteria2. Ядра sing-box и Xray, REALITY и XHTTP. Доступные транспорты и ограничения описаны на странице для провайдеров.</p></article><article><span class="number">06</span><h3>Приватность без обещаний</h3><p>Нет телеметрии. Приложение обращается к провайдеру, серверам, DNS, спискам, GitHub и сервисам проверки сети. Соединения хранятся в памяти до отключения, без записи на диск.</p></article></div>
+<p class="note">Rosetun защищает от случайных утечек, а не от вредоносных программ под вашей учётной записью. Без Lockdown падение службы снимает блокировку. Lockdown проверен только на Windows 11; сторонние брандмауэры, антивирусы, сон и гибернация не проверены. <a href="https://github.com/eoftgge/rosetun/blob/master/README.ru.md">Сетевые обращения и модель защиты</a></p></section>
+<section><h2>Знакомство с интерфейсом</h2><p>Скриншоты появятся после подготовки примеров без личных данных.</p><div class="screens"><figure><div class="placeholder" aria-hidden="true"><span>01</span></div><figcaption>Подключение и защита<small>Здесь будет скриншот</small></figcaption></figure><figure><div class="placeholder" aria-hidden="true"><span>02</span></div><figcaption>Правила и направления<small>Здесь будет скриншот</small></figcaption></figure><figure><div class="placeholder" aria-hidden="true"><span>03</span></div><figcaption>Подписки и серверы<small>Здесь будет скриншот</small></figcaption></figure><figure><div class="placeholder" aria-hidden="true"><span>04</span></div><figcaption>Трафик и соединения<small>Здесь будет скриншот</small></figcaption></figure></div></section>
+<section id="verify" class="verification"><p class="eyebrow">ЗАГРУЗКА</p><h2>Проверьте установщик</h2>
+<p>Установщик пока не подписан сертификатом Windows. Сравните SHA-256 файла со строкой ниже и с SHA256SUMS.txt из выпуска.</p>
+<pre><code>Get-FileHash .\@@INSTALLER@@ -Algorithm SHA256</code></pre><p><a href="@@CHECKSUM_URL@@">SHA256SUMS.txt</a></p><pre><code>@@SHA256_LINE@@</code></pre>
+<p>Для публичных выпусков по тегу workflow создаёт аттестацию происхождения установщика. Проверьте её через GitHub CLI. Это проверка происхождения сборки, а не подпись Windows.</p>
+<pre><code>gh attestation verify .\@@INSTALLER@@ --repo eoftgge/rosetun</code></pre>
+<p><a href="help/">Установка и первый запуск</a></p></section>
+</main>
+<footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="https://github.com/eoftgge/rosetun/blob/master/LICENSE">GPL-3.0-or-later</a><a href="https://github.com/eoftgge/rosetun/security/policy">Сообщить об уязвимости</a><a href="../en/" lang="en" hreflang="en">English</a></footer>
+</body>
+</html>
