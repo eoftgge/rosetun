@@ -277,7 +277,7 @@ fn list_menu(
     let menu =
         icons::icon_button_sized(ui, Icon::More, true, 28.0).on_hover_text(tr!("more-actions"));
     widgets::menu_popup(&menu).show(|ui| {
-        ui.set_width(210.0);
+        widgets::menu_width(ui, widgets::MenuWidth::Regular);
         let update = widgets::menu_item(
             ui,
             widgets::MenuItem {
@@ -361,8 +361,7 @@ pub(crate) fn add_dialog(
                     format_name(format)
                 };
                 ui.label(summary);
-                ui.add_space(theme::space::L);
-                if widgets::button_fill(ui, tr!("done"), true).clicked() {
+                if widgets::dialog_done(ui, tr!("done")).clicked() {
                     actions.push(Action::CancelAddList);
                 }
                 return;

@@ -202,6 +202,18 @@ pub(crate) fn dialog_footer_with_note(
     responses
 }
 
+/// The footer of a dialog that only reports a result: the one button, at the right edge, on a
+/// row a field high after the same gap.
+pub(crate) fn dialog_done(ui: &mut egui::Ui, label: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.add_space(theme::space::XL);
+    let ((), done) = egui::Sides::new().height(field_height(ui)).show(
+        ui,
+        |_| {},
+        |ui| button_fill(ui, label, true),
+    );
+    done
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModalChoice {
     None,
@@ -439,6 +451,19 @@ mod tests {
             assert_eq!(ready.primary.rect.size(), waiting.primary.rect.size());
             assert_eq!(ready.cancel.rect.size(), waiting.cancel.rect.size());
             assert_eq!(waiting.choice(), FooterChoice::None);
+        });
+    }
+
+    #[test]
+    fn a_lone_done_button_stands_at_the_right_edge_a_field_high_after_the_gap() {
+        run(|ui| {
+            ui.set_width(DialogWidth::Standard.points());
+            let right = ui.max_rect().right();
+            let before = ui.cursor().top();
+            let done = dialog_done(ui, "Done");
+            assert_eq!(done.rect.right(), right);
+            assert_eq!(done.rect.height(), field_height(ui));
+            assert!((done.rect.top() - before - theme::space::XL).abs() < 0.5);
         });
     }
 

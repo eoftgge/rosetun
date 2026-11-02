@@ -143,7 +143,7 @@ pub(super) fn subscription_card(
                     let menu = icons::icon_button_sized(ui, Icon::More, true, 28.0)
                         .on_hover_text(tr!("more-actions"));
                     widgets::menu_popup(&menu).show(|ui| {
-                        ui.set_width(180.0);
+                        widgets::menu_width(ui, widgets::MenuWidth::Compact);
                         ui.add(
                             egui::Label::new(
                                 RichText::new(menu_title(i18n::language(), subscription))

@@ -499,7 +499,7 @@ fn qr_menu(ui: &mut egui::Ui, reading: bool, enabled: bool, actions: &mut Vec<Ac
         sources.push((tr!("qr-from-screen"), QrSource::ScreenClip));
     }
     widgets::menu_popup(&response).show(|ui| {
-        ui.set_width(230.0);
+        widgets::menu_width(ui, widgets::MenuWidth::Wide);
         for (label, source) in sources {
             if widgets::menu_item(
                 ui,

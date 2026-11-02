@@ -375,3 +375,52 @@ fn a_narrow_dialog_keeps_its_title_on_one_line_and_its_buttons_inside_in_both_la
         }
     }
 }
+
+#[test]
+fn the_added_list_dialog_ends_in_a_done_button_at_the_right_edge_in_both_languages() {
+    let margin = widgets::modal_frame().total_margin();
+    for language in [Language::English, Language::Russian] {
+        let shown = i18n::in_language(language, || {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut dialog = AddListDialog {
+                result: Some((rosetun_config::ListFormat::Text, 0, Some(12))),
+                ..AddListDialog::default()
+            };
+            let mut shapes = Vec::new();
+            for frame in 1..=10 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW)),
+                        time: Some(f64::from(frame) * 0.1),
+                        ..Default::default()
+                    },
+                    |ui| lists::add_dialog(ui.ctx(), &mut dialog, &mut Vec::new()),
+                );
+                output.textures_delta.clear();
+                shapes = output.shapes;
+            }
+            let area = ctx
+                .memory(|memory| memory.area_rect(egui::Id::new("add_list")))
+                .expect("the dialog is shown");
+            let mut painted = Vec::new();
+            for clipped in &shapes {
+                flatten(&clipped.shape, &mut painted);
+            }
+            let done = painted.iter().find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text() == tr!("done") => {
+                    Some(text.visual_bounding_rect())
+                }
+                _ => None,
+            });
+            (area, done.expect("a Done button"))
+        });
+        let (area, done) = shown;
+        let right = area.right() - margin.right;
+        assert!(
+            done.right() <= right && done.right() > right - 40.0,
+            "{language:?}: Done ends at {} in a dialog whose content ends at {right}",
+            done.right()
+        );
+    }
+}

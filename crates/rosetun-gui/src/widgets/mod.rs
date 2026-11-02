@@ -24,7 +24,7 @@ pub(crate) use choice_card::choice_card;
 pub(crate) use combo::{drop_down, filter_combo};
 pub(crate) use dialogs::{
     ConfirmModal, Dialog, DialogFooter, DialogWidth, FooterChoice, ModalChoice, NameModal,
-    confirm_modal, dialog_footer, dialog_footer_with_note, name_modal,
+    confirm_modal, dialog_done, dialog_footer, dialog_footer_with_note, name_modal,
 };
 #[cfg(windows)]
 pub(crate) use dialogs::{ThreeWayChoice, ThreeWayModal, three_way_modal};
@@ -32,7 +32,7 @@ pub(crate) use frames::{
     card_chrome_height, card_frame, dismissible_error, dismissible_error_with_action,
     error_with_actions, modal_frame,
 };
-pub(crate) use menu::{MenuItem, context_menu_popup, menu_item, menu_popup};
+pub(crate) use menu::{MenuItem, MenuWidth, context_menu_popup, menu_item, menu_popup, menu_width};
 pub(crate) use search::{
     MIN_SEARCH_WIDTH, SEARCH_WIDTH, search_field, search_field_with_suffix, search_width_beside,
 };

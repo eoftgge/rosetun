@@ -63,7 +63,7 @@ struct Allowed {
     reason: &'static str,
 }
 
-const ALLOWED: [Allowed; 9] = [
+const ALLOWED: [Allowed; 5] = [
     Allowed {
         file: "view/rules/table.rs",
         call: "add_space(",
@@ -91,34 +91,6 @@ const ALLOWED: [Allowed; 9] = [
         function: None,
         arguments: Some("96.0"),
         reason: "the label column of a row of the connection card, not a dialog",
-    },
-    Allowed {
-        file: "view/add_subscription.rs",
-        call: "set_width(",
-        function: None,
-        arguments: Some("230.0"),
-        reason: "the width of the QR source menu, a popup beside a button, not a dialog",
-    },
-    Allowed {
-        file: "view/exits.rs",
-        call: "set_width(",
-        function: Some("exit_menu"),
-        arguments: Some("210.0"),
-        reason: "the width of a row's menu, a popup beside a button, not a dialog",
-    },
-    Allowed {
-        file: "view/lists.rs",
-        call: "set_width(",
-        function: None,
-        arguments: Some("210.0"),
-        reason: "the width of a row's menu, a popup beside a button, not a dialog",
-    },
-    Allowed {
-        file: "view/subscriptions/card.rs",
-        call: "set_width(",
-        function: None,
-        arguments: Some("180.0"),
-        reason: "the width of a card's menu, a popup beside a button, not a dialog",
     },
     Allowed {
         file: "view/traffic.rs",
@@ -972,9 +944,9 @@ fn only_the_views_are_kept_from_raw_inputs_and_widgets_may_hold_them() {
 
 #[test]
 fn the_fence_lets_through_only_the_listed_widths() {
-    let menu = view_violations("fn exit_menu() {\n    ui.set_width(210.0);\n}\n");
-    assert_eq!(menu.len(), 1);
-    assert!(is_allowed(&ALLOWED, "view/exits.rs", &menu[0]));
+    let tile = view_violations("fn tile() {\n    ui.set_width(232.0);\n}\n");
+    assert_eq!(tile.len(), 1);
+    assert!(is_allowed(&ALLOWED, "view/traffic.rs", &tile[0]));
     assert!(!is_allowed(
         &ALLOWED,
         "view/lists.rs",
@@ -983,6 +955,6 @@ fn the_fence_lets_through_only_the_listed_widths() {
     assert!(!is_allowed(
         &ALLOWED,
         "view/exits.rs",
-        &view_violations("fn exit_dialog() {\n    ui.set_width(210.0);\n}\n")[0]
+        &view_violations("fn exit_menu() {\n    ui.set_width(210.0);\n}\n")[0]
     ));
 }

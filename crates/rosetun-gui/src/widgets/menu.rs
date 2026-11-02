@@ -117,6 +117,29 @@ fn item_radius(pixels_per_point: f32) -> egui::CornerRadius {
     egui::CornerRadius::same(points)
 }
 
+/// The widths a menu opens in, beside the button that opens it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MenuWidth {
+    Compact,
+    Regular,
+    Wide,
+}
+
+impl MenuWidth {
+    pub(crate) const fn points(self) -> f32 {
+        match self {
+            Self::Compact => 180.0,
+            Self::Regular => 210.0,
+            Self::Wide => 230.0,
+        }
+    }
+}
+
+/// Gives the menu being filled one of the menu widths.
+pub(crate) fn menu_width(ui: &mut egui::Ui, width: MenuWidth) {
+    ui.set_width(width.points());
+}
+
 pub(crate) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
     style_popup(egui::Popup::menu(response), response)
 }

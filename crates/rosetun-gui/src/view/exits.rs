@@ -207,7 +207,7 @@ fn exit_menu(ui: &mut egui::Ui, exit: &Exit, can_edit: bool, actions: &mut Vec<A
     let menu =
         icons::icon_button_sized(ui, Icon::More, true, 28.0).on_hover_text(tr!("more-actions"));
     widgets::menu_popup(&menu).show(|ui| {
-        ui.set_width(210.0);
+        widgets::menu_width(ui, widgets::MenuWidth::Regular);
         for (label, danger, action) in [
             (
                 tr!("rename"),
