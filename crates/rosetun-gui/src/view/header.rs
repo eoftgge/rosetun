@@ -800,8 +800,14 @@ mod tests {
             }
         }
         let frame = Some(Duration::from_millis(16));
-        assert_eq!(petal_repaint(Some(&ConnectionState::Connected), 0.5, frame), frame);
-        assert_eq!(petal_repaint(Some(&ConnectionState::Connected), 0.0, frame), None);
+        assert_eq!(
+            petal_repaint(Some(&ConnectionState::Connected), 0.5, frame),
+            frame
+        );
+        assert_eq!(
+            petal_repaint(Some(&ConnectionState::Connected), 0.0, frame),
+            None
+        );
     }
 
     #[test]
@@ -814,18 +820,30 @@ mod tests {
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         for step in 0..=660 {
-            let mut output = ctx.run_ui(egui::RawInput {
-                time: Some(f64::from(step) / 60.0),
-                ..Default::default()
-            }, |ctx| {
-                egui::Panel::top("header").exact_size(super::HEIGHT).show(ctx, |ui| {
-                    show_with_rects(ui, &state, &mut Vec::new());
-                });
-            });
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(f64::from(step) / 60.0),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::Panel::top("header")
+                        .exact_size(super::HEIGHT)
+                        .show(ctx, |ui| {
+                            show_with_rects(ui, &state, &mut Vec::new());
+                        });
+                },
+            );
             output.textures_delta.clear();
         }
         assert!(!ctx.has_requested_repaint());
-        assert_eq!(ctx.data_mut(|data| data.get_temp::<super::DriftClock>(egui::Id::new("header_drift_clock"))).unwrap().connected_at, Some(0.0));
+        assert_eq!(
+            ctx.data_mut(
+                |data| data.get_temp::<super::DriftClock>(egui::Id::new("header_drift_clock"))
+            )
+            .unwrap()
+            .connected_at,
+            Some(0.0)
+        );
     }
 
     #[test]
