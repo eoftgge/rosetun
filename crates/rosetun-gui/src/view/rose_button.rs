@@ -472,7 +472,9 @@ pub(crate) fn rose_button(
             Stroke::new(
                 theme::stroke::HAIRLINE,
                 if hovered {
-                    theme::palette().accent_base.gamma_multiply(RING_HOVER_FACTOR)
+                    theme::palette()
+                        .accent_base
+                        .gamma_multiply(RING_HOVER_FACTOR)
                 } else {
                     visible.ring
                 },

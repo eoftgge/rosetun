@@ -164,7 +164,10 @@ mod tests {
                         .show(|ui| {
                             ui.set_min_width(width);
                             assert_eq!(ui.spacing().button_padding, egui::vec2(10.0, 4.0));
-                            assert_eq!(ui.spacing().menu_margin, theme::margin::same(theme::space::XS));
+                            assert_eq!(
+                                ui.spacing().menu_margin,
+                                theme::margin::same(theme::space::XS)
+                            );
                             assert_eq!(
                                 ui.visuals().widgets.hovered.corner_radius,
                                 egui::CornerRadius::same(4)
@@ -224,7 +227,10 @@ mod tests {
                 context_menu_popup(&row).open(true).show(|ui| {
                     ui.set_min_width(200.0);
                     assert_eq!(ui.spacing().button_padding, egui::vec2(10.0, 4.0));
-                    assert_eq!(ui.spacing().menu_margin, theme::margin::same(theme::space::XS));
+                    assert_eq!(
+                        ui.spacing().menu_margin,
+                        theme::margin::same(theme::space::XS)
+                    );
                     assert_eq!(
                         ui.visuals().widgets.hovered.corner_radius,
                         egui::CornerRadius::same(4)

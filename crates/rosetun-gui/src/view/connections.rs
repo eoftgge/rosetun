@@ -72,7 +72,10 @@ fn details(
             ui.horizontal(|ui| {
                 let close = 22.0;
                 ui.add_sized(
-                    egui::vec2((ui.available_width() - close - theme::space::S).max(0.0), close),
+                    egui::vec2(
+                        (ui.available_width() - close - theme::space::S).max(0.0),
+                        close,
+                    ),
                     egui::Label::new(RichText::new(&destination).monospace().strong()).truncate(),
                 )
                 .on_hover_text(&destination);
@@ -405,9 +408,12 @@ fn toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> Toolb
                 rosetun_ipc::MAX_CLOSED_CONNECTIONS,
             ),
         );
-        rects.two_rows =
-            widgets::SEARCH_WIDTH + view_width + tabs_width + ROUTE_FILTER_WIDTH + 3.0 * theme::space::S
-                > ui.available_width();
+        rects.two_rows = widgets::SEARCH_WIDTH
+            + view_width
+            + tabs_width
+            + ROUTE_FILTER_WIDTH
+            + 3.0 * theme::space::S
+            > ui.available_width();
         let primary = |ui: &mut egui::Ui,
                        search_width: f32,
                        rects: &mut ToolbarRects,

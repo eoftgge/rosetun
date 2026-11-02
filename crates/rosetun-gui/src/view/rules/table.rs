@@ -396,7 +396,8 @@ pub(super) fn rule_row(
         && egui::DragAndDrop::payload::<RuleId>(ui.ctx()).is_some_and(|id| {
             *id == rule.id || (selected && state.rules.screen.selected_rules.contains(&*id))
         });
-    let mut frame = widgets::card_frame().inner_margin(theme::margin::symmetric(theme::space::M, 0.0));
+    let mut frame =
+        widgets::card_frame().inner_margin(theme::margin::symmetric(theme::space::M, 0.0));
     let fill = if selected {
         theme::palette().input
     } else {
