@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use eframe::egui;
 use rosetun_config::{
     AccentPreset, AppConfig, DnsSettings, Exit, ExitId, ExitTarget, LanguageSetting, List, ListId,
-    LiveConnection, Node, NodeId, Rule, RuleId, RuleMatcher, RuleSet, RuleSetId, RuleTarget,
-    Status, Subscription, SubscriptionId,
+    LiveConnection, Node, NodeId, ProtectionCapabilities, Rule, RuleId, RuleMatcher, RuleSet,
+    RuleSetId, RuleTarget, Status, Subscription, SubscriptionId,
 };
 use rosetun_core::{
     AddFromUrlError, AddOptions, AddedRules, AppliedSnapshot, ExitError, ExitInfo, ExitInfoError,
@@ -34,9 +34,17 @@ use rosetun_ipc::{
 use rosetun_processes::{ProcessListError, RunningProcess, running_processes};
 
 use crate::qr::QrError;
-use crate::state::{ExitInputs, ExitRoute};
+use crate::state::{ExitRoute, RequestInputs};
 
 const CLIENT_NAME: &str = concat!("rosetun-gui/", env!("CARGO_PKG_VERSION"));
+
+/// What a helper with a kill switch and Lockdown reports, for tests that
+/// are not about protection.
+#[cfg(test)]
+pub(crate) const FULL_PROTECTION: ProtectionCapabilities = ProtectionCapabilities {
+    kill_switch: true,
+    lockdown: true,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum HelperCommandError {
@@ -95,6 +103,7 @@ pub(crate) enum WorkerEvent {
     },
     HelperAvailable {
         version: String,
+        protection: ProtectionCapabilities,
     },
     HelperUnavailable(ClientError),
     Status(Status),
@@ -388,6 +397,7 @@ pub(crate) fn start(
                             &repaint,
                             WorkerEvent::HelperAvailable {
                                 version: client.helper_version().to_owned(),
+                                protection: client.protection(),
                             },
                         ) {
                             return;

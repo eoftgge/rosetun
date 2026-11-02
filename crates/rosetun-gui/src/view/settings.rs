@@ -238,18 +238,23 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetConnectOnStart(connect_on_start));
         }
         let lockdown = state.lockdown_active();
-        let mut kill_switch = state.config.settings.kill_switch || lockdown;
+        let kill_switch_unavailable = state.kill_switch_unavailable();
+        let mut kill_switch =
+            !kill_switch_unavailable && (state.config.settings.kill_switch || lockdown);
         if card
             .toggle(
                 tr!("kill-switch"),
                 None,
-                if lockdown {
+                if kill_switch_unavailable {
+                    tr!("kill-switch-unavailable")
+                } else if lockdown {
                     tr!("kill-switch-lockdown")
                 } else {
                     tr!("kill-switch-detail")
                 },
                 &mut kill_switch,
                 state.config_ready
+                    && !kill_switch_unavailable
                     && !state.operations.kill_switch
                     && !state.operations.helper
                     && !lockdown,
@@ -263,7 +268,11 @@ fn connection(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             .toggle(
                 tr!("lockdown"),
                 Some(&tr!("experimental")),
-                tr!("lockdown-detail"),
+                if state.lockdown_unavailable() {
+                    tr!("lockdown-unavailable")
+                } else {
+                    tr!("lockdown-detail")
+                },
                 &mut lockdown_on,
                 state.can_change_lockdown(),
             )
@@ -1266,6 +1275,7 @@ mod update_status_tests {
 #[cfg(test)]
 mod lockdown_switch_tests {
     use super::*;
+    use crate::i18n::Language;
     use crate::worker::WorkerEvent;
 
     fn state(lockdown: bool) -> State {
@@ -1273,6 +1283,7 @@ mod lockdown_switch_tests {
         state.config_ready = true;
         state.reduce(WorkerEvent::HelperAvailable {
             version: "0.9.0".into(),
+            protection: crate::worker::FULL_PROTECTION,
         });
         state.reduce(WorkerEvent::Status(rosetun_config::Status {
             lockdown,
@@ -1281,9 +1292,9 @@ mod lockdown_switch_tests {
         state
     }
 
-    /// Draws the Connection section, then clicks the Lockdown row beside its title: a click on
-    /// the title's text itself goes to the selectable label.
-    fn click_lockdown(state: &State) -> Vec<Action> {
+    /// Draws the Connection section, then clicks the row of the setting titled `title` beside
+    /// that title: a click on the title's text itself goes to the selectable label.
+    fn click_row(state: &State, title: &str) -> Vec<Action> {
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         let run = |events: Vec<egui::Event>| {
@@ -1305,7 +1316,7 @@ mod lockdown_switch_tests {
             );
             output.textures_delta.clear();
             let title = output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == tr!("lockdown") => {
+                egui::Shape::Text(text) if text.galley.text() == title => {
                     let rect = text.galley.rect.translate(text.pos.to_vec2());
                     Some(egui::pos2(rect.right() + 200.0, rect.center().y))
                 }
@@ -1315,7 +1326,7 @@ mod lockdown_switch_tests {
         };
         // The first frame lays the card out before it knows its own size.
         run(Vec::new());
-        let pos = run(Vec::new()).1.expect("the Lockdown switch is drawn");
+        let pos = run(Vec::new()).1.expect("the switch is drawn");
         let button = |pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -1324,6 +1335,94 @@ mod lockdown_switch_tests {
         };
         run(vec![egui::Event::PointerMoved(pos), button(true)]);
         run(vec![button(false)]).0
+    }
+
+    fn click_lockdown(state: &State) -> Vec<Action> {
+        click_row(state, &tr!("lockdown"))
+    }
+
+    /// Every text the Connection section draws.
+    fn texts(state: &State) -> Vec<String> {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut shown = Vec::new();
+        for _ in 0..2 {
+            let mut actions = Vec::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(960.0, 640.0),
+                    )),
+                    ..egui::RawInput::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        connection(ui, state, &mut actions);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            shown = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+        }
+        shown
+    }
+
+    fn with_protection(protection: Option<rosetun_config::ProtectionCapabilities>) -> State {
+        let mut state = state(false);
+        state.config.settings.kill_switch = true;
+        state.protection = protection;
+        state
+    }
+
+    #[test]
+    fn a_system_without_protection_shows_both_switches_as_unavailable_and_inert() {
+        let none = Some(rosetun_config::ProtectionCapabilities::default());
+        for language in [Language::English, Language::Russian] {
+            crate::i18n::in_language(language, || {
+                let state = with_protection(none);
+                let shown = texts(&state);
+                assert!(shown.contains(&tr!("kill-switch-unavailable")), "{language:?}");
+                assert!(shown.contains(&tr!("lockdown-unavailable")), "{language:?}");
+                assert!(!shown.contains(&tr!("kill-switch-detail")), "{language:?}");
+                assert!(!shown.contains(&tr!("lockdown-detail")), "{language:?}");
+                assert!(click_lockdown(&state).is_empty(), "{language:?}");
+                assert!(click_row(&state, &tr!("kill-switch")).is_empty(), "{language:?}");
+            });
+        }
+    }
+
+    #[test]
+    fn until_the_helper_answers_the_switches_look_and_work_as_before() {
+        for protection in [None, Some(crate::worker::FULL_PROTECTION)] {
+            let state = with_protection(protection);
+            let shown = texts(&state);
+            assert!(shown.contains(&tr!("kill-switch-detail")), "{protection:?}");
+            assert!(shown.contains(&tr!("lockdown-detail")), "{protection:?}");
+            assert!(!shown.contains(&tr!("kill-switch-unavailable")), "{protection:?}");
+            assert!(!shown.contains(&tr!("lockdown-unavailable")), "{protection:?}");
+            assert!(
+                matches!(
+                    click_row(&state, &tr!("kill-switch")).as_slice(),
+                    [Action::SetKillSwitch(false)]
+                ),
+                "{protection:?}"
+            );
+            assert!(
+                matches!(
+                    click_lockdown(&state).as_slice(),
+                    [Action::RequestLockdown(true)]
+                ),
+                "{protection:?}"
+            );
+        }
     }
 
     #[test]

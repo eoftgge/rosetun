@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rosetun_config::{
-    ConnectionState, DomainMatch, FailureKind, Node, NodeId, Outbound, ProcessMatch, Rule,
-    RuleMatcher, RuleSet, Selection, VlessParams,
+    ConnectionState, DomainMatch, FailureKind, Node, NodeId, Outbound, ProcessMatch,
+    ProtectionCapabilities, Rule, RuleMatcher, RuleSet, Selection, VlessParams,
 };
 use rosetun_core::{
     AddFromUrlError, FetchError, ParseError, Ping, Release, RemoveSubscriptionError, RuleSetError,
@@ -199,6 +199,7 @@ fn complete_applied_restore(state: &mut State) -> AppliedSnapshot {
 mod connection;
 mod exits;
 mod lists;
+mod protection;
 mod qr;
 #[cfg(windows)]
 mod quit;

@@ -576,6 +576,7 @@ no-session = not started
 kill-switch = Kill switch
 protection = Protection
 kill-switch-detail = Blocks all internet traffic if the tunnel drops.
+kill-switch-unavailable = Not available on this system.
 lockdown = Lockdown
 lockdown-detail = No internet without the tunnel, even after a restart or without the service. Subscriptions still update.
 lockdown-lan-kept = Lockdown keeps the previous setting: changing it needs administrator rights.

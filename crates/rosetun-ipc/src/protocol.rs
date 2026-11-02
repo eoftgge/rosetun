@@ -312,6 +312,17 @@ impl ConnectRequest {
         Ok(request)
     }
 
+    /// The request as the helper can serve it: a kill switch the helper
+    /// cannot give is not asked for. The saved setting stays the user's
+    /// choice, so it works again where the helper can give it. The client
+    /// and the CLI both build their connect requests through this, so the
+    /// two agree.
+    #[must_use]
+    pub fn limited_to(mut self, protection: ProtectionCapabilities) -> Self {
+        self.settings.kill_switch = protection.effective_kill_switch(self.settings.kill_switch);
+        self
+    }
+
     pub fn effective_rule_set(&self) -> RuleSet {
         let mut rules = self.rule_set.clone();
         rules
@@ -904,6 +915,37 @@ mod tests {
         assert_eq!(&request.rule_set, config.active_rules().unwrap());
         assert_eq!(request.settings, config.settings);
         assert!(request.temporary_rules.is_empty());
+    }
+
+    #[test]
+    fn a_request_asks_for_the_kill_switch_only_where_the_helper_can_give_it() {
+        use rosetun_config::ProtectionCapabilities;
+
+        let mut config = selected_config();
+        config.settings.kill_switch = true;
+        let request = ConnectRequest::from_config(&config).unwrap();
+
+        let full = request.clone().limited_to(ProtectionCapabilities {
+            kill_switch: true,
+            lockdown: true,
+        });
+        assert!(full.settings.kill_switch);
+        assert_eq!(full, request);
+
+        let mut none = request.clone().limited_to(ProtectionCapabilities::default());
+        assert!(!none.settings.kill_switch);
+        none.settings.kill_switch = true;
+        assert_eq!(none, request, "nothing else changes");
+        assert!(config.settings.kill_switch, "the saved setting is kept");
+
+        config.settings.kill_switch = false;
+        let off = ConnectRequest::from_config(&config)
+            .unwrap()
+            .limited_to(ProtectionCapabilities {
+                kill_switch: true,
+                lockdown: true,
+            });
+        assert!(!off.settings.kill_switch);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use super::*;
 
 impl WorkerDispatcher {
-    pub(crate) fn connect(&self, inputs: ExitInputs) {
+    pub(crate) fn connect(&self, inputs: RequestInputs) {
         self.spawn_task("rosetun-connect", move |publisher| {
             tracing::info!("connect command started");
             let result = publisher
@@ -9,8 +9,10 @@ impl WorkerDispatcher {
                 .load()
                 .map_err(HelperCommandError::Store)
                 .and_then(|config| {
-                    let request =
-                        ConnectRequest::from_config_with_exits(&config, inputs.context())?;
+                    let request = inputs.limit(ConnectRequest::from_config_with_exits(
+                        &config,
+                        inputs.context(),
+                    )?);
                     let prepared = rosetun_core::prepare_lists(&publisher.store, request.clone())?;
                     let snapshot = AppliedSnapshot::from_config(&config);
                     with_helper(|client| {

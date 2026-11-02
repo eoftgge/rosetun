@@ -26,6 +26,7 @@ fn exit_lookup_waits_for_status_and_runs_once_per_route() {
     assert_eq!(state.exit, ExitLookup::None);
     state.reduce(WorkerEvent::HelperAvailable {
         version: "test".into(),
+        protection: crate::worker::FULL_PROTECTION,
     });
     assert!(state.take_exit_lookup().is_none());
 
@@ -107,6 +108,7 @@ fn exit_lookup_uses_direct_route_when_helper_is_unavailable() {
 
     state.reduce(WorkerEvent::HelperAvailable {
         version: "test".into(),
+        protection: crate::worker::FULL_PROTECTION,
     });
     assert!(state.take_exit_lookup().is_none());
     assert_eq!(state.exit, ExitLookup::None);
@@ -128,6 +130,7 @@ fn exit_lookup_discards_old_replies_and_hides_new_addresses() {
     let mut state = State::default();
     state.reduce(WorkerEvent::HelperAvailable {
         version: "test".into(),
+        protection: crate::worker::FULL_PROTECTION,
     });
     state.reduce(WorkerEvent::Status(Status::default()));
     assert!(state.take_exit_lookup().is_some());
@@ -335,6 +338,7 @@ fn helper_recovery_keeps_last_status_hidden_until_available() {
     assert!(state.visible_status().is_none());
     state.reduce(WorkerEvent::HelperAvailable {
         version: "test".into(),
+        protection: crate::worker::FULL_PROTECTION,
     });
     state.reduce(WorkerEvent::Status(Status {
         state: ConnectionState::Disconnected,

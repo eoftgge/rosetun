@@ -141,6 +141,7 @@ fn temporary_rules_load_once_and_retry_busy_after_the_next_status() {
     let mut state = state_for_auto_connect();
     state.reduce(WorkerEvent::HelperAvailable {
         version: "test".into(),
+        protection: crate::worker::FULL_PROTECTION,
     });
     state.reduce(WorkerEvent::Status(Status {
         state: ConnectionState::Connected,
@@ -586,6 +587,7 @@ fn helper_loss_drops_queued_apply_and_ignores_late_response() {
 
     state.reduce(WorkerEvent::HelperAvailable {
         version: "test".to_owned(),
+        protection: crate::worker::FULL_PROTECTION,
     });
     state.reduce(WorkerEvent::Apply(Ok(request)));
     assert!(!state.operations.helper);

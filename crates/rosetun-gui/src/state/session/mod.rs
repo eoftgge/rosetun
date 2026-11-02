@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use rosetun_config::{ConnectionState, ExitId, Rule, RuleId, Selection, Status};
+use rosetun_config::{
+    ConnectionState, ExitId, ProtectionCapabilities, Rule, RuleId, Selection, Status,
+};
 use rosetun_core::{AppliedSnapshot, RuleDestination};
 use rosetun_ipc::{
     ClientError, ConnectRequest, ConnectRequestError, ErrorCode, ExitContext, HelperError,
@@ -147,17 +149,30 @@ impl AutoApplyIntent {
     }
 }
 
+/// What a connect or apply request is built from besides the saved
+/// configuration. A change here rebuilds the cached request.
 #[derive(Default, PartialEq, Eq)]
-pub(crate) struct ExitInputs {
+pub(crate) struct RequestInputs {
     delays: Vec<(Selection, Duration)>,
     selected: Vec<(ExitId, Selection)>,
+    /// What the helper said it can give; `None` until it has answered.
+    protection: Option<ProtectionCapabilities>,
 }
 
-impl ExitInputs {
+impl RequestInputs {
     pub(crate) fn context(&self) -> ExitContext<'_> {
         ExitContext {
             delays: &self.delays,
             selected: &self.selected,
+        }
+    }
+
+    /// The request without protection the helper cannot give. Until the
+    /// helper has answered it is left as built.
+    pub(crate) fn limit(&self, request: ConnectRequest) -> ConnectRequest {
+        match self.protection {
+            Some(protection) => request.limited_to(protection),
+            None => request,
         }
     }
 }
@@ -165,7 +180,7 @@ impl ExitInputs {
 pub(crate) struct SessionState {
     cached_request: Option<Result<ConnectRequest, ConnectRequestError>>,
     cached_temporary_rules: Vec<Rule>,
-    cached_exit_inputs: ExitInputs,
+    cached_inputs: RequestInputs,
     #[cfg(test)]
     pub(in crate::state) request_builds: usize,
     pub(super) session_request: Option<ConnectRequest>,
@@ -195,7 +210,7 @@ impl Default for SessionState {
         Self {
             cached_request: None,
             cached_temporary_rules: Vec::new(),
-            cached_exit_inputs: ExitInputs::default(),
+            cached_inputs: RequestInputs::default(),
             #[cfg(test)]
             request_builds: 0,
             session_request: None,
@@ -258,7 +273,7 @@ impl SessionState {
 }
 
 impl State {
-    pub(super) fn exit_inputs(&self) -> ExitInputs {
+    pub(super) fn request_inputs(&self) -> RequestInputs {
         let delays = self
             .config
             .subscriptions
@@ -295,12 +310,16 @@ impl State {
                     .collect()
             })
             .unwrap_or_default();
-        ExitInputs { delays, selected }
+        RequestInputs {
+            delays,
+            selected,
+            protection: self.protection,
+        }
     }
 
     /// Each exit's node as the next connect or apply would pick it.
     pub(crate) fn resolved_exits(&self) -> Vec<(ExitId, Option<Selection>)> {
-        let inputs = self.exit_inputs();
+        let inputs = self.request_inputs();
         rosetun_core::resolve_exits(
             &self.config.exits,
             &self.config.subscriptions,
@@ -312,7 +331,7 @@ impl State {
     pub(super) fn refresh_cached_request(&mut self) {
         if self.session.cached_request.is_some()
             && (self.session.cached_temporary_rules != self.session.temporary_rules
-                || self.session.cached_exit_inputs != self.exit_inputs())
+                || self.session.cached_inputs != self.request_inputs())
         {
             self.cache_config_request();
             self.request_list_inspection();
@@ -320,15 +339,18 @@ impl State {
     }
 
     pub(super) fn cache_config_request(&mut self) {
-        let inputs = self.exit_inputs();
-        self.session.cached_request = Some(ConnectRequest::for_apply_with_exits(
-            &self.config,
-            None,
-            self.session.temporary_rules.clone(),
-            inputs.context(),
-        ));
+        let inputs = self.request_inputs();
+        self.session.cached_request = Some(
+            ConnectRequest::for_apply_with_exits(
+                &self.config,
+                None,
+                self.session.temporary_rules.clone(),
+                inputs.context(),
+            )
+            .map(|request| inputs.limit(request)),
+        );
         self.session.cached_temporary_rules = self.session.temporary_rules.clone();
-        self.session.cached_exit_inputs = inputs;
+        self.session.cached_inputs = inputs;
         #[cfg(test)]
         {
             self.session.request_builds += 1;
@@ -339,13 +361,16 @@ impl State {
         match self.session.cached_request.as_ref() {
             Some(Ok(request)) => Ok(std::borrow::Cow::Borrowed(request)),
             Some(Err(error)) => Err(*error),
-            None => ConnectRequest::for_apply_with_exits(
-                &self.config,
-                None,
-                self.session.temporary_rules.clone(),
-                self.exit_inputs().context(),
-            )
-            .map(std::borrow::Cow::Owned),
+            None => {
+                let inputs = self.request_inputs();
+                ConnectRequest::for_apply_with_exits(
+                    &self.config,
+                    None,
+                    self.session.temporary_rules.clone(),
+                    inputs.context(),
+                )
+                .map(|request| std::borrow::Cow::Owned(inputs.limit(request)))
+            }
         }
     }
 
@@ -372,7 +397,7 @@ impl State {
             &self.config,
             Some(&session.settings),
             self.session.temporary_rules.clone(),
-            self.exit_inputs().context(),
+            self.request_inputs().context(),
         )
         .ok()
     }

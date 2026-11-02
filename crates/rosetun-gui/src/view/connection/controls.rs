@@ -41,13 +41,25 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
         ui.set_min_height((height - widgets::card_chrome_height()).max(0.0));
         ui.colored_label(theme::palette().text_dim, tr!("protection"));
         let lockdown = state.lockdown_active();
-        let mut kill_switch = state.config.settings.kill_switch || lockdown;
+        let unavailable = state.kill_switch_unavailable();
+        let mut kill_switch = !unavailable && (state.config.settings.kill_switch || lockdown);
         let dim = theme::palette().text_dim;
         if widgets::toggle_row_with_detail(
             ui,
             tr!("kill-switch"),
             None,
             |ui| {
+                if unavailable {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(tr!("kill-switch-unavailable"))
+                                .small()
+                                .color(dim),
+                        )
+                        .wrap(),
+                    );
+                    return;
+                }
                 if !lockdown {
                     ui.add(
                         egui::Label::new(
@@ -72,6 +84,7 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
             },
             &mut kill_switch,
             state.config_ready
+                && !unavailable
                 && !state.operations.kill_switch
                 && !state.operations.helper
                 && !lockdown,
@@ -670,6 +683,40 @@ mod tests {
                 assert!(!frame.has(&tr!("settings")), "{language:?}");
                 assert!(!frame.has(&tr!("kill-switch-lockdown")), "{language:?}");
                 assert!(frame.has(&tr!("kill-switch-detail")), "{language:?}");
+            });
+        }
+    }
+
+    #[test]
+    fn a_kill_switch_the_helper_cannot_give_says_so_and_does_not_react() {
+        let window = egui::vec2(960.0, 640.0);
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                let mut none = state(EXIT_NAME);
+                none.config.settings.kill_switch = true;
+                none.protection = Some(rosetun_config::ProtectionCapabilities::default());
+                let frame = themed(&none, window, 944.0);
+                assert!(frame.has(&tr!("kill-switch-unavailable")), "{language:?}");
+                assert!(!frame.has(&tr!("kill-switch-detail")), "{language:?}");
+                let actions = click(&none, window, &tr!("kill-switch-unavailable"));
+                assert!(actions.is_empty(), "{language:?}: {} actions", actions.len());
+
+                for protection in [None, Some(crate::worker::FULL_PROTECTION)] {
+                    let mut known = state(EXIT_NAME);
+                    known.config.settings.kill_switch = true;
+                    known.protection = protection;
+                    let frame = themed(&known, window, 944.0);
+                    let place = format!("{language:?}, {protection:?}");
+                    assert!(frame.has(&tr!("kill-switch-detail")), "{place}");
+                    assert!(!frame.has(&tr!("kill-switch-unavailable")), "{place}");
+                    assert!(
+                        matches!(
+                            click(&known, window, &tr!("kill-switch-detail")).as_slice(),
+                            [Action::SetKillSwitch(false)]
+                        ),
+                        "{place}"
+                    );
+                }
             });
         }
     }

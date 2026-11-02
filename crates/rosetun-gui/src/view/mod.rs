@@ -372,6 +372,7 @@ mod settings_nav_tests {
         assert!(service_warning(&state));
         state.reduce(WorkerEvent::HelperAvailable {
             version: "0.9.0".into(),
+            protection: crate::worker::FULL_PROTECTION,
         });
         assert!(!service_warning(&state));
     }

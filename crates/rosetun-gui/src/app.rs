@@ -907,6 +907,7 @@ mod tests {
         let mut state = crate::state::State::default();
         state.reduce(crate::worker::WorkerEvent::HelperAvailable {
             version: "0.9.0".into(),
+            protection: crate::worker::FULL_PROTECTION,
         });
         state.reduce(crate::worker::WorkerEvent::Status(Status {
             state: ConnectionState::Connected,

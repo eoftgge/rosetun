@@ -4,6 +4,7 @@ fn connected_since(since: u64) -> State {
     let mut state = State::default();
     state.reduce(WorkerEvent::HelperAvailable {
         version: "0.9.0".into(),
+        protection: crate::worker::FULL_PROTECTION,
     });
     state.reduce(WorkerEvent::Status(Status {
         state: ConnectionState::Connected,

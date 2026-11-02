@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_config::{
     AccentPreset, AppConfig, DnsSettings, ExitId, ExitTarget, LanguageSetting, ListId, ListSource,
-    NodeId, RuleId, RuleMatcher, RuleSetId, RuleTarget, RuleTemplate, Status, SubscriptionId,
-    XrayUse,
+    NodeId, ProtectionCapabilities, RuleId, RuleMatcher, RuleSetId, RuleTarget, RuleTemplate,
+    Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{
     AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, SettingChange,
@@ -42,7 +42,7 @@ use quit::QuitState;
 use rules::RulesState;
 pub(crate) use rules::{AddRuleDialog, DeleteDialog, NameDialogKind, RuleInputKind};
 use session::SessionState;
-pub(crate) use session::{ExitInputs, SessionPart};
+pub(crate) use session::{RequestInputs, SessionPart};
 use settings::SettingsState;
 pub(crate) use settings::{AboutFolder, SettingsSection};
 #[cfg(any(windows, test))]
@@ -117,6 +117,10 @@ pub(crate) struct State {
     pub(crate) failure_details_open: bool,
     pub(crate) traffic: TrafficState,
     pub(crate) helper_available: bool,
+    /// What the helper can give, kept across a lost connection: it describes
+    /// the system, not the link. `None` until the first answer, and then
+    /// nothing is shown as unavailable.
+    pub(crate) protection: Option<ProtectionCapabilities>,
     pub(crate) helper_version: Option<String>,
     pub(crate) helper_error: Option<ClientError>,
     pub(crate) operation_error: Option<String>,
@@ -171,6 +175,7 @@ impl Default for State {
             failure_details_open: false,
             traffic: TrafficState::default(),
             helper_available: false,
+            protection: None,
             helper_version: None,
             helper_error: None,
             operation_error: None,
@@ -390,7 +395,7 @@ pub(crate) enum Action {
 }
 
 pub(crate) enum Job {
-    Connect(ExitInputs),
+    Connect(RequestInputs),
     CheckSystem {
         request: u64,
         own_alias: String,

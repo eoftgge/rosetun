@@ -591,6 +591,7 @@ no-session = не начат
 kill-switch = Kill switch
 protection = Защита
 kill-switch-detail = Блокирует весь интернет-трафик, если туннель оборвётся.
+kill-switch-unavailable = Недоступен в этой системе.
 lockdown = Lockdown
 lockdown-detail = Без туннеля интернета нет, даже после перезагрузки и без службы. Подписки обновляются.
 lockdown-lan-kept = Lockdown оставил прежний доступ: для изменения нужны права администратора.

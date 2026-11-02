@@ -157,8 +157,20 @@ impl State {
         self.visible_status().is_some_and(|status| status.lockdown)
     }
 
+    /// The helper said its system has no kill switch.
+    pub(crate) fn kill_switch_unavailable(&self) -> bool {
+        self.protection
+            .is_some_and(|protection| !protection.kill_switch)
+    }
+
+    /// The helper said its system has no Lockdown.
+    pub(crate) fn lockdown_unavailable(&self) -> bool {
+        self.protection.is_some_and(|protection| !protection.lockdown)
+    }
+
     pub(crate) fn can_change_lockdown(&self) -> bool {
         self.config_ready
+            && !self.lockdown_unavailable()
             && self.helper_available
             && self.status_received
             && !self.operations.helper
@@ -235,7 +247,7 @@ impl State {
             self.cancelled_connect = false;
             self.deferred_connect = None;
             self.operation_error = None;
-            return Some(Job::Connect(self.exit_inputs()));
+            return Some(Job::Connect(self.request_inputs()));
         }
         None
     }
@@ -379,14 +391,19 @@ impl State {
 
     pub(super) fn reduce_connection(&mut self, event: WorkerEvent) {
         match event {
-            WorkerEvent::HelperAvailable { version } => {
+            WorkerEvent::HelperAvailable {
+                version,
+                protection,
+            } => {
                 self.helper_available = true;
+                self.protection = Some(protection);
                 self.helper_version = Some(version);
                 self.helper_error = None;
                 self.status_received = false;
                 self.clear_temporary();
                 self.tunnel_delay = TunnelDelay::Idle;
                 self.delay_last_auto = None;
+                self.refresh_cached_request();
             }
             WorkerEvent::HelperUnavailable(error) => {
                 self.helper_available = false;
@@ -629,7 +646,7 @@ impl State {
             Action::Primary => {
                 let job = match self.primary_action() {
                     PrimaryAction::Connect | PrimaryAction::Retry | PrimaryAction::Reconnect => {
-                        Job::Connect(self.exit_inputs())
+                        Job::Connect(self.request_inputs())
                     }
                     PrimaryAction::Disconnect => Job::Disconnect,
                     PrimaryAction::Disabled => return None,
@@ -735,6 +752,7 @@ impl State {
             }
             Action::SetKillSwitch(enabled) => {
                 if self.config_ready
+                    && !self.kill_switch_unavailable()
                     && !self.operations.kill_switch
                     && !self.operations.helper
                     && !self.lockdown_active()
