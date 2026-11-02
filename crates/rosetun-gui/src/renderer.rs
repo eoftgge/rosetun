@@ -55,6 +55,7 @@ fn options(viewport: eframe::egui::ViewportBuilder, renderer: Renderer) -> efram
             setup.power_preference = wgpu::PowerPreference::LowPower;
             options.wgpu_options.wgpu_setup = WgpuSetup::CreateNew(setup);
             options.wgpu_options.surface.present_mode = wgpu::PresentMode::AutoVsync;
+            options.wgpu_options.on_surface_status = surface_status_handler();
         }
     }
     options.glow_options.vsync = true;
@@ -126,6 +127,36 @@ fn failure_kind(error: Option<&eframe::Error>) -> &'static str {
         },
         _ => "window initialization failed",
     }
+}
+
+#[cfg(windows)]
+fn surface_status_handler() -> std::sync::Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> eframe::egui_wgpu::SurfaceErrorAction + Send + Sync> {
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+
+    use eframe::egui_wgpu::SurfaceErrorAction;
+    use wgpu::CurrentSurfaceTexture;
+
+    let warnings = Mutex::new([crate::logging::RepeatedWarning::default(); 2]);
+    Arc::new(move |status| match status {
+        CurrentSurfaceTexture::Outdated => {
+            tracing::trace!("graphics surface outdated; reconfiguring");
+            SurfaceErrorAction::Reconfigure
+        }
+        CurrentSurfaceTexture::Lost => {
+            tracing::debug!("graphics surface lost; recreating");
+            SurfaceErrorAction::RecreateSurface
+        }
+        CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Validation => {
+            let (index, event) = if matches!(status, CurrentSurfaceTexture::Timeout) { (0, "timeout") } else { (1, "validation") };
+            let count = warnings.lock().unwrap_or_else(std::sync::PoisonError::into_inner)[index].observe(Instant::now());
+            if let Some(count) = count {
+                tracing::warn!(event, count, "dropped graphics frames");
+            }
+            SurfaceErrorAction::SkipFrame
+        }
+        _ => SurfaceErrorAction::SkipFrame,
+    })
 }
 
 #[cfg(test)]

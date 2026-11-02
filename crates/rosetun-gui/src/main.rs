@@ -19,6 +19,7 @@ mod errors;
 mod icons;
 #[cfg(test)]
 mod layout_fence;
+mod logging;
 mod motion;
 #[cfg(windows)]
 mod notices;
@@ -104,10 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     // HTTP diagnostics can contain credentials regardless of the selected level.
     let safe_targets = filter_fn(|metadata| {
-        !rosetun_core::is_sensitive_log_target(metadata.target())
-            // Graphics libraries include adapter names in info and warning messages.
-            && (!(metadata.target().starts_with("wgpu") || metadata.target().starts_with("egui_wgpu"))
-                || *metadata.level() >= tracing::Level::DEBUG)
+        logging::allows(metadata.target(), *metadata.level())
     });
     tracing_subscriber::registry()
         .with(env_filter)
