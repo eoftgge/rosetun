@@ -884,7 +884,7 @@ function Start-RosetunHelper {
     # binary, which takes well over 15 seconds in a freshly restored guest.
     param([int]$TimeoutSeconds = 60)
     Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $task, $pipeName, $timeout)
+        param($dir, $task, $timeout)
 
         # The default IgnoreNew policy silently drops a start issued while a
         # previous instance is still winding down, so wait it out first.
@@ -903,26 +903,67 @@ function Start-RosetunHelper {
             Move-Item -Path "$dir\helper.log" -Destination "$dir\helper-$stamp.log" -Force
         }
         Start-ScheduledTask -TaskName $task
+    } -ArgumentList $script:Config.GuestDir, $script:Config.TaskName, $TimeoutSeconds
+
+    $failure = Wait-RosetunHelperReady -TimeoutSeconds $TimeoutSeconds
+    if (-not $failure) {
+        return
+    }
+    $message = Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $task, $failure)
+        $state = (Get-ScheduledTask -TaskName $task).State
+        $result = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
+        $running = [bool](Get-Process -Name 'rosetun-helper-privileged' -ErrorAction SilentlyContinue)
+        $message = ('The helper {3}. ' +
+            'Task state: {0}; last result: 0x{1:X8}; helper process running: {2}.') -f $state, $result, $running, $failure
+        $tail = Get-Content -Path "$dir\helper.log" -Tail 20 -ErrorAction SilentlyContinue
+        if ($tail) {
+            $message += "`n" + ($tail -join "`n")
+        }
+        $message
+    } -ArgumentList $script:Config.GuestDir, $script:Config.TaskName, $failure
+    throw $message
+}
+
+function Wait-RosetunHelperReady {
+    # The helper opens its pipe first, so that a second instance gives up
+    # before it touches the firewall, and restores Lockdown only after that.
+    # The pipe alone therefore does not mean the helper has started; an answer
+    # to `rosetun status` does. Returns $null once it answers, otherwise the
+    # reason, for the caller's error message.
+    param(
+        [int]$TimeoutSeconds = 60,
+        # Wait for the SCM service to be running as well.
+        [switch]$Service
+    )
+    Invoke-RosetunGuest -ScriptBlock {
+        param($dir, $pipeName, $timeout, $service)
 
         # Enumerating the pipe directory does not connect to the pipe, unlike
         # Test-Path, so it never consumes a listener instance.
         $deadline = (Get-Date).AddSeconds($timeout)
-        while (-not ([IO.Directory]::GetFiles('\\.\pipe\') -contains "\\.\pipe\$pipeName")) {
+        while (($service -and (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue).Status -ne 'Running') -or
+            -not ([IO.Directory]::GetFiles('\\.\pipe\') -contains "\\.\pipe\$pipeName")) {
             if ((Get-Date) -gt $deadline) {
-                $state = (Get-ScheduledTask -TaskName $task).State
-                $result = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
-                $running = [bool](Get-Process -Name 'rosetun-helper-privileged' -ErrorAction SilentlyContinue)
-                $message = ('The helper did not open its pipe within {3} seconds. ' +
-                    'Task state: {0}; last result: 0x{1:X8}; helper process running: {2}.') -f $state, $result, $running, $timeout
-                $tail = Get-Content -Path "$dir\helper.log" -Tail 20 -ErrorAction SilentlyContinue
-                if ($tail) {
-                    $message += "`n" + ($tail -join "`n")
-                }
-                throw $message
+                return "did not open its pipe within $timeout seconds"
             }
             Start-Sleep -Milliseconds 200
         }
-    } -ArgumentList $script:Config.GuestDir, $script:Config.TaskName, $script:Config.PipeName, $TimeoutSeconds
+
+        $deadline = (Get-Date).AddSeconds($timeout)
+        while ($true) {
+            $output = @(& "$dir\rosetun.exe" 'status' 2>&1 | ForEach-Object { "$_" })
+            $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            if ($exitCode -eq 0) {
+                return $null
+            }
+            if ((Get-Date) -gt $deadline) {
+                return "opened its pipe but did not answer status within $timeout seconds (exit $exitCode): $($output -join ' ')"
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    } -ArgumentList $script:Config.GuestDir, $script:Config.PipeName, $TimeoutSeconds, [bool]$Service
 }
 
 function Stop-RosetunHelper {

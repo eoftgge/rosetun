@@ -506,17 +506,12 @@ function Install-TestService {
     if ($install.ExitCode -ne 0) {
         throw "Could not install the test service: $($install.Output)"
     }
-    Wait-ServicePipe
+    Wait-ServiceReady
 }
 
-function Wait-ServicePipe {
-    $ready = Wait-RosetunCondition {
-        Invoke-RosetunGuest -ScriptBlock {
-            (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue).Status -eq 'Running' -and
-                ([IO.Directory]::GetFiles('\\.\pipe\') -contains '\\.\pipe\rosetun-helper')
-        }
-    } -TimeoutSeconds 60
-    if (-not $ready) { throw 'The Rosetun service did not open its pipe within 60 s.' }
+function Wait-ServiceReady {
+    $failure = Wait-RosetunHelperReady -Service -TimeoutSeconds 60
+    if ($failure) { throw "The Rosetun service $failure." }
 }
 
 function Get-ServiceState {
@@ -969,7 +964,7 @@ try {
         $reset.ExitCode -eq 0 -and $reset.Output -match 'Lockdown removed'
     } -Note $reset.Output
     Test-Step '9 reset, running' 'no objects' { Test-LockdownAbsent } -Note (Format-Objects (Get-LockdownObjects))
-    Test-Step '9 reset, running' 'the service runs again' { Wait-ServicePipe; $true }
+    Test-Step '9 reset, running' 'the service runs again' { Wait-ServiceReady; $true }
     Test-Step '9 reset, running' 'status: lockdown off' { (Get-LockdownStatusLine) -eq 'off' }
     Test-Step '9 reset, running' 'direct egress works' { Test-RosetunDirectEgress }
 
@@ -983,7 +978,7 @@ try {
     Test-Step '9 reset, stopped' 'the service stays stopped' { (Get-ServiceState) -eq 'Stopped' }
     Invoke-RosetunGuest -ScriptBlock { Start-Service -Name 'Rosetun' }
     Test-Step '9 reset, stopped' 'the service starts and reports lockdown off' {
-        Wait-ServicePipe
+        Wait-ServiceReady
         (Get-LockdownStatusLine) -eq 'off'
     }
 

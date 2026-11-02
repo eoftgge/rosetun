@@ -322,15 +322,9 @@ function Install-OtherAccountService {
             throw "Could not start the test service: $($output -join ' ')"
         }
         $global:LASTEXITCODE = 0
-        $deadline = (Get-Date).AddSeconds(60)
-        while ((Get-Service -Name 'Rosetun' -ErrorAction Stop).Status -ne 'Running' -or
-            -not ([IO.Directory]::GetFiles('\\.\pipe\') -contains '\\.\pipe\rosetun-helper')) {
-            if ((Get-Date) -gt $deadline) {
-                throw 'The test service did not open its pipe within 60 seconds.'
-            }
-            Start-Sleep -Milliseconds 200
-        }
     } -ArgumentList $GuestDir
+    $failure = Wait-RosetunHelperReady -Service -TimeoutSeconds 60
+    if ($failure) { throw "The test service $failure." }
 }
 
 function Remove-OtherAccountService {
