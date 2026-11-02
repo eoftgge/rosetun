@@ -24,7 +24,7 @@ pub fn uses_xray(node: &Node, setting: XrayUse) -> bool {
     }
 }
 
-fn xray_supports(outbound: &Outbound) -> bool {
+pub(crate) fn xray_supports(outbound: &Outbound) -> bool {
     match outbound {
         Outbound::Vmess(params) => params.alter_id == 0,
         Outbound::Vless(_) | Outbound::Trojan(_) | Outbound::Shadowsocks(_) => true,

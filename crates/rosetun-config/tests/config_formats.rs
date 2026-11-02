@@ -4,7 +4,7 @@ use rosetun_config::{
     AccentPreset, AppConfig, CONFIG_VERSION, ConfigError, CountryCode, EngineKind, Exit, ExitId,
     ExitTarget, FormatError, HwidScope, Hysteria2Params, List, ListFormat, ListId, ListSource,
     Node, NodeId, Outbound, QuitAction, RealityParams, Rule, RuleId, RuleMatcher, RuleTarget,
-    Selection, StreamSettings, SubscriptionId, TlsMode, TlsParams, Transport, VlessParams,
+    Selection, StreamSettings, SubscriptionId, TlsFragment, TlsMode, TlsParams, Transport, VlessParams,
     XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, from_json,
 };
 use serde_json::{Value, json};
@@ -251,6 +251,12 @@ fn current_configuration_fixture_guards_the_serialized_format() {
             raw: None,
         });
     }
+    expected.settings.tls_fragment = TlsFragment {
+        enabled: true,
+        packets: "1-3".parse().unwrap(),
+        length: "100-200".parse().unwrap(),
+        interval: "10-20".parse().unwrap(),
+    };
     let (loaded, migrated_from) = from_json(V8).expect("current fixture should load");
 
     assert_eq!(migrated_from, None);
@@ -287,6 +293,12 @@ fn current_configuration_fixture_guards_the_serialized_format() {
     );
 }
 
+/// Settings saved by an older release have no fragmentation; loading adds it switched off.
+fn with_default_fragmentation(mut config: Value) -> Value {
+    config["settings"]["tls_fragment"] = serde_json::to_value(TlsFragment::default()).unwrap();
+    config
+}
+
 fn with_machine_scope(mut config: Value) -> Value {
     for subscription in config["subscriptions"].as_array_mut().unwrap() {
         subscription["hwid_scope"] = json!("machine");
@@ -299,7 +311,7 @@ fn version_seven_migration_changes_only_the_version() {
     let (config, migrated_from) = from_json(V7).unwrap();
     assert_eq!(migrated_from, Some(7));
     assert_eq!(config, format_seven_config());
-    let mut expected = value(V7);
+    let mut expected = with_default_fragmentation(value(V7));
     expected["version"] = json!(8);
     assert_eq!(serde_json::to_value(config).unwrap(), expected);
 }
@@ -310,7 +322,7 @@ fn version_five_loads_and_saves_as_version_seven() {
     assert_eq!(migrated_from, Some(5));
     assert_eq!(config, format_five_config());
 
-    let mut expected = with_machine_scope(value(V5));
+    let mut expected = with_default_fragmentation(with_machine_scope(value(V5)));
     expected["version"] = json!(8);
     expected["interface"]["accent"] = json!("rose");
     expected["interface"]["notifications"] = json!(true);
@@ -333,7 +345,7 @@ fn version_six_keeps_the_machine_id_of_every_subscription() {
             .all(|subscription| subscription.hwid_scope == HwidScope::Machine)
     );
 
-    let mut expected = with_machine_scope(value(V6));
+    let mut expected = with_default_fragmentation(with_machine_scope(value(V6)));
     expected["version"] = json!(8);
     expected["interface"]["accent"] = json!("rose");
     expected["interface"]["notifications"] = json!(true);
@@ -711,4 +723,57 @@ fn list_references_and_metadata_are_validated() {
         config.validate(),
         Err(ConfigError::InvalidListCategory)
     ));
+}
+
+#[test]
+fn a_file_of_a_newer_format_is_still_refused_with_fragmentation_in_it() {
+    let input = json!({
+        "version": CONFIG_VERSION + 2,
+        "settings": { "tls_fragment": { "enabled": true } },
+    });
+    assert!(matches!(
+        from_json(&serde_json::to_vec(&input).unwrap()),
+        Err(FormatError::Config(ConfigError::UnsupportedVersion { found, .. }))
+            if found == CONFIG_VERSION + 2
+    ));
+}
+
+#[test]
+fn a_format_eight_file_without_fragmentation_loads_with_it_off() {
+    let mut input = value(V8);
+    input["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("tls_fragment");
+    let (config, migrated_from) = from_json(&serde_json::to_vec(&input).unwrap()).unwrap();
+    assert_eq!(migrated_from, None);
+    assert_eq!(config.settings.tls_fragment, TlsFragment::default());
+    assert!(!config.settings.tls_fragment.enabled);
+}
+
+#[test]
+fn out_of_range_fragmentation_in_a_file_is_refused() {
+    for (field, text) in [
+        ("length", "100-1501"),
+        ("interval", "1-1001"),
+        ("packets", "1-101"),
+    ] {
+        let mut input = value(V8);
+        input["settings"]["tls_fragment"][field] = json!(text);
+        assert!(
+            matches!(
+                from_json(&serde_json::to_vec(&input).unwrap()),
+                Err(FormatError::Config(ConfigError::InvalidFragment))
+            ),
+            "{field} {text} must be refused"
+        );
+    }
+    for (field, text) in [("length", "0-5"), ("interval", "20-10"), ("packets", "x")] {
+        let mut input = value(V8);
+        input["settings"]["tls_fragment"][field] = json!(text);
+        assert!(
+            from_json(&serde_json::to_vec(&input).unwrap()).is_err(),
+            "{field} {text} must be refused"
+        );
+    }
 }

@@ -1,6 +1,10 @@
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+
+use crate::node::{Node, TlsMode, xray_supports};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +31,215 @@ pub enum XrayUse {
     Auto,
     Off,
     Always,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum FragmentError {
+    #[error("expected a number or a range such as 100-200")]
+    Malformed,
+    #[error("numbers start at 1")]
+    BelowOne,
+    #[error("the first number is larger than the second")]
+    Reversed,
+    #[error("the number is above {max}")]
+    AboveLimit { max: u32 },
+}
+
+/// An inclusive range of positive numbers, written `from-to` (or `n` for `n-n`) as Xray reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct FragmentRange {
+    from: u32,
+    to: u32,
+}
+
+impl FragmentRange {
+    pub fn new(from: u32, to: u32) -> Result<Self, FragmentError> {
+        if from == 0 || to == 0 {
+            Err(FragmentError::BelowOne)
+        } else if from > to {
+            Err(FragmentError::Reversed)
+        } else {
+            Ok(Self { from, to })
+        }
+    }
+
+    pub fn from(self) -> u32 {
+        self.from
+    }
+
+    pub fn to(self) -> u32 {
+        self.to
+    }
+
+    fn within(self, max: u32) -> Result<Self, FragmentError> {
+        if self.to > max {
+            Err(FragmentError::AboveLimit { max })
+        } else {
+            Ok(self)
+        }
+    }
+}
+
+impl FromStr for FragmentRange {
+    type Err = FragmentError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let number = |part: &str| {
+            let part = part.trim();
+            if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(FragmentError::Malformed);
+            }
+            // Only digits are left, so a failure here means the number does not fit.
+            part.parse::<u32>()
+                .map_err(|_| FragmentError::AboveLimit { max: u32::MAX })
+        };
+        match text.split_once('-') {
+            Some((from, to)) => Self::new(number(from)?, number(to)?),
+            None => {
+                let value = number(text)?;
+                Self::new(value, value)
+            }
+        }
+    }
+}
+
+impl fmt::Display for FragmentRange {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}-{}", self.from, self.to)
+    }
+}
+
+impl TryFrom<String> for FragmentRange {
+    type Error = FragmentError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        text.parse()
+    }
+}
+
+impl From<FragmentRange> for String {
+    fn from(range: FragmentRange) -> Self {
+        range.to_string()
+    }
+}
+
+/// Which writes to the server are split: the TLS hello or a range of packet numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum FragmentPackets {
+    #[default]
+    TlsHello,
+    Range(FragmentRange),
+}
+
+impl FragmentPackets {
+    const TLS_HELLO: &'static str = "tlshello";
+}
+
+impl FromStr for FragmentPackets {
+    type Err = FragmentError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.trim().eq_ignore_ascii_case(Self::TLS_HELLO) {
+            Ok(Self::TlsHello)
+        } else {
+            text.parse().map(Self::Range)
+        }
+    }
+}
+
+impl fmt::Display for FragmentPackets {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TlsHello => formatter.write_str(Self::TLS_HELLO),
+            Self::Range(range) => range.fmt(formatter),
+        }
+    }
+}
+
+impl TryFrom<String> for FragmentPackets {
+    type Error = FragmentError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        text.parse()
+    }
+}
+
+impl From<FragmentPackets> for String {
+    fn from(packets: FragmentPackets) -> Self {
+        packets.to_string()
+    }
+}
+
+/// Splits the first packets sent to the VPN server, so a provider that cuts the connection by
+/// its first packet misses it. Only nodes that Xray runs can use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TlsFragment {
+    pub enabled: bool,
+    pub packets: FragmentPackets,
+    /// Bytes per piece.
+    pub length: FragmentRange,
+    /// Pause after each piece, in milliseconds.
+    pub interval: FragmentRange,
+}
+
+impl TlsFragment {
+    /// The last packet number that can be split.
+    pub const MAX_PACKET: u32 = 100;
+    /// A piece longer than a TCP segment is not split any more.
+    pub const MAX_LENGTH: u32 = 1500;
+    pub const MAX_INTERVAL_MS: u32 = 1000;
+
+    pub fn parse_packets(text: &str) -> Result<FragmentPackets, FragmentError> {
+        match text.parse::<FragmentPackets>()? {
+            FragmentPackets::TlsHello => Ok(FragmentPackets::TlsHello),
+            FragmentPackets::Range(range) => range
+                .within(Self::MAX_PACKET)
+                .map(FragmentPackets::Range),
+        }
+    }
+
+    pub fn parse_length(text: &str) -> Result<FragmentRange, FragmentError> {
+        text.parse::<FragmentRange>()?.within(Self::MAX_LENGTH)
+    }
+
+    pub fn parse_interval(text: &str) -> Result<FragmentRange, FragmentError> {
+        text.parse::<FragmentRange>()?.within(Self::MAX_INTERVAL_MS)
+    }
+
+    /// Checks the limits that deserialization does not know.
+    pub fn validate(&self) -> Result<(), FragmentError> {
+        if let FragmentPackets::Range(range) = self.packets {
+            range.within(Self::MAX_PACKET)?;
+        }
+        self.length.within(Self::MAX_LENGTH)?;
+        self.interval.within(Self::MAX_INTERVAL_MS)?;
+        Ok(())
+    }
+
+    /// Whether the node's connection to its server is split when this is on. It needs Xray to
+    /// run the node, and the TLS hello mode needs a hello to split.
+    pub fn applies_to(&self, node: &Node) -> bool {
+        self.enabled
+            && xray_supports(&node.outbound)
+            && (matches!(self.packets, FragmentPackets::Range(_))
+                || !matches!(node.stream.tls, TlsMode::Plain))
+    }
+}
+
+impl Default for TlsFragment {
+    fn default() -> Self {
+        // The defaults of v2rayN's fragment settings for Xray: the TLS hello in pieces of
+        // 50 to 100 bytes, 10 to 20 ms apart.
+        Self {
+            enabled: false,
+            packets: FragmentPackets::TlsHello,
+            length: FragmentRange { from: 50, to: 100 },
+            interval: FragmentRange { from: 10, to: 20 },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
@@ -93,6 +306,8 @@ pub struct Settings {
     #[serde(default)]
     pub xray: XrayUse,
     #[serde(default)]
+    pub tls_fragment: TlsFragment,
+    #[serde(default)]
     pub kill_switch: bool,
     /// The helper restarts the engine by itself after it exits or after a resume from sleep.
     #[serde(default = "crate::default_true")]
@@ -118,6 +333,7 @@ impl Default for Settings {
         Self {
             engine: EngineKind::default(),
             xray: XrayUse::default(),
+            tls_fragment: TlsFragment::default(),
             kill_switch: false,
             auto_reconnect: true,
             allow_lan: false,
@@ -141,7 +357,13 @@ impl Settings {
 
 #[cfg(test)]
 mod settings_tests {
-    use super::{DnsSettings, Settings};
+    use super::{
+        DnsSettings, FragmentError, FragmentPackets, FragmentRange, Settings, TlsFragment,
+    };
+    use crate::{
+        Node, NodeId, Outbound, ProxyCredentials, StreamSettings, TlsMode, TlsParams,
+        VlessParams,
+    };
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
@@ -250,6 +472,114 @@ mod settings_tests {
             r#"{"dns":{"server":"dns.google","server_name":"dns.google"}}"#,
         );
         assert!(result.is_err());
+    }
+
+    fn fragment_node(outbound: Outbound, tls: TlsMode) -> Node {
+        Node {
+            id: NodeId::new("fixture"),
+            name: "Example".into(),
+            server: "192.0.2.10".into(),
+            port: 443,
+            outbound,
+            stream: StreamSettings {
+                tls,
+                ..Default::default()
+            },
+            raw: None,
+        }
+    }
+
+    fn vless() -> Outbound {
+        Outbound::Vless(VlessParams {
+            uuid: "00000000-0000-4000-8000-000000000001".into(),
+            flow: None,
+        })
+    }
+
+    #[test]
+    fn fragmentation_is_off_by_default_with_the_common_xray_values() {
+        let fragment = Settings::default().tls_fragment;
+        assert!(!fragment.enabled);
+        assert_eq!(fragment.packets, FragmentPackets::TlsHello);
+        assert_eq!(fragment.length.to_string(), "50-100");
+        assert_eq!(fragment.interval.to_string(), "10-20");
+        assert_eq!(fragment.validate(), Ok(()));
+        let settings: Settings = serde_json::from_str(r#"{"kill_switch":true}"#).unwrap();
+        assert_eq!(settings.tls_fragment, fragment);
+    }
+
+    #[test]
+    fn fragmentation_round_trips_as_text() {
+        let input = serde_json::json!({
+            "tls_fragment": {
+                "enabled": true, "packets": "1-3", "length": "100-200", "interval": "10-20"
+            }
+        });
+        let settings: Settings = serde_json::from_value(input.clone()).unwrap();
+        assert!(settings.tls_fragment.enabled);
+        assert_eq!(
+            settings.tls_fragment.packets,
+            FragmentPackets::Range(FragmentRange::new(1, 3).unwrap())
+        );
+        assert_eq!(serde_json::to_value(&settings).unwrap()["tls_fragment"], input["tls_fragment"]);
+        let partial: Settings =
+            serde_json::from_str(r#"{"tls_fragment":{"enabled":true}}"#).unwrap();
+        assert!(partial.tls_fragment.enabled);
+        assert_eq!(partial.tls_fragment.length, TlsFragment::default().length);
+    }
+
+    #[test]
+    fn ranges_accept_the_boundaries_and_refuse_the_rest() {
+        assert_eq!(TlsFragment::parse_length("1-1500").unwrap().to_string(), "1-1500");
+        assert_eq!(TlsFragment::parse_length(" 7 ").unwrap().to_string(), "7-7");
+        assert_eq!(TlsFragment::parse_interval("1-1000").unwrap().to(), 1000);
+        assert_eq!(
+            TlsFragment::parse_packets("TlsHello").unwrap(),
+            FragmentPackets::TlsHello
+        );
+        assert_eq!(TlsFragment::parse_packets("1-100").unwrap().to_string(), "1-100");
+
+        assert_eq!(TlsFragment::parse_length("0-5"), Err(FragmentError::BelowOne));
+        assert_eq!(TlsFragment::parse_length("5-0"), Err(FragmentError::BelowOne));
+        assert_eq!(TlsFragment::parse_length("20-10"), Err(FragmentError::Reversed));
+        assert_eq!(
+            TlsFragment::parse_length("1-1501"),
+            Err(FragmentError::AboveLimit { max: 1500 })
+        );
+        assert_eq!(
+            TlsFragment::parse_interval("1-1001"),
+            Err(FragmentError::AboveLimit { max: 1000 })
+        );
+        assert_eq!(
+            TlsFragment::parse_packets("1-101"),
+            Err(FragmentError::AboveLimit { max: 100 })
+        );
+        for text in ["", "-", "1-", "-5", "a", "1-2-3", "+5", "1.5", "1 2"] {
+            assert_eq!(
+                TlsFragment::parse_length(text),
+                Err(FragmentError::Malformed),
+                "{text:?}"
+            );
+        }
+        assert!(TlsFragment::parse_length("99999999999999999999").is_err());
+    }
+
+    #[test]
+    fn the_hello_mode_needs_a_hello_and_the_range_mode_does_not() {
+        let tls = || TlsMode::Tls(TlsParams::default());
+        let mut fragment = TlsFragment {
+            enabled: true,
+            ..TlsFragment::default()
+        };
+        assert!(fragment.applies_to(&fragment_node(vless(), tls())));
+        assert!(!fragment.applies_to(&fragment_node(vless(), TlsMode::Plain)));
+        fragment.packets = FragmentPackets::Range(FragmentRange::new(1, 3).unwrap());
+        assert!(fragment.applies_to(&fragment_node(vless(), TlsMode::Plain)));
+
+        let hysteria_like = Outbound::Http(ProxyCredentials::default());
+        assert!(!fragment.applies_to(&fragment_node(hysteria_like, tls())));
+        fragment.enabled = false;
+        assert!(!fragment.applies_to(&fragment_node(vless(), tls())));
     }
 
     #[test]

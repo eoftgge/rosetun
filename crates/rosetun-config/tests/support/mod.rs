@@ -120,6 +120,7 @@ pub(crate) fn legacy_config() -> AppConfig {
         settings: Settings {
             engine: EngineKind::Xray,
             xray: rosetun_config::XrayUse::Auto,
+            tls_fragment: rosetun_config::TlsFragment::default(),
             kill_switch: true,
             auto_reconnect: false,
             allow_lan: true,

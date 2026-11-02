@@ -3,6 +3,12 @@
   "settings": {
     "engine": "sing-box",
     "xray": "auto",
+    "tls_fragment": {
+      "enabled": true,
+      "packets": "1-3",
+      "length": "100-200",
+      "interval": "10-20"
+    },
     "kill_switch": true,
     "auto_reconnect": false,
     "allow_lan": true,

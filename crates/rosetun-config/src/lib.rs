@@ -34,7 +34,10 @@ pub use runtime::{
     ConnectStage, ConnectionNetwork, ConnectionRoute, ConnectionState, FailureKind, LiveConnection,
     ProtectionCapabilities, Status, Traffic,
 };
-pub use settings::{DnsSettings, EngineKind, LogLevel, Settings, TunSettings, XrayUse};
+pub use settings::{
+    DnsSettings, EngineKind, FragmentError, FragmentPackets, FragmentRange, LogLevel, Settings,
+    TlsFragment, TunSettings, XrayUse,
+};
 pub use subscription::{HwidScope, Selection, Subscription, SubscriptionInfo};
 pub use uploaded_list::{ListRef, UploadedListFormat, list_tag};
 
@@ -268,6 +271,8 @@ impl AppConfig {
 pub enum ConfigError {
     #[error("invalid external proxy configuration")]
     InvalidProxy,
+    #[error("invalid TLS fragmentation settings")]
+    InvalidFragment,
     #[error(
         "configuration version {found} is not supported (expected to be no higher than {expected})"
     )]
@@ -400,6 +405,10 @@ impl AppConfig {
             node.validate_proxy()
                 .map_err(|_| ConfigError::InvalidProxy)?;
         }
+        self.settings
+            .tls_fragment
+            .validate()
+            .map_err(|_| ConfigError::InvalidFragment)?;
         if self.version > CONFIG_VERSION {
             return Err(ConfigError::UnsupportedVersion {
                 found: self.version,

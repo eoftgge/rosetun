@@ -100,6 +100,7 @@ fn config(language: Language, error: &ConfigError) -> String {
         | ConfigError::MissingList
         | ConfigError::InvalidListCategory
         | ConfigError::InvalidExitId
+        | ConfigError::InvalidFragment
         | ConfigError::InvalidRuleExit => error.to_string(),
     }
 }
