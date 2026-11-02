@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Help and FAQ. VPN client for Windows. Subscriptions, rules and connection protection.">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Help and FAQ · Rosetun</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+  <link rel="icon" href="../../assets/rose.svg" type="image/svg+xml">
+  <link rel="alternate" hreflang="ru" href="../../ru/help/">
+  <link rel="alternate" hreflang="en" href="../../en/help/">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="wrap"><div class="header-brand"><a class="brand" href="../../en/"><img src="../../assets/rose.svg" width="40" height="40" alt="">Rosetun</a><p class="platform-label">WINDOWS <span aria-hidden="true">·</span> OPEN SOURCE</p></div>
+<nav aria-label="Navigation"><a href="../../en/">Home</a><a href="../../en/providers/">For providers</a><a href="../../en/help/">Help</a><a href="../../ru/help/" lang="ru" hreflang="ru">Русский</a></nav></header>
+<main id="main" class="wrap"><div class="prose"><p class="eyebrow">START HERE</p><h1>Help and FAQ</h1>
+<section><h2>Install and connect</h2><ol><li><a href="../#verify">Download and verify the installer</a>. Windows 11 x64 is required. Windows 10 is untested.</li><li>Run the installer and approve the administrator prompt. The installer is unsigned: if SmartScreen shows “Windows protected your PC”, after verifying the file choose “More info”, then “Run anyway”.</li><li>Open Rosetun and add a subscription URL from your provider. Rosetun does not supply VPN servers.</li><li>Select a server and connect. Rules choose what uses the VPN, connects directly or is blocked.</li></ol><p>Choose an installation folder outside user profiles that ordinary users cannot modify.</p></section>
+<section id="lockdown"><h2>Lockdown and restoring network access</h2><p>Lockdown is experimental. It blocks internet access outside the tunnel, even without a connection and after a restart. Turning it on or off in the Protection card requires confirmation and administrator rights. The kill switch stays on while Lockdown is enabled.</p><p>If there is no network access and Rosetun will not open, open Windows Terminal as administrator and run:</p><pre><code>rosetun reset-firewall</code></pre><p>This removes Lockdown without a running service. Once Lockdown is removed, direct internet access becomes possible. Uninstalling Rosetun also removes Lockdown. If the command is not found, open a terminal in the Rosetun installation folder you selected and run <code>.\rosetun.exe reset-firewall</code>.</p><p>For Wi-Fi with a sign-in page, temporarily turn off Lockdown, sign in or fix the clock, connect and enable Lockdown again. Lockdown cuts off Hyper-V networking; WSL2, Docker Desktop, Windows Sandbox and the mobile hotspot can also lose access. Turn off Lockdown while you need them.</p><p>Only Windows 11 has been tested. Third-party firewalls, antivirus software, sleep and hibernation are untested. The kill switch remains the primary protection. Lockdown does not protect against malware running under your account.</p></section>
+<section><h2>Frequently asked questions</h2>
+<details><summary>A website will not open after connecting</summary><p>Restart the browser: it has its own DNS cache, separate from Windows.</p></details>
+<details><summary>Another VPN or zapret interferes with the connection</summary><p>Disconnect the other VPN in TUN mode and retry. If you use zapret, exclude your VPN server addresses in its settings.</p></details>
+<details><summary>Where do I start troubleshooting?</summary><p>Open Settings → Service and logs → System check. It checks the clock, system proxy, other VPNs, packet interception and DNS substitution. It runs automatically after a failed connection. It changes nothing but does make network requests.</p></details>
+<details><summary>What does “No network connection” mean?</summary><p>Check Windows networking. With reconnect on disconnect enabled, Rosetun waits for the network to return while the kill switch blocks traffic as long as the service is running.</p></details>
+<details><summary>The installer reports access to a protected folder</summary><p>If ordinary users can modify the Rosetun folder, uninstall and install again. Do not grant access to the service folder through the “Continue” button in Explorer.</p></details></section>
+<section><h2>Collect a report</h2><p>In Settings → Service and logs, select “Collect report”. The text file contains versions, settings without secrets, connection state, system checks and logs. The system check makes network requests.</p><p>Rosetun removes IP addresses, URLs, domains, email addresses, keys, passwords, server, subscription, list and rule set names, and your Windows account name. Review the file yourself before sharing.</p><p>In <a href="https://github.com/eoftgge/rosetun/issues">Issues</a>, attach the report, steps to reproduce, expected behavior and error text. Do not attach subscription URLs or configurations containing secrets. Report vulnerabilities privately using the footer link.</p></section>
+<section><h2>Update or uninstall</h2><p>Rosetun offers new versions but never downloads or installs them itself. Download the new installer from Releases, verify it and run it. When the settings format changes, Rosetun keeps a copy of the previous file alongside it; this copy also contains subscription URLs.</p><p>Uninstall Rosetun through Windows apps. Settings in <code>%APPDATA%\Rosetun</code> are kept by default; the uninstaller can remove settings, subscriptions and rules.</p><p><a href="https://github.com/eoftgge/rosetun/blob/master/README.md#troubleshooting">Details in the README</a></p></section></div></main>
+<footer class="wrap"><span>Rosetun</span><a href="https://github.com/eoftgge/rosetun">GitHub</a><a href="https://github.com/eoftgge/rosetun/blob/master/LICENSE">GPL-3.0-or-later</a><a href="https://github.com/eoftgge/rosetun/security/policy">Report a vulnerability</a><a href="../../ru/help/" lang="ru" hreflang="ru">Русский</a></footer>
+</body>
+</html>
