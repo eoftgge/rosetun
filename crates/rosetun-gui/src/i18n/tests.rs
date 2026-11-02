@@ -1,7 +1,7 @@
 use super::*;
 use fluent_bundle::{FluentArgs, FluentResource};
 use rosetun_config::{
-    ConnectStage, FailureKind, LanguageSetting, Node, NodeId, Outbound, RealityParams,
+    ConnectStage, FailureKind, Node, NodeId, Outbound, RealityParams,
     StreamSettings, TlsMode, TlsParams, VlessParams, XrayUse,
 };
 
@@ -168,25 +168,8 @@ fn interface_copy_uses_plain_punctuation_and_a_session_word() {
         tr_in(Language::Russian, "no-session", &FluentArgs::new()),
         "не начат"
     );
-    for table in [
-        include_str!("../../i18n/en.ftl"),
-        include_str!("../../i18n/ru.ftl"),
-    ] {
-        assert!(!table.contains('\u{2014}'));
-    }
-}
-
-#[test]
-fn language_resolution_covers_all_settings_and_system_languages() {
-    for (setting, system_russian, expected) in [
-        (LanguageSetting::System, false, Language::English),
-        (LanguageSetting::System, true, Language::Russian),
-        (LanguageSetting::English, false, Language::English),
-        (LanguageSetting::English, true, Language::English),
-        (LanguageSetting::Russian, false, Language::Russian),
-        (LanguageSetting::Russian, true, Language::Russian),
-    ] {
-        assert_eq!(resolve_language(setting, system_russian), expected);
+    for info in &LANGUAGES {
+        assert!(!info.source.contains('\u{2014}'), "{}", info.code);
     }
 }
 

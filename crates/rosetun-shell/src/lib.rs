@@ -87,7 +87,7 @@ pub use instance::{Activation, Instance, acquire};
 #[cfg(windows)]
 pub use fonts::fonts_dir;
 #[cfg(windows)]
-pub use language::user_language_is_russian;
+pub use language::user_language;
 #[cfg(windows)]
 pub use link_pipe::{LinkListener, MAX_LINK_BYTES, send_link};
 #[cfg(windows)]

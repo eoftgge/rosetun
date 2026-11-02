@@ -64,11 +64,8 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                     Some(200.0),
                     language_label(selected),
                     |ui| {
-                        for language in [
-                            LanguageSetting::System,
-                            LanguageSetting::English,
-                            LanguageSetting::Russian,
-                        ] {
+                        let languages = i18n::LANGUAGES.iter().map(|info| info.setting);
+                        for language in std::iter::once(LanguageSetting::System).chain(languages) {
                             ui.selectable_value(&mut selected, language, language_label(language));
                         }
                     },
@@ -130,11 +127,10 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
 }
 
 fn language_label(setting: LanguageSetting) -> String {
-    match setting {
-        LanguageSetting::System => tr!("language-system"),
-        LanguageSetting::English => constants::ENGLISH.to_owned(),
-        LanguageSetting::Russian => constants::RUSSIAN.to_owned(),
-    }
+    i18n::LANGUAGES
+        .iter()
+        .find(|info| info.setting == setting)
+        .map_or_else(|| tr!("language-system"), |info| info.native_name.to_owned())
 }
 
 fn accent_label(accent: AccentPreset) -> String {
@@ -1609,7 +1605,7 @@ mod drop_down_tests {
                 egui::CentralPanel::default().show(ui, |ui| general(ui, &state, &mut actions));
             };
             screen.click_text(&tr!("language-system"), &mut show);
-            screen.click_text(constants::RUSSIAN, &mut show);
+            screen.click_text(Language::Russian.info().native_name, &mut show);
             assert!(
                 actions
                     .iter()

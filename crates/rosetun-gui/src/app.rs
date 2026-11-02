@@ -70,7 +70,7 @@ pub(crate) struct App {
     events: Receiver<WorkerEvent>,
     workers: WorkerDispatcher,
     applied_scale: Option<u16>,
-    system_russian: bool,
+    system_language: Option<i18n::Language>,
     #[cfg(windows)]
     shell_events: Option<Receiver<ShellEvent>>,
     #[cfg(windows)]
@@ -108,19 +108,20 @@ impl App {
         cc.egui_ctx
             .add_font_provider(std::sync::Arc::new(system_fonts::SystemFonts::new()));
         #[cfg(windows)]
-        let system_russian = rosetun_shell::user_language_is_russian();
+        let system_language =
+            rosetun_shell::user_language().and_then(|locale| i18n::language_of_locale(&locale));
         #[cfg(not(windows))]
-        let system_russian = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        let system_language = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .into_iter()
             .filter_map(|key| std::env::var(key).ok())
             .find(|value| !value.trim().is_empty())
-            .is_some_and(|value| locale_is_russian(&value));
+            .and_then(|value| i18n::language_of_locale(&value));
         let setting = store
             .load()
             .map_or(rosetun_config::LanguageSetting::System, |config| {
                 config.interface.language
             });
-        i18n::set_language(i18n::resolve_language(setting, system_russian));
+        i18n::set_language(i18n::resolve_language(setting, system_language));
         let applied_scale = initial_scale(&store);
         cc.egui_ctx
             .set_zoom_factor(f32::from(applied_scale) / 100.0);
@@ -138,7 +139,7 @@ impl App {
             events,
             workers,
             applied_scale: Some(applied_scale),
-            system_russian,
+            system_language,
             #[cfg(windows)]
             shell_events: None,
             #[cfg(windows)]
@@ -471,11 +472,6 @@ impl App {
     }
 }
 
-#[cfg(any(not(windows), test))]
-fn locale_is_russian(value: &str) -> bool {
-    value.starts_with("ru")
-}
-
 pub(crate) fn initial_accent(store: &Store) -> rosetun_config::AccentPreset {
     store
         .load()
@@ -599,7 +595,7 @@ impl eframe::App for App {
             ctx.request_repaint_after(delay);
         }
         let language =
-            i18n::resolve_language(self.state.config.interface.language, self.system_russian);
+            i18n::resolve_language(self.state.config.interface.language, self.system_language);
         if self.state.config_ready && language != i18n::language() {
             i18n::set_language(language);
             ctx.request_repaint();
@@ -827,7 +823,7 @@ fn repaint_delay(clock_shown: bool, next_wake: Option<Duration>) -> Option<Durat
 mod tests {
     #[cfg(windows)]
     use super::centered_position;
-    use super::{initial_accent, initial_scale, locale_is_russian, next_scale};
+    use super::{initial_accent, initial_scale, next_scale};
     #[cfg(windows)]
     use eframe::egui;
     use rosetun_core::Store;
@@ -913,14 +909,6 @@ mod tests",
             centered_position(None, egui::vec2(1200.0, 780.0)),
             egui::pos2(80.0, 80.0),
         );
-    }
-
-    #[test]
-    fn russian_locale_detection() {
-        assert!(locale_is_russian("ru_RU.UTF-8"));
-        assert!(locale_is_russian("ru"));
-        assert!(!locale_is_russian("en_US.UTF-8"));
-        assert!(!locale_is_russian(""));
     }
 
     #[test]

@@ -138,37 +138,41 @@ fn catalog(source: &str) -> Catalog {
     catalog
 }
 
-fn resources() -> [(super::Language, &'static str); 2] {
-    [
-        (super::Language::English, include_str!("../../i18n/en.ftl")),
-        (super::Language::Russian, include_str!("../../i18n/ru.ftl")),
-    ]
+/// Every language's code and catalog, English first.
+fn catalogs() -> Vec<(&'static str, Catalog)> {
+    super::LANGUAGES
+        .iter()
+        .map(|info| (info.code, catalog(info.source)))
+        .collect()
 }
 
 #[test]
-fn languages_define_the_same_messages_terms_and_variables() {
-    let [(.., english), (.., russian)] = resources();
-    let english = catalog(english);
-    let russian = catalog(russian);
-    assert_eq!(
-        english.messages.keys().collect::<Vec<_>>(),
-        russian.messages.keys().collect::<Vec<_>>()
-    );
-    assert_eq!(
-        english.terms.keys().collect::<Vec<_>>(),
-        russian.terms.keys().collect::<Vec<_>>()
-    );
-    for key in english.messages.keys().chain(english.terms.keys()) {
+fn every_language_defines_the_messages_terms_and_variables_of_english() {
+    let catalogs = catalogs();
+    let (_, english) = &catalogs[0];
+    for (code, other) in &catalogs[1..] {
         assert_eq!(
-            english.get(key).variables,
-            russian.get(key).variables,
-            "Variables for {key}"
+            english.messages.keys().collect::<Vec<_>>(),
+            other.messages.keys().collect::<Vec<_>>(),
+            "{code}"
         );
         assert_eq!(
-            english.variables(key, &mut BTreeSet::new()),
-            russian.variables(key, &mut BTreeSet::new()),
-            "Referenced variables for {key}"
+            english.terms.keys().collect::<Vec<_>>(),
+            other.terms.keys().collect::<Vec<_>>(),
+            "{code}"
         );
+        for key in english.messages.keys().chain(english.terms.keys()) {
+            assert_eq!(
+                english.get(key).variables,
+                other.get(key).variables,
+                "{code}: variables for {key}"
+            );
+            assert_eq!(
+                english.variables(key, &mut BTreeSet::new()),
+                other.variables(key, &mut BTreeSet::new()),
+                "{code}: referenced variables for {key}"
+            );
+        }
     }
 }
 
@@ -318,9 +322,8 @@ fn source_files(directory: &Path, keys: &mut BTreeSet<String>) {
 
 #[test]
 fn source_uses_only_existing_messages_and_no_messages_are_orphaned() {
-    let [(.., english), (.., russian)] = resources();
-    let english = catalog(english);
-    let russian = catalog(russian);
+    let catalogs = catalogs();
+    let (_, english) = &catalogs[0];
     let mut used = BTreeSet::new();
     source_files(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
@@ -331,21 +334,17 @@ fn source_uses_only_existing_messages_and_no_messages_are_orphaned() {
         rosetun_config::CountryCode::all().map(|code| format!("country-{}", code.as_str())),
     );
     for key in &used {
-        assert!(
-            english.messages.contains_key(key),
-            "Unknown English key: {key}"
-        );
-        assert!(
-            russian.messages.contains_key(key),
-            "Unknown Russian key: {key}"
-        );
+        for (code, catalog) in &catalogs {
+            assert!(catalog.messages.contains_key(key), "Unknown {code} key: {key}");
+        }
     }
     let mut reachable = used;
     loop {
         let mut next = reachable.clone();
         for key in &reachable {
-            next.extend(english.get(key).references.iter().cloned());
-            next.extend(russian.get(key).references.iter().cloned());
+            for (_, catalog) in &catalogs {
+                next.extend(catalog.get(key).references.iter().cloned());
+            }
         }
         if next == reachable {
             break;
@@ -389,12 +388,9 @@ fn sample_args<'a>(variables: impl Iterator<Item = &'a String>) -> FluentArgs<'s
 
 #[test]
 fn every_message_formats_without_errors_or_isolation_marks() {
-    for (language, source) in resources() {
+    for info in &super::LANGUAGES {
+        let (locale, source) = (info.code, info.source);
         let entries = catalog(source);
-        let locale = match language {
-            super::Language::English => "en",
-            super::Language::Russian => "ru",
-        };
         let resource = FluentResource::try_new(source.to_owned()).unwrap();
         let mut bundle = FluentBundle::new_concurrent(vec![locale.parse().unwrap()]);
         bundle.set_use_isolating(false);
@@ -444,20 +440,18 @@ fn every_message_formats_without_errors_or_isolation_marks() {
 
 #[test]
 fn translation_files_use_plain_punctuation() {
-    for (_, source) in resources() {
-        assert!(!source.contains('—'));
-        assert!(!source.contains("..."));
+    for info in &super::LANGUAGES {
+        assert!(!info.source.contains('—'), "{}", info.code);
+        assert!(!info.source.contains("..."), "{}", info.code);
     }
 }
 
 #[test]
-fn every_country_code_has_a_name_in_both_languages() {
-    let [(.., english), (.., russian)] = resources();
-    let english = catalog(english);
-    let russian = catalog(russian);
-    for code in rosetun_config::CountryCode::all() {
-        let key = format!("country-{}", code.as_str());
-        assert!(english.messages.contains_key(&key), "English {key}");
-        assert!(russian.messages.contains_key(&key), "Russian {key}");
+fn every_country_code_has_a_name_in_every_language() {
+    for (language, catalog) in catalogs() {
+        for code in rosetun_config::CountryCode::all() {
+            let key = format!("country-{}", code.as_str());
+            assert!(catalog.messages.contains_key(&key), "{language} {key}");
+        }
     }
 }
