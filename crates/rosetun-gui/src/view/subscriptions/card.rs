@@ -145,8 +145,8 @@ pub(super) fn subscription_card(
                         ui.add(
                             egui::Label::new(
                                 RichText::new(menu_title(i18n::language(), subscription))
-                                .small()
-                                .color(theme::palette().text_dim),
+                                    .small()
+                                    .color(theme::palette().text_dim),
                             )
                             .wrap(),
                         );
@@ -821,7 +821,10 @@ mod tests {
             );
             for language in [i18n::Language::English, i18n::Language::Russian] {
                 let title = menu_title(language, &subscription);
-                assert!(!title.contains("redacted") && !title.contains('‹'), "{title}");
+                assert!(
+                    !title.contains("redacted") && !title.contains('‹'),
+                    "{title}"
+                );
                 assert!(!title.contains("secret"), "{title}");
             }
         }

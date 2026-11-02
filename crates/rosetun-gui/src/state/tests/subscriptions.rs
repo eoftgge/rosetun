@@ -1194,7 +1194,10 @@ fn filling_from_a_link_sets_protocol_server_port_login_and_the_port_draft() {
         assert_eq!(node.server, server);
         assert_eq!(node.port, port);
         assert_eq!(dialog.proxy_port, port.to_string());
-        assert_eq!(matches!(node.stream.tls, rosetun_config::TlsMode::Tls(_)), tls);
+        assert_eq!(
+            matches!(node.stream.tls, rosetun_config::TlsMode::Tls(_)),
+            tls
+        );
         assert_eq!(matches!(node.outbound, Outbound::Socks5(_)), socks);
         let (Outbound::Http(credentials) | Outbound::Socks5(credentials)) = &node.outbound else {
             panic!("a proxy keeps a proxy outbound");
@@ -1222,7 +1225,12 @@ fn filling_from_a_link_keeps_the_name_typed_unless_the_link_names_one() {
 
 #[test]
 fn a_bad_link_shows_an_error_and_touches_no_field() {
-    for uri in ["socks5://192.0.2.10", "ftp://192.0.2.10:21", "not a link", "http://:80"] {
+    for uri in [
+        "socks5://192.0.2.10",
+        "ftp://192.0.2.10:21",
+        "not a link",
+        "http://:80",
+    ] {
         let mut dialog = AddDialog::default();
         assert!(dialog.select_proxy_tab(true));
         dialog.proxy.as_mut().unwrap().server = "198.51.100.7".into();
@@ -1231,7 +1239,10 @@ fn a_bad_link_shows_an_error_and_touches_no_field() {
         dialog.proxy_uri = uri.into();
         let before = dialog.proxy.clone();
         dialog.fill_from_proxy_uri();
-        assert!(matches!(dialog.error, Some(AddFromUrlError::Proxy)), "{uri}");
+        assert!(
+            matches!(dialog.error, Some(AddFromUrlError::Proxy)),
+            "{uri}"
+        );
         assert_eq!(dialog.proxy, before, "{uri}");
         assert_eq!(dialog.proxy_port, "9999", "{uri}");
         assert_eq!(dialog.proxy_uri, uri, "the link stays to be corrected");
@@ -1270,7 +1281,11 @@ fn editing_a_manual_proxy_fills_every_field_and_keeps_its_id_and_selection() {
     assert_eq!(id, SubscriptionId::new("7"));
     assert_eq!(saved.id, node.id);
     assert_eq!(
-        state.config.active.as_ref().map(|selection| &selection.node),
+        state
+            .config
+            .active
+            .as_ref()
+            .map(|selection| &selection.node),
         Some(&node.id)
     );
 }

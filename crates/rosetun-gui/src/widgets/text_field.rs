@@ -77,9 +77,9 @@ impl egui::Widget for TextField<'_> {
             ui.available_width()
         };
         let horizontal = theme::space::M as i8;
-        let vertical = ((height - ui.fonts_mut(|fonts| {
-            fonts.row_height(&egui::TextStyle::Body.resolve(ui.style()))
-        })) / 2.0)
+        let vertical = ((height
+            - ui.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Body.resolve(ui.style()))))
+            / 2.0)
             .max(0.0) as i8;
         ui.scope(|ui| {
             let rest = if self.invalid {
@@ -162,7 +162,11 @@ mod tests {
         run(|ui| {
             let mut text = String::new();
             let narrow = ui.add(TextField::new(&mut text).width(96.0));
-            assert!((narrow.rect.width() - 96.0).abs() < 1.0, "{}", narrow.rect.width());
+            assert!(
+                (narrow.rect.width() - 96.0).abs() < 1.0,
+                "{}",
+                narrow.rect.width()
+            );
             let full = ui.add(TextField::new(&mut text));
             assert!(full.rect.width() > 96.0);
         });
