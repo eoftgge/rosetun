@@ -46,7 +46,8 @@ impl Address {
             Self::Domain(_) => {
                 let text = rosetun_core::rule_value_text(&self.matcher(subdomains));
                 if subdomains {
-                    text.strip_prefix("*.").map_or_else(|| text.clone(), str::to_owned)
+                    text.strip_prefix("*.")
+                        .map_or_else(|| text.clone(), str::to_owned)
                 } else {
                     text
                 }
@@ -160,8 +161,9 @@ mod tests {
 
     #[test]
     fn a_pasted_mix_splits_into_domains_addresses_and_subnets() {
-        let parsed =
-            kinds("youtube.com, 192.0.2.1\n198.51.100.0/24; 2001:db8::1 https://www.example.com/path");
+        let parsed = kinds(
+            "youtube.com, 192.0.2.1\n198.51.100.0/24; 2001:db8::1 https://www.example.com/path",
+        );
         assert_eq!(
             parsed,
             [

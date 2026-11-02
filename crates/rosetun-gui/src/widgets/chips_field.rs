@@ -123,12 +123,19 @@ impl<'a> ChipsField<'a> {
             .chips
             .iter()
             .map(|chip| {
-                ui.painter()
-                    .layout_no_wrap(chip.label.to_owned(), font.clone(), theme::palette().text)
+                ui.painter().layout_no_wrap(
+                    chip.label.to_owned(),
+                    font.clone(),
+                    theme::palette().text,
+                )
             })
             .collect();
         let chip_width = |text: f32| {
-            (CHIP_PADDING + CHIP_ICON + CHIP_PADDING / 2.0 + text + CHIP_PADDING / 2.0
+            (CHIP_PADDING
+                + CHIP_ICON
+                + CHIP_PADDING / 2.0
+                + text
+                + CHIP_PADDING / 2.0
                 + CHIP_CLOSE
                 + CHIP_PADDING)
                 .min(inner_width)
@@ -220,7 +227,8 @@ impl<'a> ChipsField<'a> {
                         egui::vec2(inner_width, content_height),
                         egui::Sense::hover(),
                     );
-                    let row_top = |row: usize| content.top() + row as f32 * (CHIP_HEIGHT + CHIP_GAP);
+                    let row_top =
+                        |row: usize| content.top() + row as f32 * (CHIP_HEIGHT + CHIP_GAP);
                     for (index, ((chip, galley), (x, row, width))) in
                         self.chips.iter().zip(galleys).zip(places).enumerate()
                     {
@@ -306,7 +314,10 @@ fn paint_chip(
         Stroke::new(theme::stroke::HAIRLINE, stroke),
         egui::StrokeKind::Inside,
     );
-    let icon_center = egui::pos2(rect.left() + CHIP_PADDING + CHIP_ICON / 2.0, rect.center().y);
+    let icon_center = egui::pos2(
+        rect.left() + CHIP_PADDING + CHIP_ICON / 2.0,
+        rect.center().y,
+    );
     icons::paint(&painter, icon_center, chip.icon, text);
     let text_left = rect.left() + CHIP_PADDING + CHIP_ICON + CHIP_PADDING / 2.0;
     let close_center = egui::pos2(
@@ -419,7 +430,8 @@ mod tests {
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.set_width(400.0);
-                    let shown = ui.scope(|ui| ChipsField::new(ID, chips, input).max_rows(3).show(ui));
+                    let shown =
+                        ui.scope(|ui| ChipsField::new(ID, chips, input).max_rows(3).show(ui));
                     output = Some((shown.inner, shown.response.rect));
                 });
             },
@@ -482,7 +494,10 @@ mod tests {
             vec![egui::Event::Text("example.com,exa".into())],
             true,
         );
-        assert_eq!(shown.output.events, [ChipsEvent::Add("example.com,".into())]);
+        assert_eq!(
+            shown.output.events,
+            [ChipsEvent::Add("example.com,".into())]
+        );
         assert_eq!(input, "exa");
         let enter = egui::Event::Key {
             key: egui::Key::Enter,
@@ -539,7 +554,9 @@ mod tests {
             shown
                 .painted
                 .iter()
-                .filter(|rect| rect.rect.height() == CHIP_HEIGHT && rect.stroke.color == theme::ERROR)
+                .filter(
+                    |rect| rect.rect.height() == CHIP_HEIGHT && rect.stroke.color == theme::ERROR
+                )
                 .count(),
             1
         );
@@ -552,7 +569,9 @@ mod tests {
     #[test]
     fn the_field_grows_a_row_at_a_time_up_to_its_limit() {
         let ctx = context();
-        let labels: Vec<String> = (0..40).map(|index| format!("site{index}.example")).collect();
+        let labels: Vec<String> = (0..40)
+            .map(|index| format!("site{index}.example"))
+            .collect();
         let mut heights = Vec::new();
         for count in [0, 2, 6, 12, 40] {
             let chips: Vec<_> = labels[..count].iter().map(|label| chip(label)).collect();
@@ -560,9 +579,15 @@ mod tests {
             heights.push(shown.rect.height());
         }
         assert_eq!(heights[0], heights[1], "{heights:?}");
-        assert!(heights[1] < heights[2] && heights[2] < heights[3], "{heights:?}");
+        assert!(
+            heights[1] < heights[2] && heights[2] < heights[3],
+            "{heights:?}"
+        );
         assert_eq!(heights[3], heights[4], "{heights:?}");
-        assert_eq!(heights[4], 3.0 * CHIP_HEIGHT + 2.0 * CHIP_GAP + 2.0 * FIELD_PADDING);
+        assert_eq!(
+            heights[4],
+            3.0 * CHIP_HEIGHT + 2.0 * CHIP_GAP + 2.0 * FIELD_PADDING
+        );
     }
 
     #[test]

@@ -14,9 +14,9 @@ mod dialog;
 mod history;
 
 pub(crate) use address::{AddressError, MAX_ADDRESSES};
-pub(crate) use dialog::{AddRuleDialog, RuleInputKind};
 #[cfg(test)]
 pub(crate) use dialog::PROCESS_LIST_STALE_MS;
+pub(crate) use dialog::{AddRuleDialog, RuleInputKind};
 use history::RuleHistory;
 pub(crate) use history::UndoNotice;
 #[cfg(test)]

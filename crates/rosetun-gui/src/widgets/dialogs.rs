@@ -149,9 +149,10 @@ impl<'a> DialogFooter<'a> {
 /// The footer of a dialog, a field high, after the gap every dialog keeps above it.
 pub(crate) fn dialog_footer(ui: &mut egui::Ui, footer: DialogFooter<'_>) -> FooterResponses {
     ui.add_space(theme::space::XL);
-    let ((), responses) = egui::Sides::new()
-        .height(field_height(ui))
-        .show(ui, |_| {}, |ui| {
+    let ((), responses) = egui::Sides::new().height(field_height(ui)).show(
+        ui,
+        |_| {},
+        |ui| {
             let mut primary = button_fill(ui, footer.primary, footer.primary_enabled);
             if let Some(hint) = footer.primary_hint {
                 primary = primary.on_disabled_hover_text(hint);
@@ -163,7 +164,8 @@ pub(crate) fn dialog_footer(ui: &mut egui::Ui, footer: DialogFooter<'_>) -> Foot
                 other,
                 cancel,
             }
-        });
+        },
+    );
     responses
 }
 

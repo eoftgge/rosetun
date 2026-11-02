@@ -761,7 +761,10 @@ fn chosen_program(ui: &mut egui::Ui, name: &str, path: Option<&Path>, enabled: b
     );
     paint_tile(ui, tile_rect, name, path);
     let text_left = tile_rect.right() + PROCESS_ROW_INSET;
-    let cross = egui::pos2(rect.right() - PROCESS_ROW_INSET - CROSS_SIDE / 2.0, rect.center().y);
+    let cross = egui::pos2(
+        rect.right() - PROCESS_ROW_INSET - CROSS_SIDE / 2.0,
+        rect.center().y,
+    );
     ui.painter()
         .with_clip_rect(egui::Rect::from_x_y_ranges(
             text_left..=cross.x - CROSS_SIDE,
@@ -872,10 +875,7 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
             }
             for (title, indices) in [
                 (tr!("processes-running"), &running),
-                (
-                    tr!("processes-other", n = other.len().to_string()),
-                    &other,
-                ),
+                (tr!("processes-other", n = other.len().to_string()), &other),
             ] {
                 if indices.is_empty() {
                     continue;
@@ -1148,7 +1148,11 @@ fn paint_tile(ui: &egui::Ui, rect: egui::Rect, name: &str, path: Option<&Path>) 
 }
 
 fn tile_letter(name: &str) -> String {
-    name.chars().next().unwrap_or('?').to_uppercase().to_string()
+    name.chars()
+        .next()
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string()
 }
 
 /// A muted tile colour picked from the name, so a process keeps its colour.
@@ -1496,7 +1500,9 @@ mod tests {
     fn collect_texts(shape: &egui::Shape, out: &mut Vec<(String, bool)>) {
         match shape {
             egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_texts(shape, out)),
-            egui::Shape::Text(text) => out.push((text.galley.text().to_owned(), text.galley.elided)),
+            egui::Shape::Text(text) => {
+                out.push((text.galley.text().to_owned(), text.galley.elided));
+            }
             _ => {}
         }
     }
@@ -1671,7 +1677,9 @@ mod tests {
             assert!(texts.contains(&expected), "{expected} in {texts:?}");
         }
         assert!(
-            !texts.iter().any(|text| text.contains(&tr!("where-proxy-hint"))),
+            !texts
+                .iter()
+                .any(|text| text.contains(&tr!("where-proxy-hint"))),
             "{texts:?}"
         );
         dialog.editing = Some(RuleId::new("1"));
@@ -1802,7 +1810,10 @@ mod tests {
         assert!(!texts.contains(&r"C:\Apps\Program0.exe".to_owned()));
         #[cfg(windows)]
         assert!(position(&tr!("other-program")) > position("Program3.exe"));
-        assert!(!texts.contains(&tr!("match-any-folder")), "no program is chosen");
+        assert!(
+            !texts.contains(&tr!("match-any-folder")),
+            "no program is chosen"
+        );
 
         dialog.selected_process = Some(0);
         dialog.process = "Program0.exe".into();

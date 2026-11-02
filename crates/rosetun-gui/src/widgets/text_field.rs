@@ -130,10 +130,10 @@ impl egui::Widget for TextField<'_> {
             style_field(ui, self.invalid);
             let edit = egui::TextEdit::singleline(self.text)
                 .hint_text(self.hint)
-            .password(self.password)
-            .desired_width(width)
-            .min_size(egui::vec2(width, height))
-            .margin(egui::Margin::symmetric(horizontal, vertical));
+                .password(self.password)
+                .desired_width(width)
+                .min_size(egui::vec2(width, height))
+                .margin(egui::Margin::symmetric(horizontal, vertical));
             let edit = match self.char_limit {
                 Some(limit) => edit.char_limit(limit),
                 None => edit,
@@ -248,28 +248,28 @@ mod tests {
 
     #[test]
     fn a_field_takes_no_more_characters_than_its_limit() {
-            let ctx = egui::Context::default();
-            theme::apply(&ctx);
-            let id = egui::Id::unique("limited");
-            let mut text = String::new();
-            for events in [Vec::new(), vec![egui::Event::Text("abcdefgh".to_owned())]] {
-                if events.is_empty() {
-                    ctx.memory_mut(|memory| memory.request_focus(id));
-                }
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        events,
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            ui.add(TextField::new(&mut text).id(id).char_limit(4));
-                        });
-                    },
-                );
-                output.textures_delta.clear();
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let id = egui::Id::unique("limited");
+        let mut text = String::new();
+        for events in [Vec::new(), vec![egui::Event::Text("abcdefgh".to_owned())]] {
+            if events.is_empty() {
+                ctx.memory_mut(|memory| memory.request_focus(id));
             }
-            assert_eq!(text, "abcd");
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.add(TextField::new(&mut text).id(id).char_limit(4));
+                    });
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert_eq!(text, "abcd");
     }
 
     #[test]

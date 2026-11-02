@@ -46,12 +46,12 @@ pub(crate) use quit::QuitDecision;
 use quit::QuitState;
 #[cfg(test)]
 pub(crate) use rules::NameDialog;
+#[cfg(test)]
+pub(crate) use rules::PROCESS_LIST_STALE_MS;
 use rules::RulesState;
 pub(crate) use rules::{
     AddRuleDialog, AddressError, MAX_ADDRESSES, NameDialogKind, RuleInputKind, UndoNotice,
 };
-#[cfg(test)]
-pub(crate) use rules::PROCESS_LIST_STALE_MS;
 use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};
 use settings::SettingsState;

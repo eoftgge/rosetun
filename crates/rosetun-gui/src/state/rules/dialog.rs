@@ -251,9 +251,8 @@ impl AddRuleDialog {
             .into_iter()
             .map(Result::ok)
             .collect();
-        let parsed = parsed.filter(|parsed| {
-            !parsed.is_empty() && (self.editing.is_none() || parsed.len() == 1)
-        })?;
+        let parsed = parsed
+            .filter(|parsed| !parsed.is_empty() && (self.editing.is_none() || parsed.len() == 1))?;
         Some(address_matchers(&parsed, self.subdomains))
     }
 
@@ -582,9 +581,9 @@ impl State {
                     dialog.kind = kind;
                     dialog.error = None;
                     dialog.focus_input = true;
-                    let stale = dialog.processes_loaded_ms.is_none_or(|loaded| {
-                        now.saturating_sub(loaded) >= PROCESS_LIST_STALE_MS
-                    });
+                    let stale = dialog
+                        .processes_loaded_ms
+                        .is_none_or(|loaded| now.saturating_sub(loaded) >= PROCESS_LIST_STALE_MS);
                     if kind == RuleInputKind::Process && (!dialog.processes_loaded || stale) {
                         return self.load_processes();
                     }

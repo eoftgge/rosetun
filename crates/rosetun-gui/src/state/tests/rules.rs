@@ -488,10 +488,18 @@ fn an_address_batch_requires_every_item_to_be_valid_and_obeys_the_subdomain_choi
         );
         state.act(Action::SelectRuleInput(RuleInputKind::Address));
         let dialog = state.rules.screen.add.as_mut().unwrap();
-        dialog.set_addresses("https://www.youtube.com/watch?v=1\n192.0.2.1\nbad..domain\ninstagram.com");
+        dialog.set_addresses(
+            "https://www.youtube.com/watch?v=1\n192.0.2.1\nbad..domain\ninstagram.com",
+        );
         dialog.subdomains = subdomains;
         assert!(state.act(Action::SubmitAddRule).is_none());
-        state.rules.screen.add.as_mut().unwrap().set_addresses("https://www.youtube.com/watch?v=1, 192.0.2.1; instagram.com");
+        state
+            .rules
+            .screen
+            .add
+            .as_mut()
+            .unwrap()
+            .set_addresses("https://www.youtube.com/watch?v=1, 192.0.2.1; instagram.com");
         assert!(matches!(
             state.act(Action::SubmitAddRule),
             Some(Job::AddRules(_, matchers, RuleDestination::Proxy)) if matchers == expected
@@ -515,7 +523,13 @@ fn the_address_field_adds_multiple_addresses_and_corrects_host_bits() {
         "192.0.2.0/24\nbad..domain\n2001:db8::1\n198.51.100.0/24"
     );
     assert!(state.act(Action::SubmitAddRule).is_none());
-    state.rules.screen.add.as_mut().unwrap().set_addresses("192.0.2.0/24\n2001:db8::1\n198.51.100.0/24\n192.0.2.0/24");
+    state
+        .rules
+        .screen
+        .add
+        .as_mut()
+        .unwrap()
+        .set_addresses("192.0.2.0/24\n2001:db8::1\n198.51.100.0/24\n192.0.2.0/24");
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::AddRules(_, matchers, RuleDestination::Proxy))
@@ -540,7 +554,13 @@ fn editing_an_ip_rule_opens_the_address_kind_and_updates_one_rule() {
     assert!(state.act(Action::SubmitAddRule).is_none());
     assert!(state.rules.screen.add.is_none());
     state.act(Action::OpenEditRule(id.clone()));
-    state.rules.screen.add.as_mut().unwrap().set_addresses("203.0.113.1");
+    state
+        .rules
+        .screen
+        .add
+        .as_mut()
+        .unwrap()
+        .set_addresses("203.0.113.1");
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::UpdateRule(_, rule, RuleMatcher::IpCidr(cidr), RuleDestination::Proxy))
@@ -554,7 +574,13 @@ fn ip_local_setting_link_closes_dialog_and_opens_connection_settings() {
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Address));
-    state.rules.screen.add.as_mut().unwrap().set_addresses("192.0.2.1");
+    state
+        .rules
+        .screen
+        .add
+        .as_mut()
+        .unwrap()
+        .set_addresses("192.0.2.1");
     assert!(!state.rules.screen.add.as_ref().unwrap().local_ip_warning());
     state.act(Action::OpenLanSettings);
     assert!(state.rules.screen.add.is_none());
@@ -610,7 +636,10 @@ fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
             RuleMatcher::Domain(DomainMatch::Suffix(domain.into()));
         state.act(Action::OpenRules);
         state.act(Action::OpenEditRule(id.clone()));
-        assert_eq!(state.rules.screen.add.as_ref().unwrap().address_text(), domain);
+        assert_eq!(
+            state.rules.screen.add.as_ref().unwrap().address_text(),
+            domain
+        );
         assert!(state.act(Action::SubmitAddRule).is_none());
         assert!(state.rules.screen.add.is_none());
         state.act(Action::OpenEditRule(id.clone()));
@@ -982,7 +1011,13 @@ fn editing_an_exit_rule_keeps_its_exit() {
     assert!(state.rules.screen.add.is_none());
 
     state.act(Action::OpenEditRule(id.clone()));
-    state.rules.screen.add.as_mut().unwrap().set_addresses("example.org");
+    state
+        .rules
+        .screen
+        .add
+        .as_mut()
+        .unwrap()
+        .set_addresses("example.org");
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::UpdateRule(_, rule, _, RuleDestination::Exit(kept))) if rule == id && kept == exit
@@ -1037,9 +1072,9 @@ fn a_program_given_by_name_or_path_is_found_in_the_list_once_it_loads() {
         (ProcessMatch::Name("Missing.exe".into()), None),
     ] {
         let mut state = state_with_rules();
-        let Some(Job::LoadProcesses(request)) =
-            state.act(Action::OpenAddRuleFor(RuleMatcher::Process(matcher.clone())))
-        else {
+        let Some(Job::LoadProcesses(request)) = state.act(Action::OpenAddRuleFor(
+            RuleMatcher::Process(matcher.clone()),
+        )) else {
             panic!("a program rule loads the program list");
         };
         state.reduce(WorkerEvent::Processes {
@@ -1103,9 +1138,9 @@ fn any_folder_or_only_this_folder_makes_a_name_or_a_path_rule() {
 fn clearing_the_chosen_program_keeps_the_search() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
-    state.act(Action::OpenAddRuleFor(RuleMatcher::Process(ProcessMatch::Name(
-        "Tool.exe".into(),
-    ))));
+    state.act(Action::OpenAddRuleFor(RuleMatcher::Process(
+        ProcessMatch::Name("Tool.exe".into()),
+    )));
     let dialog = state.rules.screen.add.as_mut().unwrap();
     dialog.process_filter = "to".into();
     dialog.clear_process();
@@ -1183,7 +1218,10 @@ fn a_bad_or_repeated_address_never_reaches_the_rules() {
         ]
     ));
     let dialog = state.rules.screen.add.as_ref().unwrap();
-    assert!(dialog.address_input.is_empty(), "the typed item became a chip");
+    assert!(
+        dialog.address_input.is_empty(),
+        "the typed item became a chip"
+    );
     assert_eq!(dialog.addresses.len(), 2);
 }
 
@@ -1200,7 +1238,10 @@ fn the_address_field_takes_no_more_than_its_limit() {
     assert!(dialog.address_rules().is_none());
     dialog.remove_address(0);
     assert!(!dialog.too_many_addresses());
-    assert_eq!(dialog.address_rules().map(|rules| rules.len()), Some(MAX_ADDRESSES - 1));
+    assert_eq!(
+        dialog.address_rules().map(|rules| rules.len()),
+        Some(MAX_ADDRESSES - 1)
+    );
 }
 
 #[test]
@@ -1218,7 +1259,11 @@ fn editing_a_domain_or_an_ip_rule_shows_one_chip_and_takes_one() {
         assert_eq!(dialog.kind, RuleInputKind::Address);
         assert_eq!(dialog.addresses.len(), 1);
         dialog.add_addresses("example.org");
-        assert_eq!(dialog.addresses.len(), 1, "{matcher:?}: an edit takes one item");
+        assert_eq!(
+            dialog.addresses.len(),
+            1,
+            "{matcher:?}: an edit takes one item"
+        );
         dialog.remove_last_address();
         dialog.add_addresses("203.0.113.1 example.org");
         assert!(matches!(

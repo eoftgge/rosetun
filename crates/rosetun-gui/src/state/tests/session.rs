@@ -365,7 +365,10 @@ fn temporary_applies_to_programs_and_to_every_address_of_the_field() {
     };
     assert!(request.temporary_rules.iter().any(|rule| rule.matcher
         == RuleMatcher::Process(ProcessMatch::Name("Tool.exe".into()))));
-    assert_eq!(state.config.rule_sets, connected_state_for_apply().config.rule_sets);
+    assert_eq!(
+        state.config.rule_sets,
+        connected_state_for_apply().config.rule_sets
+    );
 }
 
 #[test]
