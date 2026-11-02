@@ -422,7 +422,7 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
             ui.add_space(theme::space::M);
             let shown = widgets::appear_progress(
                 ui.ctx(),
-                egui::Id::new("exit_kind_body"),
+                egui::Id::unique("exit_kind_body"),
                 dialog.kind == ExitKind::Node,
                 crate::motion::reduced(),
             );
@@ -748,7 +748,7 @@ mod tests {
                 output.textures_delta.clear();
             }
             let rect = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("exit_dialog")))
+                .memory(|memory| memory.area_rect(egui::Id::unique("exit_dialog")))
                 .unwrap();
             // As for the add-rule dialog, the smallest window is checked at 100 % only for height.
             if scale == 1.0 {

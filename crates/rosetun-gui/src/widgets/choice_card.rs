@@ -68,7 +68,7 @@ pub(crate) fn choice_card(
         )
         .response;
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, selected, label)
+        egui::WidgetInfo::selected(egui::Role::RadioButton, enabled, selected, label)
     });
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)

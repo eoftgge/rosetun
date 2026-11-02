@@ -55,7 +55,7 @@ pub(crate) fn resize_edges(ui: &mut egui::Ui) {
         return;
     }
     for (index, (rect, direction)) in grab_areas(ui.max_rect()).into_iter().enumerate() {
-        let response = ui.interact(rect, Id::new(("window_resize", index)), Sense::drag());
+        let response = ui.interact(rect, Id::unique(("window_resize", index)), Sense::drag());
         if response.hovered() {
             let cursor = match direction {
                 ResizeDirection::North => CursorIcon::ResizeNorth,

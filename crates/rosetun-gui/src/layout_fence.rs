@@ -876,7 +876,7 @@ fn view(ui: &mut Ui, ctx: &Context) {
     ui.add(egui::TextEdit::singleline(&mut text));
     ui.add(TextEdit::multiline(&mut text));
     egui::ComboBox::from_id_salt(\"language\").show_ui(ui, |ui| {});
-    widgets::show_modal(ctx, egui::Modal::new(egui::Id::new(\"dialog\")), |ui| {});
+    widgets::show_modal(ctx, egui::Modal::new(egui::Id::unique(\"dialog\")), |ui| {});
     ui.set_width(520.0);
 }
 ";
@@ -907,7 +907,7 @@ fn view(ui: &mut Ui, ctx: &Context, width: f32) {
         ui.set_width(widgets::DialogWidth::Narrow.points());
         ui.set_width(0.0);
     });
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::ComboBox, true, name));
+    response.widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, name));
     let mine = MyTextEdit::new();
 }
 // egui::TextEdit::singleline(&mut text)

@@ -683,7 +683,7 @@ fn failure_details(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .selectable(true)
         .wrap(),
     );
-    let id = egui::Id::new("failure_details_copied");
+    let id = egui::Id::unique("failure_details_copied");
     let now = ui.input(|input| input.time);
     let copied = ui
         .data(|data| data.get_temp::<f64>(id))

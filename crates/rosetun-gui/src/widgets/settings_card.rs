@@ -126,7 +126,7 @@ impl SettingsCard<'_> {
 
     /// Shows `hint` while the pointer rests anywhere on the row at `rect`.
     pub(crate) fn hover_hint(&mut self, rect: egui::Rect, hint: &str) {
-        let id = self.ui.id().with(("row-hint", self.rows));
+        let id = self.ui.scope_id().with(("row-hint", self.rows));
         self.ui
             .interact(rect, id, egui::Sense::hover())
             .on_hover_text(hint);
@@ -164,7 +164,7 @@ impl SettingsCard<'_> {
             response.mark_changed();
         }
         response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, *on, title)
+            egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, *on, title)
         });
         let progress = self.ui.ctx().animate_bool_with_time(response.id, *on, 0.1);
         paint_toggle(self.ui, switch, *on, progress, enabled);

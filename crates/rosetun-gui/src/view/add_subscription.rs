@@ -27,7 +27,7 @@ pub(crate) fn show(
             import_tabs(ui, dialog);
             let shown = widgets::appear_progress(
                 ui.ctx(),
-                egui::Id::new("server_import_body"),
+                egui::Id::unique("server_import_body"),
                 dialog.proxy_tab,
                 crate::motion::reduced(),
             );
@@ -74,7 +74,7 @@ fn subscription_body(
         |ui, width| {
             ui.add(
                 widgets::TextField::new(&mut dialog.url)
-                    .id(egui::Id::new(SUBSCRIPTION_URL_ID))
+                    .id(egui::Id::unique(SUBSCRIPTION_URL_ID))
                     .hint(constants::URL_PLACEHOLDER)
                     .enabled(editable)
                     .width(width),
@@ -426,7 +426,7 @@ fn proxy_link_row(ui: &mut egui::Ui, dialog: &mut AddDialog) {
         |ui, width| {
             ui.add(
                 widgets::TextField::new(&mut dialog.proxy_uri)
-                    .id(egui::Id::new(PROXY_LINK_ID))
+                    .id(egui::Id::unique(PROXY_LINK_ID))
                     .password(true)
                     .hint(constants::PROXY_URI_PLACEHOLDER)
                     .width(width),
@@ -609,7 +609,7 @@ mod tests {
                 );
                 output.textures_delta.clear();
             }
-            ctx.memory(|memory| memory.area_rect(egui::Id::new("add_subscription")))
+            ctx.memory(|memory| memory.area_rect(egui::Id::unique("add_subscription")))
                 .unwrap()
                 .height()
         };
@@ -657,7 +657,7 @@ mod tests {
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         show_frames(&ctx, dialog, size, 1..=10, |_| Vec::new());
-        ctx.memory(|memory| memory.area_rect(egui::Id::new("add_subscription")))
+        ctx.memory(|memory| memory.area_rect(egui::Id::unique("add_subscription")))
             .unwrap()
     }
 
@@ -725,7 +725,7 @@ mod tests {
     }
 
     fn link_row(ctx: &egui::Context, field_id: &str) -> LinkRow {
-        let field_id = egui::Id::new(field_id);
+        let field_id = egui::Id::unique(field_id);
         let field = ctx
             .read_response(field_id)
             .expect("the field was shown")
@@ -938,7 +938,7 @@ mod tests {
                         .unwrap_or_else(|| panic!("{language:?}: no button {label}"))
                 });
                 let area = ctx
-                    .memory(|memory| memory.area_rect(egui::Id::new("add_subscription")))
+                    .memory(|memory| memory.area_rect(egui::Id::unique("add_subscription")))
                     .unwrap();
                 for (label, rect) in ["cancel", "add"].into_iter().zip(buttons) {
                     assert!(
@@ -976,7 +976,7 @@ mod tests {
         dialog.proxy_uri = "socks5://user:pass@192.0.2.10:1080".into();
         let size = egui::vec2(1440.0, 1000.0);
         show_frames(&ctx, &mut dialog, size, 1..=3, |_| Vec::new());
-        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(PROXY_LINK_ID)));
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::unique(PROXY_LINK_ID)));
         show_frames(&ctx, &mut dialog, size, 4..=5, |_| Vec::new());
         let enter = |pressed| egui::Event::Key {
             key: egui::Key::Enter,

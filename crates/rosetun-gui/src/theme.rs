@@ -418,10 +418,14 @@ pub(crate) fn apply_style(ctx: &egui::Context) {
     visuals.widgets.inactive.corner_radius = CornerRadius::same(RADIUS);
     visuals.widgets.hovered.corner_radius = CornerRadius::same(RADIUS);
     visuals.widgets.active.corner_radius = CornerRadius::same(RADIUS);
+    // egui 0.37 rounded the open state more and made rows taller by default; the
+    // screens were laid out with the earlier values, so they stay pinned here.
+    visuals.widgets.open.corner_radius = CornerRadius::same(2);
 
     let mut style = Style::default();
     style.spacing.item_spacing = egui::vec2(10.0, 8.0);
     style.spacing.button_padding = egui::vec2(14.0, 8.0);
+    style.spacing.interact_size = egui::vec2(40.0, 18.0);
     style.spacing.window_margin = egui::Margin::same(20);
     style.text_styles = [
         (

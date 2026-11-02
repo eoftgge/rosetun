@@ -225,7 +225,7 @@ fn emblem_texture(
     accent: AccentPreset,
     rasterize: impl FnOnce(u32, &Palette) -> Vec<u8>,
 ) -> egui::TextureHandle {
-    let id = egui::Id::new(("brand_emblem", size, accent));
+    let id = egui::Id::unique(("brand_emblem", size, accent));
     if let Some(texture) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
         return texture;
     }

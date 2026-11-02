@@ -18,7 +18,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     }
     let shown = widgets::appear_progress(
         ui.ctx(),
-        egui::Id::new("settings_section_appear"),
+        egui::Id::unique("settings_section_appear"),
         state.settings.screen.section,
         state.config.interface.reduce_motion,
     );

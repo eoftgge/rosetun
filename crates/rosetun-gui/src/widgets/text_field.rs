@@ -314,7 +314,7 @@ mod tests {
         for rows in [None, Some(3)] {
             let ctx = egui::Context::default();
             theme::apply(&ctx);
-            let id = egui::Id::new("limited");
+            let id = egui::Id::unique("limited");
             let mut text = String::new();
             for events in [Vec::new(), vec![egui::Event::Text("abcdefgh".to_owned())]] {
                 if events.is_empty() {

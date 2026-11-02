@@ -101,7 +101,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
     ui.add_space(theme::space::XL);
     let shown = widgets::appear_progress(
         ui.ctx(),
-        egui::Id::new("rules_tab_appear"),
+        egui::Id::unique("rules_tab_appear"),
         state.lists.tab,
         state.config.interface.reduce_motion,
     );

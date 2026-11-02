@@ -284,7 +284,7 @@ pub(super) fn server_row(
     };
     response.widget_info(|| {
         egui::WidgetInfo::selected(
-            egui::WidgetType::SelectableLabel,
+            egui::Role::Button,
             enabled,
             selected,
             &full_name,

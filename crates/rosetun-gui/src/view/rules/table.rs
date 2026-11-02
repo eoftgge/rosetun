@@ -152,7 +152,7 @@ pub(super) fn target_button(
     choices: &[TargetChoice],
     enabled: bool,
 ) -> Option<RuleDestination> {
-    ui.push_id(egui::Id::new(id_salt), |ui| {
+    ui.push_id(egui::Id::unique(id_salt), |ui| {
         let enabled = enabled && ui.is_enabled();
         let sense = if enabled {
             egui::Sense::click()
@@ -422,7 +422,7 @@ pub(super) fn rule_row(
                 ui.spacing_mut().item_spacing.x = 0.0;
                 table_cell(ui, HANDLE_WIDTH, theme::RULE_ROW, |ui| {
                     if reorder {
-                        ui.dnd_drag_source(ui.id().with("handle"), rule.id.clone(), |ui| {
+                        ui.dnd_drag_source(ui.scope_id().with("handle"), rule.id.clone(), |ui| {
                             icons::icon_button(ui, Icon::Grip, true);
                         });
                     } else if !temporary {
@@ -653,7 +653,7 @@ pub(super) fn rule_row(
             egui::pos2(left, response.rect.top()),
             egui::pos2(right.max(left), response.rect.bottom()),
         );
-        let click = ui.interact(body, ui.id().with("select_rule"), egui::Sense::click());
+        let click = ui.interact(body, ui.scope_id().with("select_rule"), egui::Sense::click());
         if click.clicked() {
             let modifiers = ui.input(|input| input.modifiers);
             actions.push(Action::SelectRule {

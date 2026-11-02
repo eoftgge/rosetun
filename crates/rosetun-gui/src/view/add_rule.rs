@@ -80,7 +80,7 @@ fn advanced_height(dialog: &AddRuleDialog, progress: f32) -> f32 {
 /// under its own id, and egui shows a new id at its target at once, so the
 /// section never finishes the last opening's move.
 fn advanced_progress(ctx: &egui::Context, dialog: &AddRuleDialog, reduce_motion: bool) -> f32 {
-    let id = egui::Id::new("add_rule_opening");
+    let id = egui::Id::unique("add_rule_opening");
     let frame = ctx.cumulative_frame_nr();
     let count = ctx.data_mut(|data| {
         let count = match data.get_temp::<Opening>(id) {
@@ -93,7 +93,7 @@ fn advanced_progress(ctx: &egui::Context, dialog: &AddRuleDialog, reduce_motion:
     });
     widgets::reveal_progress(
         ctx,
-        egui::Id::new("add_rule_advanced").with(count),
+        egui::Id::unique("add_rule_advanced").with(count),
         dialog.advanced,
         reduce_motion,
     )
@@ -227,7 +227,7 @@ pub(crate) fn show(
                 });
                 widgets::reveal(
                     ui,
-                    egui::Id::new("add_rule_advanced_rows"),
+                    egui::Id::unique("add_rule_advanced_rows"),
                     advanced,
                     |ui| {
                         if dialog.kind == RuleInputKind::Process {
@@ -393,7 +393,7 @@ fn list_picker(
             egui::Sense::hover()
         },
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, enabled, &name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, &name));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect(
@@ -1060,7 +1060,7 @@ fn process_tab(ui: &mut egui::Ui, label: &str, selected: bool, enabled: bool) ->
         }
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, selected, label)
+        egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, label)
     });
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -1232,7 +1232,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             egui::Sense::hover()
         },
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, enabled, &label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, &label));
     let open = egui::Popup::is_id_open(ui.ctx(), destination_popup_id());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
@@ -1317,7 +1317,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
 }
 
 pub(crate) fn destination_popup_id() -> egui::Id {
-    egui::Id::new("rule_destination")
+    egui::Id::unique("rule_destination")
 }
 
 fn destination_item(
@@ -1577,7 +1577,7 @@ mod tests {
             output.textures_delta.clear();
             assert_eq!(dialog.temporary_only, can_temporary && temporary);
             let rect = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+                .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
                 .unwrap();
             assert!(rect.top() >= 0.0, "{rect:?} in {width}×{height}");
             assert!(rect.bottom() <= height, "{rect:?} in {width}×{height}");
@@ -1634,7 +1634,7 @@ mod tests {
         );
         output.textures_delta.clear();
         let rect = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
             .unwrap();
         assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
     }
@@ -1672,7 +1672,7 @@ mod tests {
             );
             output.textures_delta.clear();
             let rect = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+                .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
                 .unwrap();
             assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
         }
@@ -1731,7 +1731,7 @@ mod tests {
                 run(&mut dialog);
             }
             let modal = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+                .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
                 .unwrap();
             let popup = ctx
                 .memory(|memory| memory.area_rect(destination_popup_id()))
@@ -1852,7 +1852,7 @@ mod tests {
             );
             output.textures_delta.clear();
             let rect = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("add_rule")))
+                .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
                 .unwrap();
             assert!(
                 rect.left() >= 0.0 && rect.right() <= width,

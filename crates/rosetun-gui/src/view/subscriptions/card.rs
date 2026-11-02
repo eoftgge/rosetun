@@ -21,7 +21,7 @@ pub(super) fn subscription_card(
     let expanded = state.subscriptions.expanded.contains(&subscription.id);
     let open = widgets::reveal_progress(
         ui.ctx(),
-        egui::Id::new(("subscription_open", &subscription.id)),
+        egui::Id::unique(("subscription_open", &subscription.id)),
         expanded,
         state.config.interface.reduce_motion,
     );
@@ -66,7 +66,7 @@ pub(super) fn subscription_card(
                             egui::pos2(origin.x - grip_margin, origin.y),
                             egui::pos2(origin.x - 1.0, origin.y + 28.0),
                         ),
-                        ui.id().with("grip_drag"),
+                        ui.scope_id().with("grip_drag"),
                         egui::Sense::drag(),
                     )
                 });
@@ -256,7 +256,7 @@ pub(super) fn subscription_card(
                 }
                 widgets::reveal(
                     ui,
-                    egui::Id::new(("subscription_details", &subscription.id)),
+                    egui::Id::unique(("subscription_details", &subscription.id)),
                     open,
                     |ui| details(ui, state, subscription, now, actions),
                 );

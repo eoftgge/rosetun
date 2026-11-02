@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use eframe::egui::{
     self, Align, Color32, FontFamily, FontId, Id, Layout, PointerButton, Rect, Response, Sense,
-    Shape, Stroke, TextFormat, TextStyle, ViewportCommand, WidgetInfo, WidgetType, text::LayoutJob,
+    Shape, Stroke, TextFormat, TextStyle, ViewportCommand, WidgetInfo, Role, text::LayoutJob,
 };
 use rosetun_config::ConnectionState;
 
@@ -79,7 +79,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
 
 fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) -> HeaderRects {
     let rect = ui.max_rect();
-    let drag = ui.interact(rect, Id::new("header_drag"), Sense::click_and_drag());
+    let drag = ui.interact(rect, Id::unique("header_drag"), Sense::click_and_drag());
     if CUSTOM_FRAME {
         let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
         if drag.drag_started_by(PointerButton::Primary) {
@@ -93,7 +93,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     let time = ui.input(|input| input.time);
     // Startup work can delay the first frame past the intro's duration.
     let started_at = ui.ctx().data_mut(|data| {
-        let id = Id::new("header_intro_start");
+        let id = Id::unique("header_intro_start");
         if let Some(start) = data.get_temp::<f64>(id) {
             start
         } else {
@@ -112,7 +112,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     let connected = status.is_some_and(|status| matches!(status.state, ConnectionState::Connected));
     let transitional = status.is_some_and(|status| status.state.is_transitional());
     let settled = ui.ctx().animate_bool_with_time(
-        Id::new("header_bloom"),
+        Id::unique("header_bloom"),
         connected,
         if reduce_motion { 0.0 } else { 0.8 },
     );
@@ -122,12 +122,12 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         brand::bloom(settled, transitional, time)
     };
     let remaining = ui.ctx().data_mut(|data| {
-        data.get_temp_mut_or_default::<DriftClock>(Id::new("header_drift_clock"))
+        data.get_temp_mut_or_default::<DriftClock>(Id::unique("header_drift_clock"))
             .observe(connected, time)
     });
     let drift_time = if reduce_motion { 0.0 } else { 0.8 };
     let seed = ui.ctx().data_mut(|data| {
-        *data.get_temp_mut_or_insert_with(Id::new("header_drift_seed"), || {
+        *data.get_temp_mut_or_insert_with(Id::unique("header_drift_seed"), || {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |since| since.as_nanos() as u64)
@@ -137,12 +137,12 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         time,
         seed,
         weight: ui.ctx().animate_bool_with_time(
-            Id::new("header_drift"),
+            Id::unique("header_drift"),
             drift_target(reduce_motion, transitional, remaining),
             drift_time,
         ),
         quick: ui.ctx().animate_bool_with_time(
-            Id::new("header_drift_quick"),
+            Id::unique("header_drift_quick"),
             transitional,
             drift_time,
         ),
@@ -315,12 +315,12 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     if let Some(tab_rect) = selected_rect {
         let duration = motion::duration(motion::NORMAL, reduce_motion);
         let left = ui.ctx().animate_value_with_time(
-            Id::new("header_tab_underline_left"),
+            Id::unique("header_tab_underline_left"),
             tab_rect.left(),
             duration,
         );
         let width = ui.ctx().animate_value_with_time(
-            Id::new("header_tab_underline_width"),
+            Id::unique("header_tab_underline_width"),
             tab_rect.width(),
             duration,
         );
@@ -475,7 +475,7 @@ fn window_button(ui: &mut egui::Ui, kind: WindowButton, reduce_motion: bool) -> 
         WindowButton::Close => tr!("close-window"),
     };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(38.0, 32.0), Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.as_str()));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label.as_str()));
     let hover = ui.ctx().animate_bool_with_time(
         response.id,
         response.hovered(),
@@ -566,7 +566,7 @@ fn tab(
         Sense::click(),
     );
     response
-        .widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, label));
+        .widget_info(|| WidgetInfo::selected(Role::Button, true, selected, label));
     let t = ui.ctx().animate_bool_with_time(
         response.id,
         selected || response.hovered(),
@@ -838,7 +838,7 @@ mod tests {
         assert!(!ctx.has_requested_repaint());
         assert_eq!(
             ctx.data_mut(
-                |data| data.get_temp::<super::DriftClock>(egui::Id::new("header_drift_clock"))
+                |data| data.get_temp::<super::DriftClock>(egui::Id::unique("header_drift_clock"))
             )
             .unwrap()
             .connected_at,

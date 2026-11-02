@@ -393,7 +393,7 @@ fn traffic_chart(ui: &mut egui::Ui, chart: &Chart) {
 /// Column heights eased toward their real values, oldest first. Columns
 /// that move are told apart by their sample, fixed ones by their place.
 fn displayed_heights(ctx: &egui::Context, chart: &Chart) -> Vec<(f32, f32)> {
-    let id = egui::Id::new("traffic_chart_motion");
+    let id = egui::Id::unique("traffic_chart_motion");
     let now = ctx.input(|input| input.time);
     let mut motion = ctx.data_mut(|data| data.get_temp::<ChartMotion>(id).unwrap_or_default());
     if motion.range != Some(chart.range) {

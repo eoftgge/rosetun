@@ -65,7 +65,7 @@ impl Dialog {
         ctx: &egui::Context,
         content: impl FnOnce(&mut egui::Ui) -> T,
     ) -> egui::ModalResponse<T> {
-        let id = egui::Id::new(self.id);
+        let id = egui::Id::unique(self.id);
         let modal = egui::Modal::new(id);
         let modal = match self.top {
             Some(top) => modal.area(

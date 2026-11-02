@@ -91,3 +91,15 @@ impl TestScreen {
         self.settle(&mut show)
     }
 }
+
+/// A wheel turn by `delta` points, from an unknown source as egui-winit reports it on Windows,
+/// so a test scrolls the way the user's wheel does.
+pub(crate) fn wheel(delta: egui::Vec2) -> egui::Event {
+    egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::NONE,
+    }
+}

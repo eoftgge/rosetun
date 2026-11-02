@@ -339,7 +339,7 @@ fn card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             let now_ms = crate::display::now_unix().saturating_mul(1000);
             let shown = widgets::appear_progress(
                 ui.ctx(),
-                egui::Id::new("connections_appear"),
+                egui::Id::unique("connections_appear"),
                 (list.tab, list.view),
                 state.config.interface.reduce_motion,
             );
@@ -564,7 +564,7 @@ fn program_list(ui: &mut egui::Ui, state: &State, now_ms: u64, actions: &mut Vec
             ConnectionRow::Program { group, expanded } => {
                 let open = widgets::reveal_progress(
                     ui.ctx(),
-                    egui::Id::new(("program_open", group.path)),
+                    egui::Id::unique(("program_open", group.path)),
                     *expanded,
                     reduce_motion,
                 );
@@ -633,9 +633,9 @@ fn program_list(ui: &mut egui::Ui, state: &State, now_ms: u64, actions: &mut Vec
                         egui::vec2(width, PROGRAM_ROW_HEIGHT),
                     );
                     let salt = match placed.row {
-                        Placed::Program(group, _) => egui::Id::new(("program", group.path)),
+                        Placed::Program(group, _) => egui::Id::unique(("program", group.path)),
                         Placed::Connection(connection) => {
-                            egui::Id::new(("connection", &connection.id))
+                            egui::Id::unique(("connection", &connection.id))
                         }
                     };
                     let mut row_ui = ui.new_child(
@@ -664,7 +664,7 @@ fn program_list(ui: &mut egui::Ui, state: &State, now_ms: u64, actions: &mut Vec
         ui,
         state,
         area.response.rect,
-        area.inner.state.offset.y,
+        area.inner.state.unclamped_offset().y,
         actions,
     );
 }
@@ -679,7 +679,7 @@ fn hold_order(
     offset: f32,
     actions: &mut Vec<Action>,
 ) {
-    let id = egui::Id::new("connections_hold_order");
+    let id = egui::Id::unique("connections_hold_order");
     let now = ui.input(|input| input.time);
     let (last_offset, last_busy) = ui
         .data(|data| data.get_temp::<(f32, f64)>(id))
@@ -1214,7 +1214,7 @@ mod toolbar_tests {
             output.textures_delta.clear();
         }
         let area = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new("connection_details")))
+            .memory(|memory| memory.area_rect(egui::Id::unique("connection_details")))
             .unwrap();
         let chrome = widgets::modal_frame().total_margin().sum().x;
         assert_eq!(

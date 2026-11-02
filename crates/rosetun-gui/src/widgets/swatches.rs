@@ -44,7 +44,7 @@ pub(crate) fn swatches<T: Copy + PartialEq>(
             let active = swatch.value == selected;
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
-                    egui::WidgetType::RadioButton,
+                    egui::Role::RadioButton,
                     enabled,
                     active,
                     &swatch.label,

@@ -27,7 +27,7 @@ pub(crate) fn status_pill(
         egui::Sense::click(),
     );
     response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, accessible_text));
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, accessible_text));
     if ui.is_rect_visible(rect) {
         ui.painter().rect(
             rect,

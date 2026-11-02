@@ -381,11 +381,11 @@ fn dragging_a_rule_scrolls_the_enclosing_area_with_a_wheel() {
                             ..Default::default()
                         })
                         .show(ui, |ui| {
-                            ui.ctx().set_dragged_id(egui::Id::new("rule_drag"));
+                            ui.ctx().set_dragged_id(egui::Id::unique("rule_drag"));
                             ui.allocate_space(egui::vec2(200.0, 600.0));
                             scroll_rules_while_dragging(ui);
                         });
-                    offset = result.state.offset.y;
+                    offset = result.state.unclamped_offset().y;
                 });
             },
         );
@@ -396,12 +396,7 @@ fn dragging_a_rule_scrolls_the_enclosing_area_with_a_wheel() {
     egui::DragAndDrop::set_payload(&ctx, RuleId::new("1"));
     let offset = frame(vec![
         egui::Event::PointerMoved(egui::pos2(100.0, 100.0)),
-        egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, -72.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: egui::Modifiers::NONE,
-        },
+        crate::test_ui::wheel(egui::vec2(0.0, -72.0)),
     ]);
     let after = frame(vec![egui::Event::PointerMoved(egui::pos2(100.0, 100.0))]);
     assert!(

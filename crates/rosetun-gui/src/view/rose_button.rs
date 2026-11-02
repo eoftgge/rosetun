@@ -1,6 +1,6 @@
 use std::{sync::OnceLock, time::Duration};
 
-use eframe::egui::{self, Color32, Id, Pos2, Rect, Sense, Shape, Stroke, WidgetInfo, WidgetType};
+use eframe::egui::{self, Color32, Id, Pos2, Rect, Sense, Shape, Stroke, WidgetInfo, Role};
 use rosetun_config::ConnectionState;
 
 use crate::theme;
@@ -410,7 +410,7 @@ pub(crate) fn rose_button(
         Sense::hover()
     };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(240.0, 260.0), sense);
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
     let center = egui::pos2(rect.center().x, rect.top() + 105.0);
     let label_center = egui::pos2(center.x, rect.top() + 218.0);
     let font_id = theme::font::title();
@@ -432,7 +432,7 @@ pub(crate) fn rose_button(
     let ctx = ui.ctx();
     let now = ctx.input(|input| input.time);
     let target = params(phase);
-    let id = Id::new("rose_button");
+    let id = Id::unique("rose_button");
     let mut animation = ctx.data_mut(|data| {
         data.get_temp::<RoseAnimation>(id).unwrap_or(RoseAnimation {
             from: target,

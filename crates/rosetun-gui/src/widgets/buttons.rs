@@ -59,7 +59,7 @@ pub(crate) fn outline_button_menu(
     text: impl Into<egui::WidgetText>,
     enabled: bool,
 ) -> egui::Response {
-    let id = egui::Id::new("menu_button_chevron");
+    let id = egui::IdSalt::new("menu_button_chevron");
     let button = egui::Button::new((
         text.into(),
         egui::Atom::custom(id, egui::vec2(CHEVRON_WIDTH, 0.0)),

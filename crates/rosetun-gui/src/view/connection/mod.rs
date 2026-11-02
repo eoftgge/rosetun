@@ -42,7 +42,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
 }
 
 fn service_banner(ui: &mut egui::Ui, state: &State) {
-    let id = egui::Id::new("service_down_details");
+    let id = egui::Id::unique("service_down_details");
     let expanded = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());

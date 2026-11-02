@@ -27,7 +27,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
     let narrow = ui.available_width() < 800.0;
     let screen_shown = widgets::appear_progress(
         ui.ctx(),
-        egui::Id::new("screen_appear"),
+        egui::Id::unique("screen_appear"),
         state.screen,
         state.config.interface.reduce_motion,
     );
@@ -353,7 +353,7 @@ fn settings_nav_item(
         );
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
+        egui::WidgetInfo::selected(egui::Role::Button, true, selected, label)
     });
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)

@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn new_content_fades_in_only_when_its_key_changes() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("appear");
+        let id = egui::Id::unique("appear");
         assert_eq!(
             frame(&ctx, 0.0, |ctx| appear_progress(ctx, id, 1, false)),
             1.0
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn reduced_motion_shows_new_content_and_sections_at_once() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("instant");
+        let id = egui::Id::unique("instant");
         frame(&ctx, 0.0, |ctx| {
             appear_progress(ctx, id, 1, true);
             reveal_progress(ctx, id.with("open"), false, true)
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn a_section_opens_over_time_without_reduced_motion() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("open");
+        let id = egui::Id::unique("open");
         assert_eq!(
             frame(&ctx, 0.0, |ctx| reveal_progress(ctx, id, false, false)),
             0.0

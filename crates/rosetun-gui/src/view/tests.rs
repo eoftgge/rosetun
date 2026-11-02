@@ -294,7 +294,7 @@ fn settled(case: &Case, language: Language) -> Shown {
             shapes = output.shapes;
         }
         let area = ctx
-            .memory(|memory| memory.area_rect(egui::Id::new(case.id)))
+            .memory(|memory| memory.area_rect(egui::Id::unique(case.id)))
             .unwrap_or_else(|| panic!("{}: not shown", case.id));
         let mut painted = Vec::new();
         for clipped in &shapes {
@@ -401,7 +401,7 @@ fn the_added_list_dialog_ends_in_a_done_button_at_the_right_edge_in_both_languag
                 shapes = output.shapes;
             }
             let area = ctx
-                .memory(|memory| memory.area_rect(egui::Id::new("add_list")))
+                .memory(|memory| memory.area_rect(egui::Id::unique("add_list")))
                 .expect("the dialog is shown");
             let mut painted = Vec::new();
             for clipped in &shapes {

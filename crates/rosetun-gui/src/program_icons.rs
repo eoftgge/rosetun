@@ -199,7 +199,7 @@ pub(crate) fn paint(ui: &egui::Ui, rect: egui::Rect, side: f32, path: &Path) -> 
         return false;
     }
     let icons = ctx.data_mut(|data| {
-        data.get_temp_mut_or_default::<Arc<Mutex<ProgramIcons>>>(egui::Id::new("program_icons"))
+        data.get_temp_mut_or_default::<Arc<Mutex<ProgramIcons>>>(egui::Id::unique("program_icons"))
             .clone()
     });
     let mut icons = icons.lock().unwrap_or_else(PoisonError::into_inner);
