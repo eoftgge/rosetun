@@ -2,7 +2,7 @@
 
 A Hyper-V test bench for the Linux IPC transport (the L2 stage). The owner runs
 it; nothing in it starts implicitly. It drives a **separate Debian 13 VM** over
-SSH. The Windows matrices (`../Invoke-*Matrix.ps1`, PowerShell Direct) and the
+SSH. The Windows matrices (`../windows/Invoke-*Matrix.ps1`, PowerShell Direct) and the
 Windows VM `rosetun-test` are not involved and keep their behaviour.
 
 What it proves and what it does not:

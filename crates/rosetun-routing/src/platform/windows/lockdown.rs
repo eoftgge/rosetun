@@ -2,8 +2,8 @@
 //! every start, so the machine stays blocked outside the tunnel while
 //! disconnected, after a service crash and across reboots. Written in a
 //! standard (non-dynamic) session. The choices here were tested in a Hyper-V
-//! guest with `tools/vm/Invoke-LockdownProbe.ps1` and are checked by
-//! `tools/vm/Invoke-LockdownMatrix.ps1`.
+//! guest with `tools/vm/windows/Invoke-LockdownProbe.ps1` and are checked by
+//! `tools/vm/windows/Invoke-LockdownMatrix.ps1`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

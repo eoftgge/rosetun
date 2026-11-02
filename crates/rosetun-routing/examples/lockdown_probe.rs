@@ -1,5 +1,5 @@
 //! WFP probe for Lockdown sublayer arbitration, run by hand in the test VM
-//! (`tools/vm/Invoke-LockdownProbe.ps1`). Not part of the product: the
+//! (`tools/vm/windows/Invoke-LockdownProbe.ps1`). Not part of the product: the
 //! installer and `release.yml` never build examples.
 //!
 //! `persistent install [--boottime] [--sublayer-weight <u16>] [--flush]`

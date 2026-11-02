@@ -134,7 +134,7 @@ right after a restore happens in every run. Prepare it so the guest is quiet:
 2. Turn off automatic updates and refresh Defender signatures:
 
    ```powershell
-   Import-Module .\tools\vm\RosetunVm.psm1 -Force
+   Import-Module .\tools\vm\windows\RosetunVm.psm1 -Force
    Invoke-RosetunGuest {
        $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
        New-Item -Path $key -Force | Out-Null
@@ -148,7 +148,7 @@ right after a restore happens in every run. Prepare it so the guest is quiet:
 
    ```powershell
    Publish-Rosetun -BuildDir .\target\release -SingBoxPath 'tools\sing-box.exe' `
-       -RequestPath .\tools\vm\request-local.json -UseHostNode
+       -RequestPath .\tools\vm\windows\request-local.json -UseHostNode
    Register-RosetunHelper
    Start-RosetunHelper
    Connect-RosetunTunnel
@@ -182,11 +182,11 @@ right after a restore happens in every run. Prepare it so the guest is quiet:
 
    ```powershell
    Set-ExecutionPolicy -Scope Process Bypass
-   Import-Module .\tools\vm\RosetunVm.psm1 -Force
+   Import-Module .\tools\vm\windows\RosetunVm.psm1 -Force
    ```
 
    The scripts are unsigned and files downloaded from the web carry the Mark of
-   the Web; `Get-ChildItem .\tools\vm | Unblock-File` is the permanent fix.
+   the Web; `Get-ChildItem .\tools\vm\windows | Unblock-File` is the permanent fix.
 
 2. Make sure the pinned sing-box is in place. This downloads it once and does
    nothing when the checksum already matches:
@@ -214,14 +214,14 @@ right after a restore happens in every run. Prepare it so the guest is quiet:
    node; restart it after changing `test-node.json`, because
    `Start-RosetunTestNode` leaves a running node alone. Running it by hand in a
    window still works
-   (`& .\tools\sing-box.exe run --disable-color -c .\tools\vm\test-node.json`),
+   (`& .\tools\sing-box.exe run --disable-color -c .\tools\vm\windows\test-node.json`),
    but then its log stays in that window.
 
 4. Build and run the matrix:
 
    ```powershell
-   .\tools\vm\Invoke-FailureMatrix.ps1 -SingBoxPath 'tools\sing-box.exe' `
-       -RequestPath .\tools\vm\request-local.json -RestoreCheckpoint -UseHostNode -Build
+   .\tools\vm\windows\Invoke-FailureMatrix.ps1 -SingBoxPath 'tools\sing-box.exe' `
+       -RequestPath .\tools\vm\windows\request-local.json -RestoreCheckpoint -UseHostNode -Build
    ```
 
    Every run copies the helper and the CLI from `target\release` into the
@@ -237,7 +237,7 @@ To try a change by hand without the whole matrix, redeploy into the running
 guest and drive it with the module functions:
 
 ```powershell
-Update-Rosetun -SingBoxPath 'tools\sing-box.exe' -RequestPath .\tools\vm\request-local.json -UseHostNode -Build
+Update-Rosetun -SingBoxPath 'tools\sing-box.exe' -RequestPath .\tools\vm\windows\request-local.json -UseHostNode -Build
 Connect-RosetunTunnel
 Wait-RosetunState Connected
 Test-RosetunTunnelEgress
