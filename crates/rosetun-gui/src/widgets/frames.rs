@@ -13,6 +13,11 @@ pub(crate) fn card_frame() -> egui::Frame {
         .inner_margin(theme::margin::same(theme::space::L))
 }
 
+/// What `card_frame` adds around a card's content, top and bottom: margins and borders.
+pub(crate) fn card_chrome_height() -> f32 {
+    card_frame().total_margin().sum().y
+}
+
 pub(crate) fn modal_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(theme::palette().modal)
@@ -99,6 +104,24 @@ pub(crate) fn dismissible_error_with_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_chrome_is_the_height_the_frame_adds_around_its_content() {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let mut height = 0.0;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                height = card_frame()
+                    .show(ui, |ui| ui.allocate_space(egui::vec2(10.0, 40.0)))
+                    .response
+                    .rect
+                    .height();
+            });
+        });
+        output.textures_delta.clear();
+        assert_eq!(height, 40.0 + card_chrome_height());
+    }
 
     #[test]
     fn error_banner_keeps_action_on_one_line_in_compact_window() {

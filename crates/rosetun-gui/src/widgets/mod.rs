@@ -26,7 +26,7 @@ pub(crate) use dialogs::{ConfirmModal, ModalChoice, NameModal, confirm_modal, na
 #[cfg(windows)]
 pub(crate) use dialogs::{ThreeWayChoice, ThreeWayModal, three_way_modal};
 pub(crate) use frames::{
-    card_frame, dismissible_error, dismissible_error_with_action, error_with_actions, modal_frame,
+    card_chrome_height, card_frame, dismissible_error, dismissible_error_with_action, error_with_actions, modal_frame,
 };
 pub(crate) use menu::{MenuItem, context_menu_popup, menu_item, menu_popup};
 pub(crate) use search::{

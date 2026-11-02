@@ -1,4 +1,7 @@
+use rosetun_config::Rule;
+
 use super::*;
+use crate::rules::RuleCaption;
 
 pub(super) fn control_cards(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     if ui.available_width() < 520.0 {
@@ -34,7 +37,7 @@ pub(super) fn control_cards(ui: &mut egui::Ui, state: &State, actions: &mut Vec<
 fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, height: f32) {
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.set_min_height((height - 34.0).max(0.0));
+        ui.set_min_height((height - widgets::card_chrome_height()).max(0.0));
         ui.colored_label(theme::palette().text_dim, tr!("protection"));
         let lockdown = state.lockdown_active();
         let mut kill_switch = state.config.settings.kill_switch || lockdown;
@@ -114,7 +117,7 @@ fn row_divider(ui: &mut egui::Ui) {
 fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, height: f32) {
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.set_min_height((height - 34.0).max(0.0));
+        ui.set_min_height((height - widgets::card_chrome_height()).max(0.0));
         egui::Sides::new().shrink_left().show(
             ui,
             |ui| {
@@ -154,30 +157,7 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
             let mut shown = 0;
             for rule in enabled.by_ref().take(2) {
                 shown += 1;
-                ui.horizontal(|ui| {
-                    let width = (ui.available_width() - 90.0).max(0.0);
-                    let value = match &rule.matcher {
-                        RuleMatcher::Template(_) => crate::rules::rule_lines(&rule.matcher).0,
-                        RuleMatcher::List { list, category } => {
-                            state.list_rule_name(list, category.as_deref())
-                        }
-                        _ => rosetun_core::rule_value_text(&rule.matcher),
-                    };
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(width, ui.text_style_height(&egui::TextStyle::Body)),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.set_width(width);
-                            ui.add(egui::Label::new(state.text(&value)).truncate());
-                        },
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.colored_label(
-                            target_color(rule.target),
-                            rule_label(rule, &state.config.exits),
-                        );
-                    });
-                });
+                rule_row(ui, state, rule);
             }
             if shown == 0 {
                 ui.add(
@@ -249,6 +229,85 @@ fn rules_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, heigh
             }
         }
     });
+}
+
+/// Fewest characters of a rule's value kept before its target gives way.
+const MIN_VALUE_CHARS: usize = 4;
+
+/// One rule: the value on the left, cut with "…" when short of room, and the target on the
+/// right. The target is measured first, so the value gets what it leaves; only when even
+/// a few characters of the value would not fit does the target give way too. Returns the
+/// rectangles of the value and of the target.
+fn rule_row(ui: &mut egui::Ui, state: &State, rule: &Rule) -> (egui::Rect, egui::Rect) {
+    let (value, path) = match &rule.matcher {
+        RuleMatcher::List { list, category } => {
+            (state.list_rule_name(list, category.as_deref()), None)
+        }
+        matcher => match crate::rules::rule_lines(matcher) {
+            (name, RuleCaption::Path(path)) => (name, Some(state.text(&path))),
+            (value, _) => (value, None),
+        },
+    };
+    let value = state.text(&value);
+    let target = rule_label(rule, &state.config.exits);
+    ui.horizontal(|ui| {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let measure = |text: &str| {
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER)
+                .size()
+                .x
+                .ceil()
+        };
+        let total = ui.available_width();
+        let gap = ui.spacing().item_spacing.x;
+        let kept: String = value.chars().take(MIN_VALUE_CHARS).collect();
+        let kept = if kept == value {
+            value.clone()
+        } else {
+            format!("{kept}…")
+        };
+        let value_width = (total - gap - measure(&target))
+            .max(measure(&kept))
+            .min((total - gap).max(0.0));
+        let target_width = (total - gap - value_width).max(0.0);
+        let height = ui.text_style_height(&egui::TextStyle::Body);
+        let value_rect = ui
+            .allocate_ui_with_layout(
+                egui::vec2(value_width, height),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_width(value_width);
+                    let label = egui::Label::new(value).truncate();
+                    match path {
+                        Some(path) => ui
+                            .add(label.show_tooltip_when_elided(false))
+                            .on_hover_text(path),
+                        None => ui.add(label),
+                    }
+                    .rect
+                },
+            )
+            .inner;
+        let target_rect = ui
+            .allocate_ui_with_layout(
+                egui::vec2(target_width, height),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.set_width(target_width);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(target).color(target_color(rule.target)),
+                        )
+                        .truncate(),
+                    )
+                    .rect
+                },
+            )
+            .inner;
+        (value_rect, target_rect)
+    })
+    .inner
 }
 
 fn rule_set_picker(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -361,4 +420,156 @@ fn tunnel_up(state: &State) -> bool {
     state
         .visible_status()
         .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use rosetun_config::{
+        CountryCode, DomainMatch, ExitTarget, ProcessMatch, RuleId, RuleSet, RuleSetId, RuleTarget,
+    };
+
+    use super::*;
+    use crate::destinations::tests::{config, exit};
+    use crate::i18n::{self, Language};
+
+    const LONG_PATH: &str = r"E:\Games\Example Games\Example Client\ExampleClientServices.exe";
+    const FILE_NAME: &str = "ExampleClientServices.exe";
+    /// As long as a target can be and still leave a few characters of the value in the
+    /// narrowest two-column card.
+    const EXIT_NAME: &str = "Berlin 2";
+
+    /// The first column's width where `control_cards` still uses two columns.
+    const TWO_COLUMN_WIDTH: f32 = 520.0;
+
+    struct Shown {
+        text: String,
+        rect: egui::Rect,
+        elided: bool,
+    }
+
+    fn rule(id: &str, matcher: RuleMatcher, target: RuleTarget, exit: Option<&str>) -> Rule {
+        Rule {
+            id: RuleId::new(id),
+            enabled: true,
+            matcher,
+            target,
+            exit: exit.map(rosetun_config::ExitId::new),
+        }
+    }
+
+    fn state(exit_name: &str) -> State {
+        let mut state = State::default();
+        state.helper_available = true;
+        state.config_ready = true;
+        let mut long_exit = exit("a", ExitTarget::Country(CountryCode::parse("NL").unwrap()));
+        long_exit.name = exit_name.to_owned();
+        state.config = config(&[("main", "Main node")], vec![long_exit]);
+        let mut set = RuleSet::new(RuleSetId::new("set"), "Example set", RuleTarget::Proxy);
+        set.rules = vec![
+            rule(
+                "path",
+                RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(LONG_PATH))),
+                RuleTarget::Exit,
+                Some("a"),
+            ),
+            rule(
+                "domain",
+                RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
+                RuleTarget::Direct,
+                None,
+            ),
+        ];
+        state.config.rule_sets = vec![set];
+        state.config.active_rule_set = Some(RuleSetId::new("set"));
+        state
+    }
+
+    fn render(state: &State, window: egui::Vec2, column: f32) -> (Vec<Shown>, Vec<Action>) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut actions = Vec::new();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, window)),
+                ..egui::RawInput::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.scope(|ui| {
+                        ui.set_max_width(column);
+                        control_cards(ui, state, &mut actions);
+                    });
+                });
+            },
+        );
+        output.textures_delta.clear();
+        let shown = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(Shown {
+                    text: text.galley.text().to_owned(),
+                    rect: text.galley.rect.translate(text.pos.to_vec2()),
+                    elided: text.galley.elided,
+                }),
+                _ => None,
+            })
+            .collect();
+        (shown, actions)
+    }
+
+    fn find<'a>(shown: &'a [Shown], text: &str) -> &'a Shown {
+        shown
+            .iter()
+            .find(|found| found.text == text)
+            .unwrap_or_else(|| panic!("{text:?} not drawn"))
+    }
+
+    #[test]
+    fn a_rules_target_stays_whole_and_clear_of_its_value() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                let state = state(EXIT_NAME);
+                let exit_target = tr!("target-exit", name = EXIT_NAME);
+                let direct = tr!("direct");
+                for (window, column) in [(960.0, 944.0), (960.0, TWO_COLUMN_WIDTH)] {
+                    let (shown, _) = render(&state, egui::vec2(window, 640.0), column);
+                    let place = format!("{language:?}, column {column}");
+                    let value = find(&shown, FILE_NAME);
+                    let target = find(&shown, &exit_target);
+                    assert!(!value.rect.intersects(target.rect), "{place}");
+                    assert!(!target.elided, "{place}: target cut");
+                    assert!(value.rect.right() <= target.rect.left(), "{place}");
+                    assert_eq!(value.elided, column == TWO_COLUMN_WIDTH, "{place}");
+                    let domain = find(&shown, "example.com");
+                    let direct = find(&shown, &direct);
+                    assert!(!domain.rect.intersects(direct.rect), "{place}");
+                    assert!(!domain.elided && !direct.elided, "{place}");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn a_target_too_long_for_the_card_is_cut_instead_of_covering_the_value() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                let name = "An exit whose name is far longer than any card can hold";
+                let state = state(name);
+                let (shown, _) = render(
+                    &state,
+                    egui::vec2(960.0, 640.0),
+                    TWO_COLUMN_WIDTH,
+                );
+                let value = find(&shown, FILE_NAME);
+                let target = find(&shown, &tr!("target-exit", name = name));
+                assert!(target.elided, "{language:?}");
+                assert!(value.elided, "{language:?}");
+                assert!(value.rect.width() > 0.0, "{language:?}");
+                assert!(value.rect.right() <= target.rect.left(), "{language:?}");
+            });
+        }
+    }
 }
