@@ -239,8 +239,109 @@ pub(crate) const WARNING: Color32 = Color32::from_rgb(0xE8, 0xB4, 0x57);
 pub(crate) const EXIT: Color32 = Color32::from_rgb(0x8F, 0xB4, 0xE8);
 pub(crate) const EXPIRED: Color32 = Color32::from_rgb(0xEF, 0x62, 0x62);
 
+/// Colours of the program tiles in the "Add rule" window. A tile takes one by
+/// its name, so they are muted, fixed and the same in every palette.
+#[expect(dead_code, reason = "the views adopt the scale in the next change")]
+pub(crate) const PROGRAM_TILES: [Color32; 4] =
+    [rgb(0x4A3A6B), rgb(0x3A5A4A), rgb(0x2E4058), rgb(0x5A3A44)];
+
+/// Spacing scale: every gap, margin and padding in the views is one of these
+/// steps, or zero. Spacing a view cannot express with a step (a measured
+/// width, a fixed row) is a named constant of that view.
+#[expect(dead_code, reason = "the views adopt the scale in the next change")]
+pub(crate) mod space {
+    /// Between a title and its caption, inside a tight pair.
+    pub(crate) const XXS: f32 = 2.0;
+    /// Between icons and labels, inside small controls.
+    pub(crate) const XS: f32 = 4.0;
+    /// Between items of one row or group.
+    pub(crate) const S: f32 = 8.0;
+    /// Between a group's parts and inside dialogs' rows.
+    pub(crate) const M: f32 = 12.0;
+    /// Between blocks.
+    pub(crate) const L: f32 = 16.0;
+    /// Around a screen's main block.
+    pub(crate) const XL: f32 = 24.0;
+}
+
+/// Type scale. `CAPTION`, `BODY`, `HEADING` and `MONO` are the sizes of
+/// `TextStyle::Small`, `Body`, `Heading` and `Monospace`; use the text style
+/// where one fits and a size here for the other cases.
+#[expect(dead_code, reason = "the views adopt the scale in the next change")]
+pub(crate) mod font {
+    use eframe::egui::{FontFamily, FontId};
+
+    use super::UI_SEMIBOLD;
+
+    pub(crate) const CAPTION: f32 = 12.0;
+    pub(crate) const BODY: f32 = 15.0;
+    /// Semibold: a card or block title.
+    pub(crate) const TITLE: f32 = 17.0;
+    /// Semibold.
+    pub(crate) const HEADING: f32 = 24.0;
+    pub(crate) const MONO: f32 = 14.0;
+    pub(crate) const MONO_SMALL: f32 = 12.0;
+
+    /// The name in the header, in the brand face.
+    pub(crate) const BRAND_NAME: f32 = 25.0;
+    /// The line under the name in the header.
+    pub(crate) const BRAND_TAGLINE: f32 = 10.5;
+    /// The name on the "About" card, in the brand face.
+    pub(crate) const BRAND_ABOUT: f32 = 28.0;
+    /// The large state line of the connection screen.
+    pub(crate) const STATE_LINE: f32 = 26.0;
+
+    pub(crate) fn semibold(size: f32) -> FontId {
+        FontId::new(size, FontFamily::Name(UI_SEMIBOLD.into()))
+    }
+
+    pub(crate) fn title() -> FontId {
+        semibold(TITLE)
+    }
+
+    pub(crate) fn mono_small() -> FontId {
+        FontId::monospace(MONO_SMALL)
+    }
+}
+
+/// Line widths. Strokes that scale with a drawing (the emblem and the tab
+/// glyphs) multiply one of these by their scale.
+#[expect(dead_code, reason = "the views adopt the scale in the next change")]
+pub(crate) mod stroke {
+    /// Borders and separators.
+    pub(crate) const HAIRLINE: f32 = 1.0;
+    /// Icons the view draws by hand: a check mark, a cross, a ring.
+    pub(crate) const GLYPH: f32 = 1.5;
+    /// A drop indicator and a selection ring.
+    pub(crate) const MARK: f32 = 2.0;
+}
+
+/// Opacity levels, by role.
+#[expect(dead_code, reason = "the views adopt the scale in the next change")]
+pub(crate) mod alpha {
+    use eframe::egui::Color32;
+
+    /// A control that cannot be used, as a `gamma_multiply` factor.
+    pub(crate) const DISABLED: f32 = 0.5;
+    /// The same level for a colour that is built from its channels: a row
+    /// being dragged, a control that cannot be used.
+    pub(crate) const DISABLED_ALPHA: u8 = 128;
+    /// A fill that steps back: a button that cannot be pressed, a switched
+    /// off row.
+    pub(crate) const MUTED: f32 = 0.7;
+    /// The chosen or hovered item in a list.
+    pub(crate) const SELECTED: f32 = 0.35;
+    /// A faint wash behind a warning.
+    pub(crate) const TINT: f32 = 0.15;
+
+    /// The colour with the given alpha, from its own channels.
+    pub(crate) fn fade(color: Color32, alpha: u8) -> Color32 {
+        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+    }
+}
+
 /// Gap between blocks on the connection tab.
-pub(crate) const SECTION_GAP: f32 = 16.0;
+pub(crate) const SECTION_GAP: f32 = space::L;
 pub(crate) const SERVER_ROW: f32 = 40.0;
 /// Room a server's name keeps before its row gives up the quality bars, then the full Xray
 /// badge: "Нидерланды" is about 94 points in the semibold of a selected row.
@@ -253,6 +354,15 @@ pub(crate) const RADIUS: u8 = 6;
 pub(crate) const RADIUS_INNER: u8 = 4;
 /// The toggle track: half its height.
 pub(crate) const RADIUS_TOGGLE: u8 = 11;
+/// The check box: chosen by the owner, smaller than a button's.
+#[expect(dead_code, reason = "the views adopt the scale in the next change")]
+pub(crate) const RADIUS_CHECKBOX: u8 = 3;
+
+/// The radius that turns a box of this height into a capsule.
+#[expect(dead_code, reason = "the views adopt the scale in the next change")]
+pub(crate) fn capsule(height: f32) -> u8 {
+    (height / 2.0).round().clamp(0.0, f32::from(u8::MAX)) as u8
+}
 
 pub(crate) fn apply(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
@@ -300,21 +410,21 @@ pub(crate) fn apply_style(ctx: &egui::Context) {
     style.text_styles = [
         (
             TextStyle::Small,
-            FontId::new(12.0, FontFamily::Proportional),
+            FontId::new(font::CAPTION, FontFamily::Proportional),
         ),
-        (TextStyle::Body, FontId::new(15.0, FontFamily::Proportional)),
+        (
+            TextStyle::Body,
+            FontId::new(font::BODY, FontFamily::Proportional),
+        ),
         (
             TextStyle::Button,
-            FontId::new(15.0, FontFamily::Proportional),
+            FontId::new(font::BODY, FontFamily::Proportional),
         ),
         (
             TextStyle::Monospace,
-            FontId::new(14.0, FontFamily::Monospace),
+            FontId::new(font::MONO, FontFamily::Monospace),
         ),
-        (
-            TextStyle::Heading,
-            FontId::new(24.0, FontFamily::Name(UI_SEMIBOLD.into())),
-        ),
+        (TextStyle::Heading, font::semibold(font::HEADING)),
     ]
     .into();
     style.visuals = visuals;
