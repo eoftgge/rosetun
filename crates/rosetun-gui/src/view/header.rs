@@ -18,6 +18,30 @@ pub(crate) const HEIGHT: f32 = 76.0;
 
 const INTRO_DURATION: f64 = 2.7;
 
+/// An untouched window should stop drawing frames while the connection stays up.
+const DRIFT_AFTER_CONNECT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy, Default)]
+struct DriftClock {
+    connected_at: Option<f64>,
+}
+
+impl DriftClock {
+    fn observe(&mut self, connected: bool, time: f64) -> Option<Duration> {
+        if !connected {
+            self.connected_at = None;
+            return None;
+        }
+        let started = *self.connected_at.get_or_insert(time);
+        let remaining = DRIFT_AFTER_CONNECT.as_secs_f64() - (time - started).max(0.0);
+        (remaining > 0.0).then(|| Duration::from_secs_f64(remaining))
+    }
+}
+
+fn drift_target(reduce_motion: bool, transitional: bool, remaining: Option<Duration>) -> bool {
+    !reduce_motion && (transitional || remaining.is_some())
+}
+
 #[derive(Clone, Copy)]
 enum WindowButton {
     Minimize,
@@ -97,6 +121,10 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     } else {
         brand::bloom(settled, transitional, time)
     };
+    let remaining = ui.ctx().data_mut(|data| {
+        data.get_temp_mut_or_default::<DriftClock>(Id::new("header_drift_clock"))
+            .observe(connected, time)
+    });
     let drift_time = if reduce_motion { 0.0 } else { 0.8 };
     let seed = ui.ctx().data_mut(|data| {
         *data.get_temp_mut_or_insert_with(Id::new("header_drift_seed"), || {
@@ -110,7 +138,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         seed,
         weight: ui.ctx().animate_bool_with_time(
             Id::new("header_drift"),
-            !reduce_motion && (connected || transitional),
+            drift_target(reduce_motion, transitional, remaining),
             drift_time,
         ),
         quick: ui.ctx().animate_bool_with_time(
@@ -130,6 +158,12 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }
     if let Some(delay) = petal_repaint(status.map(|status| &status.state), drift.weight, frame) {
         ui.ctx().request_repaint_after(delay);
+    }
+
+    if frame.is_some()
+        && let Some(remaining) = remaining
+    {
+        ui.ctx().request_repaint_after(remaining);
     }
 
     brand::paint_petals(ui.painter(), rect, bloom, intro, drift);
@@ -361,9 +395,7 @@ fn petal_repaint(
     drift_weight: f32,
     frame: Option<Duration>,
 ) -> Option<Duration> {
-    let moving = connection.is_some_and(|connection| {
-        matches!(connection, ConnectionState::Connected) || connection.is_transitional()
-    }) || drift_weight > 0.0;
+    let moving = connection.is_some_and(ConnectionState::is_transitional) || drift_weight > 0.0;
     frame.filter(|_| moving)
 }
 
@@ -744,6 +776,56 @@ mod tests {
         assert_eq!(petal_repaint(None, 0.0, frame), None);
         assert_eq!(petal_repaint(disconnected, 0.2, frame), frame);
         assert_eq!(petal_repaint(disconnected, 0.2, None), None);
+    }
+
+    #[test]
+    fn drift_clock_starts_on_first_connected_status_and_restarts_after_reconnecting() {
+        let mut clock = super::DriftClock::default();
+        assert_eq!(clock.observe(true, 100.0), Some(super::DRIFT_AFTER_CONNECT));
+        assert_eq!(clock.observe(true, 109.0), Some(Duration::from_secs(1)));
+        assert_eq!(clock.observe(true, 110.0), None);
+        assert_eq!(clock.observe(false, 111.0), None);
+        assert_eq!(clock.observe(true, 120.0), Some(super::DRIFT_AFTER_CONNECT));
+    }
+
+    #[test]
+    fn drift_target_expires_but_transitions_keep_moving() {
+        let remaining = Some(Duration::from_secs(1));
+        assert!(super::drift_target(false, false, remaining));
+        assert!(!super::drift_target(false, false, None));
+        assert!(super::drift_target(false, true, None));
+        for transitional in [false, true] {
+            for remaining in [None, remaining] {
+                assert!(!super::drift_target(true, transitional, remaining));
+            }
+        }
+        let frame = Some(Duration::from_millis(16));
+        assert_eq!(petal_repaint(Some(&ConnectionState::Connected), 0.5, frame), frame);
+        assert_eq!(petal_repaint(Some(&ConnectionState::Connected), 0.0, frame), None);
+    }
+
+    #[test]
+    fn connected_header_stops_requesting_frames_after_settling() {
+        use eframe::egui;
+
+        let mut state = State::default();
+        state.helper_available = true;
+        state.status.state = ConnectionState::Connected;
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        for step in 0..=660 {
+            let mut output = ctx.run_ui(egui::RawInput {
+                time: Some(f64::from(step) / 60.0),
+                ..Default::default()
+            }, |ctx| {
+                egui::Panel::top("header").exact_size(super::HEIGHT).show(ctx, |ui| {
+                    show_with_rects(ui, &state, &mut Vec::new());
+                });
+            });
+            output.textures_delta.clear();
+        }
+        assert!(!ctx.has_requested_repaint());
+        assert_eq!(ctx.data_mut(|data| data.get_temp::<super::DriftClock>(egui::Id::new("header_drift_clock"))).unwrap().connected_at, Some(0.0));
     }
 
     #[test]
