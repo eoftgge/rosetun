@@ -50,14 +50,20 @@ fn protection_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>, 
             |ui| {
                 if !lockdown {
                     ui.add(
-                        egui::Label::new(RichText::new(tr!("kill-switch-detail")).small().color(dim))
-                            .wrap(),
+                        egui::Label::new(
+                            RichText::new(tr!("kill-switch-detail")).small().color(dim),
+                        )
+                        .wrap(),
                     );
                     return;
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    ui.label(RichText::new(tr!("kill-switch-lockdown")).small().color(dim));
+                    ui.label(
+                        RichText::new(tr!("kill-switch-lockdown"))
+                            .small()
+                            .color(dim),
+                    );
                     ui.label(RichText::new(tr!("apply-separator")).small().color(dim));
                     if widgets::link(ui, &tr!("settings"), true).clicked() {
                         actions.push(Action::OpenSettingsSection(SettingsSection::Connection));
@@ -291,10 +297,8 @@ fn rule_row(ui: &mut egui::Ui, state: &State, rule: &Rule) -> (egui::Rect, egui:
                 |ui| {
                     ui.set_width(target_width);
                     ui.add(
-                        egui::Label::new(
-                            RichText::new(target).color(target_color(rule.target)),
-                        )
-                        .truncate(),
+                        egui::Label::new(RichText::new(target).color(target_color(rule.target)))
+                            .truncate(),
                     )
                     .rect
                 },
