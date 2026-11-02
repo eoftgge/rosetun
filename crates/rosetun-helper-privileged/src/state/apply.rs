@@ -7,8 +7,9 @@ use rosetun_engine::RenderRequest;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
-    Caller, Helper, NameLookup, RECONNECT_BACKOFF, Reconnect, StartMode, exits, node_with_endpoint,
-    SessionHolder, normalize_server, probe::resolve_for_apply, render_config, validate_request,
+    Caller, Helper, NameLookup, RECONNECT_BACKOFF, Reconnect, SessionHolder, StartMode, exits,
+    node_with_endpoint, normalize_server, probe::resolve_for_apply, render_config,
+    validate_request,
 };
 
 impl Helper {

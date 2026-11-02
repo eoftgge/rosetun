@@ -11,9 +11,7 @@ use rosetun_routing::{
     TunnelInterface,
 };
 
-use super::{
-    Acquired, Caller, Guard, Helper, SESSION_WAIT, Session, SessionHolder, StartMode,
-};
+use super::{Acquired, Caller, Guard, Helper, SESSION_WAIT, Session, SessionHolder, StartMode};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct LockdownState {

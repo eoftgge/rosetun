@@ -19,9 +19,8 @@ use rosetun_ipc::{
 use rosetun_routing::RoutingGuard;
 
 use super::{
-    Acquired, Caller, Helper, NameLookup, SESSION_WAIT, SessionHolder, lockdown, node_with_endpoint,
-    resolve_quiet, select_endpoint,
-    validate_tun_name, wait_for_engine_ready,
+    Acquired, Caller, Helper, NameLookup, SESSION_WAIT, SessionHolder, lockdown,
+    node_with_endpoint, resolve_quiet, select_endpoint, validate_tun_name, wait_for_engine_ready,
 };
 
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);

@@ -680,7 +680,8 @@ impl Helper {
     }
 
     pub fn supervise(&self, now: Instant) {
-        let Some(Acquired::Locked(mut session)) = self.try_session(SessionHolder::Supervisor) else {
+        let Some(Acquired::Locked(mut session)) = self.try_session(SessionHolder::Supervisor)
+        else {
             return;
         };
         if session.stopping {
