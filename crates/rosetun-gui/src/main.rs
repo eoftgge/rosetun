@@ -26,6 +26,7 @@ mod program_icons;
 mod programs;
 mod qr;
 mod reorder;
+mod renderer;
 #[cfg(windows)]
 mod report;
 mod rose_icon;
@@ -102,8 +103,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     // HTTP diagnostics can contain credentials regardless of the selected level.
-    let safe_targets =
-        filter_fn(|metadata| !rosetun_core::is_sensitive_log_target(metadata.target()));
+    let safe_targets = filter_fn(|metadata| {
+        !rosetun_core::is_sensitive_log_target(metadata.target())
+            // Graphics libraries include adapter names in info and warning messages.
+            && (!(metadata.target().starts_with("wgpu") || metadata.target().starts_with("egui_wgpu"))
+                || *metadata.level() >= tracing::Level::DEBUG)
+    });
     tracing_subscriber::registry()
         .with(env_filter)
         .with(
@@ -140,14 +145,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         viewport
     };
-    let options = eframe::NativeOptions {
+    renderer::run(
         viewport,
-        renderer: eframe::Renderer::Glow,
-        ..Default::default()
-    };
-    eframe::run_native(
-        constants::TITLE,
-        options,
         Box::new(move |cc| {
             let app = app::App::new(cc, store);
             #[cfg(windows)]
