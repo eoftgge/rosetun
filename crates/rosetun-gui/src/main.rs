@@ -25,8 +25,8 @@ mod notices;
 mod program_icons;
 mod programs;
 mod qr;
-mod reorder;
 mod renderer;
+mod reorder;
 #[cfg(windows)]
 mod report;
 mod rose_icon;
