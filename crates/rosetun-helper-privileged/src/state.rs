@@ -6,6 +6,7 @@ mod exits;
 mod lockdown;
 mod path;
 mod probe;
+mod session_lock;
 #[cfg(test)]
 mod tests;
 mod watchdog;
@@ -13,8 +14,8 @@ mod watchdog;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -39,6 +40,7 @@ use rosetun_routing::{
 use crate::list_store::{ListChunk, ListStore, valid_hash, valid_tag};
 use crate::log_gate::VerboseGate;
 use connections::{ConnectionBook, Translation};
+use session_lock::{Acquired, SESSION_POLL, SESSION_WAIT, SessionGuard, SessionHolder};
 use watchdog::{DnsWatchdog, WatchdogTiming};
 
 const TUNNEL_READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -155,6 +157,8 @@ pub struct Helper {
     status: Arc<Mutex<Status>>,
     connections: Arc<Mutex<ConnectionBook>>,
     session: Mutex<Session>,
+    /// Who took `session`, for the log line of a request that waited in vain.
+    session_holder: AtomicU8,
     owner: Arc<Mutex<Option<AccountIdentity>>>,
     last_owner: Mutex<Option<AccountIdentity>>,
     engines: Arc<EngineRegistry>,
@@ -338,6 +342,7 @@ impl Helper {
             shutting_down: AtomicBool::new(false),
             resumed: AtomicBool::new(false),
             cancelled: Arc::clone(&cancelled),
+            session_holder: AtomicU8::new(SessionHolder::Nobody as u8),
             session: Mutex::new(Session {
                 engines,
                 routing,
@@ -511,7 +516,7 @@ impl Helper {
 
     pub(crate) fn temporary_rules_as(&self, caller: &Caller) -> Result<Vec<Rule>, HelperError> {
         self.check_owner(caller)?;
-        let session = self.session()?;
+        let session = self.session_for(SessionHolder::Query)?;
         self.check_owner(caller)?;
         Ok(session
             .request
@@ -525,7 +530,7 @@ impl Helper {
         caller: &Caller,
     ) -> Result<Vec<SessionExit>, HelperError> {
         self.check_owner(caller)?;
-        let session = self.session()?;
+        let session = self.session_for(SessionHolder::Query)?;
         self.check_owner(caller)?;
         Ok(session
             .request
@@ -553,7 +558,7 @@ impl Helper {
         if !self.check_connections_owner(caller)? {
             return Ok((Vec::new(), Vec::new()));
         }
-        let session = self.session()?;
+        let session = self.session_for(SessionHolder::Query)?;
         if !self.check_connections_owner(caller)? || session.monitor.is_none() {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -579,7 +584,7 @@ impl Helper {
         if !self.check_connections_owner(caller)? {
             return Ok(());
         }
-        let session = self.session()?;
+        let session = self.session_for(SessionHolder::Query)?;
         if !self.check_connections_owner(caller)? {
             return Ok(());
         }
@@ -675,7 +680,7 @@ impl Helper {
     }
 
     pub fn supervise(&self, now: Instant) {
-        let Ok(mut session) = self.session.try_lock() else {
+        let Some(Acquired::Locked(mut session)) = self.try_session(SessionHolder::Supervisor) else {
             return;
         };
         if session.stopping {
@@ -1049,7 +1054,7 @@ impl Helper {
         request: &ConnectRequest,
     ) -> Result<(), HelperError> {
         self.check_owner(caller)?;
-        let mut session = self.session()?;
+        let mut session = self.session_for(SessionHolder::Connect)?;
         self.check_owner(caller)?;
         validate_request(request)?;
         self.require_protection(request)?;
@@ -1175,30 +1180,25 @@ impl Helper {
     }
 
     pub(crate) fn disconnect_as(&self, caller: &Caller) -> Result<(), HelperError> {
-        let (mut session, poisoned) = match self.session.try_lock() {
-            Ok(session) => (session, false),
-            Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),
-            Err(TryLockError::WouldBlock) => {
-                return self.with_status(|status| {
-                    let owner = self.owner.lock().map_err(|_| access_denied())?;
-                    if owner
-                        .as_ref()
-                        .is_some_and(|account| account != &caller.account && !caller.administrator)
-                        || (owner.is_none() && status.state.is_transitional())
-                    {
-                        return Err(access_denied());
-                    }
-                    if status.state.is_transitional() {
-                        self.cancelled.store(true, Ordering::Release);
-                        Ok(())
-                    } else {
-                        Err(HelperError::new(
-                            ErrorCode::Busy,
-                            "another tunnel operation is in progress",
-                        ))
-                    }
-                });
+        // Cancelling a connect in progress never waits. Anything else gets
+        // the same short wait for the session as every client request.
+        let deadline = Instant::now() + SESSION_WAIT;
+        let (mut session, poisoned) = loop {
+            match self.try_session(SessionHolder::Disconnect) {
+                Some(Acquired::Locked(session)) => break (session, false),
+                Some(Acquired::Poisoned(session)) => break (session, true),
+                None => {}
             }
+            if self.cancel_transitional(caller)? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(self.session_busy(
+                    SessionHolder::Disconnect,
+                    "another tunnel operation is in progress",
+                ));
+            }
+            thread::sleep(SESSION_POLL);
         };
         self.check_owner(caller)?;
         if session.stopping {
@@ -1226,10 +1226,13 @@ impl Helper {
         self.shutting_down.store(true, Ordering::Release);
         self.cancelled.store(true, Ordering::Release);
         tracing::info!("starting helper session teardown");
-        let mut session = self
-            .session
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut session = SessionGuard::new(
+            self.session
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            &self.session_holder,
+            SessionHolder::Teardown,
+        );
         session.stopping = true;
         session.request = None;
         session.reconnect = None;
@@ -1244,29 +1247,27 @@ impl Helper {
         tracing::info!("helper session teardown completed");
     }
 
-    fn session(&self) -> Result<MutexGuard<'_, Session>, HelperError> {
-        let session = match self.session.try_lock() {
-            Ok(session) => session,
-            Err(TryLockError::WouldBlock) => {
-                return Err(HelperError::new(
-                    ErrorCode::Busy,
-                    "another tunnel operation is in progress",
-                ));
+    /// For a disconnect that finds the session busy: checks the caller's
+    /// right to cancel and, when a connect or reconnect is in progress, sets
+    /// the cancel flag and says so (`true`). Nothing else is touched, so the
+    /// caller may go on waiting.
+    fn cancel_transitional(&self, caller: &Caller) -> Result<bool, HelperError> {
+        self.with_status(|status| {
+            let owner = self.owner.lock().map_err(|_| access_denied())?;
+            if owner
+                .as_ref()
+                .is_some_and(|account| account != &caller.account && !caller.administrator)
+                || (owner.is_none() && status.state.is_transitional())
+            {
+                return Err(access_denied());
             }
-            Err(TryLockError::Poisoned(_)) => {
-                return Err(HelperError::new(
-                    ErrorCode::Internal,
-                    "helper state poisoned by an earlier panic",
-                ));
+            if status.state.is_transitional() {
+                self.cancelled.store(true, Ordering::Release);
+                Ok(true)
+            } else {
+                Ok(false)
             }
-        };
-        if session.stopping {
-            return Err(HelperError::new(
-                ErrorCode::InvalidState,
-                "helper is shutting down",
-            ));
-        }
-        Ok(session)
+        })
     }
 
     fn with_status<T>(&self, apply: impl FnOnce(&mut Status) -> T) -> T {

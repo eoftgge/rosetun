@@ -11,7 +11,9 @@ use rosetun_routing::{
     TunnelInterface,
 };
 
-use super::{Caller, Guard, Helper, Session, StartMode};
+use super::{
+    Acquired, Caller, Guard, Helper, SESSION_WAIT, Session, SessionHolder, StartMode,
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct LockdownState {
@@ -105,7 +107,7 @@ impl Helper {
                 "only an administrator can change Lockdown",
             ));
         }
-        let mut session = self.session()?;
+        let mut session = self.session_for(SessionHolder::Lockdown)?;
         if self.with_status(|status| status.state.is_transitional()) {
             return Err(HelperError::new(
                 ErrorCode::Busy,
@@ -185,15 +187,15 @@ impl Helper {
         &self,
         engine: &Path,
     ) -> Result<Option<Arc<Mutex<RoutingGuard>>>, HelperError> {
-        let mut session = match self.session.try_lock() {
-            Ok(session) => session,
-            Err(TryLockError::WouldBlock) => {
-                return Err(HelperError::new(
-                    ErrorCode::Busy,
+        let mut session = match self.acquire_session(SessionHolder::Probe, SESSION_WAIT) {
+            Some(Acquired::Locked(session)) => session,
+            None => {
+                return Err(self.session_busy(
+                    SessionHolder::Probe,
                     "tunnel changes are in progress during server checks",
                 ));
             }
-            Err(TryLockError::Poisoned(_)) => {
+            Some(Acquired::Poisoned(_)) => {
                 return Err(HelperError::new(
                     ErrorCode::Internal,
                     "helper state is unavailable during server checks",
@@ -511,7 +513,7 @@ mod tests {
 
     use super::protection_scope;
     use crate::log_gate::VerboseGate;
-    use crate::state::{Caller, Guard, Helper, StartMode};
+    use crate::state::{Caller, Guard, Helper, SessionHolder, StartMode};
 
     #[test]
     fn lockdown_forces_the_all_traffic_policy() {
@@ -718,6 +720,38 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::Busy);
         assert!(calls.enabled.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_server_check_waits_for_the_session_before_asking_for_a_permit() {
+        let calls = Arc::new(Calls::default());
+        let helper = Arc::new(lockdown_helper(&calls));
+        let worker = {
+            let helper = Arc::clone(&helper);
+            let (held_tx, held_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let _session = helper
+                    .try_session(SessionHolder::Supervisor)
+                    .expect("session is free");
+                held_tx.send(()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            });
+            held_rx.recv().unwrap();
+            worker
+        };
+
+        let permit = helper.lockdown_probe_routing(Path::new("engine.exe"));
+
+        assert!(matches!(permit, Ok(None)), "Lockdown is off, no permit");
+        worker.join().unwrap();
+
+        let _held = helper
+            .try_session(SessionHolder::Connect)
+            .expect("session is free");
+        let error = helper
+            .lockdown_probe_routing(Path::new("engine.exe"))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Busy);
     }
 
     #[test]

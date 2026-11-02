@@ -19,7 +19,8 @@ use rosetun_ipc::{
 use rosetun_routing::RoutingGuard;
 
 use super::{
-    Caller, Helper, NameLookup, lockdown, node_with_endpoint, resolve_quiet, select_endpoint,
+    Acquired, Caller, Helper, NameLookup, SESSION_WAIT, SessionHolder, lockdown, node_with_endpoint,
+    resolve_quiet, select_endpoint,
     validate_tun_name, wait_for_engine_ready,
 };
 
@@ -369,18 +370,18 @@ impl Helper {
                 .collect::<Vec<_>>();
             let routing = match &lockdown_routing {
                 Some(routing) => Some(Arc::clone(routing)),
-                None => match self.session.try_lock() {
-                    Ok(session) => session
+                None => match self.acquire_session(SessionHolder::Probe, SESSION_WAIT) {
+                    Some(Acquired::Locked(session)) => session
                         .guard
                         .as_ref()
                         .map(|guard| Arc::clone(&guard.routing)),
-                    Err(TryLockError::WouldBlock) => {
-                        return Err(HelperError::new(
-                            ErrorCode::Busy,
+                    None => {
+                        return Err(self.session_busy(
+                            SessionHolder::Probe,
                             "tunnel changes are in progress during server checks",
                         ));
                     }
-                    Err(TryLockError::Poisoned(_)) => {
+                    Some(Acquired::Poisoned(_)) => {
                         return Err(HelperError::new(
                             ErrorCode::Internal,
                             "helper state is unavailable during server checks",
@@ -470,7 +471,7 @@ impl Helper {
 
     pub(crate) fn tunnel_delay_as(&self, caller: &Caller) -> Result<TunnelDelays, HelperError> {
         self.check_owner(caller)?;
-        let session = self.session()?;
+        let session = self.session_for(SessionHolder::Probe)?;
         self.check_owner(caller)?;
         let (state, engine) = self.with_status(|status| (status.state.clone(), status.engine));
         if !matches!(state, ConnectionState::Connected) {

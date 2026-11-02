@@ -7140,3 +7140,242 @@ fn an_apply_that_turns_the_kill_switch_on_is_refused_and_leaves_the_session_alon
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(helper.session().unwrap().request.as_ref(), Some(&request));
 }
+
+/// Collects what `tracing` writes, for a test that reads the log.
+#[derive(Clone, Default)]
+struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for LogBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl LogBuffer {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+/// The debug log of the whole test process. A global subscriber, because a
+/// per-thread one loses lines when parallel tests hit the same call site
+/// first and tracing caches that no subscriber is interested. Lines of other
+/// tests land here too, so a test looks for its own line.
+fn debug_log() -> &'static LogBuffer {
+    static LOG: std::sync::OnceLock<LogBuffer> = std::sync::OnceLock::new();
+    LOG.get_or_init(|| {
+        let buffer = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .with_writer({
+                let buffer = buffer.clone();
+                move || buffer.clone()
+            })
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("no other test installs a global subscriber");
+        buffer
+    })
+}
+
+/// Takes the session on another thread, holds it for `hold`, and returns once
+/// it is held.
+fn hold_session_elsewhere(
+    helper: &Arc<Helper>,
+    holder: SessionHolder,
+    hold: Duration,
+) -> std::thread::JoinHandle<()> {
+    let (held_tx, held_rx) = channel();
+    let helper = Arc::clone(helper);
+    let worker = std::thread::spawn(move || {
+        let _session = helper.try_session(holder).expect("session is free");
+        held_tx.send(()).expect("test waits for the hold");
+        std::thread::sleep(hold);
+    });
+    held_rx.recv().expect("session is held");
+    worker
+}
+
+fn connected_helper_with_a_metadata_change() -> (Arc<Helper>, ConnectRequest) {
+    let (helper, _, _, _) = supervised_helper(true);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let mut changed = request;
+    changed.settings.autostart = !changed.settings.autostart;
+    (Arc::new(helper), changed)
+}
+
+#[test]
+fn an_apply_waits_for_a_session_another_thread_holds_briefly() {
+    let (helper, changed) = connected_helper_with_a_metadata_change();
+    let worker = hold_session_elsewhere(
+        &helper,
+        SessionHolder::Supervisor,
+        Duration::from_millis(100),
+    );
+
+    let started = Instant::now();
+    helper.apply(&changed).expect("apply waits and passes");
+
+    assert!(started.elapsed() >= Duration::from_millis(50));
+    worker.join().expect("holder thread");
+    assert_eq!(helper.session().unwrap().request.as_ref(), Some(&changed));
+}
+
+#[test]
+fn an_apply_gets_busy_after_the_wait_and_the_log_names_the_holder() {
+    let (helper, changed) = connected_helper_with_a_metadata_change();
+    let held = helper
+        .try_session(SessionHolder::Connect)
+        .expect("session is free");
+
+    let log = debug_log();
+    let started = Instant::now();
+    let error = helper.apply(&changed).expect_err("session is held");
+    let waited = started.elapsed();
+
+    assert_eq!(error.code, ErrorCode::Busy);
+    assert!(waited >= SESSION_WAIT, "answered after {waited:?}");
+    assert!(waited < SESSION_WAIT * 6, "answered after {waited:?}");
+    let text = log.text();
+    assert!(
+        text.lines().any(|line| line.contains("session busy")
+            && line.contains("requested=\"apply\"")
+            && line.contains("held_by=\"connect\"")),
+        "{text}"
+    );
+    drop(held);
+    assert_eq!(helper.session_holder(), SessionHolder::Nobody);
+}
+
+#[test]
+fn status_answers_at_once_while_an_apply_waits_for_the_session() {
+    let (helper, changed) = connected_helper_with_a_metadata_change();
+    let held = helper
+        .try_session(SessionHolder::Supervisor)
+        .expect("session is free");
+    let waiting = {
+        let helper = Arc::clone(&helper);
+        std::thread::spawn(move || helper.apply(&changed))
+    };
+    std::thread::sleep(Duration::from_millis(50));
+
+    let started = Instant::now();
+    let status = helper.status();
+
+    assert!(started.elapsed() < SESSION_WAIT / 5);
+    assert!(matches!(status.state, ConnectionState::Connected));
+    assert!(!waiting.is_finished(), "the apply is still waiting");
+    drop(held);
+    waiting
+        .join()
+        .expect("apply thread")
+        .expect("apply passes once the session is free");
+}
+
+#[test]
+fn the_holder_mark_follows_the_guard() {
+    let (helper, _, _, _) = supervised_helper(false);
+    assert_eq!(helper.session_holder(), SessionHolder::Nobody);
+    let held = helper
+        .try_session(SessionHolder::Probe)
+        .expect("session is free");
+    assert_eq!(helper.session_holder(), SessionHolder::Probe);
+    drop(held);
+    assert_eq!(helper.session_holder(), SessionHolder::Nobody);
+    // A request that fails after taking the session leaves no mark either.
+    let _ = helper.apply(&connect_request());
+    assert_eq!(helper.session_holder(), SessionHolder::Nobody);
+}
+
+#[test]
+fn a_disconnect_during_a_connect_sets_the_cancel_flag_without_waiting() {
+    let (entered, entered_rx) = channel();
+    let (release_tx, release) = channel();
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(StubEngine));
+    let helper = Arc::new(Helper::new(
+        engines,
+        Box::new(BlockingRouting {
+            entered,
+            release,
+            received_plan: Arc::new(Mutex::new(None)),
+        }),
+        VerboseGate::default(),
+    ));
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    let worker = {
+        let helper = Arc::clone(&helper);
+        std::thread::spawn(move || helper.connect(&request))
+    };
+    entered_rx.recv().expect("connect reached routing apply");
+
+    let started = Instant::now();
+    helper
+        .disconnect()
+        .expect("disconnect accepts cancellation");
+
+    assert!(started.elapsed() < SESSION_WAIT / 5);
+    assert!(helper.cancelled.load(Ordering::Acquire));
+    release_tx.send(()).expect("release apply");
+    assert_eq!(
+        worker.join().expect("worker thread").unwrap_err().code,
+        ErrorCode::Cancelled
+    );
+}
+
+#[test]
+fn a_disconnect_waits_for_a_session_held_while_nothing_is_changing() {
+    let (helper, _, _, _) = supervised_helper(false);
+    let helper = Arc::new(helper);
+    let worker = hold_session_elsewhere(
+        &helper,
+        SessionHolder::Supervisor,
+        Duration::from_millis(100),
+    );
+
+    let started = Instant::now();
+    helper.disconnect().expect("disconnect waits and passes");
+
+    assert!(started.elapsed() >= Duration::from_millis(50));
+    worker.join().expect("holder thread");
+}
+
+#[test]
+fn a_disconnect_gets_busy_when_the_session_stays_held_and_nothing_is_changing() {
+    let (helper, _, _, _) = supervised_helper(false);
+    let held = helper
+        .try_session(SessionHolder::Supervisor)
+        .expect("session is free");
+
+    let started = Instant::now();
+    let error = helper.disconnect().expect_err("session is held");
+
+    assert_eq!(error.code, ErrorCode::Busy);
+    assert!(started.elapsed() >= SESSION_WAIT);
+    drop(held);
+}
+
+#[test]
+fn the_supervisor_does_not_wait_for_a_busy_session() {
+    let (helper, _, _, _) = supervised_helper(true);
+    let helper = Arc::new(helper);
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    helper.connect(&request).expect("connect");
+    let worker = hold_session_elsewhere(&helper, SessionHolder::Apply, Duration::from_millis(300));
+
+    let started = Instant::now();
+    helper.supervise(Instant::now());
+
+    assert!(started.elapsed() < SESSION_WAIT / 5);
+    worker.join().expect("holder thread");
+}

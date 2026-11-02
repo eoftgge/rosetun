@@ -8,7 +8,7 @@ use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
 use super::{
     Caller, Helper, NameLookup, RECONNECT_BACKOFF, Reconnect, StartMode, exits, node_with_endpoint,
-    normalize_server, probe::resolve_for_apply, render_config, validate_request,
+    SessionHolder, normalize_server, probe::resolve_for_apply, render_config, validate_request,
 };
 
 impl Helper {
@@ -18,7 +18,7 @@ impl Helper {
         request: &ConnectRequest,
     ) -> Result<(), HelperError> {
         self.check_owner(caller)?;
-        let mut session = self.session()?;
+        let mut session = self.session_for(SessionHolder::Apply)?;
         self.check_owner(caller)?;
         validate_request(request)?;
         self.require_protection(request)?;
