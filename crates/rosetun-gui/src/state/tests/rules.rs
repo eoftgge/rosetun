@@ -654,10 +654,14 @@ fn editing_a_path_rule_keeps_the_path_and_rejects_templates() {
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.editing.as_ref(), Some(&id));
     assert_eq!(dialog.kind, RuleInputKind::Process);
-    assert_eq!(dialog.process_filter, "Tool.exe");
+    assert!(dialog.process_filter.is_empty(), "the list is not narrowed");
     assert_eq!(dialog.process, path);
     assert_eq!(dialog.match_mode, ProcessMatchMode::Path);
     assert!(dialog.selected_process.is_none());
+    assert_eq!(
+        dialog.chosen_program(),
+        Some(("Tool.exe".to_owned(), Some(PathBuf::from(path))))
+    );
     assert!(state.act(Action::SubmitAddRule).is_none());
     assert!(state.rules.screen.add.is_none());
 }
@@ -983,4 +987,260 @@ fn editing_an_exit_rule_keeps_its_exit() {
         state.act(Action::SubmitAddRule),
         Some(Job::UpdateRule(_, rule, _, RuleDestination::Exit(kept))) if rule == id && kept == exit
     ));
+}
+
+fn running(name: &str, path: &str, has_window: bool) -> RunningProcess {
+    RunningProcess {
+        pid: 100,
+        name: name.into(),
+        path: Some(path.into()),
+        has_window,
+    }
+}
+
+#[test]
+fn the_program_kind_reads_the_list_again_once_it_is_stale() {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    let Some(Job::LoadProcesses(request)) = state.act(Action::OpenAddRule) else {
+        panic!("a new rule loads the program list");
+    };
+    state.set_frame_time(1_000);
+    state.reduce(WorkerEvent::Processes {
+        request,
+        result: Ok(Vec::new()),
+    });
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
+    state.set_frame_time(1_000 + PROCESS_LIST_STALE_MS - 1);
+    assert!(
+        state
+            .act(Action::SelectRuleInput(RuleInputKind::Process))
+            .is_none()
+    );
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
+    state.set_frame_time(1_000 + PROCESS_LIST_STALE_MS);
+    assert!(matches!(
+        state.act(Action::SelectRuleInput(RuleInputKind::Process)),
+        Some(Job::LoadProcesses(_))
+    ));
+}
+
+#[test]
+fn a_program_given_by_name_or_path_is_found_in_the_list_once_it_loads() {
+    #[cfg(windows)]
+    let (path, other) = (r"C:\Apps\Tool.exe", r"C:\Other\Tool.exe");
+    #[cfg(not(windows))]
+    let (path, other) = ("/opt/apps/Tool.exe", "/opt/other/Tool.exe");
+    for (matcher, expected) in [
+        (ProcessMatch::Name("tool.exe".into()), Some(0)),
+        (ProcessMatch::Path(PathBuf::from(other)), Some(1)),
+        (ProcessMatch::Name("Missing.exe".into()), None),
+    ] {
+        let mut state = state_with_rules();
+        let Some(Job::LoadProcesses(request)) =
+            state.act(Action::OpenAddRuleFor(RuleMatcher::Process(matcher.clone())))
+        else {
+            panic!("a program rule loads the program list");
+        };
+        state.reduce(WorkerEvent::Processes {
+            request,
+            result: Ok(vec![
+                running("Tool.exe", path, true),
+                running("Tool.exe", other, false),
+            ]),
+        });
+        let dialog = state.rules.screen.add.as_ref().unwrap();
+        assert_eq!(dialog.selected_process, expected, "{matcher:?}");
+        assert_eq!(
+            dialog.match_mode,
+            if matches!(matcher, ProcessMatch::Path(_)) {
+                ProcessMatchMode::Path
+            } else {
+                ProcessMatchMode::Name
+            }
+        );
+        assert!(dialog.chosen_program().is_some());
+    }
+}
+
+#[test]
+fn any_folder_or_only_this_folder_makes_a_name_or_a_path_rule() {
+    #[cfg(windows)]
+    let path = r"C:\Apps\Tool.exe";
+    #[cfg(not(windows))]
+    let path = "/opt/apps/Tool.exe";
+    for (mode, expected) in [
+        (
+            ProcessMatchMode::Name,
+            ProcessMatch::Name("Tool.exe".into()),
+        ),
+        (
+            ProcessMatchMode::Path,
+            ProcessMatch::Path(PathBuf::from(path)),
+        ),
+    ] {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        let Some(Job::LoadProcesses(request)) = state.act(Action::OpenAddRule) else {
+            panic!("a new rule loads the program list");
+        };
+        state.reduce(WorkerEvent::Processes {
+            request,
+            result: Ok(vec![running("Tool.exe", path, true)]),
+        });
+        let dialog = state.rules.screen.add.as_mut().unwrap();
+        dialog.selected_process = Some(0);
+        dialog.process = "Tool.exe".into();
+        dialog.set_process_match_mode(mode);
+        assert!(matches!(
+            state.act(Action::SubmitAddRule),
+            Some(Job::AddRule(_, RuleMatcher::Process(process), _)) if process == expected
+        ));
+    }
+}
+
+#[test]
+fn clearing_the_chosen_program_keeps_the_search() {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    state.act(Action::OpenAddRuleFor(RuleMatcher::Process(ProcessMatch::Name(
+        "Tool.exe".into(),
+    ))));
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.process_filter = "to".into();
+    dialog.clear_process();
+    assert!(dialog.chosen_program().is_none());
+    assert_eq!(dialog.process_filter, "to");
+    assert!(state.act(Action::SubmitAddRule).is_none());
+}
+
+#[test]
+fn the_address_kind_adds_domain_rules_and_ip_rules_from_one_field() {
+    for (subdomains, domains) in [
+        (
+            true,
+            [
+                DomainMatch::Suffix("youtube.com".into()),
+                DomainMatch::Suffix("example.com".into()),
+            ],
+        ),
+        (
+            false,
+            [
+                DomainMatch::Exact("youtube.com".into()),
+                DomainMatch::Exact("www.example.com".into()),
+            ],
+        ),
+    ] {
+        let mut state = state_with_rules();
+        state.act(Action::OpenRules);
+        state.act(Action::OpenAddRule);
+        state.act(Action::SelectRuleInput(RuleInputKind::Address));
+        let dialog = state.rules.screen.add.as_mut().unwrap();
+        dialog.subdomains = subdomains;
+        dialog.add_addresses(
+            "youtube.com, 192.0.2.1\n198.51.100.0/24; 2001:db8::1 https://www.example.com/path",
+        );
+        assert_eq!(dialog.addresses.len(), 5);
+        let count = dialog.address_rule_count();
+        let Some(Job::AddRules(_, matchers, RuleDestination::Proxy)) =
+            state.act(Action::SubmitAddRule)
+        else {
+            panic!("the field adds its rules in one job");
+        };
+        assert_eq!(
+            matchers,
+            [
+                RuleMatcher::Domain(domains[0].clone()),
+                RuleMatcher::IpCidr("192.0.2.1/32".into()),
+                RuleMatcher::IpCidr("198.51.100.0/24".into()),
+                RuleMatcher::IpCidr("2001:db8::1/128".into()),
+                RuleMatcher::Domain(domains[1].clone()),
+            ]
+        );
+        assert_eq!(matchers.len(), count, "the button counted these rules");
+    }
+}
+
+#[test]
+fn a_bad_or_repeated_address_never_reaches_the_rules() {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    state.act(Action::OpenAddRule);
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.add_addresses("example.com bad..domain example.com");
+    assert_eq!(dialog.addresses.len(), 2);
+    assert!(state.act(Action::SubmitAddRule).is_none());
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.remove_last_address();
+    dialog.address_input = "192.0.2.1".into();
+    assert!(matches!(
+        state.act(Action::SubmitAddRule),
+        Some(Job::AddRules(_, matchers, _)) if matchers == [
+            RuleMatcher::Domain(DomainMatch::Suffix("example.com".into())),
+            RuleMatcher::IpCidr("192.0.2.1/32".into()),
+        ]
+    ));
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    assert!(dialog.address_input.is_empty(), "the typed item became a chip");
+    assert_eq!(dialog.addresses.len(), 2);
+}
+
+#[test]
+fn the_address_field_takes_no_more_than_its_limit() {
+    let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+    dialog.kind = RuleInputKind::Address;
+    let items: Vec<_> = (0..=MAX_ADDRESSES)
+        .map(|index| format!("site{index}.example"))
+        .collect();
+    dialog.add_addresses(&items.join(" "));
+    assert_eq!(dialog.addresses.len(), MAX_ADDRESSES);
+    assert!(dialog.too_many_addresses());
+    assert!(dialog.address_rules().is_none());
+    dialog.remove_address(0);
+    assert!(!dialog.too_many_addresses());
+    assert_eq!(dialog.address_rules().map(|rules| rules.len()), Some(MAX_ADDRESSES - 1));
+}
+
+#[test]
+fn editing_a_domain_or_an_ip_rule_shows_one_chip_and_takes_one() {
+    for matcher in [
+        RuleMatcher::Domain(DomainMatch::Exact("example.com".into())),
+        RuleMatcher::IpCidr("192.0.2.0/24".into()),
+    ] {
+        let mut state = state_with_rules();
+        let id = state.config.rule_sets[1].rules[0].id.clone();
+        state.config.rule_sets[1].rules[0].matcher = matcher.clone();
+        state.act(Action::OpenRules);
+        state.act(Action::OpenEditRule(id.clone()));
+        let dialog = state.rules.screen.add.as_mut().unwrap();
+        assert_eq!(dialog.kind, RuleInputKind::Address);
+        assert_eq!(dialog.addresses.len(), 1);
+        dialog.add_addresses("example.org");
+        assert_eq!(dialog.addresses.len(), 1, "{matcher:?}: an edit takes one item");
+        dialog.remove_last_address();
+        dialog.add_addresses("203.0.113.1 example.org");
+        assert!(matches!(
+            state.act(Action::SubmitAddRule),
+            Some(Job::UpdateRule(_, rule, RuleMatcher::IpCidr(cidr), _))
+                if rule == id && cidr == "203.0.113.1/32"
+        ));
+    }
+}
+
+#[test]
+fn a_keyword_rule_does_not_open_the_dialog() {
+    let mut state = state_with_rules();
+    let id = state.config.rule_sets[1].rules[0].id.clone();
+    state.config.rule_sets[1].rules[0].matcher =
+        RuleMatcher::Domain(DomainMatch::Keyword("example".into()));
+    state.act(Action::OpenRules);
+    assert!(state.act(Action::OpenEditRule(id)).is_none());
+    assert!(state.rules.screen.add.is_none());
+    assert!(
+        AddRuleDialog::new(RuleSetId::new("set"))
+            .with_matcher(&RuleMatcher::Domain(DomainMatch::Keyword("example".into())))
+            .is_none()
+    );
 }

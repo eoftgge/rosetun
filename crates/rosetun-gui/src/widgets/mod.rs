@@ -23,7 +23,7 @@ pub(crate) use buttons::{
     outline_button_full, outline_button_menu,
 };
 pub(crate) use checkbox::checkbox;
-pub(crate) use chips_field::{Chip, ChipsEvent, ChipsField};
+pub(crate) use chips_field::{CROSS_BUTTON, Chip, ChipsEvent, ChipsField, cross_button};
 #[cfg(test)]
 pub(crate) use chips_field::chips_input_id;
 pub(crate) use choice_card::choice_card;

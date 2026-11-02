@@ -1,5 +1,4 @@
-#[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rosetun_config::{DomainMatch, ListId, ProcessMatch, Rule, RuleId, RuleMatcher, RuleSetId};
 use rosetun_core::RuleDestination;
@@ -23,6 +22,8 @@ pub(crate) enum RuleInputKind {
 }
 
 pub(crate) const MAX_LIST_RULES: usize = 256;
+/// The program list is read again when the program kind is shown after this long.
+pub(crate) const PROCESS_LIST_STALE_MS: u64 = 30_000;
 
 pub(crate) struct AddRuleDialog {
     pub(crate) set: RuleSetId,
@@ -41,7 +42,6 @@ pub(crate) struct AddRuleDialog {
     pub(crate) selected_categories: Vec<String>,
     pub(crate) category_filter: String,
     pub(crate) subdomains: bool,
-    pub(crate) show_all: bool,
     pub(crate) temporary_only: bool,
     pub(crate) editing: Option<RuleId>,
     original_domain: Option<DomainMatch>,
@@ -56,6 +56,8 @@ pub(crate) struct AddRuleDialog {
     pub(crate) browsed: Option<PathBuf>,
     pub(crate) load_request: Option<u64>,
     pub(crate) processes_loaded: bool,
+    /// When the list was read, in `State::frame_time`.
+    pub(crate) processes_loaded_ms: Option<u64>,
     pub(crate) processes_error: Option<String>,
     pub(crate) busy: bool,
     pub(crate) error: Option<String>,
@@ -77,7 +79,6 @@ impl AddRuleDialog {
             selected_categories: Vec::new(),
             category_filter: String::new(),
             subdomains: true,
-            show_all: false,
             temporary_only: false,
             editing: None,
             original_domain: None,
@@ -92,6 +93,7 @@ impl AddRuleDialog {
             browsed: None,
             load_request: None,
             processes_loaded: false,
+            processes_loaded_ms: None,
             processes_error: None,
             busy: false,
             error: None,
@@ -133,19 +135,14 @@ impl AddRuleDialog {
             }
             RuleMatcher::Process(process) => {
                 dialog.process = rosetun_core::rule_value_text(matcher);
-                match process {
-                    ProcessMatch::Name(name) => dialog.process_filter = name.clone(),
-                    ProcessMatch::Path(path) => {
-                        dialog.match_mode = ProcessMatchMode::Path;
-                        dialog.process_filter = path
-                            .file_name()
-                            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
-                            .into_owned();
-                        #[cfg(windows)]
-                        {
-                            dialog.browsed = Some(path.clone());
-                        }
+                if let ProcessMatch::Path(path) = process {
+                    dialog.match_mode = ProcessMatchMode::Path;
+                    #[cfg(windows)]
+                    {
+                        dialog.browsed = Some(path.clone());
                     }
+                    #[cfg(not(windows))]
+                    let _ = path;
                 }
             }
             _ => return None,
@@ -342,6 +339,57 @@ impl AddRuleDialog {
                 > MAX_LIST_RULES
     }
 
+    /// The chosen program's name and, when it is known, its path: from the list, the file
+    /// chosen, or the rule's own path.
+    pub(crate) fn chosen_program(&self) -> Option<(String, Option<PathBuf>)> {
+        let chosen = rosetun_core::parse_process_input(&self.process).ok()?;
+        let group = self
+            .selected_process
+            .and_then(|index| self.processes.get(index));
+        #[cfg(windows)]
+        let browsed = self.browsed.clone();
+        #[cfg(not(windows))]
+        let browsed = None;
+        let (name, path) = match chosen {
+            ProcessMatch::Name(name) => (name, None),
+            ProcessMatch::Path(path) => (file_name(&path), Some(path)),
+        };
+        let name = group.map_or(name, |group| group.name.clone());
+        let path = group
+            .and_then(|group| group.path.clone())
+            .or(browsed)
+            .or(path);
+        Some((name, path))
+    }
+
+    /// Clears the chosen program, keeping the search.
+    pub(crate) fn clear_process(&mut self) {
+        self.process.clear();
+        self.selected_process = None;
+        #[cfg(windows)]
+        {
+            self.browsed = None;
+        }
+        self.error = None;
+        self.focus_input = true;
+    }
+
+    /// Points the selection at the listed program the dialog was opened for, so its icon
+    /// shows and its path can be chosen.
+    fn select_listed_process(&mut self) {
+        let Ok(chosen) = rosetun_core::parse_process_input(&self.process) else {
+            return;
+        };
+        self.selected_process = self.processes.iter().position(|group| match &chosen {
+            ProcessMatch::Name(name) => group.name.eq_ignore_ascii_case(name),
+            ProcessMatch::Path(path) => group.path.as_deref().is_some_and(|listed| {
+                listed
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&path.to_string_lossy())
+            }),
+        });
+    }
+
     pub(crate) fn set_process_match_mode(&mut self, mode: ProcessMatchMode) {
         self.match_mode = mode;
         if let Some(group) = self
@@ -377,13 +425,16 @@ impl AddRuleDialog {
     }
 }
 
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
+        .into_owned()
+}
+
 #[cfg(windows)]
-fn browsed_process_value(path: &std::path::Path, mode: ProcessMatchMode) -> String {
+fn browsed_process_value(path: &Path, mode: ProcessMatchMode) -> String {
     match mode {
-        ProcessMatchMode::Name => path
-            .file_name()
-            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
-            .into_owned(),
+        ProcessMatchMode::Name => file_name(path),
         ProcessMatchMode::Path => path.to_string_lossy().into_owned(),
     }
 }
@@ -426,6 +477,7 @@ impl State {
     }
 
     pub(super) fn reduce_rule_dialog(&mut self, event: WorkerEvent) {
+        let now = self.frame_time();
         match event {
             WorkerEvent::Processes { request, result } => {
                 let message = result
@@ -440,8 +492,9 @@ impl State {
                         Ok(processes) => {
                             dialog.processes = group_processes(processes);
                             dialog.processes_loaded = true;
-                            dialog.selected_process = None;
+                            dialog.processes_loaded_ms = Some(now);
                             dialog.processes_error = None;
+                            dialog.select_listed_process();
                         }
                         Err(_) => dialog.processes_error = message,
                     }
@@ -458,10 +511,6 @@ impl State {
                         && let Some(path) = path
                     {
                         dialog.process = browsed_process_value(&path, dialog.match_mode);
-                        dialog.process_filter = path
-                            .file_name()
-                            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
-                            .into_owned();
                         dialog.browsed = Some(path);
                         dialog.selected_process = None;
                         dialog.error = None;
@@ -524,6 +573,7 @@ impl State {
                 }
             }
             Action::SelectRuleInput(kind) => {
+                let now = self.frame_time();
                 if let Some(dialog) = &mut self.rules.screen.add
                     && !dialog.busy
                     && dialog.kind != kind
@@ -532,7 +582,10 @@ impl State {
                     dialog.kind = kind;
                     dialog.error = None;
                     dialog.focus_input = true;
-                    if kind == RuleInputKind::Process && !dialog.processes_loaded {
+                    let stale = dialog.processes_loaded_ms.is_none_or(|loaded| {
+                        now.saturating_sub(loaded) >= PROCESS_LIST_STALE_MS
+                    });
+                    if kind == RuleInputKind::Process && (!dialog.processes_loaded || stale) {
                         return self.load_processes();
                     }
                 }

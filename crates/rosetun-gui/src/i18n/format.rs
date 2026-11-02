@@ -96,14 +96,6 @@ pub(crate) fn connected_in(code: &str) -> String {
     tr!("connected-in-template", code = code)
 }
 
-pub(crate) fn all_processes(count: usize) -> String {
-    tr!("all-processes", n = count.to_string())
-}
-
-pub(crate) fn found(count: usize) -> String {
-    tr!("found", n = count.to_string())
-}
-
 pub(crate) fn item_error(item: &str, error: &str) -> String {
     format!("{item}: {error}")
 }

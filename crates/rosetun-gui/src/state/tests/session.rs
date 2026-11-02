@@ -336,6 +336,39 @@ fn adding_temporary_rule_applies_immediately_without_saving() {
 }
 
 #[test]
+fn temporary_applies_to_programs_and_to_every_address_of_the_field() {
+    let mut state = connected_state_for_apply();
+    temporary_dialog(&mut state, "session.example 192.0.2.1");
+    let Some(Job::Apply(request)) = state.act(Action::SubmitAddRule) else {
+        panic!("temporary addresses apply at once");
+    };
+    let matchers: Vec<_> = request
+        .temporary_rules
+        .iter()
+        .map(|rule| rule.matcher.clone())
+        .collect();
+    assert_eq!(
+        matchers,
+        [
+            RuleMatcher::Domain(DomainMatch::Exact("session.example".into())),
+            RuleMatcher::IpCidr("192.0.2.1/32".into()),
+        ]
+    );
+    state.reduce(WorkerEvent::Apply(Ok(*request)));
+
+    temporary_dialog(&mut state, "");
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.kind = RuleInputKind::Process;
+    dialog.process = "Tool.exe".into();
+    let Some(Job::Apply(request)) = state.act(Action::SubmitAddRule) else {
+        panic!("a temporary program rule applies at once");
+    };
+    assert!(request.temporary_rules.iter().any(|rule| rule.matcher
+        == RuleMatcher::Process(ProcessMatch::Name("Tool.exe".into()))));
+    assert_eq!(state.config.rule_sets, connected_state_for_apply().config.rule_sets);
+}
+
+#[test]
 fn temporary_rule_guards_and_duplicate_dialog_error() {
     let mut state = connected_state_for_apply();
     temporary_dialog(&mut state, "first.example");

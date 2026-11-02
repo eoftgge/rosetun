@@ -16,7 +16,9 @@ const CHIP_GAP: f32 = theme::space::XS;
 /// Inside a chip, at its ends and between its parts.
 const CHIP_PADDING: f32 = theme::space::S;
 const CHIP_ICON: f32 = 14.0;
-const CHIP_CLOSE: f32 = 14.0;
+const CHIP_CLOSE: f32 = CROSS_BUTTON;
+/// The side of a cross that removes something.
+pub(crate) const CROSS_BUTTON: f32 = 14.0;
 /// The half-length of the arms of a chip's cross.
 const CLOSE_ARM: f32 = 3.5;
 /// The space at the field's edges.
@@ -324,39 +326,50 @@ fn paint_chip(
         ui.interact(rect, id.with("chip"), egui::Sense::hover())
             .on_hover_text(error);
     }
-    let close_rect = egui::Rect::from_center_size(close_center, egui::Vec2::splat(CHIP_CLOSE));
-    let close = ui.interact(
-        close_rect,
-        id.with("close"),
+    cross_button(ui, id.with("close"), close_center, enabled).clicked()
+}
+
+/// A small cross centred on `center` that removes what it stands on.
+pub(crate) fn cross_button(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    center: egui::Pos2,
+    enabled: bool,
+) -> egui::Response {
+    let rect = egui::Rect::from_center_size(center, egui::Vec2::splat(CROSS_BUTTON));
+    let response = ui.interact(
+        rect,
+        id,
         if enabled {
             egui::Sense::click()
         } else {
             egui::Sense::hover()
         },
     );
-    let close_color = if close.hovered() && enabled {
-        palette.text
-    } else if enabled {
-        palette.text_dim
-    } else {
+    let palette = theme::palette();
+    let color = if !enabled {
         theme::DISABLED
+    } else if response.hovered() {
+        palette.text
+    } else {
+        palette.text_dim
     };
+    let stroke = Stroke::new(theme::stroke::GLYPH, color);
     let arm = egui::Vec2::splat(CLOSE_ARM);
-    let cross = Stroke::new(theme::stroke::GLYPH, close_color);
-    painter.line_segment([close_center - arm, close_center + arm], cross);
+    let painter = ui.painter();
+    painter.line_segment([center - arm, center + arm], stroke);
     painter.line_segment(
         [
-            close_center + egui::vec2(-CLOSE_ARM, CLOSE_ARM),
-            close_center + egui::vec2(CLOSE_ARM, -CLOSE_ARM),
+            center + egui::vec2(-CLOSE_ARM, CLOSE_ARM),
+            center + egui::vec2(CLOSE_ARM, -CLOSE_ARM),
         ],
-        cross,
+        stroke,
     );
-    let close = if enabled {
-        close.on_hover_cursor(egui::CursorIcon::PointingHand)
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {
-        close
-    };
-    close.clicked()
+        response
+    }
 }
 
 #[cfg(test)]

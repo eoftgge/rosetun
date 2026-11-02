@@ -167,6 +167,18 @@ fn open_new_domain(state: &mut State) {
     dialog.subdomains = false;
 }
 
+fn open_new_addresses(state: &mut State) {
+    state.act(Action::OpenAddRule);
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.add_addresses("a.example b.example 192.0.2.1 198.51.100.0/24");
+}
+
+fn open_new_program(state: &mut State) {
+    state.act(Action::OpenAddRule);
+    state.rules.screen.add.as_mut().unwrap().process = "Tool.exe".into();
+}
+
 fn open_edit_first(state: &mut State) {
     state.act(Action::OpenEditRule(RuleId::new("0")));
     let dialog = state.rules.screen.add.as_mut().unwrap();
@@ -223,6 +235,8 @@ fn rule_edits() -> Vec<(&'static str, Prepare, Action)> {
             Action::AddTemplate(RuleTemplate::Youtube),
         ),
         ("add", open_new_domain, Action::SubmitAddRule),
+        ("add addresses", open_new_addresses, Action::SubmitAddRule),
+        ("add program", open_new_program, Action::SubmitAddRule),
         ("edit", open_edit_first, Action::SubmitAddRule),
         ("rename set", open_rename, Action::SubmitSetName),
         ("create set", open_create, Action::SubmitSetName),
