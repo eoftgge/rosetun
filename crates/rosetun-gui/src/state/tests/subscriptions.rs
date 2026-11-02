@@ -301,6 +301,45 @@ fn auto_update_checks_once_per_minute_and_starts_one_due_subscription() {
 }
 
 #[test]
+fn auto_update_never_starts_a_manual_proxy_but_still_updates_a_subscription() {
+    let mut proxy = subscription("1");
+    proxy.url = "local-proxy://1".into();
+    proxy.name = "SOCKS5".into();
+    let mut state = State {
+        config_ready: true,
+        config: AppConfig {
+            subscriptions: vec![proxy.clone(), subscription("2")],
+            ..AppConfig::default()
+        },
+        ..State::default()
+    };
+    state.config.interface.auto_update_subscriptions = true;
+    assert!(!update_due(&proxy, 200_000, None));
+    assert!(!update_due(&proxy, u64::MAX, None));
+
+    let mut started = Vec::new();
+    // Two hours between the rounds, so every retry delay has passed.
+    for round in 0..4_u64 {
+        for step in 0..3_u64 {
+            let now = 200_000 + round * 2 * 60 * 60 + step * AUTO_UPDATE_CHECK;
+            if let Some(job) = state.take_auto_update(now) {
+                match job {
+                    Job::Update(id) => started.push(id),
+                    _ => panic!("only a subscription update was expected"),
+                }
+            }
+        }
+        state.operations.updating.clear();
+    }
+    assert!(!started.is_empty());
+    assert!(
+        started.iter().all(|id| *id == SubscriptionId::new("2")),
+        "{started:?}"
+    );
+    assert!(state.subscriptions.outcomes.is_empty());
+}
+
+#[test]
 fn auto_update_waits_for_config_and_update_all() {
     let mut state = state_with_subscriptions();
     state.config_ready = false;

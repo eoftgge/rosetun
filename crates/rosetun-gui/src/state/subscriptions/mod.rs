@@ -38,21 +38,27 @@ fn auto_update_hours(subscription: &Subscription) -> u64 {
         })
 }
 
-/// The interval the panel footer names: one value when every subscription shares it.
+/// The interval the panel footer names: one value when every fetched subscription
+/// shares it. A manual proxy has nothing to fetch and takes no part.
 pub(crate) fn shared_auto_update_hours(subscriptions: &[Subscription]) -> Option<u64> {
-    let first = auto_update_hours(subscriptions.first()?);
-    subscriptions
+    let mut fetched = subscriptions
         .iter()
+        .filter(|subscription| !rosetun_core::is_local_proxy(subscription));
+    let first = auto_update_hours(fetched.next()?);
+    fetched
         .all(|subscription| auto_update_hours(subscription) == first)
         .then_some(first)
 }
 
-/// Whether one subscription is due, in Unix seconds.
+/// Whether one subscription is due, in Unix seconds. A manual proxy never is.
 pub(in crate::state) fn update_due(
     subscription: &Subscription,
     now: u64,
     last_attempt: Option<u64>,
 ) -> bool {
+    if rosetun_core::is_local_proxy(subscription) {
+        return false;
+    }
     let hours = auto_update_hours(subscription);
     subscription
         .updated_at_unix
