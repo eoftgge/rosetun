@@ -83,9 +83,9 @@ pub use autostart::{autostart_enabled, disable_autostart, enable_autostart};
 #[cfg(windows)]
 pub use elevated::run_elevated;
 #[cfg(windows)]
-pub use instance::{Activation, Instance, acquire};
-#[cfg(windows)]
 pub use fonts::fonts_dir;
+#[cfg(windows)]
+pub use instance::{Activation, Instance, acquire};
 #[cfg(windows)]
 pub use language::user_language;
 #[cfg(windows)]

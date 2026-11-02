@@ -1,8 +1,8 @@
 use super::*;
 use fluent_bundle::{FluentArgs, FluentResource};
 use rosetun_config::{
-    ConnectStage, FailureKind, Node, NodeId, Outbound, RealityParams,
-    StreamSettings, TlsMode, TlsParams, VlessParams, XrayUse,
+    ConnectStage, FailureKind, Node, NodeId, Outbound, RealityParams, StreamSettings, TlsMode,
+    TlsParams, VlessParams, XrayUse,
 };
 
 fn test_bundle(source: &str, language: &str) -> FluentBundle<FluentResource> {

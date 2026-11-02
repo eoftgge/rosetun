@@ -51,7 +51,10 @@ pub(crate) struct LanguageInfo {
     pub(crate) native_name: &'static str,
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "egui has no right-to-left layout; a test keeps it so")
+        expect(
+            dead_code,
+            reason = "egui has no right-to-left layout; a test keeps it so"
+        )
     )]
     pub(crate) direction: Direction,
     source: &'static str,
@@ -228,12 +231,28 @@ mod loader_tests {
     fn language_resolution_covers_all_settings_and_system_languages() {
         for (setting, system, expected) in [
             (LanguageSetting::System, None, Language::English),
-            (LanguageSetting::System, Some(Language::English), Language::English),
-            (LanguageSetting::System, Some(Language::Russian), Language::Russian),
+            (
+                LanguageSetting::System,
+                Some(Language::English),
+                Language::English,
+            ),
+            (
+                LanguageSetting::System,
+                Some(Language::Russian),
+                Language::Russian,
+            ),
             (LanguageSetting::English, None, Language::English),
-            (LanguageSetting::English, Some(Language::Russian), Language::English),
+            (
+                LanguageSetting::English,
+                Some(Language::Russian),
+                Language::English,
+            ),
             (LanguageSetting::Russian, None, Language::Russian),
-            (LanguageSetting::Russian, Some(Language::English), Language::Russian),
+            (
+                LanguageSetting::Russian,
+                Some(Language::English),
+                Language::Russian,
+            ),
         ] {
             assert_eq!(resolve_language(setting, system), expected);
         }

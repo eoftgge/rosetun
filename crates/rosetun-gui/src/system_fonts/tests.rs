@@ -102,7 +102,10 @@ fn each_script_tries_its_own_windows_fonts_before_the_general_ones() {
             '・',
             &[("YuGothM.ttc", 1), ("meiryo.ttc", 2), ("msyh.ttc", 1)][..],
         ),
-        ('テ', &[("YuGothM.ttc", 1), ("meiryo.ttc", 2), ("msyh.ttc", 1)][..]),
+        (
+            'テ',
+            &[("YuGothM.ttc", 1), ("meiryo.ttc", 2), ("msyh.ttc", 1)][..],
+        ),
         ('서', &[("malgun.ttf", 0)][..]),
         ('ก', &[("LeelawUI.ttf", 0), ("tahoma.ttf", 0)][..]),
         ('द', &[("Nirmala.ttc", 0), ("Nirmala.ttf", 0)][..]),
@@ -170,11 +173,7 @@ fn a_fallback_comes_after_manrope_and_egui_fonts_in_every_family() {
             let font = FontId::new(14.0, family.clone());
             assert!(fonts.has_glyph(&font, ONLY_IN_CORMORANT), "{family:?}");
             let characters = fonts.characters(&family);
-            assert_eq!(
-                characters[&ONLY_IN_CORMORANT],
-                ["system-1"],
-                "{family:?}"
-            );
+            assert_eq!(characters[&ONLY_IN_CORMORANT], ["system-1"], "{family:?}");
             let latin = &characters[&'A'];
             assert_eq!(latin.first().map(String::as_str), Some(primary(&family)));
             assert_eq!(latin.last().map(String::as_str), Some("system-1"));

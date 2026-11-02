@@ -335,7 +335,10 @@ fn source_uses_only_existing_messages_and_no_messages_are_orphaned() {
     );
     for key in &used {
         for (code, catalog) in &catalogs {
-            assert!(catalog.messages.contains_key(key), "Unknown {code} key: {key}");
+            assert!(
+                catalog.messages.contains_key(key),
+                "Unknown {code} key: {key}"
+            );
         }
     }
     let mut reachable = used;

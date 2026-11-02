@@ -130,7 +130,10 @@ fn language_label(setting: LanguageSetting) -> String {
     i18n::LANGUAGES
         .iter()
         .find(|info| info.setting == setting)
-        .map_or_else(|| tr!("language-system"), |info| info.native_name.to_owned())
+        .map_or_else(
+            || tr!("language-system"),
+            |info| info.native_name.to_owned(),
+        )
 }
 
 fn accent_label(accent: AccentPreset) -> String {

@@ -65,10 +65,7 @@ const HAN: Script = Script {
 /// Thai, Lao, Khmer and the other scripts of Leelawadee UI.
 const SOUTHEAST_ASIAN: Script = Script {
     ranges: &[0x0E00..=0x0EFF, 0x1780..=0x17FF, 0x1980..=0x1AAF],
-    windows: &[
-        Face::new("LeelawUI.ttf", 0),
-        Face::new("tahoma.ttf", 0),
-    ],
+    windows: &[Face::new("LeelawUI.ttf", 0), Face::new("tahoma.ttf", 0)],
     fontconfig_lang: None,
 };
 /// Devanagari through Sinhala, all in Nirmala UI: a collection since Windows 11, a single file
@@ -83,7 +80,10 @@ const SCRIPTS: [Script; 5] = [KANA, HANGUL, HAN, SOUTHEAST_ASIAN, INDIC];
 /// Armenian and Georgian, the others symbols, Ethiopic and Myanmar.
 #[cfg_attr(
     not(any(windows, test)),
-    expect(dead_code, reason = "the fonts folder is searched on Windows and in tests")
+    expect(
+        dead_code,
+        reason = "the fonts folder is searched on Windows and in tests"
+    )
 )]
 const GENERAL: &[Face] = &[
     Face::new("segoeui.ttf", 0),
@@ -116,7 +116,10 @@ struct Script {
     ranges: &'static [RangeInclusive<u32>],
     #[cfg_attr(
         not(any(windows, test)),
-        expect(dead_code, reason = "the fonts folder is searched on Windows and in tests")
+        expect(
+            dead_code,
+            reason = "the fonts folder is searched on Windows and in tests"
+        )
     )]
     windows: &'static [Face],
     /// The language that makes fontconfig pick the font where the character alone does not.
