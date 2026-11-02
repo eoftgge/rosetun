@@ -1,5 +1,6 @@
 //! Keeps spacing, margin, type, corner, opacity and colour literals out of the views and
-//! widgets: they take their values from the scales in `theme`.
+//! widgets: they take their values from the scales in `theme`. It also keeps the views from
+//! building their own inputs, drop-downs and dialogs: those come from `widgets`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,6 +36,20 @@ const FORBIDDEN_CALLS: [&str; 3] = [
     "Color32::from_rgba_premultiplied(",
 ];
 
+/// Calls only `widgets` may make: a view takes an input, a drop-down and a dialog from there, so
+/// that every one of them looks and measures alike.
+const WIDGET_ONLY_CALLS: [&str; 3] = ["TextEdit::", "ComboBox::", "Modal::new("];
+
+/// Calls that take no number in a view: the width of a dialog is a role (`DialogWidth`), and any
+/// other width is a measure of the layout, not a literal.
+const VIEW_NUMBER_FREE_CALLS: [&str; 1] = ["set_width("];
+
+/// A constant named like this in a view would carry a dialog's width around the call above.
+const DIALOG_WIDTH_WORDS: [&str; 2] = ["DIALOG_WIDTH", "MODAL_WIDTH"];
+
+/// The label of a violation by a constant that holds a dialog's width.
+const NAMED_DIALOG_WIDTH: &str = "const (dialog width) ";
+
 /// A literal that may stay in a view, with the reason.
 struct Allowed {
     /// Path below `src`, with `/`.
@@ -48,7 +63,7 @@ struct Allowed {
     reason: &'static str,
 }
 
-const ALLOWED: [Allowed; 3] = [
+const ALLOWED: [Allowed; 9] = [
     Allowed {
         file: "view/rules/table.rs",
         call: "add_space(",
@@ -69,6 +84,48 @@ const ALLOWED: [Allowed; 3] = [
         function: None,
         arguments: Some("BUTTON_TEXT_GAP=36.0"),
         reason: "the layout of the hero: the connect button beside the state line",
+    },
+    Allowed {
+        file: "view/connection/hero.rs",
+        call: "set_width(",
+        function: None,
+        arguments: Some("96.0"),
+        reason: "the label column of a row of the connection card, not a dialog",
+    },
+    Allowed {
+        file: "view/add_subscription.rs",
+        call: "set_width(",
+        function: None,
+        arguments: Some("230.0"),
+        reason: "the width of the QR source menu, a popup beside a button, not a dialog",
+    },
+    Allowed {
+        file: "view/exits.rs",
+        call: "set_width(",
+        function: Some("exit_menu"),
+        arguments: Some("210.0"),
+        reason: "the width of a row's menu, a popup beside a button, not a dialog",
+    },
+    Allowed {
+        file: "view/lists.rs",
+        call: "set_width(",
+        function: None,
+        arguments: Some("210.0"),
+        reason: "the width of a row's menu, a popup beside a button, not a dialog",
+    },
+    Allowed {
+        file: "view/subscriptions/card.rs",
+        call: "set_width(",
+        function: None,
+        arguments: Some("180.0"),
+        reason: "the width of a card's menu, a popup beside a button, not a dialog",
+    },
+    Allowed {
+        file: "view/traffic.rs",
+        call: "set_width(",
+        function: None,
+        arguments: Some("232.0"),
+        reason: "the width of a tile of the traffic summary, not a dialog",
     },
 ];
 
@@ -352,6 +409,11 @@ fn enclosing_fn(code: &[char], offset: usize) -> Option<String> {
 
 /// The constants named like a spacing: where each starts, its name and its value.
 fn gap_constants(code: &[char]) -> Vec<(usize, String, String)> {
+    constants_named(code, &GAP_WORDS)
+}
+
+/// The constants whose name holds one of `words`: where each starts, its name and its value.
+fn constants_named(code: &[char], words: &[&str]) -> Vec<(usize, String, String)> {
     let mut found = Vec::new();
     for at in find_all(code, "const ") {
         if at > 0 && is_identifier_char(code[at - 1]) {
@@ -366,7 +428,7 @@ fn gap_constants(code: &[char]) -> Vec<(usize, String, String)> {
         while code.get(end).is_some_and(|c| c.is_whitespace()) {
             end += 1;
         }
-        if code.get(end) != Some(&':') || !GAP_WORDS.iter().any(|word| name.contains(word)) {
+        if code.get(end) != Some(&':') || !words.iter().any(|word| name.contains(word)) {
             continue;
         }
         let item: String = code[end..item_end(code, end)].iter().collect();
@@ -427,6 +489,56 @@ fn violations(source: &str) -> Vec<Violation> {
     found
 }
 
+/// What a view may not build itself: a raw input, drop-down or dialog, and a dialog's width as a
+/// number. `widgets` may; see `holds_widget_only_calls`.
+fn view_violations(source: &str) -> Vec<Violation> {
+    let code = without_test_items(mask(source));
+    let line_of = |offset: usize| code[..offset].iter().filter(|c| **c == '\n').count() + 1;
+    let mut found = Vec::new();
+    for call in WIDGET_ONLY_CALLS {
+        for at in find_all(&code, call) {
+            // `MyTextEdit::` is somebody else's type.
+            if at > 0 && is_identifier_char(code[at - 1]) {
+                continue;
+            }
+            found.push(Violation {
+                line: line_of(at),
+                call,
+                arguments: String::new(),
+                function: enclosing_fn(&code, at),
+            });
+        }
+    }
+    for call in VIEW_NUMBER_FREE_CALLS {
+        for at in find_all(&code, call) {
+            let arguments = call_arguments(&code, at + call.chars().count());
+            if has_number(&arguments) {
+                found.push(Violation {
+                    line: line_of(at),
+                    call,
+                    arguments: arguments.split_whitespace().collect(),
+                    function: enclosing_fn(&code, at),
+                });
+            }
+        }
+    }
+    for (at, name, value) in constants_named(&code, &DIALOG_WIDTH_WORDS) {
+        found.push(Violation {
+            line: line_of(at),
+            call: NAMED_DIALOG_WIDTH,
+            arguments: format!("{name}={}", value.split_whitespace().collect::<String>()),
+            function: enclosing_fn(&code, at),
+        });
+    }
+    found.sort_by_key(|violation| violation.line);
+    found
+}
+
+/// The rules of `view_violations` hold for the views; `widgets` is where the raw calls live.
+fn holds_widget_only_calls(file: &str) -> bool {
+    file.starts_with("view/")
+}
+
 fn is_allowed(allowed: &[Allowed], file: &str, violation: &Violation) -> bool {
     allowed.iter().any(|rule| {
         rule.file == file
@@ -472,6 +584,7 @@ fn views_and_widgets_take_their_layout_from_the_theme_scales() {
     );
     assert!(ALLOWED.iter().all(|allowed| !allowed.reason.is_empty()));
     let mut report = Vec::new();
+    let mut raw = Vec::new();
     for path in files {
         let relative = path
             .strip_prefix(&src)
@@ -479,12 +592,22 @@ fn views_and_widgets_take_their_layout_from_the_theme_scales() {
             .to_string_lossy()
             .replace('\\', "/");
         let source = fs::read_to_string(&path).unwrap();
+        let line = |violation: &Violation| {
+            format!(
+                "{relative}:{}: {}{}",
+                violation.line, violation.call, violation.arguments
+            )
+        };
         for violation in violations(&source) {
             if !is_allowed(&ALLOWED, &relative, &violation) {
-                report.push(format!(
-                    "{relative}:{}: {}{}",
-                    violation.line, violation.call, violation.arguments
-                ));
+                report.push(line(&violation));
+            }
+        }
+        if holds_widget_only_calls(&relative) {
+            for violation in view_violations(&source) {
+                if !is_allowed(&ALLOWED, &relative, &violation) {
+                    raw.push(line(&violation));
+                }
             }
         }
     }
@@ -492,6 +615,11 @@ fn views_and_widgets_take_their_layout_from_the_theme_scales() {
         report.is_empty(),
         "literals outside the scales in `theme` (space, margin, font, radius, stroke, alpha, colours):\n{}",
         report.join("\n")
+    );
+    assert!(
+        raw.is_empty(),
+        "inputs, drop-downs and dialogs a view builds itself instead of taking them from `widgets`:\n{}",
+        raw.join("\n")
     );
 }
 
@@ -766,4 +894,90 @@ fn view() {
     let crlf = lf.replace('\n', "\r\n");
     assert_eq!(violations(lf), violations(&crlf));
     assert_eq!(violations(&crlf).len(), 2);
+}
+
+#[test]
+fn the_fence_catches_a_view_that_builds_its_own_input_drop_down_or_dialog() {
+    let source = "\
+use eframe::egui::TextEdit;
+fn view(ui: &mut Ui, ctx: &Context) {
+    ui.add(egui::TextEdit::singleline(&mut text));
+    ui.add(TextEdit::multiline(&mut text));
+    egui::ComboBox::from_id_salt(\"language\").show_ui(ui, |ui| {});
+    widgets::show_modal(ctx, egui::Modal::new(egui::Id::new(\"dialog\")), |ui| {});
+    ui.set_width(520.0);
+}
+";
+    let found: Vec<_> = view_violations(source)
+        .into_iter()
+        .map(|violation| (violation.line, violation.call))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (3, "TextEdit::"),
+            (4, "TextEdit::"),
+            (5, "ComboBox::"),
+            (6, "Modal::new("),
+            (7, "set_width("),
+        ]
+    );
+}
+
+#[test]
+fn the_fence_accepts_a_view_that_takes_them_from_widgets() {
+    let source = "\
+fn view(ui: &mut Ui, ctx: &Context, width: f32) {
+    ui.add(widgets::TextField::new(&mut text).rows(4));
+    widgets::drop_down(ui, \"language\", Some(width), selected, |ui| {});
+    widgets::Dialog::new(\"dialog\", widgets::DialogWidth::Wide).show(ctx, |ui| {
+        ui.set_width(width);
+        ui.set_width(widgets::DialogWidth::Narrow.points());
+        ui.set_width(0.0);
+    });
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::ComboBox, true, name));
+    let mine = MyTextEdit::new();
+}
+// egui::TextEdit::singleline(&mut text)
+#[cfg(test)]
+mod tests {
+    fn test(ui: &mut Ui) {
+        ui.set_width(520.0);
+        egui::ComboBox::from_id_salt(\"language\");
+    }
+}
+";
+    assert_eq!(view_violations(source), []);
+}
+
+#[test]
+fn the_fence_catches_a_constant_that_carries_a_dialog_width() {
+    let found = view_violations(
+        "const DIALOG_WIDTH: f32 = 520.0;\nconst DETAIL_LABEL_WIDTH: f32 = 96.0;\nconst MODAL_WIDTH: f32 = 400.0;\n",
+    );
+    let found: Vec<_> = found
+        .iter()
+        .map(|violation| (violation.line, violation.arguments.as_str()))
+        .collect();
+    assert_eq!(
+        found,
+        [(1, "DIALOG_WIDTH=520.0"), (3, "MODAL_WIDTH=400.0")]
+    );
+}
+
+#[test]
+fn only_the_views_are_kept_from_raw_inputs_and_widgets_may_hold_them() {
+    assert!(holds_widget_only_calls("view/exits.rs"));
+    assert!(holds_widget_only_calls("view/rules/dialogs.rs"));
+    assert!(!holds_widget_only_calls("widgets/dialogs.rs"));
+    assert!(!holds_widget_only_calls("widgets/text_field.rs"));
+}
+
+#[test]
+fn the_fence_lets_through_only_the_listed_widths() {
+    let menu = view_violations("fn exit_menu() {\n    ui.set_width(210.0);\n}\n");
+    assert_eq!(menu.len(), 1);
+    assert!(is_allowed(&ALLOWED, "view/exits.rs", &menu[0]));
+    assert!(!is_allowed(&ALLOWED, "view/lists.rs", &view_violations("fn other() {\n    ui.set_width(520.0);\n}\n")[0]));
+    assert!(!is_allowed(&ALLOWED, "view/exits.rs", &view_violations("fn exit_dialog() {\n    ui.set_width(210.0);\n}\n")[0]));
 }
