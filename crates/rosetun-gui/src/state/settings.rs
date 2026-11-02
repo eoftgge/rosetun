@@ -2,9 +2,7 @@ use std::mem::{Discriminant, discriminant};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rosetun_config::{
-    ConnectionState, DnsSettings, Node, Outbound, TlsFragment, TlsMode, XrayUse,
-};
+use rosetun_config::{ConnectionState, DnsSettings, Node, Outbound, TlsFragment, TlsMode, XrayUse};
 use rosetun_core::{DnsPreset, SettingChange};
 
 use super::{Action, Job, Screen, State, now_unix};
@@ -579,9 +577,7 @@ impl State {
                         .parsed_fragment(self.config.settings.tls_fragment.enabled)
                     && fragment != self.config.settings.tls_fragment
                 {
-                    return self.start_settings(Job::Setting(SettingChange::TlsFragment(
-                        fragment,
-                    )));
+                    return self.start_settings(Job::Setting(SettingChange::TlsFragment(fragment)));
                 }
             }
             Action::EnableXrayAutoAndConnect => {

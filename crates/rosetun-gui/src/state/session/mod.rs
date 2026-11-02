@@ -388,9 +388,7 @@ impl State {
                 session.rule_set != current.rule_set || session.extra_nodes != current.extra_nodes
             }
             SessionPart::Dns => session.settings.dns != current.settings.dns,
-            SessionPart::Fragment => {
-                session.settings.tls_fragment != current.settings.tls_fragment
-            }
+            SessionPart::Fragment => session.settings.tls_fragment != current.settings.tls_fragment,
             SessionPart::Protection => session.settings.kill_switch != current.settings.kill_switch,
         }
     }

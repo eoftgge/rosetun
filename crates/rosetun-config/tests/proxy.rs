@@ -1,7 +1,6 @@
 use rosetun_config::{
     Node, NodeId, Outbound, ProxyCredentials, Settings, StreamSettings, TlsMode, TlsParams,
-    Transport,
-    XrayUse, uses_xray,
+    Transport, XrayUse, uses_xray,
 };
 
 fn proxy(socks: bool) -> Node {

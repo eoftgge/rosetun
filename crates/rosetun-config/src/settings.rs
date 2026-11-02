@@ -195,9 +195,9 @@ impl TlsFragment {
     pub fn parse_packets(text: &str) -> Result<FragmentPackets, FragmentError> {
         match text.parse::<FragmentPackets>()? {
             FragmentPackets::TlsHello => Ok(FragmentPackets::TlsHello),
-            FragmentPackets::Range(range) => range
-                .within(Self::MAX_PACKET)
-                .map(FragmentPackets::Range),
+            FragmentPackets::Range(range) => {
+                range.within(Self::MAX_PACKET).map(FragmentPackets::Range)
+            }
         }
     }
 
@@ -361,8 +361,7 @@ mod settings_tests {
         DnsSettings, FragmentError, FragmentPackets, FragmentRange, Settings, TlsFragment,
     };
     use crate::{
-        Node, NodeId, Outbound, ProxyCredentials, StreamSettings, TlsMode, TlsParams,
-        VlessParams,
+        Node, NodeId, Outbound, ProxyCredentials, StreamSettings, TlsMode, TlsParams, VlessParams,
     };
     use std::net::{IpAddr, Ipv4Addr};
 
@@ -521,7 +520,10 @@ mod settings_tests {
             settings.tls_fragment.packets,
             FragmentPackets::Range(FragmentRange::new(1, 3).unwrap())
         );
-        assert_eq!(serde_json::to_value(&settings).unwrap()["tls_fragment"], input["tls_fragment"]);
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["tls_fragment"],
+            input["tls_fragment"]
+        );
         let partial: Settings =
             serde_json::from_str(r#"{"tls_fragment":{"enabled":true}}"#).unwrap();
         assert!(partial.tls_fragment.enabled);
@@ -530,18 +532,33 @@ mod settings_tests {
 
     #[test]
     fn ranges_accept_the_boundaries_and_refuse_the_rest() {
-        assert_eq!(TlsFragment::parse_length("1-1500").unwrap().to_string(), "1-1500");
+        assert_eq!(
+            TlsFragment::parse_length("1-1500").unwrap().to_string(),
+            "1-1500"
+        );
         assert_eq!(TlsFragment::parse_length(" 7 ").unwrap().to_string(), "7-7");
         assert_eq!(TlsFragment::parse_interval("1-1000").unwrap().to(), 1000);
         assert_eq!(
             TlsFragment::parse_packets("TlsHello").unwrap(),
             FragmentPackets::TlsHello
         );
-        assert_eq!(TlsFragment::parse_packets("1-100").unwrap().to_string(), "1-100");
+        assert_eq!(
+            TlsFragment::parse_packets("1-100").unwrap().to_string(),
+            "1-100"
+        );
 
-        assert_eq!(TlsFragment::parse_length("0-5"), Err(FragmentError::BelowOne));
-        assert_eq!(TlsFragment::parse_length("5-0"), Err(FragmentError::BelowOne));
-        assert_eq!(TlsFragment::parse_length("20-10"), Err(FragmentError::Reversed));
+        assert_eq!(
+            TlsFragment::parse_length("0-5"),
+            Err(FragmentError::BelowOne)
+        );
+        assert_eq!(
+            TlsFragment::parse_length("5-0"),
+            Err(FragmentError::BelowOne)
+        );
+        assert_eq!(
+            TlsFragment::parse_length("20-10"),
+            Err(FragmentError::Reversed)
+        );
         assert_eq!(
             TlsFragment::parse_length("1-1501"),
             Err(FragmentError::AboveLimit { max: 1500 })

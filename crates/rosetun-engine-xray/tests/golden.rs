@@ -69,7 +69,12 @@ fn enabled() -> TlsFragment {
 /// The endpoints are random per run; the fixtures hold fixed ones.
 fn pretty(body: &[u8]) -> String {
     let mut config: Value = serde_json::from_slice(body).unwrap();
-    for (index, inbound) in config["inbounds"].as_array_mut().unwrap().iter_mut().enumerate() {
+    for (index, inbound) in config["inbounds"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .enumerate()
+    {
         inbound["port"] = json!(10801 + index);
         inbound["settings"]["accounts"] =
             json!([{ "user": "fixture-user", "pass": "fixture-password" }]);
@@ -131,5 +136,9 @@ fn a_range_of_packets_and_the_probe_take_the_same_path() {
         ),
     ];
     let probe = render_probe(&nodes, "Ethernet", &fragment).unwrap();
-    check("fragment-range-probe.json", FRAGMENTED_RANGE, pretty(&probe.body));
+    check(
+        "fragment-range-probe.json",
+        FRAGMENTED_RANGE,
+        pretty(&probe.body),
+    );
 }

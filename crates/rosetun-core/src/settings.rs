@@ -157,8 +157,7 @@ pub fn parse_fragment_input(
         enabled,
         packets: TlsFragment::parse_packets(packets)
             .map_err(|_| FragmentInputError::InvalidPackets)?,
-        length: TlsFragment::parse_length(length)
-            .map_err(|_| FragmentInputError::InvalidLength)?,
+        length: TlsFragment::parse_length(length).map_err(|_| FragmentInputError::InvalidLength)?,
         interval: TlsFragment::parse_interval(interval)
             .map_err(|_| FragmentInputError::InvalidInterval)?,
     })
@@ -340,16 +339,30 @@ mod tests {
         assert_eq!(fragment.packets.to_string(), "tlshello");
         assert_eq!(fragment.length.to_string(), "100-200");
         assert_eq!(fragment.interval.to_string(), "10-10");
-        assert!(!parse_fragment_input(false, "1-3", "1", "1").unwrap().enabled);
+        assert!(
+            !parse_fragment_input(false, "1-3", "1", "1")
+                .unwrap()
+                .enabled
+        );
 
         for (packets, length, interval, error) in [
             ("", "50-100", "10-20", FragmentInputError::InvalidPackets),
-            ("1-101", "50-100", "10-20", FragmentInputError::InvalidPackets),
+            (
+                "1-101",
+                "50-100",
+                "10-20",
+                FragmentInputError::InvalidPackets,
+            ),
             ("3-1", "50-100", "10-20", FragmentInputError::InvalidPackets),
             ("1-3", "0-100", "10-20", FragmentInputError::InvalidLength),
             ("1-3", "1-1501", "10-20", FragmentInputError::InvalidLength),
             ("1-3", "abc", "10-20", FragmentInputError::InvalidLength),
-            ("1-3", "50-100", "1-1001", FragmentInputError::InvalidInterval),
+            (
+                "1-3",
+                "50-100",
+                "1-1001",
+                FragmentInputError::InvalidInterval,
+            ),
             ("1-3", "50-100", "", FragmentInputError::InvalidInterval),
         ] {
             assert_eq!(

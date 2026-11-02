@@ -485,8 +485,12 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let value: Value =
-            serde_json::from_slice(&render_probe(&nodes, "Ethernet", &TlsFragment::default()).unwrap().body).unwrap();
+        let value: Value = serde_json::from_slice(
+            &render_probe(&nodes, "Ethernet", &TlsFragment::default())
+                .unwrap()
+                .body,
+        )
+        .unwrap();
         assert_eq!(value["inbounds"].as_array().unwrap().len(), 2);
         assert_eq!(
             value["routing"]["rules"][1]["inboundTag"],
@@ -716,12 +720,18 @@ mod tests {
             .iter()
             .map(|outbound| outbound["tag"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
-        assert_eq!(tags, ["proxy", "exit-1", "proxy-fragment", "exit-1-fragment"]);
+        assert_eq!(
+            tags,
+            ["proxy", "exit-1", "proxy-fragment", "exit-1-fragment"]
+        );
 
-        let nodes = [("probe-0".to_owned(), reality_node(), SocksEndpoint::local().unwrap())];
+        let nodes = [(
+            "probe-0".to_owned(),
+            reality_node(),
+            SocksEndpoint::local().unwrap(),
+        )];
         let probe: Value =
-            serde_json::from_slice(&render_probe(&nodes, "Ethernet", &on()).unwrap().body)
-                .unwrap();
+            serde_json::from_slice(&render_probe(&nodes, "Ethernet", &on()).unwrap().body).unwrap();
         assert_eq!(probe["outbounds"][1]["tag"], "probe-0-fragment");
         assert_eq!(
             probe["outbounds"][1]["streamSettings"]["sockopt"]["interface"],

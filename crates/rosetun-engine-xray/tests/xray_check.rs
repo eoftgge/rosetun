@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use rosetun_config::{
-    FragmentPackets, LogLevel, Node, NodeId, Outbound, RealityParams, StreamSettings, TlsFragment, TlsMode,
-    TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
+    FragmentPackets, LogLevel, Node, NodeId, Outbound, RealityParams, StreamSettings, TlsFragment,
+    TlsMode, TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
 };
 use rosetun_engine_xray::{SUPPORTED_XRAY_VERSION, SocksEndpoint, render};
 

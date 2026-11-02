@@ -1,8 +1,8 @@
 use rosetun_config::{ConfigError, ListCategoryError};
 use rosetun_core::{
     AddFromUrlError, AddSubscriptionError, DnsInputError, ExitError, FetchError,
-    FragmentInputError, ListError, ListParseError, ListPreparationError, MoveSubscriptionError, ParseError,
-    RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
+    FragmentInputError, ListError, ListParseError, ListPreparationError, MoveSubscriptionError,
+    ParseError, RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
     SelectNodeError, SelectRuleSetError, SettingsError, SkipReason, StoreError,
     SubscriptionUrlError, TextErrorKind, UnsupportedTransport, UpdateSubscriptionError,
 };

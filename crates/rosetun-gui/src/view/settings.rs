@@ -1706,7 +1706,11 @@ mod fragment_tests {
                         .show(ui, |ui| advanced(ui, &mut state, &mut actions));
                 };
                 let texts = screen.click_text(&tr!("fragment-title"), &mut show);
-                assert!(texts.iter().any(|(text, _)| *text == tr!("fragment-detail")));
+                assert!(
+                    texts
+                        .iter()
+                        .any(|(text, _)| *text == tr!("fragment-detail"))
+                );
                 assert!(
                     actions
                         .iter()

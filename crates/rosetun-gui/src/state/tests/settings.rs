@@ -1125,7 +1125,10 @@ fn fragmentation_cannot_be_turned_on_while_xray_is_off() {
         panic!("expected a fragmentation job");
     };
     assert!(fragment.enabled);
-    assert_eq!(fragment.length, rosetun_config::TlsFragment::default().length);
+    assert_eq!(
+        fragment.length,
+        rosetun_config::TlsFragment::default().length
+    );
 }
 
 #[test]
@@ -1139,7 +1142,10 @@ fn a_wrong_fragment_value_blocks_saving_and_a_right_one_saves_with_the_switch_as
         ("length", ""),
         ("interval", "20-10"),
     ] {
-        state.settings.screen.sync_fragment(&state.config.settings.tls_fragment);
+        state
+            .settings
+            .screen
+            .sync_fragment(&state.config.settings.tls_fragment);
         match field {
             "packets" => state.settings.screen.fragment_packets = value.into(),
             "length" => state.settings.screen.fragment_length = value.into(),
@@ -1150,10 +1156,16 @@ fn a_wrong_fragment_value_blocks_saving_and_a_right_one_saves_with_the_switch_as
             state.settings.screen.parsed_fragment(true).is_err(),
             "{field} {value:?}"
         );
-        assert!(state.act(Action::SaveTlsFragment).is_none(), "{field} {value:?}");
+        assert!(
+            state.act(Action::SaveTlsFragment).is_none(),
+            "{field} {value:?}"
+        );
     }
 
-    state.settings.screen.sync_fragment(&state.config.settings.tls_fragment);
+    state
+        .settings
+        .screen
+        .sync_fragment(&state.config.settings.tls_fragment);
     assert!(state.act(Action::SaveTlsFragment).is_none());
     state.settings.screen.fragment_length = "100-200".into();
     let Some(Job::Setting(SettingChange::TlsFragment(fragment))) =
