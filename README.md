@@ -2,6 +2,8 @@ English | [Русский](README.ru.md)
 
 <p align="center"><img src=".github/assets/banner.svg" alt="Rosetun: VPN client for Windows" width="100%"></p>
 
+<p align="center"><a href="https://eoftgge.github.io/rosetun/en/">Website</a> · <a href="https://eoftgge.github.io/rosetun/en/help/">Help</a> · <a href="https://eoftgge.github.io/rosetun/en/providers/">For providers</a></p>
+
 <p align="center">
   <a href="https://github.com/eoftgge/rosetun/releases/latest"><img src=".github/assets/download.svg" alt="Download Rosetun for Windows" height="56"></a>
 </p>
