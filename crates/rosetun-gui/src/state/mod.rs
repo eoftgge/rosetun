@@ -339,6 +339,8 @@ pub(crate) enum Action {
     DeleteSelectedRules,
     UndoRules,
     RedoRules,
+    /// The active set goes back to the rules the running session uses.
+    RevertRules,
     SetDefaultTarget(RuleTarget),
     AddTemplate(RuleTemplate),
     RemoveTemplate(RuleTemplate),
@@ -828,7 +830,7 @@ impl State {
             action @ (Action::Apply | Action::RestoreMyEdits) => {
                 return self.act_session(action);
             }
-            action @ (Action::UndoRules | Action::RedoRules) => {
+            action @ (Action::UndoRules | Action::RedoRules | Action::RevertRules) => {
                 return self.act_rule_history(action);
             }
             action @ (Action::ReadQr(_) | Action::CancelQr | Action::ChooseQrLink(_)) => {

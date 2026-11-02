@@ -448,3 +448,70 @@ fn keeping_a_temporary_rule_is_not_a_step() {
     saved.act(&mut state, Action::KeepTemporary(RuleId::new("t1")));
     assert_eq!(state.rules.history.undo_len(), 0);
 }
+
+fn connected_with_rules() -> (State, Saved) {
+    let mut state = connected_state_for_apply();
+    state.session.temporary_rules_loaded = true;
+    state.act(Action::OpenRules);
+    let saved = Saved::new(&state);
+    (state, saved)
+}
+
+#[test]
+fn revert_appears_only_when_the_rules_differ_from_the_session() {
+    let mut state = rules_state();
+    let mut saved = Saved::new(&state);
+    saved.act(&mut state, Action::SetRuleEnabled(RuleId::new("0"), false));
+    assert!(!state.can_revert_rules(), "no connection, no revert");
+    assert!(state.act(Action::RevertRules).is_none());
+
+    let (mut state, mut saved) = connected_with_rules();
+    assert!(!state.can_revert_rules());
+    saved.act(&mut state, Action::SetRuleEnabled(RuleId::new("0"), false));
+    assert!(state.pending_reconnect(SessionPart::Rules));
+    assert!(state.can_revert_rules());
+}
+
+#[test]
+fn revert_restores_the_session_rules_and_can_be_undone() {
+    let (mut state, mut saved) = connected_with_rules();
+    let applied = saved.bytes();
+    saved.act(&mut state, Action::SetRuleEnabled(RuleId::new("0"), false));
+    saved.act(&mut state, Action::DeleteRule(RuleId::new("2")));
+    let edited = saved.bytes();
+
+    saved.act(&mut state, Action::RevertRules);
+    assert_eq!(saved.bytes(), applied);
+    assert!(!state.pending_reconnect(SessionPart::Rules));
+    assert!(!state.can_revert_rules());
+    assert!(matches!(
+        state.rule_notice(),
+        Some((UndoNotice::Reverted, _))
+    ));
+
+    saved.act(&mut state, Action::UndoRules);
+    assert_eq!(saved.bytes(), edited);
+    assert!(state.can_revert_rules());
+}
+
+#[test]
+fn revert_makes_the_session_set_active_again_while_it_exists() {
+    let (mut state, mut saved) = connected_with_rules();
+    open_create(&mut state);
+    saved.act(&mut state, Action::SubmitSetName);
+    let created = state.config.rule_sets[1].id.clone();
+    saved.act(&mut state, Action::SelectRuleSet(Some(created.clone())));
+    state.act(Action::ChooseRuleSet(created));
+    assert!(state.can_revert_rules());
+
+    saved.act(&mut state, Action::RevertRules);
+    assert_eq!(state.config.active_rule_set, Some(RuleSetId::new("1")));
+    assert!(!state.pending_reconnect(SessionPart::Rules));
+
+    saved.act(&mut state, Action::UndoRules);
+    state.act(Action::ChooseRuleSet(RuleSetId::new("1")));
+    open_delete_set(&mut state);
+    saved.act(&mut state, Action::ConfirmDeleteSet);
+    assert!(state.pending_reconnect(SessionPart::Rules));
+    assert!(!state.can_revert_rules(), "the session set is gone");
+}

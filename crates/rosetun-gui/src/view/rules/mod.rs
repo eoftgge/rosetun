@@ -118,6 +118,7 @@ fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
         UndoNotice::RulesDeleted(count) => i18n::rules_deleted(count),
         UndoNotice::SetDeleted => tr!("rule-set-deleted"),
         UndoNotice::RulesMoved(count) => i18n::rules_moved(count),
+        UndoNotice::Reverted => tr!("rules-reverted"),
     };
     if widgets::action_notice(
         ctx,
@@ -146,7 +147,9 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         && state.config.active_rule_set == state.rules.screen.selected_set
         && state.pending_reconnect(SessionPart::Rules);
     let can_apply = state.can_apply();
+    let can_revert = state.can_revert_rules();
     let mut apply_clicked = false;
+    let mut revert_clicked = false;
     ui.heading(tr!("rules-tab-title"));
     ui.add(
         egui::Label::new(RichText::new(tr!("rules-subtitle")).color(theme::palette().text_muted))
@@ -154,11 +157,15 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     );
     if pending_apply {
         ui.add_space(theme::space::XS);
-        let (_, link) = apply_notice(ui, can_apply);
+        let (_, link, revert) = apply_notice(ui, can_apply, can_revert);
         apply_clicked = link.is_some_and(|link| link.clicked());
+        revert_clicked = revert.is_some_and(|revert| revert.clicked());
     }
     if apply_clicked {
         actions.push(Action::Apply);
+    }
+    if revert_clicked {
+        actions.push(Action::RevertRules);
     }
     ui.add_space(theme::space::XL);
     if !state.config_ready {
@@ -272,7 +279,11 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     selection_shortcuts(ui.ctx(), state, text_edit_focused, actions);
 }
 
-fn apply_notice(ui: &mut egui::Ui, can_apply: bool) -> (egui::Response, Option<egui::Response>) {
+fn apply_notice(
+    ui: &mut egui::Ui,
+    can_apply: bool,
+    can_revert: bool,
+) -> (egui::Response, Option<egui::Response>, Option<egui::Response>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = theme::space::S;
         let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
@@ -290,7 +301,10 @@ fn apply_notice(ui: &mut egui::Ui, can_apply: bool) -> (egui::Response, Option<e
         );
         let link = can_apply
             .then(|| widgets::link(ui, &tr!("apply-now"), true).on_hover_text(tr!("apply-hint")));
-        (label, link)
+        let revert = can_revert.then(|| {
+            widgets::link(ui, &tr!("revert-rules"), true).on_hover_text(tr!("revert-rules-hint"))
+        });
+        (label, link, revert)
     })
     .inner
 }

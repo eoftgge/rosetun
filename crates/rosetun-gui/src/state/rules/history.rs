@@ -4,11 +4,11 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use rosetun_config::{RuleMatcher, RuleSetId};
+use rosetun_config::{ConnectionState, RuleMatcher, RuleSetId};
 use rosetun_core::{RestoredRuleSets, RuleSetError, RuleSetsSnapshot, SetSnapshot};
 
 use crate::errors;
-use crate::state::{Action, Job, State};
+use crate::state::{Action, Job, SessionPart, State};
 use crate::worker::WorkerEvent;
 
 pub(crate) const MAX_UNDO_STEPS: usize = 50;
@@ -22,12 +22,14 @@ pub(crate) enum UndoNotice {
     RulesDeleted(usize),
     SetDeleted,
     RulesMoved(usize),
+    Reverted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Restore {
     Undo,
     Redo,
+    Revert,
 }
 
 enum Pending {
@@ -229,6 +231,36 @@ impl State {
             .then(|| (notice, Duration::from_millis(left)))
     }
 
+    /// The active set as the running session uses it, when the saved rules
+    /// differ from it and that set still exists.
+    fn revert_snapshot(&self) -> Option<RuleSetsSnapshot> {
+        let applied = self.session.applied_snapshot.as_ref()?.rule_set.as_ref()?;
+        let index = self
+            .config
+            .rule_sets
+            .iter()
+            .position(|set| set.id == applied.id)?;
+        let switched = self.config.active_rule_set.as_ref() != Some(&applied.id);
+        (switched || &self.config.rule_sets[index] != applied).then(|| RuleSetsSnapshot {
+            sets: vec![SetSnapshot {
+                id: applied.id.clone(),
+                index,
+                set: Some(applied.clone()),
+            }],
+            active: switched.then(|| Some(applied.id.clone())),
+        })
+    }
+
+    pub(crate) fn can_revert_rules(&self) -> bool {
+        self.can_restore_rules()
+            && matches!(
+                self.visible_status().map(|status| &status.state),
+                Some(ConnectionState::Connected)
+            )
+            && self.pending_reconnect(SessionPart::Rules)
+            && self.revert_snapshot().is_some()
+    }
+
     pub(in crate::state) fn act_rule_history(&mut self, action: Action) -> Option<Job> {
         let (kind, snapshot) = match action {
             Action::UndoRules if self.can_undo_rules() => {
@@ -237,7 +269,10 @@ impl State {
             Action::RedoRules if self.can_redo_rules() => {
                 (Restore::Redo, self.rules.history.redo.pop()?)
             }
-            Action::UndoRules | Action::RedoRules => return None,
+            Action::RevertRules if self.can_revert_rules() => {
+                (Restore::Revert, self.revert_snapshot()?)
+            }
+            Action::UndoRules | Action::RedoRules | Action::RevertRules => return None,
             _ => unreachable!("only rule history actions are dispatched here"),
         };
         self.rules.history.notice = None;
@@ -262,6 +297,14 @@ impl State {
                 match kind {
                     Restore::Undo => history.redo.push(restored.previous),
                     Restore::Redo => history.push_undo(restored.previous),
+                    Restore::Revert => {
+                        let now = self.frame_time();
+                        self.rules.history.record(
+                            restored.previous,
+                            Some(UndoNotice::Reverted),
+                            now,
+                        );
+                    }
                 }
                 self.operation_error = (restored.dropped > 0)
                     .then(|| crate::i18n::rules_not_restored(restored.dropped));
@@ -281,6 +324,7 @@ impl State {
                 match kind {
                     Restore::Undo => history.undo.push_back(snapshot),
                     Restore::Redo => history.redo.push(snapshot),
+                    Restore::Revert => {}
                 }
                 self.operation_error =
                     Some(self.text(&errors::rule_set(crate::i18n::language(), &error)));

@@ -747,10 +747,13 @@ rules-moved = { $count ->
     [1] Rule moved
    *[other] Rules moved: { $n }
 }
+rules-reverted = Rules reverted
 rules-not-restored = { $count ->
     [1] One rule did not come back: its list is gone.
    *[other] Rules that did not come back: { $n }. Their lists are gone.
 }
+revert-rules = Revert
+revert-rules-hint = Back to the rules the connection uses.
 search-rules = Search rules
 all = All
 domains = Websites

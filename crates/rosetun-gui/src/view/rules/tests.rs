@@ -558,14 +558,16 @@ fn apply_notice_centers_text_against_the_link() {
     theme::apply(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let (label, link) = apply_notice(ui, true);
+            let (label, link, revert) = apply_notice(ui, true, true);
             let link = link.expect("an applicable change shows the link");
+            let revert = revert.expect("a revertible change shows the revert link");
             assert!(
                 (label.rect.center().y - link.rect.center().y).abs() < 1.0,
                 "text: {:?}, link: {:?}",
                 label.rect,
                 link.rect
             );
+            assert!(revert.rect.left() > link.rect.right());
         });
     });
     output.textures_delta.clear();
@@ -577,8 +579,9 @@ fn apply_notice_has_no_link_when_the_change_waits_for_reconnect() {
     theme::apply(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let (_, link) = apply_notice(ui, false);
+            let (_, link, revert) = apply_notice(ui, false, false);
             assert!(link.is_none());
+            assert!(revert.is_none());
         });
     });
     output.textures_delta.clear();
