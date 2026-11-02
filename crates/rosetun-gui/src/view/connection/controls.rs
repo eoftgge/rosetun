@@ -699,7 +699,11 @@ mod tests {
                 assert!(frame.has(&tr!("kill-switch-unavailable")), "{language:?}");
                 assert!(!frame.has(&tr!("kill-switch-detail")), "{language:?}");
                 let actions = click(&none, window, &tr!("kill-switch-unavailable"));
-                assert!(actions.is_empty(), "{language:?}: {} actions", actions.len());
+                assert!(
+                    actions.is_empty(),
+                    "{language:?}: {} actions",
+                    actions.len()
+                );
 
                 for protection in [None, Some(crate::worker::FULL_PROTECTION)] {
                     let mut known = state(EXIT_NAME);

@@ -2,9 +2,9 @@ pub mod errors;
 pub mod platform;
 
 pub use errors::RoutingError;
-pub use rosetun_config::ProtectionCapabilities;
 pub use platform::backend;
 pub use platform::tunnel_adapter_present;
+pub use rosetun_config::ProtectionCapabilities;
 
 /// Lockdown: persistent WFP objects that keep the machine blocked outside the
 /// tunnel while disconnected, after a service crash and across reboots. The

@@ -1389,12 +1389,18 @@ mod lockdown_switch_tests {
             crate::i18n::in_language(language, || {
                 let state = with_protection(none);
                 let shown = texts(&state);
-                assert!(shown.contains(&tr!("kill-switch-unavailable")), "{language:?}");
+                assert!(
+                    shown.contains(&tr!("kill-switch-unavailable")),
+                    "{language:?}"
+                );
                 assert!(shown.contains(&tr!("lockdown-unavailable")), "{language:?}");
                 assert!(!shown.contains(&tr!("kill-switch-detail")), "{language:?}");
                 assert!(!shown.contains(&tr!("lockdown-detail")), "{language:?}");
                 assert!(click_lockdown(&state).is_empty(), "{language:?}");
-                assert!(click_row(&state, &tr!("kill-switch")).is_empty(), "{language:?}");
+                assert!(
+                    click_row(&state, &tr!("kill-switch")).is_empty(),
+                    "{language:?}"
+                );
             });
         }
     }
@@ -1406,8 +1412,14 @@ mod lockdown_switch_tests {
             let shown = texts(&state);
             assert!(shown.contains(&tr!("kill-switch-detail")), "{protection:?}");
             assert!(shown.contains(&tr!("lockdown-detail")), "{protection:?}");
-            assert!(!shown.contains(&tr!("kill-switch-unavailable")), "{protection:?}");
-            assert!(!shown.contains(&tr!("lockdown-unavailable")), "{protection:?}");
+            assert!(
+                !shown.contains(&tr!("kill-switch-unavailable")),
+                "{protection:?}"
+            );
+            assert!(
+                !shown.contains(&tr!("lockdown-unavailable")),
+                "{protection:?}"
+            );
             assert!(
                 matches!(
                     click_row(&state, &tr!("kill-switch")).as_slice(),

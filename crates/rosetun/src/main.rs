@@ -1159,7 +1159,8 @@ mod tests {
         assert_eq!(kept, request);
         assert_eq!(warning, None);
 
-        let (left, warning) = super::limit_to_protection(request.clone(), ProtectionCapabilities::default());
+        let (left, warning) =
+            super::limit_to_protection(request.clone(), ProtectionCapabilities::default());
         assert!(!left.settings.kill_switch);
         assert_eq!(
             warning,
@@ -1169,9 +1170,13 @@ mod tests {
 
         config.settings.kill_switch = false;
         let request = super::apply_request(&config, Vec::new(), Vec::new()).unwrap();
-        let (left, warning) = super::limit_to_protection(request, ProtectionCapabilities::default());
+        let (left, warning) =
+            super::limit_to_protection(request, ProtectionCapabilities::default());
         assert!(!left.settings.kill_switch);
-        assert_eq!(warning, None, "nothing was asked for, so nothing is left out");
+        assert_eq!(
+            warning, None,
+            "nothing was asked for, so nothing is left out"
+        );
     }
 
     #[test]

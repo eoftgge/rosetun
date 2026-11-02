@@ -937,7 +937,11 @@ fn unprotected_helper() -> (Helper, Arc<EngineControls>) {
         controls: Arc::clone(&controls),
         dns_server: None,
     }));
-    let helper = Helper::new(engines, Box::new(NoProtectionRouting), VerboseGate::default());
+    let helper = Helper::new(
+        engines,
+        Box::new(NoProtectionRouting),
+        VerboseGate::default(),
+    );
     (helper, controls)
 }
 
@@ -6962,7 +6966,9 @@ fn a_connect_without_the_kill_switch_still_works_where_none_exists() {
     let mut request = connect_request();
     request.settings.kill_switch = false;
 
-    helper.connect(&request).expect("connect without protection");
+    helper
+        .connect(&request)
+        .expect("connect without protection");
 
     assert!(matches!(helper.status().state, ConnectionState::Connected));
     assert_eq!(controls.spawns(), 1);
@@ -6988,7 +6994,9 @@ fn an_apply_that_turns_the_kill_switch_on_is_refused_and_leaves_the_session_alon
     let (helper, controls) = unprotected_helper();
     let mut request = connect_request();
     request.settings.kill_switch = false;
-    helper.connect(&request).expect("connect without protection");
+    helper
+        .connect(&request)
+        .expect("connect without protection");
     let mut changed = request_with_new_rules(&request);
     changed.settings.kill_switch = true;
 

@@ -588,10 +588,9 @@ mod tests {
 
     #[test]
     fn a_hello_without_the_protection_field_gives_nothing() {
-        let hello: super::Response = serde_json::from_str(
-            r#"{"hello":{"helper_version":"test","protocol_version":14}}"#,
-        )
-        .unwrap();
+        let hello: super::Response =
+            serde_json::from_str(r#"{"hello":{"helper_version":"test","protocol_version":14}}"#)
+                .unwrap();
         let super::Response::Hello { protection, .. } = hello else {
             panic!("expected a hello");
         };
@@ -932,19 +931,22 @@ mod tests {
         assert!(full.settings.kill_switch);
         assert_eq!(full, request);
 
-        let mut none = request.clone().limited_to(ProtectionCapabilities::default());
+        let mut none = request
+            .clone()
+            .limited_to(ProtectionCapabilities::default());
         assert!(!none.settings.kill_switch);
         none.settings.kill_switch = true;
         assert_eq!(none, request, "nothing else changes");
         assert!(config.settings.kill_switch, "the saved setting is kept");
 
         config.settings.kill_switch = false;
-        let off = ConnectRequest::from_config(&config)
-            .unwrap()
-            .limited_to(ProtectionCapabilities {
-                kill_switch: true,
-                lockdown: true,
-            });
+        let off =
+            ConnectRequest::from_config(&config)
+                .unwrap()
+                .limited_to(ProtectionCapabilities {
+                    kill_switch: true,
+                    lockdown: true,
+                });
         assert!(!off.settings.kill_switch);
     }
 

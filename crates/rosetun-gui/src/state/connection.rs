@@ -165,7 +165,8 @@ impl State {
 
     /// The helper said its system has no Lockdown.
     pub(crate) fn lockdown_unavailable(&self) -> bool {
-        self.protection.is_some_and(|protection| !protection.lockdown)
+        self.protection
+            .is_some_and(|protection| !protection.lockdown)
     }
 
     pub(crate) fn can_change_lockdown(&self) -> bool {
