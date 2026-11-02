@@ -1,7 +1,8 @@
 use std::net::IpAddr;
 
 use rosetun_config::{
-    AccentPreset, DnsSettings, InterfaceSettings, LanguageSetting, QuitAction, Settings, XrayUse,
+    AccentPreset, DnsSettings, InterfaceSettings, LanguageSetting, QuitAction, Settings,
+    TlsFragment, XrayUse,
 };
 use url::Host;
 
@@ -52,6 +53,7 @@ pub enum SettingsError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingChange {
     Xray(XrayUse),
+    TlsFragment(TlsFragment),
     CloseToTray(bool),
     ReduceMotion(bool),
     ConnectOnStart(bool),
@@ -67,6 +69,7 @@ pub fn change_setting(store: &Store, change: SettingChange) -> Result<(), Settin
     store.modify(|config| {
         match change {
             SettingChange::Xray(setting) => config.settings.xray = setting,
+            SettingChange::TlsFragment(fragment) => config.settings.tls_fragment = fragment,
             SettingChange::CloseToTray(enabled) => config.interface.close_to_tray = enabled,
             SettingChange::ReduceMotion(enabled) => config.interface.reduce_motion = enabled,
             SettingChange::ConnectOnStart(enabled) => config.interface.connect_on_start = enabled,
@@ -130,6 +133,34 @@ pub fn parse_dns_input(
         server_name,
         port,
         path,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum FragmentInputError {
+    #[error("enter tlshello or packet numbers from 1 to 100, such as 1-3")]
+    InvalidPackets,
+    #[error("the piece length is from 1 to 1500 bytes, such as 50-100")]
+    InvalidLength,
+    #[error("the pause is from 1 to 1000 ms, such as 10-20")]
+    InvalidInterval,
+}
+
+/// Builds the settings from the three text fields, keeping the switch as it is.
+pub fn parse_fragment_input(
+    enabled: bool,
+    packets: &str,
+    length: &str,
+    interval: &str,
+) -> Result<TlsFragment, FragmentInputError> {
+    Ok(TlsFragment {
+        enabled,
+        packets: TlsFragment::parse_packets(packets)
+            .map_err(|_| FragmentInputError::InvalidPackets)?,
+        length: TlsFragment::parse_length(length)
+            .map_err(|_| FragmentInputError::InvalidLength)?,
+        interval: TlsFragment::parse_interval(interval)
+            .map_err(|_| FragmentInputError::InvalidInterval)?,
     })
 }
 
@@ -300,6 +331,49 @@ mod tests {
         }
         let custom = parse_dns_input("1.0.0.1", "cloudflare-dns.com", "", "").unwrap();
         assert_eq!(DnsPreset::matching(&custom), None);
+    }
+
+    #[test]
+    fn fragment_input_is_parsed_field_by_field() {
+        let fragment = parse_fragment_input(true, " TlsHello ", " 100-200 ", "10").unwrap();
+        assert!(fragment.enabled);
+        assert_eq!(fragment.packets.to_string(), "tlshello");
+        assert_eq!(fragment.length.to_string(), "100-200");
+        assert_eq!(fragment.interval.to_string(), "10-10");
+        assert!(!parse_fragment_input(false, "1-3", "1", "1").unwrap().enabled);
+
+        for (packets, length, interval, error) in [
+            ("", "50-100", "10-20", FragmentInputError::InvalidPackets),
+            ("1-101", "50-100", "10-20", FragmentInputError::InvalidPackets),
+            ("3-1", "50-100", "10-20", FragmentInputError::InvalidPackets),
+            ("1-3", "0-100", "10-20", FragmentInputError::InvalidLength),
+            ("1-3", "1-1501", "10-20", FragmentInputError::InvalidLength),
+            ("1-3", "abc", "10-20", FragmentInputError::InvalidLength),
+            ("1-3", "50-100", "1-1001", FragmentInputError::InvalidInterval),
+            ("1-3", "50-100", "", FragmentInputError::InvalidInterval),
+        ] {
+            assert_eq!(
+                parse_fragment_input(true, packets, length, interval),
+                Err(error),
+                "{packets:?} {length:?} {interval:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn changing_fragmentation_keeps_the_rest_of_the_settings() {
+        let file = TestFile::new();
+        let store = Store::at(&file.0);
+        let fragment = TlsFragment {
+            enabled: true,
+            ..TlsFragment::default()
+        };
+        change_setting(&store, SettingChange::TlsFragment(fragment)).unwrap();
+        let config = store.load().unwrap();
+        assert_eq!(config.settings.tls_fragment, fragment);
+        assert_eq!(config.settings.xray, XrayUse::Auto);
+        reset_settings(&store).unwrap();
+        assert!(!store.load().unwrap().settings.tls_fragment.enabled);
     }
 
     #[test]

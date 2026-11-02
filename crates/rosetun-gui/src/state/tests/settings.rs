@@ -1077,3 +1077,113 @@ fn a_failed_save_keeps_its_error_and_the_queue_behind_it() {
     ));
     assert!(state.operation_error.is_none());
 }
+
+fn state_with_fragment_screen(xray: XrayUse) -> State {
+    let mut state = State::default();
+    let mut config = AppConfig::default();
+    config.settings.xray = xray;
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config,
+    });
+    state.act(Action::OpenSettings);
+    state
+}
+
+#[test]
+fn the_fragment_form_starts_from_the_saved_values() {
+    let mut state = State::default();
+    let mut config = AppConfig::default();
+    config.settings.tls_fragment = rosetun_config::TlsFragment {
+        enabled: true,
+        packets: "1-3".parse().unwrap(),
+        length: "100-200".parse().unwrap(),
+        interval: "5-15".parse().unwrap(),
+    };
+    state.reduce(WorkerEvent::Config {
+        generation: 1,
+        config,
+    });
+    state.act(Action::OpenSettings);
+    let screen = &state.settings.screen;
+    assert_eq!(screen.fragment_packets, "1-3");
+    assert_eq!(screen.fragment_length, "100-200");
+    assert_eq!(screen.fragment_interval, "5-15");
+}
+
+#[test]
+fn fragmentation_cannot_be_turned_on_while_xray_is_off() {
+    let mut state = state_with_fragment_screen(XrayUse::Off);
+    assert!(state.act(Action::SetTlsFragment(true)).is_none());
+    assert!(state.act(Action::SaveTlsFragment).is_none());
+    assert!(state.operations.settings.is_none());
+
+    let mut state = state_with_fragment_screen(XrayUse::Auto);
+    let Some(Job::Setting(SettingChange::TlsFragment(fragment))) =
+        state.act(Action::SetTlsFragment(true))
+    else {
+        panic!("expected a fragmentation job");
+    };
+    assert!(fragment.enabled);
+    assert_eq!(fragment.length, rosetun_config::TlsFragment::default().length);
+}
+
+#[test]
+fn a_wrong_fragment_value_blocks_saving_and_a_right_one_saves_with_the_switch_as_it_is() {
+    let mut state = state_with_fragment_screen(XrayUse::Always);
+    state.config.settings.tls_fragment.enabled = true;
+    for (field, value) in [
+        ("packets", "0-3"),
+        ("packets", "tlshello2"),
+        ("length", "1-1501"),
+        ("length", ""),
+        ("interval", "20-10"),
+    ] {
+        state.settings.screen.sync_fragment(&state.config.settings.tls_fragment);
+        match field {
+            "packets" => state.settings.screen.fragment_packets = value.into(),
+            "length" => state.settings.screen.fragment_length = value.into(),
+            _ => state.settings.screen.fragment_interval = value.into(),
+        }
+        state.settings.screen.fragment_dirty = true;
+        assert!(
+            state.settings.screen.parsed_fragment(true).is_err(),
+            "{field} {value:?}"
+        );
+        assert!(state.act(Action::SaveTlsFragment).is_none(), "{field} {value:?}");
+    }
+
+    state.settings.screen.sync_fragment(&state.config.settings.tls_fragment);
+    assert!(state.act(Action::SaveTlsFragment).is_none());
+    state.settings.screen.fragment_length = "100-200".into();
+    let Some(Job::Setting(SettingChange::TlsFragment(fragment))) =
+        state.act(Action::SaveTlsFragment)
+    else {
+        panic!("expected a fragmentation job");
+    };
+    assert!(fragment.enabled);
+    assert_eq!(fragment.length.to_string(), "100-200");
+}
+
+#[test]
+fn unsaved_fragment_input_survives_a_config_reload_until_it_is_saved() {
+    let mut state = state_with_fragment_screen(XrayUse::Auto);
+    state.settings.screen.fragment_length = "100-200".into();
+    state.settings.screen.fragment_dirty = true;
+    let mut config = state.config.clone();
+    config.settings.kill_switch = true;
+    state.reduce(WorkerEvent::Config {
+        generation: 2,
+        config,
+    });
+    assert_eq!(state.settings.screen.fragment_length, "100-200");
+
+    state.config.settings.tls_fragment.enabled = true;
+    let Some(Job::Setting(change @ SettingChange::TlsFragment(_))) =
+        state.act(Action::SaveTlsFragment)
+    else {
+        panic!("expected a fragmentation job");
+    };
+    state.reduce(WorkerEvent::Setting(change, Ok(())));
+    assert!(!state.settings.screen.fragment_dirty);
+}

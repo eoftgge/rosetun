@@ -780,10 +780,19 @@ fn successful_connect_has_no_pending_changes_until_dns_or_protection_changes() {
         SessionPart::Server,
         SessionPart::Rules,
         SessionPart::Dns,
+        SessionPart::Fragment,
         SessionPart::Protection,
     ] {
         assert!(!state.pending_reconnect(part));
     }
+
+    state.config.settings.tls_fragment.enabled = true;
+    assert!(state.pending_reconnect(SessionPart::Fragment));
+    assert!(state.has_pending_apply());
+    assert!(!state.pending_reconnect(SessionPart::Dns));
+    state.config.settings.tls_fragment.enabled = false;
+    assert!(!state.pending_reconnect(SessionPart::Fragment));
+    assert!(!state.has_pending_apply());
 
     state.config.settings.dns = DnsPreset::Google.settings();
     assert!(state.pending_reconnect(SessionPart::Dns));
@@ -800,6 +809,7 @@ fn successful_connect_has_no_pending_changes_until_dns_or_protection_changes() {
         SessionPart::Server,
         SessionPart::Rules,
         SessionPart::Dns,
+        SessionPart::Fragment,
         SessionPart::Protection,
     ] {
         assert!(!state.pending_reconnect(part));

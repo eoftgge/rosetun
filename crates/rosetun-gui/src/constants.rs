@@ -3,6 +3,9 @@ pub(crate) const BRAND: &str = "ROSETUN";
 pub(crate) const TAGLINE: &str = "Tunnel in bloom";
 pub(crate) const PORT_PLACEHOLDER: &str = "443";
 pub(crate) const DNS_PATH_PLACEHOLDER: &str = "/dns-query";
+pub(crate) const FRAGMENT_PACKETS_PLACEHOLDER: &str = "tlshello";
+pub(crate) const FRAGMENT_LENGTH_PLACEHOLDER: &str = "50-100";
+pub(crate) const FRAGMENT_INTERVAL_PLACEHOLDER: &str = "10-20";
 pub(crate) const DNS_PRESETS: [(&str, &str); 3] = [
     ("Cloudflare", "1.1.1.1"),
     ("Google", "8.8.8.8"),

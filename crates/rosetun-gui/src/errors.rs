@@ -1,7 +1,7 @@
 use rosetun_config::{ConfigError, ListCategoryError};
 use rosetun_core::{
-    AddFromUrlError, AddSubscriptionError, DnsInputError, ExitError, FetchError, ListError,
-    ListParseError, ListPreparationError, MoveSubscriptionError, ParseError,
+    AddFromUrlError, AddSubscriptionError, DnsInputError, ExitError, FetchError,
+    FragmentInputError, ListError, ListParseError, ListPreparationError, MoveSubscriptionError, ParseError,
     RemoveSubscriptionError, RenameSubscriptionError, RuleInputError, RuleSetError,
     SelectNodeError, SelectRuleSetError, SettingsError, SkipReason, StoreError,
     SubscriptionUrlError, TextErrorKind, UnsupportedTransport, UpdateSubscriptionError,
@@ -297,6 +297,20 @@ pub(crate) fn dns_input(language: Language, error: &DnsInputError) -> String {
         }
         DnsInputError::InvalidPort => tr_in(language, "error-invalid-port", &FluentArgs::new()),
         DnsInputError::InvalidPath => tr_in(language, "error-invalid-dns-path", &FluentArgs::new()),
+    }
+}
+
+pub(crate) fn fragment_input(language: Language, error: &FragmentInputError) -> String {
+    match error {
+        FragmentInputError::InvalidPackets => {
+            tr_in(language, "error-fragment-packets", &FluentArgs::new())
+        }
+        FragmentInputError::InvalidLength => {
+            tr_in(language, "error-fragment-length", &FluentArgs::new())
+        }
+        FragmentInputError::InvalidInterval => {
+            tr_in(language, "error-fragment-interval", &FluentArgs::new())
+        }
     }
 }
 

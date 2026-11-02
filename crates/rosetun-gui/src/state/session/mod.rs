@@ -18,6 +18,7 @@ pub(crate) enum SessionPart {
     Server,
     Rules,
     Dns,
+    Fragment,
     Protection,
 }
 
@@ -387,6 +388,9 @@ impl State {
                 session.rule_set != current.rule_set || session.extra_nodes != current.extra_nodes
             }
             SessionPart::Dns => session.settings.dns != current.settings.dns,
+            SessionPart::Fragment => {
+                session.settings.tls_fragment != current.settings.tls_fragment
+            }
             SessionPart::Protection => session.settings.kill_switch != current.settings.kill_switch,
         }
     }
@@ -427,6 +431,7 @@ impl State {
             || session.rule_set != current.rule_set
             || session.extra_nodes != current.extra_nodes
             || session.settings.dns != current.settings.dns
+            || session.settings.tls_fragment != current.settings.tls_fragment
     }
 
     fn saving_config(&self) -> bool {
@@ -810,8 +815,12 @@ impl State {
                         self.session.recovery.restored(failed, message);
                         self.operation_error = None;
                         self.settings.screen.dirty = false;
+                        self.settings.screen.fragment_dirty = false;
                         if self.settings.screen.opened {
                             self.settings.screen.sync_dns(&self.config.settings.dns);
+                            self.settings
+                                .screen
+                                .sync_fragment(&self.config.settings.tls_fragment);
                         }
                     }
                     Err(error) => {
@@ -834,8 +843,12 @@ impl State {
                         self.session.recovery = ApplyRecovery::default();
                         self.operation_error = None;
                         self.settings.screen.dirty = false;
+                        self.settings.screen.fragment_dirty = false;
                         if self.settings.screen.opened {
                             self.settings.screen.sync_dns(&self.config.settings.dns);
+                            self.settings
+                                .screen
+                                .sync_fragment(&self.config.settings.tls_fragment);
                         }
                     }
                     Err(error) => {

@@ -259,6 +259,8 @@ pub(crate) enum Action {
     SetAutoReconnect(bool),
     SetAllowLan(bool),
     SetXray(XrayUse),
+    SetTlsFragment(bool),
+    SaveTlsFragment,
     EnableXrayAutoAndConnect,
     SetAutoUpdateSubscriptions(bool),
     SetCheckUpdates(bool),
@@ -555,6 +557,11 @@ impl State {
                 if self.settings.screen.opened && !self.settings.screen.dirty {
                     self.settings.screen.sync_dns(&self.config.settings.dns);
                 }
+                if self.settings.screen.opened && !self.settings.screen.fragment_dirty {
+                    self.settings
+                        .screen
+                        .sync_fragment(&self.config.settings.tls_fragment);
+                }
                 self.reconcile_subscriptions();
                 self.reconcile_lists();
                 self.reconcile_exits();
@@ -703,6 +710,8 @@ impl State {
             | Action::SetAutoReconnect(_)
             | Action::SetAllowLan(_)
             | Action::SetXray(_)
+            | Action::SetTlsFragment(_)
+            | Action::SaveTlsFragment
             | Action::EnableXrayAutoAndConnect
             | Action::SetAutoUpdateSubscriptions(_)
             | Action::SetCheckUpdates(_)

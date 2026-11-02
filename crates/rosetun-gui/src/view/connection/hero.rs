@@ -30,6 +30,52 @@ mod tests {
         assert!(!server_check_available(FailureKind::NoNetwork));
         assert!(server_check_available(FailureKind::ServerUnreachable));
     }
+
+    fn engine_row(xray: bool, fragmented: bool, requested: bool, xray_use: XrayUse) -> Vec<String> {
+        let mut state = State::default();
+        state.config_ready = true;
+        state.helper_available = true;
+        state.status = rosetun_config::Status {
+            state: ConnectionState::Connected,
+            xray,
+            xray_use: Some(xray_use),
+            fragmented,
+            fragment_requested: requested,
+            ..rosetun_config::Status::default()
+        };
+        let mut actions = Vec::new();
+        let mut screen = crate::test_ui::TestScreen::new(egui::vec2(1200.0, 900.0));
+        screen
+            .settle(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| hero_card(ui, &state, &mut actions));
+            })
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    }
+
+    #[test]
+    fn the_engine_row_tells_applied_and_unapplied_fragmentation_in_both_languages() {
+        use crate::i18n::{self, Language};
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                let applied = engine_row(true, true, true, XrayUse::Auto);
+                assert!(applied.contains(&tr!("fragment-engine-active")));
+                assert!(!applied.contains(&tr!("fragment-engine-none")));
+
+                let unsupported = engine_row(false, false, true, XrayUse::Auto);
+                assert!(unsupported.contains(&tr!("fragment-engine-none")));
+                assert!(!unsupported.contains(&tr!("fragment-engine-active")));
+
+                let off = engine_row(false, false, false, XrayUse::Auto);
+                assert!(!off.contains(&tr!("fragment-engine-none")));
+                assert!(!off.contains(&tr!("fragment-engine-active")));
+
+                let plain = engine_row(true, false, false, XrayUse::Auto);
+                assert!(plain.contains(&tr!("xray-engine")));
+            });
+        }
+    }
 }
 
 /// Without a status the service either has not answered yet (start-up) or
@@ -551,7 +597,11 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             detail_row(ui, tr!("engine"), |ui| {
                                 if visible_status.is_some_and(|status| status.xray) {
                                     ui.vertical(|ui| {
-                                        ui.label(tr!("xray-engine"));
+                                        if visible_status.is_some_and(|status| status.fragmented) {
+                                            ui.label(tr!("fragment-engine-active"));
+                                        } else {
+                                            ui.label(tr!("xray-engine"));
+                                        }
                                         ui.add(
                                             egui::Label::new(
                                                 RichText::new(tr!("xray-engine-detail"))
@@ -560,10 +610,20 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                             )
                                             .wrap(),
                                         );
+                                        if let Some(status) = visible_status {
+                                            unfragmented_note(ui, status);
+                                        }
                                     });
                                 } else {
-                                    ui.add(egui::Label::new(engine.as_str()).truncate())
-                                        .on_hover_text(crate::i18n::engine_detail(engine.as_str()));
+                                    ui.vertical(|ui| {
+                                        ui.add(egui::Label::new(engine.as_str()).truncate())
+                                            .on_hover_text(crate::i18n::engine_detail(
+                                                engine.as_str(),
+                                            ));
+                                        if let Some(status) = visible_status {
+                                            unfragmented_note(ui, status);
+                                        }
+                                    });
                                 }
                             });
                         });
@@ -574,6 +634,27 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
 }
 
 const COPIED_FOR: f64 = 2.0;
+
+/// Fragmentation was on when this session started but the server's connection is not split.
+fn unfragmented_note(ui: &mut egui::Ui, status: &rosetun_config::Status) {
+    if !status.fragment_requested || status.fragmented {
+        return;
+    }
+    let hint = if status.xray_use == Some(XrayUse::Off) {
+        tr!("fragment-none-xray-hint")
+    } else {
+        tr!("fragment-none-hint")
+    };
+    ui.add(
+        egui::Label::new(
+            RichText::new(tr!("fragment-engine-none"))
+                .small()
+                .color(theme::palette().text_dim),
+        )
+        .sense(egui::Sense::hover()),
+    )
+    .on_hover_text(hint);
+}
 
 fn failure_details(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let Some(details) = state.failure_details() else {

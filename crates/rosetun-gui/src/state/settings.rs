@@ -2,7 +2,9 @@ use std::mem::{Discriminant, discriminant};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rosetun_config::{ConnectionState, DnsSettings, Node, Outbound, TlsMode, XrayUse};
+use rosetun_config::{
+    ConnectionState, DnsSettings, Node, Outbound, TlsFragment, TlsMode, XrayUse,
+};
 use rosetun_core::{DnsPreset, SettingChange};
 
 use super::{Action, Job, Screen, State, now_unix};
@@ -35,6 +37,10 @@ pub(crate) struct SettingsScreen {
     pub(crate) port: String,
     pub(crate) path: String,
     pub(crate) dirty: bool,
+    pub(crate) fragment_packets: String,
+    pub(crate) fragment_length: String,
+    pub(crate) fragment_interval: String,
+    pub(crate) fragment_dirty: bool,
     pub(crate) connect_after_xray_change: bool,
     pub(crate) xray_connect_ready: bool,
     pub(crate) config_folder: Option<PathBuf>,
@@ -55,6 +61,24 @@ impl SettingsScreen {
         self.server_name = dns.server_name.clone();
         self.port = dns.port.map_or_else(String::new, |port| port.to_string());
         self.path = dns.path.clone().unwrap_or_default();
+    }
+
+    pub(crate) fn sync_fragment(&mut self, fragment: &TlsFragment) {
+        self.fragment_packets = fragment.packets.to_string();
+        self.fragment_length = fragment.length.to_string();
+        self.fragment_interval = fragment.interval.to_string();
+    }
+
+    pub(crate) fn parsed_fragment(
+        &self,
+        enabled: bool,
+    ) -> Result<TlsFragment, rosetun_core::FragmentInputError> {
+        rosetun_core::parse_fragment_input(
+            enabled,
+            &self.fragment_packets,
+            &self.fragment_length,
+            &self.fragment_interval,
+        )
     }
 
     pub(crate) fn parsed_dns(&self) -> Result<DnsSettings, rosetun_core::DnsInputError> {
@@ -98,6 +122,8 @@ fn waits_for_save(action: &Action) -> bool {
         | Action::SetAutoReconnect(_)
         | Action::SetAllowLan(_)
         | Action::SetXray(_)
+        | Action::SetTlsFragment(_)
+        | Action::SaveTlsFragment
         | Action::EnableXrayAutoAndConnect
         | Action::SetAutoUpdateSubscriptions(_)
         | Action::SetCheckUpdates(_)
@@ -352,6 +378,16 @@ impl State {
                 if matches!(change, SettingChange::AllowLan(_)) && result.is_ok() {
                     self.queue_lockdown_lan();
                 }
+                if matches!(change, SettingChange::TlsFragment(_)) {
+                    if result.is_ok() {
+                        self.settings.screen.fragment_dirty = false;
+                    }
+                    if !self.settings.screen.fragment_dirty {
+                        self.settings
+                            .screen
+                            .sync_fragment(&self.config.settings.tls_fragment);
+                    }
+                }
                 self.finish_settings(result);
             }
             WorkerEvent::SkipVersion(result) => self.finish_settings(result),
@@ -370,7 +406,11 @@ impl State {
             WorkerEvent::ResetSettings(result) => {
                 if result.is_ok() {
                     self.settings.screen.dirty = false;
+                    self.settings.screen.fragment_dirty = false;
                     self.settings.screen.sync_dns(&self.config.settings.dns);
+                    self.settings
+                        .screen
+                        .sync_fragment(&self.config.settings.tls_fragment);
                 }
                 self.settings.screen.reset_open = false;
                 self.finish_settings(result);
@@ -415,6 +455,9 @@ impl State {
                     self.settings.screen.opened = true;
                     if self.config_ready {
                         self.settings.screen.sync_dns(&self.config.settings.dns);
+                        self.settings
+                            .screen
+                            .sync_fragment(&self.config.settings.tls_fragment);
                     }
                 }
                 let job = self.show_screen(Screen::Settings);
@@ -514,6 +557,31 @@ impl State {
             Action::SetXray(setting) => {
                 if self.can_edit_settings() && self.config.settings.xray != setting {
                     return self.start_settings(Job::Setting(SettingChange::Xray(setting)));
+                }
+            }
+            Action::SetTlsFragment(enabled) => {
+                let current = self.config.settings.tls_fragment;
+                if self.can_edit_settings()
+                    && self.config.settings.xray != XrayUse::Off
+                    && current.enabled != enabled
+                {
+                    return self.start_settings(Job::Setting(SettingChange::TlsFragment(
+                        TlsFragment { enabled, ..current },
+                    )));
+                }
+            }
+            Action::SaveTlsFragment => {
+                if self.can_edit_settings()
+                    && self.config.settings.xray != XrayUse::Off
+                    && let Ok(fragment) = self
+                        .settings
+                        .screen
+                        .parsed_fragment(self.config.settings.tls_fragment.enabled)
+                    && fragment != self.config.settings.tls_fragment
+                {
+                    return self.start_settings(Job::Setting(SettingChange::TlsFragment(
+                        fragment,
+                    )));
                 }
             }
             Action::EnableXrayAutoAndConnect => {

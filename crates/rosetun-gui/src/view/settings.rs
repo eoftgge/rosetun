@@ -405,41 +405,47 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                     .small()
                     .color(theme::palette().text_dim),
             );
-            if state
-                .visible_status()
-                .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
-                && state.pending_reconnect(SessionPart::Dns)
-            {
-                if state.can_apply() {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        ui.label(
-                            RichText::new(tr!("apply-on-leave"))
-                                .small()
-                                .color(theme::palette().accent_light),
-                        );
-                        ui.label(
-                            RichText::new(tr!("apply-separator"))
-                                .small()
-                                .color(theme::palette().accent_light),
-                        );
-                        if widgets::link(ui, &tr!("apply-now"), true)
-                            .on_hover_text(tr!("apply-hint"))
-                            .clicked()
-                        {
-                            actions.push(Action::Apply);
-                        }
-                    });
-                } else {
-                    ui.label(
-                        RichText::new(tr!("next-connect"))
-                            .small()
-                            .color(theme::palette().accent_light),
-                    );
-                }
-            }
+            pending_note(ui, state, SessionPart::Dns, actions);
         });
     });
+}
+
+/// "Not applied · Apply" under a setting that a running session has not picked up yet.
+fn pending_note(ui: &mut egui::Ui, state: &State, part: SessionPart, actions: &mut Vec<Action>) {
+    if !state
+        .visible_status()
+        .is_some_and(|status| status.state.is_active() || status.state.is_transitional())
+        || !state.pending_reconnect(part)
+    {
+        return;
+    }
+    if state.can_apply() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.label(
+                RichText::new(tr!("apply-on-leave"))
+                    .small()
+                    .color(theme::palette().accent_light),
+            );
+            ui.label(
+                RichText::new(tr!("apply-separator"))
+                    .small()
+                    .color(theme::palette().accent_light),
+            );
+            if widgets::link(ui, &tr!("apply-now"), true)
+                .on_hover_text(tr!("apply-hint"))
+                .clicked()
+            {
+                actions.push(Action::Apply);
+            }
+        });
+    } else {
+        ui.label(
+            RichText::new(tr!("next-connect"))
+                .small()
+                .color(theme::palette().accent_light),
+        );
+    }
 }
 
 fn dns_choice(
@@ -554,7 +560,120 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     }
 }
 
-fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+fn advanced(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
+    xray(ui, state, actions);
+    ui.add_space(theme::space::M);
+    fragment(ui, state, actions);
+}
+
+fn fragment(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
+    let xray_off = state.config.settings.xray == XrayUse::Off;
+    let editable = state.can_edit_settings() && !xray_off;
+    let enabled = state.config.settings.tls_fragment.enabled;
+    widgets::settings_card(ui, |card| {
+        let mut on = enabled;
+        let detail = if xray_off {
+            tr!("fragment-needs-xray")
+        } else {
+            tr!("fragment-detail")
+        };
+        if card
+            .toggle(tr!("fragment-title"), None, detail, &mut on, editable)
+            .changed()
+        {
+            actions.push(Action::SetTlsFragment(on));
+        }
+        if enabled {
+            card.body(|ui| {
+                fragment_form(ui, state, editable, actions);
+                pending_note(ui, state, SessionPart::Fragment, actions);
+            });
+        }
+    });
+}
+
+fn fragment_form(ui: &mut egui::Ui, state: &mut State, editable: bool, actions: &mut Vec<Action>) {
+    let saved = state.config.settings.tls_fragment;
+    let form = &mut state.settings.screen;
+    let parsed = form.parsed_fragment(saved.enabled);
+    let labels = [
+        tr!("fragment-packets"),
+        tr!("fragment-length"),
+        tr!("fragment-interval"),
+    ];
+    let label_width = labels
+        .iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(
+                    label.to_string(),
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    theme::palette().text,
+                )
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    let input_width = (ui.available_width() - label_width - 16.0).clamp(120.0, 300.0);
+    egui::Grid::new("fragment_settings_fields")
+        .num_columns(2)
+        .spacing([16.0, 10.0])
+        .show(ui, |ui| {
+            for (label, value, hint, tooltip, failure) in [
+                (
+                    &labels[0],
+                    &mut form.fragment_packets,
+                    constants::FRAGMENT_PACKETS_PLACEHOLDER,
+                    tr!("fragment-packets-hint"),
+                    rosetun_core::FragmentInputError::InvalidPackets,
+                ),
+                (
+                    &labels[1],
+                    &mut form.fragment_length,
+                    constants::FRAGMENT_LENGTH_PLACEHOLDER,
+                    tr!("fragment-length-hint"),
+                    rosetun_core::FragmentInputError::InvalidLength,
+                ),
+                (
+                    &labels[2],
+                    &mut form.fragment_interval,
+                    constants::FRAGMENT_INTERVAL_PLACEHOLDER,
+                    tr!("fragment-interval-hint"),
+                    rosetun_core::FragmentInputError::InvalidInterval,
+                ),
+            ] {
+                ui.label(label.as_str());
+                let field = widgets::TextField::new(value)
+                    .hint(hint)
+                    .width(input_width)
+                    .enabled(editable)
+                    .invalid(parsed.as_ref().err() == Some(&failure));
+                if ui.add(field).on_hover_text(tooltip).changed() {
+                    form.fragment_dirty = true;
+                }
+                ui.end_row();
+            }
+        });
+    if let Err(error) = &parsed {
+        ui.colored_label(
+            theme::ERROR,
+            errors::fragment_input(crate::i18n::language(), error),
+        );
+    }
+    ui.add_space(theme::space::S);
+    if widgets::button_fill(
+        ui,
+        tr!("save"),
+        editable && parsed.is_ok_and(|fragment| fragment != saved),
+    )
+    .clicked()
+    {
+        actions.push(Action::SaveTlsFragment);
+    }
+    ui.add_space(theme::space::S);
+}
+
+fn xray(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     widgets::settings_card(ui, |card| {
         card.row(tr!("xray-title"), Some(&tr!("xray-detail")), |_| {});
         card.body(|ui| {
@@ -1518,6 +1637,131 @@ mod drop_down_tests {
                 actions
                     .iter()
                     .any(|action| matches!(action, Action::SetOnQuit(QuitAction::KeepConnected)))
+            );
+        });
+    }
+}
+
+#[cfg(test)]
+mod fragment_tests {
+    use super::*;
+    use crate::i18n::{self, Language};
+    use crate::test_ui::TestScreen;
+
+    fn shown(state: &mut State, actions: &mut Vec<Action>) -> Vec<String> {
+        let mut screen = TestScreen::new(egui::vec2(960.0, 900.0));
+        screen
+            .settle(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| advanced(ui, state, actions));
+            })
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    }
+
+    fn state(xray: XrayUse, enabled: bool) -> State {
+        let mut state = State::default();
+        state.config_ready = true;
+        state.config.settings.xray = xray;
+        state.config.settings.tls_fragment.enabled = enabled;
+        let fragment = state.config.settings.tls_fragment;
+        state.settings.screen.sync_fragment(&fragment);
+        state
+    }
+
+    #[test]
+    fn the_switch_is_unavailable_with_its_reason_while_xray_is_off_in_both_languages() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                let mut state = state(XrayUse::Off, false);
+                let mut actions = Vec::new();
+                let texts = shown(&mut state, &mut actions);
+                assert!(texts.contains(&tr!("fragment-needs-xray")));
+                assert!(!texts.contains(&tr!("fragment-detail")));
+
+                let mut screen = TestScreen::new(egui::vec2(960.0, 900.0));
+                let mut show = |ui: &mut egui::Ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| advanced(ui, &mut state, &mut actions));
+                };
+                screen.click_text(&tr!("fragment-title"), &mut show);
+                assert!(
+                    !actions
+                        .iter()
+                        .any(|action| matches!(action, Action::SetTlsFragment(_)))
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn the_switch_asks_for_fragmentation_and_shows_its_caption_in_both_languages() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                let mut state = state(XrayUse::Auto, false);
+                let mut actions = Vec::new();
+                let mut screen = TestScreen::new(egui::vec2(960.0, 900.0));
+                let mut show = |ui: &mut egui::Ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| advanced(ui, &mut state, &mut actions));
+                };
+                let texts = screen.click_text(&tr!("fragment-title"), &mut show);
+                assert!(texts.iter().any(|(text, _)| *text == tr!("fragment-detail")));
+                assert!(
+                    actions
+                        .iter()
+                        .any(|action| matches!(action, Action::SetTlsFragment(true)))
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn a_wrong_value_shows_its_caption_and_blocks_saving_in_both_languages() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                let mut state = state(XrayUse::Auto, true);
+                let mut actions = Vec::new();
+                let texts = shown(&mut state, &mut actions);
+                assert!(texts.contains(&tr!("fragment-packets")));
+                assert!(
+                    !texts.contains(&tr!("error-fragment-length")),
+                    "valid values show no error"
+                );
+
+                state.settings.screen.fragment_length = "9999".into();
+                let texts = shown(&mut state, &mut actions);
+                assert!(texts.contains(&tr!("error-fragment-length")));
+                let mut screen = TestScreen::new(egui::vec2(960.0, 900.0));
+                let mut show = |ui: &mut egui::Ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| advanced(ui, &mut state, &mut actions));
+                };
+                screen.click_text(&tr!("save"), &mut show);
+                assert!(
+                    !actions
+                        .iter()
+                        .any(|action| matches!(action, Action::SaveTlsFragment))
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn a_changed_valid_value_can_be_saved() {
+        i18n::in_language(Language::English, || {
+            let mut state = state(XrayUse::Auto, true);
+            state.settings.screen.fragment_length = "100-200".into();
+            let mut actions = Vec::new();
+            let mut screen = TestScreen::new(egui::vec2(960.0, 900.0));
+            let mut show = |ui: &mut egui::Ui| {
+                egui::CentralPanel::default().show(ui, |ui| advanced(ui, &mut state, &mut actions));
+            };
+            screen.click_text(&tr!("save"), &mut show);
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| matches!(action, Action::SaveTlsFragment))
             );
         });
     }
