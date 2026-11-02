@@ -732,19 +732,25 @@ rename-rule-set = Rename rule set
 delete-rule-set = Delete rule set?
 delete-rule-set-detail = This set and all its rules will be removed.
 delete-active-rule-set-warning = Connections will use Default · through VPN.
-delete-rule = Delete rule?
-delete-rule-detail = This rule will be removed from the set.
-delete-rules-heading = { $count ->
-    [one] Delete { $n } { rule-unit }
-   *[other] Delete { rule-count }
-}
-rule-unit = rule
-and-more-rules = and { $k } more
 move-to-top = Move to top
 move-selected-to-top = Move to top
 move-to-end = Move to end
 selected-rule-count = Selected: { $n }
 delete-selected-rules = Delete selected ({ $n })
+undo = Undo
+rules-deleted = { $count ->
+    [1] Rule deleted
+   *[other] Rules deleted: { $n }
+}
+rule-set-deleted = Rule set deleted
+rules-moved = { $count ->
+    [1] Rule moved
+   *[other] Rules moved: { $n }
+}
+rules-not-restored = { $count ->
+    [1] One rule did not come back: its list is gone.
+   *[other] Rules that did not come back: { $n }. Their lists are gone.
+}
 search-rules = Search rules
 all = All
 domains = Websites
@@ -910,10 +916,6 @@ stored-as = Stored as { $ascii }
 servers = { $count ->
     [one] { $n } server
    *[other] { $n } servers
-}
-rule-count = { $count ->
-    [one] { $n } { rule-unit }
-   *[other] { $n } rules
 }
 add-rules = { $count ->
     [1] { add-rule }

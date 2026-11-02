@@ -152,6 +152,12 @@ impl WorkerDispatcher {
             WorkerEvent::RemoveRules(remove_rules(store, &set, &rules))
         });
     }
+
+    pub(crate) fn restore_rule_sets(&self, snapshot: RuleSetsSnapshot) {
+        self.spawn_complete("rosetun-restore-rule-sets", move |store| {
+            WorkerEvent::RestoreRuleSets(restore_rule_sets(store, &snapshot))
+        });
+    }
 }
 
 fn save_exit(

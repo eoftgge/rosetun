@@ -76,8 +76,7 @@ fn cases() -> Vec<Case> {
             cancel: Some(|| tr!("cancel")),
             title: None,
             show: |ctx, state| {
-                state.rules.screen.delete =
-                    Some(crate::state::DeleteDialog::Set(RuleSetId::new("set")));
+                state.rules.screen.delete_set = Some(RuleSetId::new("set"));
                 rules::delete_dialog(ctx, state, &mut Vec::new());
             },
         },

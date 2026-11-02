@@ -1355,9 +1355,8 @@ fn grouped_edit_while_connected_requires_explicit_apply() {
     assert!(state.pending_reconnect(SessionPart::Rules));
     assert!(state.can_apply());
     assert!(state.take_apply().is_none());
-    state.act(Action::RequestDeleteSelectedRules);
     assert!(matches!(
-        state.act(Action::ConfirmRuleDelete),
+        state.act(Action::DeleteSelectedRules),
         Some(Job::RemoveRules(_, _))
     ));
     let mut config = state.config.clone();
@@ -1369,7 +1368,10 @@ fn grouped_edit_while_connected_requires_explicit_apply() {
         config,
     });
     state.reduce(WorkerEvent::RemoveRules(Ok(())));
-    assert!(state.rules.screen.selected_rules.is_empty());
+    assert_eq!(
+        state.rules.screen.selected_rules.iter().collect::<Vec<_>>(),
+        [&RuleId::new("1")]
+    );
     assert!(state.pending_reconnect(SessionPart::Rules));
     assert!(state.can_apply());
     assert!(state.take_apply().is_none());

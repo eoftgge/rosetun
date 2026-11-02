@@ -1,3 +1,4 @@
+mod action_notice;
 mod buttons;
 mod checkbox;
 mod choice_card;
@@ -15,6 +16,7 @@ mod text_field;
 mod toggle;
 mod transitions;
 
+pub(crate) use action_notice::action_notice;
 pub(crate) use buttons::{
     button_fill, button_fill_compact, link, outline_button, outline_button_compact,
     outline_button_full, outline_button_menu,

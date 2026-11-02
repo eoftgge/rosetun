@@ -133,16 +133,24 @@ fn add_rules_label_pluralizes_in_both_languages() {
 #[test]
 fn grouped_rule_labels_include_counts() {
     assert_eq!(
-        in_language(Language::English, || delete_rules_heading(2)),
-        "Delete 2 rules"
+        in_language(Language::English, || rules_deleted(1)),
+        "Rule deleted"
     );
     assert_eq!(
-        in_language(Language::English, || delete_rules_heading(5)),
-        "Delete 5 rules"
+        in_language(Language::English, || rules_deleted(5)),
+        "Rules deleted: 5"
     );
     assert_eq!(
-        in_language(Language::Russian, || delete_rules_heading(5)),
-        "Удалить правила: 5"
+        in_language(Language::Russian, || rules_deleted(1)),
+        "Правило удалено"
+    );
+    assert_eq!(
+        in_language(Language::Russian, || rules_deleted(21)),
+        "Удалено правил: 21"
+    );
+    assert_eq!(
+        in_language(Language::Russian, || rules_moved(3)),
+        "Перемещено правил: 3"
     );
     assert_eq!(
         in_language(Language::Russian, || selected_rule_count(3)),
@@ -151,10 +159,6 @@ fn grouped_rule_labels_include_counts() {
     assert_eq!(
         in_language(Language::Russian, || delete_selected_rules(3)),
         "Удалить выбранные (3)"
-    );
-    assert_eq!(
-        in_language(Language::Russian, || and_more_rules(2)),
-        "и ещё 2"
     );
 }
 

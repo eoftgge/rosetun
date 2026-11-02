@@ -263,19 +263,16 @@ fn all_rule_operation_errors_clear_busy_and_use_shared_error() {
 fn set_deletion_requires_confirmation_and_reports_errors_outside_dialog() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
-    assert!(state.act(Action::ConfirmRuleDelete).is_none());
+    assert!(state.act(Action::ConfirmDeleteSet).is_none());
     state.act(Action::RequestDeleteSet);
+    assert_eq!(state.rules.screen.delete_set, Some(RuleSetId::new("2")));
     assert!(matches!(
-        state.rules.screen.delete,
-        Some(DeleteDialog::Set(_))
-    ));
-    assert!(matches!(
-        state.act(Action::ConfirmRuleDelete),
+        state.act(Action::ConfirmDeleteSet),
         Some(Job::DeleteRuleSet(id)) if id == RuleSetId::new("2")
     ));
-    assert!(state.act(Action::CancelRuleDelete).is_none());
+    assert!(state.act(Action::CancelDeleteSet).is_none());
     state.reduce(WorkerEvent::DeleteRuleSet(Err(RuleSetError::SetNotFound)));
-    assert!(state.rules.screen.delete.is_none());
+    assert!(state.rules.screen.delete_set.is_none());
     assert_eq!(
         state.operation_error.as_deref(),
         Some("rule set does not exist")
@@ -865,36 +862,25 @@ fn selected_rules_move_as_one_job_and_filters_block_reordering() {
 }
 
 #[test]
-fn selected_rules_delete_in_one_confirmed_job_and_clear_after_success() {
+fn selected_rules_delete_at_once_in_one_job_and_clear_after_success() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
     state.act(Action::SelectVisibleRules);
-    state.act(Action::RequestDeleteSelectedRules);
-    assert!(matches!(
-        &state.rules.screen.delete,
-        Some(DeleteDialog::Rules { set, rules })
-            if set == &RuleSetId::new("2") && rules.len() == 3
-    ));
-    state.act(Action::CancelRuleDelete);
-    assert!(state.rules.screen.delete.is_none());
-    assert_eq!(state.rules.screen.selected_rules.len(), 3);
     state.rules.screen.filter.search = "first".into();
-    state.act(Action::RequestDeleteSelectedRules);
     assert!(matches!(
-        state.rules.screen.delete,
-        Some(DeleteDialog::Rule { .. })
+        state.act(Action::DeleteSelectedRules),
+        Some(Job::RemoveRule(set, _)) if set == RuleSetId::new("2")
     ));
-    state.act(Action::CancelRuleDelete);
+    state.reduce(WorkerEvent::RemoveRule(Err(RuleSetError::RuleNotFound)));
+    assert_eq!(state.rules.screen.selected_rules.len(), 3);
     state.rules.screen.filter.search.clear();
-    state.act(Action::RequestDeleteSelectedRules);
     assert!(matches!(
-        state.act(Action::ConfirmRuleDelete),
+        state.act(Action::DeleteSelectedRules),
         Some(Job::RemoveRules(set, rules))
             if set == RuleSetId::new("2") && rules.len() == 3
     ));
-    assert!(state.act(Action::CancelRuleDelete).is_none());
+    assert!(state.act(Action::DeleteSelectedRules).is_none());
     state.reduce(WorkerEvent::RemoveRules(Ok(())));
-    assert!(state.rules.screen.delete.is_none());
     assert!(state.rules.screen.selected_rules.is_empty());
 }
 
@@ -960,13 +946,11 @@ fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
         added: vec![rule_set("1").rules[0].clone()],
         skipped: 0,
     })));
-    state.act(Action::RequestDeleteRule(rule));
     assert!(matches!(
-        state.act(Action::ConfirmRuleDelete),
+        state.act(Action::DeleteRule(rule)),
         Some(Job::RemoveRule(_, _))
     ));
     state.reduce(WorkerEvent::RemoveRule(Ok(())));
-    assert!(state.rules.screen.delete.is_none());
 }
 
 #[test]

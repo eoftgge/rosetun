@@ -138,6 +138,119 @@ pub fn restore_rules_and_dns(
     })
 }
 
+/// Rule sets as they stood before an edit, so that the edit can be undone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleSetsSnapshot {
+    pub sets: Vec<SetSnapshot>,
+    /// The active set, when the edit could change which one it is.
+    pub active: Option<Option<RuleSetId>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetSnapshot {
+    pub id: RuleSetId,
+    /// Where the set stood in the list, so that a deleted set comes back in its place.
+    pub index: usize,
+    /// `None` when the set did not exist yet.
+    pub set: Option<RuleSet>,
+}
+
+impl RuleSetsSnapshot {
+    pub fn of(config: &AppConfig, ids: &[RuleSetId], with_active: bool) -> Self {
+        let sets = ids
+            .iter()
+            .map(|id| {
+                let index = config.rule_sets.iter().position(|set| &set.id == id);
+                SetSnapshot {
+                    id: id.clone(),
+                    index: index.unwrap_or(config.rule_sets.len()),
+                    set: index.map(|index| config.rule_sets[index].clone()),
+                }
+            })
+            .collect();
+        Self {
+            sets,
+            active: with_active.then(|| config.active_rule_set.clone()),
+        }
+    }
+
+    pub fn rule_count(&self) -> usize {
+        self.sets
+            .iter()
+            .filter_map(|entry| entry.set.as_ref())
+            .map(|set| set.rules.len())
+            .sum()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredRuleSets {
+    /// What the restore replaced, so that it can be put back in turn.
+    pub previous: RuleSetsSnapshot,
+    /// Rules left out because their list no longer exists.
+    pub dropped: usize,
+}
+
+/// Puts rule sets back as a snapshot holds them. A rule whose list is gone
+/// is left out, and a rule whose exit is gone blocks, as when the exit is
+/// deleted.
+pub fn restore_rule_sets(
+    store: &Store,
+    snapshot: &RuleSetsSnapshot,
+) -> Result<RestoredRuleSets, RuleSetError> {
+    store.modify(|config| {
+        let ids: Vec<_> = snapshot.sets.iter().map(|entry| entry.id.clone()).collect();
+        let previous = RuleSetsSnapshot::of(config, &ids, snapshot.active.is_some());
+        let mut dropped = 0;
+        for entry in &snapshot.sets {
+            let current = config.rule_sets.iter().position(|set| set.id == entry.id);
+            match (&entry.set, current) {
+                (Some(set), current) => {
+                    let mut set = set.clone();
+                    dropped += settle_restored_rules(config, &mut set);
+                    match current {
+                        Some(index) => config.rule_sets[index] = set,
+                        None => {
+                            let index = entry.index.min(config.rule_sets.len());
+                            config.rule_sets.insert(index, set);
+                        }
+                    }
+                }
+                (None, Some(index)) => {
+                    config.rule_sets.remove(index);
+                }
+                (None, None) => {}
+            }
+        }
+        if let Some(active) = &snapshot.active {
+            config.active_rule_set = active.clone();
+        }
+        if config
+            .active_rule_set
+            .as_ref()
+            .is_some_and(|id| !config.rule_sets.iter().any(|set| &set.id == id))
+        {
+            config.active_rule_set = None;
+        }
+        Ok(RestoredRuleSets { previous, dropped })
+    })
+}
+
+fn settle_restored_rules(config: &AppConfig, set: &mut RuleSet) -> usize {
+    let before = set.rules.len();
+    set.rules
+        .retain(|rule| validate_list_matcher(config, &rule.matcher).is_ok());
+    for rule in &mut set.rules {
+        if let Some(exit) = &rule.exit
+            && !config.exits.iter().any(|item| &item.id == exit)
+        {
+            rule.target = RuleTarget::Block;
+            rule.exit = None;
+        }
+    }
+    before - set.rules.len()
+}
+
 pub(crate) fn next_id<'a>(ids: impl Iterator<Item = &'a str>) -> String {
     let occupied: BTreeSet<_> = ids.collect();
     let mut candidate = 1_u64;

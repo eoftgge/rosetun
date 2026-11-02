@@ -235,17 +235,21 @@ fn plural_forms_keep_legacy_copy_at_count_boundaries() {
             "{count}"
         );
         assert_eq!(
-            tr_in(Language::English, "delete-rules-heading", &args),
+            tr_in(Language::English, "rules-deleted", &args),
             if count == 1 {
-                "Delete 1 rule".to_owned()
+                "Rule deleted".to_owned()
             } else {
-                format!("Delete {count} rules")
+                format!("Rules deleted: {count}")
             },
             "{count}"
         );
         assert_eq!(
-            tr_in(Language::Russian, "delete-rules-heading", &args),
-            format!("Удалить правила: {count}"),
+            tr_in(Language::Russian, "rules-deleted", &args),
+            if count == 1 {
+                "Правило удалено".to_owned()
+            } else {
+                format!("Удалено правил: {count}")
+            },
             "{count}"
         );
     }

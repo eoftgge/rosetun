@@ -550,7 +550,7 @@ pub(super) fn rule_row(
                                 )
                                 .clicked()
                                 {
-                                    actions.push(Action::RequestDeleteSelectedRules);
+                                    actions.push(Action::DeleteSelectedRules);
                                     ui.close();
                                 }
                             } else {
@@ -618,7 +618,7 @@ pub(super) fn rule_row(
                                     actions.push(if temporary {
                                         Action::RemoveTemporary(rule.id.clone())
                                     } else {
-                                        Action::RequestDeleteRule(rule.id.clone())
+                                        Action::DeleteRule(rule.id.clone())
                                     });
                                     ui.close();
                                 }

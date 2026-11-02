@@ -204,6 +204,7 @@ mod qr;
 #[cfg(windows)]
 mod quit;
 mod route_reason;
+mod rule_history;
 mod rules;
 mod schedule;
 mod session;

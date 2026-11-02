@@ -120,12 +120,16 @@ pub(crate) fn delete_selected_rules(count: usize) -> String {
     tr!("delete-selected-rules", n = count.to_string())
 }
 
-pub(crate) fn delete_rules_heading(count: usize) -> String {
-    tr!("delete-rules-heading", count = count, n = count.to_string())
+pub(crate) fn rules_deleted(count: usize) -> String {
+    tr!("rules-deleted", count = count, n = count.to_string())
 }
 
-pub(crate) fn and_more_rules(count: usize) -> String {
-    tr!("and-more-rules", k = count.to_string())
+pub(crate) fn rules_moved(count: usize) -> String {
+    tr!("rules-moved", count = count, n = count.to_string())
+}
+
+pub(crate) fn rules_not_restored(count: usize) -> String {
+    tr!("rules-not-restored", count = count, n = count.to_string())
 }
 
 pub(crate) fn add_rules(count: usize) -> String {

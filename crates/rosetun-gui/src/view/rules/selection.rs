@@ -9,7 +9,7 @@ pub(super) fn clear_selection_on_click_away(
     if state.rules.screen.selected_rules.is_empty()
         || state.rules.screen.name.is_some()
         || state.rules.screen.add.is_some()
-        || state.rules.screen.delete.is_some()
+        || state.rules.screen.delete_set.is_some()
         || ctx.dragged_id().is_some()
         || actions.iter().any(|action| {
             matches!(
@@ -19,7 +19,7 @@ pub(super) fn clear_selection_on_click_away(
                     | Action::DropRules(_, _)
                     | Action::MoveSelectedRulesToTop
                     | Action::MoveSelectedRulesToEnd
-                    | Action::RequestDeleteSelectedRules
+                    | Action::DeleteSelectedRules
                     | Action::ClearRuleSelection
             )
         })
@@ -96,7 +96,7 @@ fn selection_toolbar(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>
         })
         .inner;
     if delete.clicked() {
-        actions.push(Action::RequestDeleteSelectedRules);
+        actions.push(Action::DeleteSelectedRules);
     }
 }
 
@@ -106,23 +106,35 @@ pub(super) fn selection_shortcuts(
     text_edit_focused: bool,
     actions: &mut Vec<Action>,
 ) {
+    // A text field keeps Ctrl+Z for its own text; a dialog or menu keeps the keys.
     if text_edit_focused
         || state.rules.screen.name.is_some()
         || state.rules.screen.add.is_some()
-        || state.rules.screen.delete.is_some()
+        || state.rules.screen.delete_set.is_some()
+        || ctx.memory(egui::Memory::top_modal_layer).is_some()
+        || egui::Popup::is_any_open(ctx)
     {
         return;
     }
-    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
+    let selected = !state.rules.screen.selected_rules.is_empty();
+    let pressed = |modifiers, key| ctx.input_mut(|input| input.consume_key(modifiers, key));
+    let redo = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    if pressed(redo, egui::Key::Z) || pressed(egui::Modifiers::COMMAND, egui::Key::Y) {
+        actions.push(Action::RedoRules);
+    } else if pressed(egui::Modifiers::COMMAND, egui::Key::Z) {
+        actions.push(Action::UndoRules);
+    } else if pressed(egui::Modifiers::COMMAND, egui::Key::A) {
         actions.push(Action::SelectVisibleRules);
-    } else if !state.rules.screen.selected_rules.is_empty()
-        && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-    {
+    } else if selected && pressed(egui::Modifiers::NONE, egui::Key::Escape) {
         actions.push(Action::ClearRuleSelection);
-    } else if !state.rules.screen.selected_rules.is_empty()
+    } else if selected && pressed(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+        actions.push(Action::StepRuleSelection { down: true });
+    } else if selected && pressed(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+        actions.push(Action::StepRuleSelection { down: false });
+    } else if selected
         && state.can_edit_rules()
-        && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
+        && pressed(egui::Modifiers::NONE, egui::Key::Delete)
     {
-        actions.push(Action::RequestDeleteSelectedRules);
+        actions.push(Action::DeleteSelectedRules);
     }
 }

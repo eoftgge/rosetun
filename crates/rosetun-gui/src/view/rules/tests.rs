@@ -452,8 +452,21 @@ fn table_shortcuts_select_visible_clear_and_ignore_text_focus() {
         (egui::Key::A, egui::Modifiers::COMMAND, false, true),
         (egui::Key::Escape, egui::Modifiers::NONE, false, true),
         (egui::Key::Delete, egui::Modifiers::NONE, false, true),
+        (egui::Key::ArrowDown, egui::Modifiers::NONE, false, true),
+        (egui::Key::ArrowUp, egui::Modifiers::NONE, false, true),
+        (egui::Key::Z, egui::Modifiers::COMMAND, false, true),
+        (
+            egui::Key::Z,
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            false,
+            true,
+        ),
+        (egui::Key::Y, egui::Modifiers::COMMAND, false, true),
+        (egui::Key::Backspace, egui::Modifiers::NONE, false, false),
         (egui::Key::Escape, egui::Modifiers::NONE, true, false),
         (egui::Key::Delete, egui::Modifiers::NONE, true, false),
+        (egui::Key::Z, egui::Modifiers::COMMAND, true, false),
+        (egui::Key::ArrowDown, egui::Modifiers::NONE, true, false),
     ] {
         let mut actions = Vec::new();
         let mut output = ctx.run_ui(
@@ -476,11 +489,14 @@ fn table_shortcuts_select_visible_clear_and_ignore_text_focus() {
                 actions.as_slice(),
                 [Action::SelectVisibleRules
                     | Action::ClearRuleSelection
-                    | Action::RequestDeleteSelectedRules]
+                    | Action::DeleteSelectedRules
+                    | Action::StepRuleSelection { .. }
+                    | Action::UndoRules
+                    | Action::RedoRules]
             ));
         }
     }
-    state.rules.screen.delete = Some(DeleteDialog::Set(rosetun_config::RuleSetId::new("1")));
+    state.rules.screen.delete_set = Some(rosetun_config::RuleSetId::new("1"));
     let mut actions = Vec::new();
     let mut output = ctx.run_ui(
         egui::RawInput {
@@ -497,6 +513,43 @@ fn table_shortcuts_select_visible_clear_and_ignore_text_focus() {
     );
     output.textures_delta.clear();
     assert!(actions.is_empty());
+}
+
+#[test]
+fn ctrl_z_undoes_and_ctrl_shift_z_or_ctrl_y_redo() {
+    let ctx = egui::Context::default();
+    let mut state = State::default();
+    state.config_ready = true;
+    for (key, modifiers, redo) in [
+        (egui::Key::Z, egui::Modifiers::COMMAND, false),
+        (
+            egui::Key::Z,
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            true,
+        ),
+        (egui::Key::Y, egui::Modifiers::COMMAND, true),
+    ] {
+        let mut actions = Vec::new();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..egui::RawInput::default()
+            },
+            |ctx| selection_shortcuts(ctx, &state, false, &mut actions),
+        );
+        output.textures_delta.clear();
+        if redo {
+            assert!(matches!(actions.as_slice(), [Action::RedoRules]));
+        } else {
+            assert!(matches!(actions.as_slice(), [Action::UndoRules]));
+        }
+    }
 }
 
 #[test]

@@ -433,6 +433,7 @@ impl App {
             Job::MoveRules(set, rules, to_index) => self.workers.move_rules(set, rules, to_index),
             Job::RemoveRule(set, rule) => self.workers.remove_rule(set, rule),
             Job::RemoveRules(set, rules) => self.workers.remove_rules(set, rules),
+            Job::RestoreRuleSets(snapshot) => self.workers.restore_rule_sets(snapshot),
             Job::SetKillSwitch(enabled) => self.workers.set_kill_switch(enabled),
             Job::SetLockdown(enabled) => self.workers.set_lockdown(enabled),
             Job::Add { input, options } => self.workers.add(input, options),

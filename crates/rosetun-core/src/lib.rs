@@ -45,7 +45,8 @@ pub use rules::{
     RuleDestination, RuleInputError, RuleSetError, add_rule, add_rules, create_rule_set,
     delete_rule_set, ip_lines_have_local_address, move_rule, move_rules, parse_domain_input,
     parse_domain_lines, parse_ip_cidr, parse_ip_lines, parse_process_input, remove_rule,
-    remove_rules, rename_rule_set, restore_rules_and_dns, rule_value_ascii, rule_value_text,
+    remove_rules, rename_rule_set, restore_rule_sets, restore_rules_and_dns, rule_value_ascii,
+    rule_value_text, RestoredRuleSets, RuleSetsSnapshot, SetSnapshot,
     set_default_target, set_rule_enabled, set_rule_target, temporary_rules, update_rule,
     validate_list_matcher,
 };

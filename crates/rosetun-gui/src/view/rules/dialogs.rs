@@ -30,84 +30,40 @@ pub(crate) fn name_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
     }
 }
 
-fn delete_rule_value(state: &State, rule: &Rule) -> String {
-    match &rule.matcher {
-        RuleMatcher::Template(_) => rule_lines(&rule.matcher).0,
-        RuleMatcher::List { list, category } => state.list_rule_name(list, category.as_deref()),
-        _ => rosetun_core::rule_value_text(&rule.matcher),
-    }
-}
-
 pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
-    let Some(dialog) = &state.rules.screen.delete else {
+    let Some(id) = &state.rules.screen.delete_set else {
         return;
     };
     let busy = state.operations.rules_edit;
-    let title = match dialog {
-        DeleteDialog::Set(_) => tr!("delete-rule-set"),
-        DeleteDialog::Rule { .. } => tr!("delete-rule"),
-        DeleteDialog::Rules { rules, .. } => crate::i18n::delete_rules_heading(rules.len()),
-    };
     let choice = widgets::confirm_modal(
         ctx,
         widgets::ConfirmModal {
             id: "delete_rules",
-            title,
+            title: tr!("delete-rule-set"),
             cancel: tr!("cancel"),
             confirm: tr!("delete"),
             busy,
             confirm_enabled: !busy,
             width: widgets::DialogWidth::Standard,
         },
-        |ui| match dialog {
-            DeleteDialog::Set(id) => {
-                if let Some(set) = state.config.rule_sets.iter().find(|set| &set.id == id) {
-                    ui.label(state.text(&set.name));
-                }
-                ui.add(egui::Label::new(tr!("delete-rule-set-detail")).wrap());
-                if state.config.active_rule_set.as_ref() == Some(id) {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(tr!("delete-active-rule-set-warning"))
-                                .color(theme::ERROR),
-                        )
-                        .wrap(),
-                    );
-                }
+        |ui| {
+            if let Some(set) = state.config.rule_sets.iter().find(|set| &set.id == id) {
+                ui.label(state.text(&set.name));
             }
-            DeleteDialog::Rule { set, rule } => {
-                if let Some(rule) = state
-                    .config
-                    .rule_sets
-                    .iter()
-                    .find(|item| &item.id == set)
-                    .and_then(|set| set.rules.iter().find(|item| &item.id == rule))
-                {
-                    ui.label(state.text(&delete_rule_value(state, rule)));
-                }
-                ui.label(tr!("delete-rule-detail"));
-            }
-            DeleteDialog::Rules { set, rules } => {
-                if let Some(set) = state.config.rule_sets.iter().find(|item| &item.id == set) {
-                    for id in rules.iter().take(5) {
-                        if let Some(rule) = set.rules.iter().find(|item| &item.id == id) {
-                            ui.add(
-                                egui::Label::new(state.text(&delete_rule_value(state, rule)))
-                                    .wrap(),
-                            );
-                        }
-                    }
-                }
-                if rules.len() > 5 {
-                    ui.label(crate::i18n::and_more_rules(rules.len() - 5));
-                }
-                ui.label(tr!("delete-rule-detail"));
+            ui.add(egui::Label::new(tr!("delete-rule-set-detail")).wrap());
+            if state.config.active_rule_set.as_ref() == Some(id) {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tr!("delete-active-rule-set-warning")).color(theme::ERROR),
+                    )
+                    .wrap(),
+                );
             }
         },
     );
     match choice {
-        widgets::ModalChoice::Cancel => actions.push(Action::CancelRuleDelete),
-        widgets::ModalChoice::Confirm => actions.push(Action::ConfirmRuleDelete),
+        widgets::ModalChoice::Cancel => actions.push(Action::CancelDeleteSet),
+        widgets::ModalChoice::Confirm => actions.push(Action::ConfirmDeleteSet),
         widgets::ModalChoice::None => {}
     }
 }

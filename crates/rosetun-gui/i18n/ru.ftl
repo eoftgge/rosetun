@@ -747,19 +747,25 @@ rename-rule-set = Переименовать набор правил
 delete-rule-set = Удалить набор правил?
 delete-rule-set-detail = Набор и все его правила будут удалены.
 delete-active-rule-set-warning = Подключения будут использовать «По умолчанию · всё через VPN».
-delete-rule = Удалить правило?
-delete-rule-detail = Правило будет удалено из набора.
-delete-rules-heading = { $count ->
-    [one] Удалить правила: { $n }
-   *[other] Удалить правила: { $n }
-}
-rule-unit = правило
-and-more-rules = и ещё { $k }
 move-to-top = Поднять наверх
 move-selected-to-top = В начало
 move-to-end = В конец
 selected-rule-count = Выбрано: { $n }
 delete-selected-rules = Удалить выбранные ({ $n })
+undo = Отменить
+rules-deleted = { $count ->
+    [1] Правило удалено
+   *[other] Удалено правил: { $n }
+}
+rule-set-deleted = Набор правил удалён
+rules-moved = { $count ->
+    [1] Правило перемещено
+   *[other] Перемещено правил: { $n }
+}
+rules-not-restored = { $count ->
+    [1] Одно правило не вернулось: его списка больше нет.
+   *[other] Не вернулось правил: { $n }. Их списков больше нет.
+}
 search-rules = Поиск правил
 all = Все
 domains = Сайты
@@ -929,12 +935,6 @@ servers = { $count ->
     [few] { $n } сервера
     [many] { $n } серверов
    *[other] { $n } серверов
-}
-rule-count = { $count ->
-    [one] { $n } { rule-unit }
-    [few] { $n } правила
-    [many] { $n } правил
-   *[other] { $n } правил
 }
 add-rules = { $count ->
     [1] { add-rule }

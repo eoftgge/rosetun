@@ -8,7 +8,8 @@ use rosetun_config::{
     Status, SubscriptionId, XrayUse,
 };
 use rosetun_core::{
-    AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, SettingChange,
+    AddOptions, AppliedSnapshot, DnsPreset, NewExit, RuleDestination, RuleSetsSnapshot,
+    SettingChange,
 };
 use rosetun_ipc::{ClientError, ConnectRequest};
 
@@ -46,7 +47,7 @@ use quit::QuitState;
 #[cfg(test)]
 pub(crate) use rules::NameDialog;
 use rules::RulesState;
-pub(crate) use rules::{AddRuleDialog, DeleteDialog, NameDialogKind, RuleInputKind};
+pub(crate) use rules::{AddRuleDialog, NameDialogKind, RuleInputKind, UndoNotice};
 use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};
 use settings::SettingsState;
@@ -326,11 +327,18 @@ pub(crate) enum Action {
     OpenRenameSet,
     CancelSetName,
     SubmitSetName,
+    /// Arrow keys: the rule above or below the selected one becomes the selection.
+    StepRuleSelection {
+        down: bool,
+    },
     RequestDeleteSet,
-    RequestDeleteRule(RuleId),
-    RequestDeleteSelectedRules,
-    CancelRuleDelete,
-    ConfirmRuleDelete,
+    CancelDeleteSet,
+    ConfirmDeleteSet,
+    /// Deleted at once: the notice and Ctrl+Z bring it back.
+    DeleteRule(RuleId),
+    DeleteSelectedRules,
+    UndoRules,
+    RedoRules,
     SetDefaultTarget(RuleTarget),
     AddTemplate(RuleTemplate),
     RemoveTemplate(RuleTemplate),
@@ -469,6 +477,7 @@ pub(crate) enum Job {
     MoveRules(RuleSetId, Vec<RuleId>, usize),
     RemoveRule(RuleSetId, RuleId),
     RemoveRules(RuleSetId, Vec<RuleId>),
+    RestoreRuleSets(RuleSetsSnapshot),
     SetKillSwitch(bool),
     SetLockdown(bool),
     Add {
@@ -541,6 +550,7 @@ impl State {
     }
 
     pub(crate) fn reduce(&mut self, event: WorkerEvent) {
+        self.finish_rule_step(&event);
         match event {
             WorkerEvent::Config { generation, config } => {
                 if generation <= self.config_generation {
@@ -613,7 +623,8 @@ impl State {
             | WorkerEvent::MoveRule(_)
             | WorkerEvent::MoveRules(_)
             | WorkerEvent::RemoveRule(_)
-            | WorkerEvent::RemoveRules(_)) => self.reduce_rules(event),
+            | WorkerEvent::RemoveRules(_)
+            | WorkerEvent::RestoreRuleSets(_)) => self.reduce_rules(event),
             #[cfg(windows)]
             event @ WorkerEvent::BrowsedExecutable(_) => self.reduce_rules(event),
             event @ (WorkerEvent::SaveExit(_)
@@ -660,6 +671,14 @@ impl State {
     }
 
     pub(crate) fn act(&mut self, action: Action) -> Option<Job> {
+        let job = self.act_area(action);
+        if let Some(job) = &job {
+            self.begin_rule_step(job);
+        }
+        job
+    }
+
+    fn act_area(&mut self, action: Action) -> Option<Job> {
         match action {
             action @ (Action::CheckSystem | Action::ShowSystemChecks) => {
                 return self.act_system_checks(action);
@@ -773,15 +792,16 @@ impl State {
             | Action::SelectRule { .. }
             | Action::SelectVisibleRules
             | Action::ClearRuleSelection
+            | Action::StepRuleSelection { .. }
             | Action::OpenCreateSet
             | Action::OpenRenameSet
             | Action::CancelSetName
             | Action::SubmitSetName
             | Action::RequestDeleteSet
-            | Action::RequestDeleteRule(_)
-            | Action::RequestDeleteSelectedRules
-            | Action::CancelRuleDelete
-            | Action::ConfirmRuleDelete
+            | Action::CancelDeleteSet
+            | Action::ConfirmDeleteSet
+            | Action::DeleteRule(_)
+            | Action::DeleteSelectedRules
             | Action::SetDefaultTarget(_)
             | Action::AddTemplate(_)
             | Action::RemoveTemplate(_)
@@ -807,6 +827,9 @@ impl State {
             | Action::MoveSelectedRulesToEnd) => return self.act_rules(action),
             action @ (Action::Apply | Action::RestoreMyEdits) => {
                 return self.act_session(action);
+            }
+            action @ (Action::UndoRules | Action::RedoRules) => {
+                return self.act_rule_history(action);
             }
             action @ (Action::ReadQr(_) | Action::CancelQr | Action::ChooseQrLink(_)) => {
                 return self.act_qr(action);

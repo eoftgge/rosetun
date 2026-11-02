@@ -10,8 +10,13 @@ use crate::rules::{RuleFilter, visible_rules};
 use crate::worker::WorkerEvent;
 
 mod dialog;
+mod history;
 
 pub(crate) use dialog::{AddRuleDialog, RuleInputKind};
+use history::RuleHistory;
+#[cfg(test)]
+pub(crate) use history::{MAX_UNDO_RULES, MAX_UNDO_STEPS, UNDO_NOTICE_MS};
+pub(crate) use history::UndoNotice;
 
 pub(crate) enum NameDialogKind {
     Create,
@@ -25,12 +30,6 @@ pub(crate) struct NameDialog {
     pub(crate) focus: bool,
 }
 
-pub(crate) enum DeleteDialog {
-    Set(RuleSetId),
-    Rule { set: RuleSetId, rule: RuleId },
-    Rules { set: RuleSetId, rules: Vec<RuleId> },
-}
-
 #[derive(Default)]
 pub(crate) struct RuleScreen {
     pub(crate) selected_set: Option<RuleSetId>,
@@ -38,8 +37,13 @@ pub(crate) struct RuleScreen {
     pub(crate) selected_rules: BTreeSet<RuleId>,
     pub(crate) selection_anchor: Option<RuleId>,
     pub(crate) name: Option<NameDialog>,
-    pub(crate) delete: Option<DeleteDialog>,
+    /// The set waiting for the user's confirmation of its deletion.
+    pub(crate) delete_set: Option<RuleSetId>,
     pub(crate) add: Option<AddRuleDialog>,
+    /// Selected once the rules being deleted are gone.
+    select_after_delete: Option<RuleId>,
+    /// The selection moved by a key; the table scrolls it into view once.
+    pub(crate) reveal_selection: bool,
     opened: bool,
 }
 
@@ -53,6 +57,7 @@ impl RuleScreen {
 #[derive(Default)]
 pub(crate) struct RulesState {
     pub(crate) screen: RuleScreen,
+    pub(crate) history: RuleHistory,
     next_process_request: u64,
 }
 
@@ -119,6 +124,63 @@ impl State {
             selection.insert(rule.clone());
             self.rules.screen.selection_anchor = Some(rule);
         }
+    }
+
+    fn step_rule_selection(&mut self, down: bool) {
+        let visible = self.visible_rule_ids();
+        let selection = &self.rules.screen.selected_rules;
+        let Some(index) = self
+            .rules
+            .screen
+            .selection_anchor
+            .as_ref()
+            .filter(|id| selection.contains(*id))
+            .and_then(|id| visible.iter().position(|item| item == id))
+            .or_else(|| visible.iter().rposition(|id| selection.contains(id)))
+        else {
+            return;
+        };
+        let next = if down {
+            (index + 1).min(visible.len() - 1)
+        } else {
+            index.saturating_sub(1)
+        };
+        self.select_rule(visible[next].clone(), false, false);
+        self.rules.screen.reveal_selection = true;
+    }
+
+    /// The visible rule that takes the selection once `deleted` are gone:
+    /// the next one below them, or the nearest above.
+    fn neighbor_after_delete(&self, deleted: &[RuleId]) -> Option<RuleId> {
+        let visible = self.visible_rule_ids();
+        let last = visible.iter().rposition(|id| deleted.contains(id))?;
+        visible[last + 1..]
+            .iter()
+            .find(|id| !deleted.contains(id))
+            .or_else(|| visible[..last].iter().rev().find(|id| !deleted.contains(id)))
+            .cloned()
+    }
+
+    fn delete_rules(&mut self, rules: Vec<RuleId>) -> Option<Job> {
+        let set = self.selected_rules()?;
+        if rules.is_empty()
+            || !rules
+                .iter()
+                .all(|id| set.rules.iter().any(|rule| &rule.id == id))
+        {
+            return None;
+        }
+        let set = set.id.clone();
+        self.rules.screen.select_after_delete = rules
+            .iter()
+            .any(|id| self.rules.screen.selected_rules.contains(id))
+            .then(|| self.neighbor_after_delete(&rules))
+            .flatten();
+        let job = match <[RuleId; 1]>::try_from(rules) {
+            Ok([rule]) => Job::RemoveRule(set, rule),
+            Err(rules) => Job::RemoveRules(set, rules),
+        };
+        self.start_rule_edit(job)
     }
 
     pub(crate) fn can_edit_rules(&self) -> bool {
@@ -252,7 +314,7 @@ impl State {
                 }
             }
             WorkerEvent::DeleteRuleSet(result) => {
-                self.rules.screen.delete = None;
+                self.rules.screen.delete_set = None;
                 self.finish_rule_edit(result);
             }
             WorkerEvent::SetDefaultTarget(result) => self.finish_rule_edit(result),
@@ -296,12 +358,16 @@ impl State {
             WorkerEvent::MoveRule(result) => self.finish_rule_edit(result),
             WorkerEvent::MoveRules(result) => self.finish_rule_edit(result),
             WorkerEvent::RemoveRule(result) | WorkerEvent::RemoveRules(result) => {
+                let next = self.rules.screen.select_after_delete.take();
                 if result.is_ok() {
                     self.rules.screen.clear_selection();
+                    if let Some(next) = next {
+                        self.select_rule(next, false, false);
+                    }
                 }
-                self.rules.screen.delete = None;
                 self.finish_rule_edit(result);
             }
+            WorkerEvent::RestoreRuleSets(result) => self.reduce_rule_restore(result),
             _ => unreachable!("only rule events are dispatched here"),
         }
     }
@@ -373,6 +439,11 @@ impl State {
                 }
             }
             Action::ClearRuleSelection => self.rules.screen.clear_selection(),
+            Action::StepRuleSelection { down } => {
+                if self.screen == Screen::Rules {
+                    self.step_rule_selection(down);
+                }
+            }
             Action::OpenCreateSet => {
                 if self.can_edit_rules() && self.rules.screen.name.is_none() {
                     self.rules.screen.name = Some(NameDialog {
@@ -419,60 +490,33 @@ impl State {
             }
             Action::RequestDeleteSet => {
                 if self.can_edit_rules()
-                    && self.rules.screen.delete.is_none()
+                    && self.rules.screen.delete_set.is_none()
                     && let Some(set) = self.selected_rules()
                 {
-                    self.rules.screen.delete = Some(DeleteDialog::Set(set.id.clone()));
+                    self.rules.screen.delete_set = Some(set.id.clone());
                 }
             }
-            Action::RequestDeleteRule(rule) => {
-                if self.can_edit_rules()
-                    && self.rules.screen.delete.is_none()
-                    && let Some(set) = self.selected_rules()
-                    && set.rules.iter().any(|item| item.id == rule)
-                {
-                    self.rules.screen.delete = Some(DeleteDialog::Rule {
-                        set: set.id.clone(),
-                        rule,
-                    });
-                }
-            }
-            Action::RequestDeleteSelectedRules => {
-                if self.can_edit_rules()
-                    && self.rules.screen.delete.is_none()
-                    && let Some(set) = self.selected_rules()
-                {
-                    let set_id = set.id.clone();
-                    let rules = self.selected_rule_ids();
-                    self.rules.screen.delete = match rules.as_slice() {
-                        [] => None,
-                        [rule] => Some(DeleteDialog::Rule {
-                            set: set_id,
-                            rule: rule.clone(),
-                        }),
-                        _ => Some(DeleteDialog::Rules { set: set_id, rules }),
-                    };
-                }
-            }
-            Action::CancelRuleDelete => {
+            Action::CancelDeleteSet => {
                 if !self.operations.rules_edit {
-                    self.rules.screen.delete = None;
+                    self.rules.screen.delete_set = None;
                 }
             }
-            Action::ConfirmRuleDelete => {
+            Action::ConfirmDeleteSet => {
                 if self.can_edit_rules()
-                    && let Some(dialog) = &self.rules.screen.delete
+                    && let Some(id) = &self.rules.screen.delete_set
                 {
-                    let job = match dialog {
-                        DeleteDialog::Set(id) => Job::DeleteRuleSet(id.clone()),
-                        DeleteDialog::Rule { set, rule } => {
-                            Job::RemoveRule(set.clone(), rule.clone())
-                        }
-                        DeleteDialog::Rules { set, rules } => {
-                            Job::RemoveRules(set.clone(), rules.clone())
-                        }
-                    };
-                    return self.start_rule_edit(job);
+                    return self.start_rule_edit(Job::DeleteRuleSet(id.clone()));
+                }
+            }
+            Action::DeleteRule(rule) => {
+                if self.can_edit_rules() {
+                    return self.delete_rules(vec![rule]);
+                }
+            }
+            Action::DeleteSelectedRules => {
+                if self.can_edit_rules() {
+                    let rules = self.selected_rule_ids();
+                    return self.delete_rules(rules);
                 }
             }
             Action::SetDefaultTarget(target) => {

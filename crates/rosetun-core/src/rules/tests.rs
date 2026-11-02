@@ -177,6 +177,115 @@ fn failed_snapshot_save_leaves_rules_and_dns_unchanged() {
 }
 
 #[test]
+fn restoring_a_set_snapshot_writes_the_file_as_it_was_before_the_edit() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let mut config = AppConfig::default();
+    let mut set = RuleSet::new(RuleSetId::new("1"), "Main", RuleTarget::Proxy);
+    set.rules = vec![rule("1", "a.example.com"), rule("2", "b.example.com")];
+    config.rule_sets.push(set);
+    save_config(store.path(), config);
+    let before = fs::read(store.path()).unwrap();
+    let snapshot = RuleSetsSnapshot::of(&store.load().unwrap(), &[RuleSetId::new("1")], false);
+
+    remove_rule(&store, &RuleSetId::new("1"), &RuleId::new("1")).unwrap();
+    let restored = restore_rule_sets(&store, &snapshot).unwrap();
+
+    assert_eq!(fs::read(store.path()).unwrap(), before);
+    assert_eq!(restored.dropped, 0);
+    assert_eq!(restored.previous.sets[0].set.as_ref().unwrap().rules.len(), 1);
+    restore_rule_sets(&store, &restored.previous).unwrap();
+    assert_eq!(store.load().unwrap().rule_sets[0].rules.len(), 1);
+}
+
+#[test]
+fn restoring_a_deleted_set_puts_it_back_in_place_and_active() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let config = AppConfig {
+        rule_sets: vec![
+            RuleSet::new(RuleSetId::new("1"), "First", RuleTarget::Proxy),
+            RuleSet::new(RuleSetId::new("2"), "Second", RuleTarget::Direct),
+            RuleSet::new(RuleSetId::new("3"), "Third", RuleTarget::Proxy),
+        ],
+        active_rule_set: Some(RuleSetId::new("2")),
+        ..AppConfig::default()
+    };
+    save_config(store.path(), config.clone());
+    let snapshot = RuleSetsSnapshot::of(&config, &[RuleSetId::new("2")], true);
+
+    delete_rule_set(&store, &RuleSetId::new("2")).unwrap();
+    let restored = restore_rule_sets(&store, &snapshot).unwrap();
+
+    assert_eq!(store.load().unwrap(), config);
+    assert_eq!(restored.previous.sets[0].set, None);
+    assert_eq!(restored.previous.active, Some(None));
+    restore_rule_sets(&store, &restored.previous).unwrap();
+    let deleted = store.load().unwrap();
+    assert_eq!(deleted.rule_sets.len(), 2);
+    assert_eq!(deleted.active_rule_set, None);
+}
+
+#[test]
+fn restoring_a_snapshot_of_a_set_that_did_not_exist_removes_it() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    save_config(store.path(), AppConfig::default());
+    let config = store.load().unwrap();
+    let created = create_rule_set(&store, "New", RuleTarget::Proxy).unwrap();
+    let snapshot = RuleSetsSnapshot::of(&config, &[created.id], true);
+
+    restore_rule_sets(&store, &snapshot).unwrap();
+
+    let restored = store.load().unwrap();
+    assert!(restored.rule_sets.is_empty());
+    assert_eq!(restored.active_rule_set, None);
+}
+
+#[test]
+fn restoring_leaves_out_rules_of_missing_lists_and_blocks_missing_exits() {
+    let directory = TestDirectory::new();
+    let store = Store::at(directory.config_path());
+    let mut config = AppConfig::default();
+    config
+        .rule_sets
+        .push(RuleSet::new(RuleSetId::new("1"), "Main", RuleTarget::Proxy));
+    save_config(store.path(), config);
+    let mut set = RuleSet::new(RuleSetId::new("1"), "Main", RuleTarget::Proxy);
+    set.rules = vec![
+        rule("1", "example.com"),
+        Rule {
+            matcher: RuleMatcher::List {
+                list: rosetun_config::ListId::new("gone"),
+                category: None,
+            },
+            ..rule("2", "unused.invalid")
+        },
+        Rule {
+            target: RuleTarget::Exit,
+            exit: Some(ExitId::new("gone")),
+            ..rule("3", "exit.example.com")
+        },
+    ];
+    let snapshot = RuleSetsSnapshot {
+        sets: vec![SetSnapshot {
+            id: set.id.clone(),
+            index: 0,
+            set: Some(set),
+        }],
+        active: None,
+    };
+
+    let restored = restore_rule_sets(&store, &snapshot).unwrap();
+
+    assert_eq!(restored.dropped, 1);
+    let rules = &store.load().unwrap().rule_sets[0].rules;
+    assert_eq!(rules.len(), 2);
+    assert_eq!(rules[1].target, RuleTarget::Block);
+    assert_eq!(rules[1].exit, None);
+}
+
+#[test]
 fn create_and_rename_rule_sets_validate_names_and_select_only_the_first() {
     let directory = TestDirectory::new();
     let store = Store::at(directory.config_path());

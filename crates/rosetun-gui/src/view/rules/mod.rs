@@ -8,7 +8,7 @@ use crate::rules::{
     RuleCaption, RuleFilter, TypeFilter, rule_counts, rule_counts_slice, rule_lines, visible_rules,
     visible_rules_slice,
 };
-use crate::state::{Action, DeleteDialog, NameDialogKind, RulesTab, SessionPart, State};
+use crate::state::{Action, NameDialogKind, RulesTab, SessionPart, State, UndoNotice};
 use crate::{i18n, theme, widgets};
 
 const HANDLE_WIDTH: f32 = 22.0;
@@ -106,6 +106,28 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Actio
         state.config.interface.reduce_motion,
     );
     widgets::appear(ui, shown, |ui| tab_body(ui, state, actions));
+    undo_notice(ui.ctx(), state, actions);
+}
+
+fn undo_notice(ctx: &egui::Context, state: &State, actions: &mut Vec<Action>) {
+    let Some((notice, left)) = state.rule_notice() else {
+        return;
+    };
+    ctx.request_repaint_after(left);
+    let text = match notice {
+        UndoNotice::RulesDeleted(count) => i18n::rules_deleted(count),
+        UndoNotice::SetDeleted => tr!("rule-set-deleted"),
+        UndoNotice::RulesMoved(count) => i18n::rules_moved(count),
+    };
+    if widgets::action_notice(
+        ctx,
+        "rules_undo_notice",
+        &text,
+        &tr!("undo"),
+        state.can_undo_rules(),
+    ) {
+        actions.push(Action::UndoRules);
+    }
 }
 
 fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
@@ -115,6 +137,7 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
         RulesTab::Exits => return super::exits::show(ui, state, actions),
     }
     let text_edit_focused = ui.ctx().text_edit_focused();
+    let reveal = std::mem::take(&mut state.rules.screen.reveal_selection);
     let pending_apply = state.config_ready
         && state
             .visible_status()
@@ -224,6 +247,9 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             let row = ui.push_id((set.id.as_str(), rule.id.as_str()), |ui| {
                 rule_row(ui, state, &rows, rule, Some(index), value_width, actions);
             });
+            if reveal && state.rules.screen.selection_anchor.as_ref() == Some(&rule.id) {
+                row.response.scroll_to_me(None);
+            }
             if state.rules.screen.selected_rules.contains(&rule.id) {
                 let rect = row.response.rect;
                 selection_regions.push(egui::Rect::from_min_max(
