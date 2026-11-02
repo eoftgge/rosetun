@@ -1148,7 +1148,7 @@ mod toolbar_tests {
             },
             |ctx| {
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::new().inner_margin(36.0))
+                    .frame(egui::Frame::new().inner_margin(theme::margin::same(theme::space::XXL)))
                     .show(ctx, |ui| rects = Some(toolbar(ui, state, &mut Vec::new())));
             },
         );
@@ -1169,7 +1169,7 @@ mod toolbar_tests {
         for (width, scale) in [(960.0, 1.0), (960.0, 1.25), (960.0, 1.5), (1920.0, 1.0)] {
             let rects = layout(&few, width, scale);
             let moved = layout(&many, width, scale);
-            let right = width / scale - 36.0;
+            let right = width / scale - theme::space::XXL;
             for rects in [&rects, &moved] {
                 assert!(rects.search.right() <= rects.view.left(), "{width} {scale}");
                 assert!(rects.tabs.right() <= rects.route.left(), "{width} {scale}");

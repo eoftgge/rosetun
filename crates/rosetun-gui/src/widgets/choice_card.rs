@@ -33,7 +33,7 @@ pub(crate) fn choice_card(
                 let background = ui.painter().add(egui::Shape::Noop);
                 ui.set_width(width - 24.0);
                 egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .inner_margin(theme::margin::symmetric(theme::space::M, theme::space::S))
                     .show(ui, |ui| {
                         ui.set_width(width - 24.0);
                         ui.set_max_width(width - 24.0);

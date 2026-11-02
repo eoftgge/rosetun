@@ -130,7 +130,7 @@ fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             theme::palette().accent_base,
         ))
         .corner_radius(theme::RADIUS)
-        .inner_margin(egui::Margin::symmetric(16, 10))
+        .inner_margin(theme::margin::symmetric(theme::space::L, theme::space::S))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             egui::Sides::new().shrink_left().wrap().spacing(16.0).show(

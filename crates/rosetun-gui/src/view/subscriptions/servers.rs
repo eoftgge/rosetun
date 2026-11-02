@@ -1,13 +1,13 @@
 use super::*;
 
-const ROW_PADDING: f32 = 10.0;
+const ROW_PADDING: f32 = theme::space::S;
 const FLAG_WIDTH: f32 = 38.0;
 /// Between the name (or the Xray badge) and the check result.
-const RESULT_GAP: f32 = 10.0;
+const RESULT_GAP: f32 = theme::space::S;
 /// The quality bars and their gap to the latency.
 const BARS_WIDTH: f32 = 13.0 + 8.0;
 const BADGE_GAP: f32 = theme::space::S;
-const BADGE_PADDING: f32 = 14.0;
+const BADGE_PADDING: f32 = theme::space::M;
 
 /// What every row of one subscription card shares.
 #[derive(Clone, Copy)]
@@ -451,8 +451,9 @@ mod tests {
 
     const FULL_BADGE: f32 = 38.0;
     const SHORT_BADGE: f32 = 21.0;
-    /// The subscription card of the owner's screenshot: about 340 points wide.
-    const NARROW_ROW: f32 = 314.0;
+    /// A row of the subscription card of the owner's screenshot, about 340 points wide, once
+    /// its padding and the gap before the result are the scale's 8 instead of 10.
+    const NARROW_ROW: f32 = 308.0;
 
     fn needs(width: f32, xray: bool, ping: Option<f32>) -> RowNeeds {
         RowNeeds {
@@ -497,7 +498,7 @@ mod tests {
             RowLayout {
                 bars: true,
                 xray: Some(XrayBadge::Full),
-                name_width: 600.0 - 20.0 - 38.0 - 80.0 - 21.0 - 46.0,
+                name_width: 600.0 - 16.0 - 38.0 - 78.0 - 21.0 - 46.0,
             }
         );
     }
@@ -507,7 +508,7 @@ mod tests {
         let layout = row_layout(needs(NARROW_ROW, true, None));
         assert!(!layout.bars);
         assert_eq!(layout.xray, Some(XrayBadge::Full));
-        assert_eq!(layout.name_width, NARROW_ROW - 20.0 - 38.0 - 46.0);
+        assert_eq!(layout.name_width, NARROW_ROW - 16.0 - 38.0 - 46.0);
     }
 
     #[test]

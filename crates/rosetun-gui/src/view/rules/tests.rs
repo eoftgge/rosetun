@@ -66,7 +66,7 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
             },
             |ctx| {
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::new().inner_margin(36.0))
+                    .frame(egui::Frame::new().inner_margin(theme::margin::same(theme::space::XXL)))
                     .show(ctx, |ui| {
                         rects = Some(filter_controls(
                             ui,
@@ -85,7 +85,7 @@ fn toolbar_controls_do_not_overlap_at_minimum_window_scales() {
         assert!(rects.search.right() <= rects.tabs.left(), "{scale}");
         assert!(rects.filter.right() <= rects.add.left(), "{scale}");
         assert!(rects.filter.width() >= TARGET_FILTER_WIDTH, "{scale}");
-        assert!(rects.add.right() <= width - 36.0, "{scale}");
+        assert!(rects.add.right() <= width - theme::space::XXL, "{scale}");
         if rects.two_rows {
             assert!(rects.tabs.bottom() <= rects.filter.top(), "{scale}");
             assert!(rects.tabs.bottom() <= rects.add.top(), "{scale}");

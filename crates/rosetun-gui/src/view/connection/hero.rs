@@ -56,7 +56,14 @@ fn hero_title(state: &State) -> (String, Color32) {
 pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     let narrow = ui.available_width() < 560.0;
     widgets::card_frame()
-        .inner_margin(egui::Margin::symmetric(if narrow { 12 } else { 28 }, 20))
+        .inner_margin(theme::margin::symmetric(
+            if narrow {
+                theme::space::M
+            } else {
+                theme::space::XXL
+            },
+            theme::space::L,
+        ))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             let visible_status = state.visible_status();
@@ -704,9 +711,9 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
             theme::palette().border_strong,
         ))
         .corner_radius(theme::RADIUS)
-        .inner_margin(egui::Margin::symmetric(14, 12))
+        .inner_margin(theme::margin::same(theme::space::M))
         .show(ui, |ui| {
-            ui.set_min_width(width - 28.0);
+            ui.set_min_width(width - 2.0 * theme::space::M);
             ui.horizontal(|ui| {
                 let badge_height = 26.0;
                 let name_font = theme::font::title();

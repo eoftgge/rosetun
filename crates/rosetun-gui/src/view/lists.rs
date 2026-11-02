@@ -10,8 +10,10 @@ use crate::state::{Action, AddListDialog, ListOutcome, State, source_file_name, 
 use crate::{i18n, theme, widgets};
 
 const CARD_HEIGHT: f32 = theme::RULE_ROW;
-// Two border pixels plus 5 and 6 points of vertical margin.
-const CARD_CONTENT_HEIGHT: f32 = CARD_HEIGHT - 13.0;
+// The card keeps the height of a rule row: the borders and the margin above and below are
+// taken out of it.
+const CARD_CONTENT_HEIGHT: f32 =
+    CARD_HEIGHT - 2.0 * theme::stroke::HAIRLINE - 2.0 * theme::space::XS;
 
 pub(crate) fn format_name(format: ListFormat) -> String {
     match format {
@@ -209,8 +211,8 @@ fn list_card(
         .inner_margin(egui::Margin {
             left: theme::margin::side(theme::space::M),
             right: theme::margin::side(theme::space::M),
-            top: 5,
-            bottom: 6,
+            top: theme::margin::side(theme::space::XS),
+            bottom: theme::margin::side(theme::space::XS),
         })
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());

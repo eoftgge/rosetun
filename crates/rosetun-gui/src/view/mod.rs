@@ -75,23 +75,28 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                     .inner_margin(egui::Margin {
                         left: theme::margin::side(theme::space::L),
                         right: theme::margin::side(theme::space::L),
-                        top: 28,
-                        bottom: 28,
+                        top: theme::margin::side(theme::space::XXL),
+                        bottom: theme::margin::side(theme::space::XXL),
                     }),
             )
             .show(ui, |ui| {
                 widgets::appear(ui, screen_shown, |ui| settings_nav(ui, state, &mut actions));
             });
     }
+    let side = if narrow {
+        theme::space::L
+    } else {
+        theme::space::XXL
+    };
     egui::CentralPanel::default()
         .frame(
             egui::Frame::new()
                 .fill(theme::palette().bg)
                 .inner_margin(egui::Margin {
-                    left: if narrow { theme::margin::side(theme::space::L) } else { 36 },
-                    right: if narrow { theme::margin::side(theme::space::L) } else { 36 },
-                    top: 28,
-                    bottom: 32,
+                    left: theme::margin::side(side),
+                    right: theme::margin::side(side),
+                    top: theme::margin::side(theme::space::XXL),
+                    bottom: theme::margin::side(theme::space::XXL),
                 }),
         )
         .show(ui, |ui| {

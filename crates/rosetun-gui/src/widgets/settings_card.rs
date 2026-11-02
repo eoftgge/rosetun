@@ -80,13 +80,13 @@ impl SettingsCard<'_> {
         let width = self.ui.available_width();
         egui::Frame::new()
             .inner_margin(egui::Margin {
-                left: 20,
-                right: 20,
+                left: theme::margin::side(theme::space::L),
+                right: theme::margin::side(theme::space::L),
                 top: theme::margin::side(theme::space::L),
                 bottom: theme::margin::side(theme::space::L),
             })
             .show(self.ui, |ui| {
-                ui.set_min_width((width - 40.0).max(0.0));
+                ui.set_min_width((width - 2.0 * theme::space::L).max(0.0));
                 ui.set_min_height(32.0);
                 ui.spacing_mut().item_spacing.x = theme::space::L;
                 ui.allocate_ui_with_layout(
@@ -181,13 +181,13 @@ impl SettingsCard<'_> {
         let width = self.ui.available_width();
         egui::Frame::new()
             .inner_margin(egui::Margin {
-                left: 20,
-                right: 20,
+                left: theme::margin::side(theme::space::L),
+                right: theme::margin::side(theme::space::L),
                 top: theme::margin::side(theme::space::L),
                 bottom: theme::margin::side(theme::space::L),
             })
             .show(self.ui, |ui| {
-                ui.set_min_width((width - 40.0).max(0.0));
+                ui.set_min_width((width - 2.0 * theme::space::L).max(0.0));
                 add_contents(ui);
             });
     }
@@ -274,7 +274,7 @@ mod tests {
                         .exact_size(240.0)
                         .show(ctx, |_| {});
                     egui::CentralPanel::default()
-                        .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(36, 28)))
+                        .frame(egui::Frame::new().inner_margin(theme::margin::same(theme::space::XXL)))
                         .show(ctx, |ui| {
                             egui::ScrollArea::vertical().show(ui, |ui| {
                                 settings_card(ui, |card| {

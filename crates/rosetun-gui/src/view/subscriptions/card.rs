@@ -356,7 +356,7 @@ fn details(
                 theme::palette().border,
             ))
             .corner_radius(theme::RADIUS)
-            .inner_margin(10)
+            .inner_margin(theme::margin::same(theme::space::S))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.style_mut().interaction.selectable_labels = true;

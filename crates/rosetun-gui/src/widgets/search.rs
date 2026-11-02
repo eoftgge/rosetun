@@ -56,7 +56,7 @@ fn search_field_inner(
             .desired_width(width)
             .min_size(egui::vec2(width, 38.0))
             .margin(egui::Margin {
-                left: 32,
+                left: theme::margin::side(theme::space::XXL),
                 right: right_margin,
                 top: theme::margin::side(theme::space::S),
                 bottom: theme::margin::side(theme::space::S),

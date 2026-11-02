@@ -8,8 +8,10 @@ use crate::state::{Action, ExitDialog, ExitKind, State};
 use crate::{i18n, theme, widgets};
 
 const CARD_HEIGHT: f32 = theme::RULE_ROW;
-// Two border pixels plus 5 and 6 points of vertical margin, as on the Lists tab.
-const CARD_CONTENT_HEIGHT: f32 = CARD_HEIGHT - 13.0;
+// The card keeps the height of a rule row: the borders and the margin above and below are
+// taken out of it, as on the Lists tab.
+const CARD_CONTENT_HEIGHT: f32 =
+    CARD_HEIGHT - 2.0 * theme::stroke::HAIRLINE - 2.0 * theme::space::XS;
 const RIGHT_WIDTH: f32 = 230.0;
 const DIALOG_WIDTH: f32 = 520.0;
 const MAX_NODE_LIST: f32 = 168.0;
@@ -140,8 +142,8 @@ fn exit_row(
         .inner_margin(egui::Margin {
             left: theme::margin::side(theme::space::M),
             right: theme::margin::side(theme::space::M),
-            top: 5,
-            bottom: 6,
+            top: theme::margin::side(theme::space::XS),
+            bottom: theme::margin::side(theme::space::XS),
         })
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());

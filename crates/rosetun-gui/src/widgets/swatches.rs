@@ -3,7 +3,7 @@ use eframe::egui::{self, Color32, Stroke};
 use crate::theme;
 
 const DIAMETER: f32 = 26.0;
-const GAP: f32 = 10.0;
+const GAP: f32 = theme::space::S;
 
 /// One choice of a colour group: the disc's fill and the ring around it.
 pub(crate) struct Swatch<T> {

@@ -260,6 +260,8 @@ pub(crate) mod space {
     pub(crate) const L: f32 = 16.0;
     /// Around a screen's main block.
     pub(crate) const XL: f32 = 24.0;
+    /// A screen's outer margin and its large empty states.
+    pub(crate) const XXL: f32 = 32.0;
 }
 
 /// `egui::Margin` built from the `space` steps. egui keeps margins in `i8`; the
@@ -512,6 +514,7 @@ mod tests {
             space::M,
             space::L,
             space::XL,
+            space::XXL,
         ];
         assert!(steps.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(steps.contains(&SECTION_GAP));
@@ -527,6 +530,7 @@ mod tests {
             space::M,
             space::L,
             space::XL,
+            space::XXL,
         ] {
             assert_eq!(f32::from(margin::side(step)), step);
             assert_eq!(margin::same(step), egui::Margin::same(margin::side(step)));
