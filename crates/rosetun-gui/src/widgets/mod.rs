@@ -26,7 +26,7 @@ pub(crate) use choice_card::choice_card;
 pub(crate) use combo::{drop_down, filter_combo};
 pub(crate) use dialogs::{
     ConfirmModal, Dialog, DialogFooter, DialogWidth, FooterChoice, ModalChoice, NameModal,
-    confirm_modal, dialog_done, dialog_footer, dialog_footer_with_note, name_modal,
+    confirm_modal, dialog_done, dialog_footer, name_modal,
 };
 #[cfg(windows)]
 pub(crate) use dialogs::{ThreeWayChoice, ThreeWayModal, three_way_modal};

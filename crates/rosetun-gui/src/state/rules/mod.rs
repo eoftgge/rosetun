@@ -9,9 +9,11 @@ use crate::reorder::drop_target;
 use crate::rules::{RuleFilter, visible_rules};
 use crate::worker::WorkerEvent;
 
+mod address;
 mod dialog;
 mod history;
 
+pub(crate) use address::{AddressError, MAX_ADDRESSES};
 pub(crate) use dialog::{AddRuleDialog, RuleInputKind};
 use history::RuleHistory;
 pub(crate) use history::UndoNotice;

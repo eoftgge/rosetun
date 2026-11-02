@@ -182,7 +182,7 @@ fn plural_forms_keep_legacy_copy_at_count_boundaries() {
 
     for (count, english, russian, russian_add) in [
         (0, "0 servers", "0 серверов", "Добавить 0 правил"),
-        (1, "1 server", "1 сервер", "Добавить правило"),
+        (1, "1 server", "1 сервер", "Добавить"),
         (2, "2 servers", "2 сервера", "Добавить 2 правила"),
         (3, "3 servers", "3 сервера", "Добавить 3 правила"),
         (4, "4 servers", "4 сервера", "Добавить 4 правила"),
@@ -228,7 +228,7 @@ fn plural_forms_keep_legacy_copy_at_count_boundaries() {
         assert_eq!(
             tr_in(Language::English, "add-rules", &args),
             if count == 1 {
-                "Add rule".to_owned()
+                "Add".to_owned()
             } else {
                 format!("Add {count} rules")
             },

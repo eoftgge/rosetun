@@ -38,26 +38,15 @@ impl DialogWidth {
     }
 }
 
-/// A dialog in the shared frame: its width, and where it hangs when it is not centred.
+/// A dialog in the shared frame, of its width, in the middle of the window.
 pub(crate) struct Dialog {
     id: &'static str,
     width: DialogWidth,
-    top: Option<f32>,
 }
 
 impl Dialog {
     pub(crate) fn new(id: &'static str, width: DialogWidth) -> Self {
-        Self {
-            id,
-            width,
-            top: None,
-        }
-    }
-
-    /// Hangs the dialog this far from the top of the window instead of centring it.
-    pub(crate) fn top(mut self, top: f32) -> Self {
-        self.top = Some(top);
-        self
+        Self { id, width }
     }
 
     pub(crate) fn show<T>(
@@ -67,13 +56,6 @@ impl Dialog {
     ) -> egui::ModalResponse<T> {
         let id = egui::Id::unique(self.id);
         let modal = egui::Modal::new(id);
-        let modal = match self.top {
-            Some(top) => modal.area(
-                egui::Modal::default_area(id)
-                    .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, top)),
-            ),
-            None => modal,
-        };
         let width = self.width.within(ctx.content_rect().width());
         show_modal(ctx, modal, |ui| {
             ui.set_width(width);
@@ -92,7 +74,6 @@ pub(crate) struct DialogFooter<'a> {
     other: Option<egui::WidgetText>,
     cancel: egui::WidgetText,
     cancel_enabled: bool,
-    gap: f32,
 }
 
 /// What the footer's buttons answered.
@@ -136,7 +117,6 @@ impl<'a> DialogFooter<'a> {
             other: None,
             cancel: cancel.into(),
             cancel_enabled: true,
-            gap: theme::space::XL,
         }
     }
 
@@ -164,29 +144,14 @@ impl<'a> DialogFooter<'a> {
         self.cancel_enabled = !busy;
         self
     }
-
-    /// For a footer under a divider, which already sets it apart.
-    pub(crate) fn under_divider(mut self) -> Self {
-        self.gap = 0.0;
-        self
-    }
 }
 
 /// The footer of a dialog, a field high, after the gap every dialog keeps above it.
 pub(crate) fn dialog_footer(ui: &mut egui::Ui, footer: DialogFooter<'_>) -> FooterResponses {
-    dialog_footer_with_note(ui, footer, |_| {})
-}
-
-/// The footer with `note` at the left edge, on the row of the buttons.
-pub(crate) fn dialog_footer_with_note(
-    ui: &mut egui::Ui,
-    footer: DialogFooter<'_>,
-    note: impl FnOnce(&mut egui::Ui),
-) -> FooterResponses {
-    ui.add_space(footer.gap);
+    ui.add_space(theme::space::XL);
     let ((), responses) = egui::Sides::new()
         .height(field_height(ui))
-        .show(ui, note, |ui| {
+        .show(ui, |_| {}, |ui| {
             let mut primary = button_fill(ui, footer.primary, footer.primary_enabled);
             if let Some(hint) = footer.primary_hint {
                 primary = primary.on_disabled_hover_text(hint);
@@ -429,9 +394,6 @@ mod tests {
                 let answered = dialog_footer(ui, footer);
                 assert_eq!(answered.primary.rect.top() - above, theme::space::XL);
             }
-            let above = ui.cursor().top();
-            let answered = dialog_footer(ui, DialogFooter::new("Add", "Cancel").under_divider());
-            assert_eq!(answered.primary.rect.top(), above);
         });
     }
 
@@ -464,23 +426,6 @@ mod tests {
             assert_eq!(done.rect.right(), right);
             assert_eq!(done.rect.height(), field_height(ui));
             assert!((done.rect.top() - before - theme::space::XL).abs() < 0.5);
-        });
-    }
-
-    #[test]
-    fn a_note_stands_at_the_left_edge_of_the_footer_row() {
-        run(|ui| {
-            ui.set_width(DialogWidth::Standard.points());
-            let left = ui.max_rect().left();
-            let mut note = None;
-            let answered = dialog_footer_with_note(
-                ui,
-                DialogFooter::new("Add", "Cancel").under_divider(),
-                |ui| note = Some(ui.label("Enter a site").rect),
-            );
-            let note = note.unwrap();
-            assert_eq!(note.left(), left);
-            assert!(note.right() < answered.cancel.rect.left());
         });
     }
 }

@@ -5,17 +5,21 @@ use rosetun_config::{DomainMatch, ListId, ProcessMatch, Rule, RuleId, RuleMatche
 use rosetun_core::RuleDestination;
 
 use super::super::{Action, Job, State};
+use super::address::{
+    Address, AddressError, MAX_ADDRESSES, address_matchers, has_local_address, parse_address,
+    split_addresses,
+};
 use crate::errors;
 use crate::rules::{ProcessGroup, ProcessMatchMode, group_processes};
 use crate::worker::WorkerEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum RuleInputKind {
-    Domain,
-    List,
-    Ip,
     #[default]
     Process,
+    /// Domains, addresses and subnets in one field.
+    Address,
+    List,
 }
 
 pub(crate) const MAX_LIST_RULES: usize = 256;
@@ -28,14 +32,12 @@ pub(crate) struct AddRuleDialog {
     pub(crate) node_search: String,
     /// A temporary rule's new exit was saved; submit again with it.
     pub(crate) resubmit: bool,
-    pub(crate) domains: String,
-    pub(crate) ips: String,
+    pub(crate) addresses: String,
     pub(crate) list: Option<ListId>,
     pub(crate) selected_categories: Vec<String>,
     pub(crate) category_filter: String,
     pub(crate) subdomains: bool,
     pub(crate) show_all: bool,
-    pub(crate) advanced: bool,
     pub(crate) temporary_only: bool,
     pub(crate) editing: Option<RuleId>,
     original_domain: Option<DomainMatch>,
@@ -64,14 +66,12 @@ impl AddRuleDialog {
             target: RuleDestination::Proxy,
             node_search: String::new(),
             resubmit: false,
-            domains: String::new(),
-            ips: String::new(),
+            addresses: String::new(),
             list: None,
             selected_categories: Vec::new(),
             category_filter: String::new(),
             subdomains: true,
             show_all: false,
-            advanced: false,
             temporary_only: false,
             editing: None,
             original_domain: None,
@@ -108,10 +108,11 @@ impl AddRuleDialog {
     pub(in crate::state) fn with_matcher(mut self, matcher: &RuleMatcher) -> Option<Self> {
         let dialog = &mut self;
         match matcher {
+            RuleMatcher::Domain(DomainMatch::Keyword(_)) => return None,
             RuleMatcher::Domain(domain) => {
-                dialog.kind = RuleInputKind::Domain;
+                dialog.kind = RuleInputKind::Address;
                 dialog.subdomains = matches!(domain, DomainMatch::Suffix(_));
-                dialog.domains = rosetun_core::rule_value_text(matcher)
+                dialog.addresses = rosetun_core::rule_value_text(matcher)
                     .trim_start_matches("*.")
                     .to_owned();
             }
@@ -121,8 +122,8 @@ impl AddRuleDialog {
                 dialog.selected_categories = category.iter().cloned().collect();
             }
             RuleMatcher::IpCidr(cidr) => {
-                dialog.kind = RuleInputKind::Ip;
-                dialog.ips = cidr.clone();
+                dialog.kind = RuleInputKind::Address;
+                dialog.addresses = cidr.clone();
             }
             RuleMatcher::Process(process) => {
                 dialog.process = rosetun_core::rule_value_text(matcher);
@@ -130,7 +131,6 @@ impl AddRuleDialog {
                     ProcessMatch::Name(name) => dialog.process_filter = name.clone(),
                     ProcessMatch::Path(path) => {
                         dialog.match_mode = ProcessMatchMode::Path;
-                        dialog.advanced = true;
                         dialog.process_filter = path
                             .file_name()
                             .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
@@ -147,33 +147,77 @@ impl AddRuleDialog {
         Some(self)
     }
 
+    /// Each item of the address field, parsed.
+    pub(crate) fn parsed_addresses(&self) -> Vec<Result<Address, AddressError>> {
+        split_addresses(&self.addresses).map(parse_address).collect()
+    }
+
+    /// The items that are neither a domain nor an address, with why.
+    pub(crate) fn address_errors(&self) -> Vec<(String, AddressError)> {
+        split_addresses(&self.addresses)
+            .filter_map(|item| parse_address(item).err().map(|error| (item.to_owned(), error)))
+            .collect()
+    }
+
+    /// How many rules the good items make.
+    pub(crate) fn address_rule_count(&self) -> usize {
+        let parsed: Vec<_> = self
+            .parsed_addresses()
+            .into_iter()
+            .filter_map(Result::ok)
+            .collect();
+        address_matchers(&parsed, self.subdomains).len()
+    }
+
+    /// More items than one dialog adds.
+    pub(crate) fn too_many_addresses(&self) -> bool {
+        split_addresses(&self.addresses).count() > MAX_ADDRESSES
+    }
+
+    /// Whether the address field has a domain, so "and subdomains" applies.
+    pub(crate) fn has_domain(&self) -> bool {
+        self.parsed_addresses()
+            .iter()
+            .any(|item| item.as_ref().is_ok_and(Address::is_domain))
+    }
+
+    /// The rules the address field makes, or `None` while it is empty, has a bad item or
+    /// too many, or holds more than the one rule being edited.
+    pub(crate) fn address_rules(&self) -> Option<Vec<RuleMatcher>> {
+        if let Some(original) = self.unchanged_domain() {
+            return Some(vec![RuleMatcher::Domain(original)]);
+        }
+        let parsed: Option<Vec<Address>> = self
+            .parsed_addresses()
+            .into_iter()
+            .map(Result::ok)
+            .collect();
+        let parsed = parsed.filter(|parsed| {
+            !parsed.is_empty()
+                && parsed.len() <= MAX_ADDRESSES
+                && (self.editing.is_none() || parsed.len() == 1)
+        })?;
+        Some(address_matchers(&parsed, self.subdomains))
+    }
+
     pub(crate) fn unchanged_domain(&self) -> Option<DomainMatch> {
         let original = self.original_domain.as_ref()?;
         let matcher = RuleMatcher::Domain(original.clone());
         let value = rosetun_core::rule_value_text(&matcher);
         let value = value.strip_prefix("*.").unwrap_or(&value);
-        (self.domains.trim() == value
+        (self.addresses.trim() == value
             && self.subdomains == matches!(original, DomainMatch::Suffix(_)))
         .then(|| original.clone())
     }
 
+    /// Replaces each subnet with host bits by the subnet it starts.
     pub(crate) fn correct_ip_host_bits(&mut self) {
-        let corrections = rosetun_core::parse_ip_lines(&self.ips).errors;
-        self.ips = self
-            .ips
-            .split('\n')
-            .enumerate()
-            .map(|(index, line)| {
-                corrections
-                    .iter()
-                    .find(|error| error.line == index + 1)
-                    .and_then(|error| match &error.error {
-                        rosetun_core::IpCidrError::HostBits { corrected } => {
-                            Some(corrected.as_str())
-                        }
-                        rosetun_core::IpCidrError::Invalid => None,
-                    })
-                    .unwrap_or(line)
+        self.addresses = split_addresses(&self.addresses)
+            .map(|item| match parse_address(item) {
+                Err(AddressError::Ip(rosetun_core::IpCidrError::HostBits { corrected })) => {
+                    corrected
+                }
+                _ => item.to_owned(),
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -181,7 +225,7 @@ impl AddRuleDialog {
     }
 
     pub(crate) fn local_ip_warning(&self) -> bool {
-        rosetun_core::ip_lines_have_local_address(&rosetun_core::parse_ip_lines(&self.ips))
+        has_local_address(&self.parsed_addresses())
     }
 
     pub(crate) fn select_list(&mut self, list: ListId) {
@@ -417,7 +461,7 @@ impl State {
             }
             Action::CorrectRuleIps => {
                 if let Some(dialog) = &mut self.rules.screen.add
-                    && dialog.kind == RuleInputKind::Ip
+                    && dialog.kind == RuleInputKind::Address
                     && !dialog.busy
                 {
                     dialog.correct_ip_host_bits();
@@ -442,39 +486,11 @@ impl State {
                     && self.rules.screen.selected_set.as_ref() == Some(&dialog.set)
                 {
                     let matchers: Option<Vec<_>> = match dialog.kind {
-                        RuleInputKind::Domain => {
-                            if let Some(original) = dialog.unchanged_domain() {
-                                Some(vec![RuleMatcher::Domain(original)])
-                            } else {
-                                let parsed = rosetun_core::parse_domain_lines(
-                                    &dialog.domains,
-                                    dialog.subdomains,
-                                );
-                                (parsed.errors.is_empty() && !parsed.domains.is_empty()).then(
-                                    || {
-                                        parsed
-                                            .domains
-                                            .into_iter()
-                                            .map(RuleMatcher::Domain)
-                                            .collect()
-                                    },
-                                )
-                            }
-                        }
+                        RuleInputKind::Address => dialog.address_rules(),
                         RuleInputKind::Process => {
                             rosetun_core::parse_process_input(&dialog.process)
                                 .ok()
                                 .map(|process| vec![RuleMatcher::Process(process)])
-                        }
-                        RuleInputKind::Ip => {
-                            let parsed = rosetun_core::parse_ip_lines(&dialog.ips);
-                            (parsed.errors.is_empty() && !parsed.addresses.is_empty()).then(|| {
-                                parsed
-                                    .addresses
-                                    .into_iter()
-                                    .map(RuleMatcher::IpCidr)
-                                    .collect()
-                            })
                         }
                         RuleInputKind::List => dialog.list.as_ref().and_then(|list| {
                             let entry = self.config.lists.iter().find(|entry| &entry.id == list)?;
@@ -555,7 +571,7 @@ impl State {
                             )
                         } else if matches!(
                             dialog.kind,
-                            RuleInputKind::Domain | RuleInputKind::List | RuleInputKind::Ip
+                            RuleInputKind::Address | RuleInputKind::List
                         ) {
                             Job::AddRules(dialog.set.clone(), matchers, dialog.target.clone())
                         } else {

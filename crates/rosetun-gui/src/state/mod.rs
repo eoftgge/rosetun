@@ -47,7 +47,9 @@ use quit::QuitState;
 #[cfg(test)]
 pub(crate) use rules::NameDialog;
 use rules::RulesState;
-pub(crate) use rules::{AddRuleDialog, NameDialogKind, RuleInputKind, UndoNotice};
+pub(crate) use rules::{
+    AddRuleDialog, AddressError, MAX_ADDRESSES, NameDialogKind, RuleInputKind, UndoNotice,
+};
 use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};
 use settings::SettingsState;

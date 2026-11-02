@@ -2,43 +2,35 @@ use std::path::Path;
 
 use eframe::egui::{self, Color32, RichText, Stroke};
 use rosetun_config::{AppConfig, ExitTarget, List, ListId, ProcessMatch, RuleTarget};
-use rosetun_core::{NewExit, RuleDestination};
+use rosetun_core::{IpCidrError, NewExit, RuleDestination};
 
 use crate::display;
 use crate::errors;
 use crate::icons::{self, Icon};
 use crate::rules::{ProcessMatchMode, process_matches_filter, update_process_match_mode};
-use crate::state::{Action, AddRuleDialog, RuleInputKind};
+use crate::state::{Action, AddRuleDialog, AddressError, MAX_ADDRESSES, RuleInputKind};
 use crate::view::rules::{destination_color, destination_label, target_color, target_label};
-use crate::{constants, destinations, i18n, theme, widgets};
+use crate::{destinations, i18n, theme, widgets};
 
-const DIALOG_TOP: f32 = 100.0;
-const COMPACT_DIALOG_HEIGHT: f32 = 632.0;
 const ERROR_HEIGHT: f32 = 28.0;
 const PROCESS_ROW_HEIGHT: f32 = 44.0;
 const PROCESS_TILE_SIDE: f32 = 28.0;
 const PROCESS_ROW_GAP: f32 = theme::space::XS;
 const CATEGORY_ROW_HEIGHT: f32 = 22.0;
 const CATEGORY_VIEW_HEIGHT: f32 = 120.0;
-const MIN_PROCESS_LIST: f32 = 2.0 * PROCESS_ROW_HEIGHT + PROCESS_ROW_GAP;
-const MAX_PROCESS_LIST: f32 = 5.0 * PROCESS_ROW_HEIGHT + 4.0 * PROCESS_ROW_GAP;
-const PROCESS_FOOTER_HEIGHT: f32 = 80.0;
-const ADVANCED_HEADER_HEIGHT: f32 = 32.0;
-const ADVANCED_ROW_HEIGHT: f32 = 44.0;
-const DIVIDER_HEIGHT: f32 = 16.0;
-const BOTTOM_GAP: f32 = theme::space::XL;
-const DESTINATION_HEIGHT: f32 = 36.0;
-const DESTINATION_HINT_HEIGHT: f32 = 18.0;
+/// The content area of every kind: the list kind with its categories is the tallest.
+const CONTENT_HEIGHT: f32 = 300.0;
+/// The least the content area shrinks to in a short window.
+const MIN_CONTENT_HEIGHT: f32 = 160.0;
+/// The rest of the dialog: its frame, the title, the kinds, the destination row and the
+/// footer, with the gaps between them, and room above and below it.
+const DIALOG_CHROME: f32 = 300.0;
+/// The row under the program list: the match mode beside "Choose file…".
+const MATCH_MODE_HEIGHT: f32 = 38.0;
 const DESTINATION_POPUP_MARGIN: f32 = theme::space::XL;
 const MIN_DESTINATION_POPUP: f32 = 120.0;
-
-/// The frame the rule dialog was last shown in and how many times it has
-/// opened, so a new opening gets fresh animation ids.
-#[derive(Clone, Copy)]
-struct Opening {
-    frame: u64,
-    count: u64,
-}
+/// How many errors of the address field are listed before "and N more".
+const SHOWN_ADDRESS_ERRORS: usize = 3;
 
 /// A process row's tile: the program's icon, else a letter on a colour.
 struct ProcessTile<'a> {
@@ -47,56 +39,10 @@ struct ProcessTile<'a> {
     icon: Option<&'a Path>,
 }
 
-fn process_body_height(top: f32, limit: f32, advanced: f32) -> f32 {
-    let min_list = if advanced > 0.0 {
-        PROCESS_ROW_HEIGHT
-    } else {
-        MIN_PROCESS_LIST
-    };
-    (limit - top).clamp(
-        PROCESS_FOOTER_HEIGHT + min_list,
-        PROCESS_FOOTER_HEIGHT + MAX_PROCESS_LIST,
-    )
-}
-
-fn has_advanced(dialog: &AddRuleDialog) -> bool {
-    dialog.kind == RuleInputKind::Process || dialog.editing.is_none()
-}
-
-/// The advanced section's height with its rows `progress` of the way open.
-fn advanced_height(dialog: &AddRuleDialog, progress: f32) -> f32 {
-    if has_advanced(dialog) {
-        ADVANCED_HEADER_HEIGHT
-            + ADVANCED_ROW_HEIGHT
-                * (usize::from(dialog.kind == RuleInputKind::Process)
-                    + usize::from(dialog.editing.is_none())) as f32
-                * progress.clamp(0.0, 1.0)
-    } else {
-        0.0
-    }
-}
-
-/// How far the advanced section is open. Each opening of the dialog animates
-/// under its own id, and egui shows a new id at its target at once, so the
-/// section never finishes the last opening's move.
-fn advanced_progress(ctx: &egui::Context, dialog: &AddRuleDialog, reduce_motion: bool) -> f32 {
-    let id = egui::Id::unique("add_rule_opening");
-    let frame = ctx.cumulative_frame_nr();
-    let count = ctx.data_mut(|data| {
-        let count = match data.get_temp::<Opening>(id) {
-            Some(opening) if opening.frame + 1 >= frame => opening.count,
-            Some(opening) => opening.count + 1,
-            None => 0,
-        };
-        data.insert_temp(id, Opening { frame, count });
-        count
-    });
-    widgets::reveal_progress(
-        ctx,
-        egui::Id::unique("add_rule_advanced").with(count),
-        dialog.advanced,
-        reduce_motion,
-    )
+/// The height of the content area in a window `window` points high: the same for every kind
+/// and every state of the dialog, so the dialog never changes its height while it is open.
+fn content_height(window: f32) -> f32 {
+    (window - DIALOG_CHROME).clamp(MIN_CONTENT_HEIGHT, CONTENT_HEIGHT)
 }
 
 pub(crate) fn show(
@@ -111,244 +57,209 @@ pub(crate) fn show(
     if !can_temporary {
         dialog.temporary_only = false;
     }
-    let error_height = if dialog.error.is_some() {
-        ERROR_HEIGHT
-    } else {
-        0.0
-    } + destination_hint_height(dialog);
-    let top = DIALOG_TOP
-        .min((ctx.content_rect().height() - COMPACT_DIALOG_HEIGHT - error_height).max(8.0));
-    let dialog_width = widgets::DialogWidth::Wide.within(ctx.content_rect().width());
-    let advanced = advanced_progress(ctx, dialog, config.interface.reduce_motion);
-    let response = widgets::Dialog::new("add_rule", widgets::DialogWidth::Wide)
-        .top(top)
-        .show(ctx, |ui| {
-            ui.spacing_mut().item_spacing.y = theme::space::XS;
-            ui.heading(if dialog.editing.is_some() {
-                tr!("edit-rule")
-            } else {
-                tr!("new-rule")
-            });
-            ui.label(
-                RichText::new(if dialog.editing.is_some() {
-                    tr!("edit-rule-subtitle")
-                } else {
-                    tr!("new-rule-subtitle")
-                })
-                .small()
-                .color(theme::palette().text_muted),
-            );
-            ui.add_space(theme::space::XXS);
-            ui.label(
-                RichText::new(tr!("what-to-route"))
-                    .small()
-                    .color(theme::palette().text_dim),
-            );
-            if let Some(kind) = widgets::segmented(
-                ui,
-                "rule_input_kind",
-                dialog.kind,
-                &[
-                    (RuleInputKind::Process, tr!("rule-kind-app")),
-                    (RuleInputKind::Domain, tr!("rule-kind-site")),
-                    (RuleInputKind::List, tr!("rule-kind-list")),
-                    (RuleInputKind::Ip, tr!("rule-kind-ip")),
-                ],
-                true,
-                !dialog.busy && dialog.editing.is_none(),
-            ) {
-                actions.push(Action::SelectRuleInput(kind));
-            }
-            ui.add_space(theme::space::XXS);
-            let valid = match dialog.kind {
-                RuleInputKind::Process => {
-                    let frame = widgets::modal_frame();
-                    let limit = ui.ctx().content_rect().bottom()
-                        - BOTTOM_GAP
-                        - (frame.inner_margin.bottom as f32 + frame.stroke.width)
-                        - widgets::field_height(ui)
-                        - DIVIDER_HEIGHT
-                        - 104.0
-                        - advanced_height(dialog, advanced)
-                        - destination_hint_height(dialog)
-                        - if dialog.error.is_some() {
-                            ERROR_HEIGHT
-                        } else {
-                            0.0
-                        };
-                    let height = process_body_height(ui.cursor().top(), limit, advanced);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), height),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            ui.set_min_size(egui::vec2(dialog_width, height));
-                            process_input(ui, dialog, actions)
-                        },
-                    )
-                    .inner
-                }
-                RuleInputKind::Domain => domain_input(ui, dialog),
-                RuleInputKind::List => list_input(ui, dialog, lists, actions),
-                RuleInputKind::Ip => ip_input(ui, dialog, actions),
-            };
-            ui.add_space(0.0);
-            ui.label(
-                RichText::new(tr!("where-to-route"))
-                    .small()
-                    .color(theme::palette().text_dim),
-            );
-            destination_picker(ui, dialog, config);
-            if has_advanced(dialog) {
-                ui.add_space(theme::space::S);
-                ui.horizontal(|ui| {
-                    let chevron = icons::icon_button_sized(
-                        ui,
-                        Icon::Chevron { open: advanced },
-                        !dialog.busy,
-                        20.0,
-                    );
-                    let label = if !dialog.advanced && dialog.temporary_only {
-                        tr!("advanced-temporary")
-                    } else {
-                        tr!("advanced")
-                    };
-                    let color = if !dialog.advanced && dialog.temporary_only {
-                        theme::palette().accent_light
-                    } else {
-                        theme::palette().text_muted
-                    };
-                    let link = ui.add_enabled(
-                        !dialog.busy,
-                        egui::Button::new(RichText::new(label).color(color)).frame(false),
-                    );
-                    if chevron.clicked() || link.clicked() {
-                        dialog.advanced = !dialog.advanced;
-                    }
-                });
-                widgets::reveal(
-                    ui,
-                    egui::Id::unique("add_rule_advanced_rows"),
-                    advanced,
-                    |ui| {
-                        if dialog.kind == RuleInputKind::Process {
-                            let available = full_path_available(dialog);
-                            let mut match_path = dialog.match_mode == ProcessMatchMode::Path;
-                            let response = widgets::toggle_row(
-                                ui,
-                                tr!("match-by-full-path"),
-                                None,
-                                tr!("full-path-detail"),
-                                &mut match_path,
-                                available && !dialog.busy,
-                            );
-                            if !available {
-                                response.on_hover_text(tr!("path-unavailable"));
-                            }
-                            if match_path != (dialog.match_mode == ProcessMatchMode::Path) {
-                                dialog.set_process_match_mode(if match_path {
-                                    ProcessMatchMode::Path
-                                } else {
-                                    ProcessMatchMode::Name
-                                });
-                            }
-                        }
-                        if dialog.editing.is_none() {
-                            let response = widgets::toggle_row(
-                                ui,
-                                tr!("temporary-only"),
-                                None,
-                                tr!("temporary-dialog-hint"),
-                                &mut dialog.temporary_only,
-                                can_temporary && !dialog.busy,
-                            );
-                            if !can_temporary {
-                                response.on_hover_text(tr!("temporary-needs-connection"));
-                            }
-                        }
-                    },
-                );
-            }
-            if let Some(error) = &dialog.error {
-                ui.add_space(theme::space::XS);
-                ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
-            }
-            ui.add_space(theme::space::S);
-            let (divider, _) =
-                ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
-            ui.painter().hline(
-                divider.x_range(),
-                divider.center().y,
-                Stroke::new(theme::stroke::HAIRLINE, theme::palette().border),
-            );
-            ui.add_space(theme::space::S);
-            let exceeds_list_limit = dialog.kind == RuleInputKind::List
-                && dialog
-                    .list
-                    .as_ref()
-                    .and_then(|id| lists.iter().find(|list| &list.id == id))
-                    .is_some_and(|list| {
-                        dialog.exceeds_list_limit(existing_list_rules, list.format.has_categories())
-                    });
-            let can_submit = valid
-                && !exceeds_list_limit
-                && !dialog.busy
-                && (!dialog.temporary_only || can_temporary);
-            let reason = if dialog.busy || dialog.error.is_some() || can_submit {
-                None
-            } else if exceeds_list_limit {
-                Some(tr!("list-rule-limit"))
-            } else if dialog.temporary_only && !can_temporary {
-                Some(tr!("temporary-needs-connection"))
-            } else {
-                Some(match dialog.kind {
-                    RuleInputKind::Process => tr!("choose-program"),
-                    RuleInputKind::Domain => tr!("enter-site"),
-                    RuleInputKind::List => tr!("choose-list-category"),
-                    RuleInputKind::Ip => tr!("enter-ip"),
-                })
-            };
-            let label = if dialog.busy {
-                if dialog.editing.is_some() {
-                    tr!("saving").to_owned()
-                } else {
-                    tr!("adding-rule").to_owned()
-                }
-            } else if dialog.editing.is_some() {
-                tr!("save").to_owned()
-            } else if dialog.kind == RuleInputKind::Domain {
-                let domains = rosetun_core::parse_domain_lines(&dialog.domains, dialog.subdomains);
-                crate::i18n::add_rules(domains.domains.len())
-            } else if dialog.kind == RuleInputKind::Ip {
-                let ips = rosetun_core::parse_ip_lines(&dialog.ips);
-                crate::i18n::add_rules(ips.addresses.len())
-            } else if dialog.kind == RuleInputKind::List && dialog.selected_categories.len() > 1 {
-                crate::i18n::add_rules(dialog.selected_categories.len())
-            } else {
-                tr!("add-rule").to_owned()
-            };
-            let footer = widgets::DialogFooter::new(label, tr!("cancel"))
-                .primary_enabled(can_submit)
-                .primary_hint(reason.as_deref())
-                .busy(dialog.busy)
-                .under_divider();
-            let answered = widgets::dialog_footer_with_note(ui, footer, |ui| {
-                if let Some(reason) = &reason {
-                    ui.label(
-                        RichText::new(reason)
-                            .small()
-                            .color(theme::palette().text_dim),
-                    );
-                }
-            });
-            match answered.choice() {
-                widgets::FooterChoice::Primary => actions.push(Action::SubmitAddRule),
-                widgets::FooterChoice::Cancel => actions.push(Action::CancelAddRule),
-                widgets::FooterChoice::Other | widgets::FooterChoice::None => {}
-            }
+    let height = content_height(ctx.content_rect().height());
+    let response = widgets::Dialog::new("add_rule", widgets::DialogWidth::Wide).show(ctx, |ui| {
+        ui.spacing_mut().item_spacing.y = theme::space::XS;
+        ui.heading(if dialog.editing.is_some() {
+            tr!("edit-rule")
+        } else {
+            tr!("new-rule")
         });
+        ui.add_space(theme::space::S);
+        if let Some(kind) = widgets::segmented(
+            ui,
+            "rule_input_kind",
+            dialog.kind,
+            &[
+                (RuleInputKind::Process, tr!("rule-kind-app")),
+                (RuleInputKind::Address, tr!("rule-kind-address")),
+                (RuleInputKind::List, tr!("rule-kind-list")),
+            ],
+            true,
+            !dialog.busy && dialog.editing.is_none(),
+        ) {
+            actions.push(Action::SelectRuleInput(kind));
+        }
+        ui.add_space(theme::space::S);
+        let error = dialog.error.clone();
+        let valid = content_area(ui, height, error.as_deref(), |ui| match dialog.kind {
+            RuleInputKind::Process => process_input(ui, dialog, actions),
+            RuleInputKind::Address => scrolled(ui, |ui| address_input(ui, dialog, actions)),
+            RuleInputKind::List => scrolled(ui, |ui| list_input(ui, dialog, lists, actions)),
+        });
+        ui.add_space(theme::space::S);
+        destination_row(ui, dialog, config, can_temporary);
+        let exceeds_list_limit = dialog.kind == RuleInputKind::List
+            && dialog
+                .list
+                .as_ref()
+                .and_then(|id| lists.iter().find(|list| &list.id == id))
+                .is_some_and(|list| {
+                    dialog.exceeds_list_limit(existing_list_rules, list.format.has_categories())
+                });
+        let can_submit = valid
+            && !exceeds_list_limit
+            && !dialog.busy
+            && (!dialog.temporary_only || can_temporary);
+        let reason = if dialog.busy || dialog.error.is_some() || can_submit {
+            None
+        } else if exceeds_list_limit {
+            Some(tr!("list-rule-limit"))
+        } else if dialog.temporary_only && !can_temporary {
+            Some(tr!("temporary-needs-connection"))
+        } else {
+            Some(match dialog.kind {
+                RuleInputKind::Process => tr!("choose-program"),
+                RuleInputKind::Address => address_reason(dialog),
+                RuleInputKind::List => tr!("choose-list-category"),
+            })
+        };
+        let footer = widgets::DialogFooter::new(submit_label(dialog), tr!("cancel"))
+            .primary_enabled(can_submit)
+            .primary_hint(reason.as_deref())
+            .busy(dialog.busy);
+        match widgets::dialog_footer(ui, footer).choice() {
+            widgets::FooterChoice::Primary => actions.push(Action::SubmitAddRule),
+            widgets::FooterChoice::Cancel => actions.push(Action::CancelAddRule),
+            widgets::FooterChoice::Other | widgets::FooterChoice::None => {}
+        }
+    });
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAddRule);
     }
+}
+
+/// "Add", "Add N rules" for several, "Save" for an edit.
+fn submit_label(dialog: &AddRuleDialog) -> String {
+    if dialog.busy {
+        return if dialog.editing.is_some() {
+            tr!("saving")
+        } else {
+            tr!("adding-rule")
+        };
+    }
+    if dialog.editing.is_some() {
+        return tr!("save");
+    }
+    let count = match dialog.kind {
+        RuleInputKind::Process => 1,
+        RuleInputKind::Address => dialog.address_rule_count(),
+        RuleInputKind::List => dialog.selected_categories.len(),
+    };
+    i18n::add_rules(count.max(1))
+}
+
+/// Why the address field adds nothing yet.
+fn address_reason(dialog: &AddRuleDialog) -> String {
+    if dialog.too_many_addresses() {
+        return tr!("address-limit", n = MAX_ADDRESSES.to_string());
+    }
+    dialog.address_errors().into_iter().next().map_or_else(
+        || tr!("enter-address"),
+        |(item, error)| i18n::item_error(&item, &address_error_text(&error)),
+    )
+}
+
+fn address_error_text(error: &AddressError) -> String {
+    match error {
+        AddressError::Domain(error) => errors::rule_input(i18n::language(), error),
+        AddressError::Ip(IpCidrError::Invalid) => tr!("ip-invalid"),
+        AddressError::Ip(IpCidrError::HostBits { corrected }) => {
+            tr!("ip-host-bits", corrected = corrected)
+        }
+    }
+}
+
+/// The area under the kinds, `height` high whatever it holds, with the dialog's error at its
+/// bottom.
+fn content_area(
+    ui: &mut egui::Ui,
+    height: f32,
+    error: Option<&str>,
+    add: impl FnOnce(&mut egui::Ui) -> bool,
+) -> bool {
+    let width = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, height),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_min_size(egui::vec2(width, height));
+            ui.set_max_height(height);
+            let body = height
+                - if error.is_some() {
+                    ERROR_HEIGHT + ui.spacing().item_spacing.y
+                } else {
+                    0.0
+                };
+            let valid = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(width, body),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_min_size(egui::vec2(width, body));
+                        ui.set_max_height(body);
+                        add(ui)
+                    },
+                )
+                .inner;
+            if let Some(error) = error {
+                ui.add_sized(
+                    egui::vec2(width, ERROR_HEIGHT),
+                    egui::Label::new(RichText::new(error).color(theme::ERROR)).truncate(),
+                )
+                .on_hover_text(error);
+            }
+            valid
+        },
+    )
+    .inner
+}
+
+/// A kind's content that scrolls when it is taller than the content area.
+fn scrolled(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> bool) -> bool {
+    egui::ScrollArea::vertical()
+        .id_salt("add_rule_content")
+        .max_height(ui.available_height())
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
+/// "Send to", the destination and, for a new rule, "Temporary" at the right edge.
+fn destination_row(
+    ui: &mut egui::Ui,
+    dialog: &mut AddRuleDialog,
+    config: &AppConfig,
+    can_temporary: bool,
+) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), widgets::field_height(ui)),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            if dialog.editing.is_none() {
+                let response = widgets::checkbox(
+                    ui,
+                    &mut dialog.temporary_only,
+                    tr!("temporary-only"),
+                    can_temporary && !dialog.busy,
+                );
+                if can_temporary {
+                    response.on_hover_text(tr!("temporary-dialog-hint"));
+                } else {
+                    response.on_disabled_hover_text(tr!("temporary-needs-connection"));
+                }
+                ui.add_space(theme::space::L);
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(RichText::new(tr!("where-to-route")).color(theme::palette().text_muted));
+                ui.add_space(theme::space::S);
+                destination_picker(ui, dialog, config);
+            });
+        },
+    );
 }
 
 fn category_matches<'a>(categories: &'a [String], query: &'a str) -> Vec<&'a str> {
@@ -683,18 +594,16 @@ fn list_input(
     !selected.format.has_categories() || !dialog.selected_categories.is_empty()
 }
 
-fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) -> bool {
-    ui.label(
-        RichText::new(tr!("ip-label"))
-            .small()
-            .color(theme::palette().text_dim),
-    );
-    let example = tr!("ip-example");
-    let field = widgets::TextField::new(&mut dialog.ips).enabled(!dialog.busy);
+fn address_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) -> bool {
+    let hint = tr!("address-hint");
+    let field = widgets::TextField::new(&mut dialog.addresses)
+        .enabled(!dialog.busy)
+        .hint(&hint)
+        .monospace(true);
     let input = if dialog.editing.is_some() {
         ui.add(field)
     } else {
-        ui.add(field.rows(4).monospace(true).hint(&example))
+        ui.add(field.rows(4))
     };
     if dialog.focus_input {
         input.request_focus();
@@ -703,41 +612,47 @@ fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Act
     if input.changed() {
         dialog.error = None;
     }
-    let parsed = rosetun_core::parse_ip_lines(&dialog.ips);
-    if !parsed.errors.is_empty() {
-        egui::ScrollArea::vertical()
-            .id_salt("ip_line_errors")
-            .max_height(92.0)
-            .show(ui, |ui| {
-                for error in parsed.errors.iter().take(3) {
-                    let message = match &error.error {
-                        rosetun_core::IpCidrError::Invalid => tr!("ip-invalid"),
-                        rosetun_core::IpCidrError::HostBits { corrected } => {
-                            tr!("ip-host-bits", corrected = corrected)
-                        }
-                    };
-                    ui.label(
-                        RichText::new(crate::i18n::line_error(error.line, &message))
-                            .small()
-                            .color(theme::ERROR),
-                    );
-                }
-                if parsed.errors.len() > 3 {
-                    ui.label(
-                        RichText::new(crate::i18n::more_errors(parsed.errors.len() - 3))
-                            .small()
-                            .color(theme::ERROR),
-                    );
-                }
-                if parsed
-                    .errors
-                    .iter()
-                    .any(|error| matches!(error.error, rosetun_core::IpCidrError::HostBits { .. }))
-                    && widgets::link(ui, &tr!("ip-fix"), !dialog.busy).clicked()
-                {
-                    actions.push(Action::CorrectRuleIps);
-                }
-            });
+    let has_domain = dialog.has_domain();
+    let response = widgets::checkbox(
+        ui,
+        &mut dialog.subdomains,
+        tr!("include-subdomains"),
+        has_domain && !dialog.busy,
+    );
+    if has_domain {
+        response.on_hover_text(tr!("include-subdomains-detail"));
+    }
+    let errors = dialog.address_errors();
+    for (item, error) in errors.iter().take(SHOWN_ADDRESS_ERRORS) {
+        ui.label(
+            RichText::new(i18n::item_error(
+                &display::safe_text(item),
+                &address_error_text(error),
+            ))
+            .small()
+            .color(theme::ERROR),
+        );
+    }
+    if errors.len() > SHOWN_ADDRESS_ERRORS {
+        ui.label(
+            RichText::new(i18n::more_errors(errors.len() - SHOWN_ADDRESS_ERRORS))
+                .small()
+                .color(theme::ERROR),
+        );
+    }
+    if dialog.too_many_addresses() {
+        ui.label(
+            RichText::new(tr!("address-limit", n = MAX_ADDRESSES.to_string()))
+                .small()
+                .color(theme::ERROR),
+        );
+    }
+    if errors
+        .iter()
+        .any(|(_, error)| matches!(error, AddressError::Ip(IpCidrError::HostBits { .. })))
+        && widgets::link(ui, &tr!("ip-fix"), !dialog.busy).clicked()
+    {
+        actions.push(Action::CorrectRuleIps);
     }
     if dialog.local_ip_warning() {
         ui.add(
@@ -752,60 +667,7 @@ fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Act
             actions.push(Action::OpenLanSettings);
         }
     }
-    !parsed.addresses.is_empty()
-        && parsed.errors.is_empty()
-        && (dialog.editing.is_none() || parsed.addresses.len() == 1)
-}
-
-fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
-    ui.label(
-        RichText::new(tr!("sites-label"))
-            .small()
-            .color(theme::palette().text_dim),
-    );
-    let field = widgets::TextField::new(&mut dialog.domains).enabled(!dialog.busy);
-    let input = if dialog.editing.is_some() {
-        ui.add(field)
-    } else {
-        ui.add(field.rows(5).monospace(true).hint(constants::SITES_EXAMPLE))
-    };
-    if dialog.focus_input {
-        input.request_focus();
-        dialog.focus_input = false;
-    }
-    if input.changed() {
-        dialog.error = None;
-    }
-    widgets::toggle_row(
-        ui,
-        tr!("include-subdomains"),
-        None,
-        tr!("include-subdomains-detail"),
-        &mut dialog.subdomains,
-        !dialog.busy,
-    );
-    let parsed = rosetun_core::parse_domain_lines(&dialog.domains, dialog.subdomains);
-    if dialog.unchanged_domain().is_some() {
-        return true;
-    }
-    for error in parsed.errors.iter().take(3) {
-        let message = errors::rule_input(crate::i18n::language(), &error.error);
-        ui.label(
-            RichText::new(crate::i18n::line_error(error.line, &message))
-                .small()
-                .color(theme::ERROR),
-        );
-    }
-    if parsed.errors.len() > 3 {
-        ui.label(
-            RichText::new(crate::i18n::more_errors(parsed.errors.len() - 3))
-                .small()
-                .color(theme::ERROR),
-        );
-    }
-    !parsed.domains.is_empty()
-        && parsed.errors.is_empty()
-        && (dialog.editing.is_none() || parsed.domains.len() == 1)
+    dialog.address_rules().is_some()
 }
 
 fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) -> bool {
@@ -828,7 +690,6 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 dialog.browsed = None;
             }
             update_process_match_mode(&mut dialog.match_mode, &dialog.process_filter);
-            dialog.advanced |= dialog.match_mode == ProcessMatchMode::Path;
             dialog.error = None;
         }
         if icons::icon_button_sized(
@@ -892,7 +753,8 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 .color(theme::palette().text_dim),
         );
     }
-    let list_height = (ui.available_height() - 36.0).clamp(0.0, MAX_PROCESS_LIST);
+    let list_height =
+        (ui.available_height() - MATCH_MODE_HEIGHT - ui.spacing().item_spacing.y).max(0.0);
     egui::ScrollArea::vertical()
         .id_salt("running_processes")
         .max_height(list_height)
@@ -937,7 +799,6 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                     dialog.process = chosen;
                     dialog.selected_process = None;
                     update_process_match_mode(&mut dialog.match_mode, &dialog.process);
-                    dialog.advanced |= dialog.match_mode == ProcessMatchMode::Path;
                     dialog.error = None;
                 }
             }
@@ -994,24 +855,47 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
                 );
             }
         });
-    egui::Sides::new().show(
+    #[cfg(windows)]
+    let can_browse = !dialog.busy && !dialog.browsing;
+    egui::Sides::new().height(MATCH_MODE_HEIGHT).show(
         ui,
-        |_| {},
+        |ui| match_mode_choice(ui, dialog),
         |ui| {
             #[cfg(windows)]
-            {
-                ui.spacing_mut().interact_size.y = 32.0;
-                if widgets::outline_button(ui, tr!("browse"), !dialog.busy && !dialog.browsing)
-                    .clicked()
-                {
-                    actions.push(Action::BrowseExecutable);
-                }
+            if widgets::outline_button(ui, tr!("browse"), can_browse).clicked() {
+                actions.push(Action::BrowseExecutable);
             }
             #[cfg(not(windows))]
             let _ = (ui, actions);
         },
     );
     rosetun_core::parse_process_input(&dialog.process).is_ok()
+}
+
+/// "Any folder" or "Only this folder": the program by its name, or only the file at its path.
+fn match_mode_choice(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
+    let available = full_path_available(dialog);
+    let choice = ui.scope(|ui| {
+        widgets::segmented(
+            ui,
+            "process_match_mode",
+            dialog.match_mode,
+            &[
+                (ProcessMatchMode::Name, tr!("match-any-folder")),
+                (ProcessMatchMode::Path, tr!("match-this-folder")),
+            ],
+            false,
+            available && !dialog.busy,
+        )
+    });
+    choice.response.on_hover_text(if available {
+        tr!("full-path-detail")
+    } else {
+        tr!("path-unavailable")
+    });
+    if let Some(mode) = choice.inner {
+        dialog.set_process_match_mode(mode);
+    }
 }
 
 fn process_tab(ui: &mut egui::Ui, label: &str, selected: bool, enabled: bool) -> egui::Response {
@@ -1202,29 +1086,18 @@ fn full_path_available(dialog: &AddRuleDialog) -> bool {
     available
 }
 
-fn destination_hint_height(dialog: &AddRuleDialog) -> f32 {
-    if matches!(dialog.target, RuleDestination::NewExit(_)) {
-        DESTINATION_HINT_HEIGHT
-    } else {
-        0.0
-    }
-}
-
-/// "Where to send it": one field whose list opens over the dialog.
+/// "Send to": one field whose list opens over the dialog.
 fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &AppConfig) {
     let enabled = !dialog.busy && ui.is_enabled();
-    let label = if dialog.target == RuleDestination::Proxy {
-        tr!("where-proxy-main")
-    } else {
-        destination_label(&dialog.target, &config.exits)
-    };
+    let label = destination_label(&dialog.target, &config.exits);
     let color = if enabled {
         destination_color(&dialog.target)
     } else {
         theme::DISABLED
     };
+    // Whole points, so the list that opens as wide as the field has whole-point items.
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), DESTINATION_HEIGHT),
+        egui::vec2(ui.available_width().floor(), widgets::field_height(ui)),
         if enabled {
             egui::Sense::click()
         } else {
@@ -1274,20 +1147,12 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             },
         );
     }
-    if let RuleDestination::NewExit(NewExit::Country { name, .. } | NewExit::Node { name, .. }) =
-        &dialog.target
-    {
-        let hint = tr!("where-new-exit", name = display::safe_text(name));
-        ui.add(
-            egui::Label::new(
-                RichText::new(&hint)
-                    .small()
-                    .color(theme::palette().text_dim),
-            )
-            .truncate(),
-        )
-        .on_hover_text(hint);
-    }
+    let response = match &dialog.target {
+        RuleDestination::NewExit(NewExit::Country { name, .. } | NewExit::Node { name, .. }) => {
+            response.on_hover_text(tr!("where-new-exit", name = display::safe_text(name)))
+        }
+        _ => response,
+    };
     if !enabled {
         return;
     }
@@ -1325,6 +1190,7 @@ fn destination_item(
     color: Color32,
     enabled: bool,
     selected: bool,
+    hint: Option<&str>,
 ) -> bool {
     // `menu_item` takes the width its ui already spans, and a scope starts empty.
     let width = ui.min_rect().width().max(ui.available_width());
@@ -1352,6 +1218,10 @@ fn destination_item(
             if enabled { color } else { theme::DISABLED },
         );
     }
+    let item = match hint {
+        Some(hint) => item.on_hover_text(hint),
+        None => item,
+    };
     if item.clicked() {
         ui.close();
         return true;
@@ -1399,12 +1269,14 @@ fn destination_menu(
     for target in [RuleTarget::Proxy, RuleTarget::Direct, RuleTarget::Block] {
         let destination = RuleDestination::from(target);
         let selected = dialog.target == destination;
+        let hint = (target == RuleTarget::Proxy).then(|| tr!("where-proxy-hint"));
         if destination_item(
             ui,
             &target_label(target),
             target_color(target),
             true,
             selected,
+            hint.as_deref(),
         ) {
             chosen = Some(destination);
         }
@@ -1419,7 +1291,7 @@ fn destination_menu(
             };
             let destination = RuleDestination::Exit(exit.id.clone());
             let selected = dialog.target == destination;
-            if destination_item(ui, &label, theme::EXIT, true, selected) {
+            if destination_item(ui, &label, theme::EXIT, true, selected, None) {
                 chosen = Some(destination);
             }
         }
@@ -1445,7 +1317,7 @@ fn destination_menu(
                 RuleDestination::NewExit(NewExit::Country { code: picked, .. }) if picked == &code
             );
             let label = format!("{name} · {}", code.as_str());
-            if destination_item(ui, &label, theme::EXIT, !full, selected) {
+            if destination_item(ui, &label, theme::EXIT, !full, selected, None) {
                 chosen = Some(RuleDestination::NewExit(NewExit::Country { code, name }));
             }
         }
@@ -1482,7 +1354,7 @@ fn destination_menu(
             };
             let enabled = !full || node.exit.is_some();
             let label = display::safe_text(node.name);
-            if destination_item(ui, &label, theme::EXIT, enabled, selected) {
+            if destination_item(ui, &label, theme::EXIT, enabled, selected, None) {
                 chosen = Some(match node.exit {
                     Some(exit) => RuleDestination::Exit(exit.clone()),
                     None => RuleDestination::NewExit(NewExit::Node {
@@ -1498,106 +1370,58 @@ fn destination_menu(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MAX_PROCESS_LIST, MIN_PROCESS_LIST, PROCESS_FOOTER_HEIGHT, process_body_height, tile_color,
-    };
+    use rosetun_config::{List, ListFormat, ListSource, RuleId, RuleSetId};
 
-    #[test]
-    fn process_body_fits_available_space_with_bounds() {
-        assert_eq!(process_body_height(250.0, 500.0, 0.0), 250.0);
-        assert_eq!(
-            process_body_height(250.0, 900.0, 0.0),
-            PROCESS_FOOTER_HEIGHT + MAX_PROCESS_LIST
-        );
-        assert_eq!(
-            process_body_height(250.0, 300.0, 0.0),
-            PROCESS_FOOTER_HEIGHT + MIN_PROCESS_LIST
-        );
-        assert_eq!(
-            process_body_height(250.0, 300.0, 1.0),
-            PROCESS_FOOTER_HEIGHT + 44.0
-        );
-    }
+    use super::*;
+    use crate::i18n::Language;
+    use crate::rules::ProcessGroup;
 
-    #[test]
-    fn modal_fits_compact_and_standard_windows() {
-        use super::*;
-        use rosetun_config::{RuleId, RuleSetId};
+    const COMPACT: egui::Vec2 = egui::vec2(960.0, 640.0);
+    const REGULAR: egui::Vec2 = egui::vec2(1200.0, 780.0);
 
-        for (width, height, advanced, site, can_temporary, temporary, editing, error) in [
-            (960.0, 640.0, false, false, true, true, false, false),
-            (960.0, 640.0, true, false, true, true, false, false),
-            (960.0, 640.0, false, true, true, true, false, false),
-            (960.0, 640.0, true, true, true, true, false, false),
-            (960.0, 640.0, true, false, false, true, false, false),
-            (960.0, 640.0, false, false, true, true, false, true),
-            (960.0, 640.0, true, false, true, false, true, false),
-            (1200.0, 780.0, false, false, true, false, false, false),
-            (1200.0, 780.0, true, false, true, true, false, false),
-            (1200.0, 780.0, false, true, false, true, false, false),
-        ] {
-            let ctx = egui::Context::default();
-            theme::apply(&ctx);
-            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
-            dialog.advanced = advanced;
-            dialog.temporary_only = temporary;
-            if error {
-                dialog.error = Some("This rule is already in the set.".into());
-            }
-            if editing {
-                dialog.editing = Some(RuleId::new("1"));
-            }
-            if site {
-                dialog.kind = RuleInputKind::Domain;
-                dialog.domains = "youtube.com\n192.168.1.1\nru\n127.0.0.1\ninvalid host".into();
-            } else {
-                dialog.process = r"C:\Apps\Tool.exe".into();
-                dialog.match_mode = ProcessMatchMode::Path;
-            }
+    /// The dialog after a few frames in a window of `size`: its area and every text it painted,
+    /// with whether the text was cut short.
+    fn shown(
+        dialog: &mut AddRuleDialog,
+        config: &AppConfig,
+        can_temporary: bool,
+        size: egui::Vec2,
+    ) -> (egui::Rect, Vec<(String, bool)>) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut shapes = Vec::new();
+        for frame in 0..4 {
             let mut output = ctx.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(width, height),
-                    )),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    time: Some(f64::from(frame) * 0.5),
                     ..egui::RawInput::default()
                 },
-                |ctx| {
-                    show(
-                        ctx,
-                        &mut dialog,
-                        &AppConfig::default(),
-                        can_temporary,
-                        0,
-                        &mut Vec::new(),
-                    );
-                },
+                |ctx| show(ctx, dialog, config, can_temporary, 0, &mut Vec::new()),
             );
             output.textures_delta.clear();
-            assert_eq!(dialog.temporary_only, can_temporary && temporary);
-            let rect = ctx
-                .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
-                .unwrap();
-            assert!(rect.top() >= 0.0, "{rect:?} in {width}×{height}");
-            assert!(rect.bottom() <= height, "{rect:?} in {width}×{height}");
+            shapes = output.shapes;
+        }
+        let area = ctx
+            .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
+            .expect("the dialog is shown");
+        let mut texts = Vec::new();
+        for clipped in &shapes {
+            collect_texts(&clipped.shape, &mut texts);
+        }
+        (area, texts)
+    }
+
+    fn collect_texts(shape: &egui::Shape, out: &mut Vec<(String, bool)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_texts(shape, out)),
+            egui::Shape::Text(text) => out.push((text.galley.text().to_owned(), text.galley.elided)),
+            _ => {}
         }
     }
 
-    #[test]
-    fn list_dialog_fits_compact_window_with_many_categories() {
-        use super::*;
-        use rosetun_config::{List, ListFormat, ListId, ListSource, RuleSetId};
-
-        let ctx = egui::Context::default();
-        theme::apply(&ctx);
-        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
-        dialog.kind = RuleInputKind::List;
-        dialog.advanced = true;
-        dialog.selected_categories = ["category1", "category2", "category3"]
-            .map(str::to_owned)
-            .to_vec();
-        dialog.category_filter = "category@cn".into();
-        let list = List {
+    fn list(categories: usize) -> List {
+        List {
             id: ListId::new("1"),
             name: "Example".into(),
             source: ListSource::File {
@@ -1607,74 +1431,180 @@ mod tests {
             updated_at: None,
             size: None,
             sha256: None,
-            categories: (0..1_000).map(|index| format!("category{index}")).collect(),
+            categories: (0..categories)
+                .map(|index| format!("category{index}"))
+                .collect(),
+        }
+    }
+
+    fn processes(count: usize) -> Vec<ProcessGroup> {
+        (0..count)
+            .map(|index| ProcessGroup {
+                name: format!("Program{index}.exe"),
+                path: Some(format!(r"C:\Apps\Program{index}.exe").into()),
+                count: 1 + index % 3,
+                windowed: index % 2 == 0,
+            })
+            .collect()
+    }
+
+    /// Every kind in the states that used to change the dialog's height.
+    fn variants() -> Vec<(&'static str, AddRuleDialog, AppConfig)> {
+        let config = AppConfig {
+            lists: vec![list(1_000)],
+            ..AppConfig::default()
         };
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(960.0, 640.0),
-                )),
-                ..egui::RawInput::default()
-            },
-            |ctx| {
-                show(
-                    ctx,
-                    &mut dialog,
-                    &AppConfig {
-                        lists: vec![list.clone()],
-                        ..AppConfig::default()
-                    },
-                    true,
-                    0,
-                    &mut Vec::new(),
-                );
-            },
-        );
-        output.textures_delta.clear();
-        let rect = ctx
-            .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
-            .unwrap();
-        assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
+        let new = || AddRuleDialog::new(RuleSetId::new("set"));
+        let mut variants = Vec::new();
+        variants.push(("program", new(), config.clone()));
+        let mut dialog = new();
+        dialog.processes = processes(30);
+        dialog.processes_loaded = true;
+        dialog.selected_process = Some(2);
+        dialog.process = r"C:\Apps\Program2.exe".into();
+        dialog.match_mode = ProcessMatchMode::Path;
+        dialog.error = Some("This rule is already in the set.".into());
+        variants.push(("program chosen with an error", dialog, config.clone()));
+        let mut dialog = new();
+        dialog.processes_error = Some("The process list could not be read.".into());
+        dialog.load_request = Some(1);
+        variants.push(("program list failed", dialog, config.clone()));
+        let mut dialog = new();
+        dialog.kind = RuleInputKind::Address;
+        variants.push(("address", dialog, config.clone()));
+        let mut dialog = new();
+        dialog.kind = RuleInputKind::Address;
+        dialog.addresses = "youtube.com 192.168.1.5/24 ru bad..domain 198.51.100.0/33 example. \
+                            2001:db8::1/32 a..b c..d"
+            .into();
+        dialog.target = RuleDestination::NewExit(NewExit::Country {
+            code: rosetun_config::CountryCode::parse("DE").unwrap(),
+            name: "Germany".into(),
+        });
+        variants.push(("address with errors", dialog, config.clone()));
+        let mut dialog = new();
+        dialog.kind = RuleInputKind::Address;
+        dialog.addresses = (0..=MAX_ADDRESSES)
+            .map(|index| format!("site{index}.example"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        variants.push(("too many addresses", dialog, config.clone()));
+        let mut dialog = new();
+        dialog.kind = RuleInputKind::List;
+        variants.push(("list", dialog, config.clone()));
+        let mut dialog = new();
+        dialog.kind = RuleInputKind::List;
+        dialog.list = Some(ListId::new("1"));
+        dialog.selected_categories = ["category1", "category2", "category3"]
+            .map(str::to_owned)
+            .to_vec();
+        dialog.category_filter = "category@cn".into();
+        dialog.error = Some("This rule is already in the set.".into());
+        variants.push(("list with categories and an error", dialog, config.clone()));
+        let mut dialog = new();
+        dialog.kind = RuleInputKind::List;
+        variants.push(("no lists", dialog, AppConfig::default()));
+        let mut dialog = new();
+        dialog.kind = RuleInputKind::Address;
+        dialog.addresses = "example.com".into();
+        dialog.editing = Some(RuleId::new("1"));
+        variants.push(("editing an address", dialog, config));
+        variants
     }
 
     #[test]
-    fn ip_modal_fits_compact_window_with_errors() {
-        use super::*;
-        use rosetun_config::RuleSetId;
-
-        for advanced in [false, true] {
-            let ctx = egui::Context::default();
-            theme::apply(&ctx);
-            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
-            dialog.kind = RuleInputKind::Ip;
-            dialog.advanced = advanced;
-            dialog.ips = "192.0.2.5/24\nexample.com\n2001:db8::1/32\n198.51.100.0/33".into();
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(960.0, 640.0),
-                    )),
-                    ..egui::RawInput::default()
-                },
-                |ctx| {
-                    show(
-                        ctx,
-                        &mut dialog,
-                        &AppConfig::default(),
-                        true,
-                        0,
-                        &mut Vec::new(),
+    fn the_dialog_keeps_one_height_for_every_kind_and_state_and_fits_the_window() {
+        for size in [COMPACT, REGULAR] {
+            for can_temporary in [false, true] {
+                let mut heights = Vec::new();
+                for (name, mut dialog, config) in variants() {
+                    dialog.temporary_only = true;
+                    let (area, _) = shown(&mut dialog, &config, can_temporary, size);
+                    assert_eq!(dialog.temporary_only, can_temporary, "{name}");
+                    assert!(
+                        area.top() >= 0.0 && area.bottom() <= size.y,
+                        "{name}: {area:?} in {size:?}"
                     );
-                },
-            );
-            output.textures_delta.clear();
-            let rect = ctx
-                .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
-                .unwrap();
-            assert!(rect.top() >= 0.0 && rect.bottom() <= 640.0, "{rect:?}");
+                    heights.push((name, area.height()));
+                }
+                let first = heights[0].1;
+                for (name, height) in &heights {
+                    assert!(
+                        (height - first).abs() < 0.5,
+                        "{name} is {height} high, the program kind {first} in {size:?}"
+                    );
+                }
+            }
         }
+    }
+
+    #[test]
+    fn no_text_of_the_dialog_is_cut_short_in_a_compact_window_in_both_languages() {
+        for language in [Language::English, Language::Russian] {
+            i18n::in_language(language, || {
+                for (name, mut dialog, config) in variants() {
+                    let (_, texts) = shown(&mut dialog, &config, true, COMPACT);
+                    let cut: Vec<_> = texts
+                        .iter()
+                        .filter(|(text, elided)| *elided && !text.starts_with("category"))
+                        .collect();
+                    assert!(cut.is_empty(), "{name} {language:?}: {cut:?}");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn the_title_stands_alone_and_the_destination_says_only_through_vpn() {
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        let (_, texts) = shown(&mut dialog, &AppConfig::default(), true, REGULAR);
+        let texts: Vec<_> = texts.into_iter().map(|(text, _)| text).collect();
+        for expected in [
+            tr!("new-rule"),
+            tr!("rule-kind-app"),
+            tr!("rule-kind-address"),
+            tr!("rule-kind-list"),
+            tr!("where-to-route"),
+            target_label(RuleTarget::Proxy),
+            tr!("temporary-only"),
+            tr!("add"),
+            tr!("cancel"),
+        ] {
+            assert!(texts.contains(&expected), "{expected} in {texts:?}");
+        }
+        assert!(
+            !texts.iter().any(|text| text.contains(&tr!("where-proxy-hint"))),
+            "{texts:?}"
+        );
+        dialog.editing = Some(RuleId::new("1"));
+        let (_, texts) = shown(&mut dialog, &AppConfig::default(), true, REGULAR);
+        let texts: Vec<_> = texts.into_iter().map(|(text, _)| text).collect();
+        assert!(texts.contains(&tr!("edit-rule")));
+        assert!(texts.contains(&tr!("save")));
+        assert!(!texts.contains(&tr!("temporary-only")));
+    }
+
+    #[test]
+    fn the_add_button_counts_the_rules_it_makes() {
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        assert_eq!(submit_label(&dialog), tr!("add"));
+        dialog.kind = RuleInputKind::Address;
+        dialog.addresses = "youtube.com www.youtube.com 192.0.2.1 bad..domain".into();
+        assert_eq!(submit_label(&dialog), i18n::add_rules(2));
+        dialog.subdomains = false;
+        assert_eq!(submit_label(&dialog), i18n::add_rules(3));
+        dialog.kind = RuleInputKind::List;
+        dialog.selected_categories = vec!["a".into(), "b".into()];
+        assert_eq!(submit_label(&dialog), i18n::add_rules(2));
+        dialog.editing = Some(RuleId::new("1"));
+        assert_eq!(submit_label(&dialog), tr!("save"));
+    }
+
+    #[test]
+    fn the_content_area_shrinks_only_in_a_short_window() {
+        assert_eq!(content_height(COMPACT.y), CONTENT_HEIGHT);
+        assert_eq!(content_height(REGULAR.y), CONTENT_HEIGHT);
+        assert_eq!(content_height(0.0), MIN_CONTENT_HEIGHT);
     }
 
     #[test]
@@ -1706,7 +1636,7 @@ mod tests {
             let ctx = egui::Context::default();
             theme::apply(&ctx);
             let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
-            dialog.kind = RuleInputKind::Domain;
+            dialog.kind = RuleInputKind::Address;
             dialog.target = RuleDestination::NewExit(NewExit::Country {
                 code: CountryCode::parse("DE").unwrap(),
                 name: "Germany".into(),
@@ -1758,7 +1688,7 @@ mod tests {
         let ctx = egui::Context::default();
         theme::apply(&ctx);
         let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
-        dialog.kind = RuleInputKind::Domain;
+        dialog.kind = RuleInputKind::Address;
         let run = |dialog: &mut AddRuleDialog| {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -1829,7 +1759,7 @@ mod tests {
             let ctx = egui::Context::default();
             theme::apply(&ctx);
             let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
-            dialog.kind = RuleInputKind::Domain;
+            dialog.kind = RuleInputKind::Address;
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -1957,109 +1887,6 @@ mod tests {
             matches.iter().filter(|item| **item == "google@cn").count(),
             1
         );
-    }
-
-    /// Runs one frame at `time` seconds and returns the advanced section's
-    /// progress, or `None` for a frame without the dialog.
-    fn advanced_frame(
-        ctx: &super::egui::Context,
-        time: f64,
-        dialog: Option<&crate::state::AddRuleDialog>,
-        reduce_motion: bool,
-    ) -> Option<f32> {
-        let mut progress = None;
-        let mut output = ctx.run_ui(
-            super::egui::RawInput {
-                time: Some(time),
-                ..super::egui::RawInput::default()
-            },
-            |ui| {
-                progress =
-                    dialog.map(|dialog| super::advanced_progress(ui.ctx(), dialog, reduce_motion));
-            },
-        );
-        output.textures_delta.clear();
-        progress
-    }
-
-    #[test]
-    fn the_advanced_section_moves_over_time_unless_motion_is_reduced() {
-        use rosetun_config::RuleSetId;
-
-        for reduce_motion in [false, true] {
-            let ctx = super::egui::Context::default();
-            let mut dialog = crate::state::AddRuleDialog::new(RuleSetId::new("set"));
-            assert_eq!(
-                advanced_frame(&ctx, 0.0, Some(&dialog), reduce_motion),
-                Some(0.0)
-            );
-            dialog.advanced = true;
-            let opening = advanced_frame(&ctx, 0.016, Some(&dialog), reduce_motion)
-                .expect("the dialog is shown");
-            dialog.advanced = false;
-            let closing = advanced_frame(&ctx, 1.0, Some(&dialog), reduce_motion)
-                .expect("the dialog is shown");
-            if reduce_motion {
-                assert_eq!((opening, closing), (1.0, 0.0));
-            } else {
-                assert!(0.0 < opening && opening < 1.0, "{opening}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_reopened_dialog_shows_the_advanced_section_where_it_now_is() {
-        use rosetun_config::RuleSetId;
-
-        let ctx = super::egui::Context::default();
-        let mut dialog = crate::state::AddRuleDialog::new(RuleSetId::new("set"));
-        dialog.advanced = true;
-        assert_eq!(advanced_frame(&ctx, 0.0, Some(&dialog), false), Some(1.0));
-        advanced_frame(&ctx, 0.016, None, false);
-        dialog.advanced = false;
-        assert_eq!(advanced_frame(&ctx, 0.032, Some(&dialog), false), Some(0.0));
-        advanced_frame(&ctx, 0.048, None, false);
-        dialog.advanced = true;
-        assert_eq!(advanced_frame(&ctx, 0.064, Some(&dialog), false), Some(1.0));
-    }
-
-    #[test]
-    fn advanced_rows_count_by_how_far_the_section_is_open() {
-        use super::{ADVANCED_HEADER_HEIGHT, ADVANCED_ROW_HEIGHT, advanced_height};
-        use rosetun_config::RuleSetId;
-
-        let dialog = crate::state::AddRuleDialog::new(RuleSetId::new("set"));
-        assert_eq!(advanced_height(&dialog, 0.0), ADVANCED_HEADER_HEIGHT);
-        assert_eq!(
-            advanced_height(&dialog, 0.5),
-            ADVANCED_HEADER_HEIGHT + ADVANCED_ROW_HEIGHT
-        );
-        assert_eq!(
-            advanced_height(&dialog, 1.0),
-            ADVANCED_HEADER_HEIGHT + 2.0 * ADVANCED_ROW_HEIGHT
-        );
-    }
-
-    #[test]
-    fn advanced_is_available_only_when_options_exist() {
-        use super::*;
-        use rosetun_config::{RuleId, RuleSetId};
-
-        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
-        for kind in [
-            RuleInputKind::Process,
-            RuleInputKind::Domain,
-            RuleInputKind::List,
-        ] {
-            dialog.kind = kind;
-            assert!(has_advanced(&dialog));
-        }
-        dialog.editing = Some(RuleId::new("rule"));
-        assert!(!has_advanced(&dialog));
-        dialog.kind = RuleInputKind::Domain;
-        assert!(!has_advanced(&dialog));
-        dialog.kind = RuleInputKind::Process;
-        assert!(has_advanced(&dialog));
     }
 
     #[test]

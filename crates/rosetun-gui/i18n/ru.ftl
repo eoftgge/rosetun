@@ -807,14 +807,11 @@ torrents-name = Торренты
 torrents-description = qBittorrent, uTorrent, BitTorrent, Transmission и другие
 new-rule-button = + Добавить правило
 new-rule = Новое правило
-new-rule-subtitle = Встанет первым и сработает раньше остальных.
 edit = Изменить
 edit-rule = Изменить правило
-edit-rule-subtitle = Место в списке не изменится.
 saving = Сохранение…
-what-to-route = Что направить
-where-to-route = Куда направить
-where-proxy-main = Через VPN · сервер с главного экрана
+where-to-route = Куда
+where-proxy-hint = Сервер с главного экрана
 where-section-exits = Ваши направления
 where-section-country = Другая страна
 where-section-node = Конкретный сервер
@@ -860,20 +857,17 @@ exit-rules = { $count ->
 exit-rules-hint = Показать эти правила
 exit-no-rules = Нет правил
 temporary-dialog-hint = Правило удалится, когда вы отключитесь от VPN.
-temporary-only = Только до отключения
-rule-kind-app = Приложение
-rule-kind-site = Сайт
+temporary-only = Временно
+rule-kind-app = Программа
+rule-kind-address = Адрес
+address-hint = Сайт, IP-адрес или подсеть
+enter-address = Введите адрес
+address-limit = Не больше { $n } адресов за раз
 rule-kind-list = Список
-rule-kind-ip = IP-адрес
-ip-label = IP-адреса или подсети, по одному на строку
-ip-example = 192.0.2.1
-    198.51.100.0/24
-    2001:db8::1
 ip-invalid = Введите адрес IPv4 или IPv6 либо подсеть с верным префиксом
-ip-host-bits = подсеть начинается с { $corrected }
+ip-host-bits = Подсеть начинается с { $corrected }
 ip-fix = Исправить
 ip-local-warning = Правило может не сработать: локальные адреса идут мимо туннеля. Для домашних устройств есть настройка:
-enter-ip = Введите IP-адрес
 rule-list-empty = Списков пока нет. Добавьте список, чтобы создать по нему правило.
 rule-list-select = Список
 rule-list-categories = Категории
@@ -896,20 +890,17 @@ open-tab = Открытые
 all-processes = Все процессы · { $n }
 found = Найдено · { $n }
 typed-process = Введено вручную
-sites-label = Адреса сайтов, по одному на строку
-line-error = Строка { $n }: { $error }
 more-errors = И ещё { $k }
 add-rules-one = Добавить { $n } правило
 add-rules-few = Добавить { $n } правила
 add-rules-many = Добавить { $n } правил
-include-subdomains = Включая поддомены
+include-subdomains = и поддомены
 include-subdomains-detail = youtube.com сработает и для m.youtube.com
-advanced = Дополнительно
-advanced-temporary = Дополнительно · Временное
 full-path-detail = Правило сработает только для программы из этой папки
+match-any-folder = Любая папка
+match-this-folder = Только эта папка
 browse = Выбрать файл…
 choose-program = Выберите программу
-enter-site = Введите адрес сайта
 choose-list-category = Выберите хотя бы одну категорию
 programs = Программы
 refresh = Обновить
@@ -917,8 +908,6 @@ loading-processes = Загрузка процессов…
 no-running-processes = Запущенных процессов не найдено.
 no-processes-match = Нет процессов под этот фильтр.
 path-unavailable = путь недоступен
-match-by-full-path = Совпадение по полному пути
-add-rule = Добавить правило
 adding-rule = Добавление правила…
 language-title = Язык
 language-system = Как в системе
@@ -940,7 +929,7 @@ servers = { $count ->
    *[other] { $n } серверов
 }
 add-rules = { $count ->
-    [1] { add-rule }
+    [1] { add }
     [one] { add-rules-one }
     [few] { add-rules-few }
     [many] { add-rules-many }

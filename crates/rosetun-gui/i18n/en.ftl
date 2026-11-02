@@ -792,14 +792,11 @@ torrents-name = Torrents
 torrents-description = qBittorrent, uTorrent, BitTorrent, Transmission and others
 new-rule-button = + Add rule
 new-rule = New rule
-new-rule-subtitle = Goes to the top and is checked first.
 edit = Edit
 edit-rule = Edit rule
-edit-rule-subtitle = Its place in the list stays the same.
 saving = Saving…
-what-to-route = What to route
-where-to-route = Where to send it
-where-proxy-main = Through VPN · server from the main screen
+where-to-route = Send to
+where-proxy-hint = Server from the main screen
 where-section-exits = Your exits
 where-section-country = Another country
 where-section-node = Specific server
@@ -843,20 +840,17 @@ exit-rules = { $count ->
 exit-rules-hint = Show these rules
 exit-no-rules = No rules
 temporary-dialog-hint = The rule is removed when you disconnect from the VPN.
-temporary-only = Only until disconnect
+temporary-only = Temporary
 rule-kind-app = App
-rule-kind-site = Website
+rule-kind-address = Address
+address-hint = Site, IP address or subnet
+enter-address = Enter an address
+address-limit = No more than { $n } addresses at once
 rule-kind-list = List
-rule-kind-ip = IP address
-ip-label = IP addresses or subnets, one per line
-ip-example = 192.0.2.1
-    198.51.100.0/24
-    2001:db8::1
 ip-invalid = Enter an IPv4 or IPv6 address or subnet with a valid prefix
 ip-host-bits = Subnet starts at { $corrected }
 ip-fix = Fix
 ip-local-warning = The rule may not work: local addresses bypass the tunnel. For devices at home, use this setting:
-enter-ip = Enter an IP address
 rule-list-empty = No lists added yet. Add a list to make a rule for it.
 rule-list-select = List
 rule-list-categories = Categories
@@ -879,20 +873,17 @@ open-tab = Open
 all-processes = All processes · { $n }
 found = Found · { $n }
 typed-process = Typed in
-sites-label = Website addresses, one per line
-line-error = Line { $n }: { $error }
 more-errors = And { $k } more
 add-rules-one = Add { $n } rule
 add-rules-few = Add { $n } rules
 add-rules-many = Add { $n } rules
-include-subdomains = Include subdomains
+include-subdomains = and subdomains
 include-subdomains-detail = youtube.com also covers m.youtube.com
-advanced = Advanced
-advanced-temporary = Advanced · Temporary
 full-path-detail = The rule applies only to the program in this folder
+match-any-folder = Any folder
+match-this-folder = Only this folder
 browse = Choose file…
 choose-program = Choose a program
-enter-site = Enter a site address
 choose-list-category = Select at least one category
 programs = Programs
 refresh = Refresh
@@ -900,8 +891,6 @@ loading-processes = Loading processes…
 no-running-processes = No running processes found.
 no-processes-match = No processes match the filter.
 path-unavailable = path unavailable
-match-by-full-path = Match the full path
-add-rule = Add rule
 adding-rule = Adding rule…
 language-title = Language
 language-system = System
@@ -921,7 +910,7 @@ servers = { $count ->
    *[other] { $n } servers
 }
 add-rules = { $count ->
-    [1] { add-rule }
+    [1] { add }
     [one] { add-rules-one }
     [2] { add-rules-few }
    *[other] { add-rules-many }

@@ -355,7 +355,7 @@ fn cancelled_or_late_browse_does_not_replace_input() {
     assert!(dialog.browsed.is_none());
 
     state.act(Action::BrowseExecutable);
-    state.act(Action::SelectRuleInput(RuleInputKind::Domain));
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
     state.reduce(WorkerEvent::BrowsedExecutable(Some(
         r"C:\Apps\Tool.exe".into(),
     )));
@@ -457,12 +457,13 @@ fn process_results_fill_only_the_current_dialog_and_are_dropped_on_close() {
 }
 
 #[test]
-fn site_batch_requires_every_line_to_be_valid_and_obeys_subdomain_toggle() {
+fn an_address_batch_requires_every_item_to_be_valid_and_obeys_the_subdomain_choice() {
     for (subdomains, expected) in [
         (
             true,
             vec![
                 RuleMatcher::Domain(DomainMatch::Suffix("youtube.com".into())),
+                RuleMatcher::IpCidr("192.0.2.1/32".into()),
                 RuleMatcher::Domain(DomainMatch::Suffix("instagram.com".into())),
             ],
         ),
@@ -470,6 +471,7 @@ fn site_batch_requires_every_line_to_be_valid_and_obeys_subdomain_toggle() {
             false,
             vec![
                 RuleMatcher::Domain(DomainMatch::Exact("www.youtube.com".into())),
+                RuleMatcher::IpCidr("192.0.2.1/32".into()),
                 RuleMatcher::Domain(DomainMatch::Exact("instagram.com".into())),
             ],
         ),
@@ -484,13 +486,14 @@ fn site_batch_requires_every_line_to_be_valid_and_obeys_subdomain_toggle() {
             state.rules.screen.add.as_ref().unwrap().kind,
             RuleInputKind::Process
         );
-        state.act(Action::SelectRuleInput(RuleInputKind::Domain));
+        state.act(Action::SelectRuleInput(RuleInputKind::Address));
         let dialog = state.rules.screen.add.as_mut().unwrap();
-        dialog.domains = "https://www.youtube.com/watch?v=1\n192.168.1.1\ninstagram.com".into();
+        dialog.addresses =
+            "https://www.youtube.com/watch?v=1\n192.0.2.1\nbad..domain\ninstagram.com".into();
         dialog.subdomains = subdomains;
         assert!(state.act(Action::SubmitAddRule).is_none());
-        state.rules.screen.add.as_mut().unwrap().domains =
-            "https://www.youtube.com/watch?v=1\ninstagram.com".into();
+        state.rules.screen.add.as_mut().unwrap().addresses =
+            "https://www.youtube.com/watch?v=1, 192.0.2.1; instagram.com".into();
         assert!(matches!(
             state.act(Action::SubmitAddRule),
             Some(Job::AddRules(_, matchers, RuleDestination::Proxy)) if matchers == expected
@@ -499,22 +502,22 @@ fn site_batch_requires_every_line_to_be_valid_and_obeys_subdomain_toggle() {
 }
 
 #[test]
-fn ip_rule_dialog_adds_multiple_addresses_and_corrects_host_bits() {
+fn the_address_field_adds_multiple_addresses_and_corrects_host_bits() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRule);
-    state.act(Action::SelectRuleInput(RuleInputKind::Ip));
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.ips = "192.0.2.5/24\nexample.com\n2001:db8::1\n198.51.100.0/24".into();
+    dialog.addresses = "192.0.2.5/24\nbad..domain\n2001:db8::1\n198.51.100.0/24".into();
     assert!(state.act(Action::SubmitAddRule).is_none());
     state.act(Action::CorrectRuleIps);
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(
-        dialog.ips,
-        "192.0.2.0/24\nexample.com\n2001:db8::1\n198.51.100.0/24"
+        dialog.addresses,
+        "192.0.2.0/24\nbad..domain\n2001:db8::1\n198.51.100.0/24"
     );
     assert!(state.act(Action::SubmitAddRule).is_none());
-    state.rules.screen.add.as_mut().unwrap().ips =
+    state.rules.screen.add.as_mut().unwrap().addresses =
         "192.0.2.0/24\n2001:db8::1\n198.51.100.0/24\n192.0.2.0/24".into();
     assert!(matches!(
         state.act(Action::SubmitAddRule),
@@ -528,19 +531,19 @@ fn ip_rule_dialog_adds_multiple_addresses_and_corrects_host_bits() {
 }
 
 #[test]
-fn editing_ip_rule_opens_ip_tab_and_updates_one_rule() {
+fn editing_an_ip_rule_opens_the_address_kind_and_updates_one_rule() {
     let mut state = state_with_rules();
     let id = state.config.rule_sets[1].rules[0].id.clone();
     state.config.rule_sets[1].rules[0].matcher = RuleMatcher::IpCidr("192.0.2.0/24".into());
     state.act(Action::OpenRules);
     state.act(Action::OpenEditRule(id.clone()));
     let dialog = state.rules.screen.add.as_ref().unwrap();
-    assert_eq!(dialog.kind, RuleInputKind::Ip);
-    assert_eq!(dialog.ips, "192.0.2.0/24");
+    assert_eq!(dialog.kind, RuleInputKind::Address);
+    assert_eq!(dialog.addresses, "192.0.2.0/24");
     assert!(state.act(Action::SubmitAddRule).is_none());
     assert!(state.rules.screen.add.is_none());
     state.act(Action::OpenEditRule(id.clone()));
-    state.rules.screen.add.as_mut().unwrap().ips = "203.0.113.1".into();
+    state.rules.screen.add.as_mut().unwrap().addresses = "203.0.113.1".into();
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::UpdateRule(_, rule, RuleMatcher::IpCidr(cidr), RuleDestination::Proxy))
@@ -553,8 +556,8 @@ fn ip_local_setting_link_closes_dialog_and_opens_connection_settings() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRule);
-    state.act(Action::SelectRuleInput(RuleInputKind::Ip));
-    state.rules.screen.add.as_mut().unwrap().ips = "192.0.2.1".into();
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
+    state.rules.screen.add.as_mut().unwrap().addresses = "192.0.2.1".into();
     assert!(!state.rules.screen.add.as_ref().unwrap().local_ip_warning());
     state.act(Action::OpenLanSettings);
     assert!(state.rules.screen.add.is_none());
@@ -573,13 +576,13 @@ fn editing_a_suffix_rule_populates_the_site_form_and_saves_only_changes() {
     assert!(state.act(Action::OpenEditRule(id.clone())).is_none());
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.editing.as_ref(), Some(&id));
-    assert_eq!(dialog.kind, RuleInputKind::Domain);
-    assert_eq!(dialog.domains, "example.com");
+    assert_eq!(dialog.kind, RuleInputKind::Address);
+    assert_eq!(dialog.addresses, "example.com");
     assert!(dialog.subdomains);
     state.act(Action::SelectRuleInput(RuleInputKind::Process));
     assert_eq!(
         state.rules.screen.add.as_ref().unwrap().kind,
-        RuleInputKind::Domain
+        RuleInputKind::Address
     );
     assert!(state.act(Action::SubmitAddRule).is_none());
     assert!(state.rules.screen.add.is_none());
@@ -610,7 +613,7 @@ fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
             RuleMatcher::Domain(DomainMatch::Suffix(domain.into()));
         state.act(Action::OpenRules);
         state.act(Action::OpenEditRule(id.clone()));
-        assert_eq!(state.rules.screen.add.as_ref().unwrap().domains, domain);
+        assert_eq!(state.rules.screen.add.as_ref().unwrap().addresses, domain);
         assert!(state.act(Action::SubmitAddRule).is_none());
         assert!(state.rules.screen.add.is_none());
         state.act(Action::OpenEditRule(id.clone()));
@@ -624,7 +627,7 @@ fn editing_existing_suffixes_does_not_strip_www_or_reject_a_zone() {
 }
 
 #[test]
-fn editing_a_path_rule_opens_advanced_and_rejects_templates() {
+fn editing_a_path_rule_keeps_the_path_and_rejects_templates() {
     #[cfg(windows)]
     let path = r"C:\Apps\Tool.exe";
     #[cfg(not(windows))]
@@ -656,7 +659,6 @@ fn editing_a_path_rule_opens_advanced_and_rejects_templates() {
     assert_eq!(dialog.kind, RuleInputKind::Process);
     assert_eq!(dialog.process_filter, "Tool.exe");
     assert_eq!(dialog.process, path);
-    assert!(dialog.advanced);
     assert_eq!(dialog.match_mode, ProcessMatchMode::Path);
     assert!(dialog.selected_process.is_none());
     assert!(state.act(Action::SubmitAddRule).is_none());
@@ -672,9 +674,9 @@ fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
     state.rules.screen.filter.target = Some(RuleTarget::Direct);
     state.act(Action::OpenAddRule);
     assert!(state.act(Action::SubmitAddRule).is_none());
-    state.act(Action::SelectRuleInput(RuleInputKind::Domain));
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.domains = "*.example.com".into();
+    dialog.addresses = "*.example.com".into();
     dialog.target = RuleDestination::Direct;
     assert!(matches!(
         state.act(Action::SubmitAddRule),
@@ -684,7 +686,7 @@ fn add_rule_keeps_duplicate_error_in_dialog_and_resets_filters_on_success() {
     assert!(state.act(Action::CancelAddRule).is_none());
     state.reduce(WorkerEvent::AddRules(Err(RuleSetError::DuplicateRule)));
     let dialog = state.rules.screen.add.as_ref().unwrap();
-    assert_eq!(dialog.domains, "*.example.com");
+    assert_eq!(dialog.addresses, "*.example.com");
     assert_eq!(
         dialog.error.as_deref(),
         Some("this rule is already in the set")
@@ -932,9 +934,9 @@ fn rule_actions_reject_concurrent_changes_and_filtered_reordering() {
             .is_none()
     );
     state.act(Action::OpenAddRule);
-    state.act(Action::SelectRuleInput(RuleInputKind::Domain));
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.domains = "new.example".into();
+    dialog.addresses = "new.example".into();
     dialog.subdomains = false;
     dialog.target = RuleDestination::Block;
     assert!(matches!(
@@ -979,7 +981,7 @@ fn editing_an_exit_rule_keeps_its_exit() {
     assert!(state.rules.screen.add.is_none());
 
     state.act(Action::OpenEditRule(id.clone()));
-    state.rules.screen.add.as_mut().unwrap().domains = "example.org".into();
+    state.rules.screen.add.as_mut().unwrap().addresses = "example.org".into();
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::UpdateRule(_, rule, _, RuleDestination::Exit(kept))) if rule == id && kept == exit

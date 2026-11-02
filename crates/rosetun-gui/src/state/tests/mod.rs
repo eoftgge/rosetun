@@ -163,8 +163,8 @@ fn temporary_dialog(state: &mut State, domain: &str) {
     let id = RuleSetId::new("1");
     state.rules.screen.selected_set = Some(id.clone());
     let mut dialog = AddRuleDialog::new(id);
-    dialog.kind = RuleInputKind::Domain;
-    dialog.domains = domain.into();
+    dialog.kind = RuleInputKind::Address;
+    dialog.addresses = domain.into();
     dialog.subdomains = false;
     dialog.target = RuleDestination::Direct;
     dialog.temporary_only = true;

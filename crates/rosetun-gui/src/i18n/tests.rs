@@ -113,7 +113,7 @@ fn traffic_labels_format_both_directions_and_caption() {
 #[test]
 fn add_rules_label_pluralizes_in_both_languages() {
     for (count, expected) in [
-        (1, "Добавить правило"),
+        (1, "Добавить"),
         (2, "Добавить 2 правила"),
         (5, "Добавить 5 правил"),
         (21, "Добавить 21 правило"),
@@ -123,7 +123,7 @@ fn add_rules_label_pluralizes_in_both_languages() {
             expected
         );
     }
-    assert_eq!(in_language(Language::English, || add_rules(1)), "Add rule");
+    assert_eq!(in_language(Language::English, || add_rules(1)), "Add");
     assert_eq!(
         in_language(Language::English, || add_rules(2)),
         "Add 2 rules"

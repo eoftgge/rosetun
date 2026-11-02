@@ -680,17 +680,7 @@ pub fn parse_domain_lines(input: &str, subdomains: bool) -> DomainLines {
         }
         match parse_domain_input(line) {
             Ok(domain) => {
-                let domain = match domain {
-                    DomainMatch::Exact(domain) if subdomains => {
-                        let domain = domain
-                            .strip_prefix("www.")
-                            .filter(|rest| rest.contains('.'))
-                            .unwrap_or(&domain)
-                            .to_owned();
-                        DomainMatch::Suffix(domain)
-                    }
-                    domain => domain,
-                };
+                let domain = with_subdomains(domain, subdomains);
                 if !result.domains.contains(&domain) {
                     result.domains.push(domain);
                 }
@@ -702,6 +692,22 @@ pub fn parse_domain_lines(input: &str, subdomains: bool) -> DomainLines {
         }
     }
     result
+}
+
+/// An exact domain as the rule dialog stores it: with `subdomains`, a suffix without a
+/// leading `www.` (`www.example.com` covers `example.com` and everything under it).
+pub fn with_subdomains(domain: DomainMatch, subdomains: bool) -> DomainMatch {
+    match domain {
+        DomainMatch::Exact(domain) if subdomains => {
+            let domain = domain
+                .strip_prefix("www.")
+                .filter(|rest| rest.contains('.'))
+                .unwrap_or(&domain)
+                .to_owned();
+            DomainMatch::Suffix(domain)
+        }
+        domain => domain,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

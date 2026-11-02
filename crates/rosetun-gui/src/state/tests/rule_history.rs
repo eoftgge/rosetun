@@ -161,16 +161,16 @@ fn open_delete_set(state: &mut State) {
 
 fn open_new_domain(state: &mut State) {
     state.act(Action::OpenAddRule);
-    state.act(Action::SelectRuleInput(RuleInputKind::Domain));
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.domains = "new.example".into();
+    dialog.addresses = "new.example".into();
     dialog.subdomains = false;
 }
 
 fn open_edit_first(state: &mut State) {
     state.act(Action::OpenEditRule(RuleId::new("0")));
     let dialog = state.rules.screen.add.as_mut().unwrap();
-    dialog.domains = "changed.example".into();
+    dialog.addresses = "changed.example".into();
     dialog.subdomains = false;
 }
 

@@ -104,8 +104,8 @@ pub(crate) fn found(count: usize) -> String {
     tr!("found", n = count.to_string())
 }
 
-pub(crate) fn line_error(line: usize, error: &str) -> String {
-    tr!("line-error", n = line.to_string(), error = error)
+pub(crate) fn item_error(item: &str, error: &str) -> String {
+    format!("{item}: {error}")
 }
 
 pub(crate) fn more_errors(count: usize) -> String {
