@@ -40,6 +40,12 @@ mod program_icon;
     unsafe_code,
     reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
 )]
+mod fonts;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "Win32 FFI; every unsafe block carries a SAFETY comment"
+)]
 mod language;
 #[cfg(windows)]
 #[expect(
@@ -78,6 +84,8 @@ pub use autostart::{autostart_enabled, disable_autostart, enable_autostart};
 pub use elevated::run_elevated;
 #[cfg(windows)]
 pub use instance::{Activation, Instance, acquire};
+#[cfg(windows)]
+pub use fonts::fonts_dir;
 #[cfg(windows)]
 pub use language::user_language_is_russian;
 #[cfg(windows)]

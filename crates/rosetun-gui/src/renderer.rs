@@ -31,6 +31,8 @@ fn options(viewport: eframe::egui::ViewportBuilder, renderer: Renderer) -> efram
     let mut options = eframe::NativeOptions {
         viewport: viewport.with_transparent(false),
         renderer: eframe::Renderer::Glow,
+        // `system_fonts::SystemFonts` takes its place.
+        system_font_fallback: false,
         ..Default::default()
     };
     if renderer == Renderer::Wgpu {

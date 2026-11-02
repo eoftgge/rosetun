@@ -2979,6 +2979,7 @@ dependencies = [
  "rosetun-shell",
  "rqrr",
  "serde_json",
+ "skrifa",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",

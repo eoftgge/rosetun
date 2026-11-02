@@ -22,6 +22,7 @@ rosetun-core.workspace = true
 rosetun-ipc.workspace = true
 rosetun-processes.workspace = true
 rqrr.workspace = true
+skrifa.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

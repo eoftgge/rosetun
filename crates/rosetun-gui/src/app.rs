@@ -16,7 +16,7 @@ use crate::tray;
 #[cfg(windows)]
 use crate::window_memory::WindowMemory;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
-use crate::{brand, display, i18n, motion, theme, view};
+use crate::{brand, display, i18n, motion, system_fonts, theme, view};
 
 #[cfg(windows)]
 /// Far outside every monitor: the first frame of a hidden start is drawn here.
@@ -105,6 +105,8 @@ pub(crate) struct App {
 impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>, store: Store) -> Self {
         theme::apply(&cc.egui_ctx);
+        cc.egui_ctx
+            .add_font_provider(std::sync::Arc::new(system_fonts::SystemFonts::new()));
         #[cfg(windows)]
         let system_russian = rosetun_shell::user_language_is_russian();
         #[cfg(not(windows))]

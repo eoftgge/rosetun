@@ -34,6 +34,7 @@ mod rose_icon;
 mod rose_shape;
 mod rules;
 mod state;
+mod system_fonts;
 #[cfg(test)]
 mod test_ui;
 mod theme;
