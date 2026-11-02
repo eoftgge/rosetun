@@ -420,10 +420,16 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
                 dialog.error = None;
             }
             ui.add_space(theme::space::M);
-            match dialog.kind {
+            let shown = widgets::appear_progress(
+                ui.ctx(),
+                egui::Id::new("exit_kind_body"),
+                dialog.kind == ExitKind::Node,
+                crate::motion::reduced(),
+            );
+            widgets::appear(ui, shown, |ui| match dialog.kind {
                 ExitKind::Country => country_picker(ui, dialog, config, busy),
                 ExitKind::Node => node_picker(ui, dialog, config, busy),
-            }
+            });
             if dialog.editing.is_none() && full {
                 ui.add_space(theme::space::S);
                 note(
@@ -756,6 +762,50 @@ mod tests {
                 "{kind:?} {rect:?} in {width}×{height}"
             );
         }
+    }
+
+    #[test]
+    fn choosing_the_other_kind_fades_its_picker_in() {
+        let mut state = state();
+        state.act(Action::OpenNewExit);
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        // The opacity of the label of the node picker, per frame: the alpha of its colour.
+        let frame = |time: f64, state: &mut State| {
+            let mut raw = input(900.0, 700.0);
+            raw.time = Some(time);
+            let mut output = ctx.run_ui(raw, |ctx| exit_dialog(ctx, state, &mut Vec::new()));
+            output.textures_delta.clear();
+            let label = tr!("exit-node");
+            let mut found = None;
+            for clipped in &output.shapes {
+                let mut stack = vec![&clipped.shape];
+                while let Some(shape) = stack.pop() {
+                    match shape {
+                        egui::Shape::Vec(shapes) => stack.extend(shapes),
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            found = Some(f32::from(text.fallback_color.a()) / 255.0);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            found
+        };
+        // The dialog opens and settles first.
+        for step in 0..6 {
+            assert_eq!(frame(f64::from(step) * 0.1, &mut state), None);
+        }
+        state.exits.dialog.as_mut().unwrap().kind = ExitKind::Node;
+        // It starts clear, so it is not painted yet, then grows to full.
+        assert_eq!(frame(0.6, &mut state), None);
+        let start = frame(0.64, &mut state).expect("the node picker");
+        let halfway = frame(0.7, &mut state).expect("the node picker");
+        assert!(
+            0.0 < start && start < halfway && halfway < 1.0,
+            "{start} {halfway}"
+        );
+        assert!(frame(1.0, &mut state).is_some_and(|alpha| alpha > 0.9));
     }
 
     #[test]
