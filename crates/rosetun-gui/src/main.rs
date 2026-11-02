@@ -17,6 +17,8 @@ mod destinations;
 mod display;
 mod errors;
 mod icons;
+#[cfg(test)]
+mod layout_fence;
 mod motion;
 #[cfg(windows)]
 mod notices;
