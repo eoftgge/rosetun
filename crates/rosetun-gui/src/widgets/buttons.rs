@@ -1,6 +1,10 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
 
+use crate::icons::{self, Icon};
 use crate::theme;
+
+/// What the chevron of a menu button takes of its width.
+const CHEVRON_WIDTH: f32 = 8.0;
 
 fn primary_fill(enabled: bool) -> Color32 {
     if enabled {
@@ -47,6 +51,45 @@ pub(crate) fn outline_button(
         ui.add_enabled(enabled, button)
     })
     .inner
+}
+
+/// An outlined button that opens a menu: the chevron stands inside the button, after the text.
+pub(crate) fn outline_button_menu(
+    ui: &mut egui::Ui,
+    text: impl Into<egui::WidgetText>,
+    enabled: bool,
+) -> egui::Response {
+    let id = egui::Id::new("menu_button_chevron");
+    let button = egui::Button::new((text.into(), egui::Atom::custom(id, egui::vec2(CHEVRON_WIDTH, 0.0))))
+        .fill(Color32::TRANSPARENT)
+        .gap(theme::space::S)
+        .stroke(Stroke::new(
+            theme::stroke::HAIRLINE,
+            if enabled {
+                theme::palette().border_strong
+            } else {
+                theme::palette().border
+            },
+        ));
+    let shown = ui
+        .scope(|ui| {
+            ui.visuals_mut().widgets.inactive.bg_stroke.width = 1.0;
+            ui.add_enabled_ui(enabled, |ui| button.atom_ui(ui)).inner
+        })
+        .inner;
+    if let Some(slot) = shown.rect(id) {
+        icons::paint(
+            ui.painter(),
+            slot.center(),
+            Icon::Chevron { open: 1.0 },
+            if enabled {
+                theme::palette().text_dim
+            } else {
+                theme::palette().border_strong
+            },
+        );
+    }
+    shown.response
 }
 
 pub(crate) fn button_fill_compact(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
@@ -174,6 +217,24 @@ mod tests {
                 let outlined = outline_button_compact(ui, "Added", true);
                 assert_eq!(filled.rect.height(), 28.0);
                 assert_eq!(outlined.rect.height(), 28.0);
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_menu_button_is_as_high_as_an_outlined_one() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let plain = outline_button(ui, "QR code", true);
+                let menu = outline_button_menu(ui, "QR code", true);
+                let disabled = outline_button_menu(ui, "QR code", false);
+                assert_eq!(menu.rect.height(), plain.rect.height());
+                assert_eq!(disabled.rect.size(), menu.rect.size());
+                assert!(menu.rect.width() > plain.rect.width());
+                assert!(menu.sense.senses_click() && !disabled.enabled());
             });
         });
         output.textures_delta.clear();

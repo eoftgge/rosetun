@@ -4,11 +4,11 @@ use rosetun_config::AppConfig;
 use rosetun_config::{Node, Outbound, TlsMode, TlsParams};
 
 use crate::errors;
-use crate::icons::{self, Icon};
 use crate::state::{Action, AddDialog, QrSource, QrStage, redact};
 use crate::{constants, display, i18n, theme, widgets};
 
 const ACTION_ROW_HEIGHT: f32 = 40.0;
+const SUBSCRIPTION_URL_ID: &str = "subscription_url_input";
 
 pub(crate) fn show(
     ctx: &egui::Context,
@@ -54,8 +54,8 @@ fn subscription_body(
     dialog: &mut AddDialog,
     actions: &mut Vec<Action>,
 ) {
-    ui.colored_label(theme::palette().text_muted, tr!("add-subtitle"));
-    ui.add_space(theme::space::L);
+    // A label sits close to its field; the groups are set apart by the gaps below.
+    ui.spacing_mut().item_spacing.y = theme::space::XS;
     if let Some(host) = &dialog.from_link {
         ui.colored_label(
             theme::palette().text_muted,
@@ -64,35 +64,42 @@ fn subscription_body(
                 host = display::safe_text(host)
             ),
         );
-        ui.add_space(theme::space::XS);
     }
     ui.label(tr!("subscription-url"));
     let editable = !dialog.busy && !dialog.qr.busy();
-    ui.horizontal(|ui| {
-        let input = ui.add_enabled(
-            editable,
-            egui::TextEdit::singleline(&mut dialog.url)
-                .id(egui::Id::new("subscription_url_input"))
-                .hint_text(constants::URL_PLACEHOLDER)
-                .desired_width((ui.available_width() - 210.0).max(120.0)),
-        );
-        if dialog.focus_url {
-            input.request_focus();
-            dialog.focus_url = false;
-        }
-        if input.changed() {
-            dialog.error = None;
-            dialog.qr.error = None;
-            dialog.link_error = false;
-            // The host line names where the link came from, not what is typed now.
-            dialog.from_link = None;
-        }
-        if widgets::outline_button(ui, tr!("paste"), editable).clicked() {
-            input.request_focus();
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-        }
-        qr_menu(ui, dialog, editable, actions);
-    });
+    let reading = dialog.qr.stage == QrStage::Reading;
+    let (paste, input) = widgets::field_row(
+        ui,
+        |ui| {
+            qr_menu(ui, reading, editable, actions);
+            widgets::outline_button(ui, tr!("paste"), editable).clicked()
+        },
+        |ui, width| {
+            ui.add(
+                widgets::TextField::new(&mut dialog.url)
+                    .id(egui::Id::new(SUBSCRIPTION_URL_ID))
+                    .hint(constants::URL_PLACEHOLDER)
+                    .enabled(editable)
+                    .width(width),
+            )
+        },
+    );
+    if dialog.focus_url {
+        input.request_focus();
+        dialog.focus_url = false;
+    }
+    if input.changed() {
+        dialog.error = None;
+        dialog.qr.error = None;
+        dialog.link_error = false;
+        // The host line names where the link came from, not what is typed now.
+        dialog.from_link = None;
+    }
+    if paste {
+        input.request_focus();
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+    }
+    caption(ui, &tr!("url-help"));
     qr_status(ui, dialog, actions);
     if dialog.link_error {
         ui.add(
@@ -100,9 +107,6 @@ fn subscription_body(
                 .wrap(),
         );
     }
-    ui.add(
-        egui::Label::new(RichText::new(tr!("url-help")).color(theme::palette().text_dim)).wrap(),
-    );
     let normalized = rosetun_core::normalize_subscription_url(&dialog.url);
     if !dialog.url.trim().is_empty() {
         match &normalized {
@@ -135,13 +139,13 @@ fn subscription_body(
         }
     }
     ui.add_space(theme::space::L);
-    ui.label(tr!("name"));
+    ui.label(tr!("import-name"));
+    let placeholder = tr!("name-placeholder");
     if ui
-        .add_enabled(
-            !dialog.busy,
-            egui::TextEdit::singleline(&mut dialog.name)
-                .hint_text(tr!("name-placeholder"))
-                .desired_width(f32::INFINITY),
+        .add(
+            widgets::TextField::new(&mut dialog.name)
+                .hint(&placeholder)
+                .enabled(!dialog.busy),
         )
         .changed()
     {
@@ -416,7 +420,7 @@ fn proxy_fields(ui: &mut egui::Ui, dialog: &mut AddDialog) {
 
     // `save_proxy` names an unnamed proxy after its protocol, so that is what the field hints.
     let default_name = rosetun_core::node_protocol(node).to_ascii_uppercase();
-    ui.label(tr!("proxy-name"));
+    ui.label(tr!("import-name"));
     edited |= ui
         .add(widgets::TextField::new(&mut node.name).hint(&default_name))
         .changed();
@@ -432,27 +436,24 @@ fn proxy_fields(ui: &mut egui::Ui, dialog: &mut AddDialog) {
 /// field does what the button does.
 fn proxy_link_row(ui: &mut egui::Ui, dialog: &mut AddDialog) {
     ui.label(tr!("proxy-link"));
-    let mut fill = false;
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), widgets::field_height(ui)),
-        egui::Layout::right_to_left(egui::Align::Center),
-        |ui| {
-            let filled = !dialog.proxy_uri.trim().is_empty();
-            fill = widgets::outline_button(ui, tr!("proxy-fill"), filled).clicked();
-            let width = ui.available_width();
-            let field = ui.add(
+    let filled = !dialog.proxy_uri.trim().is_empty();
+    let (mut fill, field) = widgets::field_row(
+        ui,
+        |ui| widgets::outline_button(ui, tr!("proxy-fill"), filled).clicked(),
+        |ui, width| {
+            ui.add(
                 widgets::TextField::new(&mut dialog.proxy_uri)
                     .id(egui::Id::new(PROXY_LINK_ID))
                     .password(true)
                     .hint(constants::PROXY_URI_PLACEHOLDER)
                     .width(width),
-            );
-            if field.changed() {
-                dialog.error = None;
-            }
-            fill |= field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            )
         },
     );
+    if field.changed() {
+        dialog.error = None;
+    }
+    fill |= field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
     caption(ui, &tr!("proxy-or-fill"));
     if fill && !dialog.proxy_uri.trim().is_empty() {
         dialog.fill_from_proxy_uri();
@@ -500,27 +501,13 @@ fn caption(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).small().color(theme::palette().text_dim)).wrap());
 }
 
-fn qr_menu(ui: &mut egui::Ui, dialog: &AddDialog, enabled: bool, actions: &mut Vec<Action>) {
-    let reading = dialog.qr.stage == QrStage::Reading;
-    let label = if reading {
-        tr!("qr-reading")
+fn qr_menu(ui: &mut egui::Ui, reading: bool, enabled: bool, actions: &mut Vec<Action>) {
+    // While it reads, the button names what happens and opens nothing.
+    let response = if reading {
+        widgets::outline_button(ui, tr!("qr-reading"), enabled)
     } else {
-        // Room for the chevron painted over the button's right edge.
-        format!("{}     ", tr!("qr-code"))
+        widgets::outline_button_menu(ui, tr!("qr-code"), enabled)
     };
-    let response = widgets::outline_button(ui, label, enabled);
-    if !reading {
-        icons::paint(
-            ui.painter(),
-            egui::pos2(response.rect.right() - 14.0, response.rect.center().y),
-            Icon::Chevron { open: 1.0 },
-            if enabled {
-                theme::palette().text_dim
-            } else {
-                theme::palette().border_strong
-            },
-        );
-    }
     let mut sources = vec![
         (tr!("qr-from-file"), QrSource::File),
         (tr!("qr-from-clipboard"), QrSource::Clipboard),
@@ -550,7 +537,7 @@ fn qr_menu(ui: &mut egui::Ui, dialog: &AddDialog, enabled: bool, actions: &mut V
     });
 }
 
-/// The screen clip wait, the links to choose from and a QR error, right under the link field.
+/// The screen clip wait, the links to choose from and a QR error, under the link field.
 fn qr_status(ui: &mut egui::Ui, dialog: &AddDialog, actions: &mut Vec<Action>) {
     if matches!(dialog.qr.stage, QrStage::ScreenClip(_)) {
         ui.add_space(theme::space::XS);
@@ -698,6 +685,199 @@ mod tests {
         };
         dialog.set_proxy(rosetun_core::parse_proxy_uri(uri).unwrap());
         dialog
+    }
+
+    /// The state of the last frame: the shapes it painted and the context that holds its
+    /// widgets.
+    fn settled_frame(
+        dialog: &mut AddDialog,
+        size: egui::Vec2,
+    ) -> (egui::Context, Vec<egui::epaint::ClippedShape>) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let config = AppConfig::default();
+        let mut shapes = Vec::new();
+        for frame in 1..=10 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    time: Some(f64::from(frame) * 0.1),
+                    ..Default::default()
+                },
+                |ui| show(ui.ctx(), &config, dialog, &mut Vec::new()),
+            );
+            output.textures_delta.clear();
+            shapes = output.shapes;
+        }
+        (ctx, shapes)
+    }
+
+    fn flatten(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
+        if let egui::Shape::Vec(shapes) = shape {
+            for shape in shapes {
+                flatten(shape, out);
+            }
+        } else {
+            out.push(shape.clone());
+        }
+    }
+
+    fn painted(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Shape> {
+        let mut out = Vec::new();
+        for clipped in shapes {
+            flatten(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    /// Where the link row of a tab ended up.
+    struct LinkRow {
+        field: egui::Rect,
+        /// Left to right.
+        buttons: Vec<egui::Rect>,
+        /// The left edge of the form, as the widgets below the row start.
+        form_left: f32,
+        /// The right edge of the form, as the Add button's.
+        form_right: f32,
+    }
+
+    fn link_row(ctx: &egui::Context, field_id: &str) -> LinkRow {
+        let field_id = egui::Id::new(field_id);
+        let field = ctx.read_response(field_id).expect("the field was shown").rect;
+        let clickable: Vec<_> = ctx.viewport(|viewport| {
+            viewport
+                .prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, rects)| rects.iter().copied())
+                .filter(|widget| widget.sense.senses_click() && widget.id != field_id)
+                .collect()
+        });
+        let mut buttons: Vec<_> = clickable
+            .iter()
+            .filter(|widget| (widget.rect.center().y - field.center().y).abs() < 0.5)
+            .map(|widget| widget.rect)
+            .collect();
+        buttons.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        let below = || {
+            clickable
+                .iter()
+                .filter(|widget| widget.rect.top() > field.bottom())
+        };
+        let form_left = below()
+            .map(|widget| widget.rect.left())
+            .fold(f32::MAX, f32::min);
+        let form_right = below()
+            .map(|widget| widget.rect.right())
+            .fold(f32::MIN, f32::max);
+        LinkRow {
+            field,
+            buttons,
+            form_left,
+            form_right,
+        }
+    }
+
+    fn check_link_row(row: &LinkRow, buttons: usize, gap: f32, what: &str) {
+        assert_eq!(row.buttons.len(), buttons, "{what}: {:?}", row.buttons);
+        for button in &row.buttons {
+            assert!(
+                (button.top() - row.field.top()).abs() <= 0.5
+                    && (button.bottom() - row.field.bottom()).abs() <= 0.5,
+                "{what}: field {:?}, button {button:?}",
+                row.field
+            );
+        }
+        assert!(
+            (row.field.left() - row.form_left).abs() <= 0.5,
+            "{what}: the field starts at {}, the form at {}",
+            row.field.left(),
+            row.form_left
+        );
+        let right = row.buttons.last().unwrap().right();
+        assert!(
+            (right - row.form_right).abs() <= 0.5,
+            "{what}: the row ends at {right}, the form at {}",
+            row.form_right
+        );
+        let mut edges = vec![row.field];
+        edges.extend(&row.buttons);
+        for pair in edges.windows(2) {
+            let between = pair[1].left() - pair[0].right();
+            assert!(
+                (between - gap).abs() <= 0.5,
+                "{what}: a gap of {between}, not {gap}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_link_row_of_each_tab_lines_up_in_both_languages() {
+        use crate::i18n::Language::{English, Russian};
+
+        let size = egui::vec2(1440.0, 1000.0);
+        for language in [English, Russian] {
+            i18n::in_language(language, || {
+                let mut subscription = AddDialog::default();
+                let (ctx, _) = settled_frame(&mut subscription, size);
+                let gap = ctx.global_style().spacing.item_spacing.x;
+                let row = link_row(&ctx, SUBSCRIPTION_URL_ID);
+                check_link_row(&row, 2, gap, &format!("{language:?} subscription"));
+
+                let mut proxy = AddDialog::default();
+                assert!(proxy.select_proxy_tab(true));
+                let (ctx, _) = settled_frame(&mut proxy, size);
+                let row = link_row(&ctx, PROXY_LINK_ID);
+                check_link_row(&row, 1, gap, &format!("{language:?} proxy"));
+            });
+        }
+    }
+
+    #[test]
+    fn the_qr_button_has_no_padding_and_holds_its_chevron() {
+        use crate::i18n::Language::{English, Russian};
+
+        for language in [English, Russian] {
+            i18n::in_language(language, || {
+                let (ctx, shapes) =
+                    settled_frame(&mut AddDialog::default(), egui::vec2(1440.0, 1000.0));
+                let button = *link_row(&ctx, SUBSCRIPTION_URL_ID)
+                    .buttons
+                    .last()
+                    .unwrap();
+                let shapes = painted(&shapes);
+                let label = tr!("qr-code");
+                let texts: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(texts.contains(&label), "{language:?}: {texts:?}");
+                assert!(
+                    texts.iter().all(|text| text == text.trim_end()),
+                    "{language:?}: {texts:?}"
+                );
+                let chevrons: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Path(path)
+                            if path.points.len() == 3 && button.intersects(path.visual_bounding_rect()) =>
+                        {
+                            Some(path.visual_bounding_rect())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(chevrons.len(), 1, "{language:?}: {chevrons:?}");
+                assert!(
+                    button.contains_rect(chevrons[0]),
+                    "{language:?}: chevron {:?} outside button {button:?}",
+                    chevrons[0]
+                );
+            });
+        }
     }
 
     #[test]

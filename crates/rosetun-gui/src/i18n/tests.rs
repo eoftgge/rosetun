@@ -5,18 +5,6 @@ use rosetun_config::{
     StreamSettings, TlsMode, TlsParams, VlessParams, XrayUse,
 };
 
-fn in_language<T>(language: Language, run: impl FnOnce() -> T) -> T {
-    struct Restore(Option<Language>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            super::TEST_LANGUAGE.with(|slot| slot.set(self.0));
-        }
-    }
-    let previous = super::TEST_LANGUAGE.with(|slot| slot.replace(Some(language)));
-    let _restore = Restore(previous);
-    run()
-}
-
 fn test_bundle(source: &str, language: &str) -> FluentBundle<FluentResource> {
     let resource = FluentResource::try_new(source.to_owned()).expect("Valid test FTL");
     let mut bundle = FluentBundle::new_concurrent(vec![language.parse().unwrap()]);

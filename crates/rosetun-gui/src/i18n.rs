@@ -42,6 +42,21 @@ thread_local! {
     static TEST_LANGUAGE: std::cell::Cell<Option<Language>> = const { std::cell::Cell::new(None) };
 }
 
+/// Runs `run` with the interface in `language` on this thread only, so tests in parallel
+/// keep their own.
+#[cfg(test)]
+pub(crate) fn in_language<T>(language: Language, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Language>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_LANGUAGE.with(|slot| slot.set(self.0));
+        }
+    }
+    let previous = TEST_LANGUAGE.with(|slot| slot.replace(Some(language)));
+    let _restore = Restore(previous);
+    run()
+}
+
 pub(crate) fn set_language(language: Language) {
     CURRENT.store(
         match language {

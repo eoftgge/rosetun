@@ -17,7 +17,7 @@ mod transitions;
 
 pub(crate) use buttons::{
     button_fill, button_fill_compact, link, outline_button, outline_button_compact,
-    outline_button_full,
+    outline_button_full, outline_button_menu,
 };
 pub(crate) use checkbox::checkbox;
 pub(crate) use choice_card::choice_card;
@@ -36,6 +36,6 @@ pub(crate) use segmented::{segmented, segmented_width};
 pub(crate) use settings_card::{SettingsCard, settings_card};
 pub(crate) use status_pill::{status_pill, status_pill_width};
 pub(crate) use swatches::{Swatch, swatches};
-pub(crate) use text_field::{TextField, field_height};
+pub(crate) use text_field::{TextField, field_row};
 pub(crate) use toggle::{toggle, toggle_row};
 pub(crate) use transitions::{appear, appear_progress, reveal, reveal_progress, show_modal};

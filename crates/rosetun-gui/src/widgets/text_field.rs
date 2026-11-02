@@ -22,6 +22,7 @@ pub(crate) struct TextField<'a> {
     hint: &'a str,
     password: bool,
     invalid: bool,
+    enabled: bool,
     width: f32,
     id: Option<egui::Id>,
 }
@@ -33,6 +34,7 @@ impl<'a> TextField<'a> {
             hint: "",
             password: false,
             invalid: false,
+            enabled: true,
             width: f32::INFINITY,
             id: None,
         }
@@ -57,6 +59,12 @@ impl<'a> TextField<'a> {
 
     pub(crate) fn invalid(mut self, invalid: bool) -> Self {
         self.invalid = invalid;
+        self
+    }
+
+    /// A field that is not enabled shows its value and takes no input.
+    pub(crate) fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
         self
     }
 
@@ -116,13 +124,35 @@ impl egui::Widget for TextField<'_> {
                 .desired_width(width)
                 .min_size(egui::vec2(width, height))
                 .margin(egui::Margin::symmetric(horizontal, vertical));
-            ui.add(match self.id {
-                Some(id) => edit.id(id),
-                None => edit,
-            })
+            ui.add_enabled(
+                self.enabled,
+                match self.id {
+                    Some(id) => edit.id(id),
+                    None => edit,
+                },
+            )
         })
         .inner
     }
+}
+
+/// A row as high as a field: the buttons first, from the right edge, then the field in the
+/// width they leave. `field` gets that width. Returns what each of the two returned.
+pub(crate) fn field_row<B, R>(
+    ui: &mut egui::Ui,
+    buttons: impl FnOnce(&mut egui::Ui) -> B,
+    field: impl FnOnce(&mut egui::Ui, f32) -> R,
+) -> (B, R) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), field_height(ui)),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let buttons = buttons(ui);
+            let width = ui.available_width();
+            (buttons, field(ui, width))
+        },
+    )
+    .inner
 }
 
 #[cfg(test)]
@@ -169,6 +199,37 @@ mod tests {
             );
             let full = ui.add(TextField::new(&mut text));
             assert!(full.rect.width() > 96.0);
+        });
+    }
+
+    #[test]
+    fn a_disabled_field_keeps_its_size_and_takes_no_input() {
+        run(|ui| {
+            let mut text = String::from("192.0.2.1");
+            let enabled = ui.add(TextField::new(&mut text).width(200.0));
+            let disabled = ui.add(TextField::new(&mut text).width(200.0).enabled(false));
+            assert!(enabled.enabled());
+            assert!(!disabled.enabled());
+            assert_eq!(enabled.rect.size(), disabled.rect.size());
+        });
+    }
+
+    #[test]
+    fn a_field_row_puts_the_field_between_the_edge_and_the_buttons() {
+        run(|ui| {
+            let left = ui.available_rect_before_wrap().left();
+            let right = ui.available_rect_before_wrap().right();
+            let gap = ui.spacing().item_spacing.x;
+            let mut text = String::new();
+            let (button, field) = field_row(
+                ui,
+                |ui| crate::widgets::outline_button(ui, "Paste", true),
+                |ui, width| ui.add(TextField::new(&mut text).width(width)),
+            );
+            assert_eq!(button.rect.right(), right);
+            assert!((field.rect.right() + gap - button.rect.left()).abs() < 0.5);
+            assert!((field.rect.left() - left).abs() < 0.5);
+            assert_eq!(field.rect.height(), button.rect.height());
         });
     }
 }
