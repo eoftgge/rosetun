@@ -61,6 +61,12 @@ class SiteChecks(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 check(output, rendered=True)
             css.write_text(original_css, encoding='utf-8')
+            svg = output / 'assets/rose.svg'
+            original_svg = svg.read_text(encoding='utf-8')
+            svg.write_text(original_svg.replace('</svg>', '<image href="https://example.com/image.png"/></svg>'), encoding='utf-8')
+            with self.assertRaises(AssertionError):
+                check(output, rendered=True)
+            svg.write_text(original_svg, encoding='utf-8')
             page.unlink()
             with self.assertRaises(AssertionError):
                 check(output, rendered=True)

@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 import re
 from urllib.parse import unquote, urlsplit
+import xml.etree.ElementTree as ET
 
 
 class Document(HTMLParser):
@@ -97,9 +98,19 @@ def check(directory, rendered=False):
             local_target(root, path, match[1].strip('\"\''), True)
     for path in root.rglob('*.svg'):
         svg = path.read_text(encoding='utf-8')
-        assert not re.search(r'<(?:script|foreignObject)|(?:href|url\s*\()', svg, re.I), (
-            f'{path}: SVG must be self-contained'
-        )
+        tree = ET.fromstring(svg)
+        ids = {element.get('id') for element in tree.iter() if element.get('id')}
+        assert not re.search(r'@import|image-set\s*\(|\\', svg, re.I), f'{path}: unsafe SVG CSS'
+        for element in tree.iter():
+            assert element.tag.split('}')[-1] not in {'script', 'foreignObject'}, f'{path}: active SVG'
+            for key, value in element.attrib.items():
+                name = key.split('}')[-1]
+                assert not name.lower().startswith('on'), f'{path}: SVG event handler'
+                if name in {'href', 'src'}:
+                    assert value.startswith('#') and value[1:] in ids, f'{path}: external SVG resource'
+        for match in re.finditer(r'url\(\s*([^)]+?)\s*\)', svg, re.I):
+            value = match[1].strip('\"\'')
+            assert value.startswith('#') and value[1:] in ids, f'{path}: external SVG resource'
     size = sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and 'screens' not in p.parts)
     assert size < 1_000_000, f'site exceeds 1 MB: {size} bytes'
     print(f'OK: {len(documents)} HTML pages; links, translations, local resources; {size} bytes')
