@@ -339,7 +339,7 @@ pub(super) fn server_row(
             painter.rect_stroke(
                 badge,
                 theme::RADIUS_INNER,
-                Stroke::new(1.0, theme::palette().border_strong),
+                Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong),
                 egui::StrokeKind::Inside,
             );
             painter.text(
@@ -398,7 +398,7 @@ pub(super) fn server_row(
         painter.rect_stroke(
             badge,
             theme::RADIUS_INNER,
-            Stroke::new(1.0, theme::palette().accent_light),
+            Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_light),
             egui::StrokeKind::Inside,
         );
         painter.text(

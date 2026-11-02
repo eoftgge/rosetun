@@ -63,7 +63,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             }
         },
     );
-    ui.add_space(8.0);
+    ui.add_space(theme::space::S);
     if let Some(error) = &state.lists.error
         && widgets::dismissible_error(ui, error)
     {
@@ -77,24 +77,24 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         return;
     }
     if state.config.lists.is_empty() {
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         widgets::card_frame().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.vertical_centered(|ui| {
-                ui.add_space(16.0);
+                ui.add_space(theme::space::L);
                 icons::icon_badge(ui, Icon::List, 40.0);
-                ui.add_space(8.0);
+                ui.add_space(theme::space::S);
                 ui.add(egui::Label::new(tr!("lists-empty-prompt")).wrap());
-                ui.add_space(12.0);
+                ui.add_space(theme::space::M);
                 if widgets::button_fill(ui, tr!("new-list-button"), true).clicked() {
                     actions.push(Action::OpenAddList);
                 }
-                ui.add_space(16.0);
+                ui.add_space(theme::space::L);
             });
         });
         return;
     }
-    ui.add_space(12.0);
+    ui.add_space(theme::space::M);
     egui::ScrollArea::vertical()
         .id_salt("lists_cards")
         .max_height(ui.available_height().max(320.0))
@@ -202,7 +202,7 @@ fn list_card(
         tr!("list-used-rules", count = count, n = count.to_string())
     };
     widgets::card_frame()
-        .stroke(Stroke::new(1.0, theme::palette().border))
+        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
         .inner_margin(egui::Margin {
             left: 12,
             right: 12,
@@ -473,7 +473,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             if let Some(list) = state.config.lists.iter().find(|list| list.id == dialog.id) {
                 ui.label(state.text(&list.name));
             }
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             ui.add(egui::Label::new(tr!("delete-list-detail")).wrap());
             if let Some(error) = &dialog.error {
                 ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());

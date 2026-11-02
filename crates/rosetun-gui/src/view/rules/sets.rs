@@ -121,7 +121,7 @@ fn set_picker(ui: &mut egui::Ui, state: &State, set: &RuleSet, actions: &mut Vec
             painter.rect_stroke(
                 rect,
                 theme::RADIUS,
-                Stroke::new(1.0, theme::palette().border_strong),
+                Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong),
                 egui::StrokeKind::Inside,
             );
             let center_y = rect.center().y;

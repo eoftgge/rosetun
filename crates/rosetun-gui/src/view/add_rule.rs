@@ -151,7 +151,7 @@ pub(crate) fn show(
         |ui| {
             ui.set_width(dialog_width);
             ui.set_max_width(dialog_width);
-            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.spacing_mut().item_spacing.y = theme::space::XS;
             ui.heading(if dialog.editing.is_some() {
                 tr!("edit-rule")
             } else {
@@ -166,7 +166,7 @@ pub(crate) fn show(
                 .small()
                 .color(theme::palette().text_muted),
             );
-            ui.add_space(2.0);
+            ui.add_space(theme::space::XXS);
             ui.label(
                 RichText::new(tr!("what-to-route"))
                     .small()
@@ -187,7 +187,7 @@ pub(crate) fn show(
             ) {
                 actions.push(Action::SelectRuleInput(kind));
             }
-            ui.add_space(2.0);
+            ui.add_space(theme::space::XXS);
             let valid = match dialog.kind {
                 RuleInputKind::Process => {
                     let frame = widgets::modal_frame();
@@ -227,7 +227,7 @@ pub(crate) fn show(
             );
             destination_picker(ui, dialog, config);
             if has_advanced(dialog) {
-                ui.add_space(8.0);
+                ui.add_space(theme::space::S);
                 ui.horizontal(|ui| {
                     let chevron = icons::icon_button_sized(
                         ui,
@@ -300,15 +300,15 @@ pub(crate) fn show(
                 ui.add_space(6.0);
                 ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
             }
-            ui.add_space(8.0);
+            ui.add_space(theme::space::S);
             let (divider, _) =
                 ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
             ui.painter().hline(
                 divider.x_range(),
                 divider.center().y,
-                Stroke::new(1.0, theme::palette().border),
+                Stroke::new(theme::stroke::HAIRLINE, theme::palette().border),
             );
-            ui.add_space(8.0);
+            ui.add_space(theme::space::S);
             let exceeds_list_limit = dialog.kind == RuleInputKind::List
                 && dialog
                     .list
@@ -436,8 +436,7 @@ fn list_picker(
             theme::RADIUS,
             theme::palette().input,
             Stroke::new(
-                1.0,
-                if response.hovered() && enabled {
+                theme::stroke::HAIRLINE, if response.hovered() && enabled {
                     theme::palette().border_strong
                 } else {
                     theme::palette().border
@@ -588,7 +587,7 @@ fn category_view(
 ) -> egui::Response {
     egui::Frame::new()
         .fill(theme::palette().card)
-        .stroke(Stroke::new(1.0, theme::palette().border))
+        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
         .corner_radius(theme::RADIUS)
         .inner_margin(egui::Margin::same(4))
         .show(ui, |ui| {
@@ -648,7 +647,7 @@ fn list_input(
         .find(|list| Some(&list.id) == dialog.list.as_ref())
         .unwrap_or(&lists[0]);
     if selected.format.has_categories() {
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
         let selected_count = dialog.selected_categories.len();
         egui::Sides::new().show(
             ui,
@@ -708,7 +707,7 @@ fn list_input(
                 .small()
                 .color(theme::palette().text_dim),
         );
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
     } else {
         dialog.selected_categories.clear();
     }
@@ -732,7 +731,7 @@ fn ip_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Act
             egui::TextEdit::multiline(&mut dialog.ips)
                 .desired_width(ui.available_width())
                 .desired_rows(4)
-                .font(FontId::monospace(14.0))
+                .font(egui::TextStyle::Monospace)
                 .hint_text(tr!("ip-example")),
         )
     };
@@ -814,7 +813,7 @@ fn domain_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) -> bool {
             egui::TextEdit::multiline(&mut dialog.domains)
                 .desired_width(ui.available_width())
                 .desired_rows(5)
-                .font(FontId::monospace(14.0))
+                .font(egui::TextStyle::Monospace)
                 .hint_text(constants::SITES_EXAMPLE),
         )
     };
@@ -906,7 +905,7 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     let filtering = !dialog.process_filter.trim().is_empty();
     if !filtering {
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 16.0;
+            ui.spacing_mut().item_spacing.x = theme::space::L;
             if process_tab(ui, &tr!("open-tab"), !dialog.show_all, !dialog.busy).clicked() {
                 dialog.show_all = false;
             }
@@ -1163,8 +1162,7 @@ fn process_row(
         egui::CornerRadius::same(theme::RADIUS),
         fill,
         Stroke::new(
-            1.0,
-            if selected {
+            theme::stroke::HAIRLINE, if selected {
                 theme::palette().accent_dark
             } else {
                 theme::palette().border
@@ -1226,12 +1224,7 @@ fn process_row(
 
 /// A muted tile colour picked from the name, so a process keeps its colour.
 fn tile_color(name: &str) -> Color32 {
-    let palette = [
-        Color32::from_rgb(0x4A, 0x3A, 0x6B),
-        Color32::from_rgb(0x3A, 0x5A, 0x4A),
-        Color32::from_rgb(0x2E, 0x40, 0x58),
-        Color32::from_rgb(0x5A, 0x3A, 0x44),
-    ];
+    let palette = theme::PROGRAM_TILES;
     let index = name
         .chars()
         .flat_map(char::to_lowercase)
@@ -1296,8 +1289,7 @@ fn destination_picker(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, config: &Ap
             theme::RADIUS,
             theme::palette().input,
             Stroke::new(
-                1.0,
-                if open {
+                theme::stroke::HAIRLINE, if open {
                     theme::palette().accent_base
                 } else if response.hovered() && enabled {
                     theme::palette().border_strong
@@ -1416,7 +1408,7 @@ fn destination_item(
 }
 
 fn destination_section(ui: &mut egui::Ui, title: String) {
-    ui.add_space(4.0);
+    ui.add_space(theme::space::XS);
     ui.separator();
     ui.label(
         RichText::new(title)

@@ -55,7 +55,7 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
                     ui.painter().circle_stroke(
                         rect.center(),
                         13.0,
-                        egui::Stroke::new(1.5, theme::ERROR),
+                        egui::Stroke::new(theme::stroke::GLYPH, theme::ERROR),
                     );
                     ui.painter().text(
                         rect.center(),
@@ -125,7 +125,7 @@ fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     };
     egui::Frame::new()
         .fill(theme::palette().input)
-        .stroke(egui::Stroke::new(1.0, theme::palette().accent_base))
+        .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_base))
         .corner_radius(theme::RADIUS)
         .inner_margin(egui::Margin::symmetric(16, 10))
         .show(ui, |ui| {
@@ -195,7 +195,7 @@ pub(crate) fn protection_dialog(ctx: &egui::Context, state: &State, actions: &mu
             button_gap: 20.0,
         },
         |ui| {
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             ui.add(
                 egui::Label::new(RichText::new(tr!("protection-warning")).color(theme::ERROR))
                     .wrap(),
@@ -224,13 +224,13 @@ pub(crate) fn quit_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec<
             confirm: tr!("quit-disconnect"),
         },
         |ui| {
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             ui.add(egui::Label::new(tr!("quit-connected")).wrap());
             if state.lockdown_active() {
-                ui.add_space(8.0);
+                ui.add_space(theme::space::S);
                 ui.add(egui::Label::new(tr!("quit-lockdown")).wrap());
             }
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             let mut remember = state.quit.remember;
             if widgets::checkbox(ui, &mut remember, tr!("quit-remember"), true).changed() {
                 actions.push(Action::SetRememberQuit(remember));
@@ -272,7 +272,7 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
             button_gap: 20.0,
         },
         |ui| {
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             if enabling {
                 ui.add(
                     egui::Label::new(
@@ -281,13 +281,13 @@ pub(crate) fn lockdown_dialog(ctx: &egui::Context, state: &State, actions: &mut 
                     )
                     .wrap(),
                 );
-                ui.add_space(8.0);
+                ui.add_space(theme::space::S);
             }
             ui.add(egui::Label::new(body).wrap());
             if enabling {
-                ui.add_space(8.0);
+                ui.add_space(theme::space::S);
                 ui.add(egui::Label::new(tr!("lockdown-virtual-machines")).wrap());
-                ui.add_space(8.0);
+                ui.add_space(theme::space::S);
                 ui.add(
                     egui::Label::new(
                         RichText::new(tr!("lockdown-way-out"))

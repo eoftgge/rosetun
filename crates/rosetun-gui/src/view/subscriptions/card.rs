@@ -3,6 +3,9 @@ use super::servers::{
 };
 use super::*;
 
+/// The spinner that takes the place of the refresh button while a subscription updates.
+const SPINNER_SIZE: f32 = 18.0;
+
 pub(super) fn subscription_card(
     ui: &mut egui::Ui,
     state: &State,
@@ -32,17 +35,12 @@ pub(super) fn subscription_card(
     );
     let mut frame = widgets::card_frame()
         .inner_margin(12)
-        .stroke(Stroke::new(1.0, theme::palette().border));
+        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border));
     // The grip is drawn in this margin, left of the header row.
     let grip_margin = f32::from(frame.inner_margin.left) + frame.stroke.width;
     if dragged {
         let card = theme::palette().card;
-        frame = frame.fill(Color32::from_rgba_unmultiplied(
-            card.r(),
-            card.g(),
-            card.b(),
-            128,
-        ));
+        frame = frame.fill(theme::alpha::fade(card, theme::alpha::DISABLED_ALPHA));
     }
     ui.scope_builder(
         egui::UiBuilder::new()
@@ -117,7 +115,7 @@ pub(super) fn subscription_card(
                             egui::vec2(28.0, 28.0),
                             egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                             |ui| {
-                                ui.add(egui::Spinner::new().size(18.0));
+                                ui.add(egui::Spinner::new().size(SPINNER_SIZE));
                             },
                         )
                         .response
@@ -199,7 +197,7 @@ pub(super) fn subscription_card(
                     egui::DragAndDrop::set_payload(ui.ctx(), subscription.id.clone());
                 }
                 ui.horizontal(|ui| {
-                    ui.add_space(22.0 + ui.spacing().item_spacing.x);
+                    ui.add_space(icons::ICON_BUTTON + ui.spacing().item_spacing.x);
                     egui::Sides::new().shrink_left().show(
                         ui,
                         |ui| {
@@ -355,7 +353,7 @@ fn details(
     if subscription.announce.is_some() || !subscription.notices.is_empty() {
         widgets::card_frame()
             .fill(theme::palette().bg)
-            .stroke(Stroke::new(1.0, theme::palette().border))
+            .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
             .corner_radius(theme::RADIUS)
             .inner_margin(10)
             .show(ui, |ui| {
@@ -499,7 +497,7 @@ fn details(
         xray_badges: xray_badges(xray_count, subscription.nodes.len()),
     };
     ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.spacing_mut().item_spacing.y = theme::space::XXS;
         for node in &subscription.nodes {
             ui.push_id(node.id.as_str(), |ui| {
                 server_row(ui, state, subscription, node, columns, actions);

@@ -103,7 +103,7 @@ fn paint<T>(
         if enabled {
             color
         } else {
-            color.gamma_multiply(0.5)
+            color.gamma_multiply(theme::alpha::DISABLED)
         }
     };
     let painter = ui.painter();
@@ -113,21 +113,21 @@ fn paint<T>(
         center,
         radius - 1.0,
         fade(swatch.ring),
-        Stroke::new(1.0, fade(theme::palette().border_strong)),
+        Stroke::new(theme::stroke::HAIRLINE, fade(theme::palette().border_strong)),
     );
     painter.circle_filled(center, radius - 6.0, fade(swatch.fill));
     if active {
         painter.circle_stroke(
             center,
             radius - 1.0,
-            Stroke::new(2.0, fade(theme::palette().text)),
+            Stroke::new(theme::stroke::MARK, fade(theme::palette().text)),
         );
     }
     if focused {
         painter.circle_stroke(
             center,
             radius + 2.0,
-            Stroke::new(1.0, theme::palette().accent_light),
+            Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_light),
         );
     }
 }

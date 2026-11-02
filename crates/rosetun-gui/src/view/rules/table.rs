@@ -168,7 +168,7 @@ pub(super) fn target_button(
             ui.painter().rect_stroke(
                 rect,
                 theme::RADIUS,
-                Stroke::new(1.0, theme::palette().border_strong),
+                Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong),
                 egui::StrokeKind::Inside,
             );
             let color = if enabled {
@@ -403,12 +403,7 @@ pub(super) fn rule_row(
         theme::palette().card
     };
     if dragged {
-        frame = frame.fill(Color32::from_rgba_unmultiplied(
-            fill.r(),
-            fill.g(),
-            fill.b(),
-            128,
-        ));
+        frame = frame.fill(theme::alpha::fade(fill, theme::alpha::DISABLED_ALPHA));
     } else if !rule.enabled {
         frame = frame.fill(fill.gamma_multiply(0.72));
     } else {
@@ -686,7 +681,7 @@ pub(super) fn rule_row(
                     egui::pos2(response.rect.left(), y),
                     egui::pos2(response.rect.right(), y),
                 ],
-                Stroke::new(2.0, theme::palette().accent_base),
+                Stroke::new(theme::stroke::MARK, theme::palette().accent_base),
             );
             if let Some(payload) = response.dnd_release_payload::<RuleId>()
                 && let Some((rules, target)) = drag_target(state, set, &payload, slot)
@@ -763,7 +758,7 @@ fn rule_value(
             tr!("rule-category-disabled")
         };
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().item_spacing.x = theme::space::XS;
             icons::icon_badge_colored(ui, Icon::Warning, 16.0, theme::ERROR)
                 .on_hover_text(tr!("rule-category-hint"));
             ui.add(egui::Label::new(RichText::new(warning).small().color(theme::ERROR)).truncate())
@@ -771,7 +766,7 @@ fn rule_value(
         });
     } else if exit_missing {
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().item_spacing.x = theme::space::XS;
             icons::icon_badge_colored(ui, Icon::Warning, 16.0, theme::ERROR);
             ui.add(
                 egui::Label::new(
@@ -877,7 +872,7 @@ pub(super) fn default_rule(
             egui::pos2(rect.left(), rect.top()),
             egui::pos2(rect.right(), rect.top()),
         ],
-        Stroke::new(1.0, theme::palette().border_strong),
+        Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong),
     );
     if state.can_edit_rules()
         && !state.rules.screen.filter.is_active()
@@ -889,7 +884,7 @@ pub(super) fn default_rule(
                 egui::pos2(rect.left(), rect.top()),
                 egui::pos2(rect.right(), rect.top()),
             ],
-            Stroke::new(2.0, theme::palette().accent_base),
+            Stroke::new(theme::stroke::MARK, theme::palette().accent_base),
         );
         if let Some(payload) = response.inner.dnd_release_payload::<RuleId>()
             && let Some((rules, target)) = drag_target(state, set, &payload, set.rules.len())

@@ -55,8 +55,7 @@ pub(crate) fn choice_card(
                     response.rect,
                     CornerRadius::same(RADIUS),
                     Stroke::new(
-                        1.0,
-                        if selected {
+                        theme::stroke::HAIRLINE, if selected {
                             theme::palette().accent_base
                         } else {
                             theme::palette().border

@@ -47,7 +47,7 @@ pub(super) fn paint_toggle(
         if enabled {
             color
         } else {
-            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 128)
+            theme::alpha::fade(color, theme::alpha::DISABLED_ALPHA)
         }
     };
     ui.painter().rect(
@@ -61,7 +61,7 @@ pub(super) fn paint_toggle(
         if on {
             Stroke::NONE
         } else {
-            Stroke::new(1.0, faded(theme::palette().border_strong))
+            Stroke::new(theme::stroke::HAIRLINE, faded(theme::palette().border_strong))
         },
         egui::StrokeKind::Inside,
     );

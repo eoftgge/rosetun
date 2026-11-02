@@ -27,8 +27,11 @@ pub(crate) enum Icon {
     Download,
 }
 
+/// The side of a standard icon button.
+pub(crate) const ICON_BUTTON: f32 = 22.0;
+
 pub(crate) fn icon_button(ui: &mut egui::Ui, icon: Icon, enabled: bool) -> egui::Response {
-    icon_button_sized(ui, icon, enabled, 22.0)
+    icon_button_sized(ui, icon, enabled, ICON_BUTTON)
 }
 
 pub(crate) fn icon_button_sized(

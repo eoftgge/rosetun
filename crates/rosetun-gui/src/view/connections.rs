@@ -84,7 +84,7 @@ fn details(
                     dismissed = true;
                 }
             });
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             if connection.end_unix_ms.is_some() {
                 detail_row(ui, &tr!("connections-state"), |ui| {
                     ui.label(
@@ -228,9 +228,9 @@ fn details(
             }
 
             if list.can_close(connection) {
-                ui.add_space(12.0);
+                ui.add_space(theme::space::M);
                 divider(ui);
-                ui.add_space(12.0);
+                ui.add_space(theme::space::M);
                 let closing = list.closing.as_deref() == Some(connection.id.as_str());
                 let label = if closing {
                     tr!("connections-closing")
@@ -241,7 +241,7 @@ fn details(
                 if widgets::outline_button(ui, label, enabled).clicked() {
                     actions.push(Action::CloseConnection(connection.id.clone()));
                 }
-                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.spacing_mut().item_spacing.y = theme::space::XS;
                 ui.label(
                     RichText::new(tr!("connections-close-note"))
                         .small()
@@ -274,7 +274,7 @@ fn detail_row(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui))
         );
         ui.vertical(|ui| {
             ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().item_spacing.y = theme::space::XXS;
             value(ui);
         });
     });
@@ -299,7 +299,7 @@ fn close_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
         (egui::vec2(-half, half), egui::vec2(half, -half)),
     ] {
         ui.painter()
-            .line_segment([center + from, center + to], egui::Stroke::new(1.5, color));
+            .line_segment([center + from, center + to], egui::Stroke::new(theme::stroke::GLYPH, color));
     }
     response
 }
@@ -542,7 +542,7 @@ fn divider(ui: &mut egui::Ui) {
     ui.painter().hline(
         line.x_range(),
         line.center().y,
-        egui::Stroke::new(1.0, theme::palette().border),
+        egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().border),
     );
 }
 

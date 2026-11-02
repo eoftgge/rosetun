@@ -121,7 +121,7 @@ fn general(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     });
     #[cfg(windows)]
     {
-        ui.add_space(16.0);
+        ui.add_space(theme::space::L);
         windows(ui, state, actions);
     }
 }
@@ -345,7 +345,7 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             let saved = DnsPreset::matching(&state.config.settings.dns);
             let custom = state.settings.screen.custom_dns;
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.spacing_mut().item_spacing.x = theme::space::S;
                 let width = (ui.available_width() - 3.0 * 8.0) / 4.0;
                 for (index, (preset, (name, address))) in DnsPreset::ALL
                     .into_iter()
@@ -381,10 +381,10 @@ fn dns(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
                 }
             });
             if custom {
-                ui.add_space(16.0);
+                ui.add_space(theme::space::L);
                 dns_form(ui, state, actions);
             }
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             ui.label(
                 RichText::new(tr!("dns-reachable"))
                     .small()
@@ -517,7 +517,7 @@ fn dns_form(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
             errors::dns_input(crate::i18n::language(), error),
         );
     }
-    ui.add_space(8.0);
+    ui.add_space(theme::space::S);
     if widgets::button_fill(
         ui,
         tr!("save"),
@@ -560,8 +560,7 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                 radio.center(),
                                 7.0,
                                 egui::Stroke::new(
-                                    1.5,
-                                    if selected == setting {
+                                    theme::stroke::GLYPH, if selected == setting {
                                         theme::palette().accent_light
                                     } else {
                                         theme::palette().text_dim
@@ -600,7 +599,7 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 if response.clicked() && selected != setting {
                     actions.push(Action::SetXray(setting));
                 }
-                ui.add_space(8.0);
+                ui.add_space(theme::space::S);
             }
             if selected == XrayUse::Off {
                 let count = state.xray_reality_count();
@@ -613,7 +612,7 @@ fn advanced(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                         )
                         .wrap(),
                     );
-                    ui.add_space(8.0);
+                    ui.add_space(theme::space::S);
                 }
             }
             if let Some(status) = state.visible_status().filter(|status| {
@@ -675,7 +674,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         card.row_with_title(
             |ui| {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.spacing_mut().item_spacing.x = theme::space::XS;
                     let (dot, _) =
                         ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                     ui.painter().circle_filled(dot.center(), 5.0, color);
@@ -694,7 +693,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             |_| {},
         );
     });
-    ui.add_space(16.0);
+    ui.add_space(theme::space::L);
     widgets::settings_card(ui, |card| {
         let checked = state.system_checks.checked_at.map_or_else(
             || tr!("system-check-never"),
@@ -760,7 +759,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             card.row(tr!("system-check-intro"), None, |_| {});
         }
     });
-    ui.add_space(16.0);
+    ui.add_space(theme::space::L);
     widgets::settings_card(ui, |card| {
         card.row(tr!("log-title"), Some(&tr!("log-detail")), |ui| {
             #[cfg(windows)]
@@ -821,7 +820,7 @@ fn service(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
             actions.push(Action::SetVerboseLog(on));
         }
     });
-    ui.add_space(16.0);
+    ui.add_space(theme::space::L);
     widgets::settings_card(ui, |card| {
         card.row(
             tr!("reset-settings"),
@@ -867,7 +866,7 @@ pub(crate) fn reset_dialog(ctx: &egui::Context, state: &State, actions: &mut Vec
             button_gap: 20.0,
         },
         |ui| {
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             ui.add(egui::Label::new(tr!("reset-settings-body")).wrap());
         },
     );
@@ -885,12 +884,12 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 let (emblem, _) =
                     ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
                 brand::paint_emblem(ui.painter(), emblem);
-                ui.add_space(16.0);
+                ui.add_space(theme::space::L);
                 ui.vertical(|ui| {
                     ui.label(
                         RichText::new(constants::BRAND)
                             .font(egui::FontId::new(
-                                28.0,
+                                theme::font::BRAND_ABOUT,
                                 egui::FontFamily::Name(theme::BRAND_FONT.into()),
                             ))
                             .color(theme::palette().text),
@@ -916,10 +915,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
         card.body(|ui| {
             ui.label(
                 RichText::new(tr!("updates-title"))
-                    .font(egui::FontId::new(
-                        17.0,
-                        egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
-                    ))
+                    .font(theme::font::title())
                     .color(theme::palette().text),
             );
             if let Some(release) = state.available_update() {
@@ -927,7 +923,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                 let width = ui.available_width();
                 egui::Frame::new()
                     .fill(theme::palette().input)
-                    .stroke(egui::Stroke::new(1.0, theme::palette().accent_dark))
+                    .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_dark))
                     .corner_radius(theme::RADIUS)
                     .inner_margin(16)
                     .show(ui, |ui| {
@@ -941,7 +937,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             painter.circle_stroke(
                                 center,
                                 15.5,
-                                egui::Stroke::new(1.0, theme::palette().accent_base),
+                                egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_base),
                             );
                             for (start, end) in [
                                 (
@@ -959,7 +955,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                             ] {
                                 painter.line_segment(
                                     [start, end],
-                                    egui::Stroke::new(1.5, theme::palette().accent_light),
+                                    egui::Stroke::new(theme::stroke::GLYPH, theme::palette().accent_light),
                                 );
                             }
                             ui.vertical(|ui| {
@@ -988,7 +984,7 @@ fn about(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
                                     )
                                     .wrap(),
                                 );
-                                ui.add_space(8.0);
+                                ui.add_space(theme::space::S);
                                 ui.horizontal_wrapped(|ui| {
                                     if widgets::button_fill(ui, tr!("update-open-page"), true)
                                         .clicked()

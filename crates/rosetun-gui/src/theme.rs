@@ -241,14 +241,12 @@ pub(crate) const EXPIRED: Color32 = Color32::from_rgb(0xEF, 0x62, 0x62);
 
 /// Colours of the program tiles in the "Add rule" window. A tile takes one by
 /// its name, so they are muted, fixed and the same in every palette.
-#[expect(dead_code, reason = "the views adopt the scale in the next change")]
 pub(crate) const PROGRAM_TILES: [Color32; 4] =
     [rgb(0x4A3A6B), rgb(0x3A5A4A), rgb(0x2E4058), rgb(0x5A3A44)];
 
 /// Spacing scale: every gap, margin and padding in the views is one of these
 /// steps, or zero. Spacing a view cannot express with a step (a measured
 /// width, a fixed row) is a named constant of that view.
-#[expect(dead_code, reason = "the views adopt the scale in the next change")]
 pub(crate) mod space {
     /// Between a title and its caption, inside a tight pair.
     pub(crate) const XXS: f32 = 2.0;
@@ -306,7 +304,6 @@ pub(crate) mod font {
 
 /// Line widths. Strokes that scale with a drawing (the emblem and the tab
 /// glyphs) multiply one of these by their scale.
-#[expect(dead_code, reason = "the views adopt the scale in the next change")]
 pub(crate) mod stroke {
     /// Borders and separators.
     pub(crate) const HAIRLINE: f32 = 1.0;
@@ -355,11 +352,9 @@ pub(crate) const RADIUS_INNER: u8 = 4;
 /// The toggle track: half its height.
 pub(crate) const RADIUS_TOGGLE: u8 = 11;
 /// The check box: chosen by the owner, smaller than a button's.
-#[expect(dead_code, reason = "the views adopt the scale in the next change")]
 pub(crate) const RADIUS_CHECKBOX: u8 = 3;
 
 /// The radius that turns a box of this height into a capsule.
-#[expect(dead_code, reason = "the views adopt the scale in the next change")]
 pub(crate) fn capsule(height: f32) -> u8 {
     (height / 2.0).round().clamp(0.0, f32::from(u8::MAX)) as u8
 }
@@ -487,6 +482,50 @@ mod tests {
         assert_eq!(palette_of(AccentPreset::Teal), &Palette::TEAL);
         assert_eq!(palette_of(AccentPreset::Cocoa), &Palette::COCOA);
         assert_eq!(palette_of(AccentPreset::Amber), &Palette::AMBER);
+    }
+
+    #[test]
+    fn the_spacing_steps_grow_and_the_section_gap_is_one_of_them() {
+        let steps = [
+            space::XXS,
+            space::XS,
+            space::S,
+            space::M,
+            space::L,
+            space::XL,
+        ];
+        assert!(steps.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(steps.contains(&SECTION_GAP));
+    }
+
+    #[test]
+    fn the_text_styles_take_their_sizes_from_the_type_scale() {
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+        let style = ctx.global_style();
+        let size = |text_style: &TextStyle| style.text_styles[text_style].size;
+        assert_eq!(size(&TextStyle::Small), font::CAPTION);
+        assert_eq!(size(&TextStyle::Body), font::BODY);
+        assert_eq!(size(&TextStyle::Button), font::BODY);
+        assert_eq!(size(&TextStyle::Monospace), font::MONO);
+        assert_eq!(size(&TextStyle::Heading), font::HEADING);
+    }
+
+    #[test]
+    fn the_disabled_alpha_is_the_disabled_level_in_bytes() {
+        assert_eq!(
+            (alpha::DISABLED * f32::from(u8::MAX)).round(),
+            f32::from(alpha::DISABLED_ALPHA)
+        );
+        let faded = alpha::fade(Color32::from_rgb(0xC2, 0x37, 0x4F), alpha::DISABLED_ALPHA);
+        assert_eq!(faded.a(), alpha::DISABLED_ALPHA);
+    }
+
+    #[test]
+    fn a_capsule_has_half_the_height_as_its_radius() {
+        assert_eq!(capsule(32.0), 16);
+        assert_eq!(capsule(22.0), RADIUS_TOGGLE);
+        assert_eq!(capsule(0.0), 0);
     }
 
     #[test]

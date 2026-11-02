@@ -115,7 +115,7 @@ pub(crate) fn name_modal(ctx: &egui::Context, options: NameModal<'_>) -> ModalCh
     let response = show_modal(ctx, egui::Modal::new(egui::Id::new(options.id)), |ui| {
         ui.set_width(400.0);
         ui.heading(options.title);
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         ui.label(options.label);
         let mut edit = egui::TextEdit::singleline(options.name).desired_width(f32::INFINITY);
         if let Some(limit) = options.char_limit {
@@ -139,7 +139,7 @@ pub(crate) fn name_modal(ctx: &egui::Context, options: NameModal<'_>) -> ModalCh
         if let Some(error) = options.error.as_ref() {
             ui.colored_label(theme::ERROR, error);
         }
-        ui.add_space(16.0);
+        ui.add_space(theme::space::L);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if button_fill(ui, options.submit, valid).clicked() {
                 choice = ModalChoice::Confirm;

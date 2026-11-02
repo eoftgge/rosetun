@@ -77,14 +77,14 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
         if enabled {
             color
         } else {
-            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 128)
+            theme::alpha::fade(color, theme::alpha::DISABLED_ALPHA)
         }
     };
     ui.painter().rect(
         track,
         CornerRadius::same(RADIUS),
         faded(theme::palette().bg),
-        Stroke::new(1.0, faded(theme::palette().border)),
+        Stroke::new(theme::stroke::HAIRLINE, faded(theme::palette().border)),
         egui::StrokeKind::Inside,
     );
     let mut x = track.left() + 4.0;
@@ -130,7 +130,7 @@ pub(crate) fn segmented<T: Copy + PartialEq, L: AsRef<str>>(
             ui.painter().rect_stroke(
                 rect,
                 CornerRadius::same(RADIUS_INNER),
-                Stroke::new(1.0, faded(theme::palette().text)),
+                Stroke::new(theme::stroke::HAIRLINE, faded(theme::palette().text)),
                 egui::StrokeKind::Inside,
             );
         }

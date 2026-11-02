@@ -147,7 +147,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         ui.painter().hline(
                             line.x_range(),
                             line.center().y,
-                            egui::Stroke::new(1.0, theme::palette().border),
+                            egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().border),
                         );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
@@ -174,7 +174,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         });
                     },
                 );
-                ui.add_space(if narrow { 12.0 } else { 24.0 });
+                ui.add_space(if narrow {
+                    theme::space::M
+                } else {
+                    theme::space::XL
+                });
                 ui.vertical(|ui| {
                     ui.set_min_width(ui.available_width());
                     egui::Sides::new().shrink_left().wrap().show(
@@ -211,13 +215,13 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                             }
                         },
                     );
-                    ui.add_space(12.0);
+                    ui.add_space(theme::space::M);
                     traffic_chart(ui, &chart);
                 });
             },
         );
     });
-    ui.add_space(16.0);
+    ui.add_space(theme::space::L);
     super::connections::section(ui, state, actions);
 }
 
@@ -239,10 +243,10 @@ fn traffic_row(ui: &mut egui::Ui, color: Color32, label: &str, rate: u64, connec
         );
     });
     ui.horizontal(|ui| {
-        ui.add_space(16.0);
+        ui.add_space(theme::space::L);
         ui.label(
             RichText::new(number)
-                .size(24.0)
+                .size(theme::font::HEADING)
                 .strong()
                 .monospace()
                 .color(text_color),
@@ -327,7 +331,7 @@ fn traffic_chart(ui: &mut egui::Ui, chart: &Chart) {
     ui.painter().hline(
         rect.x_range(),
         baseline,
-        egui::Stroke::new(1.0, theme::palette().border),
+        egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().border),
     );
     if columns.is_empty() {
         ui.painter().text(

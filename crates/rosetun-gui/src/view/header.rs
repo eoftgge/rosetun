@@ -2,7 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use eframe::egui::{
     self, Align, Color32, FontFamily, FontId, Id, Layout, PointerButton, Rect, Response, Sense,
-    Shape, Stroke, TextFormat, ViewportCommand, WidgetInfo, WidgetType, text::LayoutJob,
+    Shape, Stroke, TextFormat, TextStyle, ViewportCommand, WidgetInfo, WidgetType,
+    text::LayoutJob,
 };
 use rosetun_config::ConnectionState;
 
@@ -135,7 +136,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             egui::pos2(rect.left(), rect.bottom() - 0.5),
             egui::pos2(rect.right(), rect.bottom() - 0.5),
         ],
-        Stroke::new(1.0, theme::palette().border),
+        Stroke::new(theme::stroke::HAIRLINE, theme::palette().border),
     );
 
     let tabs = [
@@ -212,7 +213,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             let mut selected_rect = None;
             for (index, (icon, label, screen, action)) in tabs.into_iter().enumerate() {
                 if index != 0 {
-                    ui.add_space(4.0);
+                    ui.add_space(theme::space::XS);
                 }
                 let selected = state.screen == screen;
                 let response = tab(ui, icon, &label, selected, reduce_motion, icons_only);
@@ -256,7 +257,7 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                         ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true));
                     }
                     controls_rect = Some(Rect::from_min_max(minimize.rect.min, close.rect.max));
-                    ui.add_space(12.0);
+                    ui.add_space(theme::space::M);
                 }
                 let response = widgets::status_pill(ui, status_label, &status_text, status_color);
                 status_rect = response.rect;
@@ -374,7 +375,10 @@ fn brand_galleys(ui: &egui::Ui) -> (Arc<egui::Galley>, Arc<egui::Galley>) {
         constants::BRAND,
         0.0,
         TextFormat {
-            font_id: FontId::new(25.0, FontFamily::Name(theme::BRAND_FONT.into())),
+            font_id: FontId::new(
+                theme::font::BRAND_NAME,
+                FontFamily::Name(theme::BRAND_FONT.into()),
+            ),
             color: theme::palette().text,
             extra_letter_spacing: 6.0,
             ..Default::default()
@@ -387,7 +391,7 @@ fn brand_galleys(ui: &egui::Ui) -> (Arc<egui::Galley>, Arc<egui::Galley>) {
         &constants::TAGLINE.to_uppercase(),
         0.0,
         TextFormat {
-            font_id: FontId::new(10.5, FontFamily::Proportional),
+            font_id: FontId::new(theme::font::BRAND_TAGLINE, FontFamily::Proportional),
             color: theme::palette().text_dim,
             extra_letter_spacing: 2.3,
             ..Default::default()
@@ -507,7 +511,7 @@ fn tab_width(ui: &egui::Ui, label: &str, icons_only: bool) -> f32 {
         .painter()
         .layout_no_wrap(
             label.to_owned(),
-            FontId::new(15.0, FontFamily::Proportional),
+            TextStyle::Body.resolve(ui.style()),
             theme::palette().text,
         )
         .size()
@@ -522,7 +526,7 @@ fn tab(
     reduce_motion: bool,
     icons_only: bool,
 ) -> Response {
-    let font_id = FontId::new(15.0, FontFamily::Proportional);
+    let font_id = TextStyle::Body.resolve(ui.style());
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(tab_width(ui, label, icons_only), ui.max_rect().height()),
         Sense::click(),
@@ -578,7 +582,7 @@ fn tab(
 fn paint_tab_icon(painter: &egui::Painter, rect: Rect, icon: TabIcon, color: Color32) {
     let scale = rect.width() / 20.0;
     let point = |x: f32, y: f32| rect.min + egui::vec2(x * scale, y * scale);
-    let stroke = Stroke::new(1.5 * scale, color);
+    let stroke = Stroke::new(theme::stroke::GLYPH * scale, color);
     let line = |points: &[(f32, f32)]| {
         painter.add(Shape::line(
             points.iter().map(|&(x, y)| point(x, y)).collect(),

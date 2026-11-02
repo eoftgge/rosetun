@@ -44,7 +44,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             .frame(
                 egui::Frame::new()
                     .fill(theme::palette().panel)
-                    .stroke(Stroke::new(1.0, theme::palette().border))
+                    .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
                     .inner_margin(egui::Margin {
                         left: 16,
                         right: 16,
@@ -65,7 +65,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
             .frame(
                 egui::Frame::new()
                     .fill(theme::palette().panel)
-                    .stroke(Stroke::new(1.0, theme::palette().border))
+                    .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
                     .inner_margin(egui::Margin {
                         left: 16,
                         right: 16,
@@ -233,7 +233,7 @@ fn config_unreadable_banner(ui: &mut egui::Ui, state: &State, actions: &mut Vec<
 
 fn settings_nav(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         ui.heading(tr!("settings"));
     });
     ui.add_space(10.0);

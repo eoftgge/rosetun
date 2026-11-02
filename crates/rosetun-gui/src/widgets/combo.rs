@@ -18,7 +18,7 @@ pub(crate) fn filter_combo(
         let visuals = &mut ui.visuals_mut().widgets;
         visuals.inactive.weak_bg_fill = theme::palette().input;
         visuals.hovered.weak_bg_fill = theme::palette().border;
-        let border = Stroke::new(1.0, theme::palette().border_strong);
+        let border = Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong);
         visuals.inactive.bg_stroke = border;
         visuals.hovered.bg_stroke = border;
         visuals.open.bg_stroke = border;

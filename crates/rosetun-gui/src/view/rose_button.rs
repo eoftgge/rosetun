@@ -1,13 +1,14 @@
 use std::{sync::OnceLock, time::Duration};
 
 use eframe::egui::{
-    self, Color32, FontFamily, FontId, Id, Pos2, Rect, Sense, Shape, Stroke, WidgetInfo, WidgetType,
+    self, Color32, Id, Pos2, Rect, Sense, Shape, Stroke, WidgetInfo, WidgetType,
 };
 use rosetun_config::ConnectionState;
 
 use crate::theme;
 
 const RING_RADIUS: f32 = 96.0;
+const PETAL_STROKE: f32 = 1.4;
 const TRANSITION_SECONDS: f64 = 0.8;
 const OUTER: usize = 0;
 const MIDDLE: usize = 1;
@@ -412,7 +413,7 @@ pub(crate) fn rose_button(
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
     let center = egui::pos2(rect.center().x, rect.top() + 105.0);
     let label_center = egui::pos2(center.x, rect.top() + 218.0);
-    let font_id = FontId::new(17.0, FontFamily::Name(theme::UI_SEMIBOLD.into()));
+    let font_id = theme::font::title();
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font_id, theme::palette().text);
@@ -469,8 +470,7 @@ pub(crate) fn rose_button(
             center,
             RING_RADIUS,
             Stroke::new(
-                1.0,
-                if hovered {
+                theme::stroke::HAIRLINE, if hovered {
                     theme::palette().accent_base.gamma_multiply(0.6)
                 } else {
                     visible.ring
@@ -481,7 +481,7 @@ pub(crate) fn rose_button(
             center,
             74.0,
             visible.disc_fill,
-            Stroke::new(2.0, visible.disc_stroke),
+            Stroke::new(theme::stroke::MARK, visible.disc_stroke),
         );
         if visible.glow > 0.0 {
             for (radius, alpha) in [(70.0, 0.06), (56.0, 0.08), (40.0, 0.10)] {
@@ -508,7 +508,7 @@ pub(crate) fn rose_button(
                 painter.add(Shape::convex_polygon(
                     petal_points(center, 72.0 * index as f32 + layer.rotation, layer.k).to_vec(),
                     layer.fill,
-                    Stroke::new(1.4, layer.stroke),
+                    Stroke::new(PETAL_STROKE, layer.stroke),
                 ));
             }
         }

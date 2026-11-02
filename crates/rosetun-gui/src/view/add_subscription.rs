@@ -132,7 +132,7 @@ fn subscription_body(
             }
         }
     }
-    ui.add_space(16.0);
+    ui.add_space(theme::space::L);
     ui.label(tr!("name"));
     if ui
         .add_enabled(
@@ -145,7 +145,7 @@ fn subscription_body(
     {
         dialog.error = None;
     }
-    ui.add_space(16.0);
+    ui.add_space(theme::space::L);
     ui.horizontal(|ui| {
         widgets::toggle(ui, &mut dialog.send_hwid, !dialog.busy);
         ui.label(tr!("send-device-id"));
@@ -157,7 +157,7 @@ fn subscription_body(
         .wrap(),
     );
     if let Some(error) = &dialog.error {
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         ui.add(
             egui::Label::new(
                 RichText::new(form_error(
@@ -196,7 +196,7 @@ fn subscription_body(
 }
 
 fn import_tabs(ui: &mut egui::Ui, dialog: &mut AddDialog) {
-    ui.add_space(12.0);
+    ui.add_space(theme::space::M);
     let selected = widgets::segmented(
         ui,
         "server_import_tabs",
@@ -208,7 +208,7 @@ fn import_tabs(ui: &mut egui::Ui, dialog: &mut AddDialog) {
         true,
         !dialog.busy && !dialog.qr.busy() && dialog.editing_proxy.is_none(),
     );
-    ui.add_space(12.0);
+    ui.add_space(theme::space::M);
     if let Some(proxy) = selected {
         dialog.select_proxy_tab(proxy);
     }
@@ -252,35 +252,35 @@ fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Actio
                 TlsMode::Plain
             };
         }
-        ui.add_space(16.0);
+        ui.add_space(theme::space::L);
         ui.label(tr!("name"));
         ui.add(egui::TextEdit::singleline(&mut node.name).desired_width(f32::INFINITY));
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         ui.label(tr!("proxy-server"));
         ui.add(egui::TextEdit::singleline(&mut node.server).desired_width(f32::INFINITY));
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         ui.label(tr!("proxy-port"));
         ui.add(egui::DragValue::new(&mut node.port).range(1..=65535));
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         if let Outbound::Http(credentials) | Outbound::Socks5(credentials) = &mut node.outbound {
             ui.label(tr!("proxy-username"));
             ui.add(
                 egui::TextEdit::singleline(&mut credentials.username).desired_width(f32::INFINITY),
             );
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             ui.label(tr!("proxy-password"));
             ui.add(
                 egui::TextEdit::singleline(&mut credentials.password)
                     .password(true)
                     .desired_width(f32::INFINITY),
             );
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
         }
         if let TlsMode::Tls(tls) = &mut node.stream.tls {
             ui.label(tr!("proxy-sni"));
             let sni = tls.sni.get_or_insert_default();
             ui.add(egui::TextEdit::singleline(sni).desired_width(f32::INFINITY));
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             if sni.is_empty() {
                 tls.sni = None;
             }
@@ -291,7 +291,7 @@ fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Actio
                 .password(true)
                 .desired_width(f32::INFINITY),
         );
-        ui.add_space(8.0);
+        ui.add_space(theme::space::S);
         if widgets::outline_button(ui, tr!("proxy-import"), !dialog.proxy_uri.is_empty()).clicked()
         {
             match rosetun_core::parse_proxy_uri(dialog.proxy_uri.trim()) {

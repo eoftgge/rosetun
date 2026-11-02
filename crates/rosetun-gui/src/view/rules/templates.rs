@@ -24,10 +24,10 @@ pub(super) fn template_section(
             .font(font)
             .color(theme::palette().text_muted),
     );
-    ui.add_space(8.0);
+    ui.add_space(theme::space::S);
     let width = ((ui.available_width() - 3.0 * 12.0) / 4.0).max(0.0);
     ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-        ui.spacing_mut().item_spacing.x = 12.0;
+        ui.spacing_mut().item_spacing.x = theme::space::M;
         for template in RuleTemplate::ALL {
             ui.push_id(template.key(), |ui| {
                 template_card(ui, state, set, template, width, actions);
@@ -56,8 +56,7 @@ pub(super) fn template_card(
             ui.set_width(width);
             ui.set_max_width(width);
             let frame = widgets::card_frame().inner_margin(14).stroke(Stroke::new(
-                1.0,
-                if rule.is_some() {
+                theme::stroke::HAIRLINE, if rule.is_some() {
                     theme::palette().accent_dark
                 } else {
                     theme::palette().border
@@ -90,7 +89,7 @@ pub(super) fn template_card(
                             crate::i18n::template_name(template)
                         });
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(theme::space::S);
                     let description = state.text(&crate::i18n::template_description(template));
                     let height = 2.0 * ui.text_style_height(&egui::TextStyle::Small);
                     let mut job = egui::text::LayoutJob::simple(

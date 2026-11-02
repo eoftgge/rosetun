@@ -9,7 +9,7 @@ pub(crate) fn settings_card(ui: &mut egui::Ui, add_rows: impl FnOnce(&mut Settin
     let width = ui.available_width();
     egui::Frame::new()
         .fill(theme::palette().card)
-        .stroke(Stroke::new(1.0, theme::palette().border))
+        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
         .corner_radius(RADIUS)
         .inner_margin(0)
         .show(ui, |ui| {
@@ -85,21 +85,21 @@ impl SettingsCard<'_> {
             .show(self.ui, |ui| {
                 ui.set_min_width((width - 40.0).max(0.0));
                 ui.set_min_height(32.0);
-                ui.spacing_mut().item_spacing.x = 16.0;
+                ui.spacing_mut().item_spacing.x = theme::space::L;
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), 32.0),
                     Layout::right_to_left(Align::Center),
                     |ui| {
                         ui.scope(control);
                         let text_width = (ui.available_width() - 16.0).max(0.0);
-                        ui.add_space(16.0);
+                        ui.add_space(theme::space::L);
                         ui.allocate_ui_with_layout(
                             egui::vec2(text_width, 32.0),
                             Layout::left_to_right(Align::Center),
                             |ui| {
                                 ui.set_width(text_width);
                                 ui.vertical(|ui| {
-                                    ui.spacing_mut().item_spacing.y = 2.0;
+                                    ui.spacing_mut().item_spacing.y = theme::space::XXS;
                                     title(ui);
                                     if let Some(detail) = detail {
                                         ui.add(

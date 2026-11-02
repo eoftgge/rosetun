@@ -17,7 +17,7 @@ pub(crate) fn tag(ui: &mut egui::Ui, text: &str) -> egui::Response {
         ui.painter().rect_stroke(
             rect,
             CornerRadius::same(9),
-            Stroke::new(1.0, theme::palette().border_strong),
+            Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong),
             egui::StrokeKind::Inside,
         );
         ui.painter().galley(
@@ -35,7 +35,7 @@ pub(super) fn title_with_tag(ui: &mut egui::Ui, title: egui::WidgetText, tag_tex
     match tag_text {
         Some(tag_text) => {
             ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.spacing_mut().item_spacing.x = theme::space::S;
                 ui.label(title);
                 tag(ui, tag_text);
             });

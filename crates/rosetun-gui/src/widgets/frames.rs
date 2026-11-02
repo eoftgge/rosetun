@@ -5,7 +5,7 @@ use crate::theme::{self, ERROR, RADIUS};
 pub(crate) fn card_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(theme::palette().card)
-        .stroke(Stroke::new(1.0, theme::palette().border))
+        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
         .corner_radius(CornerRadius::same(RADIUS))
         .inner_margin(egui::Margin::same(16))
 }
@@ -13,7 +13,7 @@ pub(crate) fn card_frame() -> egui::Frame {
 pub(crate) fn modal_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(theme::palette().modal)
-        .stroke(Stroke::new(1.0, theme::palette().border_strong))
+        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong))
         .corner_radius(CornerRadius::same(RADIUS))
         .inner_margin(egui::Margin::same(24))
 }
@@ -35,7 +35,7 @@ pub(crate) fn error_with_actions(
                 ui.colored_label(ERROR, crate::constants::ERROR_MARK);
                 ui.vertical(|ui| {
                     ui.add(egui::Label::new(message).wrap());
-                    ui.add_space(8.0);
+                    ui.add_space(theme::space::S);
                     ui.horizontal_wrapped(|ui| {
                         let mut clicked = None;
                         for (index, (label, enabled)) in actions.iter().enumerate() {

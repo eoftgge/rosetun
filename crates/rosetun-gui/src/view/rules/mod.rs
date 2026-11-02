@@ -144,7 +144,7 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
     }
     if state.config.rule_sets.is_empty() {
         ui.colored_label(theme::palette().text_muted, tr!("no-rule-sets"));
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         if widgets::button_fill(ui, tr!("create-rule-set"), state.can_edit_rules()).clicked() {
             actions.push(Action::OpenCreateSet);
         }
@@ -248,7 +248,7 @@ fn tab_body(ui: &mut egui::Ui, state: &mut State, actions: &mut Vec<Action>) {
 
 fn apply_notice(ui: &mut egui::Ui, can_apply: bool) -> (egui::Response, Option<egui::Response>) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.spacing_mut().item_spacing.x = theme::space::S;
         let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
         ui.painter()
             .circle_filled(dot.center(), 3.0, theme::palette().accent_light);

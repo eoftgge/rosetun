@@ -26,7 +26,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         .frame(egui::Frame::new())
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.add_space(24.0);
+            ui.add_space(theme::space::XL);
             let (update_all, add) = egui::Sides::new()
                 .height(36.0)
                 .shrink_left()
@@ -96,28 +96,25 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             );
         });
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().item_spacing.x = theme::space::XS;
         ui.label(
             RichText::new(tr!("subscriptions-title"))
                 .color(theme::palette().text)
-                .font(egui::FontId::new(
-                    15.0,
-                    egui::FontFamily::Name(theme::UI_SEMIBOLD.into()),
-                )),
+                .font(theme::font::semibold(theme::font::BODY)),
         );
         ui.label(
             RichText::new(format!("· {}", state.config.subscriptions.len()))
                 .color(theme::palette().text_dim),
         );
     });
-    ui.add_space(12.0);
+    ui.add_space(theme::space::M);
     egui::ScrollArea::vertical()
         .id_salt("subscription_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if state.config.subscriptions.is_empty() {
                 ui.colored_label(theme::palette().text_muted, tr!("no-subscriptions"));
-                ui.add_space(8.0);
+                ui.add_space(theme::space::S);
                 ui.add(
                     egui::Label::new(
                         RichText::new(tr!("empty-subscriptions")).color(theme::palette().text_dim),
@@ -157,7 +154,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
                                 let y = if above { rect.top() } else { rect.bottom() };
                                 ui.painter().line_segment(
                                     [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                                    Stroke::new(2.0, theme::palette().accent_base),
+                                    Stroke::new(theme::stroke::MARK, theme::palette().accent_base),
                                 );
                                 if let Some(payload) =
                                     response.response.dnd_release_payload::<SubscriptionId>()
@@ -220,7 +217,7 @@ fn menu_link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
                     rect.left_bottom() + egui::vec2(0.0, -1.0),
                     egui::pos2(rect.left() + text_width, rect.bottom() - 1.0),
                 ],
-                Stroke::new(1.0, theme::palette().accent_light),
+                Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_light),
             );
         }
     }
@@ -310,7 +307,7 @@ pub(crate) fn remove_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
                     egui::TextStyle::Body,
                 ));
             }
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             ui.add(egui::Label::new(tr!("remove-detail")).wrap());
             if state
                 .config

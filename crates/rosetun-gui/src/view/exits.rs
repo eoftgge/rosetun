@@ -79,30 +79,30 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             }
         },
     );
-    ui.add_space(8.0);
+    ui.add_space(theme::space::S);
     if !state.config_ready {
         ui.colored_label(theme::palette().text_dim, tr!("loading"));
         return;
     }
     if state.config.exits.is_empty() {
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         widgets::card_frame().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.vertical_centered(|ui| {
-                ui.add_space(16.0);
+                ui.add_space(theme::space::L);
                 icons::icon_badge(ui, Icon::Globe, 40.0);
-                ui.add_space(8.0);
+                ui.add_space(theme::space::S);
                 ui.add(egui::Label::new(tr!("exits-empty")).wrap());
-                ui.add_space(12.0);
+                ui.add_space(theme::space::M);
                 if widgets::button_fill(ui, tr!("new-exit-button"), can_add).clicked() {
                     actions.push(Action::OpenNewExit);
                 }
-                ui.add_space(16.0);
+                ui.add_space(theme::space::L);
             });
         });
         return;
     }
-    ui.add_space(12.0);
+    ui.add_space(theme::space::M);
     let resolved = state.resolved_exits();
     egui::ScrollArea::vertical()
         .id_salt("exit_cards")
@@ -133,7 +133,7 @@ fn exit_row(
     let rules = state.exit_rules(&exit.id);
     let can_edit = state.can_edit_rules();
     widgets::card_frame()
-        .stroke(Stroke::new(1.0, theme::palette().border))
+        .stroke(Stroke::new(theme::stroke::HAIRLINE, theme::palette().border))
         .inner_margin(egui::Margin {
             left: 12,
             right: 12,
@@ -285,7 +285,7 @@ fn country_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig
                 }
             });
     });
-    ui.add_space(8.0);
+    ui.add_space(theme::space::S);
     note(ui, tr!("exit-country-hint"), theme::palette().text_muted);
 }
 
@@ -343,7 +343,7 @@ fn node_picker(ui: &mut egui::Ui, dialog: &mut ExitDialog, config: &AppConfig, b
     if gone {
         note(ui, tr!("exit-node-gone-pick"), theme::WARNING);
     }
-    ui.add_space(8.0);
+    ui.add_space(theme::space::S);
     let country = dialog.fallback_country.clone();
     ui.horizontal(|ui| {
         let mut on = dialog.fallback && country.is_some();
@@ -403,7 +403,7 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
         if input.changed() {
             dialog.error = None;
         }
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         if let Some(kind) = widgets::segmented(
             ui,
             "exit_kind",
@@ -418,13 +418,13 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
             dialog.kind = kind;
             dialog.error = None;
         }
-        ui.add_space(12.0);
+        ui.add_space(theme::space::M);
         match dialog.kind {
             ExitKind::Country => country_picker(ui, dialog, config, busy),
             ExitKind::Node => node_picker(ui, dialog, config, busy),
         }
         if dialog.editing.is_none() && full {
-            ui.add_space(8.0);
+            ui.add_space(theme::space::S);
             note(
                 ui,
                 tr!(
@@ -435,7 +435,7 @@ pub(crate) fn exit_dialog(ctx: &egui::Context, state: &mut State, actions: &mut 
             );
         }
         if let Some(error) = &dialog.error {
-            ui.add_space(8.0);
+            ui.add_space(theme::space::S);
             ui.add(egui::Label::new(RichText::new(error).color(theme::ERROR)).wrap());
         }
         ui.add_space(18.0);
@@ -497,7 +497,7 @@ pub(crate) fn delete_dialog(ctx: &egui::Context, state: &State, actions: &mut Ve
             if let Some(exit) = state.config.exits.iter().find(|exit| exit.id == dialog.id) {
                 ui.label(exit_title(exit));
             }
-            ui.add_space(12.0);
+            ui.add_space(theme::space::M);
             ui.add(
                 egui::Label::new(tr!("delete-exit-detail", n = dialog.rules.to_string())).wrap(),
             );

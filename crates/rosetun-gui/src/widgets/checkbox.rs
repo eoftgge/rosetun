@@ -32,10 +32,10 @@ pub(crate) fn checkbox(
             &mut widgets.hovered,
             &mut widgets.active,
         ] {
-            visuals.corner_radius = egui::CornerRadius::same(3);
+            visuals.corner_radius = egui::CornerRadius::same(theme::RADIUS_CHECKBOX);
             visuals.bg_fill = fill;
-            visuals.bg_stroke = Stroke::new(1.0, border);
-            visuals.fg_stroke = Stroke::new(1.5, check);
+            visuals.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, border);
+            visuals.fg_stroke = Stroke::new(theme::stroke::GLYPH, check);
         }
         ui.add_enabled(enabled, egui::Checkbox::new(checked, label))
     })

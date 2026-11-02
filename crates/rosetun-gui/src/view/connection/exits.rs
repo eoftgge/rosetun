@@ -15,8 +15,8 @@ pub(super) fn exits_card(ui: &mut egui::Ui, state: &State) -> bool {
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.colored_label(theme::palette().text_dim, tr!("connection-exits"));
-        ui.add_space(4.0);
-        ui.spacing_mut().item_spacing.y = 8.0;
+        ui.add_space(theme::space::XS);
+        ui.spacing_mut().item_spacing.y = theme::space::S;
         for row in &rows {
             exit_row(ui, state, row);
         }

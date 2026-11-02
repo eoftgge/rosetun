@@ -1,5 +1,8 @@
 use super::*;
 
+/// Between the connect button and the state line when the window is wide.
+const BUTTON_TEXT_GAP: f32 = 36.0;
+
 fn server_check_available(kind: FailureKind) -> bool {
     kind != FailureKind::NoNetwork
 }
@@ -103,13 +106,17 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             }
                         },
                     );
-                    ui.add_space(if narrow { 12.0 } else { 36.0 });
+                    ui.add_space(if narrow {
+                        theme::space::M
+                    } else {
+                        BUTTON_TEXT_GAP
+                    });
                     ui.vertical(|ui| {
                         ui.set_min_width(ui.available_width());
                         ui.spacing_mut().item_spacing.y = 14.0;
                         ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 4.0;
-                            ui.label(RichText::new(label).size(26.0).color(color));
+                            ui.spacing_mut().item_spacing.y = theme::space::XS;
+                            ui.label(RichText::new(label).size(theme::font::STATE_LINE).color(color));
                             let session = visible_status
                                 .and_then(|status| status.since_unix)
                                 .map_or_else(
@@ -410,8 +417,8 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                             .unwrap_or(state.config.settings.engine);
                         let (ip, ip_color, toggle) = exit_line(&state.exit, state.exit_revealed);
                         ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 8.0;
-                            ui.add_space(2.0);
+                            ui.spacing_mut().item_spacing.y = theme::space::S;
+                            ui.add_space(theme::space::XXS);
                             detail_row(ui, tr!("external-ip"), |ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
                                 let row_height = ui.text_style_height(&egui::TextStyle::Body);
@@ -439,7 +446,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                     },
                                 );
                                 if let Some(toggle) = toggle {
-                                    ui.add_space(12.0);
+                                    ui.add_space(theme::space::M);
                                     if ui
                                         .add(
                                             egui::Label::new(
@@ -638,7 +645,7 @@ fn detail_row<R>(
 ) -> R {
     let row_height = ui.text_style_height(&egui::TextStyle::Body);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 12.0;
+        ui.spacing_mut().item_spacing.x = theme::space::M;
         ui.allocate_ui_with_layout(
             egui::vec2(96.0, row_height),
             egui::Layout::left_to_right(egui::Align::Center),
@@ -688,7 +695,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
     let width = ui.available_width();
     let response = egui::Frame::new()
         .fill(theme::palette().input)
-        .stroke(egui::Stroke::new(1.0, theme::palette().border_strong))
+        .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().border_strong))
         .corner_radius(theme::RADIUS)
         .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
@@ -696,7 +703,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
             ui.horizontal(|ui| {
                 let badge_height = 26.0;
                 let name_font =
-                    egui::FontId::new(17.0, egui::FontFamily::Name(theme::UI_SEMIBOLD.into()));
+                    theme::font::title();
                 let badge = country
                     .map(|code| (code, true))
                     .or_else(|| flag.as_deref().map(|code| (code, false)));
@@ -711,8 +718,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                         rect,
                         theme::RADIUS_INNER,
                         egui::Stroke::new(
-                            1.0,
-                            if verified {
+                            theme::stroke::HAIRLINE, if verified {
                                 theme::palette().accent_dark
                             } else {
                                 theme::palette().border_strong
@@ -765,7 +771,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
                                 );
                             },
                         );
-                        ui.add_space(2.0);
+                        ui.add_space(theme::space::XXS);
                         ui.allocate_ui_with_layout(
                             egui::vec2(text_width, ui.text_style_height(&egui::TextStyle::Small)),
                             egui::Layout::left_to_right(egui::Align::Center),
@@ -806,7 +812,7 @@ fn server_button(ui: &mut egui::Ui, state: &State) -> bool {
         ui.painter().rect_stroke(
             response.rect,
             theme::RADIUS,
-            egui::Stroke::new(1.0, theme::palette().accent_dark),
+            egui::Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_dark),
             egui::StrokeKind::Inside,
         );
     }

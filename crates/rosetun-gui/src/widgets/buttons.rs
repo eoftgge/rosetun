@@ -32,8 +32,7 @@ pub(crate) fn outline_button(
     let button = egui::Button::new(text)
         .fill(Color32::TRANSPARENT)
         .stroke(Stroke::new(
-            1.0,
-            if enabled {
+            theme::stroke::HAIRLINE, if enabled {
                 theme::palette().border_strong
             } else {
                 theme::palette().border
@@ -71,7 +70,7 @@ fn compact_button(
     outlined: bool,
     full_width: bool,
 ) -> egui::Response {
-    let font = egui::FontId::new(12.0, egui::FontFamily::Name(theme::UI_SEMIBOLD.into()));
+    let font = theme::font::semibold(theme::font::CAPTION);
     let button =
         egui::Button::new(egui::RichText::new(text).font(font)).min_size(egui::vec2(0.0, 28.0));
     let button = if full_width {
@@ -83,8 +82,7 @@ fn compact_button(
     };
     let button = if outlined {
         button.fill(Color32::TRANSPARENT).stroke(Stroke::new(
-            1.0,
-            if enabled {
+            theme::stroke::HAIRLINE, if enabled {
                 theme::palette().border_strong
             } else {
                 theme::palette().border
@@ -125,7 +123,7 @@ pub(crate) fn link(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Respon
                 response.rect.left_bottom() + egui::vec2(0.0, -1.0),
                 response.rect.right_bottom() + egui::vec2(0.0, -1.0),
             ],
-            Stroke::new(1.0, theme::palette().accent_light),
+            Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_light),
         );
     }
     if enabled {
