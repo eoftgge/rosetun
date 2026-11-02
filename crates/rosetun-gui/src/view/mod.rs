@@ -29,7 +29,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
         state.config.interface.reduce_motion,
     );
     egui::Panel::top("header")
-        .exact_size(76.0)
+        .exact_size(header::HEIGHT)
         .show_separator_line(false)
         .frame(
             egui::Frame::new()

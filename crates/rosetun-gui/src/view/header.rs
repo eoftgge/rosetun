@@ -13,6 +13,9 @@ use crate::{constants, motion, theme, widgets};
 /// The window draws its own title bar on Windows; elsewhere the system frame stays.
 pub(crate) const CUSTOM_FRAME: bool = cfg!(windows);
 
+/// The height of the header panel. A centred dialog keeps this much clear above and below.
+pub(crate) const HEIGHT: f32 = 76.0;
+
 const INTRO_DURATION: f64 = 2.7;
 
 #[derive(Clone, Copy)]
@@ -780,7 +783,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::Panel::top("header").exact_size(76.0).show(ctx, |ui| {
+                    egui::Panel::top("header").exact_size(super::HEIGHT).show(ctx, |ui| {
                         rects = Some(show_with_rects(ui, &state, &mut Vec::new()));
                     });
                 },

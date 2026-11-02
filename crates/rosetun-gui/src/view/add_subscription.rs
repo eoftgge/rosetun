@@ -7,6 +7,8 @@ use crate::errors;
 use crate::state::{Action, AddDialog, QrSource, QrStage, redact};
 use crate::{constants, display, i18n, theme, widgets};
 
+use super::header;
+
 const ACTION_ROW_HEIGHT: f32 = 40.0;
 const SUBSCRIPTION_URL_ID: &str = "subscription_url_input";
 
@@ -265,19 +267,17 @@ impl ProxyProtocol {
     }
 }
 
-/// The window's header is this high. A dialog is centred, so it keeps this much clear above
-/// and below.
-const HEADER_HEIGHT: f32 = 76.0;
 /// What the dialog takes outside the scrolling form: its frame, the heading, the tabs, an error
-/// of up to two lines and the buttons.
-const PROXY_DIALOG_CHROME: f32 = 290.0;
+/// of up to two lines and the buttons. Measured at 292 in Russian with a two-line error, kept
+/// 4 above that; a test with the longest form fails when the dialog outgrows it.
+const PROXY_DIALOG_CHROME: f32 = 296.0;
 /// The form never scrolls in less than this, however small the window.
 const MIN_PROXY_FORM: f32 = 160.0;
 const PORT_FIELD_WIDTH: f32 = 96.0;
 const PROXY_LINK_ID: &str = "proxy_link_input";
 
 fn proxy_form_height(ctx: &egui::Context) -> f32 {
-    (ctx.content_rect().height() - 2.0 * HEADER_HEIGHT - PROXY_DIALOG_CHROME).max(MIN_PROXY_FORM)
+    (ctx.content_rect().height() - 2.0 * header::HEIGHT - PROXY_DIALOG_CHROME).max(MIN_PROXY_FORM)
 }
 
 fn proxy_body(ui: &mut egui::Ui, dialog: &mut AddDialog, actions: &mut Vec<Action>) {
@@ -902,12 +902,75 @@ mod tests {
             let mut dialog = proxy_dialog(uri);
             dialog.error = Some(rosetun_core::AddFromUrlError::Proxy);
             let area = settled_area(&mut dialog, size);
-            assert!(area.top() >= HEADER_HEIGHT, "{uri}: top {}", area.top());
+            assert!(area.top() >= header::HEIGHT, "{uri}: top {}", area.top());
             assert!(
-                area.bottom() <= size.y - HEADER_HEIGHT,
+                area.bottom() <= size.y - header::HEIGHT,
                 "{uri}: bottom {}",
                 area.bottom()
             );
+        }
+    }
+
+    #[test]
+    fn the_longest_proxy_form_keeps_both_buttons_in_the_smallest_window() {
+        use crate::i18n::Language::{English, Russian};
+
+        let size = egui::vec2(960.0, 640.0);
+        let window = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        for language in [Russian, English] {
+            i18n::in_language(language, || {
+                let mut dialog = proxy_dialog("https://user:pass@proxy.example.com:443");
+                // A newer settings file is the longest message a save can answer with.
+                let failure = rosetun_core::AddFromUrlError::Store(rosetun_core::StoreError::Invalid {
+                    path: "settings.json".into(),
+                    source: rosetun_config::ConfigError::UnsupportedVersion {
+                        found: 99,
+                        expected: 8,
+                    },
+                });
+                let error = errors::add_subscription(language, &failure);
+                dialog.error = Some(failure);
+                let (ctx, shapes) = settled_frame(&mut dialog, size);
+                let rows = painted(&shapes)
+                    .iter()
+                    .find_map(|shape| match shape {
+                        egui::Shape::Text(text) if text.galley.text() == error => {
+                            Some(text.galley.rows.len())
+                        }
+                        _ => None,
+                    })
+                    .expect("the error is shown");
+                assert_eq!(rows, 2, "{language:?}: the error takes {rows} lines");
+                let buttons = [tr!("cancel"), tr!("add")].map(|label| {
+                    painted(&shapes)
+                        .iter()
+                        .find_map(|shape| match shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => {
+                                Some(text.visual_bounding_rect())
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("{language:?}: no button {label}"))
+                });
+                let area = ctx
+                    .memory(|memory| memory.area_rect(egui::Id::new("add_subscription")))
+                    .unwrap();
+                for (label, rect) in ["cancel", "add"].into_iter().zip(buttons) {
+                    assert!(
+                        window.contains_rect(rect),
+                        "{language:?}: {label} at {rect:?} is outside the window"
+                    );
+                    assert!(
+                        rect.bottom() <= area.bottom(),
+                        "{language:?}: {label} at {rect:?} is below the dialog {area:?}"
+                    );
+                }
+                assert!(
+                    area.bottom() <= size.y - header::HEIGHT,
+                    "{language:?}: the dialog ends at {}",
+                    area.bottom()
+                );
+            });
         }
     }
 
