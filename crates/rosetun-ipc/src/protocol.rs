@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_EXTRA_NODES: usize = 16;
@@ -543,7 +543,7 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 14);
+        assert_eq!(super::PROTOCOL_VERSION, 15);
         assert_eq!(
             serde_json::to_string(&super::ErrorCode::ProtectionUnavailable).unwrap(),
             "\"protection_unavailable\""

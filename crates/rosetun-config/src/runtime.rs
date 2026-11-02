@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{EngineKind, ExitId, NodeId, XrayUse};
+use crate::{EngineKind, ExitId, Node, NodeId, Settings, XrayUse, fragments_tls, uses_xray};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -130,6 +130,13 @@ pub struct Status {
     pub xray_use: Option<XrayUse>,
     #[serde(default)]
     pub xray_stopped: bool,
+    /// The connection to the server is split into pieces in this session (protocol 15).
+    #[serde(default)]
+    pub fragmented: bool,
+    /// Fragmentation was on in the settings this session started with. With `fragmented` off
+    /// it means the server's protocol cannot have it.
+    #[serde(default)]
+    pub fragment_requested: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_unix: Option<u64>,
     #[serde(default)]
@@ -137,6 +144,17 @@ pub struct Status {
     /// Lockdown's persistent block is installed (protocol 12).
     #[serde(default)]
     pub lockdown: bool,
+}
+
+impl Status {
+    /// Records which engine chain carries the session that just came up.
+    pub fn record_chain(&mut self, node: &Node, settings: &Settings) {
+        self.xray = uses_xray(node, settings);
+        self.xray_use = Some(settings.xray);
+        self.xray_stopped = false;
+        self.fragmented = fragments_tls(node, settings);
+        self.fragment_requested = settings.tls_fragment.enabled;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +302,12 @@ mod failure_tests {
                 .unwrap()
                 .xray
         );
+    }
+
+    #[test]
+    fn old_status_reports_no_fragmentation() {
+        let status: Status = serde_json::from_str(r#"{"state":"disconnected"}"#).unwrap();
+        assert!(!status.fragmented && !status.fragment_requested);
     }
 
     #[test]

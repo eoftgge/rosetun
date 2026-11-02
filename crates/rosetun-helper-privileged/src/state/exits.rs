@@ -211,7 +211,7 @@ impl XraySocks {
         settings: &Settings,
     ) -> Result<Self, HelperError> {
         let chain = |node: &Node| {
-            settings.engine == rosetun_config::EngineKind::SingBox && uses_xray(node, settings.xray)
+            settings.engine == rosetun_config::EngineKind::SingBox && uses_xray(node, settings)
         };
         let endpoint = |node: &Node| {
             if !chain(node) {
@@ -257,6 +257,7 @@ impl XraySocks {
         node: &Node,
         extra: &ExtraNodes<'_>,
         interface: &str,
+        fragment: &rosetun_config::TlsFragment,
         verbose: bool,
         log_level: rosetun_config::LogLevel,
     ) -> Result<RenderedConfig, HelperError> {
@@ -273,7 +274,7 @@ impl XraySocks {
             .iter()
             .map(|(tag, node, socks)| (tag.as_str(), *node, *socks))
             .collect::<Vec<_>>();
-        rosetun_engine_xray::render(&nodes, interface, verbose, log_level)
+        rosetun_engine_xray::render(&nodes, interface, fragment, verbose, log_level)
             .map_err(|error| HelperError::new(ErrorCode::XrayStartFailed, error.to_string()))
     }
 }

@@ -492,7 +492,7 @@ fn details(
     let xray_count = subscription
         .nodes
         .iter()
-        .filter(|node| rosetun_core::uses_xray(node, state.config.settings.xray))
+        .filter(|node| rosetun_core::uses_xray(node, &state.config.settings))
         .count();
     let columns = CardColumns {
         flags: show_flags,

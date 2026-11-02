@@ -227,7 +227,7 @@ pub(super) fn server_row(
         .pings
         .get(&(subscription.id.clone(), node.id.clone()))
         .copied();
-    let uses_xray = rosetun_core::uses_xray(node, state.config.settings.xray);
+    let uses_xray = rosetun_core::uses_xray(node, &state.config.settings);
     let small = egui::TextStyle::Small.resolve(ui.style());
     let badge_width = |label: String| {
         ui.painter()

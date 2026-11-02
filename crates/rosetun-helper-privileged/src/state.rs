@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use rosetun_config::{
     ConnectionState, ExitId, ListRef, LiveConnection, Node, ProtectionCapabilities, Rule,
-    RuleMatcher, RuleTarget, Status, Traffic, list_tag, uses_xray,
+    RuleMatcher, RuleTarget, Status, Traffic, fragments_tls, list_tag,
 };
 use rosetun_engine::{
     ControlEndpoint, EngineBackend, EngineProcess, EngineRegistry, RenderRequest, RenderedConfig,
@@ -952,9 +952,7 @@ impl Helper {
                 self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
                     status.reconnect_failure_kind = None;
-                    status.xray = uses_xray(&request.node, request.settings.xray);
-                    status.xray_use = Some(request.settings.xray);
-                    status.xray_stopped = false;
+                    status.record_chain(&request.node, &request.settings);
                     status.since_unix.get_or_insert_with(now_unix);
                 })
             }) {
@@ -1100,9 +1098,7 @@ impl Helper {
                 status.state = ConnectionState::Connected;
                 status.node = Some(request.node.id.clone());
                 status.engine = Some(request.settings.engine);
-                status.xray = uses_xray(&request.node, request.settings.xray);
-                status.xray_use = Some(request.settings.xray);
-                status.xray_stopped = false;
+                status.record_chain(&request.node, &request.settings);
                 status.since_unix = Some(now_unix());
             })
         }) {
@@ -1992,6 +1988,17 @@ impl Session {
         let socks = exits::XraySocks::new(node, &extra, settings)?;
         let chain = socks.any();
         self.xray_chain = chain;
+        if settings.tls_fragment.enabled {
+            let fragment = &settings.tls_fragment;
+            tracing::info!(
+                applied = fragments_tls(node, settings),
+                xray = ?settings.xray,
+                packets = %fragment.packets,
+                length = %fragment.length,
+                interval_ms = %fragment.interval,
+                "TLS fragmentation of the server connection requested"
+            );
+        }
         let backend = self.engines.get(settings.engine).ok_or_else(|| {
             HelperError::new(
                 ErrorCode::EngineFailed,
@@ -2144,6 +2151,7 @@ impl Session {
                 resolved_node.as_ref().unwrap_or(node),
                 &extra,
                 &interface,
+                &settings.tls_fragment,
                 verbose_until.is_some(),
                 settings.log_level,
             )?;

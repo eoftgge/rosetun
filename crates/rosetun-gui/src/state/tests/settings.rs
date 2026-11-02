@@ -748,14 +748,13 @@ fn xray_settings_count_reality_nodes_and_keep_running_chain() {
         });
     state.config.settings.xray = XrayUse::Off;
     assert_eq!(state.xray_reality_count(), 1);
-    assert!(!rosetun_core::uses_xray(
-        &state.config.subscriptions[0].nodes[0],
-        XrayUse::Off
-    ));
-    assert!(rosetun_core::uses_xray(
-        &state.config.subscriptions[0].nodes[0],
-        XrayUse::Auto
-    ));
+    let node = &state.config.subscriptions[0].nodes[0];
+    let with = |xray| rosetun_config::Settings {
+        xray,
+        ..Default::default()
+    };
+    assert!(!rosetun_core::uses_xray(node, &with(XrayUse::Off)));
+    assert!(rosetun_core::uses_xray(node, &with(XrayUse::Auto)));
     state.status.state = ConnectionState::Connected;
     state.status.node = Some(NodeId::new("node"));
     state.status.xray = true;

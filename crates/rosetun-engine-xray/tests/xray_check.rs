@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use rosetun_config::{
-    LogLevel, Node, NodeId, Outbound, RealityParams, StreamSettings, TlsMode, TlsParams, Transport,
-    VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
+    FragmentPackets, LogLevel, Node, NodeId, Outbound, RealityParams, StreamSettings, TlsFragment, TlsMode,
+    TlsParams, Transport, VlessParams, XhttpExtra, XhttpMode, XhttpRange, XhttpXmux,
 };
 use rosetun_engine_xray::{SUPPORTED_XRAY_VERSION, SocksEndpoint, render};
 
@@ -75,32 +75,54 @@ fn xray_test_accepts_rendered_xhttp_configs() {
         allow_insecure: false,
         fingerprint: None,
     });
+    let fragments = [
+        ("off", TlsFragment::default()),
+        (
+            "hello",
+            TlsFragment {
+                enabled: true,
+                ..TlsFragment::default()
+            },
+        ),
+        (
+            "range",
+            TlsFragment {
+                enabled: true,
+                packets: FragmentPackets::Range("1-3".parse().unwrap()),
+                length: "100-200".parse().unwrap(),
+                interval: "10-20".parse().unwrap(),
+            },
+        ),
+    ];
     for (name, tls) in [
         ("reality", reality),
         ("tls", tls),
         ("plain", TlsMode::Plain),
     ] {
-        let node = xhttp_node(tls);
-        let socks = SocksEndpoint::local().unwrap();
-        let config = render(
-            &[("proxy", &node, &socks)],
-            "Ethernet",
-            false,
-            LogLevel::Info,
-        )
-        .unwrap();
-        let path = directory.join(format!("xhttp-{name}.json"));
-        std::fs::write(&path, config.body).unwrap();
-        let output = Command::new(&binary)
-            .args(["run", "-test", "-c"])
-            .arg(&path)
-            .output()
+        for (mode, fragment) in &fragments {
+            let node = xhttp_node(tls.clone());
+            let socks = SocksEndpoint::local().unwrap();
+            let config = render(
+                &[("proxy", &node, &socks)],
+                "Ethernet",
+                fragment,
+                false,
+                LogLevel::Info,
+            )
             .unwrap();
-        assert!(
-            output.status.success(),
-            "xray -test failed for {name}: {}",
-            String::from_utf8_lossy(&output.stdout)
-        );
+            let path = directory.join(format!("xhttp-{name}-{mode}.json"));
+            std::fs::write(&path, config.body).unwrap();
+            let output = Command::new(&binary)
+                .args(["run", "-test", "-c"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "xray -test failed for {name} ({mode}): {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
     }
     std::fs::remove_dir_all(&directory).unwrap();
 }

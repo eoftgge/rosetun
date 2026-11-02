@@ -1,4 +1,6 @@
-use rosetun_config::{LogLevel, Node, NodeId, Outbound, ProxyCredentials, StreamSettings};
+use rosetun_config::{
+    LogLevel, Node, NodeId, Outbound, ProxyCredentials, StreamSettings, TlsFragment,
+};
 use rosetun_engine::errors::EngineError;
 use rosetun_engine_xray::{SocksEndpoint, render};
 
@@ -22,6 +24,7 @@ fn external_proxies_are_not_silently_rendered_by_the_xray_chain() {
             render(
                 &[("proxy", &node, &socks)],
                 "fixture-interface",
+                &TlsFragment::default(),
                 false,
                 LogLevel::Info
             ),

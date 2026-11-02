@@ -4135,9 +4135,14 @@ struct FakeXrayRunner {
     fail_next: AtomicBool,
     probe_path: PathBuf,
     binary: Option<PathBuf>,
+    last_config: Mutex<Vec<u8>>,
 }
 
 impl FakeXrayRunner {
+    fn last_config(&self) -> String {
+        String::from_utf8(self.last_config.lock().unwrap().clone()).unwrap()
+    }
+
     fn kill(&self) {
         self.running
             .lock()
@@ -4181,6 +4186,7 @@ impl XrayRunner for FakeXrayRunner {
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
         assert!(!endpoints.is_empty());
         assert!(!config.body.is_empty());
+        self.last_config.lock().unwrap().clone_from(&config.body);
         if config.file_name == "probe.json" {
             std::fs::write(&self.probe_path, &config.body)?;
         }
@@ -4239,6 +4245,7 @@ fn xray_chain_helper() -> XrayChainHelper {
         fail_next: AtomicBool::new(false),
         probe_path: dir.join("probe.json"),
         binary: Some(binary),
+        last_config: Mutex::new(Vec::new()),
     });
     let helper = Helper::new(
         engines,
@@ -4441,6 +4448,94 @@ fn apply_xray_to_plain_restarts_under_the_guard() {
     assert_eq!(binaries[0][1].file_name().unwrap(), "xray.exe");
     assert_eq!(binaries[1].len(), 1);
     assert!(!helper.status().xray);
+}
+
+fn fragmenting(mut request: ConnectRequest) -> ConnectRequest {
+    request.settings.tls_fragment.enabled = true;
+    request
+}
+
+fn tls_request() -> ConnectRequest {
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.node.stream.tls = rosetun_config::TlsMode::Tls(rosetun_config::TlsParams::default());
+    request
+}
+
+fn hysteria_request() -> ConnectRequest {
+    let mut request = connect_request();
+    request.settings.kill_switch = true;
+    request.node.outbound = Outbound::Hysteria2(rosetun_config::Hysteria2Params {
+        password: "test".into(),
+        obfs_password: None,
+        port_ranges: Vec::new(),
+        up_mbps: None,
+        down_mbps: None,
+    });
+    request
+}
+
+#[test]
+fn fragmentation_sends_a_tls_node_through_xray_and_reports_it() {
+    let (helper, _, runner, _, _, _) = xray_chain_helper();
+    helper.connect(&fragmenting(tls_request())).unwrap();
+    let status = helper.status();
+    assert!(status.xray && status.fragmented && status.fragment_requested);
+    let config = runner.last_config();
+    assert!(config.contains(r#""protocol": "freedom""#));
+    assert!(config.contains(r#""packets": "tlshello""#));
+    assert_eq!(config.matches(r#""interface": "Ethernet""#).count(), 2);
+    helper.disconnect().unwrap();
+    assert!(!helper.status().fragmented);
+}
+
+#[test]
+fn a_hysteria2_node_connects_without_xray_or_fragmentation() {
+    let (helper, _, runner, binaries, _, _) = xray_chain_helper();
+    helper.connect(&fragmenting(hysteria_request())).unwrap();
+    let status = helper.status();
+    assert_eq!(status.state, ConnectionState::Connected);
+    assert!(!status.xray);
+    assert!(!status.fragmented);
+    assert!(status.fragment_requested);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 0);
+    assert_eq!(binaries.lock().unwrap()[0].len(), 1);
+}
+
+#[test]
+fn fragmentation_with_xray_off_connects_without_it() {
+    let (helper, _, runner, _, _, _) = xray_chain_helper();
+    let mut request = fragmenting(tls_request());
+    request.settings.xray = rosetun_config::XrayUse::Off;
+    helper.connect(&request).unwrap();
+    let status = helper.status();
+    assert_eq!(status.state, ConnectionState::Connected);
+    assert!(!status.xray && !status.fragmented && status.fragment_requested);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn apply_turning_fragmentation_on_restarts_the_engine_under_the_guard() {
+    let (helper, controls, runner, _, prepared, reverted) = xray_chain_helper();
+    let current = reality_request();
+    helper.connect(&current).unwrap();
+    assert!(!helper.status().fragmented);
+
+    let next = fragmenting(current.clone());
+    assert!(!super::apply::needs_reconnect(&current, &next));
+    helper.apply(&next).unwrap();
+
+    assert_eq!(controls.spawns(), 2);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 2);
+    assert_eq!(prepared.load(Ordering::Acquire), 1);
+    assert_eq!(reverted.load(Ordering::Acquire), 0);
+    assert!(helper.status().fragmented);
+    assert!(runner.last_config().contains(r#""packets": "1-3""#));
+
+    helper.apply(&current).unwrap();
+    assert_eq!(controls.spawns(), 3);
+    assert!(!helper.status().fragmented);
+    assert!(!runner.last_config().contains("freedom"));
 }
 
 fn connect_request() -> ConnectRequest {
@@ -5566,6 +5661,7 @@ fn probe_mixes_plain_and_reality_nodes_in_one_xray_process() {
         fail_next: AtomicBool::new(false),
         probe_path: dir.join("xray-probe.json"),
         binary: None,
+        last_config: Mutex::new(Vec::new()),
     });
     let helper = helper
         .with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
@@ -5584,6 +5680,43 @@ fn probe_mixes_plain_and_reality_nodes_in_one_xray_process() {
     assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 2);
     assert_eq!(stopped.load(Ordering::Acquire), 1);
     assert!(!runner.probe_path.exists());
+    std::fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn probe_takes_the_fragmented_path_of_the_connection() {
+    let _dns_slots = DNS_SLOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (helper, stopped, dir) = probe_fixture(true, None);
+    let runner = Arc::new(FakeXrayRunner {
+        controls: Arc::new(EngineControls::default()),
+        running: Mutex::new(None),
+        starts: AtomicUsize::new(0),
+        endpoint_count: AtomicUsize::new(0),
+        fail_next: AtomicBool::new(false),
+        probe_path: dir.join("xray-probe.json"),
+        binary: None,
+        last_config: Mutex::new(Vec::new()),
+    });
+    let helper = helper
+        .with_xray_runner(Arc::clone(&runner) as Arc<dyn XrayRunner>)
+        .with_test_physical_interface(|_| Some("Ethernet".into()));
+    let mut request = probe_request();
+    request.settings.tls_fragment.enabled = true;
+    request.nodes[0].stream.tls =
+        rosetun_config::TlsMode::Tls(rosetun_config::TlsParams::default());
+    let mut hysteria = hysteria_request().node;
+    hysteria.id = NodeId::new("hysteria");
+    request.nodes.push(hysteria);
+    let results = helper.probe_nodes(&request).unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(runner.starts.load(Ordering::Acquire), 1);
+    assert_eq!(runner.endpoint_count.load(Ordering::Acquire), 1);
+    let config = runner.last_config();
+    assert!(config.contains(r#""tag": "probe-0-fragment""#));
+    assert!(config.contains(r#""packets": "tlshello""#));
+    assert_eq!(stopped.load(Ordering::Acquire), 1);
     std::fs::remove_dir(&dir).unwrap();
 }
 

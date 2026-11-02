@@ -24,7 +24,7 @@ pub use list_validation::{
 pub use node::{
     Hysteria2Params, Node, Outbound, ProxyCredentials, RealityParams, ShadowsocksParams,
     StreamSettings, TlsMode, TlsParams, Transport, TrojanParams, VlessParams, VmessParams,
-    XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, node_country, uses_xray,
+    XhttpExtra, XhttpMode, XhttpRange, XhttpXmux, fragments_tls, node_country, uses_xray,
 };
 pub use report::{
     hide_public_addresses, ip_literals, is_public_ip, redact_log_credentials, redact_report_text,

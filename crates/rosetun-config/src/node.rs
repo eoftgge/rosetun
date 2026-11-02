@@ -3,14 +3,18 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CountryCode, NodeId, XrayUse};
+use crate::{CountryCode, NodeId, Settings, XrayUse};
 
 // sing-box#4520: REALITY servers on Xray 26.9.8+ reject sing-box's handshake.
 const XRAY_FOR_REALITY: bool = true;
 
-pub fn uses_xray(node: &Node, setting: XrayUse) -> bool {
-    match setting {
+/// Whether Xray carries this node. Every caller asks here, so a connect, an apply and a server
+/// check always agree.
+pub fn uses_xray(node: &Node, settings: &Settings) -> bool {
+    match settings.xray {
         XrayUse::Off => false,
+        // Splitting the packets to the server is Xray's feature, so a node it can run goes there.
+        _ if settings.tls_fragment.applies_to(node) => true,
         // sing-box has no XHTTP transport, so such a node has no other route.
         XrayUse::Auto if matches!(node.stream.transport, Transport::Xhttp { .. }) => {
             xray_supports(&node.outbound)
@@ -22,6 +26,12 @@ pub fn uses_xray(node: &Node, setting: XrayUse) -> bool {
         }
         XrayUse::Always => xray_supports(&node.outbound),
     }
+}
+
+/// Whether the connection to the node's server is split in this session. Xray must be allowed,
+/// or the node never reaches it.
+pub fn fragments_tls(node: &Node, settings: &Settings) -> bool {
+    settings.xray != XrayUse::Off && settings.tls_fragment.applies_to(node)
 }
 
 pub(crate) fn xray_supports(outbound: &Outbound) -> bool {
@@ -658,11 +668,136 @@ mod tests {
                 let auto = supported
                     && matches!(node.outbound, Outbound::Vless(_))
                     && matches!(node.stream.tls, TlsMode::Reality(_));
-                assert_eq!(uses_xray(&node, XrayUse::Auto), auto);
-                assert!(!uses_xray(&node, XrayUse::Off));
-                assert_eq!(uses_xray(&node, XrayUse::Always), supported);
+                assert_eq!(uses_xray(&node, &with_xray(XrayUse::Auto)), auto);
+                assert!(!uses_xray(&node, &with_xray(XrayUse::Off)));
+                assert_eq!(uses_xray(&node, &with_xray(XrayUse::Always)), supported);
             }
         }
+    }
+
+    fn with_xray(xray: XrayUse) -> Settings {
+        Settings {
+            xray,
+            ..Settings::default()
+        }
+    }
+
+    fn with_fragment(xray: XrayUse, packets: &str) -> Settings {
+        let mut settings = with_xray(xray);
+        settings.tls_fragment.enabled = true;
+        settings.tls_fragment.packets = packets.parse().unwrap();
+        settings
+    }
+
+    fn example_node(outbound: Outbound, tls: TlsMode) -> Node {
+        Node {
+            id: NodeId::new("test"),
+            name: "Test".into(),
+            server: "192.0.2.1".into(),
+            port: 443,
+            outbound,
+            stream: StreamSettings {
+                transport: Transport::Tcp,
+                tls,
+            },
+            raw: None,
+        }
+    }
+
+    fn every_outbound() -> Vec<(Outbound, bool)> {
+        vec![
+            (
+                Outbound::Vless(VlessParams {
+                    uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    flow: None,
+                }),
+                true,
+            ),
+            (
+                Outbound::Vmess(VmessParams {
+                    uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    alter_id: 0,
+                    security: None,
+                }),
+                true,
+            ),
+            (
+                Outbound::Vmess(VmessParams {
+                    uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    alter_id: 2,
+                    security: None,
+                }),
+                false,
+            ),
+            (
+                Outbound::Trojan(TrojanParams {
+                    password: "test".into(),
+                }),
+                true,
+            ),
+            (
+                Outbound::Shadowsocks(ShadowsocksParams {
+                    method: "aes-128-gcm".into(),
+                    password: "test".into(),
+                }),
+                true,
+            ),
+            (
+                Outbound::Hysteria2(Hysteria2Params {
+                    password: "test".into(),
+                    obfs_password: None,
+                    port_ranges: Vec::new(),
+                    up_mbps: None,
+                    down_mbps: None,
+                }),
+                false,
+            ),
+            (Outbound::Http(ProxyCredentials::default()), false),
+            (Outbound::Socks5(ProxyCredentials::default()), false),
+        ]
+    }
+
+    #[test]
+    fn fragmentation_sends_every_node_xray_can_run_through_xray() {
+        let tls = TlsMode::Tls(TlsParams::default());
+        for (outbound, supported) in every_outbound() {
+            let node = example_node(outbound, tls.clone());
+            for packets in ["tlshello", "1-3"] {
+                for xray in [XrayUse::Auto, XrayUse::Always] {
+                    let settings = with_fragment(xray, packets);
+                    assert_eq!(uses_xray(&node, &settings), supported);
+                    assert_eq!(fragments_tls(&node, &settings), supported);
+                }
+                let off = with_fragment(XrayUse::Off, packets);
+                assert!(!uses_xray(&node, &off));
+                assert!(!fragments_tls(&node, &off));
+            }
+        }
+    }
+
+    #[test]
+    fn fragmentation_off_changes_nothing_for_any_node() {
+        let tls = TlsMode::Tls(TlsParams::default());
+        for (outbound, _) in every_outbound() {
+            let node = example_node(outbound, tls.clone());
+            for xray in [XrayUse::Auto, XrayUse::Off, XrayUse::Always] {
+                let settings = with_xray(xray);
+                assert!(!settings.tls_fragment.enabled);
+                assert!(!fragments_tls(&node, &settings));
+            }
+        }
+    }
+
+    #[test]
+    fn the_hello_mode_leaves_a_node_without_tls_on_sing_box() {
+        let vless = every_outbound().remove(0).0;
+        let node = example_node(vless, TlsMode::Plain);
+        let hello = with_fragment(XrayUse::Auto, "tlshello");
+        assert!(!uses_xray(&node, &hello));
+        assert!(!fragments_tls(&node, &hello));
+        let range = with_fragment(XrayUse::Auto, "1-3");
+        assert!(uses_xray(&node, &range));
+        assert!(fragments_tls(&node, &range));
     }
 
     fn xhttp() -> Transport {
@@ -758,9 +893,9 @@ mod tests {
             },
             raw: None,
         };
-        assert!(uses_xray(&node, XrayUse::Auto));
-        assert!(uses_xray(&node, XrayUse::Always));
-        assert!(!uses_xray(&node, XrayUse::Off));
+        assert!(uses_xray(&node, &with_xray(XrayUse::Auto)));
+        assert!(uses_xray(&node, &with_xray(XrayUse::Always)));
+        assert!(!uses_xray(&node, &with_xray(XrayUse::Off)));
 
         node.outbound = Outbound::Hysteria2(Hysteria2Params {
             password: "test".into(),
@@ -769,7 +904,7 @@ mod tests {
             up_mbps: None,
             down_mbps: None,
         });
-        assert!(!uses_xray(&node, XrayUse::Auto));
-        assert!(!uses_xray(&node, XrayUse::Always));
+        assert!(!uses_xray(&node, &with_xray(XrayUse::Auto)));
+        assert!(!uses_xray(&node, &with_xray(XrayUse::Always)));
     }
 }

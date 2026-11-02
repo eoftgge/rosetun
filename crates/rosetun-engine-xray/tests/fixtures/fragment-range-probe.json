@@ -1,0 +1,134 @@
+{
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 10801,
+      "protocol": "socks",
+      "settings": {
+        "accounts": [
+          {
+            "pass": "fixture-password",
+            "user": "fixture-user"
+          }
+        ],
+        "auth": "password",
+        "ip": "127.0.0.1",
+        "udp": true
+      },
+      "tag": "probe-0-in"
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": 10802,
+      "protocol": "socks",
+      "settings": {
+        "accounts": [
+          {
+            "pass": "fixture-password",
+            "user": "fixture-user"
+          }
+        ],
+        "auth": "password",
+        "ip": "127.0.0.1",
+        "udp": true
+      },
+      "tag": "probe-1-in"
+    }
+  ],
+  "log": {
+    "access": "none",
+    "loglevel": "warning"
+  },
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "address": "192.0.2.10",
+        "encryption": "none",
+        "flow": "xtls-rprx-vision",
+        "id": "00000000-0000-4000-8000-000000000001",
+        "port": 443
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "sockopt": {
+          "dialerProxy": "probe-0-fragment",
+          "interface": "Ethernet"
+        }
+      },
+      "tag": "probe-0"
+    },
+    {
+      "protocol": "trojan",
+      "settings": {
+        "address": "198.51.100.20",
+        "password": "test-password",
+        "port": 443
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "sockopt": {
+          "dialerProxy": "probe-1-fragment",
+          "interface": "Ethernet"
+        },
+        "tlsSettings": {
+          "allowInsecure": false,
+          "fingerprint": "chrome",
+          "serverName": "example.com"
+        }
+      },
+      "tag": "probe-1"
+    },
+    {
+      "protocol": "freedom",
+      "settings": {
+        "fragment": {
+          "interval": "5-10",
+          "length": "100-200",
+          "packets": "1-3"
+        }
+      },
+      "streamSettings": {
+        "sockopt": {
+          "interface": "Ethernet"
+        }
+      },
+      "tag": "probe-0-fragment"
+    },
+    {
+      "protocol": "freedom",
+      "settings": {
+        "fragment": {
+          "interval": "5-10",
+          "length": "100-200",
+          "packets": "1-3"
+        }
+      },
+      "streamSettings": {
+        "sockopt": {
+          "interface": "Ethernet"
+        }
+      },
+      "tag": "probe-1-fragment"
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "inboundTag": [
+          "probe-0-in"
+        ],
+        "outboundTag": "probe-0",
+        "type": "field"
+      },
+      {
+        "inboundTag": [
+          "probe-1-in"
+        ],
+        "outboundTag": "probe-1",
+        "type": "field"
+      }
+    ]
+  }
+}

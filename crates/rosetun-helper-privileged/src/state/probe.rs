@@ -230,7 +230,7 @@ impl Helper {
         }
         let xray_nodes = nodes
             .iter()
-            .filter(|(_, node)| uses_xray(node, request.settings.xray))
+            .filter(|(_, node)| uses_xray(node, &request.settings))
             .map(|(tag, node)| {
                 SocksEndpoint::local()
                     .map(|socks| (tag.clone(), node.clone(), socks))
@@ -252,7 +252,12 @@ impl Helper {
                 )
             })?;
             Some(
-                rosetun_engine_xray::render_probe(&xray_nodes, physical).map_err(|_| {
+                rosetun_engine_xray::render_probe(
+                    &xray_nodes,
+                    physical,
+                    &request.settings.tls_fragment,
+                )
+                .map_err(|_| {
                     HelperError::new(
                         ErrorCode::XrayStartFailed,
                         "failed to render Xray server check",

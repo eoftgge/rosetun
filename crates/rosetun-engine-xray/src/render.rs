@@ -1,30 +1,39 @@
-use rosetun_config::{LogLevel, Node, Outbound, TlsMode, Transport, XhttpExtra, XhttpRange};
+use rosetun_config::{
+    FragmentPackets, LogLevel, Node, Outbound, TlsFragment, TlsMode, Transport, XhttpExtra,
+    XhttpRange,
+};
 use rosetun_engine::{RenderedConfig, errors::EngineError};
 use serde_json::{Value, json};
 
 use crate::SocksEndpoint;
 
 /// One outbound per `(tag, node, socks)`, reached through its own SOCKS inbound
-/// `<tag>-in`.
+/// `<tag>-in`. A node that `fragment` applies to dials its server through a `freedom`
+/// outbound `<tag>-fragment`, which is placed after every proxy outbound because Xray sends
+/// unrouted traffic to the first one.
 pub fn render(
     nodes: &[(&str, &Node, &SocksEndpoint)],
     interface: &str,
+    fragment: &TlsFragment,
     verbose: bool,
     log_level: LogLevel,
 ) -> Result<RenderedConfig, EngineError> {
     let mut inbounds = Vec::with_capacity(nodes.len());
     let mut outbounds = Vec::with_capacity(nodes.len());
+    let mut fragments = Vec::new();
     let mut rules = Vec::with_capacity(nodes.len());
     for (tag, node, socks) in nodes {
         let inbound_tag = format!("{tag}-in");
         inbounds.push(socks_inbound(socks, &inbound_tag));
-        outbounds.push(proxy_outbound(node, tag, interface)?);
+        outbounds.push(proxy_outbound(node, tag, interface, fragment)?);
+        fragments.extend(fragment_outbound(node, tag, interface, fragment));
         rules.push(json!({
             "type": "field",
             "inboundTag": [inbound_tag],
             "outboundTag": tag,
         }));
     }
+    outbounds.extend(fragments);
     let mut config = json!({
         "log": log_section(verbose, log_level),
         "inbounds": inbounds,
@@ -37,16 +46,20 @@ pub fn render(
     rendered("config.json", config)
 }
 
+/// Server checks take the same path as the connection, so a node that is fragmented when
+/// connected is fragmented when checked.
 pub fn render_probe(
     nodes: &[(String, Node, SocksEndpoint)],
     interface: &str,
+    fragment: &TlsFragment,
 ) -> Result<RenderedConfig, EngineError> {
     let mut inbounds = Vec::with_capacity(nodes.len());
     let mut outbounds = Vec::with_capacity(nodes.len());
+    let mut fragments = Vec::new();
     let mut rules = Vec::with_capacity(nodes.len());
     let mut unsupported_probes = Vec::new();
     for (tag, node, socks) in nodes {
-        let outbound = match proxy_outbound(node, tag, interface) {
+        let outbound = match proxy_outbound(node, tag, interface, fragment) {
             Ok(outbound) => outbound,
             Err(EngineError::Unsupported(_)) => {
                 unsupported_probes.push(tag.clone());
@@ -57,12 +70,14 @@ pub fn render_probe(
         let inbound_tag = format!("{tag}-in");
         inbounds.push(socks_inbound(socks, &inbound_tag));
         outbounds.push(outbound);
+        fragments.extend(fragment_outbound(node, tag, interface, fragment));
         rules.push(json!({
             "type": "field",
             "inboundTag": [inbound_tag],
             "outboundTag": tag,
         }));
     }
+    outbounds.extend(fragments);
     let config = json!({
         "log": log_section(false, LogLevel::Info),
         "inbounds": inbounds,
@@ -104,7 +119,52 @@ fn socks_inbound(socks: &SocksEndpoint, tag: &str) -> Value {
     })
 }
 
-fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, EngineError> {
+fn fragment_tag(tag: &str) -> String {
+    format!("{tag}-fragment")
+}
+
+/// The `freedom` outbound that splits what the proxy outbound writes to its server. It carries
+/// the physical interface itself: Xray dials through it, so the proxy outbound's own
+/// `sockopt` is not used and a missing one here sends the connection into the tunnel.
+fn fragment_outbound(
+    node: &Node,
+    tag: &str,
+    interface: &str,
+    fragment: &TlsFragment,
+) -> Option<Value> {
+    fragment.applies_to(node).then(|| {
+        json!({
+            "tag": fragment_tag(tag),
+            "protocol": "freedom",
+            "settings": {
+                "fragment": {
+                    "packets": packets(node, fragment),
+                    "length": fragment.length.to_string(),
+                    "interval": fragment.interval.to_string(),
+                },
+            },
+            "streamSettings": { "sockopt": { "interface": interface } },
+        })
+    })
+}
+
+/// The TLS hello mode cuts the hello into several TLS records. v2rayN treats that as
+/// incompatible with REALITY and cuts the first three packets there instead; so does this.
+fn packets(node: &Node, fragment: &TlsFragment) -> String {
+    match fragment.packets {
+        FragmentPackets::TlsHello if matches!(node.stream.tls, TlsMode::Reality(_)) => {
+            "1-3".to_owned()
+        }
+        packets => packets.to_string(),
+    }
+}
+
+fn proxy_outbound(
+    node: &Node,
+    tag: &str,
+    interface: &str,
+    fragment: &TlsFragment,
+) -> Result<Value, EngineError> {
     if node.server.parse::<std::net::IpAddr>().is_err() {
         return Err(EngineError::Render(
             "Xray server address must be an IP literal".into(),
@@ -167,6 +227,9 @@ fn proxy_outbound(node: &Node, tag: &str, interface: &str) -> Result<Value, Engi
     };
 
     let mut stream = json!({ "network": "tcp", "sockopt": { "interface": interface } });
+    if fragment.applies_to(node) {
+        stream["sockopt"]["dialerProxy"] = fragment_tag(tag).into();
+    }
     match &node.stream.transport {
         Transport::Tcp => {}
         Transport::Ws { path, host } => {
@@ -342,6 +405,7 @@ mod tests {
         let rendered = render(
             &[("proxy", &reality_node(), &socks)],
             "Ethernet",
+            &TlsFragment::default(),
             false,
             LogLevel::Info,
         )
@@ -390,6 +454,7 @@ mod tests {
                 ("exit-1", &extra_node, &extra),
             ],
             "Ethernet",
+            &TlsFragment::default(),
             false,
             LogLevel::Info,
         )
@@ -421,7 +486,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let value: Value =
-            serde_json::from_slice(&render_probe(&nodes, "Ethernet").unwrap().body).unwrap();
+            serde_json::from_slice(&render_probe(&nodes, "Ethernet", &TlsFragment::default()).unwrap().body).unwrap();
         assert_eq!(value["inbounds"].as_array().unwrap().len(), 2);
         assert_eq!(
             value["routing"]["rules"][1]["inboundTag"],
@@ -449,6 +514,7 @@ mod tests {
         let rendered = render(
             &[("proxy", node, &socks)],
             "Ethernet",
+            &TlsFragment::default(),
             false,
             LogLevel::Info,
         )
@@ -543,9 +609,123 @@ mod tests {
     fn xhttp_probe_uses_the_same_outbound() {
         let node = xhttp_node(reality_node().stream.tls, XhttpExtra::default());
         let nodes = [("probe-0".to_owned(), node, SocksEndpoint::local().unwrap())];
-        let rendered = render_probe(&nodes, "Ethernet").unwrap();
+        let rendered = render_probe(&nodes, "Ethernet", &TlsFragment::default()).unwrap();
         assert!(rendered.unsupported.is_empty());
         let value: Value = serde_json::from_slice(&rendered.body).unwrap();
         assert_eq!(value["outbounds"][0]["streamSettings"]["network"], "xhttp");
+    }
+
+    fn fragmented(node: &Node, fragment: &TlsFragment) -> Value {
+        let socks = SocksEndpoint::local().unwrap();
+        let rendered = render(
+            &[("proxy", node, &socks)],
+            "Ethernet",
+            fragment,
+            false,
+            LogLevel::Info,
+        )
+        .unwrap();
+        serde_json::from_slice(&rendered.body).unwrap()
+    }
+
+    fn on() -> TlsFragment {
+        TlsFragment {
+            enabled: true,
+            ..TlsFragment::default()
+        }
+    }
+
+    #[test]
+    fn the_physical_interface_is_on_the_freedom_outbound_and_the_proxy_dials_through_it() {
+        let value = fragmented(&reality_node(), &on());
+        let outbounds = value["outbounds"].as_array().unwrap();
+        assert_eq!(outbounds.len(), 2);
+        assert_eq!(outbounds[0]["tag"], "proxy");
+        assert_eq!(
+            outbounds[0]["streamSettings"]["sockopt"]["dialerProxy"],
+            "proxy-fragment"
+        );
+        assert_eq!(outbounds[1]["tag"], "proxy-fragment");
+        assert_eq!(outbounds[1]["protocol"], "freedom");
+        assert_eq!(
+            outbounds[1]["streamSettings"]["sockopt"]["interface"],
+            "Ethernet"
+        );
+        assert!(value.get("routing").is_none());
+    }
+
+    #[test]
+    fn reality_cuts_packets_one_to_three_where_tls_cuts_the_hello() {
+        let reality = fragmented(&reality_node(), &on());
+        assert_eq!(
+            reality["outbounds"][1]["settings"]["fragment"],
+            json!({ "packets": "1-3", "length": "50-100", "interval": "10-20" })
+        );
+        let mut node = reality_node();
+        node.stream.tls = TlsMode::Tls(TlsParams::default());
+        let tls = fragmented(&node, &on());
+        assert_eq!(
+            tls["outbounds"][1]["settings"]["fragment"]["packets"],
+            "tlshello"
+        );
+        let range = TlsFragment {
+            packets: "5-8".parse().unwrap(),
+            ..on()
+        };
+        let reality = fragmented(&reality_node(), &range);
+        assert_eq!(
+            reality["outbounds"][1]["settings"]["fragment"]["packets"],
+            "5-8"
+        );
+    }
+
+    #[test]
+    fn nothing_is_added_when_fragmentation_is_off_or_does_not_apply() {
+        let off = fragmented(&reality_node(), &TlsFragment::default());
+        assert_eq!(off["outbounds"].as_array().unwrap().len(), 1);
+        assert!(
+            off["outbounds"][0]["streamSettings"]["sockopt"]
+                .get("dialerProxy")
+                .is_none()
+        );
+        let mut node = reality_node();
+        node.stream.tls = TlsMode::Plain;
+        let plain = fragmented(&node, &on());
+        assert_eq!(plain["outbounds"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn extra_nodes_and_probes_get_their_own_freedom_outbound() {
+        let main = SocksEndpoint::local().unwrap();
+        let extra = SocksEndpoint::local().unwrap();
+        let rendered = render(
+            &[
+                ("proxy", &reality_node(), &main),
+                ("exit-1", &reality_node(), &extra),
+            ],
+            "Ethernet",
+            &on(),
+            false,
+            LogLevel::Info,
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&rendered.body).unwrap();
+        let tags = value["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|outbound| outbound["tag"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(tags, ["proxy", "exit-1", "proxy-fragment", "exit-1-fragment"]);
+
+        let nodes = [("probe-0".to_owned(), reality_node(), SocksEndpoint::local().unwrap())];
+        let probe: Value =
+            serde_json::from_slice(&render_probe(&nodes, "Ethernet", &on()).unwrap().body)
+                .unwrap();
+        assert_eq!(probe["outbounds"][1]["tag"], "probe-0-fragment");
+        assert_eq!(
+            probe["outbounds"][1]["streamSettings"]["sockopt"]["interface"],
+            "Ethernet"
+        );
     }
 }

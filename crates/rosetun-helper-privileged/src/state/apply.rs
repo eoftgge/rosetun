@@ -2,7 +2,7 @@ use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use rosetun_config::{ConnectionState, uses_xray};
+use rosetun_config::ConnectionState;
 use rosetun_engine::RenderRequest;
 use rosetun_ipc::{ConnectRequest, ErrorCode, HelperError};
 
@@ -114,6 +114,7 @@ impl Helper {
                 &prepared_node,
                 &extra,
                 &interface,
+                &request.settings.tls_fragment,
                 false,
                 request.settings.log_level,
             )?;
@@ -168,9 +169,7 @@ impl Helper {
                 self.publish_terminal(|status| {
                     status.state = ConnectionState::Connected;
                     status.node = Some(request.node.id.clone());
-                    status.xray = uses_xray(&request.node, request.settings.xray);
-                    status.xray_use = Some(request.settings.xray);
-                    status.xray_stopped = false;
+                    status.record_chain(&request.node, &request.settings);
                 })
             }) {
             Ok(()) => {
@@ -199,9 +198,7 @@ impl Helper {
                         self.publish_terminal(|status| {
                             status.state = ConnectionState::Connected;
                             status.node = Some(current.node.id.clone());
-                            status.xray = uses_xray(&current.node, current.settings.xray);
-                            status.xray_use = Some(current.settings.xray);
-                            status.xray_stopped = false;
+                            status.record_chain(&current.node, &current.settings);
                         })
                     });
                 match rollback {

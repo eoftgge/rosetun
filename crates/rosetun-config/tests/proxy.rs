@@ -1,5 +1,6 @@
 use rosetun_config::{
-    Node, NodeId, Outbound, ProxyCredentials, StreamSettings, TlsMode, TlsParams, Transport,
+    Node, NodeId, Outbound, ProxyCredentials, Settings, StreamSettings, TlsMode, TlsParams,
+    Transport,
     XrayUse, uses_xray,
 };
 
@@ -34,7 +35,13 @@ fn proxy_nodes_round_trip_and_stay_on_sing_box() {
         let encoded = serde_json::to_vec(&node).unwrap();
         assert_eq!(serde_json::from_slice::<Node>(&encoded).unwrap(), node);
         for setting in [XrayUse::Auto, XrayUse::Off, XrayUse::Always] {
-            assert!(!uses_xray(&node, setting));
+            let mut settings = Settings {
+                xray: setting,
+                ..Settings::default()
+            };
+            assert!(!uses_xray(&node, &settings));
+            settings.tls_fragment.enabled = true;
+            assert!(!uses_xray(&node, &settings));
         }
         let debug = format!("{node:?}");
         assert!(!debug.contains("fixture-user"));
