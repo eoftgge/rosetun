@@ -7,9 +7,15 @@
 //! and the helper allocates a thread for it. If xray needs
 //! gRPC statistics, the runtime is started within that backend and doesn't leak out.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod errors;
+#[cfg(target_os = "linux")]
+#[expect(
+    unsafe_code,
+    reason = "Linux process groups and parent-death signals; every unsafe block carries a SAFETY comment"
+)]
+pub mod process;
 
 /// Tracing target for lines an engine writes to its own output. The helper's
 /// default filter passes it at every level, because `Settings::log_level`

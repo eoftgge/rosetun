@@ -31,13 +31,13 @@ fn failure(binary: &Path, message: impl std::fmt::Display) -> EngineError {
 
 pub(crate) fn check(binary: &Path) -> Result<(), EngineError> {
     let deadline = Instant::now() + CHECK_TIMEOUT;
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| failure(binary, error))?;
+        .stderr(Stdio::null());
+    let mut child = crate::start(command).map_err(|error| failure(binary, error))?;
 
     let Some(mut stdout) = child.stdout.take() else {
         crate::stop_failed_spawn(&mut child);

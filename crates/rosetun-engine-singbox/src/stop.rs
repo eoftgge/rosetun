@@ -117,8 +117,9 @@ fn kill(process: &mut impl Stoppable) -> io::Result<StopOutcome> {
     Ok(StopOutcome::Killed)
 }
 
-/// A spawned sing-box. On Windows it runs in its own process group, which is
-/// the group the interrupt goes to.
+/// A spawned sing-box. It runs in its own process group, which is the group
+/// the interrupt goes to: `CTRL_BREAK_EVENT` on Windows, SIGTERM on Linux.
+/// sing-box removes its TUN and routes on either.
 pub(crate) struct ChildStop<'a>(pub(crate) &'a mut Child);
 
 impl ChildStop<'_> {
@@ -142,8 +143,11 @@ impl Stoppable for ChildStop<'_> {
         {
             crate::console::interrupt_group(self.0.id())
         }
-        // TODO: on Unix, send SIGTERM so the engine can remove its routes.
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            rosetun_engine::process::interrupt_group(self.0)
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             Err(io::ErrorKind::Unsupported.into())
         }
@@ -315,6 +319,93 @@ mod tests {
                 .kind(),
             io::ErrorKind::Unsupported
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    mod linux {
+        use std::path::{Path, PathBuf};
+        use std::process::{Command, Stdio};
+
+        use super::*;
+
+        struct TempDir(PathBuf);
+
+        impl TempDir {
+            fn new(name: &str) -> Self {
+                let path = std::env::temp_dir().join(format!(
+                    "rosetun-stop-{name}-{}",
+                    std::process::id()
+                ));
+                let _ = std::fs::remove_dir_all(&path);
+                std::fs::create_dir(&path).unwrap();
+                Self(path)
+            }
+        }
+
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn shell(script: &str, dir: &Path) -> Command {
+            let mut command = Command::new("/bin/sh");
+            command
+                .args(["-c", script, "fake-engine"])
+                .arg(dir)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            command
+        }
+
+        fn wait_for(path: &Path) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !path.exists() {
+                assert!(Instant::now() < deadline, "{} never appeared", path.display());
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        #[test]
+        fn sigterm_reaches_the_engine_and_its_whole_group() {
+            let dir = TempDir::new("group");
+            let script = r#"
+                trap 'echo term > "$1/term"; exit 0' TERM
+                sh -c 'trap "echo term > \"$1/child-term\"; exit 0" TERM; echo > "$1/child"; while :; do sleep 1; done' inner "$1" &
+                while :; do sleep 1; done
+            "#;
+            let mut child = rosetun_engine::process::spawn(shell(script, &dir.0)).unwrap();
+            wait_for(&dir.0.join("child"));
+            let outcome = stop(&mut ChildStop(&mut child), STOP_GRACE).unwrap();
+            assert!(matches!(outcome, StopOutcome::Graceful(_)), "{outcome:?}");
+            wait_for(&dir.0.join("term"));
+            wait_for(&dir.0.join("child-term"));
+        }
+
+        #[test]
+        fn an_engine_that_ignores_sigterm_is_killed_after_the_grace_period() {
+            let dir = TempDir::new("ignore");
+            let script = r#"trap '' TERM; echo > "$1/ready"; exec sleep 30"#;
+            let mut child = rosetun_engine::process::spawn(shell(script, &dir.0)).unwrap();
+            wait_for(&dir.0.join("ready"));
+            let grace = Duration::from_millis(300);
+            let outcome = stop(&mut ChildStop(&mut child), grace).unwrap();
+            let StopOutcome::KilledAfterTimeout(waited) = outcome else {
+                panic!("{outcome:?}");
+            };
+            assert!(waited >= grace);
+        }
+
+        #[test]
+        fn a_process_outside_its_own_group_is_killed_not_interrupted() {
+            let dir = TempDir::new("outside");
+            let mut child = shell("exec sleep 30", &dir.0).spawn().unwrap();
+            assert_eq!(
+                stop(&mut ChildStop(&mut child), STOP_GRACE).unwrap(),
+                StopOutcome::Killed
+            );
+        }
     }
 
     #[test]

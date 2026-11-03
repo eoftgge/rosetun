@@ -268,7 +268,9 @@ impl EngineBackend for SingBoxBackend {
             .stderr(Stdio::piped());
         #[cfg(windows)]
         let mut child = console::spawn(&mut command)?;
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        let mut child = rosetun_engine::process::spawn(command)?;
+        #[cfg(not(any(windows, target_os = "linux")))]
         let mut child = command.spawn()?;
 
         let (ready_sender, readiness) = Readiness::new();

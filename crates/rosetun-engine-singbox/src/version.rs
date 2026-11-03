@@ -29,8 +29,8 @@ fn parse_version(output: &str) -> Option<&str> {
 }
 
 /// `sing-box version` creates no adapter, so there is nothing to stop
-/// gracefully, and it runs outside a process group of its own: an interrupt
-/// would reach the whole console, the helper included.
+/// gracefully. On Windows it also runs outside a process group of its own:
+/// an interrupt would reach the whole console, the helper included.
 fn kill(child: &mut Child) {
     if let Err(error) = child.kill()
         && error.kind() != io::ErrorKind::InvalidInput
@@ -173,13 +173,17 @@ impl Drop for Running<'_> {
 
 fn run(binary: &Path) -> Result<(), CheckFailure> {
     let deadline = Instant::now() + CHECK_TIMEOUT;
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| failure(binary, error))?;
+        .stderr(Stdio::null());
+    #[cfg(target_os = "linux")]
+    let spawned = rosetun_engine::process::spawn(command);
+    #[cfg(not(target_os = "linux"))]
+    let spawned = command.spawn();
+    let mut child = spawned.map_err(|error| failure(binary, error))?;
 
     let Some(mut stdout) = child.stdout.take() else {
         kill(&mut child);

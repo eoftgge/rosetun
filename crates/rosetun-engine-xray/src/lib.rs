@@ -14,7 +14,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rosetun_engine::{EngineProcess, OutboundFailures, RenderedConfig, errors::EngineError};
 
@@ -22,6 +22,10 @@ pub use render::{render, render_probe};
 pub use version::SUPPORTED_XRAY_VERSION;
 
 const BINARY: &str = if cfg!(windows) { "xray.exe" } else { "xray" };
+
+/// Xray has no adapter to remove and closes at once on SIGTERM; the wait
+/// only bounds a hang before the kill.
+const STOP_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct SocksEndpoint {
@@ -133,15 +137,16 @@ impl XrayHelper {
         std::fs::create_dir_all(&self.work_dir)?;
         let config_path = self.work_dir.join(&config.file_name);
         std::fs::write(&config_path, &config.body)?;
-        let mut child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .arg("run")
             .arg("-c")
             .arg(&config_path)
             .current_dir(&self.work_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        let mut child = start(command)?;
         let (ready_sender, ready_receiver) = mpsc::channel();
         let failures = Arc::new(output::FailureCounters::default());
         let secrets = endpoints
@@ -190,6 +195,55 @@ impl XrayHelper {
             failures,
         }))
     }
+}
+
+/// On Linux in a process group of its own, tied to the helper's life.
+fn start(command: Command) -> std::io::Result<Child> {
+    #[cfg(target_os = "linux")]
+    {
+        rosetun_engine::process::spawn(command)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut command = command;
+        command.spawn()
+    }
+}
+
+/// SIGTERM to Xray's own group; `Ok(true)` once it has exited, `Ok(false)`
+/// when the grace period ran out and the caller kills.
+#[cfg(target_os = "linux")]
+fn interrupt_and_wait(child: &mut Child, grace: Duration) -> std::io::Result<bool> {
+    use std::time::Instant;
+
+    const POLL: Duration = Duration::from_millis(50);
+
+    let started = Instant::now();
+    rosetun_engine::process::interrupt_group(child)?;
+    loop {
+        if child.try_wait()?.is_some() {
+            tracing::debug!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "Xray stopped gracefully"
+            );
+            return Ok(true);
+        }
+        let now = Instant::now();
+        if now >= started + grace {
+            tracing::info!(
+                waited_ms = started.elapsed().as_millis() as u64,
+                "Xray did not stop in time and is killed"
+            );
+            return Ok(false);
+        }
+        thread::sleep(POLL.min(started + grace - now));
+    }
+}
+
+/// No graceful path off Linux: Xray has no adapter, and the caller kills.
+#[cfg(not(target_os = "linux"))]
+fn interrupt_and_wait(_child: &mut Child, _grace: Duration) -> std::io::Result<bool> {
+    Ok(false)
 }
 
 fn stop_failed_spawn(child: &mut Child) {
@@ -305,6 +359,16 @@ impl EngineProcess for XrayProcess {
         if self.child.try_wait()?.is_some() {
             return Ok(());
         }
+        match interrupt_and_wait(&mut self.child, STOP_GRACE) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                if self.child.try_wait()?.is_some() {
+                    return Ok(());
+                }
+                tracing::warn!(%error, "could not interrupt Xray; killing it");
+            }
+        }
         match self.child.kill() {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
@@ -336,5 +400,40 @@ mod tests {
         let debug = format!("{first:?}");
         assert!(!debug.contains(first.username()));
         assert!(!debug.contains(first.password()));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn fake_xray(script: &str) -> Child {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = start(command).unwrap();
+        // Wait until the shell has set its trap and said so.
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line.trim(), "ready");
+        child
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xray_is_interrupted_before_it_is_killed() {
+        let mut child = fake_xray("trap 'exit 0' TERM; echo ready; while :; do sleep 1; done");
+        assert!(interrupt_and_wait(&mut child, STOP_GRACE).unwrap());
+        assert_eq!(child.try_wait().unwrap().and_then(|status| status.code()), Some(0));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xray_that_ignores_sigterm_is_left_to_the_kill() {
+        let mut child = fake_xray("trap '' TERM; echo ready; exec sleep 30");
+        assert!(!interrupt_and_wait(&mut child, Duration::from_millis(300)).unwrap());
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 }
