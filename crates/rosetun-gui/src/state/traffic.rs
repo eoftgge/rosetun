@@ -174,6 +174,9 @@ pub(crate) struct ConnectionsList {
     samples: HashMap<String, VecDeque<(u64, u64, u64)>>,
     pending: bool,
     last_request: Option<u64>,
+    /// The list was asked for by the rule dialog, away from the Traffic tab, so it goes
+    /// when the dialog stops showing it.
+    for_rule_dialog: bool,
 }
 
 impl ConnectionsList {
@@ -437,9 +440,10 @@ impl State {
             })
     }
 
-    /// Once a second, only while the Traffic tab is on screen.
+    /// Once a second, only while the Traffic tab is on screen or the rule dialog shows the
+    /// recent sites.
     pub(super) fn connections_due(&self) -> Option<u64> {
-        if self.screen != Screen::Traffic
+        if !(self.screen == Screen::Traffic || self.recent_sites_wanted())
             || self.traffic.window_hidden
             || self.traffic.connections.pending
             || !self.connections_available()
@@ -455,10 +459,19 @@ impl State {
     }
 
     pub(crate) fn take_connections(&mut self, now: u64) -> Option<Job> {
+        if self.traffic.connections.for_rule_dialog
+            && self.screen != Screen::Traffic
+            && !self.recent_sites_wanted()
+        {
+            self.traffic.connections.forget();
+            self.traffic.connections.for_rule_dialog = false;
+        }
         if now < self.connections_due()? {
             return None;
         }
+        let for_rule_dialog = self.screen != Screen::Traffic;
         let list = &mut self.traffic.connections;
+        list.for_rule_dialog = for_rule_dialog;
         if list
             .last_request
             .is_none_or(|last| now.saturating_sub(last) > CONNECTIONS_STALE_SECS)

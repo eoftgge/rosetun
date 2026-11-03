@@ -9,7 +9,7 @@ use crate::errors;
 use crate::icons::{self, Icon};
 use crate::rules::{ProcessGroup, ProcessMatchMode, ProgramKey, process_matches_filter};
 use crate::state::{
-    Action, AddRuleDialog, AddressError, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS,
+    Action, AddRuleDialog, AddressError, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS, RecentSite,
     RuleInputKind,
 };
 use crate::view::rules::{destination_color, destination_label, target_color, target_label};
@@ -36,6 +36,11 @@ const MIN_CONTENT_HEIGHT: f32 = 160.0;
 const DIALOG_CHROME: f32 = 300.0;
 /// The rows of chips the address field grows to before it scrolls.
 const ADDRESS_ROWS: usize = 5;
+/// The rows of chips the address field is tall enough for while it is empty.
+const ADDRESS_MIN_ROWS: usize = 3;
+const RECENT_CHIP_HEIGHT: f32 = 24.0;
+/// Inside a recent site's button, at its ends.
+const RECENT_CHIP_PADDING: f32 = theme::space::S;
 const DESTINATION_POPUP_MARGIN: f32 = theme::space::XL;
 const MIN_DESTINATION_POPUP: f32 = 120.0;
 
@@ -58,6 +63,7 @@ pub(crate) fn show(
     config: &AppConfig,
     can_temporary: bool,
     existing_list_rules: usize,
+    recent: &[RecentSite],
     actions: &mut Vec<Action>,
 ) {
     let lists = &config.lists;
@@ -93,7 +99,9 @@ pub(crate) fn show(
         let valid = content_area(ui, height, error.as_deref(), |ui| {
             widgets::appear(ui, kind_shown, |ui| match dialog.kind {
                 RuleInputKind::Process => process_input(ui, dialog, actions),
-                RuleInputKind::Address => scrolled(ui, |ui| address_input(ui, dialog, actions)),
+                RuleInputKind::Address => {
+                    scrolled(ui, |ui| address_input(ui, dialog, recent, actions))
+                }
                 RuleInputKind::List => scrolled(ui, |ui| list_input(ui, dialog, lists, actions)),
             })
         });
@@ -617,7 +625,12 @@ fn list_input(
     !selected.format.has_categories() || !dialog.selected_categories.is_empty()
 }
 
-fn address_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) -> bool {
+fn address_input(
+    ui: &mut egui::Ui,
+    dialog: &mut AddRuleDialog,
+    recent: &[RecentSite],
+    actions: &mut Vec<Action>,
+) -> bool {
     let subdomains = dialog.subdomains;
     let shown: Vec<(String, Icon, Option<String>)> = dialog
         .addresses
@@ -647,35 +660,32 @@ fn address_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
     let has_domain = dialog.has_domain();
     let accepts_input = dialog.editing.is_none() || dialog.addresses.is_empty();
     let busy = dialog.busy;
-    let output = ui
-        .with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            let response = ui
-                .scope(|ui| {
-                    ui.spacing_mut().interact_size.y = widgets::field_height(ui);
-                    widgets::checkbox(
-                        ui,
-                        &mut dialog.subdomains,
-                        tr!("include-subdomains"),
-                        has_domain && !busy,
-                    )
-                })
-                .inner;
+    let width = ui.available_width();
+    let output = widgets::ChipsField::new("rule_addresses", &chips, &mut dialog.address_input)
+        .hint(&hint)
+        .enabled(!busy)
+        .accepts_input(accepts_input)
+        .min_rows(ADDRESS_MIN_ROWS)
+        .max_rows(ADDRESS_ROWS)
+        .width(width)
+        .show(ui);
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), widgets::field_height(ui)),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let response = widgets::checkbox(
+                ui,
+                &mut dialog.subdomains,
+                tr!("include-subdomains"),
+                has_domain && !busy,
+            );
             if has_domain {
                 response.on_hover_text(tr!("include-subdomains-detail"));
             } else {
                 response.on_disabled_hover_text(tr!("include-subdomains-detail"));
             }
-            ui.add_space(theme::space::M);
-            let width = ui.available_width();
-            widgets::ChipsField::new("rule_addresses", &chips, &mut dialog.address_input)
-                .hint(&hint)
-                .enabled(!busy)
-                .accepts_input(accepts_input)
-                .max_rows(ADDRESS_ROWS)
-                .width(width)
-                .show(ui)
-        })
-        .inner;
+        },
+    );
     if dialog.focus_input {
         if let Some(input) = &output.input {
             input.request_focus();
@@ -717,7 +727,106 @@ fn address_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
             actions.push(Action::OpenLanSettings);
         }
     }
+    let recent_shown = widgets::appear_progress(
+        ui.ctx(),
+        egui::Id::unique("rule_recent_sites"),
+        recent.is_empty(),
+        motion::reduced(),
+    );
+    if !recent.is_empty() {
+        widgets::appear(ui, recent_shown, |ui| recent_sites(ui, dialog, recent));
+    }
     dialog.address_rules().is_some()
+}
+
+/// The sites the tunnel carried lately, as buttons under the field: a click puts the site in
+/// the field, another click takes it out. A site the set has a rule for is dimmed.
+fn recent_sites(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, sites: &[RecentSite]) {
+    ui.add_space(theme::space::S);
+    ui.label(
+        RichText::new(tr!("recent-sites"))
+            .small()
+            .color(theme::palette().text_dim),
+    );
+    let enabled = !dialog.busy;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::Vec2::splat(theme::space::XS);
+        for site in sites {
+            let added = dialog.has_address(&site.address);
+            let label = display::safe_text(&site.address);
+            if recent_site_button(ui, &label, added, site.has_rule, enabled).clicked() {
+                dialog.toggle_address(&site.address);
+            }
+        }
+    });
+}
+
+fn recent_site_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    added: bool,
+    has_rule: bool,
+    enabled: bool,
+) -> egui::Response {
+    let palette = theme::palette();
+    let color = if !enabled {
+        theme::DISABLED
+    } else if added {
+        palette.accent_light
+    } else if has_rule {
+        palette.text_dim
+    } else {
+        palette.text
+    };
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        color,
+    );
+    let size = egui::vec2(
+        galley.size().x + 2.0 * RECENT_CHIP_PADDING,
+        RECENT_CHIP_HEIGHT,
+    );
+    let (rect, response) = ui.allocate_exact_size(
+        size,
+        if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    let (fill, border) = if added {
+        (palette.input, palette.accent_dark)
+    } else if response.hovered() && enabled {
+        (palette.border, palette.border_strong)
+    } else {
+        (palette.card, palette.border)
+    };
+    ui.painter().rect(
+        rect,
+        egui::CornerRadius::same(theme::RADIUS_INNER),
+        fill,
+        Stroke::new(theme::stroke::HAIRLINE, border),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().galley(
+        egui::pos2(
+            rect.left() + RECENT_CHIP_PADDING,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        color,
+    );
+    let response = if has_rule {
+        response.on_hover_text(tr!("recent-site-has-rule"))
+    } else {
+        response
+    };
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
 }
 
 /// A domain's chip shows a globe, an address's the icon of IP rules.
@@ -1508,7 +1617,7 @@ mod tests {
                     time: Some(f64::from(frame) * 0.5),
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, dialog, config, can_temporary, 0, &mut Vec::new()),
+                |ctx| show(ctx, dialog, config, can_temporary, 0, &[], &mut Vec::new()),
             );
             output.textures_delta.clear();
             shapes = output.shapes;
@@ -1754,7 +1863,7 @@ mod tests {
             macro_rules! frame {
                 () => {
                     |ui: &mut egui::Ui| {
-                        show(ui.ctx(), &mut dialog, &config, false, 0, &mut Vec::new())
+                        show(ui.ctx(), &mut dialog, &config, false, 0, &[], &mut Vec::new())
                     }
                 };
             }
@@ -1788,7 +1897,7 @@ mod tests {
                     events,
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, dialog, &AppConfig::default(), true, 0, &mut Vec::new()),
+                |ctx| show(ctx, dialog, &AppConfig::default(), true, 0, &[], &mut Vec::new()),
             );
             output.textures_delta.clear();
         };
@@ -1948,7 +2057,7 @@ mod tests {
             };
             let run = |dialog: &mut AddRuleDialog| {
                 let mut output = ctx.run_ui(input(), |ctx| {
-                    show(ctx, dialog, &config, false, 0, &mut Vec::new());
+                    show(ctx, dialog, &config, false, 0, &[], &mut Vec::new());
                 });
                 output.textures_delta.clear();
             };
@@ -1996,7 +2105,7 @@ mod tests {
                 ..egui::RawInput::default()
             };
             let mut output = ctx.run_ui(input, |ctx| {
-                show(ctx, dialog, &config, false, 0, &mut Vec::new());
+                show(ctx, dialog, &config, false, 0, &[], &mut Vec::new());
             });
             output.textures_delta.clear();
             output.shapes
@@ -2073,6 +2182,7 @@ mod tests {
                         &AppConfig::default(),
                         false,
                         0,
+                        &[],
                         &mut Vec::new(),
                     );
                 },
@@ -2246,7 +2356,7 @@ mod tests {
                 time: Some(time),
                 ..egui::RawInput::default()
             },
-            |ctx| show(ctx, dialog, &AppConfig::default(), false, 0, &mut Vec::new()),
+            |ctx| show(ctx, dialog, &AppConfig::default(), false, 0, &[], &mut Vec::new()),
         );
         output.textures_delta.clear();
         text_alpha(&output.shapes, text)
@@ -2292,5 +2402,207 @@ mod tests {
         progress(0.2, RuleInputKind::Process, false);
         assert_eq!(progress(0.3, RuleInputKind::List, false), 0.0);
         assert_eq!(progress(0.3 + f64::from(motion::FAST), RuleInputKind::List, false), 1.0);
+    }
+
+    fn recent_sites_of(addresses: &[(&str, bool)]) -> Vec<RecentSite> {
+        addresses
+            .iter()
+            .map(|(address, has_rule)| RecentSite {
+                address: (*address).to_owned(),
+                has_rule: *has_rule,
+            })
+            .collect()
+    }
+
+    /// The colour of the last painted text equal to `text`: a recent site stands below the
+    /// chip of the same name.
+    fn text_color(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<egui::Color32> {
+        fn find(shape: &egui::Shape, text: &str) -> Option<egui::Color32> {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().rev().find_map(|shape| find(shape, text)),
+                egui::Shape::Text(shape) if shape.galley.text() == text => shape
+                    .galley
+                    .rows
+                    .first()
+                    .and_then(|row| row.row.visuals.mesh.vertices.first())
+                    .map(|vertex| vertex.color),
+                _ => None,
+            }
+        }
+        shapes.iter().rev().find_map(|clipped| find(&clipped.shape, text))
+    }
+
+    fn painted_names(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| painted_names(shape, out)),
+            egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+            _ => {}
+        }
+    }
+
+    /// The address kind after a few frames, with `recent` offered: its area, its texts and
+    /// the shapes it painted.
+    fn address_shown(
+        dialog: &mut AddRuleDialog,
+        recent: &[RecentSite],
+    ) -> (egui::Rect, Vec<String>, Vec<egui::epaint::ClippedShape>) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut shapes = Vec::new();
+        for frame in 0..4 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, COMPACT)),
+                    time: Some(f64::from(frame) * 0.5),
+                    ..egui::RawInput::default()
+                },
+                |ctx| {
+                    show(
+                        ctx,
+                        dialog,
+                        &AppConfig::default(),
+                        false,
+                        0,
+                        recent,
+                        &mut Vec::new(),
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            shapes = output.shapes;
+        }
+        let area = ctx
+            .memory(|memory| memory.area_rect(egui::Id::unique("add_rule")))
+            .expect("the dialog is shown");
+        let mut texts = Vec::new();
+        for clipped in &shapes {
+            painted_names(&clipped.shape, &mut texts);
+        }
+        (area, texts, shapes)
+    }
+
+    #[test]
+    fn the_hint_shows_only_in_an_empty_field_and_the_field_keeps_its_height() {
+        i18n::in_language(i18n::Language::English, || {
+            let hint = tr!("address-hint");
+            assert_eq!(hint.lines().count(), 2, "the hint takes two lines");
+            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            dialog.kind = RuleInputKind::Address;
+            let (area, texts, _) = address_shown(&mut dialog, &[]);
+            assert!(texts.contains(&hint));
+            dialog.add_addresses("example.com");
+            let (filled_area, texts, _) = address_shown(&mut dialog, &[]);
+            assert!(!texts.contains(&hint), "a chip is in the field");
+            assert_eq!(filled_area.height(), area.height());
+
+            dialog.addresses.clear();
+            dialog.address_input = "typing".into();
+            let (_, texts, _) = address_shown(&mut dialog, &[]);
+            assert!(!texts.contains(&hint), "text is being typed");
+        });
+    }
+
+    #[test]
+    fn recent_sites_show_under_the_field_only_when_there_are_some() {
+        i18n::in_language(i18n::Language::English, || {
+            let title = tr!("recent-sites");
+            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            dialog.kind = RuleInputKind::Address;
+            let (without, texts, _) = address_shown(&mut dialog, &[]);
+            assert!(!texts.contains(&title), "no placeholder without sites");
+            let sites = recent_sites_of(&[
+                ("example.com", false),
+                ("example.org", true),
+                ("192.0.2.7", false),
+            ]);
+            let (with, texts, shapes) = address_shown(&mut dialog, &sites);
+            assert!(texts.contains(&title));
+            for site in &sites {
+                assert!(texts.contains(&site.address), "{}", site.address);
+            }
+            assert_eq!(with.height(), without.height(), "the dialog keeps its height");
+            assert_ne!(
+                text_color(&shapes, "example.com"),
+                text_color(&shapes, "example.org"),
+                "a site with a rule is dimmed"
+            );
+            dialog.toggle_address("example.com");
+            let (_, _, shapes) = address_shown(&mut dialog, &sites);
+            assert_ne!(
+                text_color(&shapes, "example.com"),
+                text_color(&shapes, "192.0.2.7"),
+                "an added site is lit"
+            );
+        });
+    }
+
+    #[test]
+    fn twelve_recent_sites_fit_the_compact_dialog() {
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.kind = RuleInputKind::Address;
+        let (without, _, _) = address_shown(&mut dialog, &[]);
+        let many: Vec<_> = (0..12)
+            .map(|index| (format!("subdomain{index}.example.com"), index % 2 == 0))
+            .collect();
+        let many: Vec<_> = many.iter().map(|(a, r)| (a.as_str(), *r)).collect();
+        let (with, _, _) = address_shown(&mut dialog, &recent_sites_of(&many));
+        assert_eq!(with.height(), without.height());
+        assert!(with.bottom() <= COMPACT.y);
+    }
+
+    #[test]
+    fn a_click_on_a_recent_site_adds_its_chip_and_another_removes_it() {
+        use crate::test_ui::TestScreen;
+
+        i18n::in_language(i18n::Language::English, || {
+            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            dialog.kind = RuleInputKind::Address;
+            let sites = recent_sites_of(&[("example.com", false), ("example.org", true)]);
+            let config = AppConfig::default();
+            let mut screen = TestScreen::new(COMPACT);
+            macro_rules! frame {
+                () => {
+                    |ui: &mut egui::Ui| {
+                        show(
+                            ui.ctx(),
+                            &mut dialog,
+                            &config,
+                            false,
+                            0,
+                            &sites,
+                            &mut Vec::new(),
+                        )
+                    }
+                };
+            }
+            // A recent site stands below the chip of the same name.
+            macro_rules! click_last {
+                ($label:expr) => {{
+                    let label: &str = $label;
+                    let shown = screen.settle(frame!());
+                    let (_, rect) = shown
+                        .iter()
+                        .rev()
+                        .find(|(text, _)| text == label)
+                        .unwrap_or_else(|| panic!("no text {label:?} on the screen"));
+                    let pos = rect.center();
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    screen.run(vec![egui::Event::PointerMoved(pos), button(true)], frame!());
+                    screen.run(vec![button(false)], frame!());
+                }};
+            }
+            click_last!("example.org");
+            assert!(dialog.has_address("example.org"), "a dimmed site can be added");
+            click_last!("example.com");
+            assert_eq!(dialog.addresses.len(), 2);
+            click_last!("example.org");
+            assert_eq!(dialog.addresses.len(), 1);
+            assert!(dialog.has_address("example.com"));
+        });
     }
 }

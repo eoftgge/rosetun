@@ -51,7 +51,7 @@ pub(crate) use rules::PROCESS_LIST_STALE_MS;
 use rules::RulesState;
 pub(crate) use rules::{
     AddRuleDialog, AddressError, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS, NameDialogKind,
-    RuleInputKind, UndoNotice,
+    RecentSite, RuleInputKind, UndoNotice,
 };
 use session::SessionState;
 pub(crate) use session::{RequestInputs, SessionPart};

@@ -182,6 +182,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
         exits::delete_dialog(ctx, state, &mut actions);
         let can_temporary = state.can_change_temporary();
         let existing_list_rules = state.selected_list_rule_count();
+        let recent = state.recent_sites();
         if let Some(dialog) = &mut state.rules.screen.add {
             if !can_temporary {
                 dialog.temporary_only = false;
@@ -192,6 +193,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut State) -> Vec<Action> {
                 &state.config,
                 can_temporary,
                 existing_list_rules,
+                &recent,
                 &mut actions,
             );
         }

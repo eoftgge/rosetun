@@ -1,5 +1,5 @@
 //! A field of chips: the items typed so far stand in it as chips, the text being typed after
-//! them. It grows a row at a time up to a limit, then scrolls.
+//! them. It is as tall as its least rows, grows a row at a time up to a limit, then scrolls.
 
 use eframe::egui::{self, CornerRadius, Stroke};
 
@@ -54,6 +54,7 @@ pub(crate) struct ChipsField<'a> {
     hint: &'a str,
     enabled: bool,
     accepts_input: bool,
+    min_rows: usize,
     max_rows: usize,
     width: f32,
 }
@@ -78,6 +79,7 @@ impl<'a> ChipsField<'a> {
             hint: "",
             enabled: true,
             accepts_input: true,
+            min_rows: 1,
             max_rows: 4,
             width: f32::INFINITY,
         }
@@ -96,6 +98,12 @@ impl<'a> ChipsField<'a> {
     /// Whether the field takes another item: without it, only its chips show.
     pub(crate) fn accepts_input(mut self, accepts_input: bool) -> Self {
         self.accepts_input = accepts_input;
+        self
+    }
+
+    /// The rows of chips the field is tall enough for even when it holds none.
+    pub(crate) fn min_rows(mut self, rows: usize) -> Self {
+        self.min_rows = rows.max(1);
         self
     }
 
@@ -161,7 +169,10 @@ impl<'a> ChipsField<'a> {
         let rows = row + 1;
         let rows_height = |rows: usize| rows as f32 * CHIP_HEIGHT + (rows - 1) as f32 * CHIP_GAP;
         let content_height = rows_height(rows);
-        let visible_height = content_height.min(rows_height(self.max_rows));
+        let max_rows = self.max_rows.max(self.min_rows);
+        let visible_height = content_height
+            .min(rows_height(max_rows))
+            .max(rows_height(self.min_rows));
         let height = (visible_height + 2.0 * FIELD_PADDING).max(field_height(ui));
         let vertical_padding = (height - visible_height) / 2.0;
 
@@ -214,6 +225,18 @@ impl<'a> ChipsField<'a> {
             rect.min + egui::vec2(FIELD_PADDING, vertical_padding),
             egui::vec2(inner_width, visible_height),
         );
+        if self.chips.is_empty() && self.input.is_empty() && !self.hint.is_empty() {
+            // The hint may take two lines, which a one-line input cannot show.
+            let galley = ui.painter().layout(
+                self.hint.to_owned(),
+                font.clone(),
+                ui.visuals().weak_text_color(),
+                inner.width(),
+            );
+            let top = inner.top() + (CHIP_HEIGHT - ui.fonts_mut(|fonts| fonts.row_height(&font))) / 2.0;
+            ui.painter()
+                .galley(egui::pos2(inner.left(), top), galley, ui.visuals().weak_text_color());
+        }
         let mut input = None;
         let id = egui::Id::unique(("chips_field", self.id_salt));
         ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
@@ -250,7 +273,6 @@ impl<'a> ChipsField<'a> {
                             egui::TextEdit::singleline(self.input)
                                 .id(input_id)
                                 .frame(egui::Frame::NONE)
-                                .hint_text(if self.chips.is_empty() { self.hint } else { "" })
                                 .desired_width(width)
                                 .margin(egui::Margin::ZERO)
                                 .align(egui::Align2::LEFT_CENTER)

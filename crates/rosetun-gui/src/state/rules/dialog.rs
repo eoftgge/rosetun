@@ -230,6 +230,28 @@ impl AddRuleDialog {
         self.error = None;
     }
 
+    /// Adds the site as a chip, or removes its chip when it is there already: a click on a
+    /// recent site.
+    pub(crate) fn toggle_address(&mut self, text: &str) {
+        let chip = AddressChip::new(text);
+        match self
+            .addresses
+            .iter()
+            .position(|old| old.repeats(&chip, self.subdomains))
+        {
+            Some(index) => self.remove_address(index),
+            None => self.add_addresses(text),
+        }
+    }
+
+    /// Whether the field holds a chip for the site.
+    pub(crate) fn has_address(&self, text: &str) -> bool {
+        let chip = AddressChip::new(text);
+        self.addresses
+            .iter()
+            .any(|old| old.repeats(&chip, self.subdomains))
+    }
+
     /// Turns the text still being typed into chips.
     pub(crate) fn commit_address_input(&mut self) {
         let text = std::mem::take(&mut self.address_input);

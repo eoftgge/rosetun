@@ -214,6 +214,7 @@ fn cases() -> Vec<Case> {
                     &state.config,
                     false,
                     0,
+                    &[],
                     &mut Vec::new(),
                 );
             },

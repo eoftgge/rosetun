@@ -860,7 +860,11 @@ temporary-dialog-hint = Правило удалится, когда вы отк�
 temporary-only = Временно
 rule-kind-app = Программа
 rule-kind-address = Адрес
-address-hint = Сайт, IP-адрес или подсеть
+address-hint =
+    Сайт, IP-адрес или подсеть
+    Можно вставить сразу весь список
+recent-sites = Недавние сайты
+recent-site-has-rule = Уже есть правило
 enter-address = Введите адрес
 address-limit = Не больше { $n } адресов за раз
 rule-kind-list = Список

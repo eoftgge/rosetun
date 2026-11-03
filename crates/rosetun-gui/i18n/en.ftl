@@ -843,7 +843,11 @@ temporary-dialog-hint = The rule is removed when you disconnect from the VPN.
 temporary-only = Temporary
 rule-kind-app = App
 rule-kind-address = Address
-address-hint = Site, IP address or subnet
+address-hint =
+    Site, IP address or subnet
+    Paste a whole list at once
+recent-sites = Recent sites
+recent-site-has-rule = Already has a rule
 enter-address = Enter an address
 address-limit = No more than { $n } addresses at once
 rule-kind-list = List

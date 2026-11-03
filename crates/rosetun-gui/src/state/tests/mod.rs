@@ -201,6 +201,7 @@ mod protection;
 mod qr;
 #[cfg(windows)]
 mod quit;
+mod recent;
 mod route_reason;
 mod rule_history;
 mod rules;
