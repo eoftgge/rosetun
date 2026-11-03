@@ -503,6 +503,29 @@ function Disconnect-RosetunVm {
     }
 }
 
+function Format-RosetunError {
+    # An error with where it came from: for one raised in a guest script
+    # block, its type and line there; and the host's call stack. A bare
+    # message such as "access denied" says neither.
+    param([Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord)
+    $text = "$ErrorRecord"
+    $exception = $ErrorRecord.Exception
+    if ($exception -is [System.Management.Automation.RemoteException]) {
+        $type = @($exception.SerializedRemoteException.PSObject.TypeNames)[0] -replace '^Deserialized\.', ''
+        $text += " [guest $type"
+        $position = @("$($exception.SerializedRemoteInvocationInfo.PositionMessage)" -split "`r?`n" |
+                Where-Object { $_ -match '\S' } | Select-Object -First 2)
+        if ($position.Count -gt 0) { $text += ' at ' + (($position | ForEach-Object { $_.Trim() }) -join ' ') }
+        $text += ']'
+    }
+    else {
+        $text += " [$($exception.GetType().FullName)]"
+    }
+    $stack = @("$($ErrorRecord.ScriptStackTrace)" -split "`r?`n" | Where-Object { $_ -match '\S' } | Select-Object -First 4)
+    if ($stack.Count -gt 0) { $text += ' host: ' + (($stack | ForEach-Object { $_.Trim() }) -join ' <- ') }
+    $text
+}
+
 function Invoke-RosetunGuest {
     param(
         [Parameter(Mandatory)][scriptblock]$ScriptBlock,
@@ -1768,9 +1791,11 @@ function Measure-RosetunTunnelWarmup {
 function Start-RosetunEgressWatch {
     # A scheduled task outlives the PowerShell Direct session that must close
     # before Save-VM. It uses the same 200 ms physical-egress probe throughout.
+    # -FirstProbeTimeoutSeconds: how long its first probe may take to come.
+    param([int]$FirstProbeTimeoutSeconds = 30)
     $address = Get-RosetunEgressAddress
     Invoke-RosetunGuest -ScriptBlock {
-        param($address, $url, $dir)
+        param($address, $url, $dir, $firstProbeTimeout)
         $task = 'RosetunEgressWatch'
         $path = Join-Path $dir 'rosetun-egress-watch.txt'
         $scriptPath = Join-Path $dir 'rosetun-egress-watch.ps1'
@@ -1823,7 +1848,7 @@ function Start-RosetunEgressWatch {
             Start-ScheduledTask -TaskName $task
 
             # Starting a task can take longer than a reconnect; wait for its first probe.
-            $deadline = (Get-Date).AddSeconds(30)
+            $deadline = (Get-Date).AddSeconds($firstProbeTimeout)
             while (-not (Test-Path -Path $path)) {
                 if ((Get-Date) -gt $deadline) {
                     $state = (Get-ScheduledTask -TaskName $task).State
@@ -1834,11 +1859,15 @@ function Start-RosetunEgressWatch {
                     $watchers = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'powershell.exe'" |
                             Where-Object { $_.CommandLine -like '*rosetun-egress-watch.ps1*' })
                     $states = foreach ($watcher in $watchers) {
-                        $cpu = (Get-Process -Id $watcher.ProcessId -ErrorAction SilentlyContinue).TotalProcessorTime.TotalSeconds
+                        $live = Get-Process -Id $watcher.ProcessId -ErrorAction SilentlyContinue
+                        $cpu = $live.TotalProcessorTime.TotalSeconds
+                        $threads = @($live.Threads | ForEach-Object {
+                                if ("$($_.ThreadState)" -eq 'Wait') { "Wait:$($_.WaitReason)" } else { "$($_.ThreadState)" }
+                            } | Group-Object | ForEach-Object { "$($_.Count)x $($_.Name)" }) -join ' '
                         $children = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($watcher.ProcessId)" |
                                 ForEach-Object { "$($_.Name) since $($_.CreationDate.ToUniversalTime().ToString($utc))" })
-                        'PID {0} since {1}, CPU {2:N1} s, children: {3}' -f $watcher.ProcessId,
-                        $watcher.CreationDate.ToUniversalTime().ToString($utc), $cpu,
+                        'PID {0} since {1}, CPU {2:N1} s, threads: {3}; children: {4}' -f $watcher.ProcessId,
+                        $watcher.CreationDate.ToUniversalTime().ToString($utc), $cpu, $threads,
                         $(if ($children.Count) { $children -join ', ' } else { 'none' })
                     }
                     $detail = "now $((Get-Date).ToUniversalTime().ToString($utc)); watcher: " +
@@ -1862,7 +1891,7 @@ function Start-RosetunEgressWatch {
                             "CloudExtendedTimeout $($preference.CloudExtendedTimeout), SubmitSamplesConsent $($preference.SubmitSamplesConsent)"
                     }
                     catch { $detail += "; Defender preferences: $($_.Exception.Message)" }
-                    throw "The egress watch did not record a probe within 30 seconds: task $state, result $result, script error '$errorText'; $detail."
+                    throw "The egress watch did not record a probe within $firstProbeTimeout seconds: task $state, result $result, script error '$errorText'; $detail."
                 }
                 Start-Sleep -Milliseconds 200
             }
@@ -1873,7 +1902,7 @@ function Start-RosetunEgressWatch {
             Remove-Item -Path $path, "$path.error", $scriptPath -ErrorAction SilentlyContinue
             throw
         }
-    } -ArgumentList $address, $script:Config.ProbeUrl, $script:Config.GuestDir
+    } -ArgumentList $address, $script:Config.ProbeUrl, $script:Config.GuestDir, $FirstProbeTimeoutSeconds
 }
 
 function Stop-RosetunEgressWatch {
