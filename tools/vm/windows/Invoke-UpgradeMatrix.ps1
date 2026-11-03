@@ -120,12 +120,14 @@ function Invoke-Setup {
         $setup = Join-Path $dir "$build-setup.exe"
         $log = Join-Path $dir "$logName.log"
         Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
-        # CreateProcess, not Start-Process: through ShellExecute the process
-        # waited on ended when setup started, with no exit code.
+        # CreateProcess, so the wait and the exit code come from the stub's
+        # own handle.
         $info = [Diagnostics.ProcessStartInfo]::new($setup, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$log`"")
         $info.UseShellExecute = $false
         $process = [Diagnostics.Process]::Start($info)
-        if ($background) { return [pscustomobject]@{ Id = $process.Id; ExitCode = $null } }
+        if ($background) {
+            return [pscustomobject]@{ Id = $process.Id; ExitCode = $null; Succeeded = $false; Note = 'started in the background' }
+        }
         $clock = [Diagnostics.Stopwatch]::StartNew()
         if (-not $process.WaitForExit($timeout * 1000)) {
             throw "$build setup did not finish within $timeout s."
@@ -147,7 +149,7 @@ function Invoke-Setup {
             Succeeded = $text -match 'Installation process succeeded'
             Note      = "exit $($process.ExitCode); process ended after $exitedSeconds s, log closed after $([int]$clock.Elapsed.TotalSeconds) s"
         }
-    } -ArgumentList $upgradeDir, $Build, $LogName, [bool]$Background, $SetupTimeoutSeconds
+    } -ArgumentList $upgradeDir, $Build, $LogName, ([bool]$Background), $SetupTimeoutSeconds
 }
 
 function Get-SetupLog {

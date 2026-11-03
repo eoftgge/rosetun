@@ -1055,10 +1055,7 @@ function Wait-RosetunHelperReady {
 
         # Two checks that do not connect, unlike Test-Path, so neither consumes
         # a listener instance: the pipe directory listing, and WaitNamedPipe,
-        # which asks for the name itself. One run missed a pipe that the
-        # helper had opened 50 seconds before; the reason says which check saw
-        # what and how long the slowest round took, to tell a listing that
-        # misses the pipe from a guest that stalls.
+        # which asks for the name itself.
         if (-not ('Rosetun.PipeProbe' -as [type])) {
             Add-Type -Namespace Rosetun -Name PipeProbe -MemberDefinition @'
 [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -1085,8 +1082,8 @@ public static int Probe(string name) { return WaitNamedPipeW(name, 1) ? 0 : Mars
             if ($clock.Elapsed.TotalSeconds -gt $timeout) {
                 # UTC, as helper.log, to compare with its lines.
                 $gaveUp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-                # The last round's values: in one run the pipe was found and the
-                # loop still did not end.
+                # The last round's values and the flag as it arrived, so that a
+                # wait for the wrong condition shows which one.
                 $needType = if ($null -eq $needService) { 'null' } else { $needService.GetType().FullName }
                 return ("did not open its pipe within $timeout seconds (gave up at $gaveUp; " +
                     "$rounds rounds, slowest $slowestMs ms; last WaitNamedPipe result $probe; " +
@@ -1094,8 +1091,8 @@ public static int Probe(string name) { return WaitNamedPipeW(name, 1) ? 0 : Mars
             }
             Start-Sleep -Milliseconds 200
         }
-        # A listing that misses an existing pipe once is a race with its
-        # creation; more often, it is the finding.
+        # Missing it once is a race with the pipe's creation; more often, the
+        # listing itself is wrong.
         if ($missedByListing -gt 1) {
             Write-Warning "The pipe listing missed $path in $missedByListing of $rounds rounds; WaitNamedPipe found it."
         }
@@ -1113,7 +1110,7 @@ public static int Probe(string name) { return WaitNamedPipeW(name, 1) ? 0 : Mars
             }
             Start-Sleep -Milliseconds 200
         }
-    } -ArgumentList $script:Config.GuestDir, $script:Config.PipeName, $TimeoutSeconds, [bool]$Service
+    } -ArgumentList $script:Config.GuestDir, $script:Config.PipeName, $TimeoutSeconds, ([bool]$Service)
 }
 
 function Stop-RosetunHelper {
@@ -1439,7 +1436,7 @@ function Test-RosetunDirectDns {
         }
         catch { return $false }
         finally { $client.Dispose() }
-    } -ArgumentList $address, $Server, [bool]$Tcp
+    } -ArgumentList $address, $Server, ([bool]$Tcp)
 }
 
 function Get-RosetunIpv6NeighborTarget {
@@ -1709,7 +1706,7 @@ function Test-RosetunTunnelEgress {
             TunAddresses = $tunAddresses -join ','
             Error        = ($output | Where-Object { $_ -notlike 'local=*' -and $_ }) -join ' '
         }
-    } -ArgumentList $Url, $script:Config.TunAlias, $curl, [bool]$SkipRevocationCheck
+    } -ArgumentList $Url, $script:Config.TunAlias, $curl, ([bool]$SkipRevocationCheck)
 
     if ($Detailed) {
         return $result
@@ -2230,7 +2227,7 @@ function Invoke-RosetunConnectionsDuring {
         }
         $global:LASTEXITCODE = 0
         [pscustomobject]@{ CurlExit = $curlExit; ExitCode = $exitCode; Output = ($output -join "`n") }
-    } -ArgumentList $script:Config.GuestDir, $Url, [bool]$SkipRevocationCheck, $ConfigPath
+    } -ArgumentList $script:Config.GuestDir, $Url, ([bool]$SkipRevocationCheck), $ConfigPath
 }
 
 function Get-RosetunConnectionRows {
@@ -2367,7 +2364,7 @@ function Invoke-RosetunConnectionClose {
             SecondsAfterClose = $afterClose
             After = ($after -join "`n")
         }
-    } -ArgumentList $script:Config.GuestDir, $Url, [bool]$WhileWaiting
+    } -ArgumentList $script:Config.GuestDir, $Url, ([bool]$WhileWaiting)
 }
 
 function Find-RosetunLogText {
@@ -2414,7 +2411,7 @@ function Find-RosetunLogText {
                 $log.Name
             }
         }
-    } -ArgumentList $script:Config.GuestDir, $Text, [bool]$Anywhere, [bool]$WithLine, $SinceUtcTicks
+    } -ArgumentList $script:Config.GuestDir, $Text, ([bool]$Anywhere), ([bool]$WithLine), $SinceUtcTicks
 }
 
 function Test-RosetunGuestLoopback {
