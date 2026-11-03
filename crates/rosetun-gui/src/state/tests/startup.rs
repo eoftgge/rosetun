@@ -71,3 +71,52 @@ fn configuration_replacement_ignores_stale_publications_and_retains_valid_data_o
     assert!(state.config.subscriptions.is_empty());
     assert!(state.config_error.is_none());
 }
+
+#[test]
+fn after_an_upgrade_the_gui_connects_even_without_connect_at_startup() {
+    let mut state = state_for_auto_connect();
+    state.config.interface.connect_on_start = false;
+    state.start_after_upgrade();
+    state.reduce(WorkerEvent::Status(Status {
+        upgrade_hold: true,
+        ..Status::default()
+    }));
+
+    assert!(matches!(state.take_auto_connect(), Some(Job::Connect(_))));
+    assert!(!state.take_upgrade_attention());
+}
+
+#[test]
+fn a_failed_connect_after_an_upgrade_asks_for_the_window() {
+    let mut state = state_for_auto_connect();
+    state.start_after_upgrade();
+    state.reduce(WorkerEvent::Status(Status::default()));
+    state.take_auto_connect().unwrap();
+
+    state.reduce(WorkerEvent::Connect(Err(HelperCommandError::Client(
+        ClientError::Helper(HelperError::new(ErrorCode::Internal, "")),
+    ))));
+
+    assert!(state.take_upgrade_attention());
+    assert!(!state.take_upgrade_attention(), "asked once");
+}
+
+#[test]
+fn after_an_upgrade_without_a_server_the_window_explains() {
+    let mut state = state_for_auto_connect();
+    state.config.active = None;
+    state.start_after_upgrade();
+    state.reduce(WorkerEvent::Status(Status::default()));
+
+    assert!(state.take_auto_connect().is_none());
+    assert!(state.take_upgrade_attention());
+}
+
+#[test]
+fn an_ordinary_start_never_asks_for_the_window() {
+    let mut state = state_for_auto_connect();
+    state.config.active = None;
+    state.reduce(WorkerEvent::Status(Status::default()));
+    assert!(state.take_auto_connect().is_none());
+    assert!(!state.take_upgrade_attention());
+}

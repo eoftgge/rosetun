@@ -18,6 +18,8 @@ pub(crate) enum Notice {
     Dropped,
     Restored,
     ConnectFailed,
+    /// The connect after an upgrade failed and the network stays closed.
+    HeldAfterUpgrade,
 }
 
 impl Notice {
@@ -27,6 +29,7 @@ impl Notice {
             Self::Dropped => tr!("notice-dropped"),
             Self::Restored => tr!("notice-restored"),
             Self::ConnectFailed => tr!("notice-connect-failed"),
+            Self::HeldAfterUpgrade => tr!("notice-held-after-upgrade"),
         }
     }
 }

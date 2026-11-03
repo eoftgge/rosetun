@@ -112,6 +112,14 @@ pub(crate) struct State {
     pub(crate) config: AppConfig,
     pub(crate) config_ready: bool,
     auto_connect_pending: bool,
+    /// Started by the installer after an upgrade that held the network
+    /// closed: connect at start whatever "Connect at startup" says.
+    after_upgrade: bool,
+    /// The connect in flight is that start's.
+    after_upgrade_connect: bool,
+    /// That start found nothing to connect to, or its connect failed: the
+    /// window should show why the network is closed.
+    upgrade_attention: bool,
     /// A server picked in the tray while disconnected connects once it is saved.
     connect_after_choice: bool,
     pub(crate) subscriptions: SubscriptionsState,
@@ -172,6 +180,9 @@ impl Default for State {
             config: AppConfig::default(),
             config_ready: false,
             auto_connect_pending: true,
+            after_upgrade: false,
+            after_upgrade_connect: false,
+            upgrade_attention: false,
             connect_after_choice: false,
             subscriptions: SubscriptionsState::default(),
             updates: UpdatesState::default(),
@@ -372,6 +383,8 @@ pub(crate) enum Action {
     MoveSelectedRulesToEnd,
     Primary,
     CancelConnection,
+    /// Lifts the hold an upgrade left on the network.
+    OpenNetwork,
     Apply,
     RestoreMyEdits,
     RequestProtectionOff,
@@ -436,6 +449,7 @@ pub(crate) enum Job {
     RestoreEdits(AppliedSnapshot),
     LoadTemporaryRules(u64),
     Disconnect,
+    OpenNetwork,
     SetInterfaceScale(u16),
     SetLanguage(LanguageSetting),
     SetAccent(AccentPreset),
@@ -598,6 +612,7 @@ impl State {
             | WorkerEvent::ConnectSnapshot(_)
             | WorkerEvent::Connect(_)
             | WorkerEvent::Disconnect(_)
+            | WorkerEvent::OpenNetwork(_)
             | WorkerEvent::SelectNode(_)
             | WorkerEvent::SelectRuleSet(_)
             | WorkerEvent::SetKillSwitch(_)
@@ -693,6 +708,7 @@ impl State {
             action @ (Action::ShowConnection
             | Action::Primary
             | Action::CancelConnection
+            | Action::OpenNetwork
             | Action::RequestProtectionOff
             | Action::KeepBlocked
             | Action::ConfirmProtectionOff

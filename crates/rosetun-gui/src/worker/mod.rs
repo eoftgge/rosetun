@@ -127,6 +127,7 @@ pub(crate) enum WorkerEvent {
         result: Result<Vec<Rule>, HelperCommandError>,
     },
     Disconnect(Result<(), HelperCommandError>),
+    OpenNetwork(Result<(), HelperCommandError>),
     SetInterfaceScale(Result<(), SettingsError>),
     SetLanguage(Result<(), SettingsError>),
     SetAccent(Result<(), SettingsError>),

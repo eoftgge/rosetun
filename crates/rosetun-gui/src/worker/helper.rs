@@ -104,6 +104,21 @@ impl WorkerDispatcher {
         });
     }
 
+    pub(crate) fn open_network(&self) {
+        self.spawn_task("rosetun-open-network", move |publisher| {
+            let result = with_helper(rosetun_ipc::HelperClient::open_network);
+            match &result {
+                Ok(()) => tracing::info!("network opened after the upgrade"),
+                Err(error) => tracing::warn!(%error, "could not open the network"),
+            }
+            emit(
+                &publisher.tx,
+                &publisher.repaint,
+                WorkerEvent::OpenNetwork(result),
+            );
+        });
+    }
+
     pub(crate) fn check_failure_interference(&self, request: u64, own_alias: String) {
         self.spawn_task("rosetun-check-failure-interference", move |publisher| {
             let adapters = rosetun_adapters::other_tunnels(&own_alias);

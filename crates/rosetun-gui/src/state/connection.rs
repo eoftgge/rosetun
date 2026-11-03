@@ -152,6 +152,34 @@ impl State {
         }
     }
 
+    /// The installer's hold keeps the network closed and nothing is
+    /// connected: the main screen says why and offers both ways out.
+    pub(crate) fn upgrade_hold_shown(&self) -> bool {
+        self.visible_status().is_some_and(|status| {
+            status.upgrade_hold
+                && matches!(
+                    status.state,
+                    ConnectionState::Disconnected
+                        | ConnectionState::Failed { .. }
+                        | ConnectionState::FailedProtected { .. }
+                )
+        })
+    }
+
+    pub(crate) fn can_open_network(&self) -> bool {
+        self.upgrade_hold_shown() && !self.operations.helper
+    }
+
+    /// Started by the installer after an upgrade that held the network.
+    pub(crate) fn start_after_upgrade(&mut self) {
+        self.after_upgrade = true;
+    }
+
+    /// Whether the window should come up to explain the closed network.
+    pub(crate) fn take_upgrade_attention(&mut self) -> bool {
+        std::mem::take(&mut self.upgrade_attention)
+    }
+
     /// Lockdown is per machine, so only the service knows whether it is on.
     pub(crate) fn lockdown_active(&self) -> bool {
         self.visible_status().is_some_and(|status| status.lockdown)
@@ -237,18 +265,24 @@ impl State {
             return None;
         }
         self.auto_connect_pending = false;
-        if self.config.interface.connect_on_start
+        // After an upgrade the user was connected; connecting again lifts
+        // the hold the installer left.
+        if (self.config.interface.connect_on_start || self.after_upgrade)
             && matches!(self.status.state, ConnectionState::Disconnected)
             && !self.operations.helper
             && self.primary_action() == PrimaryAction::Connect
         {
             self.operations.helper = true;
             self.connect_in_flight = true;
+            self.after_upgrade_connect = self.after_upgrade;
             self.reset_failure_interference();
             self.cancelled_connect = false;
             self.deferred_connect = None;
             self.operation_error = None;
             return Some(Job::Connect(self.request_inputs()));
+        }
+        if self.after_upgrade && !self.status.state.is_transitional() {
+            self.upgrade_attention = !matches!(self.status.state, ConnectionState::Connected);
         }
         None
     }
@@ -503,6 +537,12 @@ impl State {
             }
             WorkerEvent::Connect(result) => {
                 self.connect_in_flight = false;
+                if std::mem::take(&mut self.after_upgrade_connect)
+                    && result.is_err()
+                    && !self.cancelled_connect
+                {
+                    self.upgrade_attention = true;
+                }
                 let snapshot = self.session.connect_snapshot.take();
                 if self.cancelled_connect {
                     if self.cancel_in_flight {
@@ -615,6 +655,16 @@ impl State {
                     Err(error) => self.helper_result(Err(error)),
                 }
             }
+            WorkerEvent::OpenNetwork(result) => {
+                self.operations.helper = false;
+                match result {
+                    Ok(()) => {
+                        self.status.upgrade_hold = false;
+                        self.operation_error = None;
+                    }
+                    Err(error) => self.helper_result(Err(error)),
+                }
+            }
             WorkerEvent::TunnelDelay(result) => {
                 if !self.status_received
                     || !matches!(
@@ -662,6 +712,13 @@ impl State {
                 self.operations.helper = true;
                 self.operation_error = None;
                 return Some(job);
+            }
+            Action::OpenNetwork => {
+                if self.can_open_network() {
+                    self.operations.helper = true;
+                    self.operation_error = None;
+                    return Some(Job::OpenNetwork);
+                }
             }
             Action::CancelConnection => {
                 if self.helper_available

@@ -963,3 +963,79 @@ fn the_engine_check_hint_appears_after_ten_seconds_and_not_before() {
     assert_eq!(connected.stage_line(200), None);
     assert_eq!(connected.tray_stage_label(), None);
 }
+
+fn held(state: ConnectionState) -> Status {
+    Status {
+        state,
+        upgrade_hold: true,
+        ..Status::default()
+    }
+}
+
+#[test]
+fn the_upgrade_hold_banner_shows_only_while_held_without_a_connection() {
+    let mut state = state_for_auto_connect();
+    for shown in [
+        ConnectionState::Disconnected,
+        ConnectionState::Failed {
+            reason: "test".into(),
+            failure_kind: None,
+        },
+        ConnectionState::FailedProtected {
+            reason: "test".into(),
+            failure_kind: None,
+        },
+    ] {
+        state.reduce(WorkerEvent::Status(held(shown)));
+        assert!(state.upgrade_hold_shown());
+    }
+    for hidden in [
+        ConnectionState::Connecting,
+        ConnectionState::Connected,
+        ConnectionState::Reconnecting,
+    ] {
+        state.reduce(WorkerEvent::Status(held(hidden)));
+        assert!(!state.upgrade_hold_shown());
+    }
+    state.reduce(WorkerEvent::Status(Status::default()));
+    assert!(!state.upgrade_hold_shown());
+    state.reduce(WorkerEvent::Status(held(ConnectionState::Disconnected)));
+    state.helper_available = false;
+    assert!(!state.upgrade_hold_shown());
+}
+
+#[test]
+fn the_upgrade_hold_banner_connects_or_opens_the_network() {
+    let mut state = state_for_auto_connect();
+    state.reduce(WorkerEvent::Status(held(ConnectionState::Disconnected)));
+    assert!(matches!(state.act(Action::Primary), Some(Job::Connect(_))));
+
+    let mut state = state_for_auto_connect();
+    state.reduce(WorkerEvent::Status(held(ConnectionState::Disconnected)));
+    assert!(matches!(
+        state.act(Action::OpenNetwork),
+        Some(Job::OpenNetwork)
+    ));
+    assert!(state.operations.helper);
+    assert!(state.act(Action::OpenNetwork).is_none(), "one at a time");
+    state.reduce(WorkerEvent::OpenNetwork(Ok(())));
+    assert!(!state.operations.helper);
+    assert!(!state.upgrade_hold_shown());
+    assert!(
+        state.act(Action::OpenNetwork).is_none(),
+        "nothing left to open"
+    );
+}
+
+#[test]
+fn a_failure_to_open_the_network_keeps_the_banner_and_says_why() {
+    let mut state = state_for_auto_connect();
+    state.reduce(WorkerEvent::Status(held(ConnectionState::Disconnected)));
+    state.act(Action::OpenNetwork);
+    state.reduce(WorkerEvent::OpenNetwork(Err(HelperCommandError::Client(
+        ClientError::Helper(HelperError::new(ErrorCode::AccessDenied, "")),
+    ))));
+    assert!(!state.operations.helper);
+    assert!(state.upgrade_hold_shown());
+    assert!(state.operation_error.is_some());
+}

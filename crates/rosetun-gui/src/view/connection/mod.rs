@@ -29,6 +29,10 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
     }
     // Above the hero rather than inside it: the hero's height and the rose
     // button stay where they are, and the offer is the first thing read.
+    if state.upgrade_hold_shown() {
+        upgrade_hold_strip(ui, state, actions);
+        ui.add_space(theme::SECTION_GAP);
+    }
     if state.available_update().is_some() {
         update_strip(ui, state, actions);
         ui.add_space(theme::SECTION_GAP);
@@ -117,6 +121,63 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
             });
         }
     });
+}
+
+/// After an upgrade that held the network closed, until a connect or the
+/// user opens it.
+fn upgrade_hold_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
+    egui::Frame::new()
+        .fill(theme::palette().input)
+        .stroke(egui::Stroke::new(theme::stroke::HAIRLINE, theme::ERROR))
+        .corner_radius(theme::RADIUS)
+        .inner_margin(theme::margin::symmetric(theme::space::L, theme::space::S))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            egui::Sides::new().shrink_left().wrap().spacing(16.0).show(
+                ui,
+                |ui| {
+                    // As tall as the buttons, so the text sits on their middle.
+                    let button_height = (ui.text_style_height(&egui::TextStyle::Button)
+                        + 2.0 * ui.spacing().button_padding.y)
+                        .max(ui.spacing().interact_size.y);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), button_height),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_min_height(button_height);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(tr!("upgrade-hold-banner"))
+                                        .strong()
+                                        .color(theme::palette().text),
+                                )
+                                .wrap(),
+                            );
+                        },
+                    );
+                },
+                |ui| {
+                    if widgets::outline_button(
+                        ui,
+                        tr!("upgrade-hold-open"),
+                        state.can_open_network(),
+                    )
+                    .clicked()
+                    {
+                        actions.push(Action::OpenNetwork);
+                    }
+                    let can_connect = !state.operations.helper
+                        && matches!(
+                            state.primary_action(),
+                            PrimaryAction::Connect | PrimaryAction::Retry
+                        );
+                    if widgets::button_fill(ui, tr!("upgrade-hold-connect"), can_connect).clicked()
+                    {
+                        actions.push(Action::Primary);
+                    }
+                },
+            );
+        });
 }
 
 fn update_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {

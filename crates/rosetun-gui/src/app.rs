@@ -7,7 +7,7 @@ use eframe::egui;
 use rosetun_core::Store;
 
 #[cfg(windows)]
-use crate::notices::Notices;
+use crate::notices::{Notice, Notices};
 #[cfg(windows)]
 use crate::state::{Action, OpenedLink, QuitDecision};
 use crate::state::{Job, State};
@@ -169,6 +169,15 @@ impl App {
             #[cfg(windows)]
             quit_disconnecting: false,
         }
+    }
+
+    /// Started by the installer after an upgrade that held the network.
+    #[cfg(windows)]
+    pub(crate) fn after_upgrade(mut self, after_upgrade: bool) -> Self {
+        if after_upgrade {
+            self.state.start_after_upgrade();
+        }
+        self
     }
 
     #[cfg(windows)]
@@ -385,6 +394,7 @@ impl App {
             Job::RestoreEdits(snapshot) => self.workers.restore_edits(snapshot),
             Job::LoadTemporaryRules(request) => self.workers.load_temporary_rules(request),
             Job::Disconnect => self.workers.disconnect(),
+            Job::OpenNetwork => self.workers.open_network(),
             Job::SetInterfaceScale(percent) => self.workers.set_interface_scale(percent),
             Job::SetLanguage(language) => self.workers.set_language(language),
             Job::SetAccent(accent) => self.workers.set_accent(accent),
@@ -531,6 +541,16 @@ impl eframe::App for App {
         }
         if let Some(job) = self.state.take_auto_connect() {
             self.dispatch(job);
+        }
+        #[cfg(windows)]
+        if self.state.take_upgrade_attention() {
+            if self.window_hidden
+                && self.state.config.interface.notifications
+                && let Some(tray) = &self.tray
+            {
+                tray.notify(Notice::HeldAfterUpgrade);
+            }
+            self.show_window(ctx);
         }
         if let Some(job) = self.state.take_choice_connect() {
             self.dispatch(job);

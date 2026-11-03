@@ -60,6 +60,10 @@ use tracing_subscriber::prelude::*;
 /// Passed by autostart: start in the tray without showing the window.
 pub(crate) const HIDDEN_ARG: &str = "--hidden";
 #[cfg(windows)]
+/// Passed by the installer after an upgrade that held the network closed:
+/// start in the tray and connect, whatever "Connect at startup" says.
+const AFTER_UPGRADE_ARG: &str = "--after-upgrade";
+#[cfg(windows)]
 /// Passed by the `rosetun://` scheme handler with the link that was opened.
 const OPEN_URL_ARG: &str = "--open-url";
 
@@ -67,7 +71,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
     let open_link = open_url_arg(std::env::args_os());
     #[cfg(windows)]
-    let start_hidden = open_link.is_none() && std::env::args_os().any(|arg| arg == HIDDEN_ARG);
+    let after_upgrade =
+        open_link.is_none() && std::env::args_os().any(|arg| arg == AFTER_UPGRADE_ARG);
+    #[cfg(windows)]
+    let start_hidden =
+        after_upgrade || open_link.is_none() && std::env::args_os().any(|arg| arg == HIDDEN_ARG);
     #[cfg(windows)]
     let (activation, links) = match rosetun_shell::acquire(!start_hidden) {
         // Taken before the settings load, so a later instance's link
@@ -157,6 +165,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 start_hidden,
                 window_memory::WindowMemory::new(cc, window_file),
             );
+            #[cfg(windows)]
+            let app = app.after_upgrade(after_upgrade);
             Ok(Box::new(app))
         }),
     )?;

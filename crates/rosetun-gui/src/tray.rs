@@ -70,7 +70,7 @@ pub(crate) fn tray_view(state: &State, window_shown: bool) -> TrayView {
             let (label, _) = view::connection::state_style(&status.state);
             let icon = match status.state {
                 ConnectionState::Disconnected | ConnectionState::Failed { .. }
-                    if status.lockdown =>
+                    if status.lockdown || status.upgrade_hold =>
                 {
                     TrayState::Blocked
                 }
