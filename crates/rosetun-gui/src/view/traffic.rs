@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText};
 use rosetun_config::ConnectionState;
@@ -23,8 +22,8 @@ struct Chart {
     travel: Option<f32>,
     samples_taken: u64,
     reduce_motion: bool,
-    /// The pace of continuous frames, `None` when nobody sees the chart move.
-    frame: Option<Duration>,
+    /// Whether the chart may ask for continuous frames: someone sees it move.
+    frames: bool,
 }
 
 /// Displayed column heights, kept between frames so they ease to new values.
@@ -104,12 +103,11 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         travel,
         samples_taken: state.traffic.samples_taken,
         reduce_motion,
-        frame: traffic.and_then(|_| {
-            motion::continuous_frame(
+        frames: traffic.is_some()
+            && motion::continuous_frames(
                 motion::WindowView::of(ui.ctx(), state.window_hidden()),
                 reduce_motion,
-            )
-        }),
+            ),
     };
     widgets::card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
@@ -429,10 +427,8 @@ fn displayed_heights(ctx: &egui::Context, chart: &Chart) -> Vec<(f32, f32)> {
         bars.push(bar);
     }
     let settling = bars.iter().any(|bar| !bar.settled(now));
-    if let Some(frame) = chart.frame
-        && (settling || chart.travel.is_some())
-    {
-        ctx.request_repaint_after(frame);
+    if chart.frames && (settling || chart.travel.is_some()) {
+        ctx.request_repaint();
     }
     ctx.data_mut(|data| {
         data.insert_temp(

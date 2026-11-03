@@ -2,7 +2,6 @@
 //! rate through egui's `animate_*`; continuous ones ask for frames here.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use eframe::egui;
 
@@ -11,9 +10,6 @@ pub(crate) const FAST: f32 = 0.14;
 /// A transition that moves something larger: a list opening, a chart settling.
 pub(crate) const NORMAL: f32 = 0.22;
 
-const FOCUSED_FRAME: Duration = Duration::from_millis(16);
-const UNFOCUSED_FRAME: Duration = Duration::from_millis(33);
-
 /// `interface.reduce_motion` for widgets that see no state, set between frames.
 static REDUCED: AtomicBool = AtomicBool::new(false);
 
@@ -21,7 +17,6 @@ static REDUCED: AtomicBool = AtomicBool::new(false);
 pub(crate) struct WindowView {
     pub(crate) hidden: bool,
     pub(crate) minimized: bool,
-    pub(crate) focused: bool,
 }
 
 impl WindowView {
@@ -29,7 +24,6 @@ impl WindowView {
         ctx.input(|input| Self {
             hidden,
             minimized: input.viewport().minimized.unwrap_or(false),
-            focused: input.focused,
         })
     }
 }
@@ -52,17 +46,14 @@ pub(crate) fn duration(seconds: f32, reduce_motion: bool) -> f32 {
     if reduce_motion { 0.0 } else { seconds }
 }
 
-/// When a continuous animation (petal drift, the opening rose, the moving
-/// chart) needs its next frame: 60 per second in focus, 30 out of it, none
-/// for a window nobody can see or with motion reduced.
-pub(crate) fn continuous_frame(window: WindowView, reduce_motion: bool) -> Option<Duration> {
-    if reduce_motion || window.hidden || window.minimized {
-        None
-    } else if window.focused {
-        Some(FOCUSED_FRAME)
-    } else {
-        Some(UNFOCUSED_FRAME)
-    }
+/// Whether a continuous animation (petal drift, the opening rose, the moving
+/// chart) asks for its next frame, with `request_repaint`: the present waits
+/// for vsync, so frames follow the monitor's own rate. A fixed timer such as
+/// 16 ms is not a whole number of refreshes at 100 or 300 Hz, so its frames
+/// would land unevenly. No frames for a window nobody can see or with motion
+/// reduced. Focus does not matter: the frames are as visible without it.
+pub(crate) fn continuous_frames(window: WindowView, reduce_motion: bool) -> bool {
+    !(reduce_motion || window.hidden || window.minimized)
 }
 
 /// How much of a section `full` points tall shows at `progress` of its
@@ -81,27 +72,16 @@ pub(crate) fn reveal_height(full: f32, progress: f32, room: f32) -> f32 {
 mod tests {
     use super::*;
 
-    fn window(hidden: bool, minimized: bool, focused: bool) -> WindowView {
-        WindowView {
-            hidden,
-            minimized,
-            focused,
-        }
+    fn window(hidden: bool, minimized: bool) -> WindowView {
+        WindowView { hidden, minimized }
     }
 
     #[test]
-    fn continuous_frames_follow_focus_and_stop_off_screen() {
-        assert_eq!(
-            continuous_frame(window(false, false, true), false),
-            Some(Duration::from_millis(16))
-        );
-        assert_eq!(
-            continuous_frame(window(false, false, false), false),
-            Some(Duration::from_millis(33))
-        );
-        assert_eq!(continuous_frame(window(true, false, true), false), None);
-        assert_eq!(continuous_frame(window(false, true, false), false), None);
-        assert_eq!(continuous_frame(window(false, false, true), true), None);
+    fn continuous_frames_run_while_the_window_is_seen_and_stop_off_screen() {
+        assert!(continuous_frames(window(false, false), false));
+        assert!(!continuous_frames(window(true, false), false));
+        assert!(!continuous_frames(window(false, true), false));
+        assert!(!continuous_frames(window(false, false), true));
     }
 
     #[test]

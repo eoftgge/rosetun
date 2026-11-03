@@ -345,6 +345,20 @@ fn clicking_away_clears_selection_but_selected_rows_and_actions_keep_it() {
 }
 
 #[test]
+fn dragging_near_an_edge_scrolls_as_far_at_60_as_at_300_frames_per_second() {
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let one_second = |frames_per_second: u16| -> f32 {
+        let dt = 1.0 / f32::from(frames_per_second);
+        (0..frames_per_second)
+            .map(|_| drag_scroll_delta(viewport, 10.0, 0.0, dt))
+            .sum()
+    };
+    let at_60 = one_second(60);
+    assert!(at_60 > 100.0);
+    assert!((at_60 - one_second(300)).abs() < 0.01, "{at_60}");
+}
+
+#[test]
 fn dragging_near_edges_or_wheeling_scrolls_in_the_expected_direction() {
     let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
     assert!(drag_scroll_delta(viewport, 10.0, 0.0, 1.0 / 60.0) > 0.0);

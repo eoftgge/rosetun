@@ -147,20 +147,17 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
             drift_time,
         ),
     };
-    let frame = motion::continuous_frame(
+    let frames = motion::continuous_frames(
         motion::WindowView::of(ui.ctx(), state.window_hidden()),
         reduce_motion,
     );
-    if let Some(frame) = frame
-        && progress < 1.0
+    if frames
+        && (progress < 1.0 || petal_repaint(status.map(|status| &status.state), drift.weight))
     {
-        ui.ctx().request_repaint_after(frame);
-    }
-    if let Some(delay) = petal_repaint(status.map(|status| &status.state), drift.weight, frame) {
-        ui.ctx().request_repaint_after(delay);
+        ui.ctx().request_repaint();
     }
 
-    if frame.is_some()
+    if frames
         && let Some(remaining) = remaining
     {
         ui.ctx().request_repaint_after(remaining);
@@ -388,15 +385,9 @@ fn header_status_for(
     (label.to_owned(), color)
 }
 
-/// When the header petals need their next frame: while they drift or
-/// settle, at the pace `frame` allows for continuous animation.
-fn petal_repaint(
-    connection: Option<&ConnectionState>,
-    drift_weight: f32,
-    frame: Option<Duration>,
-) -> Option<Duration> {
-    let moving = connection.is_some_and(ConnectionState::is_transitional) || drift_weight > 0.0;
-    frame.filter(|_| moving)
+/// Whether the header petals need their next frame: while they drift or settle.
+fn petal_repaint(connection: Option<&ConnectionState>, drift_weight: f32) -> bool {
+    connection.is_some_and(ConnectionState::is_transitional) || drift_weight > 0.0
 }
 
 fn intro_progress(time: f64, started_at: f64) -> f32 {
@@ -758,23 +749,16 @@ mod tests {
     }
 
     #[test]
-    fn petals_ask_for_frames_only_while_moving_on_screen() {
-        let frame = Some(Duration::from_millis(16));
+    fn petals_ask_for_frames_only_while_moving() {
         let connected = Some(&ConnectionState::Connected);
         let connecting = Some(&ConnectionState::Connecting);
         let disconnected = Some(&ConnectionState::Disconnected);
-        assert_eq!(petal_repaint(connected, 1.0, frame), frame);
-        assert_eq!(petal_repaint(connecting, 0.0, frame), frame);
-        assert_eq!(
-            petal_repaint(Some(&ConnectionState::Reconnecting), 0.3, frame),
-            frame
-        );
-        assert_eq!(petal_repaint(connected, 1.0, None), None);
-        assert_eq!(petal_repaint(connecting, 0.5, None), None);
-        assert_eq!(petal_repaint(disconnected, 0.0, frame), None);
-        assert_eq!(petal_repaint(None, 0.0, frame), None);
-        assert_eq!(petal_repaint(disconnected, 0.2, frame), frame);
-        assert_eq!(petal_repaint(disconnected, 0.2, None), None);
+        assert!(petal_repaint(connected, 1.0));
+        assert!(petal_repaint(connecting, 0.0));
+        assert!(petal_repaint(Some(&ConnectionState::Reconnecting), 0.3));
+        assert!(!petal_repaint(disconnected, 0.0));
+        assert!(!petal_repaint(None, 0.0));
+        assert!(petal_repaint(disconnected, 0.2));
     }
 
     #[test]
@@ -798,15 +782,8 @@ mod tests {
                 assert!(!super::drift_target(true, transitional, remaining));
             }
         }
-        let frame = Some(Duration::from_millis(16));
-        assert_eq!(
-            petal_repaint(Some(&ConnectionState::Connected), 0.5, frame),
-            frame
-        );
-        assert_eq!(
-            petal_repaint(Some(&ConnectionState::Connected), 0.0, frame),
-            None
-        );
+        assert!(petal_repaint(Some(&ConnectionState::Connected), 0.5));
+        assert!(!petal_repaint(Some(&ConnectionState::Connected), 0.0));
     }
 
     #[test]

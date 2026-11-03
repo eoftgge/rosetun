@@ -150,7 +150,7 @@ pub(super) fn hero_card(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Acti
                                 &button_label,
                                 action != PrimaryAction::Disabled,
                                 state.config.interface.reduce_motion,
-                                motion::continuous_frame(
+                                motion::continuous_frames(
                                     motion::WindowView::of(ui.ctx(), state.window_hidden()),
                                     state.config.interface.reduce_motion,
                                 ),

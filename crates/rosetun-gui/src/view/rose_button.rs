@@ -1,4 +1,4 @@
-use std::{sync::OnceLock, time::Duration};
+use std::sync::OnceLock;
 
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Role, Sense, Shape, Stroke, WidgetInfo};
 use rosetun_config::ConnectionState;
@@ -402,7 +402,7 @@ pub(crate) fn rose_button(
     label: &str,
     enabled: bool,
     reduce_motion: bool,
-    frame: Option<Duration>,
+    frames: bool,
 ) -> bool {
     let sense = if enabled {
         Sense::click()
@@ -452,16 +452,11 @@ pub(crate) fn rose_button(
     }
     ctx.data_mut(|data| data.insert_temp(id, animation));
     let visible = animation.displayed(now, reduce_motion);
-    if !reduce_motion
+    let transition = !reduce_motion
         && now - animation.started < animation.duration()
-        && animation.from != animation.to
-    {
+        && animation.from != animation.to;
+    if transition || (frames && phase == RosePhase::Opening) {
         ctx.request_repaint();
-    }
-    if let Some(frame) = frame
-        && phase == RosePhase::Opening
-    {
-        ctx.request_repaint_after(frame);
     }
 
     if ui.is_rect_visible(rect) {
@@ -786,6 +781,21 @@ mod tests {
             assert!((0.0..=1.0).contains(&frame.glow));
             assert!((0.0..=1.0).contains(&frame.stamen_alpha));
         }
+    }
+
+    #[test]
+    fn the_rose_moves_the_same_at_60_and_300_frames_per_second() {
+        let animation = transition(RosePhase::Bud, RosePhase::Opening);
+        // Every frame up to `frames`, as the button draws them; the last one is shown.
+        let shown_after = |frames_per_second: u32, frames: u32| {
+            let mut shown = animation.from;
+            for frame in 0..=frames {
+                shown = animation.displayed(f64::from(frame) / f64::from(frames_per_second), false);
+            }
+            shown
+        };
+        assert_eq!(shown_after(60, 9), shown_after(300, 45), "0.15 s, opening");
+        assert_eq!(shown_after(60, 150), shown_after(300, 750), "2.5 s, pulsing");
     }
 
     #[test]
