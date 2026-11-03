@@ -14,6 +14,7 @@ walks through the kill-switch failure scenarios, printing a PASS/FAIL table.
 |---|---|
 | `vm/windows/RosetunVm.psm1` | Module with every building block: VM session, deploy, helper task, CLI, probes |
 | `vm/windows/Invoke-FailureMatrix.ps1` | The failure matrix |
+| `perf/` | `Measure-RosetunPresents.ps1`: PresentMon summary of the GUI's presents while its window is dragged; see `perf/README.md` |
 | `vm/linux/` | Separate Linux L2 stand for a Debian VM over SSH; see `vm/linux/README.md`. The Windows matrices do not use it |
 | `vm/windows/test-node.json` | sing-box config for a Shadowsocks test node running on the host |
 | `vm/windows/request-local.json` | `ConnectRequest` pointing at the test node, with the test password |
