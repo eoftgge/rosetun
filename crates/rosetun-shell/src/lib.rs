@@ -112,5 +112,5 @@ pub use tray_notice::tray_notice;
 #[cfg(windows)]
 pub use window::{
     SavedWindow, cloak_on_show, cloak_window, place_window, quiet_moves, saved_window,
-    session_ending, taskbar_small_icon_size, uncloak_window, window_cloaked,
+    session_ending, stop_raw_mouse_input, taskbar_small_icon_size, uncloak_window, window_cloaked,
 };

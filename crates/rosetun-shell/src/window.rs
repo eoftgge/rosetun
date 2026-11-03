@@ -2,6 +2,9 @@ use std::cell::Cell;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use windows_sys::Win32::Devices::HumanInterfaceDevice::{
+    HID_USAGE_GENERIC_MOUSE, HID_USAGE_PAGE_GENERIC,
+};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -11,6 +14,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::UI::HiDpi::{
     GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI,
 };
+use windows_sys::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_REMOVE, RegisterRawInputDevices};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, FindWindowW, GetSystemMetrics, GetWindowPlacement, IsIconic, IsWindowVisible,
@@ -381,6 +385,36 @@ unsafe extern "system" fn move_proc(
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
+/// Stops raw mouse input (`WM_INPUT`) for the whole process. winit registers it
+/// when its event loop starts and passes every raw movement on as a device
+/// event; eframe answers each one with a frame while the pointer is over the
+/// window or a button is held. During a drag both are true for its whole
+/// length, since the window moves under the pointer and the button is released
+/// inside the move loop, where winit does not see it. So every movement of the
+/// mouse asked for a frame that nothing on screen needed, and the drag ran as a
+/// stream of vsync-bound presents. Ordinary pointer messages (`WM_MOUSEMOVE`, buttons, wheel) are unaffected,
+/// and they are all the window needs.
+///
+/// Call after the event loop exists; a later winit registration would undo it.
+pub fn stop_raw_mouse_input() -> io::Result<()> {
+    let mouse = RAWINPUTDEVICE {
+        usUsagePage: HID_USAGE_PAGE_GENERIC,
+        usUsage: HID_USAGE_GENERIC_MOUSE,
+        dwFlags: RIDEV_REMOVE,
+        // RIDEV_REMOVE requires no target window.
+        hwndTarget: std::ptr::null_mut(),
+    };
+    // SAFETY: one initialized RAWINPUTDEVICE on this stack frame with its exact size; the call
+    // reads it and keeps no pointer. Removing a registration only changes this process's input.
+    let removed = unsafe {
+        RegisterRawInputDevices(&mouse, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
+    };
+    if removed == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// Whether the Windows session is signing out or shutting down. winit leaves
 /// `WM_QUERYENDSESSION` to the default handler, so this is the GUI's only view of it.
 pub fn session_ending() -> bool {
@@ -415,17 +449,23 @@ pub fn taskbar_small_icon_size() -> i32 {
 mod tests {
     use std::cell::Cell;
 
+    use windows_sys::Win32::Devices::HumanInterfaceDevice::{
+        HID_USAGE_GENERIC_MOUSE, HID_USAGE_PAGE_GENERIC,
+    };
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::Input::{
+        GetRegisteredRawInputDevices, RAWINPUTDEVICE, RegisterRawInputDevices,
+    };
     use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, KillTimer, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-        SendMessageW, SetWindowPos, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOVE,
+        SendMessageW, SetWindowPos, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOVE, WM_SIZE,
         WM_WINDOWPOSCHANGED, WS_POPUP,
     };
 
     use super::{
         SavedWindow, UNCLOAK_TIMER_ID, cloak_window, forwards_position_change, quiet_moves,
-        set_cloak, window_cloaked,
+        set_cloak, stop_raw_mouse_input, window_cloaked,
     };
 
     /// A window that is never shown, owned by the test's thread.
@@ -475,6 +515,7 @@ mod tests {
     struct Seen {
         position_changes: Cell<u32>,
         moves: Cell<u32>,
+        sizes: Cell<u32>,
     }
 
     unsafe extern "system" fn record(
@@ -490,6 +531,7 @@ mod tests {
         match message {
             WM_WINDOWPOSCHANGED => seen.position_changes.set(seen.position_changes.get() + 1),
             WM_MOVE => seen.moves.set(seen.moves.get() + 1),
+            WM_SIZE => seen.sizes.set(seen.sizes.get() + 1),
             _ => {}
         }
         // SAFETY: forwards the message unchanged.
@@ -540,11 +582,55 @@ mod tests {
             "a move inside a drag reached winit"
         );
         assert_eq!(seen.moves.get(), moves + 2, "the default handling went on");
+        // winit answers WM_SIZE with `Resized`, and eframe paints at once for that.
+        assert_eq!(seen.sizes.get(), 0, "a move inside a drag reported a size");
 
         // SAFETY: as above.
         unsafe { SendMessageW(window.0, WM_EXITSIZEMOVE, 0, 0) };
         move_to(&window, 35);
         assert_eq!(seen.position_changes.get(), 2);
+    }
+
+    fn registered_mouse_input() -> bool {
+        let mut devices = [RAWINPUTDEVICE {
+            usUsagePage: 0,
+            usUsage: 0,
+            dwFlags: 0,
+            hwndTarget: std::ptr::null_mut(),
+        }; 8];
+        let mut count = devices.len() as u32;
+        // SAFETY: the buffer holds `count` devices of the given size and outlives the call.
+        let listed = unsafe {
+            GetRegisteredRawInputDevices(
+                devices.as_mut_ptr(),
+                &mut count,
+                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
+            )
+        };
+        assert_ne!(listed, u32::MAX, "could not list raw input devices");
+        devices[..listed as usize].iter().any(|device| {
+            device.usUsagePage == HID_USAGE_PAGE_GENERIC && device.usUsage == HID_USAGE_GENERIC_MOUSE
+        })
+    }
+
+    #[test]
+    fn raw_mouse_input_registered_as_winit_does_is_stopped() {
+        let window = Hidden::new();
+        let mouse = RAWINPUTDEVICE {
+            usUsagePage: HID_USAGE_PAGE_GENERIC,
+            usUsage: HID_USAGE_GENERIC_MOUSE,
+            dwFlags: 0,
+            hwndTarget: window.0,
+        };
+        // SAFETY: one initialized device of the given size; the window is this thread's.
+        let registered = unsafe {
+            RegisterRawInputDevices(&mouse, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
+        };
+        assert_ne!(registered, 0, "could not register raw mouse input");
+        assert!(registered_mouse_input());
+
+        stop_raw_mouse_input().expect("stop raw mouse input");
+        assert!(!registered_mouse_input());
     }
 
     #[test]

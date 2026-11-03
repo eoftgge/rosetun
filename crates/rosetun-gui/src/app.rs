@@ -219,6 +219,10 @@ impl App {
         {
             tracing::warn!(%error, "could not keep window drags from repainting");
         }
+        // eframe exists by now, so winit registered raw input already and will not again.
+        if let Err(error) = rosetun_shell::stop_raw_mouse_input() {
+            tracing::warn!(%error, "could not stop raw mouse input");
+        }
         self.window = window;
         if !start_hidden
             && let Some(window) = &mut self.window
