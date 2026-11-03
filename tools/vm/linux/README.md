@@ -36,8 +36,9 @@ It prints one line per stage and does, in order:
 2. builds exactly the committed `HEAD` in WSL into a new folder
    `target/l2-artifacts/<short sha>-<run id>` (it refuses a working tree with
    changes and lists them);
-3. restores the checkpoint `l2-clean` and waits until the guest answers over SSH,
-   at whatever address Hyper-V reports now;
+3. restores the checkpoint `l2-clean` (taken from the powered-off VM), boots the
+   guest and waits until it answers over SSH, at whatever address Hyper-V
+   reports now;
 4. checks that the guest is the stand (stand id, BIOS GUID, boot id) and copies
    the run to it;
 5. starts the job through the installed launcher with `sudo -n` (no password);
@@ -253,11 +254,21 @@ removes both files.
 ### 6. The clean checkpoint
 
 Check in the guest that `/run/rosetun` does not exist, no Rosetun service or
-helper process is installed or running, and the guest is idle. Then, on the host:
+helper process is installed or running, and the guest is idle. Then **shut the
+VM down** and take the checkpoint of the powered-off VM, on the host:
 
 ```powershell
+Stop-VM -Name rosetun-linux-l2
 Checkpoint-VM -Name rosetun-linux-l2 -SnapshotName l2-clean
 ```
+
+Why powered off: the Default Switch gets a new subnet at every Windows boot. A
+checkpoint of a running guest holds its memory, so a restore resumes the guest
+with the address of the old subnet, and after a host reboot the host cannot
+reach it (SSH stays silent). A powered-off checkpoint makes every run a fresh
+boot that takes an address of the current subnet; the stand checks the boot id
+after that boot anyway. `-Run` refuses a checkpoint with memory (the VM comes
+back `Saved` after the restore) and prints the commands below.
 
 Every run starts by restoring this checkpoint, so it must already hold the
 account, the key in `authorized_keys`, `hyperv-daemons` and the launcher. A
@@ -266,6 +277,7 @@ key the host cannot log in, without the launcher every run falls back to the
 password. After you change any of it, make the checkpoint again:
 
 ```powershell
+Stop-VM -Name rosetun-linux-l2
 Remove-VMCheckpoint -VMName rosetun-linux-l2 -Name l2-clean
 Checkpoint-VM -Name rosetun-linux-l2 -SnapshotName l2-clean
 ```
@@ -308,7 +320,17 @@ infrastructure error; a skipped or missing required scenario; a failed cleanup.
 - **The address changed** (after a reboot or a restore): nothing to do. The host
   reads the address from Hyper-V on every try and the key is pinned by stand id.
   If Hyper-V reports no IPv4 address, check `hyperv-daemons` in the guest, or put
-  the address into `SshHost` for the moment.
+  the address into `SshHost` for the moment (and empty it again afterwards).
+- **The guest does not answer over SSH after a host reboot.** The error names
+  the address Hyper-V reported, the host's `vEthernet (Default Switch)` subnet
+  and whether they match. "Same subnet: no" means the guest resumed with an old
+  address: `l2-clean` was taken from a running VM (`-Run` refuses that now) or
+  `SshHost` holds an old address. Make the checkpoint from the powered-off VM
+  (see "The clean checkpoint") and empty `SshHost`. "Same subnet: yes" points at
+  the guest itself: look at the VM console (`systemctl status ssh`, `ip addr`).
+- **`-Run` refused the checkpoint** ("holds the memory of a running guest"):
+  run the four commands it printed: restore and start, check the guest is
+  clean, `Stop-VM`, remove and take the checkpoint again.
 - **The host key did not match** (`REMOTE HOST IDENTIFICATION HAS CHANGED` or
   `Host key verification failed`): stop. Compare
   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the console with the
@@ -365,7 +387,8 @@ objects. They do not replace a Hyper-V run.
 Not part of `-Run` and not judged by the stand: these steps put the real helper
 under systemd in the stand VM by hand, from `packaging/linux/`. Restore
 `l2-clean` first, and never take a checkpoint afterwards: the clean checkpoint
-must not hold a Rosetun service (see "The clean checkpoint").
+must not hold a Rosetun service (see "The clean checkpoint"). When you are done
+checking, restore `l2-clean` again.
 
 1. **Build** the helper and the CLI of the commit you check, in WSL, on the host
    (`D:\path\to\rosetun` is your checkout; the Linux build gets its own target
