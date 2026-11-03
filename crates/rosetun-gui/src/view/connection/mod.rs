@@ -123,6 +123,16 @@ fn service_banner(ui: &mut egui::Ui, state: &State) {
     });
 }
 
+/// The service reports one hold: on Windows an upgrade left it, on Linux
+/// the service's table outlived a crash.
+fn hold_banner() -> String {
+    if cfg!(target_os = "linux") {
+        tr!("crash-hold-banner")
+    } else {
+        tr!("upgrade-hold-banner")
+    }
+}
+
 /// After an upgrade that held the network closed, until a connect or the
 /// user opens it.
 fn upgrade_hold_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) {
@@ -147,7 +157,7 @@ fn upgrade_hold_strip(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action
                             ui.set_min_height(button_height);
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(tr!("upgrade-hold-banner"))
+                                    RichText::new(hold_banner())
                                         .strong()
                                         .color(theme::palette().text),
                                 )

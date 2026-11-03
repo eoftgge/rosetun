@@ -1,9 +1,15 @@
+#[cfg(target_os = "linux")]
+pub mod cgroup;
 pub mod errors;
+#[cfg(target_os = "linux")]
+mod nftables;
 pub mod platform;
 pub mod upgrade_hold;
 
 pub use errors::RoutingError;
 pub use platform::backend;
+#[cfg(target_os = "linux")]
+pub use platform::backend_with_cgroups;
 pub use platform::tunnel_adapter_present;
 pub use rosetun_config::ProtectionCapabilities;
 
@@ -105,6 +111,12 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
 
     fn preflight(&self) -> Result<(), RoutingError>;
 
+    /// Why the kill switch is not available, in words for an error message,
+    /// when `capabilities` says so.
+    fn unavailable_reason(&self) -> Option<String> {
+        None
+    }
+
     /// Installs bootstrap protection before the engine starts. The returned
     /// guard owns the platform protection session until disconnect.
     fn begin_protection(
@@ -142,6 +154,14 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
         _binaries: &[&std::path::Path],
     ) -> Result<RoutingGuard, RoutingError> {
         Err(RoutingError::Unsupported)
+    }
+
+    /// The service stops normally, after the session's teardown: removes
+    /// what only a crash may leave behind. Nothing on Windows, where a
+    /// dynamic WFP session dies with the process anyway and the upgrade
+    /// hold must outlive the installer's stop.
+    fn release_on_stop(&self) -> Result<(), RoutingError> {
+        Ok(())
     }
 }
 
@@ -261,7 +281,7 @@ impl RoutingGuard {
         Self::new_with_reconnector(|_, _| Ok(()), |_| Ok(()), || Ok(()))
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn from_session(session: impl ProtectionSession + 'static) -> Self {
         Self {
             session: Some(Box::new(session)),

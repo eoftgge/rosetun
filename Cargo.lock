@@ -3045,6 +3045,7 @@ dependencies = [
 name = "rosetun-routing"
 version = "0.5.0-alpha.1"
 dependencies = [
+ "libc",
  "rosetun-config",
  "thiserror 2.0.21",
  "tracing",

@@ -452,6 +452,7 @@ notice-restored = Connected again
 notice-connect-failed = Could not connect
 notice-held-after-upgrade = Could not connect after the update · internet blocked
 upgrade-hold-banner = The network is closed after the update, so your address stays hidden.
+crash-hold-banner = The network is closed after a service failure, so your address stays hidden.
 upgrade-hold-connect = Connect
 upgrade-hold-open = Open network
 notice-update-body = You can download it in Rosetun

@@ -465,6 +465,7 @@ notice-restored = Снова подключено
 notice-connect-failed = Не удалось подключиться
 notice-held-after-upgrade = Не удалось подключиться после обновления · интернет закрыт
 upgrade-hold-banner = Сеть закрыта после обновления, чтобы не открыть ваш адрес.
+crash-hold-banner = Сеть закрыта после сбоя службы, чтобы не открыть ваш адрес.
 upgrade-hold-connect = Подключиться
 upgrade-hold-open = Открыть сеть
 notice-update-body = Скачать её можно в Rosetun

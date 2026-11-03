@@ -16,6 +16,8 @@ pub enum RoutingError {
     Wfp { code: u32, context: &'static str },
     #[error("routing for this platform is not yet implemented")]
     Unsupported,
+    #[error("protection is not available: {0}")]
+    Unavailable(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

@@ -172,6 +172,8 @@ pub struct Helper {
     lockdown: lockdown::SharedLockdown,
     /// What the routing backend implements, read once when the helper is built.
     protection: ProtectionCapabilities,
+    /// Why the kill switch is missing, for the refusal of a connect.
+    protection_unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,8 +326,17 @@ impl Helper {
         let lockdown = lockdown::SharedLockdown::default();
         let connections = Arc::new(Mutex::new(ConnectionBook::default()));
         let protection = routing.capabilities();
+        let protection_unavailable = if protection.kill_switch {
+            None
+        } else {
+            routing.unavailable_reason()
+        };
+        if let Some(reason) = protection_unavailable.as_deref() {
+            tracing::warn!(reason, "the kill switch is not available");
+        }
         Self {
             protection,
+            protection_unavailable,
             lockdown: Arc::clone(&lockdown),
             status: Arc::clone(&status),
             connections: Arc::clone(&connections),
@@ -500,10 +511,13 @@ impl Helper {
     fn require_protection(&self, request: &ConnectRequest) -> Result<(), HelperError> {
         let wanted = request.settings.kill_switch || lockdown::read(&self.lockdown).enabled;
         if wanted && !self.protection.kill_switch {
-            return Err(HelperError::new(
-                ErrorCode::ProtectionUnavailable,
-                "the kill switch is not available on this system",
-            ));
+            let message = match self.protection_unavailable.as_deref() {
+                Some(reason) => {
+                    format!("the kill switch is not available on this system: {reason}")
+                }
+                None => "the kill switch is not available on this system".to_owned(),
+            };
+            return Err(HelperError::new(ErrorCode::ProtectionUnavailable, message));
         }
         Ok(())
     }
@@ -1250,6 +1264,11 @@ impl Helper {
         session.request = None;
         session.reconnect = None;
         session.teardown();
+        // A normal stop leaves nothing behind; only a crash keeps the
+        // network closed.
+        if let Err(error) = session.routing.release_on_stop() {
+            tracing::error!(%error, "could not remove protection left from before");
+        }
         self.with_status(|status| *status = Status::default());
         drop(session);
         // The service must not exit with a live probe process or its secret config.

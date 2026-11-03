@@ -54,6 +54,7 @@ enum Command {
     /// settings.
     LockdownWithLan(bool),
     ResetFirewall,
+    OpenNetwork,
     Disconnect,
     Shutdown,
 }
@@ -138,6 +139,7 @@ fn main() -> ExitCode {
         Command::CloseConnection { id } => with_helper(|client| connections::close(client, &id)),
         Command::Status => with_helper(status),
         Command::Temporary => with_helper(temporary),
+        Command::OpenNetwork => with_helper(open_network),
         Command::Disconnect => with_helper(disconnect),
         Command::Shutdown => with_helper(shutdown),
     }
@@ -336,6 +338,9 @@ fn status(client: &mut HelperClient) -> ExitCode {
             }
             println!("temporary rules: {temporary_count}");
             println!("lockdown: {}", if status.lockdown { "on" } else { "off" });
+            if status.upgrade_hold {
+                println!("network: held closed (rosetun open-network opens it)");
+            }
             println!(
                 "node: {}",
                 terminal_text(status.node.as_ref().map_or("none", NodeId::as_str))
@@ -422,6 +427,21 @@ fn disconnect(client: &mut HelperClient) -> ExitCode {
         }
         Err(error) => {
             report_helper_error(&error, "failed to disconnect tunnel");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Lifts the hold an upgrade (Windows) or a crash of the service (Linux)
+/// left; nothing to do is a success too.
+fn open_network(client: &mut HelperClient) -> ExitCode {
+    match client.open_network() {
+        Ok(()) => {
+            println!("network open");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            report_helper_error(&error, "failed to open the network");
             ExitCode::FAILURE
         }
     }
@@ -775,6 +795,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["lockdown", "on", "--lan", "on"] => Ok(Command::LockdownWithLan(true)),
         ["lockdown", "on", "--lan", "off"] => Ok(Command::LockdownWithLan(false)),
         ["reset-firewall"] => Ok(Command::ResetFirewall),
+        ["open-network"] => Ok(Command::OpenNetwork),
         ["disconnect"] => Ok(Command::Disconnect),
         ["shutdown"] => Ok(Command::Shutdown),
         ["connect", ..] => Err("connect accepts zero or one request JSON path".to_owned()),
@@ -794,6 +815,7 @@ fn parse_command_arguments(arguments: &[String]) -> Result<Command, String> {
         ["reset-firewall", ..] => Err("reset-firewall does not accept arguments".to_owned()),
         ["status", ..] => Err("status does not accept arguments".to_owned()),
         ["temporary", ..] => Err("temporary does not accept arguments".to_owned()),
+        ["open-network", ..] => Err("open-network does not accept arguments".to_owned()),
         ["disconnect", ..] => Err("disconnect does not accept arguments".to_owned()),
         ["shutdown", ..] => Err("shutdown does not accept arguments".to_owned()),
         [_, ..] => Err("unknown command".to_owned()),
@@ -833,6 +855,7 @@ Usage:
   rosetun lockdown <on|off>    (experimental)
   rosetun lockdown on --lan <on|off>
   rosetun reset-firewall
+  rosetun open-network
   rosetun disconnect
   rosetun shutdown
 
@@ -842,6 +865,8 @@ close ends one of them by its ID (the 8 characters shown, or the full ID).
 Lockdown (experimental) blocks all traffic outside the tunnel, also when
 disconnected and after a reboot. Only an administrator changes it.
 reset-firewall removes it without the service; run it as administrator.
+open-network lifts the hold that keeps the network closed after an update
+(Windows) or after the service failed (Linux).
 Options for sub add may appear in any order after the URL."
     );
 }
@@ -962,6 +987,7 @@ mod tests {
         assert_eq!(parse(&["reset-firewall"]), Ok(Command::ResetFirewall));
         assert!(parse(&["reset-firewall", "now"]).is_err());
         assert_eq!(parse(&["disconnect"]), Ok(Command::Disconnect));
+        assert_eq!(parse(&["open-network"]), Ok(Command::OpenNetwork));
         assert_eq!(parse(&["shutdown"]), Ok(Command::Shutdown));
     }
 
@@ -1215,7 +1241,14 @@ mod tests {
 
     #[test]
     fn commands_without_parameters_reject_extra_arguments() {
-        for command in ["status", "temporary", "config", "disconnect", "shutdown"] {
+        for command in [
+            "status",
+            "temporary",
+            "config",
+            "open-network",
+            "disconnect",
+            "shutdown",
+        ] {
             for arguments in [vec![command, "extra"], vec![command, "extra", "another"]] {
                 assert_eq!(
                     parse(&arguments),

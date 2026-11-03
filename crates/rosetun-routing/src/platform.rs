@@ -1,21 +1,39 @@
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 use crate::{ProtectionCapabilities, RoutingBackend, RoutingError, RoutingGuard, RoutingPlan};
 
+/// The platform's backend. On Linux it offers no protection: only the
+/// service, through `backend_with_cgroups`, knows its engines' cgroup.
 pub fn backend() -> Box<dyn crate::RoutingBackend> {
     #[cfg(windows)]
     {
         Box::new(windows::WfpBackend::new())
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        backend_with_cgroups(Err(linux::NOT_THE_SERVICE.to_owned()))
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Box::new(Stub {
             name: PLATFORM_NAME,
         })
     }
+}
+
+/// The nftables backend for the engines in these leaves, or without
+/// protection for the reason given.
+#[cfg(target_os = "linux")]
+pub fn backend_with_cgroups(
+    leaves: Result<crate::cgroup::Leaves, String>,
+) -> Box<dyn crate::RoutingBackend> {
+    Box::new(linux::NftBackend::new(leaves))
 }
 
 /// Whether Windows still has the adapter with this alias.
@@ -118,16 +136,16 @@ pub(super) fn hold_end() -> Result<(), crate::RoutingError> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 const PLATFORM_NAME: &str = "unsupported";
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 #[derive(Debug)]
 struct Stub {
     name: &'static str,
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 impl RoutingBackend for Stub {
     fn name(&self) -> &'static str {
         self.name
@@ -168,7 +186,7 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn a_platform_without_routing_has_no_protection() {
+    fn a_platform_without_routing_or_outside_the_service_has_no_protection() {
         assert_eq!(
             super::backend().capabilities(),
             ProtectionCapabilities::default()

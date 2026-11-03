@@ -113,6 +113,13 @@ impl Helper {
                 "only an administrator can change Lockdown",
             ));
         }
+        // Turning it off still works: on Linux it lifts the hold after a crash.
+        if enabled && !self.protection.lockdown {
+            return Err(HelperError::new(
+                ErrorCode::ProtectionUnavailable,
+                "Lockdown is not available on this system",
+            ));
+        }
         let mut session = self.session_for(SessionHolder::Lockdown)?;
         if self.with_status(|status| status.state.is_transitional()) {
             return Err(HelperError::new(
@@ -625,6 +632,10 @@ mod tests {
         hold_ended: AtomicUsize,
         installed: Mutex<Option<LockdownStatus>>,
         fail_disable: std::sync::atomic::AtomicBool,
+        /// A system without Lockdown and without a kill switch, as Linux
+        /// outside its service.
+        unprotected: std::sync::atomic::AtomicBool,
+        released_on_stop: AtomicUsize,
     }
 
     impl Calls {
@@ -655,10 +666,18 @@ mod tests {
         }
 
         fn capabilities(&self) -> ProtectionCapabilities {
+            let protected = !self.0.unprotected.load(Ordering::Acquire);
             ProtectionCapabilities {
-                kill_switch: true,
-                lockdown: true,
+                kill_switch: protected,
+                lockdown: protected,
             }
+        }
+
+        fn unavailable_reason(&self) -> Option<String> {
+            self.0
+                .unprotected
+                .load(Ordering::Acquire)
+                .then(|| "no cgroup of its own".to_owned())
         }
 
         fn preflight(&self) -> Result<(), RoutingError> {
@@ -671,6 +690,11 @@ mod tests {
             _engine_binaries: &[&Path],
         ) -> Result<RoutingGuard, RoutingError> {
             Ok(RoutingGuard::noop())
+        }
+
+        fn release_on_stop(&self) -> Result<(), RoutingError> {
+            self.0.released_on_stop.fetch_add(1, Ordering::AcqRel);
+            Ok(())
         }
 
         fn lockdown_status(&self) -> Result<LockdownStatus, RoutingError> {
@@ -750,6 +774,41 @@ mod tests {
         helper.set_lockdown_as(&caller, false, false).unwrap();
         assert!(!helper.status().lockdown);
         assert_eq!(calls.disabled.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn lockdown_is_refused_where_the_system_has_none_but_can_still_be_lifted() {
+        let calls = Arc::new(Calls::default());
+        calls.unprotected.store(true, Ordering::Release);
+        let helper = lockdown_helper(&calls);
+        let caller = Caller::fake(b"admin", true);
+        let error = helper.set_lockdown_as(&caller, true, false).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ProtectionUnavailable);
+        assert!(calls.enabled.lock().unwrap().is_empty());
+        helper.set_lockdown_as(&caller, false, false).unwrap();
+        assert_eq!(calls.disabled(), 1);
+    }
+
+    #[test]
+    fn the_reason_for_a_missing_kill_switch_is_kept_for_the_refusal() {
+        let calls = Arc::new(Calls::default());
+        calls.unprotected.store(true, Ordering::Release);
+        let helper = lockdown_helper(&calls);
+        assert_eq!(
+            helper.protection_unavailable.as_deref(),
+            Some("no cgroup of its own")
+        );
+        let protected = lockdown_helper(&Arc::new(Calls::default()));
+        assert_eq!(protected.protection_unavailable, None);
+    }
+
+    #[test]
+    fn a_normal_stop_releases_what_only_a_crash_may_leave() {
+        let calls = Calls::held();
+        let helper = held_helper(&calls);
+        assert!(helper.status().upgrade_hold);
+        helper.shutdown();
+        assert_eq!(calls.released_on_stop.load(Ordering::Acquire), 1);
     }
 
     #[test]
