@@ -28,6 +28,7 @@ mod programs;
 mod qr;
 mod renderer;
 mod reorder;
+mod repaint_trace;
 #[cfg(windows)]
 mod report;
 mod rose_icon;

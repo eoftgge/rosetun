@@ -15,6 +15,7 @@ use crate::state::{Job, State};
 use crate::tray;
 #[cfg(windows)]
 use crate::window_memory::WindowMemory;
+use crate::repaint_trace::RepaintTrace;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
 use crate::{brand, display, i18n, motion, system_fonts, theme, view};
 
@@ -71,6 +72,8 @@ pub(crate) struct App {
     workers: WorkerDispatcher,
     applied_scale: Option<u16>,
     system_language: Option<i18n::Language>,
+    /// Set only with `ROSETUN_REPAINT_TRACE`.
+    repaint_trace: Option<RepaintTrace>,
     #[cfg(windows)]
     shell_events: Option<Receiver<ShellEvent>>,
     #[cfg(windows)]
@@ -136,12 +139,17 @@ impl App {
         let workers = worker::start(store, tx, cc.egui_ctx.clone());
         #[cfg(windows)]
         workers.move_autostart_to_task();
+        let repaint_trace = RepaintTrace::from_env();
+        if repaint_trace.is_some() {
+            tracing::info!("repaint trace on");
+        }
         Self {
             state,
             events,
             workers,
             applied_scale: Some(applied_scale),
             system_language,
+            repaint_trace,
             #[cfg(windows)]
             shell_events: None,
             #[cfg(windows)]
@@ -803,6 +811,9 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if let Some(trace) = &mut self.repaint_trace {
+            trace.observe(ui.ctx());
+        }
         #[cfg(windows)]
         self.uncloak_when_painted(ui.ctx());
         // The root `Ui` copies the style before `logic` runs, so a new accent applied there
