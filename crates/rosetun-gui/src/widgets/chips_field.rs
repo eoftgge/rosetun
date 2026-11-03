@@ -286,6 +286,9 @@ impl<'a> ChipsField<'a> {
                     }
                 });
         });
+        // The scope above moved the cursor back to the end of its own content, which is above
+        // the field's bottom when the field is taller than what it holds.
+        ui.advance_cursor_after_rect(rect);
         if let Some(response) = &input {
             if response.changed()
                 && let Some(end) = self.input.rfind(SEPARATORS)

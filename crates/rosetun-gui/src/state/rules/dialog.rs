@@ -98,6 +98,10 @@ pub(crate) struct AddRuleDialog {
     pub(crate) address_input: String,
     /// An item was dropped for `MAX_ADDRESSES`.
     pub(crate) address_overflow: bool,
+    /// The recent sites offered under the address field, as they stood when the tunnel's
+    /// connections were read once after the tab was opened; they stay as they are while the
+    /// dialog is open. `None` until that answer comes.
+    pub(crate) recent: Option<Vec<String>>,
     pub(crate) list: Option<ListId>,
     pub(crate) selected_categories: Vec<String>,
     pub(crate) category_filter: String,
@@ -134,6 +138,7 @@ impl AddRuleDialog {
             addresses: Vec::new(),
             address_input: String::new(),
             address_overflow: false,
+            recent: None,
             list: None,
             selected_categories: Vec::new(),
             category_filter: String::new(),

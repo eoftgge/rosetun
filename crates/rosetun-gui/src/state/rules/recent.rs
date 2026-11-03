@@ -1,12 +1,14 @@
 //! The sites the tunnel carried lately, offered under the address field of the rule dialog.
-//! They come from the connection list the Traffic tab shows, only live, in memory: the list
-//! is the user's browsing history, so nothing here is logged, saved or reported.
+//! They come from the connection list the Traffic tab shows, read once when the address tab
+//! opens and then kept as they were, in the dialog and in memory only: the list is the
+//! user's browsing history, so nothing here is logged, saved or reported.
 
 use std::collections::HashSet;
 use std::net::IpAddr;
 
 use rosetun_config::{DomainMatch, LiveConnection, RuleMatcher};
 
+use super::super::traffic::ConnectionsList;
 use super::super::{Screen, State};
 use super::address::{Address, parse_address};
 use super::dialog::RuleInputKind;
@@ -32,64 +34,48 @@ impl std::fmt::Debug for RecentSite {
 }
 
 impl State {
-    /// Whether the open rule dialog shows the recent sites, so their source is polled.
+    /// Whether the open rule dialog still waits for the sites, so their source is asked once.
     pub(crate) fn recent_sites_wanted(&self) -> bool {
         self.screen == Screen::Rules
             && self.rules.screen.add.as_ref().is_some_and(|dialog| {
-                dialog.kind == RuleInputKind::Address && dialog.editing.is_none()
+                dialog.kind == RuleInputKind::Address
+                    && dialog.editing.is_none()
+                    && dialog.recent.is_none()
             })
     }
 
-    /// Up to `MAX_RECENT_SITES` sites, the latest first: from the active and the lately
-    /// closed connections. A domain stands once whatever its `www.` prefix; an address only
-    /// when no domain was seen for it. Empty without a tunnel or an answer.
+    /// Keeps the sites of the connection list just read in the dialog that waits for them.
+    pub(in crate::state) fn pin_recent_sites(&mut self) {
+        if self.recent_sites_wanted() && self.connections_available() {
+            let sites = recent_addresses(&self.traffic.connections);
+            if let Some(dialog) = &mut self.rules.screen.add {
+                dialog.recent = Some(sites);
+            }
+        }
+    }
+
+    /// The sites kept in the dialog, with whether the set already has a rule for each. Empty
+    /// without a tunnel or before the answer.
     pub(crate) fn recent_sites(&self) -> Vec<RecentSite> {
-        if !self.recent_sites_wanted() || !self.connections_available() {
+        let Some(dialog) = &self.rules.screen.add else {
+            return Vec::new();
+        };
+        if self.screen != Screen::Rules
+            || dialog.kind != RuleInputKind::Address
+            || dialog.editing.is_some()
+            || !self.connections_available()
+        {
             return Vec::new();
         }
-        let list = &self.traffic.connections;
-        let mut seen: Vec<(&LiveConnection, Address)> = list
-            .active
+        dialog
+            .recent
             .iter()
-            .chain(&list.closed)
-            .filter_map(|connection| {
-                let address = parse_address(connection.host.trim()).ok()?;
-                Some((connection, address))
+            .flatten()
+            .map(|address| RecentSite {
+                has_rule: self.rule_covers(address),
+                address: address.clone(),
             })
-            .collect();
-        // An active connection is seen now, a closed one when it ended.
-        seen.sort_by_key(|(connection, _)| {
-            std::cmp::Reverse((
-                connection.end_unix_ms.unwrap_or(u64::MAX),
-                connection.start_unix_ms,
-            ))
-        });
-        let named: HashSet<IpAddr> = seen
-            .iter()
-            .filter(|(_, address)| address.is_domain())
-            .filter_map(|(connection, _)| connection.ip.as_deref()?.parse().ok())
-            .collect();
-        let mut sites: Vec<RecentSite> = Vec::new();
-        let mut taken = HashSet::new();
-        for (_, address) in &seen {
-            let text = address.label(true);
-            if let Address::Ip(_) = address
-                && text.parse::<IpAddr>().is_ok_and(|ip| named.contains(&ip))
-            {
-                continue;
-            }
-            if !taken.insert(text.to_lowercase()) {
-                continue;
-            }
-            sites.push(RecentSite {
-                has_rule: self.rule_covers(&text),
-                address: text,
-            });
-            if sites.len() == MAX_RECENT_SITES {
-                break;
-            }
-        }
-        sites
+            .collect()
     }
 
     /// Whether the rules of the set being edited, and the session's temporary ones when that
@@ -113,6 +99,51 @@ impl State {
             .chain(temporary)
             .any(|rule| covers(&rule.matcher, address))
     }
+}
+
+/// Up to `MAX_RECENT_SITES` sites, the latest first: from the active and the lately closed
+/// connections. A domain stands once whatever its `www.` prefix; an address only when no
+/// domain was seen for it.
+fn recent_addresses(list: &ConnectionsList) -> Vec<String> {
+    let mut seen: Vec<(&LiveConnection, Address)> = list
+        .active
+        .iter()
+        .chain(&list.closed)
+        .filter_map(|connection| {
+            let address = parse_address(connection.host.trim()).ok()?;
+            Some((connection, address))
+        })
+        .collect();
+    // An active connection is seen now, a closed one when it ended.
+    seen.sort_by_key(|(connection, _)| {
+        std::cmp::Reverse((
+            connection.end_unix_ms.unwrap_or(u64::MAX),
+            connection.start_unix_ms,
+        ))
+    });
+    let named: HashSet<IpAddr> = seen
+        .iter()
+        .filter(|(_, address)| address.is_domain())
+        .filter_map(|(connection, _)| connection.ip.as_deref()?.parse().ok())
+        .collect();
+    let mut sites: Vec<String> = Vec::new();
+    let mut taken = HashSet::new();
+    for (_, address) in &seen {
+        let text = address.label(true);
+        if let Address::Ip(_) = address
+            && text.parse::<IpAddr>().is_ok_and(|ip| named.contains(&ip))
+        {
+            continue;
+        }
+        if !taken.insert(text.to_lowercase()) {
+            continue;
+        }
+        sites.push(text);
+        if sites.len() == MAX_RECENT_SITES {
+            break;
+        }
+    }
+    sites
 }
 
 /// Whether `matcher` applies to the site `address` (a domain, or an IP address).

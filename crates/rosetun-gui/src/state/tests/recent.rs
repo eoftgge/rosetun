@@ -51,7 +51,7 @@ fn sites(state: &State) -> Vec<String> {
 }
 
 #[test]
-fn the_address_tab_asks_for_the_connections_and_gives_them_up_when_it_is_left() {
+fn the_address_tab_asks_once_and_keeps_the_sites_as_they_were() {
     let mut state = state_with_rules();
     state.helper_available = true;
     state.reduce(WorkerEvent::Status(Status {
@@ -70,32 +70,54 @@ fn the_address_tab_asks_for_the_connections_and_gives_them_up_when_it_is_left() 
         state.take_connections(100),
         Some(Job::Connections)
     ));
+    assert!(
+        state.take_connections(100).is_none(),
+        "one request at a time"
+    );
     state.reduce(answer(vec![live("example.com", None, 1_000, None)], vec![]));
     assert_eq!(sites(&state), ["example.com"]);
     assert!(
-        state.take_connections(100).is_none(),
-        "once a second, like the Traffic tab"
+        state.take_connections(101).is_none(),
+        "not asked again once the answer came"
     );
-    assert!(matches!(
-        state.take_connections(101),
-        Some(Job::Connections)
-    ));
-    state.reduce(answer(vec![live("example.com", None, 1_000, None)], vec![]));
-
-    state.act(Action::SelectRuleInput(RuleInputKind::List));
-    assert!(state.take_connections(102).is_none());
-    assert!(sites(&state).is_empty());
     assert!(
         state.traffic.connections.active.is_empty(),
-        "the list is not kept once nothing shows it"
+        "the list itself is not kept"
     );
 
+    // Whatever the tunnel carries later, the sites stay.
+    state.reduce(answer(
+        vec![live("other.example.net", None, 2_000, None)],
+        vec![],
+    ));
+    assert_eq!(sites(&state), ["example.com"]);
+    state.act(Action::SelectRuleInput(RuleInputKind::List));
+    assert!(sites(&state).is_empty(), "shown on the address tab only");
     state.act(Action::SelectRuleInput(RuleInputKind::Address));
-    assert!(state.take_connections(103).is_some());
-    state.reduce(answer(vec![live("example.com", None, 1_000, None)], vec![]));
+    assert!(state.take_connections(102).is_none());
+    assert_eq!(sites(&state), ["example.com"]);
+
     state.act(Action::CancelAddRule);
-    assert!(state.take_connections(104).is_none());
-    assert!(state.traffic.connections.active.is_empty());
+    state.act(Action::OpenAddRule);
+    state.act(Action::SelectRuleInput(RuleInputKind::Address));
+    assert!(sites(&state).is_empty(), "a new dialog starts over");
+    assert!(state.take_connections(103).is_some());
+}
+
+#[test]
+fn a_failed_answer_is_asked_for_again_until_one_comes() {
+    let mut state = address_dialog();
+    assert!(state.take_connections(100).is_some());
+    state.reduce(WorkerEvent::Connections {
+        result: Err(crate::worker::HelperCommandError::Client(
+            rosetun_ipc::ClientError::Closed,
+        )),
+        received_ms: 0,
+    });
+    assert!(sites(&state).is_empty());
+    assert!(state.take_connections(101).is_some());
+    state.reduce(answer(vec![live("example.com", None, 1_000, None)], vec![]));
+    assert_eq!(sites(&state), ["example.com"]);
 }
 
 #[test]

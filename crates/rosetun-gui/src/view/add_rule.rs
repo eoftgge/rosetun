@@ -2671,4 +2671,51 @@ mod tests {
             assert!(dialog.has_address("example.com"));
         });
     }
+
+    #[test]
+    fn under_the_address_field_stand_subdomains_then_the_recent_sites_without_overlap() {
+        use crate::test_ui::TestScreen;
+
+        for language in [i18n::Language::English, i18n::Language::Russian] {
+            i18n::in_language(language, || {
+                let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+                dialog.kind = RuleInputKind::Address;
+                let sites = recent_sites_of(&[("example.com", false)]);
+                let config = AppConfig::default();
+                let mut screen = TestScreen::new(COMPACT);
+                let texts = screen.settle(|ui| {
+                    show(
+                        ui.ctx(),
+                        &mut dialog,
+                        &config,
+                        false,
+                        0,
+                        &sites,
+                        &mut Vec::new(),
+                    );
+                });
+                let rect = |text: &str| {
+                    texts
+                        .iter()
+                        .find(|(painted, _)| painted == text)
+                        .unwrap_or_else(|| panic!("no text {text:?}"))
+                        .1
+                };
+                let hint = rect(&tr!("address-hint"));
+                let subdomains = rect(&tr!("include-subdomains"));
+                let title = rect(&tr!("recent-sites"));
+                let site = rect("example.com");
+                // The field is three rows tall, so what follows starts below all of them.
+                assert!(
+                    subdomains.top() >= hint.top() + 3.0 * 24.0,
+                    "{subdomains:?}"
+                );
+                assert!(
+                    title.top() >= subdomains.bottom(),
+                    "{title:?} {subdomains:?}"
+                );
+                assert!(site.top() >= title.bottom(), "{site:?} {title:?}");
+            });
+        }
+    }
 }

@@ -440,8 +440,8 @@ impl State {
             })
     }
 
-    /// Once a second, only while the Traffic tab is on screen or the rule dialog shows the
-    /// recent sites.
+    /// Once a second, only while the Traffic tab is on screen; once for the rule dialog that
+    /// waits for the recent sites.
     pub(super) fn connections_due(&self) -> Option<u64> {
         if !(self.screen == Screen::Traffic || self.recent_sites_wanted())
             || self.traffic.window_hidden
@@ -508,6 +508,7 @@ impl State {
                 list.closed = closed;
                 list.received = true;
                 list.denied = false;
+                self.pin_recent_sites();
             }
             Err(HelperCommandError::Client(ClientError::Helper(HelperError {
                 code: ErrorCode::AccessDenied,
