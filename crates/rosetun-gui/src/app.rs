@@ -8,6 +8,7 @@ use rosetun_core::Store;
 
 #[cfg(windows)]
 use crate::notices::{Notice, Notices};
+use crate::repaint_trace::RepaintTrace;
 #[cfg(windows)]
 use crate::state::{Action, OpenedLink, QuitDecision};
 use crate::state::{Job, State};
@@ -15,7 +16,6 @@ use crate::state::{Job, State};
 use crate::tray;
 #[cfg(windows)]
 use crate::window_memory::WindowMemory;
-use crate::repaint_trace::RepaintTrace;
 use crate::worker::{self, WorkerDispatcher, WorkerEvent};
 use crate::{brand, display, i18n, motion, system_fonts, theme, view};
 

@@ -406,9 +406,8 @@ pub fn stop_raw_mouse_input() -> io::Result<()> {
     };
     // SAFETY: one initialized RAWINPUTDEVICE on this stack frame with its exact size; the call
     // reads it and keeps no pointer. Removing a registration only changes this process's input.
-    let removed = unsafe {
-        RegisterRawInputDevices(&mouse, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
-    };
+    let removed =
+        unsafe { RegisterRawInputDevices(&mouse, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32) };
     if removed == 0 {
         return Err(io::Error::last_os_error());
     }
@@ -609,7 +608,8 @@ mod tests {
         };
         assert_ne!(listed, u32::MAX, "could not list raw input devices");
         devices[..listed as usize].iter().any(|device| {
-            device.usUsagePage == HID_USAGE_PAGE_GENERIC && device.usUsage == HID_USAGE_GENERIC_MOUSE
+            device.usUsagePage == HID_USAGE_PAGE_GENERIC
+                && device.usUsage == HID_USAGE_GENERIC_MOUSE
         })
     }
 

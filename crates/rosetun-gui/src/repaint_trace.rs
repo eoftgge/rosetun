@@ -217,7 +217,10 @@ mod tests {
             ),
             None
         );
-        assert_eq!(tally.record(start + Duration::from_millis(200), [], []), None);
+        assert_eq!(
+            tally.record(start + Duration::from_millis(200), [], []),
+            None
+        );
 
         let summary = tally
             .record(start + Duration::from_millis(250), [header()], ["key"])
@@ -291,6 +294,9 @@ mod tests {
             "pointer moved"
         );
         assert_eq!(event_kind(&egui::Event::Text("secret".to_owned())), "text");
-        assert_eq!(event_kind(&egui::Event::Paste("secret".to_owned())), "clipboard");
+        assert_eq!(
+            event_kind(&egui::Event::Paste("secret".to_owned())),
+            "clipboard"
+        );
     }
 }
