@@ -35,10 +35,9 @@ impl ProgramKey {
 
 impl ProcessGroup {
     pub(crate) fn key(&self) -> ProgramKey {
-        self.path.as_deref().map_or_else(
-            || ProgramKey::of_name(&self.name),
-            ProgramKey::of_path,
-        )
+        self.path
+            .as_deref()
+            .map_or_else(|| ProgramKey::of_name(&self.name), ProgramKey::of_path)
     }
 }
 

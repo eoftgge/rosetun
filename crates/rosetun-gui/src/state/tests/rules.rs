@@ -321,7 +321,11 @@ fn a_browsed_file_is_ticked_with_its_path_whatever_the_folder_setting_says() {
         state.reduce(WorkerEvent::BrowsedExecutable(Some(path.clone())));
         let dialog = state.rules.screen.add.as_ref().unwrap();
         assert!(!dialog.browsing);
-        assert_eq!(dialog.chosen.len(), 2, "added to the program already ticked");
+        assert_eq!(
+            dialog.chosen.len(),
+            2,
+            "added to the program already ticked"
+        );
         assert_eq!(dialog.chosen[1].path.as_ref(), Some(&path));
         assert!(dialog.chosen[1].fixed_path);
         assert_eq!(
@@ -342,7 +346,13 @@ fn cancelled_or_late_browse_does_not_replace_input() {
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Process));
-    state.rules.screen.add.as_mut().unwrap().tick_program("current.exe");
+    state
+        .rules
+        .screen
+        .add
+        .as_mut()
+        .unwrap()
+        .tick_program("current.exe");
     state.act(Action::BrowseExecutable);
     state.reduce(WorkerEvent::BrowsedExecutable(None));
     let dialog = state.rules.screen.add.as_ref().unwrap();
@@ -1039,9 +1049,17 @@ fn the_program_kind_reads_the_list_again_once_it_is_stale() {
 
 fn tool_paths() -> (&'static str, &'static str, &'static str) {
     #[cfg(windows)]
-    return (r"C:\Apps\Tool.exe", r"C:\Other\Tool.exe", r"C:\Apps\Curl.exe");
+    return (
+        r"C:\Apps\Tool.exe",
+        r"C:\Other\Tool.exe",
+        r"C:\Apps\Curl.exe",
+    );
     #[cfg(not(windows))]
-    return ("/opt/apps/Tool.exe", "/opt/other/Tool.exe", "/opt/apps/Curl.exe");
+    return (
+        "/opt/apps/Tool.exe",
+        "/opt/other/Tool.exe",
+        "/opt/apps/Curl.exe",
+    );
 }
 
 /// A new rule dialog on the program kind with `processes` listed, as the service answered.
@@ -1215,7 +1233,11 @@ fn programs_with_the_same_name_make_one_rule_for_any_folder() {
     assert_eq!(dialog.process_rule_count(), 1);
     assert!(matches!(
         state.act(Action::SubmitAddRule),
-        Some(Job::AddRule(_, RuleMatcher::Process(ProcessMatch::Name(_)), _))
+        Some(Job::AddRule(
+            _,
+            RuleMatcher::Process(ProcessMatch::Name(_)),
+            _
+        ))
     ));
 }
 
@@ -1238,7 +1260,11 @@ fn only_this_folder_needs_the_path_of_every_ticked_program() {
     dialog.toggle_listed(0);
     dialog.set_process_match_mode(ProcessMatchMode::Path);
     dialog.toggle_listed(1);
-    assert_eq!(dialog.chosen.len(), 1, "a program without a path is not ticked");
+    assert_eq!(
+        dialog.chosen.len(),
+        1,
+        "a program without a path is not ticked"
+    );
 }
 
 #[test]
@@ -1330,7 +1356,10 @@ fn editing_a_program_rule_keeps_one_ticked_and_ticking_another_replaces_it() {
     assert_eq!(dialog.chosen.len(), 1);
     assert_eq!(dialog.chosen[0].path.as_deref(), Some(other.as_ref()));
     dialog.toggle_listed(1);
-    assert!(dialog.process_rules().is_none(), "unticked: nothing to save");
+    assert!(
+        dialog.process_rules().is_none(),
+        "unticked: nothing to save"
+    );
 }
 
 #[test]

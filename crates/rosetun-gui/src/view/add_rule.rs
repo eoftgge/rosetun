@@ -959,7 +959,12 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
     let extras: Vec<&ChosenProgram> = dialog
         .chosen
         .iter()
-        .filter(|program| !dialog.processes.iter().any(|group| group.key() == program.key))
+        .filter(|program| {
+            !dialog
+                .processes
+                .iter()
+                .any(|group| group.key() == program.key)
+        })
         .collect();
     let mut listed = None;
     let mut extra = None;
@@ -1863,18 +1868,38 @@ mod tests {
             macro_rules! frame {
                 () => {
                     |ui: &mut egui::Ui| {
-                        show(ui.ctx(), &mut dialog, &config, false, 0, &[], &mut Vec::new())
+                        show(
+                            ui.ctx(),
+                            &mut dialog,
+                            &config,
+                            false,
+                            0,
+                            &[],
+                            &mut Vec::new(),
+                        )
                     }
                 };
             }
             let none = tr!("rule-list-none-selected");
             let texts = screen.settle(frame!());
             assert!(texts.iter().any(|(text, _)| *text == none));
-            assert!(!texts.iter().any(|(text, _)| *text == tr!("match-any-folder")));
+            assert!(
+                !texts
+                    .iter()
+                    .any(|(text, _)| *text == tr!("match-any-folder"))
+            );
             let texts = screen.click_text("Program0.exe", frame!());
             assert_eq!(dialog.chosen.len(), 1);
-            assert!(texts.iter().any(|(text, _)| *text == tr!("match-any-folder")));
-            assert!(texts.iter().any(|(text, _)| *text == tr!("rule-list-selected", n = "1")));
+            assert!(
+                texts
+                    .iter()
+                    .any(|(text, _)| *text == tr!("match-any-folder"))
+            );
+            assert!(
+                texts
+                    .iter()
+                    .any(|(text, _)| *text == tr!("rule-list-selected", n = "1"))
+            );
             screen.click_text("Program3.exe", frame!());
             assert_eq!(dialog.chosen.len(), 2);
             screen.click_text("Program0.exe", frame!());
@@ -1897,7 +1922,17 @@ mod tests {
                     events,
                     ..egui::RawInput::default()
                 },
-                |ctx| show(ctx, dialog, &AppConfig::default(), true, 0, &[], &mut Vec::new()),
+                |ctx| {
+                    show(
+                        ctx,
+                        dialog,
+                        &AppConfig::default(),
+                        true,
+                        0,
+                        &[],
+                        &mut Vec::new(),
+                    );
+                },
             );
             output.textures_delta.clear();
         };
@@ -2356,7 +2391,17 @@ mod tests {
                 time: Some(time),
                 ..egui::RawInput::default()
             },
-            |ctx| show(ctx, dialog, &AppConfig::default(), false, 0, &[], &mut Vec::new()),
+            |ctx| {
+                show(
+                    ctx,
+                    dialog,
+                    &AppConfig::default(),
+                    false,
+                    0,
+                    &[],
+                    &mut Vec::new(),
+                );
+            },
         );
         output.textures_delta.clear();
         text_alpha(&output.shapes, text)
@@ -2376,10 +2421,18 @@ mod tests {
             // Nothing is painted at zero opacity.
             let first = alpha_at(&ctx, &mut dialog, 1.0, &hint).unwrap_or(0);
             let midway = alpha_at(&ctx, &mut dialog, 1.05, &hint).expect("the hint is painted");
-            let later = alpha_at(&ctx, &mut dialog, 1.0 + f64::from(motion::FAST) + 0.01, &hint)
-                .expect("the hint is painted");
+            let later = alpha_at(
+                &ctx,
+                &mut dialog,
+                1.0 + f64::from(motion::FAST) + 0.01,
+                &hint,
+            )
+            .expect("the hint is painted");
             let settled = alpha_at(&ctx, &mut dialog, 2.0, &hint).expect("the hint is painted");
-            assert!(first < midway && midway < settled, "{first} {midway} {settled}");
+            assert!(
+                first < midway && midway < settled,
+                "{first} {midway} {settled}"
+            );
             assert_eq!(later, settled, "whole after FAST");
         });
     }
@@ -2401,7 +2454,10 @@ mod tests {
         assert_eq!(progress(0.1, RuleInputKind::Address, true), 1.0);
         progress(0.2, RuleInputKind::Process, false);
         assert_eq!(progress(0.3, RuleInputKind::List, false), 0.0);
-        assert_eq!(progress(0.3 + f64::from(motion::FAST), RuleInputKind::List, false), 1.0);
+        assert_eq!(
+            progress(0.3 + f64::from(motion::FAST), RuleInputKind::List, false),
+            1.0
+        );
     }
 
     fn recent_sites_of(addresses: &[(&str, bool)]) -> Vec<RecentSite> {
@@ -2429,7 +2485,10 @@ mod tests {
                 _ => None,
             }
         }
-        shapes.iter().rev().find_map(|clipped| find(&clipped.shape, text))
+        shapes
+            .iter()
+            .rev()
+            .find_map(|clipped| find(&clipped.shape, text))
     }
 
     fn painted_names(shape: &egui::Shape, out: &mut Vec<String>) {
@@ -2520,7 +2579,11 @@ mod tests {
             for site in &sites {
                 assert!(texts.contains(&site.address), "{}", site.address);
             }
-            assert_eq!(with.height(), without.height(), "the dialog keeps its height");
+            assert_eq!(
+                with.height(),
+                without.height(),
+                "the dialog keeps its height"
+            );
             assert_ne!(
                 text_color(&shapes, "example.com"),
                 text_color(&shapes, "example.org"),
@@ -2597,7 +2660,10 @@ mod tests {
                 }};
             }
             click_last!("example.org");
-            assert!(dialog.has_address("example.org"), "a dimmed site can be added");
+            assert!(
+                dialog.has_address("example.org"),
+                "a dimmed site can be added"
+            );
             click_last!("example.com");
             assert_eq!(dialog.addresses.len(), 2);
             click_last!("example.org");

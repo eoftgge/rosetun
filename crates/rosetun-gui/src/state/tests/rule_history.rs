@@ -176,7 +176,13 @@ fn open_new_addresses(state: &mut State) {
 
 fn open_new_program(state: &mut State) {
     state.act(Action::OpenAddRule);
-    state.rules.screen.add.as_mut().unwrap().tick_program("Tool.exe");
+    state
+        .rules
+        .screen
+        .add
+        .as_mut()
+        .unwrap()
+        .tick_program("Tool.exe");
 }
 
 fn open_new_programs(state: &mut State) {

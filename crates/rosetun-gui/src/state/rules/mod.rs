@@ -19,10 +19,10 @@ pub(crate) use address::{AddressError, MAX_ADDRESSES};
 pub(crate) use dialog::PROCESS_LIST_STALE_MS;
 pub(crate) use dialog::{AddRuleDialog, ChosenProgram, MAX_PROGRAMS, RuleInputKind};
 use history::RuleHistory;
-pub(crate) use recent::RecentSite;
 pub(crate) use history::UndoNotice;
 #[cfg(test)]
 pub(crate) use history::{MAX_UNDO_RULES, MAX_UNDO_STEPS, UNDO_NOTICE_MS};
+pub(crate) use recent::RecentSite;
 
 pub(crate) enum NameDialogKind {
     Create,

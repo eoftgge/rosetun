@@ -233,9 +233,13 @@ impl<'a> ChipsField<'a> {
                 ui.visuals().weak_text_color(),
                 inner.width(),
             );
-            let top = inner.top() + (CHIP_HEIGHT - ui.fonts_mut(|fonts| fonts.row_height(&font))) / 2.0;
-            ui.painter()
-                .galley(egui::pos2(inner.left(), top), galley, ui.visuals().weak_text_color());
+            let top =
+                inner.top() + (CHIP_HEIGHT - ui.fonts_mut(|fonts| fonts.row_height(&font))) / 2.0;
+            ui.painter().galley(
+                egui::pos2(inner.left(), top),
+                galley,
+                ui.visuals().weak_text_color(),
+            );
         }
         let mut input = None;
         let id = egui::Id::unique(("chips_field", self.id_salt));
