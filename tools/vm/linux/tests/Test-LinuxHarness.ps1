@@ -230,6 +230,16 @@ try {
     $again = $false
     try { $null = New-RosetunLinuxStage -StageRoot $stageRoot -RunId $runId -ArtifactDir $dir -JobEnv $jobEnv } catch { $again = "$_" -match 'already exists' }
     Assert-That 'a run id cannot be staged twice' $again
+    Assert-That 'the stage carries the launcher for a manual start' (@($manifest | Where-Object { $_ -match '  guest/launch\.sh$' }).Count -eq 1)
+    Assert-That 'the installer stays out of the stage' (@($manifest | Where-Object { $_ -match 'install-launcher' }).Count -eq 0)
+    $startText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\guest\start.sh') -Raw
+    $requiredMatch = [regex]::Match($startText, '(?s)L2_START_REQUIRED=\((.*?)\)')
+    $required = @($requiredMatch.Groups[1].Value -split '\s+' | Where-Object { $_ -ne '' } | Sort-Object -CaseSensitive)
+    $stagedFiles = @($staged.Files | Sort-Object -CaseSensitive)
+    Assert-That 'the host stages exactly the files start.sh requires' (($required -join ',') -ceq ($stagedFiles -join ','))
+    Assert-That 'the staged launcher is byte-equal to guest/launch.sh in LF' (
+        (Get-RosetunLinuxFileSha256 (Join-Path $staged.Directory 'guest/launch.sh')) -eq
+        (Get-RosetunLinuxTextSha256 ((Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\guest\launch.sh') -Raw).Replace("`r`n", "`n"))))
 }
 finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -351,6 +361,29 @@ finally {
     Remove-Item Env:\ROSETUN_L2_SELFTEST -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $settingsDir -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# --- automatic or manual start of the job
+$good = 'a' * 64
+$choice = Select-RosetunLinuxStartMode -InstalledHash $good -ExpectedHash $good -SudoExitCode 0
+Assert-That 'the current launcher with its sudo rule starts the job automatically' ($choice.Mode -eq 'auto')
+$choice = Select-RosetunLinuxStartMode -InstalledHash 'missing' -ExpectedHash $good -SudoExitCode 1
+Assert-That 'a missing launcher falls back to the manual command' ($choice.Mode -eq 'manual' -and -not $choice.Reinstall -and $choice.Reason -match 'not installed')
+$choice = Select-RosetunLinuxStartMode -InstalledHash ('b' * 64) -ExpectedHash $good -SudoExitCode 0
+Assert-That 'an old launcher falls back and asks for a reinstall' ($choice.Mode -eq 'manual' -and $choice.Reinstall)
+$choice = Select-RosetunLinuxStartMode -InstalledHash $good -ExpectedHash $good -SudoExitCode 1
+Assert-That 'a launcher without the NOPASSWD rule falls back' ($choice.Mode -eq 'manual' -and $choice.Reason -match 'sudo -n')
+$choice = Select-RosetunLinuxStartMode -InstalledHash 'sha256sum: permission denied' -ExpectedHash $good -SudoExitCode 0
+Assert-That 'an unreadable launcher falls back' ($choice.Mode -eq 'manual')
+$stageDir = '/home/l2admin/rosetun-l2-stage/' + $runId
+Assert-That 'the manual command runs the staged launcher with sudo' (
+    (Get-RosetunLinuxManualStartCommand -StageDir $stageDir -RunId $runId -ManifestHash $good) -ceq "sudo bash $stageDir/guest/launch.sh $runId $stageDir $good")
+Assert-That 'the automatic command never asks for a password' (
+    (Get-RosetunLinuxLauncherStartCommand -StageDir $stageDir -RunId $runId -ManifestHash $good) -ceq "sudo -n /usr/local/libexec/rosetun-l2/launch $runId $stageDir $good")
+$launchText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\guest\launch.sh') -Raw
+Assert-That 'the host and the launcher agree on the installed path' ($launchText -match "(?m)^L2_LAUNCH_INSTALLED=$([regex]::Escape((Get-RosetunLinuxLauncherPath)))$")
+Assert-That 'the install command passes both test accounts' (
+    (Get-RosetunLinuxInstallCommand -Folder '/home/l2admin/rosetun-l2-launcher' -UserA 'ipc_owner' -UserB 'ipc_other') -ceq
+    'sudo bash /home/l2admin/rosetun-l2-launcher/install-launcher.sh ipc_owner ipc_other')
 
 # --- guest address from the adapter's list
 Assert-That 'the first usable IPv4 address is chosen' ((Select-RosetunLinuxGuestAddress @('fe80::1', '169.254.10.20', '2001:db8::5', '192.0.2.10', '198.51.100.7')) -eq '192.0.2.10')

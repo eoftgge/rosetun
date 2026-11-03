@@ -197,5 +197,78 @@ rm -- "$work/link"
 ln -s elsewhere "$work/link"
 expect_not "a changed symlink target is a different object" l2_remove_recorded "$state/objects.tsv" "$work/link"
 
+# --- launcher and start.sh: who checks what
+launch=$here/../guest/launch.sh
+start=$here/../guest/start.sh
+installer=$here/../guest/install-launcher.sh
+launcher_allows() { bash -c '. "$1" && l2_launch_path_allowed "$2"' _ "$launch" "$1"; }
+start_allows() { bash -c '. "$1" && l2_start_path_allowed "$2"' _ "$start" "$1"; }
+for path in guest/start.sh guest/launch.sh guest/run-l2.sh scenarios.tsv job.env artifacts/provenance.json artifacts/rosetun_ipc_tests; do
+    expect "the launcher accepts $path" launcher_allows "$path"
+done
+expect "the launcher accepts a guest script a later stand may add" launcher_allows guest/new-step.sh
+for path in ../etc/passwd /etc/passwd guest/../x.sh artifacts/.. artifacts/.hidden artifacts/a..b guest/sub/x.sh \
+    manifest.sha256 artifacts/a/b guest/Start.sh 'job.env x'; do
+    expect_not "the launcher refuses $path" launcher_allows "$path"
+done
+expect_not "start.sh refuses a name only the launcher's wider list accepts" start_allows guest/new-step.sh
+expect_not "start.sh refuses an artifact it does not use" start_allows artifacts/extra
+required=$(bash -c '. "$1" && printf "%s\n" "${L2_START_REQUIRED[@]}"' _ "$start")
+expect "start.sh requires the launcher, the job scripts and the artifacts" test "$(printf '%s\n' "$required" | wc -l)" -eq 10
+while IFS= read -r path; do
+    expect "every required path passes both lists: $path" bash -c '. "$1" && l2_launch_path_allowed "$3" && . "$2" && l2_start_path_allowed "$3"' _ "$launch" "$start" "$path"
+done <<<"$required"
+
+read_manifest() { bash -c '. "$1" && l2_launch_read_manifest "$2"' _ "$launch" "$1"; }
+h=$(printf '0%.0s' $(seq 1 64))
+printf '%s  guest/start.sh\n%s  job.env\n' "$h" "$h" >"$work/m-ok"
+expect "a manifest with guest/start.sh is read" read_manifest "$work/m-ok"
+printf '%s  guest/start.sh\n%s  guest/start.sh\n' "$h" "$h" >"$work/m-dup"
+expect_not "a manifest naming a file twice is refused" read_manifest "$work/m-dup"
+printf '%s  job.env\n' "$h" >"$work/m-nostart"
+expect_not "a manifest without guest/start.sh is refused" read_manifest "$work/m-nostart"
+printf '%s guest/start.sh\n' "$h" >"$work/m-bad"
+expect_not "a malformed manifest line is refused" read_manifest "$work/m-bad"
+printf '%s  ../start.sh\n%s  guest/start.sh\n' "$h" "$h" >"$work/m-escape"
+expect_not "a manifest path that leaves the run directory is refused" read_manifest "$work/m-escape"
+: >"$work/m-empty"
+expect_not "an empty manifest is refused" read_manifest "$work/m-empty"
+
+expect "the launcher refuses to run without root" bash -c 'bash "$1" x y z 2>&1 | grep -q "with sudo"' _ "$launch"
+expect "start.sh refuses to run without root" bash -c 'bash "$1" x y z 2>&1 | grep -q "with sudo"' _ "$start"
+expect_not "the launcher never starts the job itself" grep -q 'systemd-run' "$launch"
+expect_not "the launcher sources no other file" grep -Eq '^[[:space:]]*(\.|source)[[:space:]]' "$launch"
+expect "the launcher hands over only to the verified copy of start.sh" grep -q '/bin/bash "$run/guest/start.sh"' "$launch"
+expect "start.sh starts the job and reads job.env through the strict reader" \
+    bash -c 'grep -q "^    systemd-run " "$1" && grep -q "l2_read_env_file \"\$run/job.env\"" "$1"' _ "$start"
+
+# --- one-time launcher installation
+sudoers_line() { bash -c '. "$1" && l2_sudoers_line "$2" "$3"' _ "$installer" "$1" "$2"; }
+installed=$(bash -c '. "$1" && printf %s "$L2_LAUNCHER"' _ "$installer")
+expect "the installer and the launcher agree on the path" \
+    test "$installed" = "$(bash -c '. "$1" && printf %s "$L2_LAUNCH_INSTALLED"' _ "$launch")"
+line=$(sudoers_line l2admin "$installed")
+expect "the sudoers rule is the one expected line" \
+    test "$line" = 'l2admin ALL=(root) NOPASSWD: /usr/local/libexec/rosetun-l2/launch'
+expect "the sudoers rule is a single line" test "$(sudoers_line l2admin "$installed" | wc -l)" -eq 1
+expect "the sudoers rule names exactly one absolute command, not ALL" \
+    bash -c 'cmd=${1#*NOPASSWD: }; [ "$cmd" = "$2" ] && [[ $cmd == /* ]] && [[ $cmd != *" "* ]] && [[ $cmd != *ALL* ]]' _ "$line" "$installed"
+visudo=$(PATH=$PATH:/usr/sbin:/sbin command -v visudo || true)
+if [ -n "$visudo" ]; then
+    printf '%s\n' "$line" >"$work/sudoers"
+    expect "visudo accepts the sudoers rule" "$visudo" -cqf "$work/sudoers"
+else
+    printf 'note  visudo is not installed; the sudoers syntax was not checked\n'
+fi
+check_user() { bash -c '. "$1" && l2_check_sudo_user "$2" "$3" "$4" "$5"' _ "$installer" "$@"; }
+expect "an ordinary SSH account may get the rule" check_user l2admin 1000 ipc_owner ipc_other
+expect_not "an empty SUDO_USER is refused" check_user '' 1000 ipc_owner ipc_other
+expect_not "root is refused" check_user root 0 ipc_owner ipc_other
+expect_not "an account with uid 0 is refused" check_user toor 0 ipc_owner ipc_other
+expect_not "the first test account is refused" check_user ipc_owner 1001 ipc_owner ipc_other
+expect_not "the second test account is refused" check_user ipc_other 1002 ipc_owner ipc_other
+expect_not "an odd account name is refused" check_user 'l2 admin' 1000 ipc_owner ipc_other
+expect "the installer refuses to run without root" bash -c 'bash "$1" ipc_owner ipc_other 2>&1 | grep -q "with sudo"' _ "$installer"
+
 printf 'selftest-lib: %s passed, %s failed\n' "$passes" "$failures"
 [ "$failures" -eq 0 ]

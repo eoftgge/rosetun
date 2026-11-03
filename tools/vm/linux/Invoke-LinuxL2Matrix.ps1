@@ -2,18 +2,21 @@
 # Linux L2 stand, host side. The owner runs it; the agent only prepares it.
 #
 #   Stage   (default) builds HEAD in WSL (or takes -ArtifactDir), checks the selected
-#                     VM and guest, copies the run to the guest and prints the one
-#                     command the owner runs there with sudo.
+#                     VM and guest, copies the run to the guest and starts it through
+#                     the installed launcher, or prints the one command the owner
+#                     runs there with sudo when the launcher cannot.
 #   Collect           reads the status and report of a run back and judges it.
 #   InitKnownHosts    pins the guest's host key once, after the owner compared its
 #                     fingerprint with the VM console.
+#   PrepareLauncher   copies the launcher and its installer into the guest for the
+#                     one-time installation the owner runs there with sudo.
 #
 # The stand's values come from stand.local.psd1 next to this script (or -Settings);
 # a parameter given on the command line wins over the file.
 #
 # Nothing here restores a checkpoint unless -RestoreCheckpoint names one, installs
-# packages, creates accounts, or starts anything privileged. The privileged job is
-# started in the guest by the owner (guest/start.sh). See README.md.
+# packages or creates accounts. The only privileged step is the launcher the owner
+# installed (guest/launch.sh), started with sudo -n. See README.md.
 
 [CmdletBinding(DefaultParameterSetName = 'Stage')]
 param(
@@ -26,11 +29,11 @@ param(
     [string]$IdentityFile,
     [string]$StandId,
     [ValidateRange(1, 65535)][int]$SshPort = 22,
+    [string]$UserA,
+    [string]$UserB,
 
     [Parameter(ParameterSetName = 'Stage')][string]$ArtifactDir,
     [Parameter(ParameterSetName = 'Stage')][string]$WslDistro,
-    [Parameter(ParameterSetName = 'Stage')][string]$UserA,
-    [Parameter(ParameterSetName = 'Stage')][string]$UserB,
     [Parameter(ParameterSetName = 'Stage')][string]$RestoreCheckpoint,
     [Parameter(ParameterSetName = 'Stage')][string]$RepoRoot = (Join-Path $PSScriptRoot '..\..\..'),
     [Parameter(ParameterSetName = 'Stage')][ValidateRange(10, 3600)][int]$ScenarioTimeoutSeconds = 30,
@@ -42,6 +45,8 @@ param(
     [Parameter(ParameterSetName = 'Collect')][ValidateRange(0, 7200)][int]$WaitSeconds = 0,
 
     [Parameter(ParameterSetName = 'InitKnownHosts', Mandatory)][switch]$InitKnownHosts,
+
+    [Parameter(ParameterSetName = 'PrepareLauncher', Mandatory)][switch]$PrepareLauncher,
 
     [string]$LogRoot = (Join-Path $PSScriptRoot 'logs')
 )
@@ -100,6 +105,42 @@ if ($PSCmdlet.ParameterSetName -eq 'InitKnownHosts') {
 
 Test-RosetunLinuxHostKeyPinned -KnownHostsPath $stand.KnownHostsPath -HostKeyAlias $stand.StandId
 
+function Get-GuestHome {
+    param($Target)
+    $guestHome = (Invoke-RosetunLinuxSsh -Target $Target -Command 'printf %s "$HOME"' -TimeoutSeconds 20).Output.Trim()
+    if ($guestHome -notmatch '^/[A-Za-z0-9._/-]+$') { throw 'Could not determine the guest home directory.' }
+    $guestHome
+}
+
+function Show-LauncherInstall {
+    param([string]$Folder)
+    $vm = $stand.VmName
+    $checkpoint = $stand.Checkpoint
+    Write-Host '  1. On the host, restore the clean checkpoint and copy the launcher:'
+    Write-Host "       Restore-VMCheckpoint -VMName $vm -Name $checkpoint -Confirm:`$false; Start-VM -Name $vm"
+    Write-Host '       .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -PrepareLauncher'
+    Write-Host "  2. In the guest, as $($stand.SshUser):"
+    Write-Host "       $(Get-RosetunLinuxInstallCommand -Folder $Folder -UserA $stand.UserA -UserB $stand.UserB)"
+    Write-Host '  3. On the host, make the clean checkpoint again (a restore would bring the old launcher back):'
+    Write-Host "       Remove-VMCheckpoint -VMName $vm -Name $checkpoint; Checkpoint-VM -Name $vm -SnapshotName $checkpoint"
+}
+
+if ($PSCmdlet.ParameterSetName -eq 'PrepareLauncher') {
+    Assert-RosetunLinuxStandSettings -Stand $stand -SettingsPath $settingsPath -Names @('UserA', 'UserB')
+    $identity = Get-StandIdentity
+    if ($identity.State -ne 'Running') { throw "VM '$($stand.VmName)' is $($identity.State). Start it first." }
+    $target = New-StandTarget
+    Wait-RosetunLinuxSsh -Target $target -TimeoutSeconds 120
+    $copied = Copy-RosetunLinuxLauncherToGuest -Target $target -GuestHome (Get-GuestHome $target)
+    Write-Host "Copied the launcher to $($copied.Folder) (sha256 $($copied.LauncherHash))."
+    Write-Host "In the guest, as $($stand.SshUser), run:"
+    Write-Host ''
+    Write-Host "  $(Get-RosetunLinuxInstallCommand -Folder $copied.Folder -UserA $stand.UserA -UserB $stand.UserB)"
+    Write-Host ''
+    Write-Host 'Then make the clean checkpoint again (see the stand guide).'
+    exit 0
+}
+
 if ($PSCmdlet.ParameterSetName -eq 'Stage') {
     Assert-RosetunLinuxStandSettings -Stand $stand -SettingsPath $settingsPath -Names @('UserA', 'UserB')
     $runId = New-RosetunLinuxRunId
@@ -146,15 +187,12 @@ if ($PSCmdlet.ParameterSetName -eq 'Stage') {
     $bootId = $bootRead.Output.Trim()
     if ($bootRead.ExitCode -ne 0 -or $bootId -notmatch '^[0-9a-f-]{36}$') { throw 'Could not read the guest boot id.' }
 
-
     $jobEnv = New-RosetunLinuxJobEnv -RunId $runId -StandId $stand.StandId -BootId $bootId -UserA $stand.UserA -UserB $stand.UserB `
         -BiosGuid $identity.BiosGuid -ScenarioTimeoutSeconds $ScenarioTimeoutSeconds `
         -UnitTimeoutSeconds $UnitTimeoutSeconds -JobTimeoutSeconds $JobTimeoutSeconds
     $stage = New-RosetunLinuxStage -StageRoot (Join-Path $runLog 'stage') -RunId $runId -ArtifactDir $artifactDir -JobEnv $jobEnv
 
-    $guestHome = (Invoke-RosetunLinuxSsh -Target $target -Command 'printf %s "$HOME"' -TimeoutSeconds 20).Output.Trim()
-    if ($guestHome -notmatch '^/[A-Za-z0-9._/-]+$') { throw 'Could not determine the guest home directory.' }
-    $remoteParent = "$guestHome/rosetun-l2-stage"
+    $remoteParent = "$(Get-GuestHome $target)/rosetun-l2-stage"
     $made = Invoke-RosetunLinuxSsh -Target $target -TimeoutSeconds 20 `
         -Command "umask 077 && mkdir -p -m 700 -- $remoteParent && test ! -e $remoteParent/$runId"
     if ($made.ExitCode -ne 0) { throw "Could not prepare $remoteParent on the guest (or the run id exists): $($made.Error.Trim())" }
@@ -172,11 +210,23 @@ if ($PSCmdlet.ParameterSetName -eq 'Stage') {
     }
     [IO.File]::WriteAllText((Join-Path $runLog 'stage.json'), ($record | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
 
+    $start = Start-RosetunLinuxJob -Target $target -StageDir "$remoteParent/$runId" -RunId $runId -ManifestHash $stage.ManifestHash `
+        -ExpectedLauncherHash (Get-RosetunLinuxFileSha256 (Join-Path $stage.Directory 'guest/launch.sh'))
     Write-Host ''
-    Write-Host "Run $runId is staged on the guest. Nothing privileged has started."
-    Write-Host 'In the guest, as the account that owns the stage directory, run exactly:'
-    Write-Host ''
-    Write-Host "  sudo bash $remoteParent/$runId/guest/start.sh $runId $remoteParent/$runId $($stage.ManifestHash)"
+    if ($start.Started) {
+        Write-Host "Run $runId started through the launcher:"
+        Write-Host "  $($start.Output.Replace("`n", "`n  "))"
+    }
+    else {
+        Write-Host "Run $runId is staged on the guest. It was not started: $($start.Reason)."
+        if ($start.Reinstall) {
+            Write-Host 'Reinstall the launcher before the next run:'
+            Show-LauncherInstall -Folder "$(Get-GuestHome $target)/rosetun-l2-launcher"
+        }
+        Write-Host 'For this run, in the guest, as the account that owns the stage directory, run exactly:'
+        Write-Host ''
+        Write-Host "  $($start.ManualCommand)"
+    }
     Write-Host ''
     Write-Host 'Then, from this host:'
     Write-Host ''

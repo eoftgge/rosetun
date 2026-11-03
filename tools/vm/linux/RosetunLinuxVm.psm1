@@ -21,6 +21,9 @@ $script:HostKeyAliasPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
 $script:SettingNames = @('VmName', 'StandId', 'SshUser', 'SshHost', 'SshPort', 'KnownHostsPath', 'IdentityFile',
     'UserA', 'UserB', 'Checkpoint', 'WslDistro')
 $script:SettingDefaults = @{ Checkpoint = 'l2-clean'; WslDistro = 'Debian'; SshPort = 22 }
+# The installed launcher (guest/launch.sh) and the guest scripts a stage carries.
+$script:LauncherPath = '/usr/local/libexec/rosetun-l2/launch'
+$script:GuestScripts = @('launch.sh', 'lib.sh', 'run-l2.sh', 'start.sh')
 
 function Get-RosetunLinuxRoot {
     $PSScriptRoot
@@ -714,7 +717,7 @@ function New-RosetunLinuxStage {
     if (Test-Path -LiteralPath $root) { throw "Stage directory '$root' already exists; a run id is used once." }
     $null = New-Item -ItemType Directory -Path (Join-Path $root 'guest'), (Join-Path $root 'artifacts')
     $linux = Get-RosetunLinuxRoot
-    foreach ($script in @('lib.sh', 'run-l2.sh', 'start.sh')) {
+    foreach ($script in $script:GuestScripts) {
         Write-RosetunLinuxLfFile -Path (Join-Path $root "guest/$script") -Text (Get-Content -LiteralPath (Join-Path $linux "guest/$script") -Raw)
     }
     Write-RosetunLinuxLfFile -Path (Join-Path $root 'scenarios.tsv') -Text (Get-Content -LiteralPath (Join-Path $linux 'scenarios.tsv') -Raw)
@@ -733,6 +736,113 @@ function New-RosetunLinuxStage {
         Directory    = $root
         ManifestHash = Get-RosetunLinuxFileSha256 (Join-Path $root 'manifest.sha256')
         Files        = $files
+    }
+}
+
+# ------------------------------------------------------------------ starting the job
+
+function Get-RosetunLinuxLauncherPath { $script:LauncherPath }
+
+# The command the owner pastes into the guest when the launcher cannot start the
+# job without a password. It runs the staged launcher, which proves itself
+# against the manifest.
+function Get-RosetunLinuxManualStartCommand {
+    param([Parameter(Mandatory)][string]$StageDir, [Parameter(Mandatory)][string]$RunId, [Parameter(Mandatory)][string]$ManifestHash)
+    "sudo bash $StageDir/guest/launch.sh $RunId $StageDir $ManifestHash"
+}
+
+function Get-RosetunLinuxLauncherStartCommand {
+    param([Parameter(Mandatory)][string]$StageDir, [Parameter(Mandatory)][string]$RunId, [Parameter(Mandatory)][string]$ManifestHash)
+    "sudo -n $($script:LauncherPath) $RunId $StageDir $ManifestHash"
+}
+
+function Get-RosetunLinuxInstallCommand {
+    param([Parameter(Mandatory)][string]$Folder, [Parameter(Mandatory)][string]$UserA, [Parameter(Mandatory)][string]$UserB)
+    "sudo bash $Folder/install-launcher.sh $UserA $UserB"
+}
+
+# Automatic start needs the launcher of this version and the sudoers rule; anything
+# else falls back to the manual command, with the reason.
+function Select-RosetunLinuxStartMode {
+    param(
+        [AllowEmptyString()][AllowNull()][string]$InstalledHash,
+        [Parameter(Mandatory)][string]$ExpectedHash,
+        [int]$SudoExitCode = 1
+    )
+    $mode = { param($name, $reason, $reinstall) [pscustomobject]@{ Mode = $name; Reason = $reason; Reinstall = $reinstall } }
+    if ([string]::IsNullOrWhiteSpace($InstalledHash) -or $InstalledHash -eq 'missing') {
+        return & $mode 'manual' "the launcher is not installed in $($script:LauncherPath)" $false
+    }
+    if ($InstalledHash -notmatch '^[0-9a-f]{64}$') { return & $mode 'manual' 'the installed launcher could not be read' $false }
+    if ($InstalledHash -ne $ExpectedHash) {
+        return & $mode 'manual' 'the installed launcher is not the guest/launch.sh of this commit' $true
+    }
+    if ($SudoExitCode -ne 0) {
+        return & $mode 'manual' 'sudo -n refused the launcher; /etc/sudoers.d/rosetun-l2 is missing or names another account' $false
+    }
+    & $mode 'auto' 'the launcher of this commit may run without a password' $false
+}
+
+# Reads the installed launcher's hash and whether sudo lets this account run it
+# without a password. Nothing privileged runs here.
+function Get-RosetunLinuxLauncherState {
+    param([Parameter(Mandatory)]$Target)
+    $path = $script:LauncherPath
+    $probe = Invoke-RosetunLinuxSsh -Target $Target -TimeoutSeconds 30 -Command (
+        "if [ -f $path ]; then sha256sum -- $path | cut -d' ' -f1; else echo missing; fi; " +
+        "if sudo -n -l $path >/dev/null 2>&1; then echo sudo=0; else echo sudo=1; fi")
+    $lines = @($probe.Output -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+    $hash = if ($lines.Count -ge 1) { $lines[0] } else { '' }
+    $sudo = if ($lines.Count -ge 2 -and $lines[1] -eq 'sudo=0') { 0 } else { 1 }
+    [pscustomobject]@{ InstalledHash = $hash; SudoExitCode = $sudo }
+}
+
+# Starts a staged run through the installed launcher when that is possible.
+# Returns Started=$false with the reason and the manual command otherwise. A
+# launcher that runs and refuses is an error, never a fallback.
+function Start-RosetunLinuxJob {
+    param(
+        [Parameter(Mandatory)]$Target,
+        [Parameter(Mandatory)][string]$StageDir,
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][string]$ManifestHash,
+        [Parameter(Mandatory)][string]$ExpectedLauncherHash
+    )
+    $state = Get-RosetunLinuxLauncherState -Target $Target
+    $choice = Select-RosetunLinuxStartMode -InstalledHash $state.InstalledHash -ExpectedHash $ExpectedLauncherHash -SudoExitCode $state.SudoExitCode
+    $manual = Get-RosetunLinuxManualStartCommand -StageDir $StageDir -RunId $RunId -ManifestHash $ManifestHash
+    if ($choice.Mode -ne 'auto') {
+        return [pscustomobject]@{ Started = $false; Mode = 'manual'; Reason = $choice.Reason; Reinstall = $choice.Reinstall; ManualCommand = $manual; Output = '' }
+    }
+    $start = Invoke-RosetunLinuxSsh -Target $Target -TimeoutSeconds 180 -Command (Get-RosetunLinuxLauncherStartCommand -StageDir $StageDir -RunId $RunId -ManifestHash $ManifestHash)
+    if ($start.ExitCode -ne 0) {
+        throw "The launcher refused run ${RunId} (exit $($start.ExitCode)): $(($start.Error + ' ' + $start.Output).Trim())"
+    }
+    [pscustomobject]@{ Started = $true; Mode = 'auto'; Reason = $choice.Reason; Reinstall = $false; ManualCommand = $manual; Output = $start.Output.Trim() }
+}
+
+# Copies launch.sh and install-launcher.sh into ~/rosetun-l2-launcher of the guest
+# for the one-time installation. Returns that folder and the launcher's hash.
+function Copy-RosetunLinuxLauncherToGuest {
+    param([Parameter(Mandatory)]$Target, [Parameter(Mandatory)][string]$GuestHome)
+    if ($GuestHome -notmatch '^/[A-Za-z0-9._/-]+$') { throw "Unsafe guest home '$GuestHome'." }
+    $local = Join-Path ([IO.Path]::GetTempPath()) "rosetun-l2-$([guid]::NewGuid().ToString('N'))"
+    $folder = Join-Path $local 'rosetun-l2-launcher'
+    $null = New-Item -ItemType Directory -Path $folder
+    try {
+        foreach ($name in @('launch.sh', 'install-launcher.sh')) {
+            Write-RosetunLinuxLfFile -Path (Join-Path $folder $name) -Text (Get-Content -LiteralPath (Join-Path (Get-RosetunLinuxRoot) "guest/$name") -Raw)
+        }
+        $remote = "$GuestHome/rosetun-l2-launcher"
+        $clear = Invoke-RosetunLinuxSsh -Target $Target -TimeoutSeconds 20 -Command "rm -rf -- $remote"
+        if ($clear.ExitCode -ne 0) { throw "Could not clear $remote on the guest: $($clear.Error.Trim())" }
+        Copy-RosetunLinuxToGuest -Target $Target -LocalDirectory $folder -RemoteParent $GuestHome
+        $fix = Invoke-RosetunLinuxSsh -Target $Target -TimeoutSeconds 20 -Command "chmod 700 -- $remote && chmod 644 -- $remote/*.sh"
+        if ($fix.ExitCode -ne 0) { throw "Could not set modes in ${remote}: $($fix.Error.Trim())" }
+        [pscustomobject]@{ Folder = $remote; LauncherHash = Get-RosetunLinuxFileSha256 (Join-Path $folder 'launch.sh') }
+    }
+    finally {
+        Remove-Item -LiteralPath $local -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
