@@ -226,22 +226,108 @@ $key = Join-Path ([IO.Path]::GetTempPath()) "id-$([guid]::NewGuid().ToString('N'
 try {
     [IO.File]::WriteAllText($known, "example.invalid ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderPlaceholderPlaceholder00`n")
     [IO.File]::WriteAllText($key, "placeholder`n")
-    $target = New-RosetunLinuxTarget -HostName 'example.invalid' -User 'tester' -KnownHostsPath $known -IdentityFile $key
-    $options = (Get-RosetunLinuxSshOptions $target) -join ' '
+    $target = New-RosetunLinuxTarget -HostName '192.0.2.10' -User 'tester' -KnownHostsPath $known -IdentityFile $key -HostKeyAlias 'stand-1'
+    $optionList = @(Get-RosetunLinuxSshOptions $target)
+    $options = $optionList -join ' '
     Assert-That 'host keys are verified strictly' ($options -match 'StrictHostKeyChecking=yes')
     Assert-That 'host key checking is never disabled' ($options -notmatch 'StrictHostKeyChecking=(no|accept-new)')
+    Assert-That 'the host key is looked up by stand id, not by address' ($optionList -contains 'HostKeyAlias=stand-1')
+    Assert-That 'the address is never checked against known_hosts' ($optionList -contains 'CheckHostIP=no')
+    Assert-That 'ssh never rewrites the pinned file' ($optionList -contains 'UpdateHostKeys=no')
     Assert-That 'passwords are never prompted for' ($options -match 'PasswordAuthentication=no' -and $options -match 'BatchMode=yes')
     Assert-That 'agent forwarding is off' ($options -match 'ForwardAgent=no')
+    $pendingOptions = @(Get-RosetunLinuxSshOptions $target -AcceptNewKeyInto 'C:\x\kh.pending')
+    Assert-That 'a first key goes only into the pending file' (($pendingOptions -contains 'UserKnownHostsFile=C:/x/kh.pending') -and
+        ($pendingOptions -contains 'StrictHostKeyChecking=accept-new') -and -not ($pendingOptions -match [regex]::Escape($known.Replace('\', '/'))))
     $noKnown = $false
-    try { $null = New-RosetunLinuxTarget -HostName 'example.invalid' -User 'tester' -KnownHostsPath (Join-Path $env:TEMP 'nothing-here') -IdentityFile $key } catch { $noKnown = $true }
-    Assert-That 'a missing known_hosts file is refused' $noKnown
+    try { $null = New-RosetunLinuxTarget -HostName 'example.invalid' -User 'tester' -KnownHostsPath (Join-Path $env:TEMP 'nothing-here') -IdentityFile $key -HostKeyAlias 'stand-1' } catch { $noKnown = "$_" -match 'InitKnownHosts' }
+    Assert-That 'a missing known_hosts file is refused with a hint' $noKnown
     $badHost = $false
-    try { $null = New-RosetunLinuxTarget -HostName 'a b;c' -User 'tester' -KnownHostsPath $known -IdentityFile $key } catch { $badHost = $true }
+    try { $null = New-RosetunLinuxTarget -HostName 'a b;c' -User 'tester' -KnownHostsPath $known -IdentityFile $key -HostKeyAlias 'stand-1' } catch { $badHost = $true }
     Assert-That 'an unsafe host name is refused' $badHost
+    $badAlias = $false
+    try { $null = New-RosetunLinuxTarget -HostName 'example.invalid' -User 'tester' -KnownHostsPath $known -IdentityFile $key -HostKeyAlias 'a b' } catch { $badAlias = $true }
+    Assert-That 'an unsafe stand id is refused as alias' $badAlias
+    $pendingTarget = $false
+    try { $null = New-RosetunLinuxTarget -HostName 'example.invalid' -User 'tester' -KnownHostsPath "$known.pending" -IdentityFile $key -HostKeyAlias 'stand-1' -AllowMissingKnownHosts } catch { $pendingTarget = "$_" -match 'never confirmed' }
+    Assert-That 'an unconfirmed pending file is never used as known_hosts' $pendingTarget
 }
 finally {
     Remove-Item -LiteralPath $known, $key -Force -ErrorAction SilentlyContinue
 }
+
+# --- first host key: kept only after the owner answers yes
+$khDir = Join-Path ([IO.Path]::GetTempPath()) "kh-init-$([guid]::NewGuid().ToString('N'))"
+$null = New-Item -ItemType Directory -Path $khDir
+try {
+    $line = "stand-1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderPlaceholderPlaceholder00`n"
+    $pending = Join-Path $khDir 'kh.pending'
+    $pinned = Join-Path $khDir 'kh'
+    [IO.File]::WriteAllText($pending, $line)
+    Assert-That 'a single ed25519 key under the stand id is a valid pending key' (Test-RosetunLinuxPendingHostKey -Path $pending -HostKeyAlias 'stand-1')
+    Assert-That 'a pending key under another name is refused' (-not (Test-RosetunLinuxPendingHostKey -Path $pending -HostKeyAlias 'stand-2'))
+    [IO.File]::WriteAllText($pending, $line + $line.Replace('stand-1', 'stand-1'))
+    Assert-That 'a pending file with two keys is refused' (-not (Test-RosetunLinuxPendingHostKey -Path $pending -HostKeyAlias 'stand-1'))
+    [IO.File]::WriteAllText($pending, $line.Replace('ssh-ed25519', 'ssh-rsa'))
+    Assert-That 'a pending key of another type is refused' (-not (Test-RosetunLinuxPendingHostKey -Path $pending -HostKeyAlias 'stand-1'))
+
+    [IO.File]::WriteAllText($pending, $line)
+    $kept = Complete-RosetunLinuxKnownHosts -PendingPath $pending -KnownHostsPath $pinned -Answer 'no'
+    Assert-That 'an answer other than yes keeps nothing' ((-not $kept) -and -not (Test-Path $pinned) -and -not (Test-Path $pending))
+    [IO.File]::WriteAllText($pending, $line)
+    $kept = Complete-RosetunLinuxKnownHosts -PendingPath $pending -KnownHostsPath $pinned -Answer 'YES please'
+    Assert-That 'only the exact answer yes confirms' ((-not $kept) -and -not (Test-Path $pinned))
+    [IO.File]::WriteAllText($pending, $line)
+    [IO.File]::WriteAllText($pinned, '')
+    $kept = Complete-RosetunLinuxKnownHosts -PendingPath $pending -KnownHostsPath $pinned -Answer 'yes'
+    Assert-That 'a confirmed key replaces an empty file' ($kept -and (Get-Content -LiteralPath $pinned -Raw) -eq $line -and -not (Test-Path $pending))
+    $refused = $false
+    try { Assert-RosetunLinuxKnownHostsInitAllowed -KnownHostsPath $pinned } catch { $refused = "$_" -match 'never replaces' }
+    Assert-That 'an existing pinned key is never replaced by -InitKnownHosts' $refused
+}
+finally {
+    Remove-Item -LiteralPath $khDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# --- settings file and parameter precedence
+$settingsDir = Join-Path ([IO.Path]::GetTempPath()) "stand-$([guid]::NewGuid().ToString('N'))"
+$null = New-Item -ItemType Directory -Path $settingsDir
+try {
+    $file = Join-Path $settingsDir 'stand.local.psd1'
+    [IO.File]::WriteAllText($file, "@{ VmName = 'vm-a'; StandId = 'stand-1'; SshUser = 'l2admin'; KnownHostsPath = '~\kh'; IdentityFile = '%ROSETUN_L2_SELFTEST%\id'; UserA = 'ipc_owner'; SshHost = '' }")
+    $env:ROSETUN_L2_SELFTEST = 'C:\example'
+    $fromFile = Read-RosetunLinuxStandSettings -Path $file
+    $resolved = Resolve-RosetunLinuxStandSettings -Settings $fromFile -Explicit @{ VmName = 'vm-b'; UserB = 'ipc_other' }
+    Assert-That 'an explicit parameter wins over the file' ($resolved.VmName -eq 'vm-b')
+    Assert-That 'the file fills what the command line leaves out' ($resolved.StandId -eq 'stand-1' -and $resolved.UserA -eq 'ipc_owner' -and $resolved.UserB -eq 'ipc_other')
+    Assert-That 'defaults fill what neither sets' ($resolved.Checkpoint -eq 'l2-clean' -and $resolved.WslDistro -eq 'Debian' -and $resolved.SshPort -eq 22)
+    Assert-That 'an empty SshHost counts as not set' ($null -eq $resolved.SshHost)
+    Assert-That 'paths expand ~ and environment variables' ($resolved.KnownHostsPath -eq "$HOME\kh" -and $resolved.IdentityFile -eq 'C:\example\id')
+    [IO.File]::WriteAllText($file, "@{ VmNmae = 'vm-a' }")
+    $typo = $false
+    try { $null = Read-RosetunLinuxStandSettings -Path $file } catch { $typo = "$_" -match "Unknown setting 'VmNmae'" }
+    Assert-That 'an unknown setting is refused' $typo
+    [IO.File]::WriteAllText($file, "@{ SshPort = '22' }")
+    $port = $false
+    try { $null = Read-RosetunLinuxStandSettings -Path $file } catch { $port = $true }
+    Assert-That 'a port given as text is refused' $port
+    $missing = $false
+    try { Assert-RosetunLinuxStandSettings -Stand $resolved -Names @('VmName', 'SshHost') -SettingsPath $file } catch { $missing = "$_" -match 'SshHost' }
+    Assert-That 'a missing setting is named' $missing
+    $absent = $false
+    try { $null = Read-RosetunLinuxStandSettings -Path (Join-Path $settingsDir 'none.psd1') } catch { $absent = "$_" -match 'stand.example.psd1' }
+    Assert-That 'a missing settings file points to the example' $absent
+}
+finally {
+    Remove-Item Env:\ROSETUN_L2_SELFTEST -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $settingsDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# --- guest address from the adapter's list
+Assert-That 'the first usable IPv4 address is chosen' ((Select-RosetunLinuxGuestAddress @('fe80::1', '169.254.10.20', '2001:db8::5', '192.0.2.10', '198.51.100.7')) -eq '192.0.2.10')
+Assert-That 'IPv6 and link-local addresses alone give no address' ($null -eq (Select-RosetunLinuxGuestAddress @('fe80::1', '169.254.1.1', '2001:db8::1')))
+Assert-That 'an empty adapter list gives no address' ($null -eq (Select-RosetunLinuxGuestAddress @()))
+Assert-That 'loopback and junk are skipped' ((Select-RosetunLinuxGuestAddress @('127.0.0.1', 'not-an-address', '203.0.113.4')) -eq '203.0.113.4')
 
 Write-Host "Test-LinuxHarness: $script:Passed passed, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }

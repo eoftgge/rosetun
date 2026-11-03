@@ -4,25 +4,31 @@
 #   Stage   (default) checks the selected VM and guest, copies the run to the guest
 #                     and prints the one command the owner runs there with sudo.
 #   Collect           reads the status and report of a run back and judges it.
+#   InitKnownHosts    pins the guest's host key once, after the owner compared its
+#                     fingerprint with the VM console.
+#
+# The stand's values come from stand.local.psd1 next to this script (or -Settings);
+# a parameter given on the command line wins over the file.
 #
 # Nothing here restores a checkpoint unless -RestoreCheckpoint names one, installs
 # packages, creates accounts, or starts anything privileged. The privileged job is
-# started in the guest by the owner (guest/start.sh). See Linux-Stand.md.
+# started in the guest by the owner (guest/start.sh). See README.md.
 
 [CmdletBinding(DefaultParameterSetName = 'Stage')]
 param(
-    [Parameter(Mandatory)][string]$VmName,
-    [Parameter(Mandatory)][guid]$VmId,
-    [Parameter(Mandatory)][string]$SshHost,
-    [Parameter(Mandatory)][string]$SshUser,
-    [Parameter(Mandatory)][string]$KnownHostsPath,
-    [Parameter(Mandatory)][string]$IdentityFile,
-    [Parameter(Mandatory)][string]$StandId,
+    [string]$Settings,
+    [string]$VmName,
+    [guid]$VmId,
+    [string]$SshHost,
+    [string]$SshUser,
+    [string]$KnownHostsPath,
+    [string]$IdentityFile,
+    [string]$StandId,
     [ValidateRange(1, 65535)][int]$SshPort = 22,
 
     [Parameter(ParameterSetName = 'Stage', Mandatory)][string]$ArtifactDir,
-    [Parameter(ParameterSetName = 'Stage', Mandatory)][string]$UserA,
-    [Parameter(ParameterSetName = 'Stage', Mandatory)][string]$UserB,
+    [Parameter(ParameterSetName = 'Stage')][string]$UserA,
+    [Parameter(ParameterSetName = 'Stage')][string]$UserB,
     [Parameter(ParameterSetName = 'Stage')][string]$RestoreCheckpoint,
     [Parameter(ParameterSetName = 'Stage')][string]$RepoRoot = (Join-Path $PSScriptRoot '..\..\..'),
     [Parameter(ParameterSetName = 'Stage')][ValidateRange(10, 3600)][int]$ScenarioTimeoutSeconds = 30,
@@ -33,6 +39,8 @@ param(
     [Parameter(ParameterSetName = 'Collect', Mandatory)][string]$RunId,
     [Parameter(ParameterSetName = 'Collect')][ValidateRange(0, 7200)][int]$WaitSeconds = 0,
 
+    [Parameter(ParameterSetName = 'InitKnownHosts', Mandatory)][switch]$InitKnownHosts,
+
     [string]$LogRoot = (Join-Path $PSScriptRoot 'logs')
 )
 
@@ -42,6 +50,22 @@ Import-Module (Join-Path $PSScriptRoot 'RosetunLinuxVm.psm1') -Force
 
 $guestBase = '/var/lib/rosetun-l2'
 
+# ------------------------------------------------------------------ settings
+
+$settingsPath = if ($PSBoundParameters.ContainsKey('Settings')) { $Settings }
+else {
+    $default = Join-Path $PSScriptRoot 'stand.local.psd1'
+    if (Test-Path -LiteralPath $default -PathType Leaf) { $default } else { $null }
+}
+$fileSettings = if ($settingsPath) { Read-RosetunLinuxStandSettings -Path $settingsPath } else { @{} }
+$explicit = @{}
+foreach ($name in @('VmName', 'StandId', 'SshUser', 'SshHost', 'SshPort', 'KnownHostsPath', 'IdentityFile', 'UserA', 'UserB')) {
+    if ($PSBoundParameters.ContainsKey($name)) { $explicit[$name] = $PSBoundParameters[$name] }
+}
+$stand = Resolve-RosetunLinuxStandSettings -Settings $fileSettings -Explicit $explicit
+Assert-RosetunLinuxStandSettings -Stand $stand -SettingsPath $settingsPath `
+    -Names @('VmName', 'StandId', 'SshUser', 'KnownHostsPath', 'IdentityFile')
+
 function Read-GuestJson {
     param($Target, [string]$Path)
     $text = Read-RosetunLinuxGuestFile -Target $Target -Path $Path
@@ -49,28 +73,51 @@ function Read-GuestJson {
     try { $text | ConvertFrom-Json -ErrorAction Stop } catch { $null }
 }
 
-$target = New-RosetunLinuxTarget -HostName $SshHost -User $SshUser -KnownHostsPath $KnownHostsPath `
-    -IdentityFile $IdentityFile -Port $SshPort
-Test-RosetunLinuxHostKeyPinned -Target $target
+# The VM id is read from Hyper-V unless the caller pins it; the stand id file,
+# BIOS GUID and boot id still prove which guest answers.
+$vmIdGiven = $PSBoundParameters.ContainsKey('VmId')
+function Get-StandIdentity {
+    $expected = if ($vmIdGiven) { $VmId } else { @(Get-VM -Name $stand.VmName -ErrorAction Stop)[0].VMId }
+    Get-RosetunLinuxVmIdentity -VmName $stand.VmName -VmId $expected
+}
+
+# The address comes from SshHost or, after the VM is up, from Hyper-V.
+function New-StandTarget {
+    param([switch]$AllowMissingKnownHosts)
+    $address = if ($stand.SshHost) { $stand.SshHost } else { Resolve-RosetunLinuxGuestAddress -VmName $stand.VmName -TimeoutSeconds 180 }
+    New-RosetunLinuxTarget -HostName $address -User $stand.SshUser -KnownHostsPath $stand.KnownHostsPath `
+        -IdentityFile $stand.IdentityFile -HostKeyAlias $stand.StandId -Port $stand.SshPort -AllowMissingKnownHosts:$AllowMissingKnownHosts
+}
+
+if ($PSCmdlet.ParameterSetName -eq 'InitKnownHosts') {
+    $identity = Get-StandIdentity
+    if ($identity.State -ne 'Running') { throw "VM '$($stand.VmName)' is $($identity.State). Start it first." }
+    Initialize-RosetunLinuxKnownHosts -Target (New-StandTarget -AllowMissingKnownHosts)
+    exit 0
+}
+
+Test-RosetunLinuxHostKeyPinned -KnownHostsPath $stand.KnownHostsPath -HostKeyAlias $stand.StandId
 
 if ($PSCmdlet.ParameterSetName -eq 'Stage') {
+    Assert-RosetunLinuxStandSettings -Stand $stand -SettingsPath $settingsPath -Names @('UserA', 'UserB')
     $runId = New-RosetunLinuxRunId
     $runLog = Join-Path $LogRoot $runId
     $null = New-Item -ItemType Directory -Path $runLog
 
-    $identity = Get-RosetunLinuxVmIdentity -VmName $VmName -VmId $VmId
+    $identity = Get-StandIdentity
     if ($RestoreCheckpoint) {
-        Write-Host "Restoring checkpoint '$RestoreCheckpoint' of '$VmName' (requested explicitly)."
-        Restore-RosetunLinuxCheckpoint -VmName $VmName -CheckpointName $RestoreCheckpoint
+        Write-Host "Restoring checkpoint '$RestoreCheckpoint' of '$($stand.VmName)' (requested explicitly)."
+        Restore-RosetunLinuxCheckpoint -VmName $stand.VmName -CheckpointName $RestoreCheckpoint
     }
     elseif ($identity.State -ne 'Running') {
-        throw "VM '$VmName' is $($identity.State). Start it yourself; the stand starts and restores nothing without -RestoreCheckpoint."
+        throw "VM '$($stand.VmName)' is $($identity.State). Start it yourself; the stand starts and restores nothing without -RestoreCheckpoint."
     }
+    $target = New-StandTarget
     Wait-RosetunLinuxSsh -Target $target -TimeoutSeconds 300
 
     $standRead = Invoke-RosetunLinuxSsh -Target $target -Command 'cat /etc/rosetun-l2-stand-id' -TimeoutSeconds 20
-    if ($standRead.ExitCode -ne 0 -or $standRead.Output.Trim() -ne $StandId) {
-        throw "The guest does not carry stand id '$StandId' in /etc/rosetun-l2-stand-id. Wrong machine; nothing was copied."
+    if ($standRead.ExitCode -ne 0 -or $standRead.Output.Trim() -ne $stand.StandId) {
+        throw "The guest does not carry stand id '$($stand.StandId)' in /etc/rosetun-l2-stand-id. Wrong machine; nothing was copied."
     }
     $bootRead = Invoke-RosetunLinuxSsh -Target $target -Command 'cat /proc/sys/kernel/random/boot_id' -TimeoutSeconds 20
     $bootId = $bootRead.Output.Trim()
@@ -82,7 +129,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Stage') {
         Write-Warning "Artifact origin is NOT confirmed: $($artifacts.Note). The report will say so."
     }
 
-    $jobEnv = New-RosetunLinuxJobEnv -RunId $runId -StandId $StandId -BootId $bootId -UserA $UserA -UserB $UserB `
+    $jobEnv = New-RosetunLinuxJobEnv -RunId $runId -StandId $stand.StandId -BootId $bootId -UserA $stand.UserA -UserB $stand.UserB `
         -BiosGuid $identity.BiosGuid -ScenarioTimeoutSeconds $ScenarioTimeoutSeconds `
         -UnitTimeoutSeconds $UnitTimeoutSeconds -JobTimeoutSeconds $JobTimeoutSeconds
     $stage = New-RosetunLinuxStage -StageRoot (Join-Path $runLog 'stage') -RunId $runId -ArtifactDir $ArtifactDir -JobEnv $jobEnv
@@ -100,7 +147,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Stage') {
     $record = [ordered]@{
         schema = 1; run_id = $runId; created = [DateTime]::UtcNow.ToString('o')
         vm = [ordered]@{ name = $identity.Name; id = $identity.VmId }
-        stand_id = $StandId; boot_id = $bootId; manifest_sha256 = $stage.ManifestHash
+        stand_id = $stand.StandId; boot_id = $bootId; manifest_sha256 = $stage.ManifestHash
         source = [ordered]@{ sha = $source.Sha; dirty = $source.Dirty; dirty_entries = $source.DirtyEntries; dirty_digest = $source.DirtyDigest }
         artifacts = [ordered]@{ hashes = $artifacts.Hashes; origin_confirmed = $artifacts.Confirmed; origin_note = $artifacts.Note; toolchain = $artifacts.Toolchain; built_on = $artifacts.BuiltOn }
         checkpoint_restored = [bool]$RestoreCheckpoint
@@ -115,7 +162,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Stage') {
     Write-Host ''
     Write-Host 'Then, from this host:'
     Write-Host ''
-    Write-Host "  .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Collect -RunId $runId -WaitSeconds 1200 <same VM, SSH and stand parameters>"
+    Write-Host "  .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Collect -RunId $runId -WaitSeconds 1200"
     exit 0
 }
 
@@ -125,10 +172,11 @@ $runLog = Join-Path $LogRoot $RunId
 $stagePath = Join-Path $runLog 'stage.json'
 if (-not (Test-Path -LiteralPath $stagePath)) { throw "No stage record for run $RunId under '$LogRoot'. This host did not stage it." }
 $record = Get-Content -LiteralPath $stagePath -Raw | ConvertFrom-Json
-if ($record.run_id -ne $RunId -or $record.stand_id -ne $StandId -or $record.vm.id -ne $VmId.ToString() -or $record.vm.name -ne $VmName) {
+$identity = Get-StandIdentity
+if ($record.run_id -ne $RunId -or $record.stand_id -ne $stand.StandId -or $record.vm.id -ne $identity.VmId -or $record.vm.name -ne $stand.VmName) {
     throw 'The stage record belongs to another VM or stand. Nothing was read.'
 }
-$null = Get-RosetunLinuxVmIdentity -VmName $VmName -VmId $VmId
+$target = New-StandTarget
 
 $stageInfo = [pscustomobject]@{
     RunId = $RunId; BootId = $record.boot_id

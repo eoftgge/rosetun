@@ -15,6 +15,12 @@ $script:ArtifactNames = @('l2_transport_fixture', 'rosetun_helper_privileged_tes
 $script:ResultNames = @('PASS', 'FAIL', 'SKIP', 'ERROR')
 # The Windows test VM and its credential file are never a Linux stand.
 $script:ForbiddenVmNames = @('rosetun-test')
+# The host key is pinned under the stand id, never under an address: the guest's
+# Default Switch address changes after a reboot or a checkpoint restore.
+$script:HostKeyAliasPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+$script:SettingNames = @('VmName', 'StandId', 'SshUser', 'SshHost', 'SshPort', 'KnownHostsPath', 'IdentityFile',
+    'UserA', 'UserB', 'Checkpoint', 'WslDistro')
+$script:SettingDefaults = @{ Checkpoint = 'l2-clean'; WslDistro = 'Debian'; SshPort = 22 }
 
 function Get-RosetunLinuxRoot {
     $PSScriptRoot
@@ -92,42 +98,150 @@ function Find-RosetunLinuxTool {
     $command.Source
 }
 
+# ------------------------------------------------------------------ settings
+
+function Expand-RosetunLinuxPath {
+    param([AllowEmptyString()][AllowNull()][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
+    $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+    if ($expanded -eq '~' -or $expanded.StartsWith('~\') -or $expanded.StartsWith('~/')) {
+        $expanded = $HOME + $expanded.Substring(1)
+    }
+    $expanded
+}
+
+# Reads stand.local.psd1. Only known keys are accepted, so a typo fails loudly
+# instead of silently falling back to a default.
+function Read-RosetunLinuxStandSettings {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "The stand settings file '$Path' does not exist. Copy stand.example.psd1 next to it to stand.local.psd1 and fill it in."
+    }
+    try { $data = Import-PowerShellDataFile -LiteralPath $Path -ErrorAction Stop }
+    catch { throw "The stand settings file '$Path' is not a valid PowerShell data file: $($_.Exception.Message)" }
+    $settings = @{}
+    foreach ($key in @($data.Keys)) {
+        $name = @($script:SettingNames | Where-Object { $_ -eq $key })
+        if ($name.Count -ne 1) { throw "Unknown setting '$key' in '$Path'. Known settings: $($script:SettingNames -join ', ')." }
+        $value = $data[$key]
+        if ($name[0] -eq 'SshPort') {
+            if ($value -isnot [int] -or $value -lt 1 -or $value -gt 65535) { throw "Setting SshPort in '$Path' must be a number from 1 to 65535." }
+        }
+        elseif ($value -isnot [string]) { throw "Setting $($name[0]) in '$Path' must be a quoted string." }
+        $settings[$name[0]] = $value
+    }
+    $settings
+}
+
+# Explicit parameters win over the file, the file wins over the defaults. An
+# empty string counts as not set.
+function Resolve-RosetunLinuxStandSettings {
+    param([hashtable]$Settings = @{}, [hashtable]$Explicit = @{})
+    $resolved = [ordered]@{}
+    foreach ($name in $script:SettingNames) {
+        $value = $null
+        foreach ($source in @($Explicit, $Settings, $script:SettingDefaults)) {
+            if ($source.ContainsKey($name) -and -not [string]::IsNullOrEmpty([string]$source[$name])) { $value = $source[$name]; break }
+        }
+        if ($name -in @('KnownHostsPath', 'IdentityFile')) { $value = Expand-RosetunLinuxPath $value }
+        $resolved[$name] = $value
+    }
+    [pscustomobject]$resolved
+}
+
+function Assert-RosetunLinuxStandSettings {
+    param([Parameter(Mandatory)]$Stand, [Parameter(Mandatory)][string[]]$Names, [string]$SettingsPath)
+    $missing = @($Names | Where-Object { [string]::IsNullOrEmpty([string]$Stand.$_) })
+    if ($missing.Count -eq 0) { return }
+    $where = if ($SettingsPath) { "in '$SettingsPath'" } else { 'in tools/vm/linux/stand.local.psd1 (copy stand.example.psd1)' }
+    throw "Missing stand setting(s): $($missing -join ', '). Set them $where or pass them as parameters."
+}
+
+# ------------------------------------------------------------------ guest address
+
+# The first IPv4 address that can carry SSH from the host. IPv6 and link-local
+# addresses are skipped: the Default Switch hands out IPv4 by DHCP.
+function Select-RosetunLinuxGuestAddress {
+    param([AllowEmptyCollection()][string[]]$Addresses = @())
+    foreach ($text in $Addresses) {
+        $address = $null
+        if (-not [Net.IPAddress]::TryParse([string]$text, [ref]$address)) { continue }
+        if ($address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { continue }
+        $bytes = $address.GetAddressBytes()
+        if ($bytes[0] -eq 169 -and $bytes[1] -eq 254) { continue }
+        if ($bytes[0] -eq 127 -or $bytes[0] -eq 0 -or $bytes[0] -ge 224) { continue }
+        return $address.ToString()
+    }
+    $null
+}
+
+# Reads the guest address from Hyper-V (KVP, which needs hyperv-daemons in the
+# guest) and waits for it after a boot or a restore.
+function Resolve-RosetunLinuxGuestAddress {
+    param([Parameter(Mandatory)][string]$VmName, [int]$TimeoutSeconds = 180)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $reported = @(Get-VMNetworkAdapter -VMName $VmName -ErrorAction Stop | ForEach-Object { @($_.IPAddresses) })
+        $address = Select-RosetunLinuxGuestAddress -Addresses $reported
+        if ($null -ne $address) { return $address }
+        Start-Sleep -Seconds 3
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Hyper-V reports no IPv4 address for '$VmName' after $TimeoutSeconds s. Check that the VM runs and that hyperv-daemons is installed in the guest, or set SshHost in stand.local.psd1."
+}
+
+# ------------------------------------------------------------------ SSH
+
 function New-RosetunLinuxTarget {
     param(
         [Parameter(Mandatory)][string]$HostName,
         [Parameter(Mandatory)][string]$User,
         [Parameter(Mandatory)][string]$KnownHostsPath,
         [Parameter(Mandatory)][string]$IdentityFile,
-        [ValidateRange(1, 65535)][int]$Port = 22
+        [Parameter(Mandatory)][string]$HostKeyAlias,
+        [ValidateRange(1, 65535)][int]$Port = 22,
+        # Only -InitKnownHosts builds a target before the pinned file exists.
+        [switch]$AllowMissingKnownHosts
     )
     if ($HostName -notmatch '^[A-Za-z0-9._:-]+$') { throw "Unsafe SSH host name '$HostName'." }
     if ($User -notmatch $script:AccountPattern) { throw "Unsafe SSH user name '$User'." }
-    if (-not (Test-Path -LiteralPath $KnownHostsPath -PathType Leaf)) {
-        throw "The known_hosts file '$KnownHostsPath' does not exist. Create it from a fingerprint you checked on the VM console (see the stand guide)."
-    }
+    if ($HostKeyAlias -notmatch $script:HostKeyAliasPattern) { throw "Unsafe stand id '$HostKeyAlias' for a host key alias." }
+    if ($KnownHostsPath -match '\.pending$') { throw "'$KnownHostsPath' holds a host key that was never confirmed. Run -InitKnownHosts again." }
     if (-not (Test-Path -LiteralPath $IdentityFile -PathType Leaf)) {
         throw "The SSH identity file '$IdentityFile' does not exist."
     }
-    $item = Get-Item -LiteralPath $KnownHostsPath
-    if ($item.Length -eq 0) { throw "The known_hosts file '$KnownHostsPath' is empty." }
+    if (-not $AllowMissingKnownHosts) {
+        if (-not (Test-Path -LiteralPath $KnownHostsPath -PathType Leaf)) {
+            throw "The known_hosts file '$KnownHostsPath' does not exist. Create it with -InitKnownHosts and compare the fingerprint on the VM console."
+        }
+        if ((Get-Item -LiteralPath $KnownHostsPath).Length -eq 0) {
+            throw "The known_hosts file '$KnownHostsPath' is empty. Create it with -InitKnownHosts."
+        }
+    }
     [pscustomobject]@{
         HostName       = $HostName
         User           = $User
         Port           = $Port
-        KnownHostsPath = (Resolve-Path -LiteralPath $KnownHostsPath).ProviderPath
+        HostKeyAlias   = $HostKeyAlias
+        KnownHostsPath = [IO.Path]::GetFullPath($KnownHostsPath)
         IdentityFile   = (Resolve-Path -LiteralPath $IdentityFile).ProviderPath
     }
 }
 
-# Common ssh/scp options. Host keys are always verified against the pinned file;
-# there is no way to switch verification off from this module.
+# Common ssh/scp options. Host keys are verified strictly against the pinned file,
+# under the stand id as alias. The only other mode writes a first key into a
+# pending file that -InitKnownHosts shows to the owner; it never feeds a run.
 function Get-RosetunLinuxSshOptions {
-    param([Parameter(Mandatory)]$Target)
-    $known = $Target.KnownHostsPath.Replace('\', '/')
+    param([Parameter(Mandatory)]$Target, [string]$AcceptNewKeyInto)
+    $known = if ($AcceptNewKeyInto) { $AcceptNewKeyInto } else { $Target.KnownHostsPath }
+    $known = $known.Replace('\', '/')
     $identity = $Target.IdentityFile.Replace('\', '/')
-    @(
-        '-o', 'BatchMode=yes',
-        '-o', 'StrictHostKeyChecking=yes',
+    $checking = if ($AcceptNewKeyInto) { @('-o', 'StrictHostKeyChecking=accept-new', '-o', 'HashKnownHosts=no') }
+    else { @('-o', 'StrictHostKeyChecking=yes') }
+    @('-o', 'BatchMode=yes') + $checking + @(
+        '-o', "HostKeyAlias=$($Target.HostKeyAlias)",
+        '-o', 'HostKeyAlgorithms=ssh-ed25519',
+        '-o', 'CheckHostIP=no',
+        '-o', 'UpdateHostKeys=no',
         '-o', "UserKnownHostsFile=$known",
         '-o', "GlobalKnownHostsFile=$known",
         '-o', 'PasswordAuthentication=no',
@@ -146,12 +260,95 @@ function Get-RosetunLinuxSshOptions {
 }
 
 function Test-RosetunLinuxHostKeyPinned {
-    param([Parameter(Mandatory)]$Target)
-    $name = if ($Target.Port -eq 22) { $Target.HostName } else { "[$($Target.HostName)]:$($Target.Port)" }
+    param([Parameter(Mandatory)][string]$KnownHostsPath, [Parameter(Mandatory)][string]$HostKeyAlias)
+    if (-not (Test-Path -LiteralPath $KnownHostsPath -PathType Leaf) -or (Get-Item -LiteralPath $KnownHostsPath).Length -eq 0) {
+        throw "No pinned host key: '$KnownHostsPath' is missing or empty. Create it with -InitKnownHosts and compare the fingerprint on the VM console."
+    }
     $keygen = Find-RosetunLinuxTool 'ssh-keygen'
-    $result = Invoke-RosetunLinuxProcess -FilePath $keygen -ArgumentList @('-F', $name, '-f', $Target.KnownHostsPath) -TimeoutSeconds 15
+    $result = Invoke-RosetunLinuxProcess -FilePath $keygen -ArgumentList @('-F', $HostKeyAlias, '-f', $KnownHostsPath) -TimeoutSeconds 15
     if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.Output)) {
-        throw "No host key for $name in '$($Target.KnownHostsPath)'. Add the key only after comparing its fingerprint on the VM console."
+        throw "No host key for '$HostKeyAlias' in '$KnownHostsPath'. A file made before keys were pinned by stand id holds an address instead: delete it and run -InitKnownHosts."
+    }
+}
+
+# ------------------------------------------------------------------ first host key
+
+function Assert-RosetunLinuxKnownHostsInitAllowed {
+    param([Parameter(Mandatory)][string]$KnownHostsPath)
+    if (Test-Path -LiteralPath $KnownHostsPath -PathType Container) { throw "'$KnownHostsPath' is a directory." }
+    if ((Test-Path -LiteralPath $KnownHostsPath -PathType Leaf) -and (Get-Item -LiteralPath $KnownHostsPath).Length -gt 0) {
+        throw "'$KnownHostsPath' already holds a host key; -InitKnownHosts never replaces one. If the guest's key really changed, delete the file yourself and run it again."
+    }
+}
+
+# The pending file must hold exactly one ed25519 key, under the stand id.
+function Test-RosetunLinuxPendingHostKey {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$HostKeyAlias)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $lines = @(Get-Content -LiteralPath $Path | Where-Object { $_.Trim() -ne '' -and -not $_.TrimStart().StartsWith('#') })
+    if ($lines.Count -ne 1) { return $false }
+    $fields = @($lines[0].Trim() -split '\s+')
+    $fields.Count -ge 3 -and $fields[0] -ceq $HostKeyAlias -and $fields[1] -ceq 'ssh-ed25519' -and $fields[2] -match '^[A-Za-z0-9+/]+={0,2}$'
+}
+
+# Only the literal answer "yes" turns the pending file into the pinned one;
+# anything else deletes it.
+function Complete-RosetunLinuxKnownHosts {
+    param(
+        [Parameter(Mandatory)][string]$PendingPath,
+        [Parameter(Mandatory)][string]$KnownHostsPath,
+        [AllowEmptyString()][AllowNull()][string]$Answer
+    )
+    if ("$Answer".Trim() -ceq 'yes') {
+        Assert-RosetunLinuxKnownHostsInitAllowed -KnownHostsPath $KnownHostsPath
+        if (Test-Path -LiteralPath $KnownHostsPath -PathType Leaf) { Remove-Item -LiteralPath $KnownHostsPath -Force }
+        Move-Item -LiteralPath $PendingPath -Destination $KnownHostsPath
+        return $true
+    }
+    Remove-Item -LiteralPath $PendingPath -Force -ErrorAction SilentlyContinue
+    $false
+}
+
+# Connects once with accept-new into a pending file, shows the fingerprint and
+# keeps the key only after the owner compared it with the VM console. ssh-keyscan
+# is not used: the Windows build cannot agree on a key exchange with OpenSSH 10.
+function Initialize-RosetunLinuxKnownHosts {
+    param(
+        [Parameter(Mandatory)]$Target,
+        [scriptblock]$ReadAnswer = { Read-Host 'Type yes if the two fingerprints are equal' }
+    )
+    Assert-RosetunLinuxKnownHostsInitAllowed -KnownHostsPath $Target.KnownHostsPath
+    $directory = Split-Path -Parent $Target.KnownHostsPath
+    if (-not (Test-Path -LiteralPath $directory -PathType Container)) { $null = New-Item -ItemType Directory -Path $directory }
+    $pending = "$($Target.KnownHostsPath).pending"
+    Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
+    try {
+        $arguments = @('-T', '-p', "$($Target.Port)") + (Get-RosetunLinuxSshOptions $Target -AcceptNewKeyInto $pending) +
+            @('--', "$($Target.User)@$($Target.HostName)", 'true')
+        $login = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxTool 'ssh') -ArgumentList $arguments -TimeoutSeconds 60
+        if (-not (Test-RosetunLinuxPendingHostKey -Path $pending -HostKeyAlias $Target.HostKeyAlias)) {
+            throw "Could not receive an ed25519 host key from $($Target.HostName): $($login.Error.Trim())"
+        }
+        $print = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxTool 'ssh-keygen') -ArgumentList @('-lf', $pending) -TimeoutSeconds 15
+        if ($print.ExitCode -ne 0) { throw "ssh-keygen could not read the received key: $($print.Error.Trim())" }
+        Write-Host ''
+        Write-Host "Host key received from $($Target.HostName), to be stored as '$($Target.HostKeyAlias)':"
+        Write-Host "  $($print.Output.Trim())"
+        Write-Host ''
+        Write-Host 'On the VM console (the Hyper-V window, not SSH) run:'
+        Write-Host '  ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub'
+        Write-Host 'and compare its SHA256 value with the one above.'
+        if ($login.ExitCode -ne 0) {
+            Write-Warning "The key arrived but the login failed: $($login.Error.Trim()). Check authorized_keys after this step."
+        }
+        $answer = & $ReadAnswer
+        if (-not (Complete-RosetunLinuxKnownHosts -PendingPath $pending -KnownHostsPath $Target.KnownHostsPath -Answer $answer)) {
+            throw 'The fingerprint was not confirmed. Nothing was kept.'
+        }
+        Write-Host "Pinned the host key in '$($Target.KnownHostsPath)'."
+    }
+    finally {
+        Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
     }
 }
 

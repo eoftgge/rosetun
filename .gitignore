@@ -4,5 +4,6 @@
 /tools/vm/logs/
 /tools/vm/windows/logs/
 /tools/vm/linux/logs/
+/tools/vm/linux/stand.local.psd1
 /tools/rules/
 *.exe
