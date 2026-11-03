@@ -15,9 +15,13 @@ mod log_file;
 mod log_gate;
 #[cfg(windows)]
 mod process_job;
+#[cfg(target_os = "linux")]
+mod sd_notify;
 mod server;
 #[cfg(windows)]
 mod service;
+#[cfg(target_os = "linux")]
+mod signals;
 mod state;
 #[cfg(windows)]
 mod upgrade_hold;
@@ -70,6 +74,13 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
     }
 }
 
+/// The console helper and the systemd service; the rest manage the Windows
+/// service, firewall and install directory.
+#[cfg(target_os = "linux")]
+fn runs_on_linux(mode: &Mode) -> bool {
+    matches!(mode, Mode::Console | Mode::Service)
+}
+
 fn log_filter() -> tracing_subscriber::EnvFilter {
     tracing_subscriber::EnvFilter::try_from_env("ROSETUN_LOG").unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new(format!(
@@ -80,6 +91,17 @@ fn log_filter() -> tracing_subscriber::EnvFilter {
 }
 
 fn main() -> std::process::ExitCode {
+    // First, while the process has one thread: every thread started later
+    // inherits the mask, so only the waiter takes SIGTERM, SIGINT or SIGHUP.
+    #[cfg(target_os = "linux")]
+    let signals = match signals::block() {
+        Ok(signals) => signals,
+        Err(error) => {
+            eprintln!("cannot block termination signals: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let message = info
@@ -104,13 +126,25 @@ fn main() -> std::process::ExitCode {
         }
     };
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    if !runs_on_linux(&mode) {
+        eprintln!(
+            "this command is Windows only; on Linux run the helper without arguments or with --service"
+        );
+        return std::process::ExitCode::from(2);
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     if mode != Mode::Console {
         eprintln!("service and install-directory commands are Windows only");
         return std::process::ExitCode::from(2);
     }
 
     match mode {
+        #[cfg(target_os = "linux")]
+        Mode::Console => run_linux(signals, false),
+        #[cfg(target_os = "linux")]
+        Mode::Service => run_linux(signals, true),
+        #[cfg(not(target_os = "linux"))]
         Mode::Console => run_console(),
         #[cfg(windows)]
         Mode::Service => run_service(),
@@ -148,7 +182,7 @@ fn main() -> std::process::ExitCode {
             install_command(&path, "finalized", install_dir::finalize(&path))
         }
         #[cfg(not(windows))]
-        _ => unreachable!("non-Windows modes were rejected above"),
+        _ => unreachable!("Windows-only modes were rejected above"),
     }
 }
 
@@ -193,8 +227,7 @@ fn service_command(result: std::io::Result<()>) -> std::process::ExitCode {
     }
 }
 
-fn run_console() -> std::process::ExitCode {
-    let gate = VerboseGate::default();
+fn init_console_log(gate: &VerboseGate) {
     let log_gate = gate.clone();
     tracing_subscriber::fmt()
         .with_env_filter(log_filter())
@@ -203,6 +236,12 @@ fn run_console() -> std::process::ExitCode {
             log_gate.allows(metadata) && !rosetun_config::is_sensitive_log_target(metadata.target())
         }))
         .init();
+}
+
+#[cfg(not(target_os = "linux"))]
+fn run_console() -> std::process::ExitCode {
+    let gate = VerboseGate::default();
+    init_console_log(&gate);
 
     #[cfg(windows)]
     let run_dir = match data_dir::data_dir().and_then(|dir| {
@@ -226,6 +265,70 @@ fn run_console() -> std::process::ExitCode {
         }
     };
     if let Err(error) = Server::new(true).serve(listener, helper) {
+        tracing::error!(%error, "helper stopped");
+        return std::process::ExitCode::FAILURE;
+    }
+    std::process::ExitCode::SUCCESS
+}
+
+/// The console helper and the systemd service on Linux. Both stop on
+/// SIGTERM, SIGINT or SIGHUP through the same path as an IPC shutdown;
+/// only the console honours that request (as on Windows). The service logs
+/// to stderr for journald, which adds its own timestamps, and tells systemd
+/// when it is ready and when it starts stopping.
+#[cfg(target_os = "linux")]
+fn run_linux(signals: signals::Blocked, service: bool) -> std::process::ExitCode {
+    let gate = VerboseGate::default();
+    if service {
+        let log_gate = gate.clone();
+        tracing_subscriber::fmt()
+            .with_env_filter(log_filter())
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .without_time()
+            .finish()
+            .with(tracing_subscriber::filter::filter_fn(move |metadata| {
+                log_gate.allows(metadata)
+                    && !rosetun_config::is_sensitive_log_target(metadata.target())
+            }))
+            .init();
+    } else {
+        init_console_log(&gate);
+    }
+
+    let notifier = if service {
+        match sd_notify::Notifier::from_env().transpose() {
+            Ok(notifier) => notifier.map(Arc::new),
+            Err(error) => {
+                tracing::error!(%error, "cannot reach systemd");
+                return std::process::ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+
+    let (listener, helper) = match start(Path::new("/run/rosetun"), gate) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(%error, "failed to start helper");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let server = Server::new(!service);
+    let shutdown = server.shutdown_handle();
+    let stopping = notifier.clone();
+    if let Err(error) = signals::spawn_waiter(signals, move |_| {
+        sd_notify::send(stopping.as_deref(), sd_notify::STOPPING);
+        shutdown.request();
+    }) {
+        tracing::error!(%error, "failed to start the signal thread");
+        helper.shutdown();
+        return std::process::ExitCode::FAILURE;
+    }
+    sd_notify::send(notifier.as_deref(), sd_notify::READY);
+    tracing::info!(service, "helper is ready");
+    if let Err(error) = server.serve(listener, helper) {
         tracing::error!(%error, "helper stopped");
         return std::process::ExitCode::FAILURE;
     }
@@ -495,6 +598,25 @@ mod tests {
             backend.locate_binary(),
             Err(rosetun_engine::errors::EngineError::BinaryUnavailable(_))
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_runs_only_the_console_and_the_service() {
+        let mode = |args: &[&str]| parse_mode(args.iter().map(OsString::from)).unwrap();
+        assert!(runs_on_linux(&mode(&[])));
+        assert!(runs_on_linux(&mode(&["--service"])));
+        for args in [
+            &["--install-service"][..],
+            &["--uninstall-service"],
+            &["--reset-firewall"],
+            &["--verify-install-dir", "/opt/example"],
+            &["--secure-install-dir", "/opt/example"],
+            &["--finalize-install-dir", "/opt/example"],
+            &["--hold-for-upgrade", "/opt/example"],
+        ] {
+            assert!(!runs_on_linux(&mode(args)), "{args:?}");
+        }
     }
 
     #[cfg(windows)]

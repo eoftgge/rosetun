@@ -2995,6 +2995,7 @@ name = "rosetun-helper-privileged"
 version = "0.5.0-alpha.1"
 dependencies = [
  "base64",
+ "libc",
  "rosetun-config",
  "rosetun-dns",
  "rosetun-engine",

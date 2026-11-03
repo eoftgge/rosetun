@@ -454,3 +454,28 @@ fn malformed_frames_and_disconnects_release_their_permits() {
         Response::Status(_)
     ));
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_termination_signal_stops_the_server_and_removes_its_socket() {
+    use std::os::unix::thread::JoinHandleExt;
+
+    let mut server = TestServer::start(timeouts());
+    let mut client = server.connect();
+    hello(&mut client);
+    let shutdown = server.shutdown.clone();
+    let blocked = crate::signals::block().expect("block termination signals in this thread");
+    let waiter = crate::signals::spawn_waiter(blocked, move |_| shutdown.request())
+        .expect("start the signal waiter");
+    // SAFETY: The waiter never returns on its own, so its thread is alive; a
+    // thread-directed signal reaches only that thread, where it is blocked.
+    let sent = unsafe { libc::pthread_kill(waiter.as_pthread_t(), libc::SIGTERM) };
+    assert_eq!(sent, 0);
+    server
+        .finished
+        .recv_timeout(Duration::from_secs(4))
+        .expect("serve stops on the signal");
+    let thread = server.thread.take().expect("server thread");
+    thread.join().expect("server thread").expect("clean shutdown");
+    assert!(!server.endpoint.exists());
+}
