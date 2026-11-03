@@ -935,7 +935,76 @@ function Start-RosetunHelper {
         }
         $message
     } -ArgumentList $script:Config.GuestDir, $script:Config.TaskName, $failure
+    try {
+        $message += "`nDiagnostics: $(Save-RosetunHelperStartFailure)"
+    }
+    catch {
+        $message += "`nCould not save diagnostics: $_"
+    }
     throw $message
+}
+
+function Save-RosetunHelperStartFailure {
+    # Every helper log, and what holds or could hold the helper's pipe right
+    # now, into a fresh folder under tools\vm\logs. Times are UTC, as in
+    # helper.log, so the task start, the process start, the first log line
+    # and the moment the wait gave up can be lined up. Returns the folder.
+    $destination = Save-RosetunLogs
+    $report = Invoke-RosetunGuest -ScriptBlock {
+        param($task, $pipeName)
+        $utc = 'yyyy-MM-ddTHH:mm:ss.fffZ'
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add("collected: $((Get-Date).ToUniversalTime().ToString($utc))")
+
+        $scheduled = Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+        if ($scheduled) {
+            $info = Get-ScheduledTaskInfo -TaskName $task
+            $lastRun = if ($info.LastRunTime) { $info.LastRunTime.ToUniversalTime().ToString($utc) } else { 'never' }
+            $lines.Add(('task {0}: state {1}; last run {2}; last result 0x{3:X8}' -f
+                    $task, $scheduled.State, $lastRun, $info.LastTaskResult))
+        }
+        else {
+            $lines.Add("task ${task}: not registered")
+        }
+
+        $lines.Add('')
+        $lines.Add('processes (rosetun*, then the parent of each helper):')
+        $processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name LIKE 'rosetun%'")
+        $parents = @($processes | Where-Object { $_.Name -eq 'rosetun-helper-privileged.exe' } |
+                ForEach-Object { Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($_.ParentProcessId)" })
+        foreach ($process in @($processes) + @($parents)) {
+            $started = if ($process.CreationDate) { $process.CreationDate.ToUniversalTime().ToString($utc) } else { '?' }
+            $lines.Add(('  PID {0}, parent {1}, started {2}: {3}' -f
+                    $process.ProcessId, $process.ParentProcessId, $started, $process.ExecutablePath))
+            $lines.Add("    $($process.CommandLine)")
+        }
+        if ($processes.Count -eq 0) { $lines.Add('  none') }
+
+        $lines.Add('')
+        try {
+            $pipes = @([IO.Directory]::GetFiles('\\.\pipe\') | Where-Object { $_ -like '*rosetun*' })
+            $lines.Add("pipes with rosetun in the name: $(if ($pipes.Count) { $pipes -join ', ' } else { 'none' })")
+            $lines.Add("expected pipe \\.\pipe\$pipeName present: $($pipes -contains "\\.\pipe\$pipeName")")
+        }
+        catch {
+            $lines.Add("pipes: could not list them: $($_.Exception.Message)")
+        }
+        $override = [Environment]::GetEnvironmentVariable('ROSETUN_HELPER_ENDPOINT', 'Machine')
+        $lines.Add("ROSETUN_HELPER_ENDPOINT (machine): $(if ($override) { $override } else { 'not set' })")
+
+        $lines.Add('')
+        $service = Get-CimInstance -ClassName Win32_Service -Filter "Name = 'Rosetun'"
+        if ($service) {
+            $lines.Add(('service Rosetun: state {0}; start mode {1}; PID {2}; {3}' -f
+                    $service.State, $service.StartMode, $service.ProcessId, $service.PathName))
+        }
+        else {
+            $lines.Add('service Rosetun: not installed')
+        }
+        $lines -join "`r`n"
+    } -ArgumentList $script:Config.TaskName, $script:Config.PipeName
+    [IO.File]::WriteAllText((Join-Path $destination 'helper-start.txt'), $report)
+    $destination
 }
 
 function Wait-RosetunHelperReady {
@@ -958,7 +1027,9 @@ function Wait-RosetunHelperReady {
         while (($service -and (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue).Status -ne 'Running') -or
             -not ([IO.Directory]::GetFiles('\\.\pipe\') -contains "\\.\pipe\$pipeName")) {
             if ((Get-Date) -gt $deadline) {
-                return "did not open its pipe within $timeout seconds"
+                # UTC, as helper.log, to compare with its first line.
+                $gaveUp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+                return "did not open its pipe within $timeout seconds (gave up at $gaveUp)"
             }
             Start-Sleep -Milliseconds 200
         }
