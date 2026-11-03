@@ -29,7 +29,8 @@ use crate::{
 use self::nft::{Nft, SystemNft};
 
 /// Why there is no protection when the helper does not run as the unit.
-pub(super) const NOT_THE_SERVICE: &str = "the helper does not run as rosetun-helper.service, so its engines have no cgroup of their own";
+pub(super) const NOT_THE_SERVICE: &str =
+    "the helper does not run as rosetun-helper.service, so its engines have no cgroup of their own";
 
 #[derive(Debug, Default)]
 struct Shared {
@@ -97,7 +98,11 @@ fn hold_rules(leaves: &Leaves) -> String {
 /// Every condition the rules rely on, with the reason for the first that
 /// fails: the unit's leaves, cgroup v2 at the mount point, the engines' leaf
 /// in place, and an nft binary only root can change.
-fn preflight(nft: &dyn Nft, leaves: &Result<Leaves, String>, mount: &Path) -> Result<(), RoutingError> {
+fn preflight(
+    nft: &dyn Nft,
+    leaves: &Result<Leaves, String>,
+    mount: &Path,
+) -> Result<(), RoutingError> {
     let leaves = leaves
         .as_ref()
         .map_err(|reason| RoutingError::Unavailable(reason.clone()))?;
@@ -245,7 +250,12 @@ struct NftSession {
 }
 
 impl NftSession {
-    fn rules(&self, scope: ProtectionScope, allow_lan: bool, tunnel: Option<&InterfaceName>) -> String {
+    fn rules(
+        &self,
+        scope: ProtectionScope,
+        allow_lan: bool,
+        tunnel: Option<&InterfaceName>,
+    ) -> String {
         nftables::replace(&Rules {
             scope,
             allow_lan,
@@ -448,15 +458,30 @@ mod tests {
             mount.0.clone(),
         );
         assert!(!outside.capabilities().kill_switch);
-        assert!(outside.unavailable_reason().unwrap().contains("rosetun-helper.service"));
+        assert!(
+            outside
+                .unavailable_reason()
+                .unwrap()
+                .contains("rosetun-helper.service")
+        );
 
         let bare = Mount::new(false);
         let no_leaves = backend(&nft, &bare);
-        assert!(no_leaves.unavailable_reason().unwrap().contains("engines' cgroup"));
+        assert!(
+            no_leaves
+                .unavailable_reason()
+                .unwrap()
+                .contains("engines' cgroup")
+        );
 
         let no_v2 = Mount::new(true);
         std::fs::remove_file(no_v2.0.join("cgroup.controllers")).unwrap();
-        assert!(backend(&nft, &no_v2).unavailable_reason().unwrap().contains("cgroup v2"));
+        assert!(
+            backend(&nft, &no_v2)
+                .unavailable_reason()
+                .unwrap()
+                .contains("cgroup v2")
+        );
 
         let foreign = Arc::new(FakeNft {
             unusable: Some("/usr/sbin/nft is not a regular file owned by root alone".to_owned()),
@@ -490,9 +515,11 @@ mod tests {
             .begin_protection(&plan(ProtectionScope::AllTraffic), &[])
             .unwrap();
         assert!(nft.applied()[0].contains("policy drop;"));
-        assert!(backend
-            .begin_protection(&plan(ProtectionScope::AllTraffic), &[])
-            .is_err());
+        assert!(
+            backend
+                .begin_protection(&plan(ProtectionScope::AllTraffic), &[])
+                .is_err()
+        );
         guard.revert().unwrap();
         assert_eq!(nft.applied().last().unwrap(), &nftables::remove());
         assert!(!*nft.table.lock().unwrap());
@@ -529,9 +556,11 @@ mod tests {
             .begin_protection(&plan(ProtectionScope::AllTraffic), &[])
             .unwrap();
         *nft.fail_next.lock().unwrap() = true;
-        assert!(guard
-            .prepare_reconnect(&plan(ProtectionScope::DnsOnly), &[])
-            .is_err());
+        assert!(
+            guard
+                .prepare_reconnect(&plan(ProtectionScope::DnsOnly), &[])
+                .is_err()
+        );
         assert!(nft.applied().last().unwrap().contains("policy drop;"));
     }
 
@@ -548,7 +577,12 @@ mod tests {
             alias: "rosetun-none".to_owned(),
             ipv4: Ipv4Addr::new(192, 0, 2, 1),
         };
-        assert!(guard.authorize_tunnel(&missing).unwrap_err().is_tunnel_not_ready());
+        assert!(
+            guard
+                .authorize_tunnel(&missing)
+                .unwrap_err()
+                .is_tunnel_not_ready()
+        );
         let unsafe_name = TunnelInterface {
             alias: "tun\"0".to_owned(),
             ipv4: Ipv4Addr::new(192, 0, 2, 1),
@@ -575,7 +609,12 @@ mod tests {
         };
         guard.authorize_tunnel(&lo).unwrap();
         let count = nft.applied().len();
-        assert!(nft.applied().last().unwrap().contains("\t\toif \"lo\" accept\n\t\toif \"lo\" accept"));
+        assert!(
+            nft.applied()
+                .last()
+                .unwrap()
+                .contains("\t\toif \"lo\" accept\n\t\toif \"lo\" accept")
+        );
         guard.authorize_tunnel(&lo).unwrap();
         assert_eq!(nft.applied().len(), count);
     }
@@ -591,7 +630,9 @@ mod tests {
         let status = backend.lockdown_status().unwrap();
         assert!(status.enabled && status.upgrade_hold);
         // The service "repairs" it: the hold's own rules replace the leftovers.
-        backend.enable_lockdown(false, &LockdownApps::default()).unwrap();
+        backend
+            .enable_lockdown(false, &LockdownApps::default())
+            .unwrap();
         let script = nft.applied().last().unwrap().clone();
         assert_eq!(script, hold_rules(&leaves()));
         assert!(script.contains("/helper\" meta l4proto { tcp, udp } th dport 53 accept"));

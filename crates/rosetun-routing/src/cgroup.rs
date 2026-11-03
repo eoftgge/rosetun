@@ -153,9 +153,9 @@ fn valid_component(component: &str) -> bool {
         && component.len() <= MAX_COMPONENT_BYTES
         && component != "."
         && component != ".."
-        && component
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'@' | b':' | b'-'))
+        && component.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'@' | b':' | b'-')
+        })
 }
 
 #[cfg(test)]
@@ -237,7 +237,11 @@ mod tests {
             "/a/b\\x2dc",
             "/a/b}",
         ] {
-            assert_eq!(CgroupPath::parse(path), Err(CgroupError::InvalidPath), "{path:?}");
+            assert_eq!(
+                CgroupPath::parse(path),
+                Err(CgroupError::InvalidPath),
+                "{path:?}"
+            );
         }
         let base = CgroupPath::parse(SERVICE).unwrap();
         assert!(base.child("..").is_err());

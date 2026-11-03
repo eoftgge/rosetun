@@ -3,6 +3,8 @@
     reason = "a binary has no public API; `pub` only shares items between its modules"
 )]
 
+#[cfg(target_os = "linux")]
+mod cgroup;
 #[cfg(windows)]
 mod data_dir;
 #[cfg(windows)]
@@ -15,8 +17,6 @@ mod log_file;
 mod log_gate;
 #[cfg(windows)]
 mod process_job;
-#[cfg(target_os = "linux")]
-mod cgroup;
 #[cfg(target_os = "linux")]
 mod sd_notify;
 mod server;

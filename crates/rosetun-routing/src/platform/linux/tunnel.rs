@@ -15,7 +15,9 @@ pub(super) fn check(name: &InterfaceName, ipv4: Ipv4Addr) -> Result<(), RoutingE
         name: name.as_str().to_owned(),
         reason: reason.to_owned(),
     };
-    let flags_path = Path::new("/sys/class/net").join(name.as_str()).join("flags");
+    let flags_path = Path::new("/sys/class/net")
+        .join(name.as_str())
+        .join("flags");
     let Ok(flags) = std::fs::read_to_string(&flags_path) else {
         return Err(not_ready("the interface does not exist yet"));
     };
@@ -24,7 +26,9 @@ pub(super) fn check(name: &InterfaceName, ipv4: Ipv4Addr) -> Result<(), RoutingE
         return Err(not_ready("the interface is not up"));
     }
     if !interface_ipv4(name.as_str())?.contains(&ipv4) {
-        return Err(not_ready("the interface does not carry the configured address"));
+        return Err(not_ready(
+            "the interface does not carry the configured address",
+        ));
     }
     Ok(())
 }
@@ -65,7 +69,8 @@ fn interface_ipv4(name: &str) -> Result<Vec<Ipv4Addr>, RoutingError> {
         }
         // SAFETY: an AF_INET address is a sockaddr_in; read_unaligned copes
         // with any alignment the C library used.
-        let address = unsafe { std::ptr::read_unaligned(current.ifa_addr.cast::<libc::sockaddr_in>()) };
+        let address =
+            unsafe { std::ptr::read_unaligned(current.ifa_addr.cast::<libc::sockaddr_in>()) };
         found.push(Ipv4Addr::from(u32::from_be(address.sin_addr.s_addr)));
     }
     // SAFETY: `list` came from a successful getifaddrs and is freed once;

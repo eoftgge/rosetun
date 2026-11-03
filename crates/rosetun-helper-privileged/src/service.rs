@@ -180,7 +180,8 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
                 .get()
                 .expect("service log gate configured")
                 .clone();
-            crate::start(&run_dir, gate, rosetun_routing::backend()).map_err(|error| error.to_string())
+            crate::start(&run_dir, gate, rosetun_routing::backend())
+                .map_err(|error| error.to_string())
         });
     let (listener, helper) = match started {
         Ok(started) => started,

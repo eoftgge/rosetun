@@ -276,7 +276,8 @@ mod tests {
     fn the_dns_lock_drops_only_port_53_outside_the_tunnel() {
         let engines = engines();
         let tunnel = InterfaceName::new("rosetun0").unwrap();
-        for (tunnel, tunnel_line) in [(None, ""), (Some(&tunnel), "\t\toif \"rosetun0\" accept\n")] {
+        for (tunnel, tunnel_line) in [(None, ""), (Some(&tunnel), "\t\toif \"rosetun0\" accept\n")]
+        {
             // "Local network" does not apply to the DNS lock.
             let text = replace(&Rules {
                 scope: ProtectionScope::DnsOnly,
@@ -385,7 +386,8 @@ mod tests {
                         );
                     }
                     assert!(
-                        line.chars().all(|c| c.is_ascii_graphic() || c == ' ' || c == '\t'),
+                        line.chars()
+                            .all(|c| c.is_ascii_graphic() || c == ' ' || c == '\t'),
                         "{line:?}"
                     );
                 }
