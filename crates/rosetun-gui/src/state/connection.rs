@@ -171,11 +171,13 @@ impl State {
     }
 
     /// Started by the installer after an upgrade that held the network.
+    #[cfg(any(windows, test))]
     pub(crate) fn start_after_upgrade(&mut self) {
         self.after_upgrade = true;
     }
 
     /// Whether the window should come up to explain the closed network.
+    #[cfg(any(windows, test))]
     pub(crate) fn take_upgrade_attention(&mut self) -> bool {
         std::mem::take(&mut self.upgrade_attention)
     }

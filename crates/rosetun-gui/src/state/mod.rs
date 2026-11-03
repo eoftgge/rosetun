@@ -119,6 +119,10 @@ pub(crate) struct State {
     after_upgrade_connect: bool,
     /// That start found nothing to connect to, or its connect failed: the
     /// window should show why the network is closed.
+    #[cfg_attr(
+        not(any(windows, test)),
+        expect(dead_code, reason = "only the Windows shell shows the window")
+    )]
     upgrade_attention: bool,
     /// A server picked in the tray while disconnected connects once it is saved.
     connect_after_choice: bool,
