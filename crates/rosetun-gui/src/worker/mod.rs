@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc::Sender};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use rosetun_config::{
@@ -389,10 +389,13 @@ pub(crate) fn start(
         .name("rosetun-helper-watch".into())
         .spawn(move || {
             let endpoint = rosetun_ipc::default_endpoint();
+            let started = Instant::now();
             let mut available = None;
+            let mut reached = false;
             loop {
                 match HelperClient::connect(&endpoint, CLIENT_NAME) {
                     Ok(mut client) => {
+                        reached = true;
                         log_helper_availability(&mut available, true);
                         if !emit(
                             &tx,
@@ -444,7 +447,7 @@ pub(crate) fn start(
                         }
                     }
                 }
-                thread::sleep(Duration::from_secs(2));
+                thread::sleep(helper_retry_delay(started.elapsed(), reached));
             }
         })
         .expect("could not spawn helper watcher");
@@ -489,6 +492,23 @@ fn log_helper_availability(previous: &mut Option<bool>, available: bool) {
     }
 }
 
+/// After sign-in the GUI often starts before the service answers; until it
+/// has answered once, the first seconds retry quickly so the tray shows the
+/// real state sooner.
+const HELPER_STARTUP_WINDOW: Duration = Duration::from_secs(10);
+const HELPER_STARTUP_RETRY: Duration = Duration::from_millis(250);
+const HELPER_RETRY: Duration = Duration::from_secs(2);
+
+/// The pause before the next attempt to reach the service. A connection lost
+/// after the service answered keeps the ordinary pause.
+fn helper_retry_delay(since_start: Duration, reached: bool) -> Duration {
+    if !reached && since_start < HELPER_STARTUP_WINDOW {
+        HELPER_STARTUP_RETRY
+    } else {
+        HELPER_RETRY
+    }
+}
+
 /// Traffic-only status updates queue without waking the window; this many of them in a row
 /// wake it anyway, so a hidden window drains the queue about once a minute.
 const QUIET_STATUS_LIMIT: u32 = 60;
@@ -514,6 +534,24 @@ fn emit(tx: &Sender<WorkerEvent>, repaint: &egui::Context, event: WorkerEvent) -
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn the_service_is_retried_quickly_only_in_the_first_seconds_before_it_answers() {
+        let fast = Duration::from_millis(250);
+        let slow = Duration::from_secs(2);
+        assert_eq!(helper_retry_delay(Duration::ZERO, false), fast);
+        assert_eq!(helper_retry_delay(Duration::from_millis(9_999), false), fast);
+        assert_eq!(helper_retry_delay(Duration::from_secs(10), false), slow);
+        assert_eq!(helper_retry_delay(Duration::from_secs(60), false), slow);
+    }
+
+    #[test]
+    fn a_connection_lost_after_the_service_answered_keeps_the_ordinary_pause() {
+        let slow = Duration::from_secs(2);
+        assert_eq!(helper_retry_delay(Duration::ZERO, true), slow);
+        assert_eq!(helper_retry_delay(Duration::from_secs(3), true), slow);
+        assert_eq!(helper_retry_delay(Duration::from_secs(60), true), slow);
+    }
 
     #[test]
     fn missing_and_present_files_have_distinct_stamps() {
