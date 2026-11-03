@@ -179,7 +179,11 @@ mod tests {
     }
 
     fn pid_in(path: &Path) -> libc::pid_t {
-        std::fs::read_to_string(path).unwrap().trim().parse().unwrap()
+        std::fs::read_to_string(path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
     }
 
     fn kill_group(pid: libc::pid_t) {
@@ -194,7 +198,12 @@ mod tests {
         assert!(wait_for(&dir.0.join("child"), Duration::from_secs(5)));
         let pid = libc::pid_t::try_from(child.id()).unwrap();
         // SAFETY: Plain values; our own unreaped child and its group member.
-        let (own, inner) = unsafe { (libc::getpgid(pid), libc::getpgid(pid_in(&dir.0.join("child")))) };
+        let (own, inner) = unsafe {
+            (
+                libc::getpgid(pid),
+                libc::getpgid(pid_in(&dir.0.join("child"))),
+            )
+        };
         assert_eq!(own, pid);
         assert_eq!(inner, pid);
 

@@ -476,6 +476,9 @@ fn a_termination_signal_stops_the_server_and_removes_its_socket() {
         .recv_timeout(Duration::from_secs(4))
         .expect("serve stops on the signal");
     let thread = server.thread.take().expect("server thread");
-    thread.join().expect("server thread").expect("clean shutdown");
+    thread
+        .join()
+        .expect("server thread")
+        .expect("clean shutdown");
     assert!(!server.endpoint.exists());
 }

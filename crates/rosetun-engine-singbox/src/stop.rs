@@ -332,10 +332,8 @@ mod tests {
 
         impl TempDir {
             fn new(name: &str) -> Self {
-                let path = std::env::temp_dir().join(format!(
-                    "rosetun-stop-{name}-{}",
-                    std::process::id()
-                ));
+                let path = std::env::temp_dir()
+                    .join(format!("rosetun-stop-{name}-{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&path);
                 std::fs::create_dir(&path).unwrap();
                 Self(path)
@@ -362,7 +360,11 @@ mod tests {
         fn wait_for(path: &Path) {
             let deadline = Instant::now() + Duration::from_secs(5);
             while !path.exists() {
-                assert!(Instant::now() < deadline, "{} never appeared", path.display());
+                assert!(
+                    Instant::now() < deadline,
+                    "{} never appeared",
+                    path.display()
+                );
                 thread::sleep(Duration::from_millis(20));
             }
         }

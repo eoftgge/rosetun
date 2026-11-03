@@ -96,7 +96,10 @@ mod tests {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             DirBuilder::new().mode(0o755).create(&top).unwrap();
-            DirBuilder::new().mode(0o755).create(top.join("bin")).unwrap();
+            DirBuilder::new()
+                .mode(0o755)
+                .create(top.join("bin"))
+                .unwrap();
             fs::write(top.join("bin/engine"), b"#!/bin/sh\n").unwrap();
             fs::set_permissions(top.join("bin/engine"), Permissions::from_mode(0o755)).unwrap();
             let owner = fs::metadata(&top).unwrap().uid();
@@ -171,7 +174,11 @@ mod tests {
         symlink(fixture.engine(), fixture.top.join("bin/link")).unwrap();
         assert!(fixture.verify(&fixture.top.join("bin/link")).is_err());
         symlink(fixture.top.join("bin"), fixture.top.join("bin-link")).unwrap();
-        assert!(fixture.verify(&fixture.top.join("bin-link/engine")).is_err());
+        assert!(
+            fixture
+                .verify(&fixture.top.join("bin-link/engine"))
+                .is_err()
+        );
         assert!(fixture.verify(&fixture.top.join("bin")).is_err());
         assert!(fixture.verify(&fixture.top.join("bin/missing")).is_err());
     }
@@ -180,7 +187,11 @@ mod tests {
     fn paths_outside_the_top_or_not_canonical_are_refused() {
         let fixture = Fixture::new();
         assert!(fixture.verify(Path::new("relative/engine")).is_err());
-        assert!(fixture.verify(&fixture.top.join("bin/../bin/engine")).is_err());
+        assert!(
+            fixture
+                .verify(&fixture.top.join("bin/../bin/engine"))
+                .is_err()
+        );
         assert!(fixture.verify(&fixture.top).is_err());
     }
 

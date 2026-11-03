@@ -429,7 +429,10 @@ mod tests {
     fn xray_is_interrupted_before_it_is_killed() {
         let mut child = fake_xray("trap 'exit 0' TERM; echo ready; while :; do sleep 1; done");
         assert!(interrupt_and_wait(&mut child, STOP_GRACE).unwrap());
-        assert_eq!(child.try_wait().unwrap().and_then(|status| status.code()), Some(0));
+        assert_eq!(
+            child.try_wait().unwrap().and_then(|status| status.code()),
+            Some(0)
+        );
     }
 
     #[cfg(target_os = "linux")]
