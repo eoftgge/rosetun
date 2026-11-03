@@ -44,6 +44,8 @@ UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#GuiExe}
 SetupIconFile=..\crates\rosetun-gui\assets\rosetun.ico
 SetupLogging=yes
+; The uninstaller logs what it could not remove, such as another user's sign-in task.
+UninstallLogging=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -395,6 +397,56 @@ begin
   end;
 end;
 
+// Each user's autostart is a Task Scheduler task \Rosetun\Autostart-<SID>.
+// Unlike their HKCU Run values, the elevated uninstaller can reach every
+// user's task. A task that cannot be removed only fails to start later, so
+// a failure is logged and the uninstall goes on.
+procedure RemoveSignInTasks();
+var
+  Service, Root, Folder, Tasks: Variant;
+  Names: array of String;
+  I, Count: Integer;
+begin
+  try
+    Service := CreateOleObject('Schedule.Service');
+    Service.Connect();
+    Root := Service.GetFolder('\');
+  except
+    Log('Task Scheduler is unavailable: ' + GetExceptionMessage());
+    Exit;
+  end;
+  try
+    Folder := Root.GetFolder('{#AppName}');
+  except
+    Log('No {#AppName} folder in Task Scheduler');
+    Exit;
+  end;
+  try
+    // 1 = TASK_ENUM_HIDDEN. Names first: deleting changes the collection.
+    Tasks := Folder.GetTasks(1);
+    Count := Tasks.Count;
+    SetArrayLength(Names, Count);
+    for I := 1 to Count do
+      Names[I - 1] := Tasks.Item(I).Name;
+  except
+    Log('Could not list the sign-in tasks: ' + GetExceptionMessage());
+    SetArrayLength(Names, 0);
+  end;
+  for I := 0 to GetArrayLength(Names) - 1 do
+    if Pos('Autostart-', Names[I]) = 1 then
+      try
+        Folder.DeleteTask(Names[I], 0);
+        Log('Removed sign-in task ' + Names[I]);
+      except
+        Log('Could not remove sign-in task ' + Names[I] + ': ' + GetExceptionMessage());
+      end;
+  try
+    Root.DeleteFolder('{#AppName}', 0);
+  except
+    Log('Could not remove the {#AppName} folder from Task Scheduler: ' + GetExceptionMessage());
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
@@ -403,7 +455,9 @@ begin
   begin
     RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/F /IM {#GuiExe}', ResultCode);
     RunHidden(ExpandConstant('{app}\{#HelperExe}'), '--uninstall-service', ResultCode);
-    // Autostart is per user. Only the current user's values are reachable here.
+    RemoveSignInTasks();
+    // Autostart of earlier versions was a Run value; only the current
+    // user's is reachable here.
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Rosetun');
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run', 'Rosetun');
   end;
