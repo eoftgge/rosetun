@@ -127,9 +127,7 @@ Root: HKLM; Subkey: "Software\Classes\rosetun\shell\open\command"; ValueType: st
 ; Without runasoriginaluser the GUI would inherit the installer's elevation and
 ; keep its configuration in the wrong profile.
 Filename: "{app}\{#GuiExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser; Check: ShouldLaunchGui
-; With the network held closed, the GUI starts in any mode and reconnects:
-; the user was connected before the upgrade.
-Filename: "{app}\{#GuiExe}"; Parameters: "--after-upgrade"; Flags: nowait runasoriginaluser; Check: ShouldReconnectAfterUpgrade
+; The GUI that reconnects after a held upgrade starts from CurStepChanged.
 
 [UninstallDelete]
 ; Created by the service, not by the installer.
@@ -374,6 +372,19 @@ begin
         mbError, MB_OK, IDOK);
       Log('Service setup failed with exit code ' + IntToStr(ResultCode));
       InstallFailureCode := 4;
+    end;
+    // With the network held closed, the GUI starts in any mode and
+    // reconnects: the user was connected before the upgrade. Not a [Run]
+    // entry: Setup runs those before this step, when the install is not
+    // finalized and the service not installed, so its check never passed.
+    // As the original user, as [Run]'s runasoriginaluser.
+    if ShouldReconnectAfterUpgrade() then
+    begin
+      if ExecAsOriginalUser(ExpandConstant('{app}\{#GuiExe}'), '--after-upgrade', ExpandConstant('{app}'),
+        SW_SHOWNORMAL, ewNoWait, ResultCode) then
+        Log('Started the GUI to reconnect after the upgrade')
+      else
+        Log('Could not start the GUI after the upgrade: ' + SysErrorMessage(ResultCode));
     end;
   end;
 end;
