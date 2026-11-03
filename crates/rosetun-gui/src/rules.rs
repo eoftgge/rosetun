@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rosetun_config::{ExitId, ProcessMatch, Rule, RuleMatcher, RuleSet, RuleTarget, RuleTemplate};
 use rosetun_processes::RunningProcess;
@@ -13,6 +13,33 @@ pub(crate) struct ProcessGroup {
     pub(crate) path: Option<PathBuf>,
     pub(crate) count: usize,
     pub(crate) windowed: bool,
+}
+
+/// What tells one listed program from another, in lower case: its path, else its name. A
+/// choice keeps it, so the list can be read again without losing the choice.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ProgramKey {
+    Path(String),
+    Name(String),
+}
+
+impl ProgramKey {
+    pub(crate) fn of_path(path: &Path) -> Self {
+        Self::Path(path.to_string_lossy().to_lowercase())
+    }
+
+    pub(crate) fn of_name(name: &str) -> Self {
+        Self::Name(name.to_lowercase())
+    }
+}
+
+impl ProcessGroup {
+    pub(crate) fn key(&self) -> ProgramKey {
+        self.path.as_deref().map_or_else(
+            || ProgramKey::of_name(&self.name),
+            ProgramKey::of_path,
+        )
+    }
 }
 
 pub(crate) fn group_processes(processes: Vec<RunningProcess>) -> Vec<ProcessGroup> {
@@ -72,14 +99,6 @@ pub(crate) enum ProcessMatchMode {
     #[default]
     Name,
     Path,
-}
-
-pub(crate) fn update_process_match_mode(mode: &mut ProcessMatchMode, input: &str) {
-    match rosetun_core::parse_process_input(input) {
-        Ok(ProcessMatch::Path(_)) => *mode = ProcessMatchMode::Path,
-        Ok(ProcessMatch::Name(_)) => *mode = ProcessMatchMode::Name,
-        Err(_) => {}
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -365,17 +384,6 @@ mod tests {
         assert!(process_matches_filter(&group[0], "TELEGRAM"));
         assert!(process_matches_filter(&group[0], "users\\TEST"));
         assert!(!process_matches_filter(&group[0], "firefox"));
-    }
-
-    #[test]
-    fn a_typed_path_switches_to_full_path_mode() {
-        let mut mode = ProcessMatchMode::Name;
-        update_process_match_mode(&mut mode, "curl.exe");
-        assert_eq!(mode, ProcessMatchMode::Name);
-        update_process_match_mode(&mut mode, r#""C:\Apps\curl.exe""#);
-        assert_eq!(mode, ProcessMatchMode::Path);
-        update_process_match_mode(&mut mode, "curl.exe");
-        assert_eq!(mode, ProcessMatchMode::Name);
     }
 
     #[test]

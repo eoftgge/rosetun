@@ -963,7 +963,11 @@ fn creating_a_rule_from_a_connection_opens_the_filled_dialog() {
     assert!(matches!(job, Some(Job::LoadProcesses(_))));
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert_eq!(dialog.kind, RuleInputKind::Process);
-    assert_eq!(dialog.process, path);
+    assert_eq!(dialog.chosen.len(), 1);
+    assert_eq!(
+        dialog.chosen[0].path.as_deref(),
+        Some(std::path::Path::new(path))
+    );
     assert_eq!(dialog.match_mode, ProcessMatchMode::Path);
     assert_eq!(dialog.editing, None);
 }

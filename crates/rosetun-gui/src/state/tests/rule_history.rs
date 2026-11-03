@@ -176,7 +176,15 @@ fn open_new_addresses(state: &mut State) {
 
 fn open_new_program(state: &mut State) {
     state.act(Action::OpenAddRule);
-    state.rules.screen.add.as_mut().unwrap().process = "Tool.exe".into();
+    state.rules.screen.add.as_mut().unwrap().tick_program("Tool.exe");
+}
+
+fn open_new_programs(state: &mut State) {
+    state.act(Action::OpenAddRule);
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    for name in ["Tool.exe", "Other.exe", "Curl.exe"] {
+        dialog.tick_program(name);
+    }
 }
 
 fn open_edit_first(state: &mut State) {
@@ -237,6 +245,7 @@ fn rule_edits() -> Vec<(&'static str, Prepare, Action)> {
         ("add", open_new_domain, Action::SubmitAddRule),
         ("add addresses", open_new_addresses, Action::SubmitAddRule),
         ("add program", open_new_program, Action::SubmitAddRule),
+        ("add programs", open_new_programs, Action::SubmitAddRule),
         ("edit", open_edit_first, Action::SubmitAddRule),
         ("rename set", open_rename, Action::SubmitSetName),
         ("create set", open_create, Action::SubmitSetName),

@@ -9,7 +9,7 @@ use super::address::{
     split_addresses,
 };
 use crate::errors;
-use crate::rules::{ProcessGroup, ProcessMatchMode, group_processes};
+use crate::rules::{ProcessGroup, ProcessMatchMode, ProgramKey, group_processes};
 use crate::worker::WorkerEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -22,8 +22,68 @@ pub(crate) enum RuleInputKind {
 }
 
 pub(crate) const MAX_LIST_RULES: usize = 256;
+/// The most programs one dialog adds. A temporary rule is one of the service's
+/// `MAX_TEMPORARY_RULES`, so more could never be applied at once.
+pub(crate) const MAX_PROGRAMS: usize = rosetun_ipc::MAX_TEMPORARY_RULES;
 /// The program list is read again when the program kind is shown after this long.
 pub(crate) const PROCESS_LIST_STALE_MS: u64 = 30_000;
+
+/// A program the dialog makes a rule for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChosenProgram {
+    pub(crate) key: ProgramKey,
+    /// The executable's file name: what an "Any folder" rule matches.
+    pub(crate) name: String,
+    /// Where the program is, when that is known.
+    pub(crate) path: Option<PathBuf>,
+    /// The rule is for the file at `path` whatever the folder setting says: the program was
+    /// given as a file or typed as a path.
+    pub(crate) fixed_path: bool,
+}
+
+impl ChosenProgram {
+    pub(crate) fn listed(group: &ProcessGroup) -> Self {
+        Self {
+            key: group.key(),
+            name: group.name.clone(),
+            path: group.path.clone(),
+            fixed_path: false,
+        }
+    }
+
+    /// A file, by its full path.
+    pub(crate) fn file(path: PathBuf) -> Self {
+        Self {
+            key: ProgramKey::of_path(&path),
+            name: file_name(&path),
+            path: Some(path),
+            fixed_path: true,
+        }
+    }
+
+    pub(crate) fn named(name: String) -> Self {
+        Self {
+            key: ProgramKey::of_name(&name),
+            name,
+            path: None,
+            fixed_path: false,
+        }
+    }
+
+    /// The rule's condition when the folder setting is `mode`.
+    fn matcher(&self, mode: ProcessMatchMode) -> Option<RuleMatcher> {
+        let text = match (&self.path, mode) {
+            (Some(path), ProcessMatchMode::Path) => path.to_string_lossy().into_owned(),
+            (Some(path), ProcessMatchMode::Name) if self.fixed_path => {
+                path.to_string_lossy().into_owned()
+            }
+            _ => self.name.clone(),
+        };
+        rosetun_core::parse_process_input(&text)
+            .ok()
+            .map(RuleMatcher::Process)
+    }
+}
 
 pub(crate) struct AddRuleDialog {
     pub(crate) set: RuleSetId,
@@ -45,15 +105,14 @@ pub(crate) struct AddRuleDialog {
     pub(crate) temporary_only: bool,
     pub(crate) editing: Option<RuleId>,
     original_domain: Option<DomainMatch>,
-    pub(crate) process: String,
     pub(crate) process_filter: String,
     pub(crate) processes: Vec<ProcessGroup>,
-    pub(crate) selected_process: Option<usize>,
+    /// The programs ticked in the list, in the order they were ticked.
+    pub(crate) chosen: Vec<ChosenProgram>,
+    /// "Any folder" or "Only this folder", one for every chosen program.
     pub(crate) match_mode: ProcessMatchMode,
     #[cfg(windows)]
     pub(crate) browsing: bool,
-    #[cfg(windows)]
-    pub(crate) browsed: Option<PathBuf>,
     pub(crate) load_request: Option<u64>,
     pub(crate) processes_loaded: bool,
     /// When the list was read, in `State::frame_time`.
@@ -82,15 +141,12 @@ impl AddRuleDialog {
             temporary_only: false,
             editing: None,
             original_domain: None,
-            process: String::new(),
             process_filter: String::new(),
             processes: Vec::new(),
-            selected_process: None,
+            chosen: Vec::new(),
             match_mode: ProcessMatchMode::Name,
             #[cfg(windows)]
             browsing: false,
-            #[cfg(windows)]
-            browsed: None,
             load_request: None,
             processes_loaded: false,
             processes_loaded_ms: None,
@@ -134,16 +190,16 @@ impl AddRuleDialog {
                 dialog.addresses = vec![AddressChip::new(cidr)];
             }
             RuleMatcher::Process(process) => {
-                dialog.process = rosetun_core::rule_value_text(matcher);
-                if let ProcessMatch::Path(path) = process {
-                    dialog.match_mode = ProcessMatchMode::Path;
-                    #[cfg(windows)]
-                    {
-                        dialog.browsed = Some(path.clone());
+                dialog.chosen = vec![match process {
+                    ProcessMatch::Name(name) => ChosenProgram::named(name.clone()),
+                    ProcessMatch::Path(path) => {
+                        dialog.match_mode = ProcessMatchMode::Path;
+                        ChosenProgram {
+                            fixed_path: false,
+                            ..ChosenProgram::file(path.clone())
+                        }
                     }
-                    #[cfg(not(windows))]
-                    let _ = path;
-                }
+                }];
             }
             _ => return None,
         }
@@ -293,6 +349,16 @@ impl AddRuleDialog {
         self.address_input = text.to_owned();
     }
 
+    /// Ticks the program `text` names, as typed in the search.
+    #[cfg(test)]
+    pub(crate) fn tick_program(&mut self, text: &str) {
+        let program = match rosetun_core::parse_process_input(text).unwrap() {
+            ProcessMatch::Name(name) => ChosenProgram::named(name),
+            ProcessMatch::Path(path) => ChosenProgram::file(path),
+        };
+        self.toggle_program(program);
+    }
+
     /// The items of the address field, one per line.
     #[cfg(test)]
     pub(crate) fn address_text(&self) -> String {
@@ -338,89 +404,143 @@ impl AddRuleDialog {
                 > MAX_LIST_RULES
     }
 
-    /// The chosen program's name and, when it is known, its path: from the list, the file
-    /// chosen, or the rule's own path.
-    pub(crate) fn chosen_program(&self) -> Option<(String, Option<PathBuf>)> {
-        let chosen = rosetun_core::parse_process_input(&self.process).ok()?;
-        let group = self
-            .selected_process
-            .and_then(|index| self.processes.get(index));
-        #[cfg(windows)]
-        let browsed = self.browsed.clone();
-        #[cfg(not(windows))]
-        let browsed = None;
-        let (name, path) = match chosen {
-            ProcessMatch::Name(name) => (name, None),
-            ProcessMatch::Path(path) => (file_name(&path), Some(path)),
-        };
-        let name = group.map_or(name, |group| group.name.clone());
-        let path = group
-            .and_then(|group| group.path.clone())
-            .or(browsed)
-            .or(path);
-        Some((name, path))
-    }
-
-    /// Clears the chosen program, keeping the search.
-    pub(crate) fn clear_process(&mut self) {
-        self.process.clear();
-        self.selected_process = None;
-        #[cfg(windows)]
-        {
-            self.browsed = None;
+    /// Ticks the program, or unticks it. An edit keeps one: ticking another replaces it.
+    pub(crate) fn toggle_program(&mut self, program: ChosenProgram) {
+        if let Some(index) = self.chosen.iter().position(|item| item.key == program.key) {
+            self.chosen.remove(index);
+        } else {
+            if self.editing.is_some() {
+                self.chosen.clear();
+            }
+            self.chosen.push(program);
         }
         self.error = None;
+    }
+
+    /// Ticks the listed program, or unticks it. "Only this folder" cannot take a program
+    /// whose path is not known.
+    pub(crate) fn toggle_listed(&mut self, index: usize) {
+        if let Some(group) = self.processes.get(index)
+            && (group.path.is_some() || self.match_mode == ProcessMatchMode::Name)
+        {
+            let program = ChosenProgram::listed(group);
+            self.toggle_program(program);
+        }
+    }
+
+    /// Ticks the program the search text names: a program name, or the path of a file.
+    pub(crate) fn toggle_typed(&mut self) {
+        let program = match rosetun_core::parse_process_input(self.process_filter.trim()) {
+            Ok(ProcessMatch::Name(name)) => ChosenProgram::named(name),
+            Ok(ProcessMatch::Path(path)) => ChosenProgram::file(path),
+            Err(_) => return,
+        };
+        self.toggle_program(program);
+    }
+
+    /// Ticks a file chosen in the file dialog.
+    #[cfg(windows)]
+    pub(crate) fn add_file(&mut self, path: PathBuf) {
+        let program = ChosenProgram::file(path);
+        if !self.chosen.iter().any(|item| item.key == program.key) {
+            self.toggle_program(program);
+        }
         self.focus_input = true;
     }
 
-    /// Points the selection at the listed program the dialog was opened for, so its icon
-    /// shows and its path can be chosen.
-    fn select_listed_process(&mut self) {
-        let Ok(chosen) = rosetun_core::parse_process_input(&self.process) else {
-            return;
-        };
-        self.selected_process = self.processes.iter().position(|group| match &chosen {
-            ProcessMatch::Name(name) => group.name.eq_ignore_ascii_case(name),
-            ProcessMatch::Path(path) => group.path.as_deref().is_some_and(|listed| {
-                listed
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(&path.to_string_lossy())
-            }),
+    pub(crate) fn is_chosen(&self, key: &ProgramKey) -> bool {
+        self.chosen.iter().any(|item| &item.key == key)
+    }
+
+    /// Unticks every program.
+    pub(crate) fn clear_chosen(&mut self) {
+        self.chosen.clear();
+        self.error = None;
+    }
+
+    /// Whether "Only this folder" can apply: the path of every program is known.
+    pub(crate) fn full_path_available(&self) -> bool {
+        self.chosen.iter().all(|item| item.path.is_some())
+    }
+
+    /// Whether the folder setting changes anything: some program is not a file by its path.
+    pub(crate) fn folder_setting_applies(&self) -> bool {
+        self.chosen.iter().any(|item| !item.fixed_path)
+    }
+
+    /// The rules the chosen programs make, each once, or `None` while none is chosen, one is
+    /// not a valid program, or there are more than one dialog adds.
+    pub(crate) fn process_rules(&self) -> Option<Vec<RuleMatcher>> {
+        if self.chosen.is_empty() || self.too_many_programs() {
+            return None;
+        }
+        let mut matchers: Vec<RuleMatcher> = Vec::new();
+        for program in &self.chosen {
+            let matcher = program.matcher(self.match_mode)?;
+            if !matchers.iter().any(|old| same_program(old, &matcher)) {
+                matchers.push(matcher);
+            }
+        }
+        (self.editing.is_none() || matchers.len() == 1).then_some(matchers)
+    }
+
+    /// How many rules the chosen programs make.
+    pub(crate) fn process_rule_count(&self) -> usize {
+        self.process_rules()
+            .map_or(self.chosen.len(), |rules| rules.len())
+    }
+
+    /// More programs than one dialog adds.
+    pub(crate) fn too_many_programs(&self) -> bool {
+        self.chosen.len() > MAX_PROGRAMS
+    }
+
+    /// Points the programs given by name at the listed ones, so their icon shows and their
+    /// path can be chosen. The name stays as it was given.
+    fn resolve_chosen(&mut self) {
+        for program in &mut self.chosen {
+            let listed = match &program.key {
+                ProgramKey::Name(_) => self
+                    .processes
+                    .iter()
+                    .find(|group| group.name.eq_ignore_ascii_case(&program.name)),
+                key => self.processes.iter().find(|group| &group.key() == key),
+            };
+            if let Some(group) = listed {
+                program.key = group.key();
+                program.path = group.path.clone();
+            }
+        }
+        let mut seen = Vec::new();
+        self.chosen.retain(|program| {
+            let new = !seen.contains(&program.key);
+            seen.push(program.key.clone());
+            new
         });
     }
 
     pub(crate) fn set_process_match_mode(&mut self, mode: ProcessMatchMode) {
-        self.match_mode = mode;
-        if let Some(group) = self
-            .selected_process
-            .and_then(|index| self.processes.get(index))
-        {
-            let value = match mode {
-                ProcessMatchMode::Name => Some(group.name.clone()),
-                ProcessMatchMode::Path => group
-                    .path
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-            };
-            if let Some(value) = value {
-                self.process = value;
-            }
-        } else {
-            #[cfg(windows)]
-            if let Some(path) = &self.browsed {
-                self.process = browsed_process_value(path, mode);
-                self.error = None;
-                return;
-            }
-            if mode == ProcessMatchMode::Name
-                && let Ok(ProcessMatch::Path(path)) =
-                    rosetun_core::parse_process_input(&self.process)
-                && let Some(name) = path.file_name()
-            {
-                self.process = name.to_string_lossy().into_owned();
-            }
+        if mode == ProcessMatchMode::Path && !self.full_path_available() {
+            return;
         }
+        self.match_mode = mode;
         self.error = None;
+    }
+}
+
+/// Whether two program conditions are one rule: the same name or the same path, whatever
+/// the letter case.
+fn same_program(a: &RuleMatcher, b: &RuleMatcher) -> bool {
+    match (a, b) {
+        (
+            RuleMatcher::Process(ProcessMatch::Name(a)),
+            RuleMatcher::Process(ProcessMatch::Name(b)),
+        ) => a.eq_ignore_ascii_case(b),
+        (
+            RuleMatcher::Process(ProcessMatch::Path(a)),
+            RuleMatcher::Process(ProcessMatch::Path(b)),
+        ) => ProgramKey::of_path(a) == ProgramKey::of_path(b),
+        _ => false,
     }
 }
 
@@ -428,14 +548,6 @@ fn file_name(path: &Path) -> String {
     path.file_name()
         .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
         .into_owned()
-}
-
-#[cfg(windows)]
-fn browsed_process_value(path: &Path, mode: ProcessMatchMode) -> String {
-    match mode {
-        ProcessMatchMode::Name => file_name(path),
-        ProcessMatchMode::Path => path.to_string_lossy().into_owned(),
-    }
 }
 
 impl State {
@@ -493,7 +605,7 @@ impl State {
                             dialog.processes_loaded = true;
                             dialog.processes_loaded_ms = Some(now);
                             dialog.processes_error = None;
-                            dialog.select_listed_process();
+                            dialog.resolve_chosen();
                         }
                         Err(_) => dialog.processes_error = message,
                     }
@@ -509,11 +621,7 @@ impl State {
                     if dialog.kind == RuleInputKind::Process
                         && let Some(path) = path
                     {
-                        dialog.process = browsed_process_value(&path, dialog.match_mode);
-                        dialog.browsed = Some(path);
-                        dialog.selected_process = None;
-                        dialog.error = None;
-                        dialog.focus_input = true;
+                        dialog.add_file(path);
                     }
                 }
             }
@@ -623,11 +731,7 @@ impl State {
                 {
                     let matchers: Option<Vec<_>> = match dialog.kind {
                         RuleInputKind::Address => dialog.address_rules(),
-                        RuleInputKind::Process => {
-                            rosetun_core::parse_process_input(&dialog.process)
-                                .ok()
-                                .map(|process| vec![RuleMatcher::Process(process)])
-                        }
+                        RuleInputKind::Process => dialog.process_rules(),
                         RuleInputKind::List => dialog.list.as_ref().and_then(|list| {
                             let entry = self.config.lists.iter().find(|entry| &entry.id == list)?;
                             let categories = if entry.format.has_categories() {
@@ -705,10 +809,7 @@ impl State {
                                 matcher,
                                 dialog.target.clone(),
                             )
-                        } else if matches!(
-                            dialog.kind,
-                            RuleInputKind::Address | RuleInputKind::List
-                        ) {
+                        } else if dialog.kind != RuleInputKind::Process || matchers.len() > 1 {
                             Job::AddRules(dialog.set.clone(), matchers, dialog.target.clone())
                         } else {
                             Job::AddRule(

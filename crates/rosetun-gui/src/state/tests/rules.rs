@@ -302,25 +302,15 @@ fn browse_executable_requires_an_idle_process_dialog() {
 
 #[cfg(windows)]
 #[test]
-fn browsed_executable_uses_the_selected_match_mode_and_clears_process_selection() {
-    for (mode, expected) in [
-        (ProcessMatchMode::Name, "Tool.exe"),
-        (ProcessMatchMode::Path, r"C:\Apps\Tool.exe"),
-    ] {
+fn a_browsed_file_is_ticked_with_its_path_whatever_the_folder_setting_says() {
+    for mode in [ProcessMatchMode::Name, ProcessMatchMode::Path] {
         let mut state = state_with_rules();
         state.act(Action::OpenRules);
         state.act(Action::OpenAddRule);
         state.act(Action::SelectRuleInput(RuleInputKind::Process));
         let dialog = state.rules.screen.add.as_mut().unwrap();
         dialog.match_mode = mode;
-        dialog.selected_process = Some(0);
-        dialog.processes.push(ProcessGroup {
-            name: "Other.exe".into(),
-            path: Some(r"C:\Apps\Other.exe".into()),
-            count: 1,
-            windowed: false,
-        });
-        dialog.process = "Other.exe".into();
+        dialog.tick_program("Other.exe");
         dialog.error = Some("previous error".into());
         dialog.focus_input = false;
         assert!(matches!(
@@ -331,10 +321,16 @@ fn browsed_executable_uses_the_selected_match_mode_and_clears_process_selection(
         state.reduce(WorkerEvent::BrowsedExecutable(Some(path.clone())));
         let dialog = state.rules.screen.add.as_ref().unwrap();
         assert!(!dialog.browsing);
-        assert_eq!(dialog.browsed.as_ref(), Some(&path));
-        assert_eq!(dialog.process, expected);
-        assert_eq!(dialog.selected_process, None);
-        assert!(dialog.error.is_none());
+        assert_eq!(dialog.chosen.len(), 2, "added to the program already ticked");
+        assert_eq!(dialog.chosen[1].path.as_ref(), Some(&path));
+        assert!(dialog.chosen[1].fixed_path);
+        assert_eq!(
+            dialog.process_rules(),
+            Some(vec![
+                RuleMatcher::Process(rosetun_config::ProcessMatch::Name("Other.exe".into())),
+                RuleMatcher::Process(rosetun_config::ProcessMatch::Path(path)),
+            ])
+        );
         assert!(dialog.focus_input);
     }
 }
@@ -346,13 +342,12 @@ fn cancelled_or_late_browse_does_not_replace_input() {
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Process));
-    state.rules.screen.add.as_mut().unwrap().process = "current.exe".into();
+    state.rules.screen.add.as_mut().unwrap().tick_program("current.exe");
     state.act(Action::BrowseExecutable);
     state.reduce(WorkerEvent::BrowsedExecutable(None));
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(!dialog.browsing);
-    assert_eq!(dialog.process, "current.exe");
-    assert!(dialog.browsed.is_none());
+    assert_eq!(dialog.chosen.len(), 1);
 
     state.act(Action::BrowseExecutable);
     state.act(Action::SelectRuleInput(RuleInputKind::Address));
@@ -361,8 +356,7 @@ fn cancelled_or_late_browse_does_not_replace_input() {
     )));
     let dialog = state.rules.screen.add.as_ref().unwrap();
     assert!(!dialog.browsing);
-    assert_eq!(dialog.process, "current.exe");
-    assert!(dialog.browsed.is_none());
+    assert_eq!(dialog.chosen.len(), 1);
 
     state.act(Action::SelectRuleInput(RuleInputKind::Process));
     state.act(Action::BrowseExecutable);
@@ -371,26 +365,6 @@ fn cancelled_or_late_browse_does_not_replace_input() {
         r"C:\Apps\Tool.exe".into(),
     )));
     assert!(state.rules.screen.add.is_none());
-}
-
-#[cfg(windows)]
-#[test]
-fn browsed_executable_switches_between_name_and_path_without_a_running_process() {
-    let mut state = state_with_rules();
-    state.act(Action::OpenRules);
-    state.act(Action::OpenAddRule);
-    state.act(Action::SelectRuleInput(RuleInputKind::Process));
-    state.act(Action::BrowseExecutable);
-    state.reduce(WorkerEvent::BrowsedExecutable(Some(
-        r"C:\Apps\Tool.exe".into(),
-    )));
-    let dialog = state.rules.screen.add.as_mut().unwrap();
-    assert_eq!(dialog.process, "Tool.exe");
-    assert!(dialog.selected_process.is_none());
-    dialog.set_process_match_mode(ProcessMatchMode::Path);
-    assert_eq!(dialog.process, r"C:\Apps\Tool.exe");
-    dialog.set_process_match_mode(ProcessMatchMode::Name);
-    assert_eq!(dialog.process, "Tool.exe");
 }
 
 #[test]
@@ -684,13 +658,10 @@ fn editing_a_path_rule_keeps_the_path_and_rejects_templates() {
     assert_eq!(dialog.editing.as_ref(), Some(&id));
     assert_eq!(dialog.kind, RuleInputKind::Process);
     assert!(dialog.process_filter.is_empty(), "the list is not narrowed");
-    assert_eq!(dialog.process, path);
     assert_eq!(dialog.match_mode, ProcessMatchMode::Path);
-    assert!(dialog.selected_process.is_none());
-    assert_eq!(
-        dialog.chosen_program(),
-        Some(("Tool.exe".to_owned(), Some(PathBuf::from(path))))
-    );
+    assert_eq!(dialog.chosen.len(), 1);
+    assert_eq!(dialog.chosen[0].name, "Tool.exe");
+    assert_eq!(dialog.chosen[0].path, Some(PathBuf::from(path)));
     assert!(state.act(Action::SubmitAddRule).is_none());
     assert!(state.rules.screen.add.is_none());
 }
@@ -743,7 +714,13 @@ fn process_input_and_missing_set_guard_submission() {
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRule);
     state.act(Action::SelectRuleInput(RuleInputKind::Process));
-    state.rules.screen.add.as_mut().unwrap().process = r#""C:\Apps\curl.exe""#.into();
+    state
+        .rules
+        .screen
+        .add
+        .as_mut()
+        .unwrap()
+        .tick_program(r#""C:\Apps\curl.exe""#);
     assert!(matches!(
         state.act(Action::SubmitAddRule),
         Some(Job::AddRule(
@@ -1060,16 +1037,47 @@ fn the_program_kind_reads_the_list_again_once_it_is_stale() {
     ));
 }
 
+fn tool_paths() -> (&'static str, &'static str, &'static str) {
+    #[cfg(windows)]
+    return (r"C:\Apps\Tool.exe", r"C:\Other\Tool.exe", r"C:\Apps\Curl.exe");
+    #[cfg(not(windows))]
+    return ("/opt/apps/Tool.exe", "/opt/other/Tool.exe", "/opt/apps/Curl.exe");
+}
+
+/// A new rule dialog on the program kind with `processes` listed, as the service answered.
+fn program_dialog(processes: Vec<RunningProcess>) -> State {
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    let Some(Job::LoadProcesses(request)) = state.act(Action::OpenAddRule) else {
+        panic!("a new rule loads the program list");
+    };
+    state.reduce(WorkerEvent::Processes {
+        request,
+        result: Ok(processes),
+    });
+    state
+}
+
+fn process_rule(name: &str) -> RuleMatcher {
+    RuleMatcher::Process(ProcessMatch::Name(name.into()))
+}
+
 #[test]
 fn a_program_given_by_name_or_path_is_found_in_the_list_once_it_loads() {
-    #[cfg(windows)]
-    let (path, other) = (r"C:\Apps\Tool.exe", r"C:\Other\Tool.exe");
-    #[cfg(not(windows))]
-    let (path, other) = ("/opt/apps/Tool.exe", "/opt/other/Tool.exe");
+    let (path, other, _) = tool_paths();
     for (matcher, expected) in [
-        (ProcessMatch::Name("tool.exe".into()), Some(0)),
-        (ProcessMatch::Path(PathBuf::from(other)), Some(1)),
-        (ProcessMatch::Name("Missing.exe".into()), None),
+        (
+            ProcessMatch::Name("tool.exe".into()),
+            crate::rules::ProgramKey::of_path(path.as_ref()),
+        ),
+        (
+            ProcessMatch::Path(PathBuf::from(other)),
+            crate::rules::ProgramKey::of_path(other.as_ref()),
+        ),
+        (
+            ProcessMatch::Name("Missing.exe".into()),
+            crate::rules::ProgramKey::of_name("missing.exe"),
+        ),
     ] {
         let mut state = state_with_rules();
         let Some(Job::LoadProcesses(request)) = state.act(Action::OpenAddRuleFor(
@@ -1085,7 +1093,8 @@ fn a_program_given_by_name_or_path_is_found_in_the_list_once_it_loads() {
             ]),
         });
         let dialog = state.rules.screen.add.as_ref().unwrap();
-        assert_eq!(dialog.selected_process, expected, "{matcher:?}");
+        assert_eq!(dialog.chosen.len(), 1, "{matcher:?}");
+        assert_eq!(dialog.chosen[0].key, expected, "{matcher:?}");
         assert_eq!(
             dialog.match_mode,
             if matches!(matcher, ProcessMatch::Path(_)) {
@@ -1094,16 +1103,17 @@ fn a_program_given_by_name_or_path_is_found_in_the_list_once_it_loads() {
                 ProcessMatchMode::Name
             }
         );
-        assert!(dialog.chosen_program().is_some());
+        assert_eq!(
+            dialog.process_rules(),
+            Some(vec![RuleMatcher::Process(matcher.clone())]),
+            "the rule stays as it was given"
+        );
     }
 }
 
 #[test]
 fn any_folder_or_only_this_folder_makes_a_name_or_a_path_rule() {
-    #[cfg(windows)]
-    let path = r"C:\Apps\Tool.exe";
-    #[cfg(not(windows))]
-    let path = "/opt/apps/Tool.exe";
+    let (path, _, _) = tool_paths();
     for (mode, expected) in [
         (
             ProcessMatchMode::Name,
@@ -1114,18 +1124,9 @@ fn any_folder_or_only_this_folder_makes_a_name_or_a_path_rule() {
             ProcessMatch::Path(PathBuf::from(path)),
         ),
     ] {
-        let mut state = state_with_rules();
-        state.act(Action::OpenRules);
-        let Some(Job::LoadProcesses(request)) = state.act(Action::OpenAddRule) else {
-            panic!("a new rule loads the program list");
-        };
-        state.reduce(WorkerEvent::Processes {
-            request,
-            result: Ok(vec![running("Tool.exe", path, true)]),
-        });
+        let mut state = program_dialog(vec![running("Tool.exe", path, true)]);
         let dialog = state.rules.screen.add.as_mut().unwrap();
-        dialog.selected_process = Some(0);
-        dialog.process = "Tool.exe".into();
+        dialog.toggle_listed(0);
         dialog.set_process_match_mode(mode);
         assert!(matches!(
             state.act(Action::SubmitAddRule),
@@ -1135,7 +1136,221 @@ fn any_folder_or_only_this_folder_makes_a_name_or_a_path_rule() {
 }
 
 #[test]
-fn clearing_the_chosen_program_keeps_the_search() {
+fn ticking_a_program_twice_unticks_it_and_clear_selection_unticks_all() {
+    let (path, other, third) = tool_paths();
+    let mut state = program_dialog(vec![
+        running("Tool.exe", path, true),
+        running("Other.exe", other, true),
+        running("Curl.exe", third, false),
+    ]);
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    assert!(dialog.process_rules().is_none(), "nothing is ticked");
+    let index_of = |dialog: &AddRuleDialog, name: &str| {
+        dialog
+            .processes
+            .iter()
+            .position(|group| group.name == name)
+            .unwrap()
+    };
+    for name in ["Tool.exe", "Curl.exe"] {
+        let index = index_of(dialog, name);
+        dialog.toggle_listed(index);
+    }
+    assert_eq!(dialog.chosen.len(), 2);
+    let index = index_of(dialog, "Tool.exe");
+    dialog.toggle_listed(index);
+    assert_eq!(dialog.chosen.len(), 1);
+    assert!(!dialog.is_chosen(&dialog.processes[index].key()));
+    dialog.toggle_listed(index);
+    dialog.clear_chosen();
+    assert!(dialog.chosen.is_empty());
+    assert!(state.act(Action::SubmitAddRule).is_none());
+}
+
+#[test]
+fn several_ticked_programs_are_saved_as_one_rule_each_with_one_destination() {
+    let (path, other, third) = tool_paths();
+    let mut state = program_dialog(vec![
+        running("Tool.exe", path, true),
+        running("Other.exe", other, true),
+        running("Curl.exe", third, false),
+    ]);
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.target = RuleDestination::Direct;
+    for index in 0..3 {
+        dialog.toggle_listed(index);
+    }
+    dialog.set_process_match_mode(ProcessMatchMode::Path);
+    assert_eq!(dialog.process_rule_count(), 3);
+    let Some(Job::AddRules(_, matchers, RuleDestination::Direct)) =
+        state.act(Action::SubmitAddRule)
+    else {
+        panic!("several programs are added together");
+    };
+    let paths: Vec<_> = matchers
+        .iter()
+        .map(|matcher| match matcher {
+            RuleMatcher::Process(ProcessMatch::Path(path)) => path.clone(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    let mut expected: Vec<_> = [path, other, third].map(PathBuf::from).to_vec();
+    expected.sort();
+    let mut paths_sorted = paths;
+    paths_sorted.sort();
+    assert_eq!(paths_sorted, expected);
+}
+
+#[test]
+fn programs_with_the_same_name_make_one_rule_for_any_folder() {
+    let (path, other, _) = tool_paths();
+    let mut state = program_dialog(vec![
+        running("Tool.exe", path, true),
+        running("Tool.exe", other, true),
+    ]);
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.toggle_listed(0);
+    dialog.toggle_listed(1);
+    assert_eq!(dialog.chosen.len(), 2);
+    assert_eq!(dialog.process_rule_count(), 1);
+    assert!(matches!(
+        state.act(Action::SubmitAddRule),
+        Some(Job::AddRule(_, RuleMatcher::Process(ProcessMatch::Name(_)), _))
+    ));
+}
+
+#[test]
+fn only_this_folder_needs_the_path_of_every_ticked_program() {
+    let (path, _, _) = tool_paths();
+    let mut state = program_dialog(vec![running("Tool.exe", path, true)]);
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.processes.push(crate::rules::ProcessGroup {
+        name: "Hidden.exe".into(),
+        path: None,
+        count: 1,
+        windowed: false,
+    });
+    dialog.toggle_listed(1);
+    assert!(!dialog.full_path_available());
+    dialog.set_process_match_mode(ProcessMatchMode::Path);
+    assert_eq!(dialog.match_mode, ProcessMatchMode::Name, "refused");
+    dialog.clear_chosen();
+    dialog.toggle_listed(0);
+    dialog.set_process_match_mode(ProcessMatchMode::Path);
+    dialog.toggle_listed(1);
+    assert_eq!(dialog.chosen.len(), 1, "a program without a path is not ticked");
+}
+
+#[test]
+fn a_typed_name_or_path_is_ticked_like_a_listed_program() {
+    let (path, _, _) = tool_paths();
+    let mut state = program_dialog(vec![running("Tool.exe", path, true)]);
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.process_filter = "custom.exe".into();
+    dialog.toggle_typed();
+    dialog.process_filter = format!("\"{path}\"");
+    dialog.toggle_typed();
+    assert_eq!(dialog.chosen.len(), 2);
+    assert!(dialog.chosen[1].fixed_path);
+    assert_eq!(
+        dialog.process_rules(),
+        Some(vec![
+            process_rule("custom.exe"),
+            RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(path))),
+        ])
+    );
+    assert!(!dialog.folder_setting_applies() || dialog.chosen.iter().any(|item| !item.fixed_path));
+}
+
+#[test]
+fn reading_the_process_list_again_keeps_the_ticks() {
+    let (path, other, third) = tool_paths();
+    let mut state = program_dialog(vec![
+        running("Tool.exe", path, true),
+        running("Other.exe", other, true),
+    ]);
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.toggle_listed(0);
+    dialog.toggle_listed(1);
+    let before: Vec<_> = dialog.chosen.iter().map(|item| item.key.clone()).collect();
+    let Some(Job::LoadProcesses(request)) = state.act(Action::RefreshProcesses) else {
+        panic!("the list is read again");
+    };
+    // The list changed meanwhile: one program closed, another started.
+    state.reduce(WorkerEvent::Processes {
+        request,
+        result: Ok(vec![
+            running("Other.exe", other, true),
+            running("Curl.exe", third, true),
+            running("Tool.exe", path, true),
+        ]),
+    });
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    let after: Vec<_> = dialog.chosen.iter().map(|item| item.key.clone()).collect();
+    assert_eq!(after, before);
+    for group in &dialog.processes {
+        assert_eq!(
+            dialog.is_chosen(&group.key()),
+            group.name != "Curl.exe",
+            "{}",
+            group.name
+        );
+    }
+    let Some(Job::LoadProcesses(request)) = state.act(Action::RefreshProcesses) else {
+        panic!("the list is read again");
+    };
+    state.reduce(WorkerEvent::Processes {
+        request,
+        result: Ok(vec![running("Curl.exe", third, true)]),
+    });
+    let dialog = state.rules.screen.add.as_ref().unwrap();
+    assert_eq!(dialog.chosen.len(), 2, "a program that closed stays ticked");
+}
+
+#[test]
+fn editing_a_program_rule_keeps_one_ticked_and_ticking_another_replaces_it() {
+    let (path, other, _) = tool_paths();
+    let mut state = state_with_rules();
+    state.act(Action::OpenRules);
+    let set = state.selected_rules().unwrap().id.clone();
+    let rule = Rule {
+        id: RuleId::new("program"),
+        matcher: RuleMatcher::Process(ProcessMatch::Path(PathBuf::from(path))),
+        target: RuleTarget::Proxy,
+        enabled: true,
+        exit: None,
+    };
+    let mut dialog = AddRuleDialog::for_rule(set, &rule).unwrap();
+    dialog.processes = crate::rules::group_processes(vec![
+        running("Tool.exe", path, true),
+        running("Tool.exe", other, true),
+    ]);
+    assert_eq!(dialog.chosen.len(), 1);
+    dialog.toggle_listed(1);
+    assert_eq!(dialog.chosen.len(), 1);
+    assert_eq!(dialog.chosen[0].path.as_deref(), Some(other.as_ref()));
+    dialog.toggle_listed(1);
+    assert!(dialog.process_rules().is_none(), "unticked: nothing to save");
+}
+
+#[test]
+fn too_many_programs_make_nothing_to_add() {
+    let mut state = program_dialog(Vec::new());
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    for index in 0..=MAX_PROGRAMS {
+        dialog.tick_program(&format!("program{index}.exe"));
+    }
+    assert!(dialog.too_many_programs());
+    assert!(dialog.process_rules().is_none());
+    assert!(state.act(Action::SubmitAddRule).is_none());
+    let dialog = state.rules.screen.add.as_mut().unwrap();
+    dialog.tick_program("program0.exe");
+    assert!(!dialog.too_many_programs());
+    assert_eq!(dialog.process_rules().unwrap().len(), MAX_PROGRAMS);
+}
+
+#[test]
+fn clearing_the_chosen_programs_keeps_the_search() {
     let mut state = state_with_rules();
     state.act(Action::OpenRules);
     state.act(Action::OpenAddRuleFor(RuleMatcher::Process(
@@ -1143,8 +1358,8 @@ fn clearing_the_chosen_program_keeps_the_search() {
     )));
     let dialog = state.rules.screen.add.as_mut().unwrap();
     dialog.process_filter = "to".into();
-    dialog.clear_process();
-    assert!(dialog.chosen_program().is_none());
+    dialog.clear_chosen();
+    assert!(dialog.chosen.is_empty());
     assert_eq!(dialog.process_filter, "to");
     assert!(state.act(Action::SubmitAddRule).is_none());
 }

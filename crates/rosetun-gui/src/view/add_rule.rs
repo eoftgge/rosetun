@@ -1,16 +1,17 @@
 use std::path::Path;
 
 use eframe::egui::{self, Color32, RichText, Stroke};
-use rosetun_config::{AppConfig, ExitTarget, List, ListId, RuleTarget};
+use rosetun_config::{AppConfig, ExitTarget, List, ListId, ProcessMatch, RuleTarget};
 use rosetun_core::{IpCidrError, NewExit, RuleDestination};
 
 use crate::display;
 use crate::errors;
 use crate::icons::{self, Icon};
-use crate::rules::{
-    ProcessGroup, ProcessMatchMode, process_matches_filter, update_process_match_mode,
+use crate::rules::{ProcessGroup, ProcessMatchMode, ProgramKey, process_matches_filter};
+use crate::state::{
+    Action, AddRuleDialog, AddressError, ChosenProgram, MAX_ADDRESSES, MAX_PROGRAMS,
+    RuleInputKind,
 };
-use crate::state::{Action, AddRuleDialog, AddressError, MAX_ADDRESSES, RuleInputKind};
 use crate::view::rules::{destination_color, destination_label, target_color, target_label};
 use crate::{constants, destinations, i18n, motion, theme, widgets};
 
@@ -20,9 +21,9 @@ const PROCESS_ROW_HEIGHT: f32 = 40.0;
 const PROCESS_ROW_HEIGHT_TWO_LINES: f32 = 48.0;
 /// The room at a row's left and right edges and between its tile and its text.
 const PROCESS_ROW_INSET: f32 = theme::space::M;
-const CHOSEN_PROGRAM_HEIGHT: f32 = 44.0;
-const CROSS_SIDE: f32 = widgets::CROSS_BUTTON;
 const PROCESS_TILE_SIDE: f32 = 28.0;
+/// The tick box of a program row.
+const PROCESS_TICK_SIDE: f32 = 20.0;
 const PROCESS_ROW_GAP: f32 = theme::space::XS;
 const CATEGORY_ROW_HEIGHT: f32 = 22.0;
 const CATEGORY_VIEW_HEIGHT: f32 = 120.0;
@@ -106,6 +107,7 @@ pub(crate) fn show(
                 .is_some_and(|list| {
                     dialog.exceeds_list_limit(existing_list_rules, list.format.has_categories())
                 });
+        let too_many_programs = dialog.kind == RuleInputKind::Process && dialog.too_many_programs();
         let can_submit = valid
             && !exceeds_list_limit
             && !dialog.busy
@@ -114,6 +116,8 @@ pub(crate) fn show(
             None
         } else if exceeds_list_limit {
             Some(tr!("list-rule-limit"))
+        } else if too_many_programs {
+            Some(tr!("program-limit", n = MAX_PROGRAMS.to_string()))
         } else if dialog.temporary_only && !can_temporary {
             Some(tr!("temporary-needs-connection"))
         } else {
@@ -161,7 +165,7 @@ fn submit_label(dialog: &AddRuleDialog) -> String {
         return tr!("save");
     }
     let count = match dialog.kind {
-        RuleInputKind::Process => 1,
+        RuleInputKind::Process => dialog.process_rule_count(),
         RuleInputKind::Address => dialog.address_rule_count(),
         RuleInputKind::List => dialog.selected_categories.len(),
     };
@@ -741,69 +745,64 @@ fn process_input(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Ve
         input.request_focus();
         dialog.focus_input = false;
     }
-    if let Some((name, path)) = dialog.chosen_program() {
-        if chosen_program(ui, &name, path.as_deref(), !dialog.busy) {
-            dialog.clear_process();
-        }
-        match_mode_choice(ui, dialog);
-    }
+    let folder_id = egui::Id::unique("rule_folder_choice");
+    let folder_shown = widgets::reveal_progress(
+        ui.ctx(),
+        folder_id,
+        !dialog.chosen.is_empty(),
+        motion::reduced(),
+    );
+    widgets::reveal(ui, folder_id, folder_shown, |ui| {
+        widgets::appear(ui, folder_shown, |ui| match_mode_choice(ui, dialog));
+    });
+    chosen_header(ui, dialog);
     process_list(ui, dialog, actions);
-    rosetun_core::parse_process_input(&dialog.process).is_ok()
+    dialog.process_rules().is_some()
 }
 
-/// The chosen program above the list: its icon, its name and a cross that clears it. Answers
-/// whether the cross was clicked.
-fn chosen_program(ui: &mut egui::Ui, name: &str, path: Option<&Path>, enabled: bool) -> bool {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), CHOSEN_PROGRAM_HEIGHT),
-        egui::Sense::hover(),
+/// Above the list, at the right: how many programs are ticked and a link that unticks them.
+fn chosen_header(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
+    let count = dialog.chosen.len();
+    egui::Sides::new().show(
+        ui,
+        |_| {},
+        |ui| {
+            if count == 0 {
+                ui.label(
+                    RichText::new(tr!("rule-list-none-selected"))
+                        .small()
+                        .color(theme::palette().text_dim),
+                );
+                return;
+            }
+            if widgets::link(ui, &tr!("rule-list-clear"), !dialog.busy).clicked() {
+                dialog.clear_chosen();
+            }
+            ui.label(
+                RichText::new(tr!("rule-list-selected", n = count.to_string()))
+                    .small()
+                    .color(theme::palette().accent_light),
+            );
+        },
     );
-    ui.painter().rect(
-        rect,
-        egui::CornerRadius::same(theme::RADIUS),
-        theme::palette().input,
-        Stroke::new(theme::stroke::HAIRLINE, theme::palette().accent_dark),
-        egui::StrokeKind::Inside,
-    );
-    let tile_rect = egui::Rect::from_min_size(
-        egui::pos2(
-            rect.left() + PROCESS_ROW_INSET,
-            rect.center().y - PROCESS_TILE_SIDE / 2.0,
-        ),
-        egui::Vec2::splat(PROCESS_TILE_SIDE),
-    );
-    paint_tile(ui, tile_rect, name, path);
-    let text_left = tile_rect.right() + PROCESS_ROW_INSET;
-    let cross = egui::pos2(
-        rect.right() - PROCESS_ROW_INSET - CROSS_SIDE / 2.0,
-        rect.center().y,
-    );
-    ui.painter()
-        .with_clip_rect(egui::Rect::from_x_y_ranges(
-            text_left..=cross.x - CROSS_SIDE,
-            rect.y_range(),
-        ))
-        .text(
-            egui::pos2(text_left, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            display::safe_text(name),
-            theme::font::semibold(theme::font::CAPTION),
-            theme::palette().accent_light,
-        );
-    if let Some(path) = path {
-        response.on_hover_text(display::safe_text(&path.to_string_lossy()));
-    }
-    widgets::cross_button(ui, egui::Id::unique("chosen_program_clear"), cross, enabled).clicked()
 }
 
-/// "Any folder" or "Only this folder": the program by its name, or only the file at its path.
+/// "Any folder" or "Only this folder", one for every ticked program. A file chosen by its
+/// path is always for that folder, so the choice shows "Only this folder" and is unavailable
+/// while only files are ticked.
 fn match_mode_choice(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
-    let available = full_path_available(dialog);
+    let applies = dialog.folder_setting_applies();
+    let available = applies && dialog.full_path_available();
+    let shown = if applies {
+        dialog.match_mode
+    } else {
+        ProcessMatchMode::Path
+    };
     let choice = ui.scope(|ui| {
         widgets::segmented(
             ui,
             "process_match_mode",
-            dialog.match_mode,
+            shown,
             &[
                 (ProcessMatchMode::Name, tr!("match-any-folder")),
                 (ProcessMatchMode::Path, tr!("match-this-folder")),
@@ -812,7 +811,9 @@ fn match_mode_choice(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
             available && !dialog.busy,
         )
     });
-    choice.response.on_hover_text(if available {
+    choice.response.on_hover_text(if !applies {
+        tr!("match-file-detail")
+    } else if available {
         tr!("full-path-detail")
     } else {
         tr!("path-unavailable")
@@ -822,8 +823,8 @@ fn match_mode_choice(ui: &mut egui::Ui, dialog: &mut AddRuleDialog) {
     }
 }
 
-/// The running programs with windows, then the other processes, both narrowed by the search,
-/// and "Other program…" last.
+/// The ticked programs the list does not show, then the running programs with windows, then
+/// the other processes, both narrowed by the search, and "Other program…" last.
 fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec<Action>) {
     let filter = dialog.process_filter.trim().to_owned();
     let shown: Vec<usize> = dialog
@@ -836,13 +837,23 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
     let (running, other): (Vec<usize>, Vec<usize>) = shown
         .iter()
         .partition(|index| dialog.processes[**index].windowed);
-    let manual = !filter.is_empty()
-        && rosetun_core::parse_process_input(&filter).is_ok()
+    let typed_key = match rosetun_core::parse_process_input(&filter) {
+        Ok(ProcessMatch::Name(name)) if !filter.is_empty() => Some(ProgramKey::of_name(&name)),
+        Ok(ProcessMatch::Path(path)) if !filter.is_empty() => Some(ProgramKey::of_path(&path)),
+        _ => None,
+    };
+    let manual = typed_key.as_ref().is_some_and(|key| !dialog.is_chosen(key))
         && !dialog
             .processes
             .iter()
             .any(|group| group.name.eq_ignore_ascii_case(&filter));
-    let mut selection = None;
+    let extras: Vec<&ChosenProgram> = dialog
+        .chosen
+        .iter()
+        .filter(|program| !dialog.processes.iter().any(|group| group.key() == program.key))
+        .collect();
+    let mut listed = None;
+    let mut extra = None;
     let mut typed = false;
     #[cfg(windows)]
     let mut browse = false;
@@ -867,6 +878,11 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
                         .color(theme::palette().text_dim),
                 );
             }
+            for program in &extras {
+                if extra_row(ui, program, !dialog.busy).changed() {
+                    extra = Some(program.key.clone());
+                }
+            }
             if manual {
                 let response = process_row(
                     ui,
@@ -879,12 +895,11 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
                             fill: theme::palette().border_strong,
                             icon: None,
                         },
-                        selected: dialog.selected_process.is_none()
-                            && dialog.process.eq_ignore_ascii_case(&filter),
+                        checked: Some(false),
                     },
                     !dialog.busy,
                 );
-                typed = response.clicked() && !dialog.busy;
+                typed = response.changed() && !dialog.busy;
             }
             for (title, indices) in [
                 (tr!("processes-running"), &running),
@@ -901,12 +916,12 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
                 );
                 for &index in indices {
                     let group = &dialog.processes[index];
-                    if group_row(ui, dialog, group, index).clicked() && !dialog.busy {
-                        selection = Some(index);
+                    if group_row(ui, dialog, group).changed() && !dialog.busy {
+                        listed = Some(index);
                     }
                 }
             }
-            if shown.is_empty() && !manual && dialog.processes_loaded {
+            if shown.is_empty() && !manual && extras.is_empty() && dialog.processes_loaded {
                 ui.label(
                     RichText::new(if filter.is_empty() {
                         tr!("no-running-processes")
@@ -931,7 +946,7 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
                             fill: theme::palette().border,
                             icon: None,
                         },
-                        selected: false,
+                        checked: None,
                     },
                     enabled,
                 )
@@ -939,11 +954,17 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
                     && enabled;
             }
         });
-    if let Some(index) = selection {
-        select_process(dialog, index);
+    if let Some(index) = listed {
+        dialog.toggle_listed(index);
+    }
+    if let Some(key) = extra
+        && let Some(program) = dialog.chosen.iter().find(|program| program.key == key)
+    {
+        let program = program.clone();
+        dialog.toggle_program(program);
     }
     if typed {
-        choose_typed(dialog, &filter);
+        dialog.toggle_typed();
     }
     #[cfg(windows)]
     if browse {
@@ -951,14 +972,37 @@ fn process_list(ui: &mut egui::Ui, dialog: &mut AddRuleDialog, actions: &mut Vec
     }
 }
 
+/// A ticked program the list does not show: a file, a name typed in, or a program that has
+/// closed since. A file shows its full path under the name, which says the rule is for
+/// that file only.
+fn extra_row(ui: &mut egui::Ui, program: &ChosenProgram, enabled: bool) -> egui::Response {
+    let path = program
+        .path
+        .as_ref()
+        .map(|path| display::safe_text(&path.to_string_lossy()));
+    let detail = path.clone().unwrap_or_else(|| tr!("typed-process"));
+    let name = display::safe_text(&program.name);
+    let letter = display::safe_text(&tile_letter(&program.name));
+    process_row(
+        ui,
+        ProcessRow {
+            name: &name,
+            detail: Some(&detail),
+            hover: path.as_deref(),
+            tile: ProcessTile {
+                letter: &letter,
+                fill: tile_color(&program.name),
+                icon: program.path.as_deref(),
+            },
+            checked: Some(true),
+        },
+        enabled,
+    )
+}
+
 /// One listed program: its name with the number of copies, and its path on hover. The path
 /// is a second line only when another listed program has the same name.
-fn group_row(
-    ui: &mut egui::Ui,
-    dialog: &AddRuleDialog,
-    group: &ProcessGroup,
-    index: usize,
-) -> egui::Response {
+fn group_row(ui: &mut egui::Ui, dialog: &AddRuleDialog, group: &ProcessGroup) -> egui::Response {
     let path = group.path.as_ref().map_or_else(
         || tr!("path-unavailable"),
         |path| display::safe_text(&path.to_string_lossy()),
@@ -975,50 +1019,24 @@ fn group_row(
         display::safe_text(&group.name)
     };
     let letter = display::safe_text(&tile_letter(&group.name));
+    let checked = dialog.is_chosen(&group.key());
+    // Only this folder cannot take a program whose path is unknown.
+    let allowed = group.path.is_some() || dialog.match_mode == ProcessMatchMode::Name || checked;
     process_row(
         ui,
         ProcessRow {
             name: &name,
-            detail: same_name.then_some(path.as_str()),
+            detail: (same_name || !allowed).then_some(path.as_str()),
             hover: Some(&path),
             tile: ProcessTile {
                 letter: &letter,
                 fill: tile_color(&group.name),
                 icon: group.path.as_deref(),
             },
-            selected: dialog.selected_process == Some(index),
+            checked: Some(checked),
         },
-        !dialog.busy,
+        !dialog.busy && allowed,
     )
-}
-
-/// The text of the search as the program: a name, or a full path.
-fn choose_typed(dialog: &mut AddRuleDialog, typed: &str) {
-    #[cfg(windows)]
-    {
-        dialog.browsed = None;
-    }
-    dialog.process = typed.to_owned();
-    dialog.selected_process = None;
-    update_process_match_mode(&mut dialog.match_mode, &dialog.process);
-    dialog.error = None;
-}
-
-fn select_process(dialog: &mut AddRuleDialog, index: usize) {
-    let group = &dialog.processes[index];
-    dialog.selected_process = Some(index);
-    #[cfg(windows)]
-    {
-        dialog.browsed = None;
-    }
-    if dialog.match_mode == ProcessMatchMode::Path && group.path.is_none() {
-        dialog.match_mode = ProcessMatchMode::Name;
-    }
-    dialog.process = match dialog.match_mode {
-        ProcessMatchMode::Name => group.name.clone(),
-        ProcessMatchMode::Path => group.path.as_ref().unwrap().to_string_lossy().into_owned(),
-    };
-    dialog.error = None;
 }
 
 /// What a row of the program list shows.
@@ -1028,10 +1046,15 @@ struct ProcessRow<'a> {
     detail: Option<&'a str>,
     hover: Option<&'a str>,
     tile: ProcessTile<'a>,
-    selected: bool,
+    /// A tick box at the row's left edge and the row lit as chosen; `None` for a row that
+    /// is an action.
+    checked: Option<bool>,
 }
 
+/// One row of the list. A click anywhere on a row with a tick box, or on the box, ticks it
+/// or unticks it: the response then reports a change.
 fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::Response {
+    let selected = row.checked == Some(true);
     let height = if row.detail.is_some() {
         PROCESS_ROW_HEIGHT_TWO_LINES
     } else {
@@ -1045,7 +1068,7 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
             egui::Sense::hover()
         },
     );
-    let fill = if row.selected {
+    let fill = if selected {
         theme::palette().input
     } else if response.hovered() && enabled {
         theme::palette().border
@@ -1058,7 +1081,7 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
         fill,
         Stroke::new(
             theme::stroke::HAIRLINE,
-            if row.selected {
+            if selected {
                 theme::palette().accent_dark
             } else {
                 theme::palette().border
@@ -1066,11 +1089,23 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
         ),
         egui::StrokeKind::Inside,
     );
+    let mut tile_left = rect.left() + PROCESS_ROW_INSET;
+    let mut ticked = false;
+    if let Some(mut checked) = row.checked {
+        let tick_rect = egui::Rect::from_center_size(
+            egui::pos2(tile_left + PROCESS_TICK_SIDE / 2.0, rect.center().y),
+            egui::Vec2::splat(PROCESS_TICK_SIDE),
+        );
+        ticked = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(tick_rect), |ui| {
+                ui.spacing_mut().interact_size = egui::Vec2::splat(PROCESS_TICK_SIDE);
+                widgets::checkbox(ui, &mut checked, "", enabled).changed()
+            })
+            .inner;
+        tile_left += PROCESS_TICK_SIDE + PROCESS_ROW_INSET;
+    }
     let tile_rect = egui::Rect::from_min_size(
-        egui::pos2(
-            rect.left() + PROCESS_ROW_INSET,
-            rect.center().y - PROCESS_TILE_SIDE / 2.0,
-        ),
+        egui::pos2(tile_left, rect.center().y - PROCESS_TILE_SIDE / 2.0),
         egui::Vec2::splat(PROCESS_TILE_SIDE),
     );
     if !row
@@ -1098,7 +1133,7 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
     ));
     let name_color = if !enabled {
         theme::DISABLED
-    } else if row.selected {
+    } else if selected {
         theme::palette().accent_light
     } else {
         theme::palette().text
@@ -1130,34 +1165,18 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
             );
         }
     }
-    let response = match row.hover {
+    let mut response = match row.hover {
         Some(hover) => response.on_hover_text(hover),
         None => response,
     };
+    if row.checked.is_some() && enabled && (ticked || response.clicked()) {
+        response.mark_changed();
+    }
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {
         response
     }
-}
-
-/// The program's icon in `rect`, else the first letter of its name on its colour.
-fn paint_tile(ui: &egui::Ui, rect: egui::Rect, name: &str, path: Option<&Path>) {
-    if path.is_some_and(|path| crate::program_icons::paint(ui, rect, PROCESS_TILE_SIDE, path)) {
-        return;
-    }
-    ui.painter().rect_filled(
-        rect,
-        egui::CornerRadius::same(theme::RADIUS),
-        tile_color(name),
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        display::safe_text(&tile_letter(name)),
-        theme::font::semibold(theme::font::CAPTION),
-        theme::palette().text,
-    );
 }
 
 fn tile_letter(name: &str) -> String {
@@ -1176,12 +1195,6 @@ fn tile_color(name: &str) -> Color32 {
         .flat_map(char::to_lowercase)
         .fold(0_usize, |sum, ch| (sum + ch as usize) % palette.len());
     palette[index]
-}
-
-fn full_path_available(dialog: &AddRuleDialog) -> bool {
-    dialog
-        .chosen_program()
-        .is_some_and(|(_, path)| path.is_some())
 }
 
 /// "Send to": one field whose list opens over the dialog.
@@ -1560,8 +1573,7 @@ mod tests {
         let mut dialog = new();
         dialog.processes = processes(30);
         dialog.processes_loaded = true;
-        dialog.selected_process = Some(2);
-        dialog.process = r"C:\Apps\Program2.exe".into();
+        dialog.toggle_listed(2);
         dialog.match_mode = ProcessMatchMode::Path;
         dialog.error = Some("This rule is already in the set.".into());
         variants.push(("program chosen with an error", dialog, config.clone()));
@@ -1579,7 +1591,7 @@ mod tests {
             windowed: true,
         });
         dialog.processes_loaded = true;
-        dialog.process = "Program1.exe".into();
+        dialog.toggle_listed(1);
         variants.push(("program by name with a namesake", dialog, config.clone()));
         let mut dialog = new();
         dialog.kind = RuleInputKind::Address;
@@ -1720,6 +1732,50 @@ mod tests {
     }
 
     #[test]
+    fn the_add_button_counts_the_ticked_programs() {
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.tick_program("Tool.exe");
+        assert_eq!(submit_label(&dialog), tr!("add"));
+        dialog.tick_program("Other.exe");
+        dialog.tick_program("Curl.exe");
+        assert_eq!(submit_label(&dialog), i18n::add_rules(3));
+    }
+
+    #[test]
+    fn a_click_on_a_program_row_ticks_it_and_clear_selection_unticks_all() {
+        use crate::test_ui::TestScreen;
+
+        i18n::in_language(i18n::Language::English, || {
+            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            dialog.processes = processes(4);
+            dialog.processes_loaded = true;
+            let config = AppConfig::default();
+            let mut screen = TestScreen::new(COMPACT);
+            macro_rules! frame {
+                () => {
+                    |ui: &mut egui::Ui| {
+                        show(ui.ctx(), &mut dialog, &config, false, 0, &mut Vec::new())
+                    }
+                };
+            }
+            let none = tr!("rule-list-none-selected");
+            let texts = screen.settle(frame!());
+            assert!(texts.iter().any(|(text, _)| *text == none));
+            assert!(!texts.iter().any(|(text, _)| *text == tr!("match-any-folder")));
+            let texts = screen.click_text("Program0.exe", frame!());
+            assert_eq!(dialog.chosen.len(), 1);
+            assert!(texts.iter().any(|(text, _)| *text == tr!("match-any-folder")));
+            assert!(texts.iter().any(|(text, _)| *text == tr!("rule-list-selected", n = "1")));
+            screen.click_text("Program3.exe", frame!());
+            assert_eq!(dialog.chosen.len(), 2);
+            screen.click_text("Program0.exe", frame!());
+            assert_eq!(dialog.chosen.len(), 1);
+            screen.click_text(&tr!("rule-list-clear"), frame!());
+            assert!(dialog.chosen.is_empty());
+        });
+    }
+
+    #[test]
     fn a_paste_into_the_address_field_makes_one_chip_per_item_of_its_kind() {
         let ctx = egui::Context::default();
         theme::apply(&ctx);
@@ -1828,17 +1884,18 @@ mod tests {
             "no program is chosen"
         );
 
-        dialog.selected_process = Some(0);
-        dialog.process = "Program0.exe".into();
+        dialog.toggle_listed(0);
         let (_, texts) = shown(&mut dialog, &AppConfig::default(), true, REGULAR);
         let texts: Vec<_> = texts.into_iter().map(|(text, _)| text).collect();
         assert!(texts.contains(&tr!("match-any-folder")));
         assert!(texts.contains(&tr!("match-this-folder")));
         assert_eq!(
             texts.iter().filter(|text| *text == "Program0.exe").count(),
-            2,
-            "the chosen program above the list and its row"
+            1,
+            "no plaque above the list: the ticked program is its row"
         );
+        assert!(texts.contains(&tr!("rule-list-selected", n = "1")));
+        assert!(texts.contains(&tr!("rule-list-clear")));
     }
 
     #[test]
@@ -2137,10 +2194,9 @@ mod tests {
     }
 
     #[test]
-    fn selecting_a_process_preserves_the_search_and_raw_matcher() {
-        use super::select_process;
+    fn ticking_a_process_preserves_the_search_and_raw_matcher() {
         use crate::rules::ProcessGroup;
-        use rosetun_config::RuleSetId;
+        use rosetun_config::{ProcessMatch, RuleSetId};
 
         let mut dialog = crate::state::AddRuleDialog::new(RuleSetId::new("set"));
         dialog.process_filter = "tele".into();
@@ -2150,10 +2206,14 @@ mod tests {
             count: 1,
             windowed: true,
         });
-        select_process(&mut dialog, 0);
+        dialog.toggle_listed(0);
         assert_eq!(dialog.process_filter, "tele");
-        assert_eq!(dialog.process, "Tele\u{202e}gram.exe");
-        assert_eq!(dialog.selected_process, Some(0));
+        assert_eq!(
+            dialog.process_rules(),
+            Some(vec![rosetun_config::RuleMatcher::Process(
+                ProcessMatch::Name("Tele\u{202e}gram.exe".into())
+            )])
+        );
     }
 
     /// The opacity of the first painted text equal to `text`, 0 to 255.

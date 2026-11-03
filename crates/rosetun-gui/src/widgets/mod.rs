@@ -25,7 +25,7 @@ pub(crate) use buttons::{
 pub(crate) use checkbox::checkbox;
 #[cfg(test)]
 pub(crate) use chips_field::chips_input_id;
-pub(crate) use chips_field::{CROSS_BUTTON, Chip, ChipsEvent, ChipsField, cross_button};
+pub(crate) use chips_field::{Chip, ChipsEvent, ChipsField};
 pub(crate) use choice_card::choice_card;
 pub(crate) use combo::{drop_down, filter_combo};
 pub(crate) use dialogs::{
