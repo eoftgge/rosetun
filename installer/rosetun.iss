@@ -91,6 +91,12 @@ russian.UninstallCancel=Отмена
 english.UninstallDataFailed=Could not delete user data at %1. Rosetun itself has already been removed.
 russian.UninstallDataFailed=Не удалось удалить данные пользователя в %1. Сама программа уже удалена.
 english.LockdownRemoveFailed=Could not remove Lockdown (code %1). Rosetun was kept so the network can be restored: restart the computer and run the uninstaller again, or run "rosetun reset-firewall" as administrator.
+english.HoldFailed=Could not keep the network closed for the upgrade (code %1). While Rosetun is updated, the network may open. Continue?
+russian.HoldFailed=Не удалось удержать сеть закрытой на время обновления (код %1). Пока Rosetun обновляется, сеть может открыться. Продолжить?
+english.HoldCancelled=Installation cancelled. Rosetun was not changed.
+russian.HoldCancelled=Установка отменена. Rosetun не изменён.
+english.HoldKept=The upgrade did not finish, so the network stays closed to keep your address hidden. To open it, run "rosetun reset-firewall" as administrator, or run the installer again.
+russian.HoldKept=Обновление не завершилось, поэтому сеть осталась закрытой, чтобы не открыть ваш адрес. Чтобы открыть её, выполните "rosetun reset-firewall" от администратора или запустите установщик ещё раз.
 russian.LockdownRemoveFailed=Не удалось снять Lockdown (код %1). Rosetun оставлен, чтобы сеть можно было вернуть: перезагрузите компьютер и запустите удаление ещё раз или выполните "rosetun reset-firewall" от администратора.
 
 [Tasks]
@@ -121,6 +127,9 @@ Root: HKLM; Subkey: "Software\Classes\rosetun\shell\open\command"; ValueType: st
 ; Without runasoriginaluser the GUI would inherit the installer's elevation and
 ; keep its configuration in the wrong profile.
 Filename: "{app}\{#GuiExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser; Check: ShouldLaunchGui
+; With the network held closed, the GUI starts in any mode and reconnects:
+; the user was connected before the upgrade.
+Filename: "{app}\{#GuiExe}"; Parameters: "--after-upgrade"; Flags: nowait runasoriginaluser; Check: ShouldReconnectAfterUpgrade
 
 [UninstallDelete]
 ; Created by the service, not by the installer.
@@ -137,10 +146,21 @@ var
   UserDataPath: String;
   InstallFailureCode: Integer;
   InstallFinalized: Boolean;
+  NetworkHeld: Boolean;
+
+function InstallSucceeded(): Boolean;
+begin
+  Result := InstallFinalized and (InstallFailureCode = 0);
+end;
 
 function ShouldLaunchGui(): Boolean;
 begin
-  Result := InstallFinalized and (InstallFailureCode = 0);
+  Result := InstallSucceeded() and not NetworkHeld;
+end;
+
+function ShouldReconnectAfterUpgrade(): Boolean;
+begin
+  Result := InstallSucceeded() and NetworkHeld;
 end;
 
 function GetCustomSetupExitCode(): Integer;
@@ -258,10 +278,59 @@ begin
   RunHidden(ExpandConstant('{sys}\net.exe'), 'stop ' + ServiceName, ResultCode);
 end;
 
+// Exit codes of the helper's --hold-for-upgrade.
+const
+  HoldPlaced = 0;
+  HoldKept = 1;
+  HoldNoKillSwitch = 3;
+  HoldLockdownOn = 4;
+
+// Before the running copy stops: with the kill switch on, the new helper
+// holds the network closed with Lockdown's block until the new version
+// connects. Nothing here talks to the old service.
+function HoldNetwork(): Boolean;
+var
+  Code: Integer;
+begin
+  Result := True;
+  Code := RunInstallHelper('--hold-for-upgrade', WizardDirValue());
+  case Code of
+    HoldPlaced, HoldKept:
+      begin
+        NetworkHeld := True;
+        Log('The network is held closed for the upgrade');
+      end;
+    HoldNoKillSwitch, HoldLockdownOn:
+      Log('The network is not held for the upgrade (code ' + IntToStr(Code) + ')');
+  else
+    begin
+      Log('Could not hold the network for the upgrade, code ' + IntToStr(Code));
+      Result := SuppressibleMsgBox(FmtMessage(CustomMessage('HoldFailed'), [IntToStr(Code)]),
+        mbConfirmation, MB_YESNO, IDYES) = IDYES;
+    end;
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  StopRunningCopies();
   Result := '';
+  if not HoldNetwork() then
+  begin
+    Result := CustomMessage('HoldCancelled');
+    Exit;
+  end;
+  StopRunningCopies();
+end;
+
+// A hold outlives a failed or cancelled upgrade on purpose: closed, not open.
+procedure DeinitializeSetup();
+begin
+  if NetworkHeld and not InstallSucceeded() then
+  begin
+    Log('The upgrade did not finish; the network stays held closed');
+    if not WizardSilent() then
+      MsgBox(CustomMessage('HoldKept'), mbInformation, MB_OK);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
