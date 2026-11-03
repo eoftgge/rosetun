@@ -11,6 +11,8 @@
 
 pub mod errors;
 #[cfg(target_os = "linux")]
+pub mod installed;
+#[cfg(target_os = "linux")]
 #[expect(
     unsafe_code,
     reason = "Linux process groups and parent-death signals; every unsafe block carries a SAFETY comment"

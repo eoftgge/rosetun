@@ -548,6 +548,9 @@ fn singbox_backend(run_dir: &Path, data_dir: &Path) -> SingBoxBackend {
     backend_from_copy(work_dir, copied)
 }
 
+/// The engines next to the helper. On Linux they run only while root alone
+/// can change them and every folder above them; there is no copy to fall
+/// back to.
 #[cfg(not(windows))]
 fn singbox_backend(run_dir: &Path, _data_dir: &Path) -> SingBoxBackend {
     SingBoxBackend::new(run_dir.join("sing-box"))

@@ -136,6 +136,8 @@ impl EngineBackend for SingBoxBackend {
             }
         };
         let binary = std::fs::canonicalize(binary)?;
+        #[cfg(target_os = "linux")]
+        rosetun_engine::installed::verify(&binary)?;
 
         version::check(&binary)?;
         Ok(binary)
@@ -248,6 +250,8 @@ impl EngineBackend for SingBoxBackend {
         config: &RenderedConfig,
         verbose_until_unix: Arc<AtomicU64>,
     ) -> Result<Box<dyn EngineProcess>, EngineError> {
+        #[cfg(target_os = "linux")]
+        rosetun_engine::installed::verify(binary)?;
         std::fs::create_dir_all(&self.work_dir)?;
         let config_path = self.work_dir.join(&config.file_name);
         std::fs::write(&config_path, &config.body)?;
