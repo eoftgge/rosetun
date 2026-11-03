@@ -16,6 +16,8 @@ mod log_gate;
 #[cfg(windows)]
 mod process_job;
 #[cfg(target_os = "linux")]
+mod cgroup;
+#[cfg(target_os = "linux")]
 mod sd_notify;
 mod server;
 #[cfg(windows)]
@@ -257,7 +259,7 @@ fn run_console() -> std::process::ExitCode {
     #[cfg(not(windows))]
     let run_dir = std::path::PathBuf::from("/run/rosetun");
 
-    let (listener, helper) = match start(&run_dir, gate) {
+    let (listener, helper) = match start(&run_dir, gate, rosetun_routing::backend()) {
         Ok(result) => result,
         Err(error) => {
             tracing::error!(%error, "failed to start helper");
@@ -308,7 +310,14 @@ fn run_linux(signals: signals::Blocked, service: bool) -> std::process::ExitCode
         None
     };
 
-    let (listener, helper) = match start(Path::new("/run/rosetun"), gate) {
+    // Before anything else starts: the helper moves into its own leaf and
+    // engines go into theirs, or protection stays off with the reason.
+    let routing = if service {
+        rosetun_routing::backend_with_cgroups(cgroup::prepare())
+    } else {
+        rosetun_routing::backend()
+    };
+    let (listener, helper) = match start(Path::new("/run/rosetun"), gate, routing) {
         Ok(result) => result,
         Err(error) => {
             tracing::error!(%error, "failed to start helper");
@@ -449,9 +458,13 @@ fn prepare_start(run_dir: &Path) -> Result<PreparedStart, StartError> {
     }
 }
 
-fn start(run_dir: &Path, gate: VerboseGate) -> Result<(Listener, Arc<Helper>), StartError> {
+fn start(
+    run_dir: &Path,
+    gate: VerboseGate,
+    routing: Box<dyn rosetun_routing::RoutingBackend>,
+) -> Result<(Listener, Arc<Helper>), StartError> {
     start_prepared(prepare_start(run_dir), |prepared| {
-        initialize(prepared, gate)
+        initialize(prepared, gate, routing)
     })
 }
 
@@ -467,6 +480,7 @@ fn start_prepared<T>(
 fn initialize(
     prepared: PreparedStart,
     gate: VerboseGate,
+    routing: Box<dyn rosetun_routing::RoutingBackend>,
 ) -> Result<(Listener, Arc<Helper>), StartError> {
     let PreparedStart {
         listener,
@@ -521,7 +535,7 @@ fn initialize(
     engines.register(Box::new(singbox));
 
     let helper = Arc::new(
-        Helper::new(engines, rosetun_routing::backend(), gate)
+        Helper::new(engines, routing, gate)
             .with_xray(xray)
             .with_list_store(lists, run_dir.join("sing-box")),
     );
