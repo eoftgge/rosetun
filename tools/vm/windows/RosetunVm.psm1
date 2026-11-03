@@ -989,6 +989,14 @@ function Save-RosetunHelperStartFailure {
         catch {
             $lines.Add("pipes: could not list them: $($_.Exception.Message)")
         }
+        if (-not ('Rosetun.PipeProbe' -as [type])) {
+            Add-Type -Namespace Rosetun -Name PipeProbe -MemberDefinition @'
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+static extern bool WaitNamedPipeW(string name, uint timeout);
+public static int Probe(string name) { return WaitNamedPipeW(name, 1) ? 0 : Marshal.GetLastWin32Error(); }
+'@
+        }
+        $lines.Add("WaitNamedPipe \\.\pipe\${pipeName}: $([Rosetun.PipeProbe]::Probe("\\.\pipe\$pipeName")) (0 free, 121 busy, 2 none)")
         $override = [Environment]::GetEnvironmentVariable('ROSETUN_HELPER_ENDPOINT', 'Machine')
         $lines.Add("ROSETUN_HELPER_ENDPOINT (machine): $(if ($override) { $override } else { 'not set' })")
 
@@ -1000,6 +1008,30 @@ function Save-RosetunHelperStartFailure {
         }
         else {
             $lines.Add('service Rosetun: not installed')
+        }
+
+        # Whether the guest was starved: other waits time out with it.
+        $lines.Add('')
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem
+        $lines.Add("booted: $($os.LastBootUpTime.ToUniversalTime().ToString($utc))")
+        $busiest = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process |
+                Where-Object { $_.Name -notin '_Total', 'Idle' } |
+                Sort-Object -Property PercentProcessorTime -Descending | Select-Object -First 8)
+        $lines.Add("busiest processes now (% of one CPU, $([Environment]::ProcessorCount) CPUs):")
+        foreach ($process in $busiest) {
+            $lines.Add(('  {0} (PID {1}): {2}%' -f $process.Name, $process.IDProcess, $process.PercentProcessorTime))
+        }
+        try {
+            $defender = Get-MpComputerStatus
+            foreach ($name in 'RealTimeProtectionEnabled', 'QuickScanStartTime', 'QuickScanEndTime',
+                'FullScanStartTime', 'FullScanEndTime', 'AntivirusSignatureLastUpdated') {
+                $value = $defender.$name
+                if ($value -is [datetime]) { $value = $value.ToUniversalTime().ToString($utc) }
+                $lines.Add("Defender ${name}: $value")
+            }
+        }
+        catch {
+            $lines.Add("Defender: $($_.Exception.Message)")
         }
         $lines -join "`r`n"
     } -ArgumentList $script:Config.TaskName, $script:Config.PipeName
@@ -1021,20 +1053,50 @@ function Wait-RosetunHelperReady {
     Invoke-RosetunGuest -ScriptBlock {
         param($dir, $pipeName, $timeout, $service)
 
-        # Enumerating the pipe directory does not connect to the pipe, unlike
-        # Test-Path, so it never consumes a listener instance.
-        $deadline = (Get-Date).AddSeconds($timeout)
-        while (($service -and (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue).Status -ne 'Running') -or
-            -not ([IO.Directory]::GetFiles('\\.\pipe\') -contains "\\.\pipe\$pipeName")) {
-            if ((Get-Date) -gt $deadline) {
-                # UTC, as helper.log, to compare with its first line.
+        # Two checks that do not connect, unlike Test-Path, so neither consumes
+        # a listener instance: the pipe directory listing, and WaitNamedPipe,
+        # which asks for the name itself. One run missed a pipe that the
+        # helper had opened 50 seconds before; the reason says which check saw
+        # what and how long the slowest round took, to tell a listing that
+        # misses the pipe from a guest that stalls.
+        if (-not ('Rosetun.PipeProbe' -as [type])) {
+            Add-Type -Namespace Rosetun -Name PipeProbe -MemberDefinition @'
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+static extern bool WaitNamedPipeW(string name, uint timeout);
+public static int Probe(string name) { return WaitNamedPipeW(name, 1) ? 0 : Marshal.GetLastWin32Error(); }
+'@
+        }
+        $path = "\\.\pipe\$pipeName"
+        $rounds = 0
+        $slowestMs = 0
+        $missedByListing = 0
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        while ($true) {
+            $round = [Diagnostics.Stopwatch]::StartNew()
+            $running = -not $service -or (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue).Status -eq 'Running'
+            $listed = [IO.Directory]::GetFiles('\\.\pipe\') -contains $path
+            # 0: an instance is free; 121: it exists, every instance is busy.
+            $probe = [Rosetun.PipeProbe]::Probe($path)
+            $named = $probe -eq 0 -or $probe -eq 121
+            if ($named -and -not $listed) { $missedByListing++ }
+            $rounds++
+            $slowestMs = [Math]::Max($slowestMs, $round.ElapsedMilliseconds)
+            if ($running -and ($listed -or $named)) { break }
+            if ($clock.Elapsed.TotalSeconds -gt $timeout) {
+                # UTC, as helper.log, to compare with its lines.
                 $gaveUp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-                return "did not open its pipe within $timeout seconds (gave up at $gaveUp)"
+                return ("did not open its pipe within $timeout seconds (gave up at $gaveUp; " +
+                    "$rounds rounds, slowest $slowestMs ms; last WaitNamedPipe result $probe)")
             }
             Start-Sleep -Milliseconds 200
         }
+        # A listing that misses an existing pipe once is a race with its
+        # creation; more often, it is the finding.
+        if ($missedByListing -gt 1) {
+            Write-Warning "The pipe listing missed $path in $missedByListing of $rounds rounds; WaitNamedPipe found it."
+        }
 
-        $deadline = (Get-Date).AddSeconds($timeout)
+        $clock.Restart()
         while ($true) {
             $output = @(& "$dir\rosetun.exe" 'status' 2>&1 | ForEach-Object { "$_" })
             $exitCode = $LASTEXITCODE
@@ -1042,7 +1104,7 @@ function Wait-RosetunHelperReady {
             if ($exitCode -eq 0) {
                 return $null
             }
-            if ((Get-Date) -gt $deadline) {
+            if ($clock.Elapsed.TotalSeconds -gt $timeout) {
                 return "opened its pipe but did not answer status within $timeout seconds (exit $exitCode): $($output -join ' ')"
             }
             Start-Sleep -Milliseconds 200
@@ -1977,14 +2039,28 @@ function Save-RosetunLogs {
     # earlier helper runs, into a fresh folder on the host.
     param([string]$Destination = (Join-Path $script:LogRoot (Get-Date -Format 'yyyyMMdd-HHmmss')))
 
+    Save-RosetunGuestFiles -Path $script:Config.GuestDir -Filter 'helper*.log' -Destination $Destination
+    # The host-side node log, written when the node runs via Start-RosetunTestNode.
+    Copy-Item -Path (Join-Path $script:LogRoot 'test-node.log') -Destination $Destination -ErrorAction SilentlyContinue
+    return $Destination
+}
+
+function Save-RosetunGuestFiles {
+    # Copies the files matching -Filter in a guest folder to a host folder.
+    # A running program keeps its log open, so Copy-Item cannot read it
+    # directly: each file is snapshotted on the guest with shared read first.
+    # A missing guest folder copies nothing.
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$Filter = '*',
+        [Parameter(Mandatory)][string]$Destination
+    )
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-    # The running helper keeps helper.log open, so Copy-Item cannot read it
-    # directly. Snapshot every log on the guest with shared read access first.
     $snapshot = Invoke-RosetunGuest -ScriptBlock {
-        param($dir)
+        param($dir, $filter)
         $snapshot = Join-Path $env:TEMP ('rosetun-logs-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $snapshot | Out-Null
-        foreach ($log in Get-ChildItem -Path $dir -Filter 'helper*.log' -File) {
+        foreach ($log in @(Get-ChildItem -Path $dir -Filter $filter -File -ErrorAction SilentlyContinue)) {
             try {
                 $source = [IO.File]::Open($log.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read,
                     [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
@@ -1999,9 +2075,9 @@ function Save-RosetunLogs {
             }
         }
         $snapshot
-    } -ArgumentList $script:Config.GuestDir
+    } -ArgumentList $Path, $Filter
     try {
-        Copy-Item -FromSession (Connect-RosetunVm) -Path (Join-Path $snapshot '*.log') `
+        Copy-Item -FromSession (Connect-RosetunVm) -Path (Join-Path $snapshot '*') `
             -Destination $Destination -ErrorAction Continue
     }
     finally {
@@ -2010,9 +2086,6 @@ function Save-RosetunLogs {
             Remove-Item -Path $snapshot -Recurse -Force -ErrorAction SilentlyContinue
         } -ArgumentList $snapshot
     }
-    # The host-side node log, written when the node runs via Start-RosetunTestNode.
-    Copy-Item -Path (Join-Path $script:LogRoot 'test-node.log') -Destination $Destination -ErrorAction SilentlyContinue
-    return $Destination
 }
 
 function Get-RosetunHelperLog {

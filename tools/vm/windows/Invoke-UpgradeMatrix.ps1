@@ -122,6 +122,9 @@ function Invoke-Setup {
         Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
         $process = Start-Process -FilePath $setup -PassThru `
             -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`""
+        # Without a handle opened now, WaitForExit opens one for waiting only
+        # and ExitCode comes back empty.
+        $null = $process.Handle
         if ($background) { return [pscustomobject]@{ Id = $process.Id; ExitCode = $null } }
         if (-not $process.WaitForExit($timeout * 1000)) {
             throw "$build setup did not finish within $timeout s."
@@ -175,9 +178,12 @@ function Connect-Installed {
 }
 
 function Wait-InstalledService {
-    Invoke-RosetunGuest -ScriptBlock {
-        $deadline = (Get-Date).AddSeconds(60)
-        while ((Get-Date) -lt $deadline) {
+    # Returns whether the service runs and its pipe is open; if not, saves
+    # what tells why before the uninstall removes it.
+    param([Parameter(Mandatory)][string]$Scenario)
+    $ready = Invoke-RosetunGuest -ScriptBlock {
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        while ($clock.Elapsed.TotalSeconds -lt 60) {
             $service = Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue
             if ($service -and $service.Status -eq 'Running' -and (Test-Path '\\.\pipe\rosetun-helper')) {
                 return $true
@@ -186,6 +192,55 @@ function Wait-InstalledService {
         }
         $false
     }
+    if (-not $ready) {
+        try {
+            $saved = Save-UpgradeEvidence -Scenario $Scenario
+            Write-Warning "The service did not come up in '$Scenario'; evidence in $saved"
+        }
+        catch { Write-Warning "Could not save the evidence for '$Scenario': $_" }
+    }
+    $ready
+}
+
+function Save-UpgradeEvidence {
+    # The setup logs, the installed service's logs, and the service's state
+    # with its recent SCM events, into a fresh folder. Returns the folder.
+    param([Parameter(Mandatory)][string]$Scenario)
+    $name = 'upgrade-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ($Scenario -replace '[^\w-]+', '-')
+    $destination = Join-Path (Get-RosetunLogRoot) $name
+    Save-RosetunGuestFiles -Path $upgradeDir -Filter '*.log' -Destination $destination
+    Save-RosetunGuestFiles -Path 'C:\Program Files\Rosetun\data\logs' -Destination (Join-Path $destination 'service')
+    $state = Invoke-RosetunGuest -ScriptBlock {
+        $utc = 'yyyy-MM-ddTHH:mm:ss.fffZ'
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add("collected: $((Get-Date).ToUniversalTime().ToString($utc))")
+        $service = Get-CimInstance -ClassName Win32_Service -Filter "Name = 'Rosetun'"
+        if ($service) {
+            $lines.Add(('service Rosetun: state {0}; start mode {1}; PID {2}; exit code {3}; service exit code {4}; {5}' -f
+                    $service.State, $service.StartMode, $service.ProcessId, $service.ExitCode,
+                    $service.ServiceSpecificExitCode, $service.PathName))
+        }
+        else {
+            $lines.Add('service Rosetun: not installed')
+        }
+        $lines.Add("pipe \\.\pipe\rosetun-helper listed: $([IO.Directory]::GetFiles('\\.\pipe\') -contains '\\.\pipe\rosetun-helper')")
+        foreach ($process in @(Get-CimInstance -ClassName Win32_Process -Filter "Name LIKE 'rosetun%' OR Name LIKE '%setup%'")) {
+            $lines.Add(('process PID {0}, parent {1}, started {2}: {3}' -f $process.ProcessId, $process.ParentProcessId,
+                    $process.CreationDate.ToUniversalTime().ToString($utc), $process.CommandLine))
+        }
+        $lines.Add('')
+        $lines.Add('Service Control Manager, last 15 minutes:')
+        $events = @(Get-WinEvent -ErrorAction SilentlyContinue -FilterHashtable @{
+                LogName = 'System'; ProviderName = 'Service Control Manager'; StartTime = (Get-Date).AddMinutes(-15)
+            })
+        foreach ($entry in $events) {
+            $lines.Add(('{0} {1}: {2}' -f $entry.TimeCreated.ToUniversalTime().ToString($utc), $entry.Id,
+                    ($entry.Message -replace '\s+', ' ')))
+        }
+        $lines -join "`r`n"
+    }
+    [IO.File]::WriteAllText((Join-Path $destination 'state.txt'), $state)
+    $destination
 }
 
 function Get-UpgradeGui {
@@ -294,7 +349,7 @@ try {
     $scenario = '1 Lockdown'
     $previous = Invoke-Setup -Build previous -LogName 'lockdown-previous'
     Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 } -Note "exit $($previous.ExitCode)"
-    Test-Step $scenario 'its service runs' { Wait-InstalledService }
+    Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     $lockdown = Invoke-InstalledCli 'lockdown' 'on'
     Test-Step $scenario 'Lockdown turns on' { $lockdown.ExitCode -eq 0 } -Note $lockdown.Output
     Test-Step $scenario 'direct egress is blocked before the upgrade' { -not (Test-RosetunDirectEgress) }
@@ -309,7 +364,7 @@ try {
     Test-Step $scenario 'setup saw Lockdown and placed no hold' {
         (Get-SetupLog 'lockdown-current') -match 'Lockdown is on and holds the network'
     }
-    Test-Step $scenario 'its service runs' { Wait-InstalledService }
+    Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     $status = Get-HoldStatus
     Test-Step $scenario 'Lockdown is still on, and no hold' {
         $status.lockdown -and -not $status.upgrade_hold
@@ -324,7 +379,7 @@ try {
     $scenario = '2 kill switch'
     $previous = Invoke-Setup -Build previous -LogName 'kill-switch-previous'
     Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 } -Note "exit $($previous.ExitCode)"
-    Test-Step $scenario 'its service runs' { Wait-InstalledService }
+    Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     Connect-Installed 'request-upgrade-kill-switch.json'
     Test-Step $scenario 'connected before the upgrade' { Wait-InstalledState 'connected' }
     Test-Step $scenario 'direct egress is blocked before the upgrade' { -not (Test-RosetunDirectEgress) }
@@ -341,7 +396,7 @@ try {
         (Get-SetupLog 'kill-switch-current') -match 'upgrade hold placed'
     }
     Test-Step $scenario 'setup starts the GUI with --after-upgrade' { "$gui" -match '--after-upgrade' } -Note "$gui"
-    Test-Step $scenario 'its service runs' { Wait-InstalledService }
+    Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     $status = Get-HoldStatus
     Test-Step $scenario 'the service reports the hold, not Lockdown' {
         $status.upgrade_hold -and -not $status.lockdown
@@ -376,7 +431,7 @@ try {
     $scenario = '3 no kill switch'
     $previous = Invoke-Setup -Build previous -LogName 'open-previous'
     Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 } -Note "exit $($previous.ExitCode)"
-    Test-Step $scenario 'its service runs' { Wait-InstalledService }
+    Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     Connect-Installed 'request-upgrade-open.json'
     Test-Step $scenario 'connected before the upgrade' { Wait-InstalledState 'connected' }
     Start-Watch
@@ -390,7 +445,7 @@ try {
         (Get-SetupLog 'open-current') -match 'no kill switch is on; the network is not held'
     }
     Test-Step $scenario 'no GUI with --after-upgrade' { "$gui" -notmatch '--after-upgrade' } -Note "$gui"
-    Test-Step $scenario 'its service runs' { Wait-InstalledService }
+    Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     $status = Get-HoldStatus
     Test-Step $scenario 'no hold and no Lockdown' {
         -not $status.upgrade_hold -and -not $status.lockdown
@@ -404,7 +459,7 @@ try {
     $scenario = '4 broken upgrade'
     $previous = Invoke-Setup -Build previous -LogName 'broken-previous'
     Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 } -Note "exit $($previous.ExitCode)"
-    Test-Step $scenario 'its service runs' { Wait-InstalledService }
+    Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     Connect-Installed 'request-upgrade-kill-switch.json'
     Test-Step $scenario 'connected before the upgrade' { Wait-InstalledState 'connected' }
     Start-Watch
@@ -463,6 +518,10 @@ finally {
         }
     }
     catch { Write-Warning "Could not stop a setup: $_" }
+    if ($results.Result -contains 'FAIL') {
+        try { Write-Warning "Evidence of the failed run in $(Save-UpgradeEvidence -Scenario 'run')" }
+        catch { Write-Warning "Could not save the evidence of the failed run: $_" }
+    }
     try { Uninstall-Rosetun } catch { Write-Warning "Could not uninstall Rosetun: $_" }
     $clean = $false
     try {
