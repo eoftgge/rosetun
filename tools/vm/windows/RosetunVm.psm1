@@ -1844,6 +1844,24 @@ function Start-RosetunEgressWatch {
                     $detail = "now $((Get-Date).ToUniversalTime().ToString($utc)); watcher: " +
                         $(if ($watchers.Count) { $states -join '; ' } else { 'none' }) +
                         "; $path.tmp exists: $(Test-Path -Path "$path.tmp")"
+                    # Whether any PowerShell starts now, or only this one hangs.
+                    $info = [Diagnostics.ProcessStartInfo]::new(
+                        "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe",
+                        '-NoProfile -NonInteractive -Command exit 0')
+                    $info.UseShellExecute = $false
+                    $info.CreateNoWindow = $true
+                    $plain = [Diagnostics.Process]::Start($info)
+                    $plainClock = [Diagnostics.Stopwatch]::StartNew()
+                    $plainEnded = $plain.WaitForExit(40000)
+                    if (-not $plainEnded) { $plain.Kill() }
+                    $detail += "; a plain powershell.exe -Command exit 0 " +
+                        $(if ($plainEnded) { "ended after $([int]$plainClock.Elapsed.TotalSeconds) s" } else { 'did not end in 40 s' })
+                    try {
+                        $preference = Get-MpPreference
+                        $detail += "; Defender MAPSReporting $($preference.MAPSReporting), CloudBlockLevel $($preference.CloudBlockLevel), " +
+                            "CloudExtendedTimeout $($preference.CloudExtendedTimeout), SubmitSamplesConsent $($preference.SubmitSamplesConsent)"
+                    }
+                    catch { $detail += "; Defender preferences: $($_.Exception.Message)" }
                     throw "The egress watch did not record a probe within 30 seconds: task $state, result $result, script error '$errorText'; $detail."
                 }
                 Start-Sleep -Milliseconds 200

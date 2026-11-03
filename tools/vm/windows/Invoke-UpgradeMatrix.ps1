@@ -365,6 +365,23 @@ try {
     New-UpgradeRequests
     Restore-RosetunGuestLease
     Test-Step '0 baseline' 'direct egress works' { Test-RosetunDirectEgress }
+    # The watch's PowerShell is the first one SYSTEM starts in the restored
+    # guest. Started first under Lockdown, it once sat for 30 s with 0.1 s
+    # of CPU and never reached its script. Here it starts with the network
+    # open; the time to its first probe is recorded to compare.
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        Start-Watch
+        $firstProbe = [int]$clock.Elapsed.TotalSeconds
+        $warm = Stop-Watch
+        Add-Info '0 baseline' 'egress watch started with the network open' "first probe after $firstProbe s; $(Format-Watch $warm)"
+    }
+    catch {
+        # Slow with the network open too: Lockdown is not the cause. The
+        # scenarios try it again.
+        $script:watchActive = $false
+        Add-Info '0 baseline' 'egress watch started with the network open' "failed after $([int]$clock.Elapsed.TotalSeconds) s: $_"
+    }
 
     # 1. Lockdown on, disconnected: Lockdown holds the network itself.
     $scenario = '1 Lockdown'
