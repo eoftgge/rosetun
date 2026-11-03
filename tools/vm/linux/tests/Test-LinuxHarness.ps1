@@ -385,6 +385,16 @@ Assert-That 'the install command passes both test accounts' (
     (Get-RosetunLinuxInstallCommand -Folder '/home/l2admin/rosetun-l2-launcher' -UserA 'ipc_owner' -UserB 'ipc_other') -ceq
     'sudo bash /home/l2admin/rosetun-l2-launcher/install-launcher.sh ipc_owner ipc_other')
 
+# --- progress of a one-command run
+Assert-That 'elapsed time reads as minutes and seconds' ((Format-RosetunLinuxElapsed ([TimeSpan]::FromSeconds(3725))) -eq '62:05')
+Assert-That 'a job without status is waiting to start' ((Format-RosetunLinuxJobProgress -Status $null) -eq 'waiting for the job to start')
+Assert-That 'a running job names its scenario' ((Format-RosetunLinuxJobProgress -Status $running) -eq 'job running, stale.restart-refused')
+$noisy = [pscustomobject]@{ state = 'running'; current = "x`e[31m" + ('y' * 200) }
+$noisyLine = Format-RosetunLinuxJobProgress -Status $noisy
+Assert-That 'guest text in progress lines is printable and short' ($noisyLine -notmatch "`e" -and $noisyLine.Length -le 100)
+Assert-That 'the automatic run waits for the job limit plus cleanup' ((Get-RosetunLinuxRunWaitSeconds -JobTimeoutSeconds 900) -eq 1200)
+Assert-That 'a manual start leaves time to paste the command' ((Get-RosetunLinuxRunWaitSeconds -JobTimeoutSeconds 900 -Manual) -gt 1200)
+
 # --- guest address from the adapter's list
 Assert-That 'the first usable IPv4 address is chosen' ((Select-RosetunLinuxGuestAddress @('fe80::1', '169.254.10.20', '2001:db8::5', '192.0.2.10', '198.51.100.7')) -eq '192.0.2.10')
 Assert-That 'IPv6 and link-local addresses alone give no address' ($null -eq (Select-RosetunLinuxGuestAddress @('fe80::1', '169.254.1.1', '2001:db8::1')))

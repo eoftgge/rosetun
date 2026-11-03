@@ -1,11 +1,16 @@
 #Requires -Version 7.0
 # Linux L2 stand, host side. The owner runs it; the agent only prepares it.
 #
+#   Run               the one command: builds HEAD in WSL, restores the clean
+#                     checkpoint, checks the guest, stages the run, starts it through
+#                     the installed launcher, waits for the job and judges the report.
+#                     Exits 0 only on PASS.
 #   Stage   (default) builds HEAD in WSL (or takes -ArtifactDir), checks the selected
 #                     VM and guest, copies the run to the guest and starts it through
 #                     the installed launcher, or prints the one command the owner
 #                     runs there with sudo when the launcher cannot.
-#   Collect           reads the status and report of a run back and judges it.
+#   Collect           reads the status and report of a run back and judges it; use it
+#                     to reconnect to a run.
 #   InitKnownHosts    pins the guest's host key once, after the owner compared its
 #                     fingerprint with the VM console.
 #   PrepareLauncher   copies the launcher and its installer into the guest for the
@@ -14,7 +19,7 @@
 # The stand's values come from stand.local.psd1 next to this script (or -Settings);
 # a parameter given on the command line wins over the file.
 #
-# Nothing here restores a checkpoint unless -RestoreCheckpoint names one, installs
+# Only -Run and -RestoreCheckpoint restore a checkpoint. Nothing here installs
 # packages or creates accounts. The only privileged step is the launcher the owner
 # installed (guest/launch.sh), started with sudo -n. See README.md.
 
@@ -32,13 +37,16 @@ param(
     [string]$UserA,
     [string]$UserB,
 
-    [Parameter(ParameterSetName = 'Stage')][string]$ArtifactDir,
-    [Parameter(ParameterSetName = 'Stage')][string]$WslDistro,
+    [Parameter(ParameterSetName = 'Run', Mandatory)][switch]$Run,
+    [Parameter(ParameterSetName = 'Run')][string]$Checkpoint,
+
+    [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][string]$ArtifactDir,
+    [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][string]$WslDistro,
     [Parameter(ParameterSetName = 'Stage')][string]$RestoreCheckpoint,
-    [Parameter(ParameterSetName = 'Stage')][string]$RepoRoot = (Join-Path $PSScriptRoot '..\..\..'),
-    [Parameter(ParameterSetName = 'Stage')][ValidateRange(10, 3600)][int]$ScenarioTimeoutSeconds = 30,
-    [Parameter(ParameterSetName = 'Stage')][ValidateRange(10, 3600)][int]$UnitTimeoutSeconds = 180,
-    [Parameter(ParameterSetName = 'Stage')][ValidateRange(60, 7200)][int]$JobTimeoutSeconds = 900,
+    [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][string]$RepoRoot = (Join-Path $PSScriptRoot '..\..\..'),
+    [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][ValidateRange(10, 3600)][int]$ScenarioTimeoutSeconds = 30,
+    [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][ValidateRange(10, 3600)][int]$UnitTimeoutSeconds = 180,
+    [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][ValidateRange(60, 7200)][int]$JobTimeoutSeconds = 900,
 
     [Parameter(ParameterSetName = 'Collect', Mandatory)][switch]$Collect,
     [Parameter(ParameterSetName = 'Collect', Mandatory)][string]$RunId,
@@ -56,22 +64,47 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'RosetunLinuxVm.psm1') -Force
 
 $guestBase = '/var/lib/rosetun-l2'
+$mode = $PSCmdlet.ParameterSetName
 
 # ------------------------------------------------------------------ settings
+
+if (-not (Test-RosetunLinuxElevated)) {
+    throw 'Hyper-V needs administrator rights. Open Windows PowerShell as administrator, start pwsh in that window and run this again.'
+}
+if ($null -eq (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
+    throw 'The Hyper-V PowerShell module is missing. Enable "Hyper-V Module for Windows PowerShell" in Windows features.'
+}
 
 $settingsPath = if ($PSBoundParameters.ContainsKey('Settings')) { $Settings }
 else {
     $default = Join-Path $PSScriptRoot 'stand.local.psd1'
     if (Test-Path -LiteralPath $default -PathType Leaf) { $default } else { $null }
 }
+if ($mode -eq 'Run' -and $null -eq $settingsPath) {
+    throw "No stand settings. Copy tools\vm\linux\stand.example.psd1 to tools\vm\linux\stand.local.psd1 and fill it in."
+}
 $fileSettings = if ($settingsPath) { Read-RosetunLinuxStandSettings -Path $settingsPath } else { @{} }
 $explicit = @{}
-foreach ($name in @('VmName', 'StandId', 'SshUser', 'SshHost', 'SshPort', 'KnownHostsPath', 'IdentityFile', 'UserA', 'UserB', 'WslDistro')) {
+foreach ($name in @('VmName', 'StandId', 'SshUser', 'SshHost', 'SshPort', 'KnownHostsPath', 'IdentityFile', 'UserA', 'UserB',
+        'Checkpoint', 'WslDistro')) {
     if ($PSBoundParameters.ContainsKey($name)) { $explicit[$name] = $PSBoundParameters[$name] }
 }
 $stand = Resolve-RosetunLinuxStandSettings -Settings $fileSettings -Explicit $explicit
 Assert-RosetunLinuxStandSettings -Stand $stand -SettingsPath $settingsPath `
     -Names @('VmName', 'StandId', 'SshUser', 'KnownHostsPath', 'IdentityFile')
+if (-not (Test-Path -LiteralPath $stand.IdentityFile -PathType Leaf)) {
+    throw "The SSH key '$($stand.IdentityFile)' does not exist. Make it as the stand guide shows, or fix IdentityFile."
+}
+
+# ------------------------------------------------------------------ helpers
+
+$clock = [Diagnostics.Stopwatch]::StartNew()
+
+# One line per stage of the run, with the time since the start.
+function Write-Step {
+    param([string]$Text)
+    Write-Host ("[{0}] {1}" -f (Format-RosetunLinuxElapsed $clock.Elapsed), $Text)
+}
 
 function Read-GuestJson {
     param($Target, [string]$Path)
@@ -88,22 +121,33 @@ function Get-StandIdentity {
     Get-RosetunLinuxVmIdentity -VmName $stand.VmName -VmId $expected
 }
 
-# The address comes from SshHost or, after the VM is up, from Hyper-V.
+# The address comes from SshHost or, once the VM is up, from Hyper-V.
 function New-StandTarget {
-    param([switch]$AllowMissingKnownHosts)
-    $address = if ($stand.SshHost) { $stand.SshHost } else { Resolve-RosetunLinuxGuestAddress -VmName $stand.VmName -TimeoutSeconds 180 }
+    param([switch]$AllowMissingKnownHosts, [int]$AddressTimeoutSeconds = 180)
+    $address = if ($stand.SshHost) { $stand.SshHost } else { Resolve-RosetunLinuxGuestAddress -VmName $stand.VmName -TimeoutSeconds $AddressTimeoutSeconds }
     New-RosetunLinuxTarget -HostName $address -User $stand.SshUser -KnownHostsPath $stand.KnownHostsPath `
         -IdentityFile $stand.IdentityFile -HostKeyAlias $stand.StandId -Port $stand.SshPort -AllowMissingKnownHosts:$AllowMissingKnownHosts
 }
 
-if ($PSCmdlet.ParameterSetName -eq 'InitKnownHosts') {
-    $identity = Get-StandIdentity
-    if ($identity.State -ne 'Running') { throw "VM '$($stand.VmName)' is $($identity.State). Start it first." }
-    Initialize-RosetunLinuxKnownHosts -Target (New-StandTarget -AllowMissingKnownHosts)
-    exit 0
+# Waits until the guest answers over SSH, reading the address again on every try:
+# after a restore Hyper-V may report the old lease for a while.
+function Wait-StandTarget {
+    param([int]$TimeoutSeconds = 300)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $last = ''
+    do {
+        try {
+            $target = New-StandTarget -AddressTimeoutSeconds 30
+            Wait-RosetunLinuxSsh -Target $target -TimeoutSeconds 30
+            return $target
+        }
+        catch {
+            if ("$_" -match 'host key verification failed') { throw }
+            $last = "$_"
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "The guest did not answer over SSH within $TimeoutSeconds s. Last answer: $last"
 }
-
-Test-RosetunLinuxHostKeyPinned -KnownHostsPath $stand.KnownHostsPath -HostKeyAlias $stand.StandId
 
 function Get-GuestHome {
     param($Target)
@@ -115,22 +159,189 @@ function Get-GuestHome {
 function Show-LauncherInstall {
     param([string]$Folder)
     $vm = $stand.VmName
-    $checkpoint = $stand.Checkpoint
+    $point = $stand.Checkpoint
     Write-Host '  1. On the host, restore the clean checkpoint and copy the launcher:'
-    Write-Host "       Restore-VMCheckpoint -VMName $vm -Name $checkpoint -Confirm:`$false; Start-VM -Name $vm"
+    Write-Host "       Restore-VMCheckpoint -VMName $vm -Name $point -Confirm:`$false; Start-VM -Name $vm"
     Write-Host '       .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -PrepareLauncher'
     Write-Host "  2. In the guest, as $($stand.SshUser):"
     Write-Host "       $(Get-RosetunLinuxInstallCommand -Folder $Folder -UserA $stand.UserA -UserB $stand.UserB)"
     Write-Host '  3. On the host, make the clean checkpoint again (a restore would bring the old launcher back):'
-    Write-Host "       Remove-VMCheckpoint -VMName $vm -Name $checkpoint; Checkpoint-VM -Name $vm -SnapshotName $checkpoint"
+    Write-Host "       Remove-VMCheckpoint -VMName $vm -Name $point; Checkpoint-VM -Name $vm -SnapshotName $point"
 }
 
-if ($PSCmdlet.ParameterSetName -eq 'PrepareLauncher') {
+# Builds HEAD in WSL, or checks a given artifact folder. A host build must match
+# HEAD exactly; a given folder may be unconfirmed, and the report says so.
+function Invoke-StandBuild {
+    param([string]$RunId)
+    $repo = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath
+    $source = Get-RosetunLinuxSource -RepoRoot $repo
+    if ($ArtifactDir) {
+        Write-Step "Using the artifacts in $ArtifactDir"
+        $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $ArtifactDir -Source $source
+        if (-not $artifacts.Confirmed) { Write-Warning "Artifact origin is NOT confirmed: $($artifacts.Note). The report will say so." }
+        return [pscustomobject]@{ Directory = $ArtifactDir; Source = $source; Artifacts = $artifacts }
+    }
+    Assert-RosetunLinuxCleanSource -Source $source
+    Write-Step "Building $($source.Sha.Substring(0, 12)) in WSL '$($stand.WslDistro)'"
+    $directory = Invoke-RosetunLinuxBuild -RepoRoot $repo -Source $source -RunId $RunId -WslDistro $stand.WslDistro `
+        -Heartbeat { param($elapsed) Write-Host "    building, $(Format-RosetunLinuxElapsed $elapsed)" } -HeartbeatSeconds 60
+    $after = Get-RosetunLinuxSource -RepoRoot $repo
+    if ($after.Sha -ne $source.Sha -or $after.Dirty) { throw 'The checkout changed during the build. Nothing was staged; start again.' }
+    $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $directory -Source $source
+    if (-not $artifacts.Confirmed) { throw "The build does not match HEAD: $($artifacts.Note). Nothing was staged." }
+    Write-Host "    $directory"
+    [pscustomobject]@{ Directory = $directory; Source = $source; Artifacts = $artifacts }
+}
+
+# Checks which guest answers, stages the run there and records it on the host.
+function Invoke-StandStage {
+    param([string]$RunId, [string]$RunLog, $Build, $Identity, [string]$Restored)
+    $target = Wait-StandTarget -TimeoutSeconds 300
+    Write-Step "Checking the guest at $($target.HostName)"
+    $standRead = Invoke-RosetunLinuxSsh -Target $target -Command 'cat /etc/rosetun-l2-stand-id' -TimeoutSeconds 20
+    if ($standRead.ExitCode -ne 0 -or $standRead.Output.Trim() -ne $stand.StandId) {
+        throw "The guest does not carry stand id '$($stand.StandId)' in /etc/rosetun-l2-stand-id. Wrong machine; nothing was copied."
+    }
+    $bootRead = Invoke-RosetunLinuxSsh -Target $target -Command 'cat /proc/sys/kernel/random/boot_id' -TimeoutSeconds 20
+    $bootId = $bootRead.Output.Trim()
+    if ($bootRead.ExitCode -ne 0 -or $bootId -notmatch '^[0-9a-f-]{36}$') { throw 'Could not read the guest boot id.' }
+
+    Write-Step "Staging run $RunId"
+    $jobEnv = New-RosetunLinuxJobEnv -RunId $RunId -StandId $stand.StandId -BootId $bootId -UserA $stand.UserA -UserB $stand.UserB `
+        -BiosGuid $Identity.BiosGuid -ScenarioTimeoutSeconds $ScenarioTimeoutSeconds `
+        -UnitTimeoutSeconds $UnitTimeoutSeconds -JobTimeoutSeconds $JobTimeoutSeconds
+    $stage = New-RosetunLinuxStage -StageRoot (Join-Path $RunLog 'stage') -RunId $RunId -ArtifactDir $Build.Directory -JobEnv $jobEnv
+    $remoteParent = "$(Get-GuestHome $target)/rosetun-l2-stage"
+    $made = Invoke-RosetunLinuxSsh -Target $target -TimeoutSeconds 20 `
+        -Command "umask 077 && mkdir -p -m 700 -- $remoteParent && test ! -e $remoteParent/$RunId"
+    if ($made.ExitCode -ne 0) { throw "Could not prepare $remoteParent on the guest (or the run id exists): $($made.Error.Trim())" }
+    Copy-RosetunLinuxToGuest -Target $target -LocalDirectory $stage.Directory -RemoteParent $remoteParent
+    $fix = Invoke-RosetunLinuxSsh -Target $target -TimeoutSeconds 20 -Command "chmod 700 -- $remoteParent/$RunId && chmod 755 -- $remoteParent/$RunId/guest/*.sh $remoteParent/$RunId/artifacts/*"
+    if ($fix.ExitCode -ne 0) { throw "Could not set modes on the staged run: $($fix.Error.Trim())" }
+
+    $source = $Build.Source
+    $artifacts = $Build.Artifacts
+    $record = [ordered]@{
+        schema = 1; run_id = $RunId; created = [DateTime]::UtcNow.ToString('o')
+        vm = [ordered]@{ name = $Identity.Name; id = $Identity.VmId }
+        stand_id = $stand.StandId; boot_id = $bootId; manifest_sha256 = $stage.ManifestHash
+        source = [ordered]@{ sha = $source.Sha; dirty = $source.Dirty; dirty_entries = $source.DirtyEntries; dirty_paths = @($source.DirtyPaths); dirty_digest = $source.DirtyDigest }
+        artifacts = [ordered]@{ hashes = $artifacts.Hashes; origin_confirmed = $artifacts.Confirmed; origin_note = $artifacts.Note; toolchain = $artifacts.Toolchain; built_on = $artifacts.BuiltOn }
+        checkpoint_restored = [bool]$Restored
+    }
+    [IO.File]::WriteAllText((Join-Path $RunLog 'stage.json'), ($record | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+    [pscustomobject]@{ Target = $target; StageDir = "$remoteParent/$RunId"; Stage = $stage }
+}
+
+function Invoke-StandStart {
+    param([string]$RunId, $Staged)
+    $start = Start-RosetunLinuxJob -Target $Staged.Target -StageDir $Staged.StageDir -RunId $RunId -ManifestHash $Staged.Stage.ManifestHash `
+        -ExpectedLauncherHash (Get-RosetunLinuxFileSha256 (Join-Path $Staged.Stage.Directory 'guest/launch.sh'))
+    if ($start.Started) {
+        Write-Step 'Started the job through the launcher (no password)'
+        return $start
+    }
+    Write-Step "The job was not started: $($start.Reason)"
+    if ($start.Reinstall) {
+        Write-Host 'Reinstall the launcher before the next run:'
+        Show-LauncherInstall -Folder "$(Get-GuestHome $Staged.Target)/rosetun-l2-launcher"
+    }
+    Write-Host 'For this run, in the guest, as the account that owns the stage directory, run exactly:'
+    Write-Host ''
+    Write-Host "  $($start.ManualCommand)"
+    Write-Host ''
+    $start
+}
+
+# Reads the run back, waiting up to WaitSeconds for it to finish, judges it and
+# writes report.txt and report.json. Returns the verdict.
+function Invoke-StandCollect {
+    param([string]$RunId, [int]$WaitSeconds, [switch]$Progress)
+    if (-not (Test-RosetunLinuxRunId $RunId)) { throw "Invalid run id '$RunId'." }
+    $runLog = Join-Path $LogRoot $RunId
+    $stagePath = Join-Path $runLog 'stage.json'
+    if (-not (Test-Path -LiteralPath $stagePath)) { throw "No stage record for run $RunId under '$LogRoot'. This host did not stage it." }
+    $record = Get-Content -LiteralPath $stagePath -Raw | ConvertFrom-Json
+    $identity = Get-StandIdentity
+    if ($record.run_id -ne $RunId -or $record.stand_id -ne $stand.StandId -or $record.vm.id -ne $identity.VmId -or $record.vm.name -ne $stand.VmName) {
+        throw 'The stage record belongs to another VM or stand. Nothing was read.'
+    }
+
+    $stageInfo = [pscustomobject]@{
+        RunId = $RunId; BootId = $record.boot_id
+        Source = [pscustomobject]@{
+            Sha = $record.source.sha; Dirty = $record.source.dirty; DirtyEntries = $record.source.dirty_entries
+            DirtyPaths = @(Get-RosetunLinuxMember -Object $record.source -Name 'dirty_paths' | Where-Object { $null -ne $_ })
+        }
+        Artifacts = [pscustomobject]@{
+            Confirmed = [bool]$record.artifacts.origin_confirmed; Note = $record.artifacts.origin_note
+            Hashes = [ordered]@{}
+        }
+    }
+    foreach ($property in $record.artifacts.hashes.PSObject.Properties) { $stageInfo.Artifacts.Hashes[$property.Name] = $property.Value }
+
+    $scenarios = @(Get-RosetunLinuxScenarios)
+    $waitClock = [Diagnostics.Stopwatch]::StartNew()
+    $lastLine = ''
+    $lastShown = [TimeSpan]::Zero
+    do {
+        $status = $null
+        $report = $null
+        try {
+            $target = Wait-StandTarget -TimeoutSeconds 60
+            $status = Read-GuestJson -Target $target -Path "$guestBase/$RunId/report/status.json"
+            $report = Read-GuestJson -Target $target -Path "$guestBase/$RunId/report/report.json"
+        }
+        catch {
+            Write-Warning "Could not reach the guest: $_"
+        }
+        $finished = ($null -ne $report) -and ($null -ne $status) -and ($status.state -eq 'finished')
+        if ($finished -or $waitClock.Elapsed.TotalSeconds -ge $WaitSeconds) { break }
+        if ($Progress) {
+            $line = Format-RosetunLinuxJobProgress -Status $status
+            if ($line -ne $lastLine -or ($waitClock.Elapsed - $lastShown).TotalSeconds -ge 120) {
+                Write-Host "    $line, $(Format-RosetunLinuxElapsed $waitClock.Elapsed)"
+                $lastLine = $line
+                $lastShown = $waitClock.Elapsed
+            }
+        }
+        Start-Sleep -Seconds 10
+    } while ($true)
+
+    $judgement = Test-RosetunLinuxReport -Report $report -Status $status -Stage $stageInfo -Scenarios $scenarios
+    $text = Format-RosetunLinuxReport -Judgement $judgement -Stage $stageInfo
+    $reportPath = Join-Path $runLog 'report.txt'
+    [IO.File]::WriteAllText($reportPath, $text, [Text.UTF8Encoding]::new($false))
+    $hostReport = [ordered]@{
+        schema = 1; run_id = $RunId; collected = [DateTime]::UtcNow.ToString('o')
+        verdict = $judgement.Verdict; coverage = $judgement.Coverage; cleanup = $judgement.CleanupStatus
+        problems = $judgement.Problems; counts = $judgement.Counts
+        source = $record.source; artifacts = $record.artifacts; boot_id = $record.boot_id
+        guest = if ($null -ne $report) { $report.guest } else { $null }
+        scenarios = $judgement.Rows
+    }
+    [IO.File]::WriteAllText((Join-Path $runLog 'report.json'), ($hostReport | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+    Write-Host $text
+    Write-Host "Report: $reportPath"
+    $judgement.Verdict
+}
+
+# ------------------------------------------------------------------ modes
+
+if ($mode -eq 'InitKnownHosts') {
+    $identity = Get-StandIdentity
+    if ($identity.State -ne 'Running') { throw "VM '$($stand.VmName)' is $($identity.State). Start it first." }
+    Initialize-RosetunLinuxKnownHosts -Target (New-StandTarget -AllowMissingKnownHosts)
+    exit 0
+}
+
+Test-RosetunLinuxHostKeyPinned -KnownHostsPath $stand.KnownHostsPath -HostKeyAlias $stand.StandId
+
+if ($mode -eq 'PrepareLauncher') {
     Assert-RosetunLinuxStandSettings -Stand $stand -SettingsPath $settingsPath -Names @('UserA', 'UserB')
     $identity = Get-StandIdentity
     if ($identity.State -ne 'Running') { throw "VM '$($stand.VmName)' is $($identity.State). Start it first." }
-    $target = New-StandTarget
-    Wait-RosetunLinuxSsh -Target $target -TimeoutSeconds 120
+    $target = Wait-StandTarget -TimeoutSeconds 120
     $copied = Copy-RosetunLinuxLauncherToGuest -Target $target -GuestHome (Get-GuestHome $target)
     Write-Host "Copied the launcher to $($copied.Folder) (sha256 $($copied.LauncherHash))."
     Write-Host "In the guest, as $($stand.SshUser), run:"
@@ -141,156 +352,57 @@ if ($PSCmdlet.ParameterSetName -eq 'PrepareLauncher') {
     exit 0
 }
 
-if ($PSCmdlet.ParameterSetName -eq 'Stage') {
-    Assert-RosetunLinuxStandSettings -Stand $stand -SettingsPath $settingsPath -Names @('UserA', 'UserB')
-    $runId = New-RosetunLinuxRunId
-    $runLog = Join-Path $LogRoot $runId
-    $null = New-Item -ItemType Directory -Path $runLog
+if ($mode -eq 'Collect') {
+    $verdict = Invoke-StandCollect -RunId $RunId -WaitSeconds $WaitSeconds -Progress:($WaitSeconds -gt 0)
+    if ($verdict -eq 'PASS') { exit 0 }
+    exit 1
+}
 
-    # The build comes first, so a failed build leaves the VM untouched.
-    $repo = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath
-    $source = Get-RosetunLinuxSource -RepoRoot $repo
-    if ($ArtifactDir) {
-        $artifactDir = $ArtifactDir
-        $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $artifactDir -Source $source
-        if (-not $artifacts.Confirmed) {
-            Write-Warning "Artifact origin is NOT confirmed: $($artifacts.Note). The report will say so."
-        }
-    }
-    else {
-        Write-Host "Building $($source.Sha.Substring(0, 12)) in WSL '$($stand.WslDistro)'..."
-        $artifactDir = Invoke-RosetunLinuxBuild -RepoRoot $repo -Source $source -RunId $runId -WslDistro $stand.WslDistro `
-            -Heartbeat { param($elapsed) Write-Host ('  still building, {0:mm\:ss}' -f $elapsed) }
-        $after = Get-RosetunLinuxSource -RepoRoot $repo
-        if ($after.Sha -ne $source.Sha -or $after.Dirty) { throw 'The checkout changed during the build. Nothing was staged; start again.' }
-        $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $artifactDir -Source $source
-        if (-not $artifacts.Confirmed) { throw "The build does not match HEAD: $($artifacts.Note). Nothing was staged." }
-        Write-Host "Artifacts: $artifactDir"
-    }
+Assert-RosetunLinuxStandSettings -Stand $stand -SettingsPath $settingsPath -Names @('UserA', 'UserB')
+$newRunId = New-RosetunLinuxRunId
+$runLog = Join-Path $LogRoot $newRunId
 
+if ($mode -eq 'Run') {
+    Assert-RosetunLinuxStandSettings -Stand $stand -SettingsPath $settingsPath -Names @('Checkpoint')
+    # Everything that can fail fast is checked before the build takes minutes.
     $identity = Get-StandIdentity
-    if ($RestoreCheckpoint) {
-        Write-Host "Restoring checkpoint '$RestoreCheckpoint' of '$($stand.VmName)' (requested explicitly)."
-        Restore-RosetunLinuxCheckpoint -VmName $stand.VmName -CheckpointName $RestoreCheckpoint
+    $points = @(Get-VMCheckpoint -VMName $stand.VmName -Name $stand.Checkpoint -ErrorAction SilentlyContinue)
+    if ($points.Count -ne 1) {
+        throw "VM '$($stand.VmName)' has $($points.Count) checkpoints named '$($stand.Checkpoint)'; the run needs exactly one (see the stand guide)."
     }
-    elseif ($identity.State -ne 'Running') {
-        throw "VM '$($stand.VmName)' is $($identity.State). Start it yourself; the stand starts and restores nothing without -RestoreCheckpoint."
-    }
-    $target = New-StandTarget
-    Wait-RosetunLinuxSsh -Target $target -TimeoutSeconds 300
+    if (-not $ArtifactDir) { $null = ConvertTo-RosetunLinuxWslPath -WslDistro $stand.WslDistro -Path $PSScriptRoot }
+    $null = New-Item -ItemType Directory -Path $runLog
+    Write-Step "Run $newRunId on '$($stand.VmName)'"
 
-    $standRead = Invoke-RosetunLinuxSsh -Target $target -Command 'cat /etc/rosetun-l2-stand-id' -TimeoutSeconds 20
-    if ($standRead.ExitCode -ne 0 -or $standRead.Output.Trim() -ne $stand.StandId) {
-        throw "The guest does not carry stand id '$($stand.StandId)' in /etc/rosetun-l2-stand-id. Wrong machine; nothing was copied."
-    }
-    $bootRead = Invoke-RosetunLinuxSsh -Target $target -Command 'cat /proc/sys/kernel/random/boot_id' -TimeoutSeconds 20
-    $bootId = $bootRead.Output.Trim()
-    if ($bootRead.ExitCode -ne 0 -or $bootId -notmatch '^[0-9a-f-]{36}$') { throw 'Could not read the guest boot id.' }
-
-    $jobEnv = New-RosetunLinuxJobEnv -RunId $runId -StandId $stand.StandId -BootId $bootId -UserA $stand.UserA -UserB $stand.UserB `
-        -BiosGuid $identity.BiosGuid -ScenarioTimeoutSeconds $ScenarioTimeoutSeconds `
-        -UnitTimeoutSeconds $UnitTimeoutSeconds -JobTimeoutSeconds $JobTimeoutSeconds
-    $stage = New-RosetunLinuxStage -StageRoot (Join-Path $runLog 'stage') -RunId $runId -ArtifactDir $artifactDir -JobEnv $jobEnv
-
-    $remoteParent = "$(Get-GuestHome $target)/rosetun-l2-stage"
-    $made = Invoke-RosetunLinuxSsh -Target $target -TimeoutSeconds 20 `
-        -Command "umask 077 && mkdir -p -m 700 -- $remoteParent && test ! -e $remoteParent/$runId"
-    if ($made.ExitCode -ne 0) { throw "Could not prepare $remoteParent on the guest (or the run id exists): $($made.Error.Trim())" }
-    Copy-RosetunLinuxToGuest -Target $target -LocalDirectory $stage.Directory -RemoteParent $remoteParent
-    $fix = Invoke-RosetunLinuxSsh -Target $target -TimeoutSeconds 20 -Command "chmod 700 -- $remoteParent/$runId && chmod 755 -- $remoteParent/$runId/guest/*.sh $remoteParent/$runId/artifacts/*"
-    if ($fix.ExitCode -ne 0) { throw "Could not set modes on the staged run: $($fix.Error.Trim())" }
-
-    $record = [ordered]@{
-        schema = 1; run_id = $runId; created = [DateTime]::UtcNow.ToString('o')
-        vm = [ordered]@{ name = $identity.Name; id = $identity.VmId }
-        stand_id = $stand.StandId; boot_id = $bootId; manifest_sha256 = $stage.ManifestHash
-        source = [ordered]@{ sha = $source.Sha; dirty = $source.Dirty; dirty_entries = $source.DirtyEntries; dirty_paths = @($source.DirtyPaths); dirty_digest = $source.DirtyDigest }
-        artifacts = [ordered]@{ hashes = $artifacts.Hashes; origin_confirmed = $artifacts.Confirmed; origin_note = $artifacts.Note; toolchain = $artifacts.Toolchain; built_on = $artifacts.BuiltOn }
-        checkpoint_restored = [bool]$RestoreCheckpoint
-    }
-    [IO.File]::WriteAllText((Join-Path $runLog 'stage.json'), ($record | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
-
-    $start = Start-RosetunLinuxJob -Target $target -StageDir "$remoteParent/$runId" -RunId $runId -ManifestHash $stage.ManifestHash `
-        -ExpectedLauncherHash (Get-RosetunLinuxFileSha256 (Join-Path $stage.Directory 'guest/launch.sh'))
-    Write-Host ''
-    if ($start.Started) {
-        Write-Host "Run $runId started through the launcher:"
-        Write-Host "  $($start.Output.Replace("`n", "`n  "))"
-    }
-    else {
-        Write-Host "Run $runId is staged on the guest. It was not started: $($start.Reason)."
-        if ($start.Reinstall) {
-            Write-Host 'Reinstall the launcher before the next run:'
-            Show-LauncherInstall -Folder "$(Get-GuestHome $target)/rosetun-l2-launcher"
-        }
-        Write-Host 'For this run, in the guest, as the account that owns the stage directory, run exactly:'
-        Write-Host ''
-        Write-Host "  $($start.ManualCommand)"
-    }
-    Write-Host ''
-    Write-Host 'Then, from this host:'
-    Write-Host ''
-    Write-Host "  .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Collect -RunId $runId -WaitSeconds 1200"
-    exit 0
+    $build = Invoke-StandBuild -RunId $newRunId
+    Write-Step "Restoring checkpoint '$($stand.Checkpoint)'"
+    Restore-RosetunLinuxCheckpoint -VmName $stand.VmName -CheckpointName $stand.Checkpoint
+    Write-Step 'Waiting for the guest'
+    $staged = Invoke-StandStage -RunId $newRunId -RunLog $runLog -Build $build -Identity $identity -Restored $stand.Checkpoint
+    $start = Invoke-StandStart -RunId $newRunId -Staged $staged
+    $wait = Get-RosetunLinuxRunWaitSeconds -JobTimeoutSeconds $JobTimeoutSeconds -Manual:(-not $start.Started)
+    Write-Step "Waiting for the job (at most $(Format-RosetunLinuxElapsed ([TimeSpan]::FromSeconds($wait))))"
+    $verdict = Invoke-StandCollect -RunId $newRunId -WaitSeconds $wait -Progress
+    Write-Step "Result: $verdict"
+    if ($verdict -eq 'PASS') { exit 0 }
+    Write-Host "Reconnect later with: .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Collect -RunId $newRunId -WaitSeconds 1200"
+    exit 1
 }
 
-# Collect
-if (-not (Test-RosetunLinuxRunId $RunId)) { throw "Invalid run id '$RunId'." }
-$runLog = Join-Path $LogRoot $RunId
-$stagePath = Join-Path $runLog 'stage.json'
-if (-not (Test-Path -LiteralPath $stagePath)) { throw "No stage record for run $RunId under '$LogRoot'. This host did not stage it." }
-$record = Get-Content -LiteralPath $stagePath -Raw | ConvertFrom-Json
+# Stage
+$null = New-Item -ItemType Directory -Path $runLog
+$build = Invoke-StandBuild -RunId $newRunId
 $identity = Get-StandIdentity
-if ($record.run_id -ne $RunId -or $record.stand_id -ne $stand.StandId -or $record.vm.id -ne $identity.VmId -or $record.vm.name -ne $stand.VmName) {
-    throw 'The stage record belongs to another VM or stand. Nothing was read.'
+if ($RestoreCheckpoint) {
+    Write-Step "Restoring checkpoint '$RestoreCheckpoint' (requested explicitly)"
+    Restore-RosetunLinuxCheckpoint -VmName $stand.VmName -CheckpointName $RestoreCheckpoint
 }
-$target = New-StandTarget
-
-$stageInfo = [pscustomobject]@{
-    RunId = $RunId; BootId = $record.boot_id
-    Source = [pscustomobject]@{
-        Sha = $record.source.sha; Dirty = $record.source.dirty; DirtyEntries = $record.source.dirty_entries
-        DirtyPaths = @(Get-RosetunLinuxMember -Object $record.source -Name 'dirty_paths' | Where-Object { $null -ne $_ })
-    }
-    Artifacts = [pscustomobject]@{
-        Confirmed = [bool]$record.artifacts.origin_confirmed; Note = $record.artifacts.origin_note
-        Hashes = [ordered]@{}
-    }
+elseif ($identity.State -ne 'Running') {
+    throw "VM '$($stand.VmName)' is $($identity.State). Start it yourself; the stand starts and restores nothing without -RestoreCheckpoint."
 }
-foreach ($property in $record.artifacts.hashes.PSObject.Properties) { $stageInfo.Artifacts.Hashes[$property.Name] = $property.Value }
-
-$scenarios = @(Get-RosetunLinuxScenarios)
-$deadline = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
-do {
-    $status = $null
-    $report = $null
-    try {
-        Wait-RosetunLinuxSsh -Target $target -TimeoutSeconds 60
-        $status = Read-GuestJson -Target $target -Path "$guestBase/$RunId/report/status.json"
-        $report = Read-GuestJson -Target $target -Path "$guestBase/$RunId/report/report.json"
-    }
-    catch {
-        Write-Warning "Could not reach the guest: $_"
-    }
-    $finished = ($null -ne $report) -and ($null -ne $status) -and ($status.state -eq 'finished')
-    if ($finished -or [DateTime]::UtcNow -ge $deadline) { break }
-    Start-Sleep -Seconds 10
-} while ($true)
-
-$judgement = Test-RosetunLinuxReport -Report $report -Status $status -Stage $stageInfo -Scenarios $scenarios
-$text = Format-RosetunLinuxReport -Judgement $judgement -Stage $stageInfo
-[IO.File]::WriteAllText((Join-Path $runLog 'report.txt'), $text, [Text.UTF8Encoding]::new($false))
-$hostReport = [ordered]@{
-    schema = 1; run_id = $RunId; collected = [DateTime]::UtcNow.ToString('o')
-    verdict = $judgement.Verdict; coverage = $judgement.Coverage; cleanup = $judgement.CleanupStatus
-    problems = $judgement.Problems; counts = $judgement.Counts
-    source = $record.source; artifacts = $record.artifacts; boot_id = $record.boot_id
-    guest = if ($null -ne $report) { $report.guest } else { $null }
-    scenarios = $judgement.Rows
-}
-[IO.File]::WriteAllText((Join-Path $runLog 'report.json'), ($hostReport | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
-
-Write-Host $text
-Write-Host "Reports: $runLog"
-if ($judgement.Verdict -eq 'PASS') { exit 0 }
-exit 1
+$staged = Invoke-StandStage -RunId $newRunId -RunLog $runLog -Build $build -Identity $identity -Restored $RestoreCheckpoint
+$null = Invoke-StandStart -RunId $newRunId -Staged $staged
+Write-Host 'Then, from this host:'
+Write-Host ''
+Write-Host "  .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Collect -RunId $newRunId -WaitSeconds 1200"
+exit 0

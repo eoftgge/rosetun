@@ -846,6 +846,39 @@ function Copy-RosetunLinuxLauncherToGuest {
     }
 }
 
+# ------------------------------------------------------------------ running
+
+function Test-RosetunLinuxElevated {
+    $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Format-RosetunLinuxElapsed {
+    param([Parameter(Mandatory)][TimeSpan]$Elapsed)
+    $minutes = [int][Math]::Floor($Elapsed.TotalMinutes)
+    '{0}:{1:00}' -f $minutes, $Elapsed.Seconds
+}
+
+# One line about the job for the wait loop, from status.json or its absence.
+function Format-RosetunLinuxJobProgress {
+    param($Status)
+    if ($null -eq $Status) { return 'waiting for the job to start' }
+    $state = [string](Get-RosetunLinuxMember -Object $Status -Name 'state')
+    $current = [string](Get-RosetunLinuxMember -Object $Status -Name 'current')
+    if ([string]::IsNullOrWhiteSpace($state)) { $state = 'unknown' }
+    # The guest wrote this text; keep it printable and short.
+    $current = $current -replace '[^\x20-\x7E]', '?'
+    if ($current.Length -gt 80) { $current = $current.Substring(0, 80) }
+    if ([string]::IsNullOrWhiteSpace($current)) { "job $state" } else { "job $state, $current" }
+}
+
+# How long -Run waits for the report: the job's own limit plus room for the
+# cleanup, or for the owner to paste the manual command.
+function Get-RosetunLinuxRunWaitSeconds {
+    param([Parameter(Mandatory)][int]$JobTimeoutSeconds, [switch]$Manual)
+    if ($Manual) { $JobTimeoutSeconds + 1800 } else { $JobTimeoutSeconds + 300 }
+}
+
 # ------------------------------------------------------------------ report verdict
 
 # Property of a parsed JSON value, or $null. A truncated or foreign report must
