@@ -414,7 +414,7 @@ checking, restore `l2-clean` again.
 
    ```sh
    cd ~/rosetun-manual
-   sudo apt-get install --no-install-recommends curl unzip
+   sudo apt-get install --no-install-recommends curl unzip nftables
    curl -fLO https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64.tar.gz
    curl -fLO https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-linux-64.zip
    sha256sum sing-box-1.14.3-linux-amd64.tar.gz Xray-linux-64.zip
@@ -439,6 +439,21 @@ checking, restore `l2-clean` again.
    systemctl status rosetun-helper
    ```
 
+   The kill switch needs `/usr/sbin/nft` (package `nftables`, installed above),
+   cgroup v2 and the unit's delegated cgroup. Check that the helper moved into
+   its leaf and that engines have theirs:
+
+   ```sh
+   systemctl show -p Delegate rosetun-helper
+   cat /proc/$(systemctl show -p MainPID --value rosetun-helper)/cgroup
+   ls -d /sys/fs/cgroup/system.slice/rosetun-helper.service/engines
+   journalctl -u rosetun-helper -b | grep -E 'cgroup|kill switch'
+   ```
+
+   Expected: `Delegate=yes`, `0::/system.slice/rosetun-helper.service/helper`,
+   the `engines` folder, and "engines start in their own cgroup" with no
+   "the kill switch is not available" line.
+
    `systemd-sysusers` creates group `rosetun` only where it is missing; in the
    stand it already exists (step 2 of the preparation).
 
@@ -450,7 +465,19 @@ checking, restore `l2-clean` again.
    sudo usermod -aG rosetun <account>
    ```
 
-6. **Removal**, if you do not simply restore `l2-clean`:
+6. **The table.** While a session with the kill switch or the DNS lock runs, and
+   after a crash of the helper, the rules are in one table:
+
+   ```sh
+   sudo nft list table inet rosetun
+   ```
+
+   A normal stop (`systemctl stop`, a disconnect) removes it; "Error: No such
+   file or directory" then means no table. After a crash the restarted helper
+   keeps it (`rosetun status` says `network: held closed`) until a connect or
+   `rosetun open-network`.
+
+7. **Removal**, if you do not simply restore `l2-clean`:
 
    ```sh
    sudo systemctl disable --now rosetun-helper
@@ -463,8 +490,9 @@ What the unit does: `Type=notify` (the helper reports ready once its socket is
 published), `/run/rosetun` and `/var/lib/rosetun` created by systemd
 (`RuntimeDirectory`, `StateDirectory`) and the runtime one removed on every stop
 or crash, so a killed helper's socket never blocks the restart, `KillMode=mixed`
-(the helper stops its engines itself) and `Restart=on-failure`. The comments in
-the unit file explain each line.
+(the helper stops its engines itself), `Restart=on-failure` and `Delegate=yes`
+(the helper's own cgroup leaves, for the kill switch). The comments in the unit
+file explain each line.
 
 ## Next stages (not implemented here)
 

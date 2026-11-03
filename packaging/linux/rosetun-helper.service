@@ -37,8 +37,20 @@ TimeoutStopSec=45
 Restart=on-failure
 RestartSec=2
 
-# Hardening, limited to what cannot touch the TUN device, routes, /proc or
-# nftables:
+# The kill switch permits the engines by cgroup. The helper gets this unit's
+# cgroup subtree, makes the leaves "helper" (itself) and "engines" (every
+# engine, moved there before it runs) and refuses to start engines and
+# offers no kill switch without them. It enables no controller: "yes" is
+# just how systemd spells handing over the subtree.
+Delegate=yes
+# The nftables table (inet rosetun) is removed by the helper on a normal
+# stop. On purpose there is no ExecStopPost that removes it: after a crash
+# the table keeps the network closed until the restarted helper is asked to
+# open it or a connect replaces it.
+
+# Hardening, limited to what cannot touch the TUN device, routes, /proc,
+# nftables or the cgroup tree (so no ProtectControlGroups or
+# ProtectKernelTunables, which make /sys/fs/cgroup read-only):
 # - the helper runs no set-user-ID program, and needs no privilege it lacks;
 NoNewPrivileges=yes
 # - neither the helper nor the engines use /tmp;
