@@ -144,6 +144,11 @@ pub struct Status {
     /// Lockdown's persistent block is installed (protocol 12).
     #[serde(default)]
     pub lockdown: bool,
+    /// The installer holds the network closed after an upgrade until a
+    /// connect, a disconnect or `OpenNetwork` lifts it (protocol 16). It is
+    /// Lockdown's block, but not reported as `lockdown`.
+    #[serde(default)]
+    pub upgrade_hold: bool,
 }
 
 impl Status {

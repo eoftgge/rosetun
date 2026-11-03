@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
 use std::time::Duration;
 
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 pub const MAX_PROBE_NODES: usize = 256;
 pub const MAX_TEMPORARY_RULES: usize = 256;
 pub const MAX_EXTRA_NODES: usize = 16;
@@ -61,6 +61,8 @@ pub enum Request {
         enabled: bool,
         allow_lan: bool,
     },
+    /// Lifts the hold an upgrade left, opening the network (protocol 16).
+    OpenNetwork,
     Subscribe,
     Shutdown,
 }
@@ -108,6 +110,7 @@ impl std::fmt::Debug for Request {
                 .field("enabled", enabled)
                 .field("allow_lan", allow_lan)
                 .finish(),
+            Self::OpenNetwork => f.write_str("OpenNetwork"),
             Self::Subscribe => f.write_str("Subscribe"),
             Self::Shutdown => f.write_str("Shutdown"),
         }
@@ -543,7 +546,11 @@ mod tests {
             serde_json::to_string(&super::ErrorCode::AccessDenied).unwrap(),
             "\"access_denied\""
         );
-        assert_eq!(super::PROTOCOL_VERSION, 15);
+        assert_eq!(super::PROTOCOL_VERSION, 16);
+        assert_eq!(
+            serde_json::to_string(&super::Request::OpenNetwork).unwrap(),
+            "\"open_network\""
+        );
         assert_eq!(
             serde_json::to_string(&super::ErrorCode::ProtectionUnavailable).unwrap(),
             "\"protection_unavailable\""

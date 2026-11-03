@@ -510,7 +510,9 @@ impl Helper {
 
     pub fn status(&self) -> Status {
         let mut status = self.with_status(|status| status.clone());
-        status.lockdown = lockdown::read(&self.lockdown).enabled;
+        let lockdown = lockdown::read(&self.lockdown);
+        status.lockdown = lockdown.enabled && !lockdown.upgrade_hold;
+        status.upgrade_hold = lockdown.enabled && lockdown.upgrade_hold;
         status
     }
 
@@ -1111,6 +1113,12 @@ impl Helper {
             Ok(()) => {
                 session.request = Some(request.clone());
                 self.resumed.store(false, Ordering::Release);
+                // The tunnel is up under the hold's block; the hold is
+                // lifted only now. A failure keeps the network closed and
+                // the session connected through its permits above the block.
+                if let Err(error) = session.release_upgrade_hold("connected") {
+                    tracing::error!(%error, "could not lift the upgrade hold after connecting");
+                }
                 session.start_monitor(request.settings.engine);
                 session.start_watchdog();
                 if caller.administrator
@@ -1214,6 +1222,10 @@ impl Helper {
         self.with_status(|status| *status = Status::default());
         if poisoned {
             self.session.clear_poison();
+        }
+        // The user chose to be disconnected, so nothing is left to hold for.
+        if let Err(error) = session.release_upgrade_hold("disconnected") {
+            tracing::error!(%error, "could not lift the upgrade hold after disconnecting");
         }
         Ok(())
     }

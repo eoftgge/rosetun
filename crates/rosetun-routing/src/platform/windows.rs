@@ -76,6 +76,10 @@ impl RoutingBackend for WfpBackend {
         lockdown::disable()
     }
 
+    fn end_upgrade_hold(&self) -> Result<(), RoutingError> {
+        lockdown::end_hold()
+    }
+
     fn permit_in_lockdown(
         &mut self,
         binaries: &[&std::path::Path],

@@ -1,5 +1,6 @@
 pub mod errors;
 pub mod platform;
+pub mod upgrade_hold;
 
 pub use errors::RoutingError;
 pub use platform::backend;
@@ -73,6 +74,9 @@ pub struct LockdownStatus {
     /// The weight BFE stored for the sublayer, which may differ from the one
     /// requested.
     pub sublayer_weight: Option<u16>,
+    /// The objects are an upgrade's hold, not a Lockdown the user turned on
+    /// (see `upgrade_hold`). Only with `enabled`.
+    pub upgrade_hold: bool,
 }
 
 /// Programs Lockdown permits by application ID so a subscription can be
@@ -122,6 +126,12 @@ pub trait RoutingBackend: std::fmt::Debug + Send {
     }
 
     fn disable_lockdown(&self) -> Result<bool, RoutingError> {
+        Err(RoutingError::Unsupported)
+    }
+
+    /// Keeps Lockdown and drops the upgrade hold's marker, so Lockdown is the
+    /// user's from now on. Disabling Lockdown removes the marker anyway.
+    fn end_upgrade_hold(&self) -> Result<(), RoutingError> {
         Err(RoutingError::Unsupported)
     }
 

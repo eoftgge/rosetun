@@ -19,6 +19,8 @@ mod server;
 #[cfg(windows)]
 mod service;
 mod state;
+#[cfg(windows)]
+mod upgrade_hold;
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -34,7 +36,7 @@ use tracing_subscriber::prelude::*;
 use crate::log_gate::VerboseGate;
 use crate::server::{Helper, Server};
 
-const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --reset-firewall | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path>]";
+const USAGE: &str = "usage: rosetun-helper-privileged [--service | --install-service | --uninstall-service | --reset-firewall | --verify-install-dir <path> | --secure-install-dir <path> | --finalize-install-dir <path> | --hold-for-upgrade <path>]";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
@@ -47,6 +49,9 @@ enum Mode {
     VerifyInstallDir(std::path::PathBuf),
     SecureInstallDir(std::path::PathBuf),
     FinalizeInstallDir(std::path::PathBuf),
+    /// Holds the network closed for an upgrade (administrator): exit codes
+    /// in `upgrade_hold::hold_exit`.
+    HoldForUpgrade(std::path::PathBuf),
 }
 
 fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> {
@@ -60,6 +65,7 @@ fn parse_mode(args: impl IntoIterator<Item = OsString>) -> Result<Mode, String> 
         [arg, path] if arg == "--verify-install-dir" => Ok(Mode::VerifyInstallDir(path.into())),
         [arg, path] if arg == "--secure-install-dir" => Ok(Mode::SecureInstallDir(path.into())),
         [arg, path] if arg == "--finalize-install-dir" => Ok(Mode::FinalizeInstallDir(path.into())),
+        [arg, path] if arg == "--hold-for-upgrade" => Ok(Mode::HoldForUpgrade(path.into())),
         _ => Err(USAGE.to_owned()),
     }
 }
@@ -120,6 +126,14 @@ fn main() -> std::process::ExitCode {
                 .with_writer(std::io::stderr)
                 .init();
             service::reset_firewall()
+        }
+        #[cfg(windows)]
+        Mode::HoldForUpgrade(path) => {
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::new("warn"))
+                .with_writer(std::io::stderr)
+                .init();
+            upgrade_hold::hold_for_upgrade(&path)
         }
         #[cfg(windows)]
         Mode::VerifyInstallDir(path) => {
@@ -523,6 +537,11 @@ mod tests {
             mode(&["--finalize-install-dir", r"D:\Example\Rosetun"]),
             Ok(Mode::FinalizeInstallDir(r"D:\Example\Rosetun".into()))
         );
+        assert_eq!(
+            mode(&["--hold-for-upgrade", r"D:\Example\Rosetun"]),
+            Ok(Mode::HoldForUpgrade(r"D:\Example\Rosetun".into()))
+        );
+        assert_eq!(mode(&["--hold-for-upgrade"]), Err(USAGE.to_owned()));
         assert_eq!(mode(&["--verify-install-dir"]), Err(USAGE.to_owned()));
         assert_eq!(mode(&["--unknown"]), Err(USAGE.to_owned()));
         assert_eq!(

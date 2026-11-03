@@ -1,6 +1,12 @@
 //! Lockdown in the service. The persistent WFP objects are the only record of
 //! whether it is on; the service reads them at start and is the only writer
 //! while it runs, so it keeps a copy instead of asking BFE on every request.
+//!
+//! The installer's upgrade hold is the same objects with a marker
+//! (`rosetun_routing::upgrade_hold`). The service treats it as Lockdown, so a
+//! connect goes above its block, and lifts it like turning Lockdown off: once
+//! a session is connected, on a disconnect, or on `OpenNetwork`. It has no
+//! timer: until then the network stays closed.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, TryLockError};
@@ -17,6 +23,8 @@ use super::{Acquired, Caller, Guard, Helper, SESSION_WAIT, Session, SessionHolde
 pub(super) struct LockdownState {
     pub(super) enabled: bool,
     pub(super) allow_lan: bool,
+    /// The objects are an upgrade's hold, not the user's Lockdown.
+    pub(super) upgrade_hold: bool,
 }
 
 pub(super) type SharedLockdown = Arc<Mutex<LockdownState>>;
@@ -125,10 +133,39 @@ impl Helper {
             Err(TryLockError::Poisoned(error)) => error.into_inner(),
         };
         if enabled {
-            session.enable_lockdown(allow_lan)
+            session.enable_lockdown(allow_lan)?;
+            session.adopt_upgrade_hold()
         } else {
             session.disable_lockdown()
         }
+    }
+
+    /// Lifts the upgrade hold for the session's owner or an administrator;
+    /// with no session, for any local account, as a disconnect would.
+    pub(crate) fn open_network_as(&self, caller: &Caller) -> Result<(), HelperError> {
+        self.check_owner(caller)?;
+        let mut session = self.session_for(SessionHolder::Lockdown)?;
+        self.check_owner(caller)?;
+        if !read(&session.lockdown).upgrade_hold {
+            return Ok(());
+        }
+        if self.with_status(|status| status.state.is_transitional()) {
+            return Err(HelperError::new(
+                ErrorCode::Busy,
+                "another tunnel operation is in progress",
+            ));
+        }
+        let _probe = match self.probe.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => {
+                return Err(HelperError::new(
+                    ErrorCode::Busy,
+                    "a server check is in progress",
+                ));
+            }
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        };
+        session.release_upgrade_hold("opened by the user")
     }
 
     /// At service start: Lockdown is on if its provider exists. Repairs a
@@ -155,8 +192,12 @@ impl Helper {
             LockdownState {
                 enabled: true,
                 allow_lan: status.allow_lan,
+                upgrade_hold: status.upgrade_hold,
             },
         );
+        if status.upgrade_hold {
+            tracing::info!("the upgrade hold keeps the network closed until a connect");
+        }
         // No session yet: the GUI and the CLI get their permits back too.
         match session
             .routing
@@ -234,6 +275,7 @@ impl Session {
             LockdownState {
                 enabled: true,
                 allow_lan,
+                ..read(&self.lockdown)
             },
         );
         tracing::info!(
@@ -331,6 +373,38 @@ impl Session {
         self.programs_withdrawn = false;
         tracing::info!(removed, "Lockdown turned off");
         self.release_forced_kill_switch();
+        Ok(())
+    }
+
+    /// Lockdown turned on by an administrator during the hold stays when the
+    /// hold would end: only the marker goes.
+    fn adopt_upgrade_hold(&mut self) -> Result<(), HelperError> {
+        let state = read(&self.lockdown);
+        if !state.upgrade_hold {
+            return Ok(());
+        }
+        self.routing.end_upgrade_hold().map_err(routing_failed)?;
+        write(
+            &self.lockdown,
+            LockdownState {
+                upgrade_hold: false,
+                ..state
+            },
+        );
+        tracing::info!("the upgrade hold is now the user's Lockdown");
+        Ok(())
+    }
+
+    /// Lifts the upgrade hold as turning Lockdown off does: a session's
+    /// filters move back to the Rosetun sublayer before the block goes, so
+    /// a connected tunnel is never open, and a kill switch Lockdown forced
+    /// on a session that does not want one is released.
+    pub(super) fn release_upgrade_hold(&mut self, reason: &'static str) -> Result<(), HelperError> {
+        if !read(&self.lockdown).upgrade_hold {
+            return Ok(());
+        }
+        self.disable_lockdown()?;
+        tracing::info!(reason, "upgrade hold lifted");
         Ok(())
     }
 
@@ -476,6 +550,7 @@ pub(super) fn sync_lan(
         LockdownState {
             enabled: true,
             allow_lan,
+            ..state
         },
     );
     tracing::info!(allow_lan, "Lockdown LAN access follows the connect request");
@@ -504,6 +579,7 @@ mod tests {
 
     use rosetun_engine::EngineRegistry;
     use rosetun_ipc::ErrorCode;
+    use rosetun_ipc::transport::AccountIdentity;
     use rosetun_routing::{
         LockdownApps, LockdownStatus, ProtectionCapabilities, ProtectionScope, RoutingBackend,
         RoutingError, RoutingGuard, RoutingPlan,
@@ -546,8 +622,28 @@ mod tests {
         enabled: Mutex<Vec<bool>>,
         apps: Mutex<Vec<LockdownApps>>,
         disabled: AtomicUsize,
+        hold_ended: AtomicUsize,
         installed: Mutex<Option<LockdownStatus>>,
         fail_disable: std::sync::atomic::AtomicBool,
+    }
+
+    impl Calls {
+        /// What the installer leaves: Lockdown's set with the hold's marker.
+        fn held() -> Arc<Self> {
+            let calls = Arc::new(Self::default());
+            *calls.installed.lock().unwrap() = Some(LockdownStatus {
+                enabled: true,
+                complete: true,
+                allow_lan: false,
+                sublayer_weight: Some(0xD000),
+                upgrade_hold: true,
+            });
+            calls
+        }
+
+        fn disabled(&self) -> usize {
+            self.disabled.load(Ordering::Acquire)
+        }
     }
 
     #[derive(Debug)]
@@ -588,11 +684,18 @@ mod tests {
         ) -> Result<LockdownStatus, RoutingError> {
             self.0.enabled.lock().unwrap().push(allow_lan);
             self.0.apps.lock().unwrap().push(apps.clone());
+            let held = self
+                .0
+                .installed
+                .lock()
+                .unwrap()
+                .is_some_and(|status| status.upgrade_hold);
             let status = LockdownStatus {
                 enabled: true,
                 complete: true,
                 allow_lan,
                 sublayer_weight: Some(0xD000),
+                upgrade_hold: held,
             };
             *self.0.installed.lock().unwrap() = Some(status);
             Ok(status)
@@ -608,6 +711,20 @@ mod tests {
             }
             Ok(self.0.installed.lock().unwrap().take().is_some())
         }
+
+        fn end_upgrade_hold(&self) -> Result<(), RoutingError> {
+            self.0.hold_ended.fetch_add(1, Ordering::AcqRel);
+            if let Some(status) = self.0.installed.lock().unwrap().as_mut() {
+                status.upgrade_hold = false;
+            }
+            Ok(())
+        }
+    }
+
+    fn held_helper(calls: &Arc<Calls>) -> Helper {
+        let helper = lockdown_helper(calls);
+        helper.restore_lockdown();
+        helper
     }
 
     fn lockdown_helper(calls: &Arc<Calls>) -> Helper {
@@ -643,6 +760,7 @@ mod tests {
             complete: false,
             allow_lan: true,
             sublayer_weight: None,
+            upgrade_hold: false,
         });
         let helper = lockdown_helper(&calls);
         helper.restore_lockdown();
@@ -781,6 +899,7 @@ mod tests {
             super::LockdownState {
                 enabled: true,
                 allow_lan: false,
+                upgrade_hold: false,
             },
         );
         let apps = super::test_apps();
@@ -806,5 +925,128 @@ mod tests {
         .unwrap();
         assert_eq!(*calls.enabled.lock().unwrap(), [true]);
         assert!(super::read(&shared).allow_lan);
+    }
+
+    #[test]
+    fn service_start_keeps_the_upgrade_hold_apart_from_lockdown() {
+        let calls = Calls::held();
+        let helper = held_helper(&calls);
+
+        let status = helper.status();
+        assert!(status.upgrade_hold);
+        assert!(!status.lockdown);
+        assert_eq!(calls.apps.lock().unwrap().clone(), [super::test_apps()]);
+        assert_eq!(calls.disabled(), 0);
+        assert_eq!(calls.hold_ended.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn open_network_lifts_the_hold_for_any_account_while_nothing_runs() {
+        let calls = Calls::held();
+        let helper = held_helper(&calls);
+
+        helper
+            .open_network_as(&Caller::fake(b"user", false))
+            .unwrap();
+
+        assert_eq!(calls.disabled(), 1);
+        let status = helper.status();
+        assert!(!status.upgrade_hold);
+        assert!(!status.lockdown);
+        helper
+            .open_network_as(&Caller::fake(b"user", false))
+            .unwrap();
+        assert_eq!(calls.disabled(), 1, "nothing left to lift");
+    }
+
+    #[test]
+    fn open_network_belongs_to_the_session_owner_or_an_administrator() {
+        let calls = Calls::held();
+        let helper = held_helper(&calls);
+        *helper.owner.lock().unwrap() = Some(AccountIdentity::WindowsSid(b"owner".to_vec()));
+
+        let error = helper
+            .open_network_as(&Caller::fake(b"other", false))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::AccessDenied);
+        assert_eq!(calls.disabled(), 0);
+        assert!(helper.status().upgrade_hold);
+
+        helper
+            .open_network_as(&Caller::fake(b"owner", false))
+            .unwrap();
+        assert_eq!(calls.disabled(), 1);
+
+        let calls = Calls::held();
+        let helper = held_helper(&calls);
+        *helper.owner.lock().unwrap() = Some(AccountIdentity::WindowsSid(b"owner".to_vec()));
+        helper
+            .open_network_as(&Caller::fake(b"admin", true))
+            .unwrap();
+        assert_eq!(calls.disabled(), 1);
+    }
+
+    #[test]
+    fn the_hold_actions_leave_the_users_lockdown_alone() {
+        let calls = Arc::new(Calls::default());
+        let helper = lockdown_helper(&calls);
+        let admin = Caller::fake(b"admin", true);
+        helper.set_lockdown_as(&admin, true, false).unwrap();
+
+        helper.open_network_as(&admin).unwrap();
+        helper.disconnect_as(&admin).unwrap();
+
+        assert_eq!(calls.disabled(), 0);
+        assert_eq!(calls.hold_ended.load(Ordering::Acquire), 0);
+        let status = helper.status();
+        assert!(status.lockdown);
+        assert!(!status.upgrade_hold);
+    }
+
+    #[test]
+    fn lockdown_turned_on_during_the_hold_stays_when_the_hold_would_end() {
+        let calls = Calls::held();
+        let helper = held_helper(&calls);
+        let admin = Caller::fake(b"admin", true);
+
+        helper.set_lockdown_as(&admin, true, true).unwrap();
+        assert_eq!(calls.hold_ended.load(Ordering::Acquire), 1);
+        let status = helper.status();
+        assert!(status.lockdown);
+        assert!(!status.upgrade_hold);
+
+        helper.disconnect_as(&admin).unwrap();
+        helper.open_network_as(&admin).unwrap();
+        assert_eq!(calls.disabled(), 0);
+        assert!(helper.status().lockdown);
+    }
+
+    #[test]
+    fn turning_lockdown_off_during_the_hold_ends_both() {
+        let calls = Calls::held();
+        let helper = held_helper(&calls);
+
+        helper
+            .set_lockdown_as(&Caller::fake(b"admin", true), false, false)
+            .unwrap();
+
+        assert_eq!(calls.disabled(), 1);
+        let status = helper.status();
+        assert!(!status.lockdown);
+        assert!(!status.upgrade_hold);
+    }
+
+    #[test]
+    fn a_hold_removed_by_reset_firewall_is_gone_at_the_next_start() {
+        let calls = Calls::held();
+        // `--reset-firewall` removes Lockdown's objects, the marker with them,
+        // while the service is stopped; it starts again afterwards.
+        calls.installed.lock().unwrap().take();
+        let helper = held_helper(&calls);
+
+        let status = helper.status();
+        assert!(!status.upgrade_hold);
+        assert!(!status.lockdown);
+        assert!(calls.enabled.lock().unwrap().is_empty());
     }
 }

@@ -453,6 +453,10 @@ fn dispatch(
                 Err(error) => Response::Error(error),
             }
         }
+        Request::OpenNetwork => match helper.open_network_as(caller.expect("caller checked")) {
+            Ok(()) => Response::Ok,
+            Err(error) => Response::Error(error),
+        },
         Request::Apply(request) => {
             match helper.apply_as(caller.expect("caller checked"), request) {
                 Ok(()) => Response::Ok,
@@ -611,6 +615,7 @@ mod tests {
             Request::CloseConnection { id: "a".to_owned() },
             Request::TunnelDelay,
             Request::Disconnect,
+            Request::OpenNetwork,
             Request::SetLockdown {
                 enabled: true,
                 allow_lan: false,

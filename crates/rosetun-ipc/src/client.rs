@@ -174,6 +174,11 @@ impl HelperClient {
         self.expect_ok(Request::SetLockdown { enabled, allow_lan })
     }
 
+    /// Lifts the hold an upgrade left; `Ok` when there was none.
+    pub fn open_network(&mut self) -> Result<(), ClientError> {
+        self.expect_ok(Request::OpenNetwork)
+    }
+
     pub fn shutdown(&mut self) -> Result<(), ClientError> {
         self.expect_ok(Request::Shutdown)
     }

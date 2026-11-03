@@ -6908,6 +6908,7 @@ impl RoutingBackend for LockdownSessionRouting {
             complete: true,
             allow_lan: false,
             sublayer_weight: Some(0xD000),
+            upgrade_hold: false,
         })
     }
 
@@ -6977,6 +6978,143 @@ fn lockdown_program_permits_leave_with_a_session_and_return_after_it() {
         assert!(with_programs(&after[1 + synced]));
         assert!(!helper.session().unwrap().programs_withdrawn);
     }
+}
+
+/// An upgrade hold is installed; records every routing step in order.
+#[derive(Debug)]
+struct HoldRouting {
+    events: Arc<Mutex<Vec<String>>>,
+    held: Arc<AtomicBool>,
+}
+
+impl HoldRouting {
+    fn status(&self) -> rosetun_routing::LockdownStatus {
+        let held = self.held.load(Ordering::Acquire);
+        rosetun_routing::LockdownStatus {
+            enabled: held,
+            complete: held,
+            allow_lan: false,
+            sublayer_weight: held.then_some(0xD000),
+            upgrade_hold: held,
+        }
+    }
+}
+
+impl RoutingBackend for HoldRouting {
+    fn name(&self) -> &'static str {
+        "test-upgrade-hold"
+    }
+
+    fn capabilities(&self) -> ProtectionCapabilities {
+        FULL_PROTECTION
+    }
+
+    fn preflight(&self) -> Result<(), RoutingError> {
+        Ok(())
+    }
+
+    fn begin_protection(
+        &mut self,
+        plan: &RoutingPlan,
+        _engine_binaries: &[&Path],
+    ) -> Result<RoutingGuard, RoutingError> {
+        self.events.lock().unwrap().push(format!(
+            "session begins, Lockdown sublayer {}",
+            plan.lockdown
+        ));
+        let events = Arc::clone(&self.events);
+        Ok(RoutingGuard::new_with_lockdown(move |lockdown| {
+            events
+                .lock()
+                .unwrap()
+                .push(format!("session moves, Lockdown sublayer {lockdown}"));
+            Ok(())
+        }))
+    }
+
+    fn lockdown_status(&self) -> Result<rosetun_routing::LockdownStatus, RoutingError> {
+        Ok(self.status())
+    }
+
+    fn enable_lockdown(
+        &self,
+        allow_lan: bool,
+        _apps: &LockdownApps,
+    ) -> Result<rosetun_routing::LockdownStatus, RoutingError> {
+        self.events.lock().unwrap().push("block written".to_owned());
+        Ok(rosetun_routing::LockdownStatus {
+            allow_lan,
+            ..self.status()
+        })
+    }
+
+    fn disable_lockdown(&self) -> Result<bool, RoutingError> {
+        self.events.lock().unwrap().push("block removed".to_owned());
+        Ok(self.held.swap(false, Ordering::AcqRel))
+    }
+}
+
+fn held_dns_helper(server: SocketAddr) -> (Helper, Arc<Mutex<Vec<String>>>) {
+    let mut engines = EngineRegistry::new();
+    engines.register(Box::new(DnsEngine {
+        server: Some(server),
+        stopped: Arc::new(AtomicUsize::new(0)),
+    }));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let helper = Helper::new(
+        engines,
+        Box::new(HoldRouting {
+            events: Arc::clone(&events),
+            held: Arc::new(AtomicBool::new(true)),
+        }),
+        VerboseGate::default(),
+    );
+    shorten_dns_timeouts(&helper);
+    helper.restore_lockdown();
+    assert!(helper.status().upgrade_hold);
+    events.lock().unwrap().clear();
+    (helper, events)
+}
+
+#[test]
+fn a_connect_lifts_the_upgrade_hold_only_once_its_session_is_above_the_block() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, events) = held_dns_helper(server.address());
+    let caller = Caller::fake(b"owner", false);
+
+    helper
+        .connect_as(&caller, &connect_request())
+        .expect("DNS responds");
+
+    assert_eq!(
+        *events.lock().unwrap(),
+        [
+            "session begins, Lockdown sublayer true",
+            "session moves, Lockdown sublayer false",
+            "block removed",
+        ]
+    );
+    let status = helper.status();
+    assert_eq!(status.state, ConnectionState::Connected);
+    assert!(!status.upgrade_hold);
+    assert!(!status.lockdown);
+    helper.disconnect_as(&caller).unwrap();
+    assert_eq!(events.lock().unwrap().len(), 3);
+}
+
+#[test]
+fn a_disconnect_lifts_the_upgrade_hold() {
+    use super::dns::test_support::{Behavior, Server};
+
+    let server = Server::new(Behavior::Noerror);
+    let (helper, events) = held_dns_helper(server.address());
+
+    helper.disconnect_as(&Caller::fake(b"user", false)).unwrap();
+
+    assert_eq!(*events.lock().unwrap(), ["block removed"]);
+    assert!(!helper.status().upgrade_hold);
 }
 
 #[cfg(target_os = "linux")]
@@ -7083,6 +7221,7 @@ fn lockdown_without_the_capability_refuses_a_connect_even_without_the_kill_switc
     *helper.lockdown.lock().unwrap() = lockdown::LockdownState {
         enabled: true,
         allow_lan: false,
+        upgrade_hold: false,
     };
     let mut request = connect_request();
     request.settings.kill_switch = false;

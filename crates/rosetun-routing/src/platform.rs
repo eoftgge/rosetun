@@ -80,6 +80,44 @@ pub(super) fn lockdown_disable() -> Result<bool, crate::RoutingError> {
     }
 }
 
+pub(super) fn session_filters()
+-> Result<Vec<crate::upgrade_hold::SessionFilter>, crate::RoutingError> {
+    #[cfg(windows)]
+    {
+        windows::lockdown::session_filters()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(crate::RoutingError::Unsupported)
+    }
+}
+
+pub(super) fn hold_place(
+    allow_lan: bool,
+    apps: &crate::LockdownApps,
+) -> Result<crate::LockdownStatus, crate::RoutingError> {
+    #[cfg(windows)]
+    {
+        windows::lockdown::hold(allow_lan, apps)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (allow_lan, apps);
+        Err(crate::RoutingError::Unsupported)
+    }
+}
+
+pub(super) fn hold_end() -> Result<(), crate::RoutingError> {
+    #[cfg(windows)]
+    {
+        windows::lockdown::end_hold()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(crate::RoutingError::Unsupported)
+    }
+}
+
 #[cfg(not(windows))]
 const PLATFORM_NAME: &str = "unsupported";
 

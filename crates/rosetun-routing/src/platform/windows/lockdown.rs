@@ -11,13 +11,16 @@ use std::ptr;
 
 use windows_sys::Win32::Foundation::{
     FWP_E_FILTER_NOT_FOUND, FWP_E_IN_USE, FWP_E_PROVIDER_NOT_FOUND, FWP_E_SUBLAYER_NOT_FOUND,
+    HANDLE,
 };
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
+    FWP_ACTION_BLOCK, FWP_FILTER_ENUM_OVERLAPPING, FWP_UINT8, FWPM_FILTER_ENUM_TEMPLATE0,
     FWPM_FILTER_FLAG_BOOTTIME, FWPM_FILTER_FLAG_PERSISTENT, FWPM_FILTER0,
-    FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_PROVIDER0, FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0,
-    FwpmFilterDeleteByKey0, FwpmFilterGetByKey0, FwpmFreeMemory0, FwpmProviderAdd0,
-    FwpmProviderDeleteByKey0, FwpmProviderGetByKey0, FwpmSubLayerAdd0, FwpmSubLayerDeleteByKey0,
-    FwpmSubLayerGetByKey0,
+    FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6, FWPM_PROVIDER_FLAG_PERSISTENT,
+    FWPM_PROVIDER0, FWPM_SUBLAYER_FLAG_PERSISTENT, FWPM_SUBLAYER0, FwpmFilterCreateEnumHandle0,
+    FwpmFilterDeleteByKey0, FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0, FwpmFilterGetByKey0,
+    FwpmFreeMemory0, FwpmProviderAdd0, FwpmProviderDeleteByKey0, FwpmProviderGetByKey0,
+    FwpmSubLayerAdd0, FwpmSubLayerDeleteByKey0, FwpmSubLayerGetByKey0,
 };
 use windows_sys::Win32::System::Registry::{
     HKEY_LOCAL_MACHINE, KEY_READ, RegCloseKey, RegFlushKey, RegOpenKeyExW,
@@ -29,7 +32,10 @@ use super::policy::{
     AddressFamily, BOOTSTRAP_ALLOW_WEIGHT, Condition, DNS_PROTOCOLS, LAN_SUBNETS, Rule, lan_permit,
     private_dns_blocks, probe_authorization,
 };
-use super::session::{Engine, display_data, empty_blob, wfp_error, wide};
+use super::session::{
+    Engine, SUBLAYER_KEY as SESSION_SUBLAYER_KEY, display_data, empty_blob, wfp_error, wide,
+};
+use crate::upgrade_hold::SessionFilter;
 use crate::{
     LockdownApps, LockdownStatus, ProtectionSession, RoutingError, RoutingGuard, RoutingPlan,
     TunnelInterface,
@@ -40,6 +46,10 @@ use crate::{
 // and leaves a machine offline that `reset-firewall` can no longer open.
 pub(super) const PROVIDER_KEY: GUID = GUID::from_u128(0xf12dbedd_f3c7_4a72_b0f8_20559c88b112);
 pub(super) const SUBLAYER_KEY: GUID = GUID::from_u128(0xf829a64d_c373_4d92_9d66_e1c680f3794f);
+/// Marks Lockdown's objects as an upgrade's hold (see `upgrade_hold`): a
+/// persistent provider without objects of its own, written and removed in
+/// the same transactions as the set.
+pub(super) const HOLD_PROVIDER_KEY: GUID = GUID::from_u128(0x496d09fa_1d9a_451b_871f_35ba72197795);
 /// Dynamic provider of a server check's permits while no session runs. It
 /// differs from the session's provider so a connect can start meanwhile.
 const PROBE_PROVIDER_KEY: GUID = GUID::from_u128(0x8c9a1588_cf36_44b8_80d8_987a6b81b4d2);
@@ -534,7 +544,8 @@ pub(in crate::platform) fn status() -> Result<LockdownStatus, RoutingError> {
 }
 
 fn read_status(engine: &Engine) -> Result<LockdownStatus, RoutingError> {
-    let enabled = provider_exists(engine)?;
+    let enabled = provider_exists(engine, &PROVIDER_KEY)?;
+    let upgrade_hold = enabled && provider_exists(engine, &HOLD_PROVIDER_KEY)?;
     let sublayer_weight = sublayer_weight(engine)?;
     let mut base_complete = true;
     let (mut lan_present, mut lan_total) = (0, 0);
@@ -556,12 +567,47 @@ fn read_status(engine: &Engine) -> Result<LockdownStatus, RoutingError> {
             && (lan_present == 0 || lan_present == lan_total),
         allow_lan: lan_present > 0,
         sublayer_weight,
+        upgrade_hold,
     })
 }
 
 pub(in crate::platform) fn enable(
     allow_lan: bool,
     apps: &LockdownApps,
+) -> Result<LockdownStatus, RoutingError> {
+    write_set(allow_lan, apps, false)
+}
+
+/// The same set as `enable`, marked as an upgrade's hold.
+pub(in crate::platform) fn hold(
+    allow_lan: bool,
+    apps: &LockdownApps,
+) -> Result<LockdownStatus, RoutingError> {
+    write_set(allow_lan, apps, true)
+}
+
+/// Removes the hold's marker only; Lockdown's objects stay.
+pub(in crate::platform) fn end_hold() -> Result<(), RoutingError> {
+    let engine = Engine::standard()?;
+    let transaction = engine.transaction()?;
+    // SAFETY: the engine is open and the key is a constant.
+    let status = unsafe { FwpmProviderDeleteByKey0(engine.handle(), &HOLD_PROVIDER_KEY) };
+    found(
+        status,
+        FWP_E_PROVIDER_NOT_FOUND,
+        "removing the upgrade hold's marker",
+    )?;
+    transaction.commit()?;
+    flush();
+    Ok(())
+}
+
+/// Writes the set; `hold` adds the hold's marker, otherwise an existing
+/// marker is left as it is.
+fn write_set(
+    allow_lan: bool,
+    apps: &LockdownApps,
+    hold: bool,
 ) -> Result<LockdownStatus, RoutingError> {
     let wanted = filter_set(allow_lan, apps);
     let wanted_keys = wanted
@@ -571,8 +617,11 @@ pub(in crate::platform) fn enable(
     let engine = Engine::standard()?;
     let transaction = engine.transaction()?;
 
-    if !provider_exists(&engine)? {
+    if !provider_exists(&engine, &PROVIDER_KEY)? {
         add_provider(&engine)?;
+    }
+    if hold && !provider_exists(&engine, &HOLD_PROVIDER_KEY)? {
+        add_hold_marker(&engine)?;
     }
     if sublayer_weight(&engine)?.is_none() {
         add_sublayer(&engine)?;
@@ -636,6 +685,14 @@ pub(in crate::platform) fn disable() -> Result<bool, RoutingError> {
         status,
         FWP_E_PROVIDER_NOT_FOUND,
         "removing the Lockdown provider",
+    )?;
+    // Whatever turns Lockdown off ends the hold with it.
+    // SAFETY: the engine is open and the key is a constant.
+    let status = unsafe { FwpmProviderDeleteByKey0(engine.handle(), &HOLD_PROVIDER_KEY) };
+    removed |= found(
+        status,
+        FWP_E_PROVIDER_NOT_FOUND,
+        "removing the upgrade hold's marker",
     )?;
 
     transaction.commit()?;
@@ -796,10 +853,29 @@ fn add_sublayer(engine: &Engine) -> Result<(), RoutingError> {
     Ok(())
 }
 
-fn provider_exists(engine: &Engine) -> Result<bool, RoutingError> {
+fn add_hold_marker(engine: &Engine) -> Result<(), RoutingError> {
+    let name = wide("Rosetun upgrade hold");
+    let description =
+        wide("Lockdown holds the network closed until Rosetun connects after an upgrade");
+    let provider = FWPM_PROVIDER0 {
+        providerKey: HOLD_PROVIDER_KEY,
+        displayData: display_data(&name, &description),
+        flags: FWPM_PROVIDER_FLAG_PERSISTENT,
+        providerData: empty_blob(),
+        serviceName: ptr::null_mut(),
+    };
+    // SAFETY: the engine is open and the provider's strings outlive the call.
+    let status = unsafe { FwpmProviderAdd0(engine.handle(), &provider, ptr::null_mut()) };
+    if status != 0 {
+        return Err(wfp_error(status, "adding the upgrade hold's marker"));
+    }
+    Ok(())
+}
+
+fn provider_exists(engine: &Engine, key: &GUID) -> Result<bool, RoutingError> {
     let mut provider: *mut FWPM_PROVIDER0 = ptr::null_mut();
     // SAFETY: on success BFE allocates the result, freed at once.
-    let status = unsafe { FwpmProviderGetByKey0(engine.handle(), &PROVIDER_KEY, &mut provider) };
+    let status = unsafe { FwpmProviderGetByKey0(engine.handle(), key, &mut provider) };
     let present = found(
         status,
         FWP_E_PROVIDER_NOT_FOUND,
@@ -870,6 +946,89 @@ fn delete_filter(engine: &Engine, key: u128) -> Result<bool, RoutingError> {
     let key = GUID::from_u128(key);
     let status = unsafe { FwpmFilterDeleteByKey0(engine.handle(), &key) };
     found(status, FWP_E_FILTER_NOT_FOUND, "removing a Lockdown filter")
+}
+
+/// The filters of the Rosetun sublayer at both outbound connect layers: the
+/// running session's, whichever version of the service added them.
+pub(in crate::platform) fn session_filters() -> Result<Vec<SessionFilter>, RoutingError> {
+    let engine = Engine::standard()?;
+    let mut found = Vec::new();
+    for layer in [
+        FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+        FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+    ] {
+        found.extend(layer_filters(&engine, layer)?);
+    }
+    Ok(found)
+}
+
+fn layer_filters(engine: &Engine, layer: GUID) -> Result<Vec<SessionFilter>, RoutingError> {
+    // Without conditions every filter of the layer overlaps the template.
+    let template = FWPM_FILTER_ENUM_TEMPLATE0 {
+        layerKey: layer,
+        enumType: FWP_FILTER_ENUM_OVERLAPPING,
+        actionMask: u32::MAX,
+        ..Default::default()
+    };
+    let mut handle: HANDLE = ptr::null_mut();
+    // SAFETY: the engine and the template are live for the call; the enum
+    // handle is destroyed below on every path.
+    let status = unsafe { FwpmFilterCreateEnumHandle0(engine.handle(), &template, &mut handle) };
+    if status != 0 {
+        return Err(wfp_error(status, "listing the Rosetun session's filters"));
+    }
+    let result = read_filters(engine, handle);
+    // SAFETY: the handle came from FwpmFilterCreateEnumHandle0 on this engine.
+    unsafe { FwpmFilterDestroyEnumHandle0(engine.handle(), handle) };
+    result
+}
+
+fn read_filters(engine: &Engine, handle: HANDLE) -> Result<Vec<SessionFilter>, RoutingError> {
+    const PAGE: u32 = 256;
+    let mut found = Vec::new();
+    loop {
+        let mut entries: *mut *mut FWPM_FILTER0 = ptr::null_mut();
+        let mut returned = 0_u32;
+        // SAFETY: the engine and the enum handle are live; on success BFE
+        // allocates an array of `returned` filter pointers, freed below.
+        let status =
+            unsafe { FwpmFilterEnum0(engine.handle(), handle, PAGE, &mut entries, &mut returned) };
+        if status != 0 {
+            return Err(wfp_error(status, "listing the Rosetun session's filters"));
+        }
+        if !entries.is_null() {
+            // SAFETY: BFE returned `returned` valid filter pointers, all read
+            // here before the array is freed.
+            let filters = unsafe { std::slice::from_raw_parts(entries, returned as usize) };
+            for &filter in filters {
+                // SAFETY: each entry points to a filter inside the same block.
+                let filter = unsafe { &*filter };
+                if !same_guid(&filter.subLayerKey, &SESSION_SUBLAYER_KEY) {
+                    continue;
+                }
+                let weight = if filter.weight.r#type == FWP_UINT8 {
+                    // SAFETY: the union holds `uint8` when the type says so.
+                    Some(unsafe { filter.weight.Anonymous.uint8 })
+                } else {
+                    None
+                };
+                found.push(SessionFilter {
+                    block: filter.action.r#type == FWP_ACTION_BLOCK,
+                    conditions: filter.numFilterConditions,
+                    weight,
+                });
+            }
+            free(entries);
+        }
+        if returned < PAGE {
+            return Ok(found);
+        }
+    }
+}
+
+/// `GUID` has no `PartialEq` in windows-sys.
+fn same_guid(a: &GUID, b: &GUID) -> bool {
+    (a.data1, a.data2, a.data3, a.data4) == (b.data1, b.data2, b.data3, b.data4)
 }
 
 /// `Ok(true)` when the object was there, `Ok(false)` for `not_found`.
