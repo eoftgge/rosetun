@@ -151,15 +151,12 @@ fn show_with_rects(ui: &mut egui::Ui, state: &State, actions: &mut Vec<Action>) 
         motion::WindowView::of(ui.ctx(), state.window_hidden()),
         reduce_motion,
     );
-    if frames
-        && (progress < 1.0 || petal_repaint(status.map(|status| &status.state), drift.weight))
+    if frames && (progress < 1.0 || petal_repaint(status.map(|status| &status.state), drift.weight))
     {
         ui.ctx().request_repaint();
     }
 
-    if frames
-        && let Some(remaining) = remaining
-    {
+    if frames && let Some(remaining) = remaining {
         ui.ctx().request_repaint_after(remaining);
     }
 

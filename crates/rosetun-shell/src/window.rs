@@ -14,10 +14,10 @@ use windows_sys::Win32::UI::HiDpi::{
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, FindWindowW, GetSystemMetrics, GetWindowPlacement, IsIconic, IsWindowVisible,
-    IsZoomed, KillTimer, SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPlacement, SetWindowPos,
-    WINDOWPLACEMENT, WINDOWPOS, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCDESTROY, WM_QUERYOPEN,
-    WM_SHOWWINDOW, WM_TIMER, WM_WINDOWPOSCHANGED, WPF_RESTORETOMAXIMIZED,
+    IsZoomed, KillTimer, SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT,
+    WINDOWPOS, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCDESTROY, WM_QUERYOPEN, WM_SHOWWINDOW,
+    WM_TIMER, WM_WINDOWPOSCHANGED, WPF_RESTORETOMAXIMIZED,
 };
 
 use crate::first_start::{ScreenRect, first_start_rect};
@@ -316,8 +316,7 @@ pub fn quiet_moves(hwnd: isize) -> io::Result<()> {
     // subclass procedure is a static function; the reference data is the box above, which
     // `move_proc` frees on WM_NCDESTROY after removing the subclass, so neither outlives
     // the window.
-    if unsafe { SetWindowSubclass(hwnd, Some(move_proc), MOVE_SUBCLASS_ID, watch as usize) } == 0
-    {
+    if unsafe { SetWindowSubclass(hwnd, Some(move_proc), MOVE_SUBCLASS_ID, watch as usize) } == 0 {
         // SAFETY: the subclass was not installed, so this is the only pointer to the box.
         drop(unsafe { Box::from_raw(watch) });
         return Err(io::Error::other("could not subclass the main window"));
@@ -524,14 +523,22 @@ mod tests {
         quiet_moves(window.0 as isize).expect("subclass the test window");
 
         move_to(&window, 5);
-        assert_eq!(seen.position_changes.get(), 1, "a move outside a drag is reported");
+        assert_eq!(
+            seen.position_changes.get(),
+            1,
+            "a move outside a drag is reported"
+        );
 
         // SAFETY: the window is this thread's; the messages carry no pointers.
         unsafe { SendMessageW(window.0, WM_ENTERSIZEMOVE, 0, 0) };
         let moves = seen.moves.get();
         move_to(&window, 15);
         move_to(&window, 25);
-        assert_eq!(seen.position_changes.get(), 1, "a move inside a drag reached winit");
+        assert_eq!(
+            seen.position_changes.get(),
+            1,
+            "a move inside a drag reached winit"
+        );
         assert_eq!(seen.moves.get(), moves + 2, "the default handling went on");
 
         // SAFETY: as above.
@@ -543,8 +550,14 @@ mod tests {
     #[test]
     fn only_a_move_inside_a_drag_on_the_same_monitor_is_kept_from_winit() {
         assert!(!forwards_position_change(true, true, false));
-        assert!(forwards_position_change(true, true, true), "another monitor");
-        assert!(forwards_position_change(true, false, false), "sized, not moved");
+        assert!(
+            forwards_position_change(true, true, true),
+            "another monitor"
+        );
+        assert!(
+            forwards_position_change(true, false, false),
+            "sized, not moved"
+        );
         assert!(forwards_position_change(false, true, false), "not a drag");
     }
 

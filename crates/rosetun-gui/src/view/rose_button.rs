@@ -795,7 +795,11 @@ mod tests {
             shown
         };
         assert_eq!(shown_after(60, 9), shown_after(300, 45), "0.15 s, opening");
-        assert_eq!(shown_after(60, 150), shown_after(300, 750), "2.5 s, pulsing");
+        assert_eq!(
+            shown_after(60, 150),
+            shown_after(300, 750),
+            "2.5 s, pulsing"
+        );
     }
 
     #[test]
