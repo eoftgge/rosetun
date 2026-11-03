@@ -551,6 +551,7 @@ function Invoke-RosetunLinuxBuild {
         [Parameter(Mandatory)][string]$RunId,
         [Parameter(Mandatory)][string]$WslDistro,
         [scriptblock]$Heartbeat,
+        [int]$HeartbeatSeconds = 30,
         [int]$TimeoutSeconds = 3600
     )
     Assert-RosetunLinuxCleanSource -Source $Source
@@ -564,7 +565,8 @@ function Invoke-RosetunLinuxBuild {
     $repoWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $RepoRoot
     $outWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $outRoot
     $arguments = @('-d', $WslDistro, '--cd', '~', '--exec', 'bash', "$repoWsl/tools/vm/linux/build-in-wsl.sh", $repoWsl, $Source.Sha, "$outWsl/$name")
-    $result = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxWsl) -ArgumentList $arguments -TimeoutSeconds $TimeoutSeconds -Heartbeat $Heartbeat -Environment $script:WslEnvironment
+    $result = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxWsl) -ArgumentList $arguments -TimeoutSeconds $TimeoutSeconds `
+        -Heartbeat $Heartbeat -HeartbeatSeconds $HeartbeatSeconds -Environment $script:WslEnvironment
     if ($result.ExitCode -ne 0) {
         $tail = @((Get-RosetunLinuxWslText $result.Error) -split "`n" | Select-Object -Last 25) -join "`n"
         throw "The build in WSL failed (exit $($result.ExitCode)):`n$tail"

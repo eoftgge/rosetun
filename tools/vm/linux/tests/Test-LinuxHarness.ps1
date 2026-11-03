@@ -385,6 +385,27 @@ Assert-That 'the install command passes both test accounts' (
     (Get-RosetunLinuxInstallCommand -Folder '/home/l2admin/rosetun-l2-launcher' -UserA 'ipc_owner' -UserB 'ipc_other') -ceq
     'sudo bash /home/l2admin/rosetun-l2-launcher/install-launcher.sh ipc_owner ipc_other')
 
+# --- the entry script calls module functions only with parameters they have
+$entryPath = Join-Path $PSScriptRoot '..\Invoke-LinuxL2Matrix.ps1'
+$entryAst = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $entryPath).ProviderPath, [ref]$null, [ref]$null)
+$moduleCommands = @{}
+foreach ($command in @(Get-Command -Module RosetunLinuxVm)) { $moduleCommands[$command.Name] = $command }
+$badCalls = [System.Collections.Generic.List[string]]::new()
+$checkedCalls = 0
+foreach ($call in $entryAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+    $name = $call.GetCommandName()
+    if ($null -eq $name -or -not $moduleCommands.ContainsKey($name)) { continue }
+    $checkedCalls++
+    $known = $moduleCommands[$name].Parameters.Keys
+    foreach ($element in $call.CommandElements) {
+        if ($element -isnot [System.Management.Automation.Language.CommandParameterAst]) { continue }
+        $matched = @($known | Where-Object { $_ -like "$($element.ParameterName)*" })
+        if ($matched.Count -eq 0) { $badCalls.Add("$name -$($element.ParameterName) (line $($element.Extent.StartLineNumber))") }
+    }
+}
+Assert-That 'the entry script calls module functions' ($checkedCalls -gt 20)
+Assert-That 'every parameter the entry script passes exists' ($badCalls.Count -eq 0) ($badCalls -join '; ')
+
 # --- progress of a one-command run
 Assert-That 'elapsed time reads as minutes and seconds' ((Format-RosetunLinuxElapsed ([TimeSpan]::FromSeconds(3725))) -eq '62:05')
 Assert-That 'a job without status is waiting to start' ((Format-RosetunLinuxJobProgress -Status $null) -eq 'waiting for the job to start')
