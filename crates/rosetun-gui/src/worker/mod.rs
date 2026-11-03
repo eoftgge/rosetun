@@ -541,7 +541,10 @@ mod tests {
         let fast = Duration::from_millis(250);
         let slow = Duration::from_secs(2);
         assert_eq!(helper_retry_delay(Duration::ZERO, false), fast);
-        assert_eq!(helper_retry_delay(Duration::from_millis(9_999), false), fast);
+        assert_eq!(
+            helper_retry_delay(Duration::from_millis(9_999), false),
+            fast
+        );
         assert_eq!(helper_retry_delay(Duration::from_secs(10), false), slow);
         assert_eq!(helper_retry_delay(Duration::from_secs(60), false), slow);
     }
