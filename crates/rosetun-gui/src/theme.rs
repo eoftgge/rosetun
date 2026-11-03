@@ -380,6 +380,15 @@ pub(crate) fn capsule(height: f32) -> u8 {
     (height / 2.0).round().clamp(0.0, f32::from(u8::MAX)) as u8
 }
 
+/// Selected text in every field and label: the letters keep the text colour over a wash of the
+/// accent, so they stay readable. A selected item in a list paints its own fill.
+pub(crate) fn text_selection(palette: &Palette) -> egui::style::Selection {
+    egui::style::Selection {
+        bg_fill: palette.accent_base.gamma_multiply(alpha::SELECTED),
+        stroke: Stroke::new(stroke::HAIRLINE, palette.text),
+    }
+}
+
 pub(crate) fn apply(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
     ctx.set_theme(egui::Theme::Dark);
@@ -408,8 +417,7 @@ pub(crate) fn apply_style(ctx: &egui::Context) {
     visuals.widgets.active.bg_fill = palette.accent_dark;
     visuals.widgets.active.weak_bg_fill = palette.accent_dark;
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, palette.text);
-    visuals.selection.bg_fill = palette.accent_base;
-    visuals.selection.stroke = Stroke::new(1.0, palette.text);
+    visuals.selection = text_selection(palette);
     visuals.window_corner_radius = CornerRadius::same(RADIUS);
     visuals.menu_corner_radius = CornerRadius::same(RADIUS);
     visuals.window_shadow = Shadow::NONE;
@@ -496,6 +504,21 @@ mod tests {
             assert_eq!(actual, Color32::from_rgb(r, g, b));
         }
         assert_eq!(palette_of(AccentPreset::default()), &Palette::ROSE);
+    }
+
+    #[test]
+    fn selected_text_reads_against_its_wash_in_every_palette() {
+        for accent in AccentPreset::ALL {
+            let palette = palette_of(accent);
+            let selection = text_selection(palette);
+            // A field, and the surfaces a selectable label stands on.
+            for surface in [palette.input, palette.panel, palette.card, palette.modal] {
+                // egui blends in gamma space, as `blend` does.
+                let wash = surface.blend(selection.bg_fill);
+                let ratio = contrast(selection.stroke.color, wash);
+                assert!(ratio >= 4.5, "{accent:?} over {surface:?}: {ratio:.2}");
+            }
+        }
     }
 
     #[test]

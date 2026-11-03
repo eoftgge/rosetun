@@ -47,7 +47,12 @@ pub(crate) fn drop_down(
                         chevron,
                     );
                 })
-                .show_ui(ui, menu)
+                .show_ui(ui, |ui| {
+                    // A chosen item is filled with the accent itself, not the faint wash
+                    // behind selected text.
+                    ui.visuals_mut().selection.bg_fill = palette.accent_base;
+                    menu(ui);
+                })
                 .response
         })
         .inner

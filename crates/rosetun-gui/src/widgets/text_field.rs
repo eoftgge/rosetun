@@ -24,20 +24,20 @@ pub(crate) fn field_vertical_margin(ui: &egui::Ui, height: f32) -> i8 {
 
 /// Gives the text inputs in `ui` the look of a field: the palette's field colour, a hairline
 /// border that rises on hover, rounded corners, and red when the value is not acceptable. A
-/// search field and a field in a form take their look from here.
+/// search field and a field in a form take their look from here, and their frame from
+/// `field_frame`.
 pub(crate) fn style_field(ui: &mut egui::Ui, invalid: bool) {
     let palette = theme::palette();
-    let (rest, raised, focused) = if invalid {
-        (theme::ERROR, theme::ERROR, theme::ERROR)
+    let (rest, raised) = if invalid {
+        (theme::ERROR, theme::ERROR)
     } else {
-        (palette.border_strong, palette.text_dim, palette.accent_base)
+        (palette.border_strong, palette.text_dim)
     };
     let visuals = ui.visuals_mut();
     visuals.extreme_bg_color = palette.input;
     visuals.widgets.inactive.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, rest);
     visuals.widgets.hovered.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, raised);
     visuals.widgets.active.bg_stroke = Stroke::new(theme::stroke::HAIRLINE, raised);
-    visuals.selection.stroke = Stroke::new(theme::stroke::HAIRLINE, focused);
     for state in [
         &mut visuals.widgets.inactive,
         &mut visuals.widgets.hovered,
@@ -45,6 +45,43 @@ pub(crate) fn style_field(ui: &mut egui::Ui, invalid: bool) {
     ] {
         state.corner_radius = CornerRadius::same(RADIUS);
     }
+}
+
+/// The frame of the text input `id` in a `ui` given its look by `style_field`, around text
+/// `margin` away from the edge. egui outlines a focused input in the colour of selected
+/// text, so the input gets this frame instead: the accent (red when `invalid`) around a
+/// focused field, and selected text stays in the text colour.
+pub(crate) fn field_frame(
+    ui: &egui::Ui,
+    id: egui::Id,
+    invalid: bool,
+    margin: egui::Margin,
+) -> egui::Frame {
+    // The state of the previous pass, as egui styles its own input.
+    let state = match ui.ctx().read_response(id) {
+        Some(response) => response.widget_state(),
+        None => {
+            ui.ctx().request_repaint();
+            egui::widget_style::WidgetState::default()
+        }
+    };
+    let visuals = ui.visuals();
+    let look = visuals.widgets.state(state);
+    let stroke = if state == egui::widget_style::WidgetState::Active {
+        let focused = if invalid {
+            theme::ERROR
+        } else {
+            theme::palette().accent_base
+        };
+        Stroke::new(theme::stroke::HAIRLINE, focused)
+    } else {
+        look.bg_stroke
+    };
+    egui::Frame::new()
+        .fill(visuals.text_edit_bg_color())
+        .corner_radius(look.corner_radius)
+        .apply_stroke_and_expansion_without_layout_shift(stroke, look.expansion)
+        .inner_margin(margin - egui::Margin::from(stroke.width))
 }
 
 /// An input on the palette's field colour with a hairline border, red when the value is not
@@ -128,23 +165,24 @@ impl egui::Widget for TextField<'_> {
         let vertical = field_vertical_margin(ui, height);
         ui.scope(|ui| {
             style_field(ui, self.invalid);
+            let id = self.id.unwrap_or_else(|| {
+                let id = ui.next_auto_id();
+                ui.skip_ahead_auto_ids(1);
+                id
+            });
+            let margin = egui::Margin::symmetric(horizontal, vertical);
             let edit = egui::TextEdit::singleline(self.text)
+                .id(id)
+                .frame(field_frame(ui, id, self.invalid, margin))
                 .hint_text(self.hint)
                 .password(self.password)
                 .desired_width(width)
-                .min_size(egui::vec2(width, height))
-                .margin(egui::Margin::symmetric(horizontal, vertical));
+                .min_size(egui::vec2(width, height));
             let edit = match self.char_limit {
                 Some(limit) => edit.char_limit(limit),
                 None => edit,
             };
-            ui.add_enabled(
-                self.enabled,
-                match self.id {
-                    Some(id) => edit.id(id),
-                    None => edit,
-                },
-            )
+            ui.add_enabled(self.enabled, edit)
         })
         .inner
     }
@@ -244,6 +282,175 @@ mod tests {
         });
         output.textures_delta.clear();
         (rects, output.shapes)
+    }
+
+    /// The colour selected letters and the selection behind them end up with, as the
+    /// tessellator paints the text shapes of a frame.
+    fn selection_colours(shapes: &[egui::epaint::ClippedShape]) -> Vec<(egui::Color32, egui::Color32)> {
+        fn collect(shape: &egui::Shape, out: &mut Vec<egui::epaint::TextShape>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+                egui::Shape::Text(text) => out.push(text.clone()),
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        for clipped in shapes {
+            collect(&clipped.shape, &mut texts);
+        }
+        let mut found = Vec::new();
+        for text in texts {
+            let fade = |color: egui::Color32| {
+                if text.opacity_factor < 1.0 {
+                    color.gamma_multiply(text.opacity_factor)
+                } else {
+                    color
+                }
+            };
+            for row in &text.galley.rows {
+                let visuals = &row.row.visuals;
+                let glyphs = visuals.glyph_vertex_range.clone();
+                // The selection is the one rectangle egui adds after the glyphs.
+                if visuals.mesh.vertices.len() < glyphs.end + 4 {
+                    continue;
+                }
+                let wash = fade(visuals.mesh.vertices[glyphs.end].color);
+                for vertex in &visuals.mesh.vertices[glyphs] {
+                    let letter = match text.override_text_color {
+                        Some(color) => color,
+                        None if vertex.color == egui::Color32::PLACEHOLDER => text.fallback_color,
+                        None => vertex.color,
+                    };
+                    found.push((fade(letter), wash));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn selected_text_in_a_field_keeps_the_text_colour_and_the_border_the_accent() {
+        for invalid in [false, true] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let id = egui::Id::unique(("selected", invalid));
+            let mut text = String::from("example.com");
+            let select_all = egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            };
+            let mut field = None;
+            let mut shapes = Vec::new();
+            for events in [Vec::new(), vec![select_all], Vec::new()] {
+                if events.is_empty() && field.is_none() {
+                    ctx.memory_mut(|memory| memory.request_focus(id));
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let response = ui.add(
+                                TextField::new(&mut text)
+                                    .id(id)
+                                    .invalid(invalid)
+                                    .width(260.0),
+                            );
+                            field = Some(response.rect);
+                        });
+                    },
+                );
+                output.textures_delta.clear();
+                shapes = output.shapes;
+            }
+            let selection = ctx.global_style().visuals.selection;
+            let colours = selection_colours(&shapes);
+            assert_eq!(colours.len(), 4 * "example.com".len(), "{invalid}: {colours:?}");
+            for (letter, wash) in colours {
+                assert_eq!(wash, selection.bg_fill);
+                assert_eq!(letter, theme::palette().text);
+                assert_ne!(letter, wash);
+            }
+            let focused = if invalid {
+                theme::ERROR
+            } else {
+                theme::palette().accent_base
+            };
+            let rect = field.expect("the field was shown");
+            let frame = &painted_frames(&shapes, &[rect])[0];
+            assert_eq!(
+                frame.stroke,
+                egui::epaint::Stroke::new(theme::stroke::HAIRLINE, focused)
+            );
+        }
+    }
+
+    #[test]
+    fn a_field_at_rest_keeps_the_look_and_text_place_of_an_egui_framed_input() {
+        let text_pos = |shapes: &[egui::epaint::ClippedShape]| {
+            shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => Some(text.pos),
+                    _ => None,
+                })
+                .expect("the field painted its text")
+        };
+        for invalid in [false, true] {
+            let (ours, ours_shapes) = laid_out(|ui| {
+                let mut text = String::from("192.0.2.1");
+                vec![ui.add(TextField::new(&mut text).invalid(invalid).width(260.0)).rect]
+            });
+            let (egui_own, egui_shapes) = laid_out(|ui| {
+                let mut text = String::from("192.0.2.1");
+                ui.scope(|ui| {
+                    style_field(ui, invalid);
+                    let height = field_height(ui);
+                    let vertical = field_vertical_margin(ui, height);
+                    let edit = egui::TextEdit::singleline(&mut text)
+                        .desired_width(260.0)
+                        .min_size(egui::vec2(260.0, height))
+                        .margin(egui::Margin::symmetric(theme::space::M as i8, vertical));
+                    vec![ui.add(edit).rect]
+                })
+                .inner
+            });
+            assert_eq!(ours, egui_own);
+            assert_eq!(text_pos(&ours_shapes), text_pos(&egui_shapes));
+            let frame = &painted_frames(&ours_shapes, &ours)[0];
+            assert_eq!(
+                frame,
+                &painted_frames(&egui_shapes, &egui_own)[0],
+                "{invalid}"
+            );
+            let rest = if invalid {
+                theme::ERROR
+            } else {
+                theme::palette().border_strong
+            };
+            assert_eq!(frame.fill, theme::palette().input);
+            assert_eq!(frame.stroke.color, rest);
+            assert_eq!(frame.corner_radius, CornerRadius::same(RADIUS));
+        }
+    }
+
+    #[test]
+    fn every_field_selects_text_as_the_rest_of_the_window() {
+        run(|ui| {
+            let global = ui.ctx().global_style().visuals.selection;
+            for invalid in [false, true] {
+                ui.scope(|ui| {
+                    style_field(ui, invalid);
+                    assert_eq!(ui.visuals().selection, global);
+                });
+            }
+            assert_eq!(global, theme::text_selection(theme::palette()));
+        });
     }
 
     #[test]

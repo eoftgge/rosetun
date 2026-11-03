@@ -3,7 +3,7 @@ use eframe::egui;
 use crate::icons::{self, Icon};
 use crate::theme;
 
-use super::text_field::{field_height, field_vertical_margin, style_field};
+use super::text_field::{field_frame, field_height, field_vertical_margin, style_field};
 
 /// Search fields over the rules and connections lists share these widths.
 pub(crate) const SEARCH_WIDTH: f32 = 260.0;
@@ -57,17 +57,21 @@ fn search_field_inner(
     let search = ui
         .scope(|ui| {
             style_field(ui, false);
+            let id = ui.next_auto_id();
+            ui.skip_ahead_auto_ids(1);
+            let margin = egui::Margin {
+                left: theme::margin::side(theme::space::XXL),
+                right: right_margin,
+                top: vertical,
+                bottom: vertical,
+            };
             ui.add(
                 egui::TextEdit::singleline(text)
+                    .id(id)
+                    .frame(field_frame(ui, id, false, margin))
                     .hint_text(hint)
                     .desired_width(width)
-                    .min_size(egui::vec2(width, height))
-                    .margin(egui::Margin {
-                        left: theme::margin::side(theme::space::XXL),
-                        right: right_margin,
-                        top: vertical,
-                        bottom: vertical,
-                    }),
+                    .min_size(egui::vec2(width, height)),
             )
         })
         .inner;
