@@ -135,18 +135,22 @@ function Wait-StandTarget {
     param([int]$TimeoutSeconds = 300)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $last = ''
+    $address = $null
     do {
         try {
             $target = New-StandTarget -AddressTimeoutSeconds 30
+            $address = $target.HostName
             Wait-RosetunLinuxSsh -Target $target -TimeoutSeconds 30
             return $target
         }
         catch {
             if ("$_" -match 'host key verification failed') { throw }
-            $last = "$_"
+            $last = "$_" -replace '^.*Last answer: ', ''
         }
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "The guest did not answer over SSH within $TimeoutSeconds s. Last answer: $last"
+    $source = if ($stand.SshHost) { 'SshHost' } else { 'Hyper-V' }
+    throw (Format-RosetunLinuxSshSilence -TimeoutSeconds $TimeoutSeconds -Address $address -AddressSource $source `
+            -HostSubnets @(Get-RosetunLinuxHostSwitchSubnets) -LastAnswer $last)
 }
 
 function Get-GuestHome {
@@ -165,8 +169,8 @@ function Show-LauncherInstall {
     Write-Host '       .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -PrepareLauncher'
     Write-Host "  2. In the guest, as $($stand.SshUser):"
     Write-Host "       $(Get-RosetunLinuxInstallCommand -Folder $Folder -UserA $stand.UserA -UserB $stand.UserB)"
-    Write-Host '  3. On the host, make the clean checkpoint again (a restore would bring the old launcher back):'
-    Write-Host "       Remove-VMCheckpoint -VMName $vm -Name $point; Checkpoint-VM -Name $vm -SnapshotName $point"
+    Write-Host '  3. On the host, make the clean checkpoint again from the powered-off VM (a restore would bring the old launcher back):'
+    Write-Host "       Stop-VM -Name $vm; Remove-VMCheckpoint -VMName $vm -Name $point; Checkpoint-VM -Name $vm -SnapshotName $point"
 }
 
 # Builds HEAD in WSL, or checks a given artifact folder. A host build must match

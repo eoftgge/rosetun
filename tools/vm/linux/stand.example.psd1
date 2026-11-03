@@ -20,7 +20,8 @@
     Checkpoint     = 'l2-clean'
     # WSL distribution that builds the artifacts.
     WslDistro      = 'Debian'
-    # Leave empty to read the address from Hyper-V (needs hyperv-daemons in the
-    # guest). Set it only for a fixed address.
-    SshHost        = ''
+    # The address comes from Hyper-V (KVP, needs hyperv-daemons in the guest).
+    # Only if KVP is not available: a fixed address here overrides Hyper-V and
+    # goes stale when the Default Switch gets a new subnet after a host reboot.
+    # SshHost      = '192.0.2.10'
 }

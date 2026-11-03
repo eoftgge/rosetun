@@ -422,6 +422,48 @@ Assert-That 'IPv6 and link-local addresses alone give no address' ($null -eq (Se
 Assert-That 'an empty adapter list gives no address' ($null -eq (Select-RosetunLinuxGuestAddress @()))
 Assert-That 'loopback and junk are skipped' ((Select-RosetunLinuxGuestAddress @('127.0.0.1', 'not-an-address', '203.0.113.4')) -eq '203.0.113.4')
 
+# --- subnet of the guest address against the host's Default Switch
+Assert-That 'the prefix length counts' (-not (Test-RosetunLinuxSameSubnet -Address '192.0.2.77' -Network '192.0.2.1' -PrefixLength 28))
+Assert-That 'an address inside a /24 is in the same subnet' (Test-RosetunLinuxSameSubnet -Address '192.0.2.77' -Network '192.0.2.1' -PrefixLength 24)
+Assert-That 'an address of another subnet is not' (-not (Test-RosetunLinuxSameSubnet -Address '198.51.100.7' -Network '192.0.2.1' -PrefixLength 20))
+Assert-That 'a /0 contains everything' (Test-RosetunLinuxSameSubnet -Address '203.0.113.9' -Network '192.0.2.1' -PrefixLength 0)
+Assert-That 'junk is never in the subnet' (-not (Test-RosetunLinuxSameSubnet -Address 'not-an-address' -Network '192.0.2.1' -PrefixLength 24))
+Assert-That 'IPv6 is never in an IPv4 subnet' (-not (Test-RosetunLinuxSameSubnet -Address '2001:db8::1' -Network '192.0.2.1' -PrefixLength 24))
+
+$switch = @([pscustomobject]@{ Address = '192.0.2.1'; PrefixLength = 24 })
+$stale = Format-RosetunLinuxSshSilence -TimeoutSeconds 300 -Address '198.51.100.7' -HostSubnets $switch -LastAnswer ''
+Assert-That 'the silence names the Hyper-V address' ($stale -match '198\.51\.100\.7, from Hyper-V')
+Assert-That 'the silence names the host subnet' ($stale -match '192\.0\.2\.1/24')
+Assert-That 'a stale subnet is called out' ($stale -match 'Same subnet: no')
+Assert-That 'an empty last answer is never printed empty' ($stale -match 'Last answer: no attempt finished')
+Assert-That 'without SshHost there is no SshHost warning' ($stale -notmatch 'SshHost is set')
+$reachable = Format-RosetunLinuxSshSilence -TimeoutSeconds 300 -Address '192.0.2.50' -HostSubnets $switch -LastAnswer 'connection refused'
+Assert-That 'a reachable address points at the guest' ($reachable -match 'Same subnet: yes')
+$pinned = Format-RosetunLinuxSshSilence -TimeoutSeconds 300 -Address '198.51.100.7' -AddressSource SshHost -HostSubnets $switch -LastAnswer 'x'
+Assert-That 'a set SshHost is warned about' ($pinned -match 'SshHost is set' -and $pinned -match 'from SshHost')
+$noSwitch = Format-RosetunLinuxSshSilence -TimeoutSeconds 300 -Address '' -HostSubnets @() -LastAnswer 'x'
+Assert-That 'a missing address and switch are both said' ($noSwitch -match 'Guest address: none' -and $noSwitch -match 'has no IPv4 address')
+
+# --- one failed ssh attempt in words
+Assert-That 'an empty ssh failure is described' ((ConvertTo-RosetunLinuxSshAnswer -ExitCode 255 -ErrorText '' -HostName '192.0.2.5') -match 'printed nothing.*192\.0\.2\.5:22')
+Assert-That 'a timeout is named' ((ConvertTo-RosetunLinuxSshAnswer -ExitCode 255 -ErrorText 'ssh: connect to host 192.0.2.5 port 22: Connection timed out' -HostName '192.0.2.5') -match '^connection timeout')
+Assert-That 'a killed ssh is a timeout' ((ConvertTo-RosetunLinuxSshAnswer -ExitCode -1 -ErrorText 'TIMEOUT: ssh.exe did not finish within 25 s' -HostName '192.0.2.5') -match '^no answer')
+Assert-That 'a refusal is named' ((ConvertTo-RosetunLinuxSshAnswer -ExitCode 255 -ErrorText 'connect to host 192.0.2.5 port 22: Connection refused' -HostName '192.0.2.5') -match '^connection refused')
+Assert-That 'a refused key is named' ((ConvertTo-RosetunLinuxSshAnswer -ExitCode 255 -ErrorText 'l2admin@192.0.2.5: Permission denied (publickey).' -HostName '192.0.2.5') -match '^the key was refused')
+Assert-That 'no route is named' ((ConvertTo-RosetunLinuxSshAnswer -ExitCode 255 -ErrorText 'connect to host 192.0.2.5 port 22: No route to host' -HostName '192.0.2.5') -match '^no route')
+
+# --- the state a restore leaves tells what the checkpoint holds
+Assert-That 'a powered-off checkpoint is accepted' ($null -eq (Get-RosetunLinuxRestoredStateProblem -VmName 'rosetun-linux-l2' -CheckpointName 'l2-clean' -State 'Off'))
+$memory = Get-RosetunLinuxRestoredStateProblem -VmName 'rosetun-linux-l2' -CheckpointName 'l2-clean' -State 'Saved'
+Assert-That 'a checkpoint with memory is refused' ($null -ne $memory -and $memory -match 'memory of a running guest')
+foreach ($command in @(Get-RosetunLinuxCheckpointRemake -VmName 'rosetun-linux-l2' -CheckpointName 'l2-clean')) {
+    Assert-That "the refusal carries '$command'" ($memory.Contains($command))
+}
+Assert-That 'the remake stops the VM before the checkpoint' (
+    $memory.IndexOf('Stop-VM -Name rosetun-linux-l2') -lt $memory.IndexOf('Checkpoint-VM -Name rosetun-linux-l2'))
+$odd = Get-RosetunLinuxRestoredStateProblem -VmName 'rosetun-linux-l2' -CheckpointName 'l2-clean' -State 'Paused'
+Assert-That 'any other state is refused too' ($null -ne $odd -and $odd -match "'Paused'")
+
 Write-Host "Test-LinuxHarness: $script:Passed passed, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }
 exit 0

@@ -205,6 +205,82 @@ function Resolve-RosetunLinuxGuestAddress {
     throw "Hyper-V reports no IPv4 address for '$VmName' after $TimeoutSeconds s. Check that the VM runs and that hyperv-daemons is installed in the guest, or set SshHost in stand.local.psd1."
 }
 
+# Whether an IPv4 address lies inside Network/PrefixLength.
+function Test-RosetunLinuxSameSubnet {
+    param([Parameter(Mandatory)][string]$Address, [Parameter(Mandatory)][string]$Network, [ValidateRange(0, 32)][int]$PrefixLength)
+    $a = $null
+    $n = $null
+    if (-not [Net.IPAddress]::TryParse($Address, [ref]$a) -or -not [Net.IPAddress]::TryParse($Network, [ref]$n)) { return $false }
+    if ($a.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or $n.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+    $toNumber = { param($ip) $b = $ip.GetAddressBytes(); ([uint32]$b[0] -shl 24) -bor ([uint32]$b[1] -shl 16) -bor ([uint32]$b[2] -shl 8) -bor [uint32]$b[3] }
+    $all = [uint64][uint32]::MaxValue
+    $mask = [uint32](($all -shl (32 - $PrefixLength)) -band $all)
+    ((& $toNumber $a) -band $mask) -eq ((& $toNumber $n) -band $mask)
+}
+
+# The host's IPv4 subnets on the Default Switch, as 'address/prefix' objects.
+# The switch gets a new subnet at every Windows boot.
+function Get-RosetunLinuxHostSwitchSubnets {
+    param([string]$InterfaceAlias = 'vEthernet (Default Switch)')
+    @(Get-NetIPAddress -InterfaceAlias $InterfaceAlias -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            ForEach-Object { [pscustomobject]@{ Address = [string]$_.IPAddress; PrefixLength = [int]$_.PrefixLength } })
+}
+
+# Turns one failed ssh attempt into words. ssh at LogLevel=ERROR can exit 255
+# with nothing on stderr, and an empty "last answer" says nothing.
+function ConvertTo-RosetunLinuxSshAnswer {
+    param([int]$ExitCode, [AllowEmptyString()][AllowNull()][string]$ErrorText, [string]$HostName, [int]$Port = 22)
+    $text = "$ErrorText".Trim()
+    $where = "${HostName}:$Port"
+    if ($text -match '^TIMEOUT:') { return "no answer: ssh to $where did not finish in time (connection timeout, nothing answered)" }
+    if ($text -match 'timed out') { return "connection timeout: nothing answered at $where ($text)" }
+    if ($text -match 'Connection refused') { return "connection refused at ${where}: the address answers but sshd does not listen there ($text)" }
+    if ($text -match 'No route to host|Network is unreachable|Host is unreachable') { return "no route to $where from this host ($text)" }
+    if ($text -match 'Permission denied') { return "the key was refused at ${where}: wrong IdentityFile or authorized_keys in the guest ($text)" }
+    if ($text -match 'Connection (reset|closed)') { return "the connection to $where was closed before login ($text)" }
+    if ($text) { return $text }
+    "ssh exited with code $ExitCode and printed nothing (no answer from $where; a connection timeout looks like this)"
+}
+
+# The message when the guest never answered over SSH: what address was tried,
+# where it came from and whether the host can reach that subnet at all.
+function Format-RosetunLinuxSshSilence {
+    param(
+        [int]$TimeoutSeconds,
+        [AllowEmptyString()][AllowNull()][string]$Address,
+        [ValidateSet('Hyper-V', 'SshHost')][string]$AddressSource = 'Hyper-V',
+        [AllowEmptyCollection()][object[]]$HostSubnets = @(),
+        [AllowEmptyString()][AllowNull()][string]$LastAnswer
+    )
+    $lines = [Collections.Generic.List[string]]::new()
+    $lines.Add("The guest did not answer over SSH within $TimeoutSeconds s.")
+    if ($Address) {
+        $from = if ($AddressSource -eq 'SshHost') { 'SshHost in the stand settings' } else { 'Hyper-V (KVP)' }
+        $lines.Add("  Guest address: $Address, from $from.")
+    }
+    else {
+        $lines.Add('  Guest address: none; Hyper-V reported no IPv4 address.')
+    }
+    $subnets = @($HostSubnets | Where-Object { $null -ne $_ })
+    if ($subnets.Count -eq 0) {
+        $lines.Add("  Host side: 'vEthernet (Default Switch)' has no IPv4 address on this host.")
+    }
+    else {
+        $lines.Add("  Host side: 'vEthernet (Default Switch)' is $(@($subnets | ForEach-Object { "$($_.Address)/$($_.PrefixLength)" }) -join ', ').")
+        if ($Address) {
+            $inside = @($subnets | Where-Object { Test-RosetunLinuxSameSubnet -Address $Address -Network $_.Address -PrefixLength $_.PrefixLength }).Count -gt 0
+            if ($inside) { $lines.Add('  Same subnet: yes. The host can reach the address; look at the guest (console, sshd, firewall).') }
+            else { $lines.Add('  Same subnet: no. The guest keeps an address from an older Default Switch subnet; boot it fresh (see the stand guide: the clean checkpoint is made from a powered-off VM).') }
+        }
+    }
+    if ($AddressSource -eq 'SshHost') {
+        $lines.Add('  SshHost is set: it overrides the address from Hyper-V and goes stale when the Default Switch changes its subnet after a host reboot. Empty it unless KVP does not work.')
+    }
+    $answer = if ([string]::IsNullOrWhiteSpace($LastAnswer)) { 'no attempt finished' } else { $LastAnswer.Trim() }
+    $lines.Add("  Last answer: $answer")
+    $lines -join [Environment]::NewLine
+}
+
 # ------------------------------------------------------------------ SSH
 
 function New-RosetunLinuxTarget {
@@ -434,6 +510,48 @@ function Get-RosetunLinuxVmIdentity {
     }
 }
 
+# The exact commands that make the clean checkpoint again from a powered-off VM.
+function Get-RosetunLinuxCheckpointRemake {
+    param([Parameter(Mandatory)][string]$VmName, [Parameter(Mandatory)][string]$CheckpointName)
+    @(
+        "Restore-VMCheckpoint -VMName $VmName -Name $CheckpointName -Confirm:`$false; Start-VM -Name $VmName",
+        "Stop-VM -Name $VmName",
+        "Remove-VMCheckpoint -VMName $VmName -Name $CheckpointName",
+        "Checkpoint-VM -Name $VmName -SnapshotName $CheckpointName"
+    )
+}
+
+# The state a restore leaves tells what the checkpoint holds: 'Off' for a
+# checkpoint of a powered-off VM, 'Saved' for one with the memory of a running
+# guest. Only 'Off' is accepted: a guest resumed from memory keeps its old
+# Default Switch address, and the switch gets a new subnet at every host boot.
+# Returns $null when the state is fine, else the error text.
+function Get-RosetunLinuxRestoredStateProblem {
+    param(
+        [Parameter(Mandatory)][string]$VmName,
+        [Parameter(Mandatory)][string]$CheckpointName,
+        [Parameter(Mandatory)][string]$State
+    )
+    if ($State -eq 'Off') { return $null }
+    $what = if ($State -eq 'Saved') {
+        "Checkpoint '$CheckpointName' holds the memory of a running guest (the VM is 'Saved' after the restore)."
+    }
+    else {
+        "After restoring checkpoint '$CheckpointName' the VM is '$State', not 'Off'."
+    }
+    $steps = @(Get-RosetunLinuxCheckpointRemake -VmName $VmName -CheckpointName $CheckpointName)
+    @(
+        $what,
+        'The stand needs a checkpoint of a powered-off VM: a resumed guest keeps its old address, which the host cannot reach once the Default Switch has a new subnet after a host reboot. Nothing was started.',
+        'Make the checkpoint again, on the host as administrator:',
+        "  1. $($steps[0])",
+        '     Check in the guest that it is still clean (see the stand guide, "The clean checkpoint").',
+        "  2. $($steps[1])",
+        "  3. $($steps[2])",
+        "  4. $($steps[3])"
+    ) -join [Environment]::NewLine
+}
+
 function Restore-RosetunLinuxCheckpoint {
     param(
         [Parameter(Mandatory)][string]$VmName,
@@ -444,7 +562,9 @@ function Restore-RosetunLinuxCheckpoint {
         throw "Expected exactly one checkpoint named '$CheckpointName' on '$VmName', found $($found.Count). Nothing was restored."
     }
     $found[0] | Restore-VMCheckpoint -Confirm:$false
-    if ((Get-VM -Name $VmName).State -ne 'Running') { Start-VM -Name $VmName }
+    $problem = Get-RosetunLinuxRestoredStateProblem -VmName $VmName -CheckpointName $CheckpointName -State ([string](Get-VM -Name $VmName).State)
+    if ($null -ne $problem) { throw $problem }
+    Start-VM -Name $VmName
 }
 
 function Wait-RosetunLinuxSsh {
@@ -455,18 +575,19 @@ function Wait-RosetunLinuxSsh {
         try {
             $probe = Invoke-RosetunLinuxSsh -Target $Target -Command 'true' -TimeoutSeconds 25
             if ($probe.ExitCode -eq 0) { return }
-            $last = $probe.Error.Trim()
             # A refused host key is a security answer, not a boot delay.
-            if ($last -match 'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed') {
-                throw "SSH host key verification failed: $last"
+            if ($probe.Error -match 'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed') {
+                throw "SSH host key verification failed: $($probe.Error.Trim())"
             }
+            $last = ConvertTo-RosetunLinuxSshAnswer -ExitCode $probe.ExitCode -ErrorText $probe.Error -HostName $Target.HostName -Port $Target.Port
         }
         catch {
             if ("$_" -match 'host key') { throw }
-            $last = "$_"
+            $last = ConvertTo-RosetunLinuxSshAnswer -ExitCode -1 -ErrorText "$_" -HostName $Target.HostName -Port $Target.Port
         }
         Start-Sleep -Seconds 3
     }
+    if (-not $last) { $last = 'no attempt finished' }
     throw "The guest did not accept SSH within $TimeoutSeconds s. Last answer: $last"
 }
 
