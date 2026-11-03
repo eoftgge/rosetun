@@ -39,6 +39,20 @@ param(
 
     [Parameter(ParameterSetName = 'Run', Mandatory)][switch]$Run,
     [Parameter(ParameterSetName = 'Run')][string]$Checkpoint,
+    # L3: the real service with its nftables kill switch, against the host's test node.
+    [Parameter(ParameterSetName = 'Run')][ValidateSet('L2', 'L3')][string]$Stage = 'L2',
+    # L3 only: the Windows sing-box.exe that runs the test node on the host.
+    [Parameter(ParameterSetName = 'Run')][string]$SingBoxPath,
+    # L3 only: the Linux sing-box binary installed in the guest (the version the
+    # helper pins; checked against its release checksum by the owner).
+    [Parameter(ParameterSetName = 'Run')][string]$SingBoxLinuxPath,
+    # L3 only: the connect request whose node and settings the matrix uses.
+    [Parameter(ParameterSetName = 'Run')][string]$RequestPath,
+    # L3 only: sends the test node's own traffic out of this host adapter.
+    [Parameter(ParameterSetName = 'Run')][string]$NodeBindInterface,
+    # L3 only: a public address that answers HTTPS and DNS, probed directly and
+    # through the tunnel.
+    [Parameter(ParameterSetName = 'Run')][string]$ProbeAddress = '1.1.1.1',
 
     [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][string]$ArtifactDir,
     [Parameter(ParameterSetName = 'Stage')][Parameter(ParameterSetName = 'Run')][string]$WslDistro,
@@ -176,22 +190,22 @@ function Show-LauncherInstall {
 # Builds HEAD in WSL, or checks a given artifact folder. A host build must match
 # HEAD exactly; a given folder may be unconfirmed, and the report says so.
 function Invoke-StandBuild {
-    param([string]$RunId)
+    param([string]$RunId, [string]$BuildStage = 'L2')
     $repo = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath
     $source = Get-RosetunLinuxSource -RepoRoot $repo
     if ($ArtifactDir) {
         Write-Step "Using the artifacts in $ArtifactDir"
-        $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $ArtifactDir -Source $source
+        $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $ArtifactDir -Source $source -Stage $BuildStage
         if (-not $artifacts.Confirmed) { Write-Warning "Artifact origin is NOT confirmed: $($artifacts.Note). The report will say so." }
         return [pscustomobject]@{ Directory = $ArtifactDir; Source = $source; Artifacts = $artifacts }
     }
     Assert-RosetunLinuxCleanSource -Source $source
     Write-Step "Building $($source.Sha.Substring(0, 12)) in WSL '$($stand.WslDistro)'"
-    $directory = Invoke-RosetunLinuxBuild -RepoRoot $repo -Source $source -RunId $RunId -WslDistro $stand.WslDistro `
+    $directory = Invoke-RosetunLinuxBuild -RepoRoot $repo -Source $source -RunId $RunId -WslDistro $stand.WslDistro -Stage $BuildStage `
         -Heartbeat { param($elapsed) Write-Host "    building, $(Format-RosetunLinuxElapsed $elapsed)" } -HeartbeatSeconds 60
     $after = Get-RosetunLinuxSource -RepoRoot $repo
     if ($after.Sha -ne $source.Sha -or $after.Dirty) { throw 'The checkout changed during the build. Nothing was staged; start again.' }
-    $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $directory -Source $source
+    $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $directory -Source $source -Stage $BuildStage
     if (-not $artifacts.Confirmed) { throw "The build does not match HEAD: $($artifacts.Note). Nothing was staged." }
     Write-Host "    $directory"
     [pscustomobject]@{ Directory = $directory; Source = $source; Artifacts = $artifacts }
@@ -199,7 +213,14 @@ function Invoke-StandBuild {
 
 # Checks which guest answers, stages the run there and records it on the host.
 function Invoke-StandStage {
-    param([string]$RunId, [string]$RunLog, $Build, $Identity, [string]$Restored)
+    param(
+        [string]$RunId, [string]$RunLog, $Build, $Identity, [string]$Restored,
+        [string]$StageName = 'L2',
+        # L3: the engine and the requests staged next to the build, and the job's
+        # host node values.
+        [Collections.IDictionary]$ExtraFiles = [ordered]@{},
+        [Collections.IDictionary]$ExtraJob = [ordered]@{}
+    )
     $target = Wait-StandTarget -TimeoutSeconds 300
     Write-Step "Checking the guest at $($target.HostName)"
     $standRead = Invoke-RosetunLinuxSsh -Target $target -Command 'cat /etc/rosetun-l2-stand-id' -TimeoutSeconds 20
@@ -213,8 +234,9 @@ function Invoke-StandStage {
     Write-Step "Staging run $RunId"
     $jobEnv = New-RosetunLinuxJobEnv -RunId $RunId -StandId $stand.StandId -BootId $bootId -UserA $stand.UserA -UserB $stand.UserB `
         -BiosGuid $Identity.BiosGuid -ScenarioTimeoutSeconds $ScenarioTimeoutSeconds `
-        -UnitTimeoutSeconds $UnitTimeoutSeconds -JobTimeoutSeconds $JobTimeoutSeconds
-    $stage = New-RosetunLinuxStage -StageRoot (Join-Path $RunLog 'stage') -RunId $RunId -ArtifactDir $Build.Directory -JobEnv $jobEnv
+        -UnitTimeoutSeconds $UnitTimeoutSeconds -JobTimeoutSeconds $JobTimeoutSeconds -Extra $ExtraJob
+    $stage = New-RosetunLinuxStage -StageRoot (Join-Path $RunLog 'stage') -RunId $RunId -ArtifactDir $Build.Directory -JobEnv $jobEnv `
+        -Stage $StageName -Extra $ExtraFiles
     $remoteParent = "$(Get-GuestHome $target)/rosetun-l2-stage"
     $made = Invoke-RosetunLinuxSsh -Target $target -TimeoutSeconds 20 `
         -Command "umask 077 && mkdir -p -m 700 -- $remoteParent && test ! -e $remoteParent/$RunId"
@@ -225,8 +247,11 @@ function Invoke-StandStage {
 
     $source = $Build.Source
     $artifacts = $Build.Artifacts
+    $extraHashes = [ordered]@{}
+    foreach ($name in @($ExtraFiles.Keys)) { $extraHashes[$name] = Get-RosetunLinuxFileSha256 $ExtraFiles[$name] }
     $record = [ordered]@{
-        schema = 1; run_id = $RunId; created = [DateTime]::UtcNow.ToString('o')
+        schema = 1; run_id = $RunId; stage = $StageName; created = [DateTime]::UtcNow.ToString('o')
+        staged_files = $extraHashes
         vm = [ordered]@{ name = $Identity.Name; id = $Identity.VmId }
         stand_id = $stand.StandId; boot_id = $bootId; manifest_sha256 = $stage.ManifestHash
         source = [ordered]@{ sha = $source.Sha; dirty = $source.Dirty; dirty_entries = $source.DirtyEntries; dirty_paths = @($source.DirtyPaths); dirty_digest = $source.DirtyDigest }
@@ -284,7 +309,10 @@ function Invoke-StandCollect {
     }
     foreach ($property in $record.artifacts.hashes.PSObject.Properties) { $stageInfo.Artifacts.Hashes[$property.Name] = $property.Value }
 
-    $scenarios = @(Get-RosetunLinuxScenarios)
+    $recordedStage = [string](Get-RosetunLinuxMember -Object $record -Name 'stage')
+    if ([string]::IsNullOrEmpty($recordedStage)) { $recordedStage = 'L2' }
+    if ($recordedStage -notin @('L2', 'L3')) { throw "The stage record names an unknown stage '$recordedStage'." }
+    $scenarios = @(Get-RosetunLinuxScenarios -Stage $recordedStage)
     $waitClock = [Diagnostics.Stopwatch]::StartNew()
     $lastLine = ''
     $lastShown = [TimeSpan]::Zero
@@ -375,21 +403,81 @@ if ($mode -eq 'Run') {
         throw "VM '$($stand.VmName)' has $($points.Count) checkpoints named '$($stand.Checkpoint)'; the run needs exactly one (see the stand guide)."
     }
     if (-not $ArtifactDir) { $null = ConvertTo-RosetunLinuxWslPath -WslDistro $stand.WslDistro -Path $PSScriptRoot }
+    $extraFiles = [ordered]@{}
+    $extraJob = [ordered]@{}
+    $nodeStarted = $false
+    if ($Stage -eq 'L3') {
+        # Everything that can fail fast, before the build.
+        if (-not $SingBoxLinuxPath) { throw '-Stage L3 needs -SingBoxLinuxPath: the Linux sing-box binary for the guest (see the stand guide, L3).' }
+        $elf = Test-RosetunLinuxElf $SingBoxLinuxPath
+        if (-not $elf.Ok) { throw "-SingBoxLinuxPath '$SingBoxLinuxPath': $($elf.Reason)." }
+        if (-not $SingBoxPath) { $SingBoxPath = Join-Path $RepoRoot 'tools\sing-box.exe' }
+        if (-not (Test-Path -LiteralPath $SingBoxPath -PathType Leaf)) { throw "-SingBoxPath '$SingBoxPath' does not exist: the host test node needs the Windows sing-box.exe." }
+        if (-not $RequestPath) { $RequestPath = Join-Path $RepoRoot 'tools\vm\windows\request-local.json' }
+        if (-not (Test-Path -LiteralPath $RequestPath -PathType Leaf)) { throw "-RequestPath '$RequestPath' does not exist." }
+        $probe = $null
+        if (-not [Net.IPAddress]::TryParse($ProbeAddress, [ref]$probe) -or $probe.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+            throw "-ProbeAddress '$ProbeAddress' is not an IPv4 address."
+        }
+        $hostAddress = @(Get-RosetunLinuxHostSwitchSubnets | Select-Object -First 1)
+        if ($hostAddress.Count -eq 0) { throw "The host has no IPv4 address on 'vEthernet (Default Switch)'." }
+        $hostAddress = $hostAddress[0].Address
+        if (-not $PSBoundParameters.ContainsKey('JobTimeoutSeconds')) { $JobTimeoutSeconds = 1800 }
+        # The test node of the Windows matrices, on the host's Default Switch address.
+        Import-Module (Join-Path $PSScriptRoot '..\windows\RosetunVm.psm1') -Force
+        $nodePort = Get-RosetunTestNodePort
+        $extraJob = [ordered]@{ HOST_ADDRESS = $hostAddress; NODE_PORT = "$nodePort"; PROBE_ADDRESS = $probe.ToString() }
+    }
     $null = New-Item -ItemType Directory -Path $runLog
-    Write-Step "Run $newRunId on '$($stand.VmName)'"
+    Write-Step "Run $newRunId ($Stage) on '$($stand.VmName)'"
 
-    $build = Invoke-StandBuild -RunId $newRunId
-    Write-Step "Restoring checkpoint '$($stand.Checkpoint)'"
-    Restore-RosetunLinuxCheckpoint -VmName $stand.VmName -CheckpointName $stand.Checkpoint
-    Write-Step 'Waiting for the guest'
-    $staged = Invoke-StandStage -RunId $newRunId -RunLog $runLog -Build $build -Identity $identity -Restored $stand.Checkpoint
-    $start = Invoke-StandStart -RunId $newRunId -Staged $staged
-    $wait = Get-RosetunLinuxRunWaitSeconds -JobTimeoutSeconds $JobTimeoutSeconds -Manual:(-not $start.Started)
-    Write-Step "Waiting for the job (at most $(Format-RosetunLinuxElapsed ([TimeSpan]::FromSeconds($wait))))"
-    $verdict = Invoke-StandCollect -RunId $newRunId -WaitSeconds $wait -Progress
-    Write-Step "Result: $verdict"
+    try {
+        $build = Invoke-StandBuild -RunId $newRunId -BuildStage $Stage
+        if ($Stage -eq 'L3') {
+            if (-not (Get-NetTCPConnection -LocalPort $nodePort -State Listen -ErrorAction SilentlyContinue)) {
+                Write-Step "Starting the test node on $($hostAddress):$nodePort"
+                $nodeArguments = @{ SingBoxPath = (Resolve-Path -LiteralPath $SingBoxPath).ProviderPath }
+                if ($NodeBindInterface) { $nodeArguments.BindInterface = $NodeBindInterface }
+                Start-RosetunTestNode @nodeArguments
+                $nodeStarted = $true
+            }
+            else {
+                Write-Step "Using the test node already listening on port $nodePort"
+            }
+            $requestDir = Join-Path $runLog 'requests'
+            $null = New-Item -ItemType Directory -Path $requestDir
+            $extraFiles = New-RosetunLinuxL3Requests -RequestPath $RequestPath -HostAddress $hostAddress -NodePort $nodePort -OutDir $requestDir
+            $extraFiles['sing-box'] = (Resolve-Path -LiteralPath $SingBoxLinuxPath).ProviderPath
+            $extraFiles['rosetun-helper.service'] = Join-Path $RepoRoot 'packaging\linux\rosetun-helper.service'
+        }
+        Write-Step "Restoring checkpoint '$($stand.Checkpoint)'"
+        Restore-RosetunLinuxCheckpoint -VmName $stand.VmName -CheckpointName $stand.Checkpoint
+        Write-Step 'Waiting for the guest'
+        $staged = Invoke-StandStage -RunId $newRunId -RunLog $runLog -Build $build -Identity $identity -Restored $stand.Checkpoint `
+            -StageName $Stage -ExtraFiles $extraFiles -ExtraJob $extraJob
+        $start = Invoke-StandStart -RunId $newRunId -Staged $staged
+        $wait = Get-RosetunLinuxRunWaitSeconds -JobTimeoutSeconds $JobTimeoutSeconds -Manual:(-not $start.Started)
+        Write-Step "Waiting for the job (at most $(Format-RosetunLinuxElapsed ([TimeSpan]::FromSeconds($wait))))"
+        $verdict = Invoke-StandCollect -RunId $newRunId -WaitSeconds $wait -Progress
+        Write-Step "Result: $verdict"
+    }
+    finally {
+        if ($Stage -eq 'L3') {
+            # The service must never stay in a checkpoint or a running guest.
+            if (Test-Path -LiteralPath (Join-Path $runLog 'stage.json')) {
+                Write-Step "Restoring checkpoint '$($stand.Checkpoint)' after the run"
+                try { Restore-RosetunLinuxCheckpoint -VmName $stand.VmName -CheckpointName $stand.Checkpoint -NoStart }
+                catch { Write-Warning "Could not restore '$($stand.Checkpoint)' after the run: $_" }
+            }
+            if ($nodeStarted) {
+                try { Stop-RosetunTestNode } catch { Write-Warning "Could not stop the test node: $_" }
+            }
+        }
+    }
     if ($verdict -eq 'PASS') { exit 0 }
-    Write-Host "Reconnect later with: .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Collect -RunId $newRunId -WaitSeconds 1200"
+    if ($Stage -eq 'L2') {
+        Write-Host "Reconnect later with: .\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Collect -RunId $newRunId -WaitSeconds 1200"
+    }
     exit 1
 }
 

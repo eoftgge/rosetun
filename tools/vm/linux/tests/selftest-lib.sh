@@ -218,6 +218,21 @@ expect "start.sh requires the launcher, the job scripts and the artifacts" test 
 while IFS= read -r path; do
     expect "every required path passes both lists: $path" bash -c '. "$1" && l2_launch_path_allowed "$3" && . "$2" && l2_start_path_allowed "$3"' _ "$launch" "$start" "$path"
 done <<<"$required"
+l3_allows() { bash -c '. "$1" && l3_start_path_allowed "$2"' _ "$start" "$1"; }
+required_l3=$(bash -c '. "$1" && printf "%s\n" "${L3_START_REQUIRED[@]}"' _ "$start")
+expect "start.sh requires the L3 job, the service, the engine and the requests" test "$(printf '%s\n' "$required_l3" | wc -l)" -eq 14
+while IFS= read -r path; do
+    expect "every required L3 path passes both lists: $path" bash -c '. "$1" && l2_launch_path_allowed "$3" && . "$2" && l3_start_path_allowed "$3"' _ "$launch" "$start" "$path"
+done <<<"$required_l3"
+expect_not "an L3 stage refuses the L2 fixture" l3_allows artifacts/l2_transport_fixture
+expect_not "an L3 stage refuses the L2 job" l3_allows guest/run-l2.sh
+expect_not "an L2 stage refuses the L3 job" start_allows guest/run-l3.sh
+expect_not "an L3 stage refuses another request" l3_allows artifacts/request-other.json
+expect "start.sh picks the job by the stage" grep -q 'job="$run/guest/run-$stage.sh"' "$start"
+expect "run-l3.sh reads the host node values through the strict reader" \
+    grep -q 'JOB_TIMEOUT_SECONDS HOST_ADDRESS NODE_PORT PROBE_ADDRESS' "$here/../guest/run-l3.sh"
+expect_not "run-l3.sh never deletes the service's own table" \
+    grep -Eq 'delete table inet rosetun([^-]|$)' "$here/../guest/run-l3.sh"
 
 read_manifest() { bash -c '. "$1" && l2_launch_read_manifest "$2"' _ "$launch" "$1"; }
 h=$(printf '0%.0s' $(seq 1 64))

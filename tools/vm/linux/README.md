@@ -17,8 +17,9 @@ What it proves and what it does not:
 
 The unit tests run as an ordinary account against the build you staged. They
 are not a substitute for the fixture, and the fixture is not a substitute for
-them. The stand makes **no claim** about the network, a kill switch, systemd
-integration of Rosetun, engines or Lockdown. Those are later stages (below).
+them. L2 makes **no claim** about the network, a kill switch, systemd
+integration of Rosetun, engines or Lockdown. The kill switch on the real
+service is the separate L3 run ("L3" below); Lockdown is a later stage.
 
 ## Quick start
 
@@ -80,16 +81,17 @@ runs, the job goes on in the guest; reconnect with
 
 | File | Purpose |
 |---|---|
-| `Invoke-LinuxL2Matrix.ps1` | Host entry point: `-Run`, and the single steps `-InitKnownHosts`, `-PrepareLauncher`, stage (default), `-Collect` |
+| `Invoke-LinuxL2Matrix.ps1` | Host entry point: `-Run` (L2), `-Run -Stage L3`, and the single steps `-InitKnownHosts`, `-PrepareLauncher`, stage (default), `-Collect` |
 | `RosetunLinuxVm.psm1` | Host module: settings, SSH/SCP with a pinned host key, VM identity, the WSL build, artifact checks, report verdict |
 | `stand.example.psd1` | The settings with documentation values; copy it to `stand.local.psd1` (git-ignored) |
 | `build-in-wsl.sh` | Runs in WSL for the host: updates the stand's clone to `HEAD` and calls `build-artifacts.sh` |
-| `build-artifacts.sh` | Builds the three Linux binaries inside Debian and records their provenance |
+| `build-artifacts.sh` | Builds the three L2 binaries (or, with `--l3`, the release helper and CLI) inside Debian and records their provenance |
 | `guest/install-launcher.sh` | One-time installation of the launcher and its sudoers rule in the guest |
 | `guest/launch.sh` | The launcher: proves the staged files and hands over to the verified `start.sh` |
-| `guest/start.sh` | Checks the run directory and starts the autonomous job |
-| `guest/run-l2.sh`, `guest/lib.sh` | The job itself: scenarios, cleanup, report |
-| `scenarios.tsv` | The scenario list, shared by the guest and the host |
+| `guest/start.sh` | Checks the run directory and starts the autonomous job of its stage |
+| `guest/run-l2.sh`, `guest/lib.sh` | The L2 job itself: scenarios, cleanup, report |
+| `guest/run-l3.sh` | The L3 job: installs the service, kill switch and DNS lock scenarios, cleanup, report |
+| `scenarios.tsv`, `scenarios-l3.tsv` | The scenario lists, shared by the guest and the host |
 | `tests/` | Unprivileged self-tests of the stand (not a VM run) |
 
 Reports go to `tools/vm/linux/logs/<run id>/` (git-ignored): `stage.json`,
@@ -494,13 +496,85 @@ or crash, so a killed helper's socket never blocks the restart, `KillMode=mixed`
 (the helper's own cgroup leaves, for the kill switch). The comments in the unit
 file explain each line.
 
+## L3: the kill switch on the real service
+
+A separate command on the same VM. It installs the real helper as the systemd
+unit from the build of `HEAD`, connects through the host's test node and
+checks the nftables kill switch and DNS lock from inside the guest:
+
+```powershell
+.\tools\vm\linux\Invoke-LinuxL2Matrix.ps1 -Run -Stage L3 -SingBoxPath .\tools\sing-box.exe -SingBoxLinuxPath .\target\sing-box-linux\sing-box
+```
+
+`-SingBoxPath` is the Windows `sing-box.exe` of the Windows matrices: the host
+runs the same test node (`../windows/RosetunVm.psm1`, `Start-RosetunTestNode`,
+Shadowsocks on TCP 8388 at the host's Default Switch address; the one-time
+firewall rule of the Windows guide must exist). A node already listening is
+reused and left running; one the run started is stopped at the end.
+`-NodeBindInterface` is passed on to it. `-RequestPath` (default
+`../windows/request-local.json`) gives the node's credentials and settings;
+the run makes three requests from it with the node pointed at the host:
+kill switch without and with "Local network", and without the kill switch
+(the DNS lock). `-ProbeAddress` (default `1.1.1.1`) must answer HTTPS and DNS
+from the guest without a tunnel and through the node.
+
+`-SingBoxLinuxPath` is the Linux engine the helper runs, the version in
+`SUPPORTED_SING_BOX_VERSION` (1.14.3 at the time of writing). Download it on
+the host and compare the archive's SHA-256 with the release page before you
+use it:
+
+```powershell
+New-Item -ItemType Directory -Force target\sing-box-linux | Out-Null
+Invoke-WebRequest https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64.tar.gz -OutFile target\sing-box-linux\sing-box.tar.gz
+Get-FileHash target\sing-box-linux\sing-box.tar.gz
+tar -xzf target\sing-box-linux\sing-box.tar.gz -C target\sing-box-linux --strip-components=1 sing-box-1.14.3-linux-amd64/sing-box
+```
+
+**Before the first L3 run** the clean checkpoint needs `nftables`, `curl` and
+`dig`: restore `l2-clean`, start the VM, run
+`sudo apt-get install --no-install-recommends nftables curl bind9-dnsutils` in
+the guest, then make the checkpoint again from the powered-off VM ("The clean
+checkpoint" above). Nothing else changes: the launcher is the same.
+
+The run restores `l2-clean` before it starts and again after it has read the
+report (the VM is left off), so the service never stays in a checkpoint or a
+running guest. The report cannot be collected later with `-Collect`: the
+restore after the run removes the guest's copy, and the host keeps
+`report.txt` and `report.json` under `tools/vm/linux/logs/<run id>`. The job's
+own limit is 30 minutes (`-JobTimeoutSeconds`).
+
+In the guest, as root, from a transient unit like L2 (the kill switch may cut
+SSH off; the host reads the report afterwards):
+
+| Scenario | Proof |
+|---|---|
+| `preflight.*` | stand id, boot id, BIOS GUID; nothing of Rosetun installed and no table `inet rosetun`; `nft`, `curl`, `dig`, cgroup v2; HTTPS and TCP 53 to the probe address and TCP to the host node answer on the physical interface |
+| `install.service` | the unit starts, `/proc/<MainPID>/cgroup` is `…/rosetun-helper.service/helper`, the `engines` leaf exists, the journal has no "kill switch is not available" |
+| `killswitch.direct-blocked` | with the kill switch, `curl --interface <physical>` to the probe address is refused (curl exit 7 or 28) and the table exists |
+| `killswitch.tunnel-passes` | the same HTTPS request without `--interface` (through the tunnel) answers |
+| `lan.off` | TCP to the host node on the physical interface is refused |
+| `killswitch.foreign-table` | a table `inet rosetun-l3-foreign` with an accept-all output chain at priority -200 does not open the direct path; the stand deletes only that table |
+| `killswitch.engine-killed` | `pkill -KILL sing-box`, then a direct probe every 0.3 s until `Connected` again: every probe refused, the table always there |
+| `killswitch.disconnect` | a disconnect removes the table, the direct path answers |
+| `lan.on` | with "Local network" the host node connects on the physical interface, the probe address does not |
+| `dnslock.*` | without the kill switch: TCP 53 to the probe address on the physical interface is refused, HTTPS there answers; `dig @<probe>` through the tunnel is answered |
+| `crash.helper-killed` | `kill -KILL` of the helper: the table stays, the direct path stays refused, systemd restarts the helper (`NRestarts`), `rosetun status` says `network: held closed` |
+| `crash.open-network` | `rosetun open-network` as the first account removes the table, the direct path answers |
+| `stop.removes-table` | `systemctl stop` during a kill-switch session removes the table, the direct path answers |
+
+What it does not prove: UDP 53 straight to an outside resolver on the physical
+interface (`dig` cannot bind an interface; the DNS lock is shown with TCP 53,
+and the rule matches both by `meta l4proto { tcp, udp }`); IPv6 (the Default
+Switch gives the guest no IPv6 route); Lockdown (not offered on Linux); a
+reboot or a power cut with the table in place; the GUI. The cleanup stops the
+service, which removes its table; a table still there after the stop is a
+cleanup ERROR and is left for the checkpoint restore, never deleted by the
+stand.
+
 ## Next stages (not implemented here)
 
 Each needs its own stand extension and a decision by the owner first:
 
-- L3: stand scenarios for the systemd unit (installed by hand above) and the real
-  helper lifecycle, engine identification.
-- Kill switch and DNS lock on nftables, and the Linux contract for protection after
-  a helper crash (the Windows fail-open expectation is **not** carried over).
-- Lockdown, reboot and power-cut scenarios; the missing-group case on a clean VM.
+- Lockdown on Linux; reboot and power-cut scenarios with the table in place.
+- The missing-group case on a clean VM.
 - The `.deb` installer and desktop integration.

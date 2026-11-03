@@ -19,13 +19,20 @@ BASE=/var/lib/rosetun-l2
 
 die() { printf 'start.sh: %s\n' "$*" >&2; exit 1; }
 
-# The exact composition of a stage of this version; the launcher accepts a wider
-# set of names so that a new file here needs no new launcher.
+# The exact composition of a stage of this version, for each stage; the launcher
+# accepts a wider set of names so that a new file here needs no new launcher.
 l2_start_path_allowed() {
     [[ $1 =~ ^(guest/(launch|lib|run-l2|start)\.sh|scenarios\.tsv|job\.env|artifacts/(l2_transport_fixture|rosetun_helper_privileged_tests|rosetun_ipc_tests|provenance\.json))$ ]]
 }
 L2_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l2.sh guest/start.sh scenarios.tsv job.env
     artifacts/l2_transport_fixture artifacts/rosetun_helper_privileged_tests artifacts/rosetun_ipc_tests
+    artifacts/provenance.json)
+l3_start_path_allowed() {
+    [[ $1 =~ ^(guest/(launch|lib|run-l3|start)\.sh|scenarios-l3\.tsv|job\.env|artifacts/(rosetun-helper-privileged|rosetun|sing-box|rosetun-helper\.service|request-(kill-switch|lan|dns-lock)\.json|provenance\.json))$ ]]
+}
+L3_START_REQUIRED=(guest/launch.sh guest/lib.sh guest/run-l3.sh guest/start.sh scenarios-l3.tsv job.env
+    artifacts/rosetun-helper-privileged artifacts/rosetun artifacts/sing-box artifacts/rosetun-helper.service
+    artifacts/request-kill-switch.json artifacts/request-lan.json artifacts/request-dns-lock.json
     artifacts/provenance.json)
 
 l2_start_root_only() {
@@ -49,16 +56,21 @@ l2_start_main() {
     [ -f "$run/manifest.sha256" ] && l2_start_root_only "$run/manifest.sha256" || die "the run's manifest is missing or not root-owned"
     [ "$(sha256sum -- "$run/manifest.sha256" | cut -d' ' -f1)" = "$manifest_hash" ] || die "the run's manifest is not the one the host computed"
 
+    # A stage that carries the L3 job is an L3 stage and must hold only its files.
+    local stage=l2 allowed=l2_start_path_allowed required=("${L2_START_REQUIRED[@]}")
+    if grep -q '  guest/run-l3\.sh$' "$run/manifest.sha256"; then
+        stage=l3 allowed=l3_start_path_allowed required=("${L3_START_REQUIRED[@]}")
+    fi
     local line path paths=()
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         [[ $line =~ ^[0-9a-f]{64}\ \ (.+)$ ]] || die "malformed manifest line"
         path=${BASH_REMATCH[1]}
-        l2_start_path_allowed "$path" || die "manifest names a path the stand does not use: $path"
+        "$allowed" "$path" || die "manifest names a path the $stage stand does not use: $path"
         paths+=("$path")
     done <"$run/manifest.sha256"
     local need
-    for need in "${L2_START_REQUIRED[@]}"; do
+    for need in "${required[@]}"; do
         printf '%s\n' "${paths[@]}" | grep -qxF -- "$need" || die "the manifest lacks $need"
     done
     (cd -- "$run" && sha256sum --check --strict --quiet manifest.sha256) || die "a file of the run does not match the manifest"
@@ -80,19 +92,22 @@ l2_start_main() {
     # The job description is only read through the strict reader in lib.sh.
     . "$run/guest/lib.sh"
     RUN_ID='' JOB_TIMEOUT_SECONDS=900
-    l2_read_env_file "$run/job.env" RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID \
-        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS || die "job.env is not valid"
+    local keys=(RUN_ID STAND_ID EXPECTED_BOOT_ID USER_A USER_B BIOS_GUID
+        SCENARIO_TIMEOUT_SECONDS UNIT_TIMEOUT_SECONDS JOB_TIMEOUT_SECONDS)
+    [ "$stage" = l2 ] || keys+=(HOST_ADDRESS NODE_PORT PROBE_ADDRESS)
+    l2_read_env_file "$run/job.env" "${keys[@]}" || die "job.env is not valid"
     [ "$RUN_ID" = "$run_id" ] || die "job.env belongs to another run"
     [[ $JOB_TIMEOUT_SECONDS =~ ^[0-9]{2,5}$ ]] || die "invalid job time limit"
 
-    local unit="rosetun-l2-$run_id"
+    # The L3 cleanup stops the real service, which may take its own 45 s.
+    local unit="rosetun-l2-$run_id" job="$run/guest/run-$stage.sh"
     systemd-run --quiet --collect --unit="$unit" \
-        --description="Rosetun Linux L2 stand run $run_id (test infrastructure)" \
+        --description="Rosetun Linux ${stage^^} stand run $run_id (test infrastructure)" \
         --property=KillMode=control-group \
-        --property=TimeoutStopSec=30 \
+        --property=TimeoutStopSec=120 \
         --property=RuntimeMaxSec="$JOB_TIMEOUT_SECONDS" \
-        --property=ExecStopPost="/bin/bash $run/guest/run-l2.sh finalize $run" \
-        /bin/bash "$run/guest/run-l2.sh" run "$run" || die "systemd-run failed"
+        --property=ExecStopPost="/bin/bash $job finalize $run" \
+        /bin/bash "$job" run "$run" || die "systemd-run failed"
 
     printf 'started %s.service\nrun directory: %s\nreport:        %s/report/report.json\n' "$unit" "$run" "$run"
     printf 'The job runs without this session. Check it from the host with -Collect.\n'

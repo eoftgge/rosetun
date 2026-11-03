@@ -464,6 +464,82 @@ Assert-That 'the remake stops the VM before the checkpoint' (
 $odd = Get-RosetunLinuxRestoredStateProblem -VmName 'rosetun-linux-l2' -CheckpointName 'l2-clean' -State 'Paused'
 Assert-That 'any other state is refused too' ($null -ne $odd -and $odd -match "'Paused'")
 
+# --- L3: scenarios, requests, the stage's composition
+$l3 = @(Get-RosetunLinuxScenarios -Stage L3)
+Assert-That 'the L3 scenarios load' ($l3.Count -ge 15)
+Assert-That 'every L3 scenario is required' (@($l3 | Where-Object { -not $_.Required }).Count -eq 0)
+Assert-That 'the L3 list covers the crash and the stop' (@($l3 | Where-Object { $_.Id -in @('crash.helper-killed', 'crash.open-network', 'stop.removes-table') }).Count -eq 3)
+Assert-That 'L2 keeps its own list' (@(Get-RosetunLinuxScenarios -Stage L2 | Where-Object { $_.Id -like 'killswitch.*' }).Count -eq 0)
+
+$l3tmp = Join-Path ([IO.Path]::GetTempPath()) "rosetun-l3-selftest-$([guid]::NewGuid().ToString('N'))"
+$null = New-Item -ItemType Directory -Path $l3tmp
+try {
+    $template = [ordered]@{
+        node     = [ordered]@{ id = 'n'; server = 'node.example.com'; port = 1 }
+        settings = [ordered]@{ kill_switch = $false; allow_lan = $true; auto_reconnect = $false }
+    }
+    $templatePath = Join-Path $l3tmp 'template.json'
+    [IO.File]::WriteAllText($templatePath, ($template | ConvertTo-Json -Depth 5))
+    $requestDir = Join-Path $l3tmp 'requests'
+    $null = New-Item -ItemType Directory -Path $requestDir
+    $requests = New-RosetunLinuxL3Requests -RequestPath $templatePath -HostAddress '192.0.2.1' -NodePort 8388 -OutDir $requestDir
+    $read = { param($name) Get-Content -LiteralPath $requests[$name] -Raw | ConvertFrom-Json }
+    $ks = & $read 'request-kill-switch.json'
+    $lan = & $read 'request-lan.json'
+    $dns = & $read 'request-dns-lock.json'
+    Assert-That 'the requests point at the host node' ($ks.node.server -eq '192.0.2.1' -and $ks.node.port -eq 8388 -and $dns.node.server -eq '192.0.2.1')
+    Assert-That 'the kill-switch request has the kill switch and no LAN' ($ks.settings.kill_switch -and -not $ks.settings.allow_lan)
+    Assert-That 'the LAN request has both' ($lan.settings.kill_switch -and $lan.settings.allow_lan)
+    Assert-That 'the DNS-lock request has no kill switch' (-not $dns.settings.kill_switch)
+    Assert-That 'every request reconnects by itself' ($ks.settings.auto_reconnect -and $lan.settings.auto_reconnect -and $dns.settings.auto_reconnect)
+    $badHost = $false
+    try { $null = New-RosetunLinuxL3Requests -RequestPath $templatePath -HostAddress '2001:db8::1' -NodePort 8388 -OutDir $requestDir } catch { $badHost = $true }
+    Assert-That 'an IPv6 host address is refused' $badHost
+
+    $l3build = Join-Path $l3tmp 'build'
+    $null = New-Item -ItemType Directory -Path $l3build
+    $elfHeader = [byte[]]@(0x7F, 0x45, 0x4C, 0x46, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0x3E, 0) + [byte[]]::new(44)
+    $buildHashes = [ordered]@{}
+    foreach ($name in @('rosetun-helper-privileged', 'rosetun')) {
+        [IO.File]::WriteAllBytes((Join-Path $l3build $name), $elfHeader)
+        $buildHashes[$name] = @{ sha256 = Get-RosetunLinuxFileSha256 (Join-Path $l3build $name) }
+    }
+    $l3source = [pscustomobject]@{ Sha = 'a' * 40; Dirty = $false; DirtyEntries = 0; DirtyDigest = 'd' * 64 }
+    [IO.File]::WriteAllText((Join-Path $l3build 'provenance.json'), ([ordered]@{
+                schema = 1; stage = 'l3'; target = 'x86_64-unknown-linux-gnu'; source_sha = 'a' * 40; source_dirty = $false
+                source_dirty_digest = 'd' * 64; toolchain = @{}; built_on = @{}; artifacts = $buildHashes
+            } | ConvertTo-Json -Depth 5))
+    Assert-That 'an L3 build is checked against its own artifacts' (Get-RosetunLinuxArtifacts -ArtifactDir $l3build -Source $l3source -Stage L3).Confirmed
+    $l2refused = $false
+    try { $null = Get-RosetunLinuxArtifacts -ArtifactDir $l3build -Source $l3source -Stage L2 } catch { $l2refused = $true }
+    Assert-That 'an L3 build is not an L2 build' $l2refused
+
+    $engine = Join-Path $l3tmp 'sing-box'
+    [IO.File]::WriteAllBytes($engine, $elfHeader)
+    $extra = [ordered]@{}
+    foreach ($name in $requests.Keys) { $extra[$name] = $requests[$name] }
+    $extra['sing-box'] = $engine
+    $extra['rosetun-helper.service'] = Join-Path $PSScriptRoot '..\..\..\..\packaging\linux\rosetun-helper.service'
+    $jobExtra = [ordered]@{ HOST_ADDRESS = '192.0.2.1'; NODE_PORT = '8388'; PROBE_ADDRESS = '198.51.100.1' }
+    $l3env = New-RosetunLinuxJobEnv -RunId $runId -StandId 'stand-1' -BootId $bootId -UserA 'ipc_owner' -UserB 'ipc_other' `
+        -BiosGuid '00112233-4455-6677-8899-aabbccddeeff' -Extra $jobExtra
+    Assert-That 'the L3 job carries the host node' ($l3env -match '(?m)^HOST_ADDRESS=192\.0\.2\.1$' -and $l3env -match '(?m)^NODE_PORT=8388$')
+    $l3staged = New-RosetunLinuxStage -StageRoot (Join-Path $l3tmp 'stage') -RunId $runId -ArtifactDir $l3build -JobEnv $l3env -Stage L3 -Extra $extra
+    $startText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\guest\start.sh') -Raw
+    $l3required = @([regex]::Match($startText, '(?s)L3_START_REQUIRED=\((.*?)\)').Groups[1].Value -split '\s+' | Where-Object { $_ -ne '' } | Sort-Object -CaseSensitive)
+    Assert-That 'the host stages exactly the files start.sh requires for L3' (($l3required -join ',') -ceq (@($l3staged.Files | Sort-Object -CaseSensitive) -join ','))
+
+    $unsafeExtra = $false
+    try { $null = New-RosetunLinuxJobEnv -RunId $runId -StandId 's' -BootId $bootId -UserA 'a' -UserB 'b' -BiosGuid 'g' -Extra @{ HOST_ADDRESS = '1;reboot' } } catch { $unsafeExtra = $true }
+    Assert-That 'an unsafe extra job value is refused' $unsafeExtra
+    $unsafeKey = $false
+    try { $null = New-RosetunLinuxJobEnv -RunId $runId -StandId 's' -BootId $bootId -UserA 'a' -UserB 'b' -BiosGuid 'g' -Extra @{ 'path' = 'x' } } catch { $unsafeKey = $true }
+    Assert-That 'a lowercase extra job key is refused' $unsafeKey
+}
+finally {
+    Remove-Item -LiteralPath $l3tmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "Test-LinuxHarness: $script:Passed passed, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }
 exit 0

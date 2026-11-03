@@ -12,6 +12,14 @@ $script:RunIdPattern = '^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$'
 $script:SafeValuePattern = '^[A-Za-z0-9._:@/+=-]+$'
 $script:AccountPattern = '^[a-z_][a-z0-9_-]{0,31}$'
 $script:ArtifactNames = @('l2_transport_fixture', 'rosetun_helper_privileged_tests', 'rosetun_ipc_tests')
+# What each stage builds, stages and judges. L3 installs the real service and
+# runs only through -Run -Stage L3.
+$script:StageProfiles = @{
+    L2 = @{ Artifacts = $script:ArtifactNames; Scripts = @('launch.sh', 'lib.sh', 'run-l2.sh', 'start.sh'); Scenarios = 'scenarios.tsv' }
+    L3 = @{ Artifacts = @('rosetun-helper-privileged', 'rosetun'); Scripts = @('launch.sh', 'lib.sh', 'run-l3.sh', 'start.sh'); Scenarios = 'scenarios-l3.tsv' }
+}
+# The L3 stage's requests, made from the owner's request on the host.
+$script:L3Requests = @('request-kill-switch.json', 'request-lan.json', 'request-dns-lock.json')
 $script:ResultNames = @('PASS', 'FAIL', 'SKIP', 'ERROR')
 # The Windows test VM and its credential file are never a Linux stand.
 $script:ForbiddenVmNames = @('rosetun-test')
@@ -23,10 +31,14 @@ $script:SettingNames = @('VmName', 'StandId', 'SshUser', 'SshHost', 'SshPort', '
 $script:SettingDefaults = @{ Checkpoint = 'l2-clean'; WslDistro = 'Debian'; SshPort = 22 }
 # The installed launcher (guest/launch.sh) and the guest scripts a stage carries.
 $script:LauncherPath = '/usr/local/libexec/rosetun-l2/launch'
-$script:GuestScripts = @('launch.sh', 'lib.sh', 'run-l2.sh', 'start.sh')
 
 function Get-RosetunLinuxRoot {
     $PSScriptRoot
+}
+
+function Get-RosetunLinuxStageProfile {
+    param([ValidateSet('L2', 'L3')][string]$Stage = 'L2')
+    $script:StageProfiles[$Stage]
 }
 
 function New-RosetunLinuxRunId {
@@ -555,7 +567,9 @@ function Get-RosetunLinuxRestoredStateProblem {
 function Restore-RosetunLinuxCheckpoint {
     param(
         [Parameter(Mandatory)][string]$VmName,
-        [Parameter(Mandatory)][string]$CheckpointName
+        [Parameter(Mandatory)][string]$CheckpointName,
+        # After an L3 run: back to the clean state, left powered off.
+        [switch]$NoStart
     )
     $found = @(Get-VMCheckpoint -VMName $VmName -Name $CheckpointName -ErrorAction Stop)
     if ($found.Count -ne 1) {
@@ -564,7 +578,7 @@ function Restore-RosetunLinuxCheckpoint {
     $found[0] | Restore-VMCheckpoint -Confirm:$false
     $problem = Get-RosetunLinuxRestoredStateProblem -VmName $VmName -CheckpointName $CheckpointName -State ([string](Get-VM -Name $VmName).State)
     if ($null -ne $problem) { throw $problem }
-    Start-VM -Name $VmName
+    if (-not $NoStart) { Start-VM -Name $VmName }
 }
 
 function Wait-RosetunLinuxSsh {
@@ -673,7 +687,8 @@ function Invoke-RosetunLinuxBuild {
         [Parameter(Mandatory)][string]$WslDistro,
         [scriptblock]$Heartbeat,
         [int]$HeartbeatSeconds = 30,
-        [int]$TimeoutSeconds = 3600
+        [int]$TimeoutSeconds = 3600,
+        [ValidateSet('L2', 'L3')][string]$Stage = 'L2'
     )
     Assert-RosetunLinuxCleanSource -Source $Source
     if ($WslDistro -notmatch '^[A-Za-z0-9._-]+$') { throw "Unsafe WSL distribution name '$WslDistro'." }
@@ -686,6 +701,7 @@ function Invoke-RosetunLinuxBuild {
     $repoWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $RepoRoot
     $outWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $outRoot
     $arguments = @('-d', $WslDistro, '--cd', '~', '--exec', 'bash', "$repoWsl/tools/vm/linux/build-in-wsl.sh", $repoWsl, $Source.Sha, "$outWsl/$name")
+    if ($Stage -eq 'L3') { $arguments += '--l3' }
     $result = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxWsl) -ArgumentList $arguments -TimeoutSeconds $TimeoutSeconds `
         -Heartbeat $Heartbeat -HeartbeatSeconds $HeartbeatSeconds -Environment $script:WslEnvironment
     if ($result.ExitCode -ne 0) {
@@ -725,7 +741,8 @@ function Test-RosetunLinuxElf {
 function Get-RosetunLinuxArtifacts {
     param(
         [Parameter(Mandatory)][string]$ArtifactDir,
-        [Parameter(Mandatory)]$Source
+        [Parameter(Mandatory)]$Source,
+        [ValidateSet('L2', 'L3')][string]$Stage = 'L2'
     )
     if (-not (Test-Path -LiteralPath $ArtifactDir -PathType Container)) { throw "Artifact directory '$ArtifactDir' does not exist." }
     $provenancePath = Join-Path $ArtifactDir 'provenance.json'
@@ -737,7 +754,7 @@ function Get-RosetunLinuxArtifacts {
         throw 'provenance.json has an unexpected schema or target.'
     }
     $entries = [ordered]@{}
-    foreach ($name in $script:ArtifactNames) {
+    foreach ($name in (Get-RosetunLinuxStageProfile $Stage).Artifacts) {
         $path = Join-Path $ArtifactDir $name
         $elf = Test-RosetunLinuxElf $path
         if (-not $elf.Ok) { throw "Artifact '$name': $($elf.Reason)." }
@@ -771,7 +788,8 @@ function Get-RosetunLinuxArtifacts {
 # ------------------------------------------------------------------ scenarios and staging
 
 function Get-RosetunLinuxScenarios {
-    param([string]$Path = (Join-Path (Get-RosetunLinuxRoot) 'scenarios.tsv'))
+    param([ValidateSet('L2', 'L3')][string]$Stage = 'L2', [string]$Path)
+    if (-not $Path) { $Path = Join-Path (Get-RosetunLinuxRoot) (Get-RosetunLinuxStageProfile $Stage).Scenarios }
     $lines = @(Get-Content -LiteralPath $Path | Where-Object { $_.Trim() -ne '' })
     if ($lines.Count -lt 2 -or $lines[0] -ne "id`trequired`tevidence`tgroup`tdetail`ttitle") {
         throw "scenarios.tsv has an unexpected header."
@@ -799,9 +817,16 @@ function New-RosetunLinuxJobEnv {
         [Parameter(Mandatory)][string]$BiosGuid,
         [int]$ScenarioTimeoutSeconds = 30,
         [int]$UnitTimeoutSeconds = 180,
-        [int]$JobTimeoutSeconds = 900
+        [int]$JobTimeoutSeconds = 900,
+        # More KEY=value lines for a stage that needs them (L3: the host node).
+        [Collections.IDictionary]$Extra = [ordered]@{}
     )
     if (-not (Test-RosetunLinuxRunId $RunId)) { throw "Invalid run id '$RunId'." }
+    foreach ($key in @($Extra.Keys)) {
+        if ($key -cnotmatch '^[A-Z][A-Z_]{0,31}$' -or [string]$Extra[$key] -notmatch $script:SafeValuePattern) {
+            throw "Unsafe job value '$key'."
+        }
+    }
     foreach ($pair in @(@('stand id', $StandId), @('boot id', $BootId), @('BIOS GUID', $BiosGuid))) {
         if ($pair[1] -notmatch $script:SafeValuePattern) { throw "Unsafe $($pair[0]) '$($pair[1])'." }
     }
@@ -817,7 +842,7 @@ function New-RosetunLinuxJobEnv {
         "USER_A=$UserA", "USER_B=$UserB", "BIOS_GUID=$BiosGuid",
         "SCENARIO_TIMEOUT_SECONDS=$ScenarioTimeoutSeconds", "UNIT_TIMEOUT_SECONDS=$UnitTimeoutSeconds",
         "JOB_TIMEOUT_SECONDS=$JobTimeoutSeconds"
-    ) -join "`n"
+    ) + @($Extra.Keys | ForEach-Object { "$_=$($Extra[$_])" }) -join "`n"
 }
 
 function Write-RosetunLinuxLfFile {
@@ -833,20 +858,28 @@ function New-RosetunLinuxStage {
         [Parameter(Mandatory)][string]$StageRoot,
         [Parameter(Mandatory)][string]$RunId,
         [Parameter(Mandatory)][string]$ArtifactDir,
-        [Parameter(Mandatory)][string]$JobEnv
+        [Parameter(Mandatory)][string]$JobEnv,
+        [ValidateSet('L2', 'L3')][string]$Stage = 'L2',
+        # Files staged under artifacts/ besides the build, by published name.
+        [Collections.IDictionary]$Extra = [ordered]@{}
     )
     if (-not (Test-RosetunLinuxRunId $RunId)) { throw "Invalid run id '$RunId'." }
+    $stageProfile = Get-RosetunLinuxStageProfile $Stage
     $root = Join-Path $StageRoot $RunId
     if (Test-Path -LiteralPath $root) { throw "Stage directory '$root' already exists; a run id is used once." }
     $null = New-Item -ItemType Directory -Path (Join-Path $root 'guest'), (Join-Path $root 'artifacts')
     $linux = Get-RosetunLinuxRoot
-    foreach ($script in $script:GuestScripts) {
+    foreach ($script in $stageProfile.Scripts) {
         Write-RosetunLinuxLfFile -Path (Join-Path $root "guest/$script") -Text (Get-Content -LiteralPath (Join-Path $linux "guest/$script") -Raw)
     }
-    Write-RosetunLinuxLfFile -Path (Join-Path $root 'scenarios.tsv') -Text (Get-Content -LiteralPath (Join-Path $linux 'scenarios.tsv') -Raw)
+    Write-RosetunLinuxLfFile -Path (Join-Path $root $stageProfile.Scenarios) -Text (Get-Content -LiteralPath (Join-Path $linux $stageProfile.Scenarios) -Raw)
     Write-RosetunLinuxLfFile -Path (Join-Path $root 'job.env') -Text $JobEnv
-    foreach ($name in $script:ArtifactNames + @('provenance.json')) {
+    foreach ($name in @($stageProfile.Artifacts) + @('provenance.json')) {
         Copy-Item -LiteralPath (Join-Path $ArtifactDir $name) -Destination (Join-Path $root "artifacts/$name")
+    }
+    foreach ($name in @($Extra.Keys)) {
+        if ($name -notmatch '^[A-Za-z0-9_][A-Za-z0-9_.-]*$') { throw "Unsafe staged file name '$name'." }
+        Copy-Item -LiteralPath $Extra[$name] -Destination (Join-Path $root "artifacts/$name")
     }
     $files = @(Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
             $_.FullName.Substring($root.Length + 1).Replace('\', '/')
@@ -860,6 +893,46 @@ function New-RosetunLinuxStage {
         ManifestHash = Get-RosetunLinuxFileSha256 (Join-Path $root 'manifest.sha256')
         Files        = $files
     }
+}
+
+# The three requests of the L3 matrix from the owner's request: its node
+# pointed at the host node, with the kill switch and "Local network" off
+# (auto_reconnect on, so a killed engine comes back), with "Local network" on,
+# and without the kill switch (the DNS lock). Returns name -> path.
+function New-RosetunLinuxL3Requests {
+    param(
+        [Parameter(Mandatory)][string]$RequestPath,
+        [Parameter(Mandatory)][string]$HostAddress,
+        [Parameter(Mandatory)][ValidateRange(1, 65535)][int]$NodePort,
+        [Parameter(Mandatory)][string]$OutDir
+    )
+    $address = $null
+    if (-not [Net.IPAddress]::TryParse($HostAddress, [ref]$address) -or $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+        throw "The host address '$HostAddress' is not an IPv4 address."
+    }
+    $template = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+    if ($null -eq (Get-RosetunLinuxMember -Object $template -Name 'node') -or $null -eq (Get-RosetunLinuxMember -Object $template -Name 'settings')) {
+        throw "'$RequestPath' is not a connect request (no node or settings)."
+    }
+    $variants = [ordered]@{
+        'request-kill-switch.json' = @{ kill_switch = $true; allow_lan = $false }
+        'request-lan.json'         = @{ kill_switch = $true; allow_lan = $true }
+        'request-dns-lock.json'    = @{ kill_switch = $false; allow_lan = $false }
+    }
+    $paths = [ordered]@{}
+    foreach ($name in $variants.Keys) {
+        $request = $template | ConvertTo-Json -Depth 32 | ConvertFrom-Json
+        $request.node.server = $address.ToString()
+        $request.node.port = $NodePort
+        foreach ($setting in @('kill_switch', 'allow_lan')) {
+            $request.settings | Add-Member -NotePropertyName $setting -NotePropertyValue $variants[$name][$setting] -Force
+        }
+        $request.settings | Add-Member -NotePropertyName auto_reconnect -NotePropertyValue $true -Force
+        $path = Join-Path $OutDir $name
+        [IO.File]::WriteAllText($path, ($request | ConvertTo-Json -Depth 32), [Text.UTF8Encoding]::new($false))
+        $paths[$name] = $path
+    }
+    $paths
 }
 
 # ------------------------------------------------------------------ starting the job
