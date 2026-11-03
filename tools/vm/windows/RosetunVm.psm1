@@ -839,6 +839,19 @@ function Publish-Rosetun {
     Write-Host "sing-box first launch took $seconds s"
 }
 
+function New-RosetunUpgradeRequest {
+    # The upgrade matrix's request from request.json's text: the kill switch
+    # as given and Local network off. The source may lack either field.
+    param(
+        [Parameter(Mandatory)][string]$Json,
+        [Parameter(Mandatory)][bool]$KillSwitch
+    )
+    $request = $Json | ConvertFrom-Json
+    $request.settings | Add-Member -NotePropertyName kill_switch -NotePropertyValue $KillSwitch -Force
+    $request.settings | Add-Member -NotePropertyName allow_lan -NotePropertyValue $false -Force
+    $request | ConvertTo-Json -Depth 20
+}
+
 function Update-Rosetun {
     # Redeploys a build into the running guest without restoring the
     # checkpoint: faster than the matrix when iterating on one scenario.

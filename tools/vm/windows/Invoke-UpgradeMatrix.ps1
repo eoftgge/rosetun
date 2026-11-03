@@ -90,18 +90,21 @@ function Copy-Setups {
 
 function New-UpgradeRequests {
     # request.json with the kill switch on and off; auto-reconnect stays off,
-    # as Publish-Rosetun sets it.
-    Invoke-RosetunGuest -ScriptBlock {
-        param($dir)
-        foreach ($killSwitch in $true, $false) {
-            $request = Get-Content -Raw -LiteralPath (Join-Path $dir 'request.json') | ConvertFrom-Json
-            $request.settings.kill_switch = $killSwitch
-            $request.settings.allow_lan = $false
-            $name = if ($killSwitch) { 'request-upgrade-kill-switch.json' } else { 'request-upgrade-open.json' }
+    # as Publish-Rosetun sets it. Built on the host by the function
+    # tests\Test-RosetunUpgradeRequests.ps1 checks without a VM.
+    $source = [string](Invoke-RosetunGuest -ScriptBlock {
+            param($path)
+            Get-Content -Raw -LiteralPath $path
+        } -ArgumentList (Join-Path $guestDir 'request.json'))
+    foreach ($killSwitch in $true, $false) {
+        $name = if ($killSwitch) { 'request-upgrade-kill-switch.json' } else { 'request-upgrade-open.json' }
+        $json = New-RosetunUpgradeRequest -Json $source -KillSwitch $killSwitch
+        Invoke-RosetunGuest -ScriptBlock {
+            param($path, $json)
             # Without a BOM: serde_json rejects one.
-            [IO.File]::WriteAllText((Join-Path $dir $name), ($request | ConvertTo-Json -Depth 20))
-        }
-    } -ArgumentList $guestDir
+            [IO.File]::WriteAllText($path, $json)
+        } -ArgumentList (Join-Path $guestDir $name), $json
+    }
 }
 
 function Invoke-Setup {
