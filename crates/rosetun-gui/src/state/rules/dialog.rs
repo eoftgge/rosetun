@@ -12,7 +12,7 @@ use crate::errors;
 use crate::rules::{ProcessGroup, ProcessMatchMode, group_processes};
 use crate::worker::WorkerEvent;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub(crate) enum RuleInputKind {
     #[default]
     Process,

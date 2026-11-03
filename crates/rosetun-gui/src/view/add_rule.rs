@@ -12,7 +12,7 @@ use crate::rules::{
 };
 use crate::state::{Action, AddRuleDialog, AddressError, MAX_ADDRESSES, RuleInputKind};
 use crate::view::rules::{destination_color, destination_label, target_color, target_label};
-use crate::{constants, destinations, i18n, theme, widgets};
+use crate::{constants, destinations, i18n, motion, theme, widgets};
 
 const ERROR_HEIGHT: f32 = 28.0;
 const PROCESS_ROW_HEIGHT: f32 = 40.0;
@@ -88,10 +88,13 @@ pub(crate) fn show(
         }
         ui.add_space(theme::space::S);
         let error = dialog.error.clone();
-        let valid = content_area(ui, height, error.as_deref(), |ui| match dialog.kind {
-            RuleInputKind::Process => process_input(ui, dialog, actions),
-            RuleInputKind::Address => scrolled(ui, |ui| address_input(ui, dialog, actions)),
-            RuleInputKind::List => scrolled(ui, |ui| list_input(ui, dialog, lists, actions)),
+        let kind_shown = kind_progress(ui.ctx(), dialog.kind, motion::reduced());
+        let valid = content_area(ui, height, error.as_deref(), |ui| {
+            widgets::appear(ui, kind_shown, |ui| match dialog.kind {
+                RuleInputKind::Process => process_input(ui, dialog, actions),
+                RuleInputKind::Address => scrolled(ui, |ui| address_input(ui, dialog, actions)),
+                RuleInputKind::List => scrolled(ui, |ui| list_input(ui, dialog, lists, actions)),
+            })
         });
         ui.add_space(theme::space::S);
         destination_row(ui, dialog, config, can_temporary);
@@ -133,6 +136,16 @@ pub(crate) fn show(
     if !dialog.busy && response.should_close() {
         actions.push(Action::CancelAddRule);
     }
+}
+
+/// How far the content of `kind` has appeared: it fades in whenever another kind is chosen.
+fn kind_progress(ctx: &egui::Context, kind: RuleInputKind, reduce_motion: bool) -> f32 {
+    widgets::appear_progress(
+        ctx,
+        egui::Id::unique("rule_input_body"),
+        kind,
+        reduce_motion,
+    )
 }
 
 /// "Add", "Add N rules" for several, "Save" for an edit.
@@ -2141,5 +2154,83 @@ mod tests {
         assert_eq!(dialog.process_filter, "tele");
         assert_eq!(dialog.process, "Tele\u{202e}gram.exe");
         assert_eq!(dialog.selected_process, Some(0));
+    }
+
+    /// The opacity of the first painted text equal to `text`, 0 to 255.
+    fn text_alpha(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<u8> {
+        fn find(shape: &egui::Shape, text: &str) -> Option<u8> {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, text)),
+                egui::Shape::Text(shape) if shape.galley.text() == text => shape
+                    .galley
+                    .rows
+                    .first()
+                    .and_then(|row| row.row.visuals.mesh.vertices.first())
+                    .map(|vertex| vertex.color.a()),
+                _ => None,
+            }
+        }
+        shapes.iter().find_map(|clipped| find(&clipped.shape, text))
+    }
+
+    /// Runs the dialog at `time` seconds and returns the opacity of `text`.
+    fn alpha_at(
+        ctx: &egui::Context,
+        dialog: &mut AddRuleDialog,
+        time: f64,
+        text: &str,
+    ) -> Option<u8> {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, COMPACT)),
+                time: Some(time),
+                ..egui::RawInput::default()
+            },
+            |ctx| show(ctx, dialog, &AppConfig::default(), false, 0, &mut Vec::new()),
+        );
+        output.textures_delta.clear();
+        text_alpha(&output.shapes, text)
+    }
+
+    #[test]
+    fn the_content_fades_in_when_another_kind_is_chosen() {
+        i18n::in_language(i18n::Language::English, || {
+            let hint = tr!("address-hint");
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+            for step in 0..6 {
+                alpha_at(&ctx, &mut dialog, f64::from(step) * 0.1, &hint);
+            }
+            dialog.kind = RuleInputKind::Address;
+            // Nothing is painted at zero opacity.
+            let first = alpha_at(&ctx, &mut dialog, 1.0, &hint).unwrap_or(0);
+            let midway = alpha_at(&ctx, &mut dialog, 1.05, &hint).expect("the hint is painted");
+            let later = alpha_at(&ctx, &mut dialog, 1.0 + f64::from(motion::FAST) + 0.01, &hint)
+                .expect("the hint is painted");
+            let settled = alpha_at(&ctx, &mut dialog, 2.0, &hint).expect("the hint is painted");
+            assert!(first < midway && midway < settled, "{first} {midway} {settled}");
+            assert_eq!(later, settled, "whole after FAST");
+        });
+    }
+
+    #[test]
+    fn reduced_motion_shows_the_chosen_kind_at_once() {
+        let ctx = egui::Context::default();
+        let progress = |time: f64, kind: RuleInputKind, reduce: bool| {
+            let mut value = 0.0;
+            let input = egui::RawInput {
+                time: Some(time),
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| value = kind_progress(ui.ctx(), kind, reduce));
+            output.textures_delta.clear();
+            value
+        };
+        progress(0.0, RuleInputKind::Process, true);
+        assert_eq!(progress(0.1, RuleInputKind::Address, true), 1.0);
+        progress(0.2, RuleInputKind::Process, false);
+        assert_eq!(progress(0.3, RuleInputKind::List, false), 0.0);
+        assert_eq!(progress(0.3 + f64::from(motion::FAST), RuleInputKind::List, false), 1.0);
     }
 }
