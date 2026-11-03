@@ -206,6 +206,11 @@ impl App {
         {
             tracing::warn!(%error, "could not cloak the main window while it appears");
         }
+        if let Some(window) = &window
+            && let Err(error) = rosetun_shell::quiet_moves(window.hwnd())
+        {
+            tracing::warn!(%error, "could not keep window drags from repainting");
+        }
         self.window = window;
         if !start_hidden
             && let Some(window) = &mut self.window

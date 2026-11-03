@@ -1,32 +1,45 @@
+use std::cell::Cell;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
-    MonitorFromPoint, MonitorFromWindow,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY,
+    MONITORINFO, MonitorFromPoint, MonitorFromWindow,
 };
 use windows_sys::Win32::UI::HiDpi::{
     GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GetSystemMetrics, GetWindowPlacement, IsIconic, IsWindowVisible, IsZoomed,
-    KillTimer, SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPlacement, SetWindowPos, WINDOWPLACEMENT,
-    WM_NCDESTROY, WM_QUERYOPEN, WM_SHOWWINDOW, WM_TIMER, WPF_RESTORETOMAXIMIZED,
+    DefWindowProcW, FindWindowW, GetSystemMetrics, GetWindowPlacement, IsIconic, IsWindowVisible,
+    IsZoomed, KillTimer, SM_CXSMICON, SM_SHUTTINGDOWN, SW_HIDE, SW_SHOWNOACTIVATE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPlacement, SetWindowPos,
+    WINDOWPLACEMENT, WINDOWPOS, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_NCDESTROY, WM_QUERYOPEN,
+    WM_SHOWWINDOW, WM_TIMER, WM_WINDOWPOSCHANGED, WPF_RESTORETOMAXIMIZED,
 };
 
 use crate::first_start::{ScreenRect, first_start_rect};
 
 const CLOAK_SUBCLASS_ID: usize = 1;
+const MOVE_SUBCLASS_ID: usize = 2;
 const UNCLOAK_TIMER_ID: usize = 0x5254_434C;
 /// A window that never appears is worse than a white frame.
 const CLOAK_LIMIT_MS: u32 = 500;
 
 /// Only the main window is subclassed, and only on its own thread.
 static CLOAKED: AtomicBool = AtomicBool::new(false);
+
+/// What [`quiet_moves`] remembers between messages. It lives in the subclass's
+/// reference data and is touched only on the window's thread.
+#[derive(Debug)]
+struct MoveWatch {
+    /// Inside the modal loop Windows runs while the user drags or sizes the window.
+    in_move_loop: Cell<bool>,
+    /// The monitor that held most of the window after its last position change.
+    monitor: Cell<usize>,
+}
 
 /// Where the window was. The rect is the normal (not maximized) one, in the
 /// coordinates that `GetWindowPlacement` and `SetWindowPlacement` use.
@@ -282,6 +295,93 @@ unsafe extern "system" fn cloak_proc(
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
+/// Keeps winit from hearing that the window moved while the user drags it,
+/// unless it reached another monitor. A move changes nothing inside the
+/// window, yet eframe answers each move winit reports with a frame: a stream
+/// of vsync-bound presents that holds the drag back and, on a variable-refresh
+/// display, stops abruptly with the drag. Size and DPI changes still reach
+/// winit, as `WM_SIZE` and `WM_DPICHANGED`, and moves outside a drag
+/// (restoring, placing, snapping from the keyboard) are reported as before.
+///
+/// Call once, on the thread that owns the window.
+pub fn quiet_moves(hwnd: isize) -> io::Result<()> {
+    let hwnd = hwnd as HWND;
+    // SAFETY: hwnd is borrowed; the monitor handle is owned by Windows and only compared.
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) } as usize;
+    let watch = Box::into_raw(Box::new(MoveWatch {
+        in_move_loop: Cell::new(false),
+        monitor: Cell::new(monitor),
+    }));
+    // SAFETY: hwnd is the caller's live top-level window, owned by winit on this thread. The
+    // subclass procedure is a static function; the reference data is the box above, which
+    // `move_proc` frees on WM_NCDESTROY after removing the subclass, so neither outlives
+    // the window.
+    if unsafe { SetWindowSubclass(hwnd, Some(move_proc), MOVE_SUBCLASS_ID, watch as usize) } == 0
+    {
+        // SAFETY: the subclass was not installed, so this is the only pointer to the box.
+        drop(unsafe { Box::from_raw(watch) });
+        return Err(io::Error::other("could not subclass the main window"));
+    }
+    Ok(())
+}
+
+/// Whether a position change goes on to winit, which reports a move as
+/// `WindowEvent::Moved`. A frame on another monitor picks up its scale and
+/// refresh; inside a drag on the same monitor there is nothing to draw.
+fn forwards_position_change(in_move_loop: bool, moved: bool, monitor_changed: bool) -> bool {
+    !in_move_loop || !moved || monitor_changed
+}
+
+unsafe extern "system" fn move_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    id: usize,
+    data: usize,
+) -> LRESULT {
+    let watch = data as *mut MoveWatch;
+    match message {
+        WM_ENTERSIZEMOVE | WM_EXITSIZEMOVE => {
+            // SAFETY: data is the box `quiet_moves` installed; it is freed only on
+            // WM_NCDESTROY, the window's last message, on this same thread.
+            unsafe { &*watch }
+                .in_move_loop
+                .set(message == WM_ENTERSIZEMOVE);
+        }
+        WM_WINDOWPOSCHANGED => {
+            // SAFETY: as above.
+            let watch = unsafe { &*watch };
+            // SAFETY: for this message lparam points to a WINDOWPOS valid during the call.
+            let flags = unsafe { (*(lparam as *const WINDOWPOS)).flags };
+            // SAFETY: hwnd is borrowed; the monitor handle is owned by Windows and only compared.
+            let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) } as usize;
+            let monitor_changed = watch.monitor.replace(monitor) != monitor;
+            if !forwards_position_change(
+                watch.in_move_loop.get(),
+                flags & SWP_NOMOVE == 0,
+                monitor_changed,
+            ) {
+                // What winit does after reporting the move: the default handler, which
+                // sends WM_SIZE (still seen by winit) and WM_MOVE.
+                // SAFETY: the message and its arguments exactly as received.
+                return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+            }
+        }
+        WM_NCDESTROY => {
+            // SAFETY: removes the subclass installed by `quiet_moves` with the same procedure
+            // and id, on the window's own thread; it is never called with `data` again.
+            unsafe { RemoveWindowSubclass(hwnd, Some(move_proc), id) };
+            // SAFETY: the box leaked by `quiet_moves`; with the subclass gone nothing else
+            // holds the pointer.
+            drop(unsafe { Box::from_raw(watch) });
+        }
+        _ => {}
+    }
+    // SAFETY: forwards the message unchanged to the next procedure in the chain.
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
 /// Whether the Windows session is signing out or shutting down. winit leaves
 /// `WM_QUERYENDSESSION` to the default handler, so this is the GUI's only view of it.
 pub fn session_ending() -> bool {
@@ -314,12 +414,20 @@ pub fn taskbar_small_icon_size() -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use windows_sys::Win32::Foundation::HWND;
+    use std::cell::Cell;
+
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, KillTimer, WS_POPUP,
+        CreateWindowExW, DestroyWindow, KillTimer, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        SendMessageW, SetWindowPos, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOVE,
+        WM_WINDOWPOSCHANGED, WS_POPUP,
     };
 
-    use super::{SavedWindow, UNCLOAK_TIMER_ID, cloak_window, set_cloak, window_cloaked};
+    use super::{
+        SavedWindow, UNCLOAK_TIMER_ID, cloak_window, forwards_position_change, quiet_moves,
+        set_cloak, window_cloaked,
+    };
 
     /// A window that is never shown, owned by the test's thread.
     struct Hidden(HWND);
@@ -361,6 +469,83 @@ mod tests {
             // SAFETY: the window was created by `new` on this thread.
             unsafe { DestroyWindow(self.0) };
         }
+    }
+
+    /// What reached the procedure below `quiet_moves`, where winit would be.
+    #[derive(Default)]
+    struct Seen {
+        position_changes: Cell<u32>,
+        moves: Cell<u32>,
+    }
+
+    unsafe extern "system" fn record(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        data: usize,
+    ) -> LRESULT {
+        // SAFETY: data points to the test's `Seen`, which outlives the window.
+        let seen = unsafe { &*(data as *const Seen) };
+        match message {
+            WM_WINDOWPOSCHANGED => seen.position_changes.set(seen.position_changes.get() + 1),
+            WM_MOVE => seen.moves.set(seen.moves.get() + 1),
+            _ => {}
+        }
+        // SAFETY: forwards the message unchanged.
+        unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+    }
+
+    fn move_to(window: &Hidden, x: i32) {
+        // SAFETY: the window is this thread's; only its position changes.
+        let moved = unsafe {
+            SetWindowPos(
+                window.0,
+                std::ptr::null_mut(),
+                x,
+                0,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        assert_ne!(moved, 0, "the test window did not move");
+    }
+
+    #[test]
+    fn a_drag_on_one_monitor_reaches_the_window_without_a_move_report() {
+        let seen = Seen::default();
+        let window = Hidden::new();
+        // SAFETY: the window is this thread's; `seen` outlives it (dropped after it).
+        let installed =
+            unsafe { SetWindowSubclass(window.0, Some(record), 99, (&raw const seen) as usize) };
+        assert_ne!(installed, 0);
+        quiet_moves(window.0 as isize).expect("subclass the test window");
+
+        move_to(&window, 5);
+        assert_eq!(seen.position_changes.get(), 1, "a move outside a drag is reported");
+
+        // SAFETY: the window is this thread's; the messages carry no pointers.
+        unsafe { SendMessageW(window.0, WM_ENTERSIZEMOVE, 0, 0) };
+        let moves = seen.moves.get();
+        move_to(&window, 15);
+        move_to(&window, 25);
+        assert_eq!(seen.position_changes.get(), 1, "a move inside a drag reached winit");
+        assert_eq!(seen.moves.get(), moves + 2, "the default handling went on");
+
+        // SAFETY: as above.
+        unsafe { SendMessageW(window.0, WM_EXITSIZEMOVE, 0, 0) };
+        move_to(&window, 35);
+        assert_eq!(seen.position_changes.get(), 2);
+    }
+
+    #[test]
+    fn only_a_move_inside_a_drag_on_the_same_monitor_is_kept_from_winit() {
+        assert!(!forwards_position_change(true, true, false));
+        assert!(forwards_position_change(true, true, true), "another monitor");
+        assert!(forwards_position_change(true, false, false), "sized, not moved");
+        assert!(forwards_position_change(false, true, false), "not a drag");
     }
 
     // One test: the cloak state is process-wide.

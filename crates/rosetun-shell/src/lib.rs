@@ -111,6 +111,6 @@ pub use system_info::{local_report_timestamp, windows_build};
 pub use tray_notice::tray_notice;
 #[cfg(windows)]
 pub use window::{
-    SavedWindow, cloak_on_show, cloak_window, place_window, saved_window, session_ending,
-    taskbar_small_icon_size, uncloak_window, window_cloaked,
+    SavedWindow, cloak_on_show, cloak_window, place_window, quiet_moves, saved_window,
+    session_ending, taskbar_small_icon_size, uncloak_window, window_cloaked,
 };
