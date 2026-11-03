@@ -1051,7 +1051,7 @@ function Wait-RosetunHelperReady {
         [switch]$Service
     )
     Invoke-RosetunGuest -ScriptBlock {
-        param($dir, $pipeName, $timeout, $service)
+        param($dir, $pipeName, $timeout, $needService)
 
         # Two checks that do not connect, unlike Test-Path, so neither consumes
         # a listener instance: the pipe directory listing, and WaitNamedPipe,
@@ -1073,7 +1073,7 @@ public static int Probe(string name) { return WaitNamedPipeW(name, 1) ? 0 : Mars
         $clock = [Diagnostics.Stopwatch]::StartNew()
         while ($true) {
             $round = [Diagnostics.Stopwatch]::StartNew()
-            $running = -not $service -or (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue).Status -eq 'Running'
+            $running = -not $needService -or (Get-Service -Name 'Rosetun' -ErrorAction SilentlyContinue).Status -eq 'Running'
             $listed = [IO.Directory]::GetFiles('\\.\pipe\') -contains $path
             # 0: an instance is free; 121: it exists, every instance is busy.
             $probe = [Rosetun.PipeProbe]::Probe($path)
@@ -1085,8 +1085,12 @@ public static int Probe(string name) { return WaitNamedPipeW(name, 1) ? 0 : Mars
             if ($clock.Elapsed.TotalSeconds -gt $timeout) {
                 # UTC, as helper.log, to compare with its lines.
                 $gaveUp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+                # The last round's values: in one run the pipe was found and the
+                # loop still did not end.
+                $needType = if ($null -eq $needService) { 'null' } else { $needService.GetType().FullName }
                 return ("did not open its pipe within $timeout seconds (gave up at $gaveUp; " +
-                    "$rounds rounds, slowest $slowestMs ms; last WaitNamedPipe result $probe)")
+                    "$rounds rounds, slowest $slowestMs ms; last WaitNamedPipe result $probe; " +
+                    "running=$running listed=$listed named=$named; needService=[$needService] of type $needType)")
             }
             Start-Sleep -Milliseconds 200
         }
@@ -1828,7 +1832,22 @@ function Start-RosetunEgressWatch {
                     $state = (Get-ScheduledTask -TaskName $task).State
                     $result = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
                     $errorText = Get-Content -Path "$path.error" -Raw -ErrorAction SilentlyContinue
-                    throw "The egress watch did not record a probe within 30 seconds: task $state, result $result, script error '$errorText'."
+                    # Whether its PowerShell is still starting or a probe hangs.
+                    $utc = 'yyyy-MM-ddTHH:mm:ss.fffZ'
+                    $watchers = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'powershell.exe'" |
+                            Where-Object { $_.CommandLine -like '*rosetun-egress-watch.ps1*' })
+                    $states = foreach ($watcher in $watchers) {
+                        $cpu = (Get-Process -Id $watcher.ProcessId -ErrorAction SilentlyContinue).TotalProcessorTime.TotalSeconds
+                        $children = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($watcher.ProcessId)" |
+                                ForEach-Object { "$($_.Name) since $($_.CreationDate.ToUniversalTime().ToString($utc))" })
+                        'PID {0} since {1}, CPU {2:N1} s, children: {3}' -f $watcher.ProcessId,
+                        $watcher.CreationDate.ToUniversalTime().ToString($utc), $cpu,
+                        $(if ($children.Count) { $children -join ', ' } else { 'none' })
+                    }
+                    $detail = "now $((Get-Date).ToUniversalTime().ToString($utc)); watcher: " +
+                        $(if ($watchers.Count) { $states -join '; ' } else { 'none' }) +
+                        "; $path.tmp exists: $(Test-Path -Path "$path.tmp")"
+                    throw "The egress watch did not record a probe within 30 seconds: task $state, result $result, script error '$errorText'; $detail."
                 }
                 Start-Sleep -Milliseconds 200
             }
@@ -2074,11 +2093,15 @@ function Save-RosetunGuestFiles {
                 Write-Warning "Could not copy $($log.Name): $($_.Exception.Message)"
             }
         }
-        $snapshot
+        [pscustomobject]@{ Path = $snapshot; Count = @(Get-ChildItem -Path $snapshot -File).Count }
     } -ArgumentList $Path, $Filter
+    $count = $snapshot.Count
+    $snapshot = $snapshot.Path
     try {
-        Copy-Item -FromSession (Connect-RosetunVm) -Path (Join-Path $snapshot '*') `
-            -Destination $Destination -ErrorAction Continue
+        if ($count -gt 0) {
+            Copy-Item -FromSession (Connect-RosetunVm) -Path (Join-Path $snapshot '*') `
+                -Destination $Destination -ErrorAction Continue
+        }
     }
     finally {
         Invoke-RosetunGuest -ScriptBlock {

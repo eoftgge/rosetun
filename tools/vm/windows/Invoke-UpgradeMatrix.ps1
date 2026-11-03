@@ -120,16 +120,33 @@ function Invoke-Setup {
         $setup = Join-Path $dir "$build-setup.exe"
         $log = Join-Path $dir "$logName.log"
         Remove-Item -LiteralPath $log -ErrorAction SilentlyContinue
-        $process = Start-Process -FilePath $setup -PassThru `
-            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`""
-        # Without a handle opened now, WaitForExit opens one for waiting only
-        # and ExitCode comes back empty.
-        $null = $process.Handle
+        # CreateProcess, not Start-Process: through ShellExecute the process
+        # waited on ended when setup started, with no exit code.
+        $info = [Diagnostics.ProcessStartInfo]::new($setup, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=`"$log`"")
+        $info.UseShellExecute = $false
+        $process = [Diagnostics.Process]::Start($info)
         if ($background) { return [pscustomobject]@{ Id = $process.Id; ExitCode = $null } }
+        $clock = [Diagnostics.Stopwatch]::StartNew()
         if (-not $process.WaitForExit($timeout * 1000)) {
             throw "$build setup did not finish within $timeout s."
         }
-        [pscustomobject]@{ Id = $process.Id; ExitCode = $process.ExitCode }
+        $exitedSeconds = [int]$clock.Elapsed.TotalSeconds
+        # Setup writes this line last; it is the check that setup has ended,
+        # whatever process carried it.
+        $text = ''
+        while ($text -notmatch 'Log closed\.') {
+            if ($clock.Elapsed.TotalSeconds -gt $timeout) {
+                throw "$build setup did not close its log within $timeout s (its process ended after $exitedSeconds s)."
+            }
+            Start-Sleep -Milliseconds 500
+            $text = [string](Get-Content -Raw -LiteralPath $log -ErrorAction SilentlyContinue)
+        }
+        [pscustomobject]@{
+            Id        = $process.Id
+            ExitCode  = $process.ExitCode
+            Succeeded = $text -match 'Installation process succeeded'
+            Note      = "exit $($process.ExitCode); process ended after $exitedSeconds s, log closed after $([int]$clock.Elapsed.TotalSeconds) s"
+        }
     } -ArgumentList $upgradeDir, $Build, $LogName, [bool]$Background, $SetupTimeoutSeconds
 }
 
@@ -274,8 +291,10 @@ function Uninstall-Rosetun {
     Invoke-RosetunGuest -ScriptBlock {
         $uninstaller = "$env:ProgramFiles\Rosetun\unins000.exe"
         if (Test-Path -LiteralPath $uninstaller) {
-            $process = Start-Process -FilePath $uninstaller -PassThru `
-                -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+            # CreateProcess, as for setup, so the wait has the process's own handle.
+            $info = [Diagnostics.ProcessStartInfo]::new($uninstaller, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART')
+            $info.UseShellExecute = $false
+            $process = [Diagnostics.Process]::Start($info)
             if (-not $process.WaitForExit(300000)) { throw 'The uninstaller did not finish within 300 s.' }
             # The uninstaller copies itself to TEMP and returns before that copy ends.
             $deadline = (Get-Date).AddSeconds(120)
@@ -348,7 +367,7 @@ try {
     # 1. Lockdown on, disconnected: Lockdown holds the network itself.
     $scenario = '1 Lockdown'
     $previous = Invoke-Setup -Build previous -LogName 'lockdown-previous'
-    Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 } -Note "exit $($previous.ExitCode)"
+    Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 -and $previous.Succeeded } -Note $previous.Note
     Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     $lockdown = Invoke-InstalledCli 'lockdown' 'on'
     Test-Step $scenario 'Lockdown turns on' { $lockdown.ExitCode -eq 0 } -Note $lockdown.Output
@@ -357,7 +376,7 @@ try {
     $current = Invoke-Setup -Build current -LogName 'lockdown-current'
     $watch = Stop-Watch
     Stop-UpgradeGui
-    Test-Step $scenario 'the current build installs over it' { $current.ExitCode -eq 0 } -Note "exit $($current.ExitCode)"
+    Test-Step $scenario 'the current build installs over it' { $current.ExitCode -eq 0 -and $current.Succeeded } -Note $current.Note
     Test-Step $scenario 'nothing got out during the upgrade' {
         $watch.Probes -gt 0 -and $watch.Leaks -eq 0
     } -Note (Format-Watch $watch)
@@ -378,7 +397,7 @@ try {
     # between the old service stopping and the new one connecting.
     $scenario = '2 kill switch'
     $previous = Invoke-Setup -Build previous -LogName 'kill-switch-previous'
-    Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 } -Note "exit $($previous.ExitCode)"
+    Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 -and $previous.Succeeded } -Note $previous.Note
     Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     Connect-Installed 'request-upgrade-kill-switch.json'
     Test-Step $scenario 'connected before the upgrade' { Wait-InstalledState 'connected' }
@@ -388,7 +407,7 @@ try {
     $gui = Wait-UpgradeGui
     $watch = Stop-Watch
     Stop-UpgradeGui
-    Test-Step $scenario 'the current build installs over it' { $current.ExitCode -eq 0 } -Note "exit $($current.ExitCode)"
+    Test-Step $scenario 'the current build installs over it' { $current.ExitCode -eq 0 -and $current.Succeeded } -Note $current.Note
     Test-Step $scenario 'nothing got out during the upgrade' {
         $watch.Probes -gt 0 -and $watch.Leaks -eq 0
     } -Note (Format-Watch $watch)
@@ -430,7 +449,7 @@ try {
     # held. The upgrade's window is the expected leak, recorded, not failed.
     $scenario = '3 no kill switch'
     $previous = Invoke-Setup -Build previous -LogName 'open-previous'
-    Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 } -Note "exit $($previous.ExitCode)"
+    Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 -and $previous.Succeeded } -Note $previous.Note
     Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     Connect-Installed 'request-upgrade-open.json'
     Test-Step $scenario 'connected before the upgrade' { Wait-InstalledState 'connected' }
@@ -439,7 +458,7 @@ try {
     $gui = Get-UpgradeGui
     $watch = Stop-Watch
     Stop-UpgradeGui
-    Test-Step $scenario 'the current build installs over it' { $current.ExitCode -eq 0 } -Note "exit $($current.ExitCode)"
+    Test-Step $scenario 'the current build installs over it' { $current.ExitCode -eq 0 -and $current.Succeeded } -Note $current.Note
     Add-Info $scenario 'direct egress during the upgrade (expected without the kill switch)' (Format-Watch $watch)
     Test-Step $scenario 'setup placed no hold' {
         (Get-SetupLog 'open-current') -match 'no kill switch is on; the network is not held'
@@ -458,7 +477,7 @@ try {
     # opens it.
     $scenario = '4 broken upgrade'
     $previous = Invoke-Setup -Build previous -LogName 'broken-previous'
-    Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 } -Note "exit $($previous.ExitCode)"
+    Test-Step $scenario 'the previous build installs' { $previous.ExitCode -eq 0 -and $previous.Succeeded } -Note $previous.Note
     Test-Step $scenario 'its service runs' { Wait-InstalledService $scenario }
     Connect-Installed 'request-upgrade-kill-switch.json'
     Test-Step $scenario 'connected before the upgrade' { Wait-InstalledState 'connected' }
