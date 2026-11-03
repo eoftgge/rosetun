@@ -158,6 +158,7 @@ error-code-not-implemented = the service does not support this yet
 error-code-internal = internal service error
 error-autostart-read = could not read the autostart setting: { $detail }
 error-autostart-write = could not change autostart: { $detail }
+autostart-task-description = Starts Rosetun when you sign in to Windows.
 error-open-folder = could not open the folder: { $detail }
 connection = Connection
 traffic = Traffic

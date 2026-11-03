@@ -28,7 +28,11 @@ impl WorkerDispatcher {
     #[cfg(windows)]
     pub(crate) fn load_autostart(&self) {
         self.spawn_task("rosetun-load-autostart", move |publisher| {
-            let result = rosetun_shell::autostart_enabled();
+            let result = std::env::current_exe()
+                .and_then(|exe| rosetun_shell::autostart_enabled(&exe))
+                .inspect_err(|error| {
+                    tracing::warn!(code = error.raw_os_error(), "could not read autostart");
+                });
             emit(
                 &publisher.tx,
                 &publisher.repaint,
@@ -41,19 +45,47 @@ impl WorkerDispatcher {
     pub(crate) fn set_autostart(&self, enabled: bool) {
         self.spawn_task("rosetun-set-autostart", move |publisher| {
             let result = (|| {
+                let exe = std::env::current_exe()?;
                 if enabled {
-                    let exe = std::env::current_exe()?;
-                    rosetun_shell::enable_autostart(&exe, crate::HIDDEN_ARG)?;
+                    let description = tr!("autostart-task-description");
+                    rosetun_shell::enable_autostart(&autostart(&exe, &description))?;
                 } else {
                     rosetun_shell::disable_autostart()?;
                 }
-                rosetun_shell::autostart_enabled()
-            })();
+                rosetun_shell::autostart_enabled(&exe)
+            })()
+            .inspect_err(|error| {
+                tracing::warn!(
+                    code = error.raw_os_error(),
+                    enabled,
+                    "could not change autostart"
+                );
+            });
             emit(
                 &publisher.tx,
                 &publisher.repaint,
                 WorkerEvent::SetAutostart(result),
             );
+        });
+    }
+
+    /// Moves autostart of an earlier version from the Run value to the
+    /// sign-in task, without telling the user. Runs at every start until it
+    /// succeeds; nothing is left to move after that.
+    #[cfg(windows)]
+    pub(crate) fn move_autostart_to_task(&self) {
+        self.spawn_task("rosetun-move-autostart", move |_| {
+            let description = tr!("autostart-task-description");
+            let result = std::env::current_exe().and_then(|exe| {
+                rosetun_shell::move_autostart_to_task(&autostart(&exe, &description))
+            });
+            match result {
+                Ok(true) => tracing::info!("autostart moved to the sign-in task"),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(code = error.raw_os_error(), "could not move autostart");
+                }
+            }
         });
     }
 
@@ -106,5 +138,14 @@ impl WorkerDispatcher {
                 WorkerEvent::OpenFolder(result),
             );
         });
+    }
+}
+
+#[cfg(windows)]
+fn autostart<'a>(exe: &'a Path, description: &'a str) -> rosetun_shell::Autostart<'a> {
+    rosetun_shell::Autostart {
+        exe,
+        argument: crate::HIDDEN_ARG,
+        description,
     }
 }

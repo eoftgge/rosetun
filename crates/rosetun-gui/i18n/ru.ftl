@@ -158,6 +158,7 @@ error-code-not-implemented = служба пока этого не умеет
 error-code-internal = внутренняя ошибка службы
 error-autostart-read = не удалось прочитать настройку автозапуска: { $detail }
 error-autostart-write = не удалось изменить автозапуск: { $detail }
+autostart-task-description = Запускает Rosetun при входе в Windows.
 error-open-folder = не удалось открыть папку: { $detail }
 connection = Подключение
 traffic = Трафик

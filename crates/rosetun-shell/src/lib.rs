@@ -84,7 +84,9 @@ mod tray_notice;
 mod window;
 
 #[cfg(windows)]
-pub use autostart::{autostart_enabled, disable_autostart, enable_autostart};
+pub use autostart::{
+    Autostart, autostart_enabled, disable_autostart, enable_autostart, move_autostart_to_task,
+};
 #[cfg(windows)]
 pub use elevated::run_elevated;
 #[cfg(windows)]

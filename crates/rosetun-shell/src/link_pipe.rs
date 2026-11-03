@@ -243,7 +243,7 @@ fn pipe_name() -> io::Result<String> {
     Ok(format!("{PIPE_PREFIX}.{}.{session}", user_sid(&token)?))
 }
 
-fn current_user_sid() -> io::Result<String> {
+pub(crate) fn current_user_sid() -> io::Result<String> {
     user_sid(&current_token()?)
 }
 

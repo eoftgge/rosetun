@@ -134,6 +134,8 @@ impl App {
             .and_then(|exe| exe.parent().map(|dir| dir.join("licenses")))
             .filter(|dir| dir.is_dir());
         let workers = worker::start(store, tx, cc.egui_ctx.clone());
+        #[cfg(windows)]
+        workers.move_autostart_to_task();
         Self {
             state,
             events,
