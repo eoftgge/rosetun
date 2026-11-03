@@ -298,9 +298,20 @@ function Uninstall-Rosetun {
             $info.UseShellExecute = $false
             $process = [Diagnostics.Process]::Start($info)
             if (-not $process.WaitForExit(300000)) { throw 'The uninstaller did not finish within 300 s.' }
-            # The uninstaller copies itself to TEMP and returns before that copy ends.
-            $deadline = (Get-Date).AddSeconds(120)
-            while ((Test-Path -LiteralPath $uninstaller) -and (Get-Date) -lt $deadline) {
+            # The uninstaller copies itself to TEMP, starts that copy and returns;
+            # the copy does the work. Wait for the copy by its process, then for
+            # the uninstaller's file to go. Test-Path threw access denied on that
+            # file while it was being removed; File.Exists never throws.
+            $copies = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($process.Id)")
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            while ($true) {
+                $running = @($copies | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+                $present = [IO.File]::Exists($uninstaller)
+                if ($running.Count -eq 0 -and -not $present) { break }
+                if ($clock.Elapsed.TotalSeconds -gt 120) {
+                    $names = ($running | ForEach-Object { "$($_.Name) (PID $($_.ProcessId))" }) -join ', '
+                    throw "The uninstall did not end within 120 s: still running: $(if ($names) { $names } else { 'none' }); unins000.exe present: $present."
+                }
                 Start-Sleep -Milliseconds 500
             }
         }
