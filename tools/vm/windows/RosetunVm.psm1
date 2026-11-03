@@ -1790,7 +1790,12 @@ function Measure-RosetunTunnelWarmup {
 
 function Start-RosetunEgressWatch {
     # A scheduled task outlives the PowerShell Direct session that must close
-    # before Save-VM. It uses the same 200 ms physical-egress probe throughout.
+    # before Save-VM. One curl makes every probe: a URL range it fetches at
+    # most five times a second, each bound to the physical adapter, writing
+    # one exit code a line (0 is an answer, a leak). stderr is unbuffered, so
+    # each line is in the file when the probe ends. No PowerShell runs in the
+    # task: in the upgrade matrix the watch's PowerShell sat for minutes
+    # without CPU before its first line, while a plain one started at once.
     # -FirstProbeTimeoutSeconds: how long its first probe may take to come.
     param([int]$FirstProbeTimeoutSeconds = 30)
     $address = Get-RosetunEgressAddress
@@ -1798,7 +1803,14 @@ function Start-RosetunEgressWatch {
         param($address, $url, $dir, $firstProbeTimeout)
         $task = 'RosetunEgressWatch'
         $path = Join-Path $dir 'rosetun-egress-watch.txt'
-        $scriptPath = Join-Path $dir 'rosetun-egress-watch.ps1'
+        # Marks the watch's curl, so that it is found and stopped even when
+        # stopping the task leaves it running.
+        $marker = 'rosetun-egress-probe='
+        function Stop-RosetunWatchCurl {
+            Get-CimInstance -ClassName Win32_Process -Filter "Name = 'curl.exe'" |
+                Where-Object { $_.CommandLine -like "*$marker*" } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        }
         if (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue) {
             Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
             $deadline = (Get-Date).AddSeconds(10)
@@ -1808,37 +1820,12 @@ function Start-RosetunEgressWatch {
             }
             Unregister-ScheduledTask -TaskName $task -Confirm:$false
         }
-        Remove-Item -Path $path, "$path.tmp", "$path.error" -ErrorAction SilentlyContinue
-        $probe = {
-            param($address, $url, $path)
-            $ErrorActionPreference = 'Stop'
-            $probes = 0
-            $leaks = 0
-            try {
-                while ($true) {
-                    & curl.exe --interface $address --max-time 2 --silent --output NUL $url 2>$null
-                    $probes++
-                    if ($LASTEXITCODE -eq 0) { $leaks++ }
-                    # Stop-ScheduledTask kills this process at any moment: write a
-                    # temporary file and swap it in, so the counts are never empty.
-                    # A reader holding the file blocks the swap; the next round retries.
-                    [IO.File]::WriteAllText("$path.tmp", "$probes $leaks")
-                    try { Move-Item -LiteralPath "$path.tmp" -Destination $path -Force }
-                    catch { }
-                    Start-Sleep -Milliseconds 200
-                }
-            }
-            catch {
-                [IO.File]::WriteAllText("$path.error", "$_")
-                exit 1
-            }
-        }
-        [IO.File]::WriteAllText($scriptPath, $probe.ToString())
-        # SYSTEM does not inherit the PowerShell Direct session's execution policy.
-        $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" "{1}" "{2}" "{3}"' -f `
-            $scriptPath, $address, $url, $path
-        $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
-            -Argument $arguments -WorkingDirectory $dir
+        Stop-RosetunWatchCurl
+        Remove-Item -Path $path -ErrorAction SilentlyContinue
+        $range = $url.TrimEnd('/') + "/?$marker[1-10000000]"
+        $arguments = ('/d /c curl.exe --interface {0} --max-time 2 --rate 300/m --silent --output NUL ' +
+            '--write-out "%{{stderr}}%{{exitcode}}\n" "{1}" 2> "{2}"') -f $address, $range, $path
+        $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\cmd.exe" -Argument $arguments -WorkingDirectory $dir
         $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
@@ -1848,50 +1835,29 @@ function Start-RosetunEgressWatch {
             Start-ScheduledTask -TaskName $task
 
             # Starting a task can take longer than a reconnect; wait for its first probe.
-            $deadline = (Get-Date).AddSeconds($firstProbeTimeout)
-            while (-not (Test-Path -Path $path)) {
-                if ((Get-Date) -gt $deadline) {
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            while ($true) {
+                $text = ''
+                try {
+                    $stream = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite, Delete')
+                    try { $text = [IO.StreamReader]::new($stream).ReadToEnd() } finally { $stream.Dispose() }
+                }
+                catch { }
+                if ($text.Contains("`n")) { break }
+                if ($clock.Elapsed.TotalSeconds -gt $firstProbeTimeout) {
+                    $utc = 'yyyy-MM-ddTHH:mm:ss.fffZ'
                     $state = (Get-ScheduledTask -TaskName $task).State
                     $result = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
-                    $errorText = Get-Content -Path "$path.error" -Raw -ErrorAction SilentlyContinue
-                    # Whether its PowerShell is still starting or a probe hangs.
-                    $utc = 'yyyy-MM-ddTHH:mm:ss.fffZ'
-                    $watchers = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'powershell.exe'" |
-                            Where-Object { $_.CommandLine -like '*rosetun-egress-watch.ps1*' })
-                    $states = foreach ($watcher in $watchers) {
-                        $live = Get-Process -Id $watcher.ProcessId -ErrorAction SilentlyContinue
-                        $cpu = $live.TotalProcessorTime.TotalSeconds
-                        $threads = @($live.Threads | ForEach-Object {
-                                if ("$($_.ThreadState)" -eq 'Wait') { "Wait:$($_.WaitReason)" } else { "$($_.ThreadState)" }
-                            } | Group-Object | ForEach-Object { "$($_.Count)x $($_.Name)" }) -join ' '
-                        $children = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($watcher.ProcessId)" |
-                                ForEach-Object { "$($_.Name) since $($_.CreationDate.ToUniversalTime().ToString($utc))" })
-                        'PID {0} since {1}, CPU {2:N1} s, threads: {3}; children: {4}' -f $watcher.ProcessId,
-                        $watcher.CreationDate.ToUniversalTime().ToString($utc), $cpu, $threads,
-                        $(if ($children.Count) { $children -join ', ' } else { 'none' })
-                    }
-                    $detail = "now $((Get-Date).ToUniversalTime().ToString($utc)); watcher: " +
-                        $(if ($watchers.Count) { $states -join '; ' } else { 'none' }) +
-                        "; $path.tmp exists: $(Test-Path -Path "$path.tmp")"
-                    # Whether any PowerShell starts now, or only this one hangs.
-                    $info = [Diagnostics.ProcessStartInfo]::new(
-                        "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe",
-                        '-NoProfile -NonInteractive -Command exit 0')
-                    $info.UseShellExecute = $false
-                    $info.CreateNoWindow = $true
-                    $plain = [Diagnostics.Process]::Start($info)
-                    $plainClock = [Diagnostics.Stopwatch]::StartNew()
-                    $plainEnded = $plain.WaitForExit(40000)
-                    if (-not $plainEnded) { $plain.Kill() }
-                    $detail += "; a plain powershell.exe -Command exit 0 " +
-                        $(if ($plainEnded) { "ended after $([int]$plainClock.Elapsed.TotalSeconds) s" } else { 'did not end in 40 s' })
-                    try {
-                        $preference = Get-MpPreference
-                        $detail += "; Defender MAPSReporting $($preference.MAPSReporting), CloudBlockLevel $($preference.CloudBlockLevel), " +
-                            "CloudExtendedTimeout $($preference.CloudExtendedTimeout), SubmitSamplesConsent $($preference.SubmitSamplesConsent)"
-                    }
-                    catch { $detail += "; Defender preferences: $($_.Exception.Message)" }
-                    throw "The egress watch did not record a probe within $firstProbeTimeout seconds: task $state, result $result, script error '$errorText'; $detail."
+                    $processes = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'curl.exe' OR Name = 'cmd.exe'" |
+                            Where-Object { $_.CommandLine -like "*$marker*" } | ForEach-Object {
+                                $live = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+                                '{0} PID {1} since {2}, CPU {3:N1} s' -f $_.Name, $_.ProcessId,
+                                $_.CreationDate.ToUniversalTime().ToString($utc), $live.TotalProcessorTime.TotalSeconds
+                            })
+                    $file = if (Test-Path -Path $path) { "$((Get-Item -Path $path).Length) bytes" } else { 'none' }
+                    throw ("The egress watch did not record a probe within $firstProbeTimeout seconds: task $state, " +
+                        "result $result; now $((Get-Date).ToUniversalTime().ToString($utc)); " +
+                        "processes: $(if ($processes.Count) { $processes -join '; ' } else { 'none' }); file: $file.")
                 }
                 Start-Sleep -Milliseconds 200
             }
@@ -1899,7 +1865,8 @@ function Start-RosetunEgressWatch {
         catch {
             Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
             Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
-            Remove-Item -Path $path, "$path.error", $scriptPath -ErrorAction SilentlyContinue
+            Stop-RosetunWatchCurl
+            Remove-Item -Path $path -ErrorAction SilentlyContinue
             throw
         }
     } -ArgumentList $address, $script:Config.ProbeUrl, $script:Config.GuestDir, $FirstProbeTimeoutSeconds
@@ -1919,33 +1886,30 @@ function Stop-RosetunEgressWatch {
                 }
                 Start-Sleep -Milliseconds 200
             }
-            # Move-Item -Force deletes the old counts before it moves the new ones
-            # in, so a stop in between leaves only the temporary file; a process
-            # that is still exiting can also hold the file for a moment.
-            $counts = @()
-            $deadline = (Get-Date).AddSeconds(3)
-            while ($counts.Count -lt 2) {
-                foreach ($candidate in $path, "$path.tmp") {
-                    try { $text = [IO.File]::ReadAllText($candidate) }
-                    catch { continue }
-                    $counts = @($text.Trim() -split ' ')
-                    if ($counts.Count -ge 2) { break }
-                }
-                if ($counts.Count -ge 2 -or (Get-Date) -gt $deadline) { break }
+            # The task's end may leave its curl running; it holds the file.
+            $deadline = (Get-Date).AddSeconds(10)
+            while ($true) {
+                $curl = @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'curl.exe'" |
+                        Where-Object { $_.CommandLine -like '*rosetun-egress-probe=*' })
+                if ($curl.Count -eq 0) { break }
+                if ((Get-Date) -gt $deadline) { throw 'The egress watch curl did not stop within 10 seconds.' }
+                foreach ($process in $curl) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }
                 Start-Sleep -Milliseconds 200
             }
-            if ($counts.Count -lt 2) {
-                $failure = Get-Content -Path "$path.error" -Raw -ErrorAction SilentlyContinue
-                if ($failure) { Write-Warning "The egress watch failed: $failure" }
-                else { Write-Warning 'The egress watch left no readable counts.' }
+            $text = $null
+            try { $text = [IO.File]::ReadAllText($path) }
+            catch { }
+            if ($null -eq $text) {
+                Write-Warning 'The egress watch left no readable counts.'
                 return [pscustomobject]@{ Probes = 0; Leaks = 0 }
             }
-            [pscustomobject]@{ Probes = [int]$counts[0]; Leaks = [int]$counts[1] }
+            # A probe cut off by the stop has no line end.
+            $lines = @($text.Substring(0, $text.LastIndexOf("`n") + 1) -split "`r?`n" | Where-Object { $_ -match '^\d+$' })
+            [pscustomobject]@{ Probes = $lines.Count; Leaks = @($lines | Where-Object { $_ -eq '0' }).Count }
         }
         finally {
             Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
-            Remove-Item -Path $path, "$path.tmp", "$path.error", (Join-Path $dir 'rosetun-egress-watch.ps1') `
-                -ErrorAction SilentlyContinue
+            Remove-Item -Path $path -ErrorAction SilentlyContinue
         }
     } -ArgumentList $script:Config.GuestDir
 }
@@ -2763,7 +2727,10 @@ function Get-RosetunEgressWatchProbes {
     # Probes the running egress watch has made so far.
     Invoke-RosetunGuest -ScriptBlock {
         param($dir)
-        [int]((Get-Content -Path (Join-Path $dir 'rosetun-egress-watch.txt')) -split ' ')[0]
+        $stream = [IO.File]::Open((Join-Path $dir 'rosetun-egress-watch.txt'), 'Open', 'Read', 'ReadWrite, Delete')
+        try { $text = [IO.StreamReader]::new($stream).ReadToEnd() } finally { $stream.Dispose() }
+        # Complete lines only: the probe in progress has no line end yet.
+        @($text.Substring(0, $text.LastIndexOf("`n") + 1) -split "`r?`n" | Where-Object { $_ -match '^\d+$' }).Count
     } -ArgumentList $script:Config.GuestDir
 }
 

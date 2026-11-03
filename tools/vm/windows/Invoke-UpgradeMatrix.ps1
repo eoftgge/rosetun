@@ -315,8 +315,7 @@ function Get-HoldStatus {
 }
 
 function Start-Watch {
-    param([int]$FirstProbeTimeoutSeconds = 30)
-    Start-RosetunEgressWatch -FirstProbeTimeoutSeconds $FirstProbeTimeoutSeconds
+    Start-RosetunEgressWatch
     $script:watchActive = $true
 }
 
@@ -366,22 +365,14 @@ try {
     New-UpgradeRequests
     Restore-RosetunGuestLease
     Test-Step '0 baseline' 'direct egress works' { Test-RosetunDirectEgress }
-    # The first start of the watch in the restored guest sat for over 30 s
-    # without CPU before its script ran, with the network open as under
-    # Lockdown, while a later start worked at once. It is started once here,
-    # with more time, and the time to its first probe is recorded.
-    $clock = [Diagnostics.Stopwatch]::StartNew()
-    try {
-        Start-Watch -FirstProbeTimeoutSeconds 180
-        $firstProbe = [int]$clock.Elapsed.TotalSeconds
-        $warm = Stop-Watch
-        Add-Info '0 baseline' 'egress watch started with the network open' "first probe after $firstProbe s; $(Format-Watch $warm)"
-    }
-    catch {
-        # The scenarios start it again.
-        $script:watchActive = $false
-        Add-Info '0 baseline' 'egress watch started with the network open' "failed after $([int]$clock.Elapsed.TotalSeconds) s: $_"
-    }
+    # With the network open the watch must count leaks, or its "0 got out"
+    # later proves nothing.
+    Start-Watch
+    Start-Sleep -Seconds 2
+    $watch = Stop-Watch
+    Test-Step '0 baseline' 'the egress watch sees direct egress' {
+        $watch.Probes -gt 0 -and $watch.Leaks -gt 0
+    } -Note (Format-Watch $watch)
 
     # 1. Lockdown on, disconnected: Lockdown holds the network itself.
     $scenario = '1 Lockdown'
