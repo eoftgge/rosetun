@@ -1,8 +1,9 @@
 #Requires -Version 7.0
 # Linux L2 stand, host side. The owner runs it; the agent only prepares it.
 #
-#   Stage   (default) checks the selected VM and guest, copies the run to the guest
-#                     and prints the one command the owner runs there with sudo.
+#   Stage   (default) builds HEAD in WSL (or takes -ArtifactDir), checks the selected
+#                     VM and guest, copies the run to the guest and prints the one
+#                     command the owner runs there with sudo.
 #   Collect           reads the status and report of a run back and judges it.
 #   InitKnownHosts    pins the guest's host key once, after the owner compared its
 #                     fingerprint with the VM console.
@@ -26,7 +27,8 @@ param(
     [string]$StandId,
     [ValidateRange(1, 65535)][int]$SshPort = 22,
 
-    [Parameter(ParameterSetName = 'Stage', Mandatory)][string]$ArtifactDir,
+    [Parameter(ParameterSetName = 'Stage')][string]$ArtifactDir,
+    [Parameter(ParameterSetName = 'Stage')][string]$WslDistro,
     [Parameter(ParameterSetName = 'Stage')][string]$UserA,
     [Parameter(ParameterSetName = 'Stage')][string]$UserB,
     [Parameter(ParameterSetName = 'Stage')][string]$RestoreCheckpoint,
@@ -59,7 +61,7 @@ else {
 }
 $fileSettings = if ($settingsPath) { Read-RosetunLinuxStandSettings -Path $settingsPath } else { @{} }
 $explicit = @{}
-foreach ($name in @('VmName', 'StandId', 'SshUser', 'SshHost', 'SshPort', 'KnownHostsPath', 'IdentityFile', 'UserA', 'UserB')) {
+foreach ($name in @('VmName', 'StandId', 'SshUser', 'SshHost', 'SshPort', 'KnownHostsPath', 'IdentityFile', 'UserA', 'UserB', 'WslDistro')) {
     if ($PSBoundParameters.ContainsKey($name)) { $explicit[$name] = $PSBoundParameters[$name] }
 }
 $stand = Resolve-RosetunLinuxStandSettings -Settings $fileSettings -Explicit $explicit
@@ -104,6 +106,27 @@ if ($PSCmdlet.ParameterSetName -eq 'Stage') {
     $runLog = Join-Path $LogRoot $runId
     $null = New-Item -ItemType Directory -Path $runLog
 
+    # The build comes first, so a failed build leaves the VM untouched.
+    $repo = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath
+    $source = Get-RosetunLinuxSource -RepoRoot $repo
+    if ($ArtifactDir) {
+        $artifactDir = $ArtifactDir
+        $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $artifactDir -Source $source
+        if (-not $artifacts.Confirmed) {
+            Write-Warning "Artifact origin is NOT confirmed: $($artifacts.Note). The report will say so."
+        }
+    }
+    else {
+        Write-Host "Building $($source.Sha.Substring(0, 12)) in WSL '$($stand.WslDistro)'..."
+        $artifactDir = Invoke-RosetunLinuxBuild -RepoRoot $repo -Source $source -RunId $runId -WslDistro $stand.WslDistro `
+            -Heartbeat { param($elapsed) Write-Host ('  still building, {0:mm\:ss}' -f $elapsed) }
+        $after = Get-RosetunLinuxSource -RepoRoot $repo
+        if ($after.Sha -ne $source.Sha -or $after.Dirty) { throw 'The checkout changed during the build. Nothing was staged; start again.' }
+        $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $artifactDir -Source $source
+        if (-not $artifacts.Confirmed) { throw "The build does not match HEAD: $($artifacts.Note). Nothing was staged." }
+        Write-Host "Artifacts: $artifactDir"
+    }
+
     $identity = Get-StandIdentity
     if ($RestoreCheckpoint) {
         Write-Host "Restoring checkpoint '$RestoreCheckpoint' of '$($stand.VmName)' (requested explicitly)."
@@ -123,16 +146,11 @@ if ($PSCmdlet.ParameterSetName -eq 'Stage') {
     $bootId = $bootRead.Output.Trim()
     if ($bootRead.ExitCode -ne 0 -or $bootId -notmatch '^[0-9a-f-]{36}$') { throw 'Could not read the guest boot id.' }
 
-    $source = Get-RosetunLinuxSource -RepoRoot (Resolve-Path -LiteralPath $RepoRoot).ProviderPath
-    $artifacts = Get-RosetunLinuxArtifacts -ArtifactDir $ArtifactDir -Source $source
-    if (-not $artifacts.Confirmed) {
-        Write-Warning "Artifact origin is NOT confirmed: $($artifacts.Note). The report will say so."
-    }
 
     $jobEnv = New-RosetunLinuxJobEnv -RunId $runId -StandId $stand.StandId -BootId $bootId -UserA $stand.UserA -UserB $stand.UserB `
         -BiosGuid $identity.BiosGuid -ScenarioTimeoutSeconds $ScenarioTimeoutSeconds `
         -UnitTimeoutSeconds $UnitTimeoutSeconds -JobTimeoutSeconds $JobTimeoutSeconds
-    $stage = New-RosetunLinuxStage -StageRoot (Join-Path $runLog 'stage') -RunId $runId -ArtifactDir $ArtifactDir -JobEnv $jobEnv
+    $stage = New-RosetunLinuxStage -StageRoot (Join-Path $runLog 'stage') -RunId $runId -ArtifactDir $artifactDir -JobEnv $jobEnv
 
     $guestHome = (Invoke-RosetunLinuxSsh -Target $target -Command 'printf %s "$HOME"' -TimeoutSeconds 20).Output.Trim()
     if ($guestHome -notmatch '^/[A-Za-z0-9._/-]+$') { throw 'Could not determine the guest home directory.' }
@@ -148,7 +166,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Stage') {
         schema = 1; run_id = $runId; created = [DateTime]::UtcNow.ToString('o')
         vm = [ordered]@{ name = $identity.Name; id = $identity.VmId }
         stand_id = $stand.StandId; boot_id = $bootId; manifest_sha256 = $stage.ManifestHash
-        source = [ordered]@{ sha = $source.Sha; dirty = $source.Dirty; dirty_entries = $source.DirtyEntries; dirty_digest = $source.DirtyDigest }
+        source = [ordered]@{ sha = $source.Sha; dirty = $source.Dirty; dirty_entries = $source.DirtyEntries; dirty_paths = @($source.DirtyPaths); dirty_digest = $source.DirtyDigest }
         artifacts = [ordered]@{ hashes = $artifacts.Hashes; origin_confirmed = $artifacts.Confirmed; origin_note = $artifacts.Note; toolchain = $artifacts.Toolchain; built_on = $artifacts.BuiltOn }
         checkpoint_restored = [bool]$RestoreCheckpoint
     }
@@ -180,7 +198,10 @@ $target = New-StandTarget
 
 $stageInfo = [pscustomobject]@{
     RunId = $RunId; BootId = $record.boot_id
-    Source = [pscustomobject]@{ Sha = $record.source.sha; Dirty = $record.source.dirty; DirtyEntries = $record.source.dirty_entries }
+    Source = [pscustomobject]@{
+        Sha = $record.source.sha; Dirty = $record.source.dirty; DirtyEntries = $record.source.dirty_entries
+        DirtyPaths = @(Get-RosetunLinuxMember -Object $record.source -Name 'dirty_paths' | Where-Object { $null -ne $_ })
+    }
     Artifacts = [pscustomobject]@{
         Confirmed = [bool]$record.artifacts.origin_confirmed; Note = $record.artifacts.origin_note
         Hashes = [ordered]@{}

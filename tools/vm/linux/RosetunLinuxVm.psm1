@@ -57,10 +57,15 @@ function Invoke-RosetunLinuxProcess {
         [Parameter(Mandatory)][string]$FilePath,
         [string[]]$ArgumentList = @(),
         [int]$TimeoutSeconds = 60,
-        [int]$MaxOutputChars = 8MB
+        [int]$MaxOutputChars = 8MB,
+        # Called with the elapsed time every HeartbeatSeconds while the program runs.
+        [scriptblock]$Heartbeat,
+        [int]$HeartbeatSeconds = 30,
+        [hashtable]$Environment = @{}
     )
     $info = [Diagnostics.ProcessStartInfo]::new($FilePath)
     foreach ($argument in $ArgumentList) { $info.ArgumentList.Add($argument) }
+    foreach ($key in $Environment.Keys) { $info.Environment[$key] = [string]$Environment[$key] }
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardInput = $true
@@ -71,9 +76,17 @@ function Invoke-RosetunLinuxProcess {
         $process.StandardInput.Close()
         $outTask = $process.StandardOutput.ReadToEndAsync()
         $errTask = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            try { $process.Kill($true) } catch { Write-Verbose "kill failed: $_" }
-            throw "TIMEOUT: $([IO.Path]::GetFileName($FilePath)) did not finish within $TimeoutSeconds s"
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $beat = $HeartbeatSeconds
+        while (-not $process.WaitForExit(500)) {
+            if ($clock.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                try { $process.Kill($true) } catch { Write-Verbose "kill failed: $_" }
+                throw "TIMEOUT: $([IO.Path]::GetFileName($FilePath)) did not finish within $TimeoutSeconds s"
+            }
+            if ($null -ne $Heartbeat -and $clock.Elapsed.TotalSeconds -ge $beat) {
+                & $Heartbeat $clock.Elapsed
+                $beat += $HeartbeatSeconds
+            }
         }
         $process.WaitForExit()
         $text = { param($task) $value = $task.Result; if ($value.Length -gt $MaxOutputChars) { $value.Substring(0, $MaxOutputChars) } else { $value } }
@@ -464,14 +477,99 @@ function Get-RosetunLinuxSource {
     if ($head.ExitCode -ne 0 -or $head.Output.Trim() -notmatch '^[0-9a-f]{40}$') { throw "git rev-parse HEAD failed in '$RepoRoot'." }
     $status = & $run @('status', '--porcelain=v1', '-uall', '--no-renames')
     $diff = & $run @('diff', 'HEAD', '--binary', '--no-ext-diff')
-    if ($status.ExitCode -ne 0 -or $diff.ExitCode -ne 0) { throw "git status failed in '$RepoRoot'." }
+    # The digest needs every untracked file; the listing for people folds an
+    # untracked folder into one line.
+    $listing = & $run @('status', '--porcelain=v1', '-unormal', '--no-renames')
+    if ($status.ExitCode -ne 0 -or $diff.ExitCode -ne 0 -or $listing.ExitCode -ne 0) { throw "git status failed in '$RepoRoot'." }
     $entries = @($status.Output -split "`n" | Where-Object { $_.Trim() -ne '' })
     [pscustomobject]@{
         Sha           = $head.Output.Trim()
         Dirty         = ($entries.Count -gt 0)
         DirtyEntries  = $entries.Count
+        DirtyPaths    = @(ConvertFrom-RosetunLinuxGitStatus $listing.Output)
         DirtyDigest   = Get-RosetunLinuxTextSha256 ($status.Output.Replace("`r`n", "`n") + "`n--`n" + $diff.Output.Replace("`r`n", "`n"))
     }
+}
+
+# Path names from `git status --porcelain=v1`, without the two status letters.
+function ConvertFrom-RosetunLinuxGitStatus {
+    param([AllowEmptyString()][string]$Text)
+    @($Text -split "`n" | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_.Length -gt 3 } | ForEach-Object { $_.Substring(3) })
+}
+
+function Format-RosetunLinuxPathList {
+    param([AllowEmptyCollection()][string[]]$Paths = @(), [int]$Limit = 30)
+    $shown = @($Paths | Select-Object -First $Limit | ForEach-Object { "  - $_" })
+    if ($Paths.Count -gt $Limit) { $shown += "  ... and $($Paths.Count - $Limit) more" }
+    $shown -join "`n"
+}
+
+# A host build is a build of HEAD only, so any change outside .gitignore stops it.
+function Assert-RosetunLinuxCleanSource {
+    param([Parameter(Mandatory)]$Source)
+    if (-not $Source.Dirty) { return }
+    throw ("The working tree differs from HEAD $($Source.Sha.Substring(0, 12)), so the build would not be that commit. " +
+        "Commit, stash or remove these paths (git-ignored paths do not count):`n" + (Format-RosetunLinuxPathList $Source.DirtyPaths))
+}
+
+function Find-RosetunLinuxWsl {
+    $system = Join-Path $env:SystemRoot 'System32\wsl.exe'
+    if (Test-Path -LiteralPath $system) { return $system }
+    $command = Get-Command 'wsl.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $command) { throw 'wsl.exe was not found. Install WSL with a Debian distribution (see the stand guide).' }
+    $command.Source
+}
+
+# wsl.exe writes its own messages in UTF-16 unless WSL_UTF8 is set.
+$script:WslEnvironment = @{ WSL_UTF8 = '1' }
+
+function Get-RosetunLinuxWslText {
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    "$Text".Replace("`0", '').Trim()
+}
+
+function ConvertTo-RosetunLinuxWslPath {
+    param([Parameter(Mandatory)][string]$WslDistro, [Parameter(Mandatory)][string]$Path)
+    $result = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxWsl) -ArgumentList @('-d', $WslDistro, '--exec', 'wslpath', '-a', '-u', $Path) -TimeoutSeconds 120 -Environment $script:WslEnvironment
+    $text = Get-RosetunLinuxWslText $result.Output
+    if ($result.ExitCode -ne 0 -or $text -notmatch '^/[^\s]*$') {
+        $why = (Get-RosetunLinuxWslText $result.Error) + ' ' + $text
+        throw "WSL distribution '$WslDistro' could not translate '$Path' (exit $($result.ExitCode)): $($why.Trim()). Check 'wsl -l -v' and the WslDistro setting."
+    }
+    $text
+}
+
+# Builds HEAD in WSL into a new folder target/l2-artifacts/<short sha>-<run id> and
+# returns its path. Older folders are kept.
+function Invoke-RosetunLinuxBuild {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)]$Source,
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][string]$WslDistro,
+        [scriptblock]$Heartbeat,
+        [int]$TimeoutSeconds = 3600
+    )
+    Assert-RosetunLinuxCleanSource -Source $Source
+    if ($WslDistro -notmatch '^[A-Za-z0-9._-]+$') { throw "Unsafe WSL distribution name '$WslDistro'." }
+    if (-not (Test-RosetunLinuxRunId $RunId)) { throw "Invalid run id '$RunId'." }
+    $outRoot = Join-Path $RepoRoot 'target\l2-artifacts'
+    $name = '{0}-{1}' -f $Source.Sha.Substring(0, 12), $RunId
+    $out = Join-Path $outRoot $name
+    if (Test-Path -LiteralPath $out) { throw "Artifact folder '$out' already exists." }
+    $null = New-Item -ItemType Directory -Path $outRoot -Force
+    $repoWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $RepoRoot
+    $outWsl = ConvertTo-RosetunLinuxWslPath -WslDistro $WslDistro -Path $outRoot
+    $arguments = @('-d', $WslDistro, '--cd', '~', '--exec', 'bash', "$repoWsl/tools/vm/linux/build-in-wsl.sh", $repoWsl, $Source.Sha, "$outWsl/$name")
+    $result = Invoke-RosetunLinuxProcess -FilePath (Find-RosetunLinuxWsl) -ArgumentList $arguments -TimeoutSeconds $TimeoutSeconds -Heartbeat $Heartbeat -Environment $script:WslEnvironment
+    if ($result.ExitCode -ne 0) {
+        $tail = @((Get-RosetunLinuxWslText $result.Error) -split "`n" | Select-Object -Last 25) -join "`n"
+        throw "The build in WSL failed (exit $($result.ExitCode)):`n$tail"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $out 'provenance.json') -PathType Leaf)) {
+        throw "The build in WSL reported success but '$out' has no provenance.json."
+    }
+    $out
 }
 
 # True only for a 64-bit little-endian x86-64 ELF executable or PIE: not a PE file,
@@ -772,6 +870,8 @@ function Format-RosetunLinuxReport {
     $builder = [Text.StringBuilder]::new()
     $null = $builder.AppendLine("Linux L2 stand run $($Stage.RunId)")
     $null = $builder.AppendLine("Source:      $($Stage.Source.Sha) dirty=$($Stage.Source.Dirty) ($($Stage.Source.DirtyEntries) changed paths)")
+    $dirtyPaths = @(Get-RosetunLinuxMember -Object $Stage.Source -Name 'DirtyPaths' | Where-Object { $null -ne $_ })
+    if ($Stage.Source.Dirty -and $dirtyPaths.Count -gt 0) { $null = $builder.AppendLine((Format-RosetunLinuxPathList $dirtyPaths)) }
     $origin = if ($Stage.Artifacts.Confirmed) { 'confirmed' } else { "UNCONFIRMED: $($Stage.Artifacts.Note)" }
     $null = $builder.AppendLine("Build origin: $origin")
     foreach ($name in $Stage.Artifacts.Hashes.Keys) { $null = $builder.AppendLine("  $($Stage.Artifacts.Hashes[$name])  $name") }

@@ -131,6 +131,35 @@ Assert-That 'a hanging program is killed and reported as a timeout' $threw
 Assert-That 'the timeout fires on time' (([DateTime]::UtcNow - $started).TotalSeconds -lt 20)
 $ok = Invoke-RosetunLinuxProcess -FilePath $pwsh -ArgumentList @('-NoProfile', '-Command', 'Write-Output hello; exit 3') -TimeoutSeconds 30
 Assert-That 'exit code and output are returned' ($ok.ExitCode -eq 3 -and $ok.Output.Trim() -eq 'hello')
+$script:Beats = 0
+$null = Invoke-RosetunLinuxProcess -FilePath $pwsh -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 3') -TimeoutSeconds 30 `
+    -Heartbeat { param($elapsed) $script:Beats++ } -HeartbeatSeconds 1
+Assert-That 'a long program reports its elapsed time' ($script:Beats -ge 1)
+
+# --- dirty working trees: a host build refuses them and names the paths
+$listed = ConvertFrom-RosetunLinuxGitStatus " M tools/vm/linux/README.md`n?? notes/`r`nA  crates/x.rs`n"
+Assert-That 'changed paths are read from git status' (($listed -join '|') -eq 'tools/vm/linux/README.md|notes/|crates/x.rs')
+Assert-That 'a clean status lists nothing' (@(ConvertFrom-RosetunLinuxGitStatus '').Count -eq 0)
+$dirtySource = [pscustomobject]@{ Sha = 'c' * 40; Dirty = $true; DirtyEntries = 2; DirtyPaths = @('tools/vm/linux/README.md', 'notes/'); DirtyDigest = 'd' * 64 }
+$refusedBuild = ''
+try { Assert-RosetunLinuxCleanSource -Source $dirtySource } catch { $refusedBuild = "$_" }
+Assert-That 'a dirty tree stops the host build' ($refusedBuild -match 'differs from HEAD')
+Assert-That 'the refusal names every changed path' ($refusedBuild -match 'tools/vm/linux/README\.md' -and $refusedBuild -match 'notes/')
+$many = @(1..40 | ForEach-Object { "file$_.txt" })
+Assert-That 'a long path list is cut with a count' ((Format-RosetunLinuxPathList $many) -match 'and 10 more')
+Assert-That 'a clean tree passes' ($null -eq (Assert-RosetunLinuxCleanSource -Source ([pscustomobject]@{ Sha = 'c' * 40; Dirty = $false; DirtyPaths = @() })))
+$dirtyStage = [pscustomobject]@{
+    RunId = $runId; BootId = $bootId; Source = $dirtySource
+    Artifacts = [pscustomobject]@{ Confirmed = $false; Note = 'x'; Hashes = [ordered]@{} }
+}
+$dirtyText = Format-RosetunLinuxReport -Judgement (Test-RosetunLinuxReport -Report (New-GoodReport) -Status $finished -Stage $stage -Scenarios $scenarios) -Stage $dirtyStage
+Assert-That 'the report names the changed paths of a dirty source' ($dirtyText -match 'dirty=True' -and $dirtyText -match '- notes/')
+$oldStage = [pscustomobject]@{
+    RunId = $runId; BootId = $bootId; Source = [pscustomobject]@{ Sha = 'c' * 40; Dirty = $true; DirtyEntries = 1 }
+    Artifacts = [pscustomobject]@{ Confirmed = $false; Note = 'x'; Hashes = [ordered]@{} }
+}
+$oldText = Format-RosetunLinuxReport -Judgement (Test-RosetunLinuxReport -Report (New-GoodReport) -Status $finished -Stage $stage -Scenarios $scenarios) -Stage $oldStage
+Assert-That 'a stage record from before path lists still formats' ($oldText -match 'dirty=True')
 
 # --- ELF detection
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "rosetun-l2-selftest-$([guid]::NewGuid().ToString('N'))"
