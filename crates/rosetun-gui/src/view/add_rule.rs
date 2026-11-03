@@ -1216,6 +1216,8 @@ fn process_row(ui: &mut egui::Ui, row: ProcessRow<'_>, enabled: bool) -> egui::R
                 widgets::checkbox(ui, &mut checked, "", enabled).changed()
             })
             .inner;
+        // The scope moved the cursor back to the bottom of the box, inside the row.
+        ui.advance_cursor_after_rect(rect);
         tile_left += PROCESS_TICK_SIDE + PROCESS_ROW_INSET;
     }
     let tile_rect = egui::Rect::from_min_size(
@@ -1900,7 +1902,8 @@ mod tests {
                     .iter()
                     .any(|(text, _)| *text == tr!("rule-list-selected", n = "1"))
             );
-            screen.click_text("Program3.exe", frame!());
+            let second = i18n::process_copies("Program2.exe", 3);
+            screen.click_text(&second, frame!());
             assert_eq!(dialog.chosen.len(), 2);
             screen.click_text("Program0.exe", frame!());
             assert_eq!(dialog.chosen.len(), 1);
@@ -2716,6 +2719,51 @@ mod tests {
                 );
                 assert!(site.top() >= title.bottom(), "{site:?} {title:?}");
             });
+        }
+    }
+
+    #[test]
+    fn program_rows_follow_one_another_without_overlap() {
+        use crate::test_ui::TestScreen;
+
+        let mut dialog = AddRuleDialog::new(RuleSetId::new("set"));
+        dialog.processes = (0..4)
+            .map(|index| ProcessGroup {
+                name: format!("Program{index}.exe"),
+                path: Some(format!(r"C:\Apps\Program{index}.exe").into()),
+                count: 1,
+                windowed: true,
+            })
+            .collect();
+        dialog.processes_loaded = true;
+        let config = AppConfig::default();
+        let mut screen = TestScreen::new(COMPACT);
+        let texts = screen.settle(|ui| {
+            show(
+                ui.ctx(),
+                &mut dialog,
+                &config,
+                false,
+                0,
+                &[],
+                &mut Vec::new(),
+            );
+        });
+        let top = |name: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == name)
+                .unwrap_or_else(|| panic!("no {name}"))
+                .1
+                .top()
+        };
+        for index in 0..3 {
+            let step =
+                top(&format!("Program{}.exe", index + 1)) - top(&format!("Program{index}.exe"));
+            assert!(
+                (step - (PROCESS_ROW_HEIGHT + PROCESS_ROW_GAP)).abs() < 0.5,
+                "row {index} is {step} above the next"
+            );
         }
     }
 }
