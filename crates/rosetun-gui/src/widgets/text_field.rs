@@ -286,7 +286,9 @@ mod tests {
 
     /// The colour selected letters and the selection behind them end up with, as the
     /// tessellator paints the text shapes of a frame.
-    fn selection_colours(shapes: &[egui::epaint::ClippedShape]) -> Vec<(egui::Color32, egui::Color32)> {
+    fn selection_colours(
+        shapes: &[egui::epaint::ClippedShape],
+    ) -> Vec<(egui::Color32, egui::Color32)> {
         fn collect(shape: &egui::Shape, out: &mut Vec<egui::epaint::TextShape>) {
             match shape {
                 egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
@@ -370,7 +372,11 @@ mod tests {
             }
             let selection = ctx.global_style().visuals.selection;
             let colours = selection_colours(&shapes);
-            assert_eq!(colours.len(), 4 * "example.com".len(), "{invalid}: {colours:?}");
+            assert_eq!(
+                colours.len(),
+                4 * "example.com".len(),
+                "{invalid}: {colours:?}"
+            );
             for (letter, wash) in colours {
                 assert_eq!(wash, selection.bg_fill);
                 assert_eq!(letter, theme::palette().text);
@@ -404,7 +410,10 @@ mod tests {
         for invalid in [false, true] {
             let (ours, ours_shapes) = laid_out(|ui| {
                 let mut text = String::from("192.0.2.1");
-                vec![ui.add(TextField::new(&mut text).invalid(invalid).width(260.0)).rect]
+                vec![
+                    ui.add(TextField::new(&mut text).invalid(invalid).width(260.0))
+                        .rect,
+                ]
             });
             let (egui_own, egui_shapes) = laid_out(|ui| {
                 let mut text = String::from("192.0.2.1");
