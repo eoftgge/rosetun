@@ -360,11 +360,95 @@ pinning, the start mode, the launcher's and `start.sh`'s path lists, the sudoers
 rule and the installer's refusals, and the guest cleanup that refuses foreign
 objects. They do not replace a Hyper-V run.
 
+## Manual service installation for checking
+
+Not part of `-Run` and not judged by the stand: these steps put the real helper
+under systemd in the stand VM by hand, from `packaging/linux/`. Restore
+`l2-clean` first, and never take a checkpoint afterwards: the clean checkpoint
+must not hold a Rosetun service (see "The clean checkpoint").
+
+1. **Build** the helper and the CLI of the commit you check, in WSL, on the host
+   (`D:\path\to\rosetun` is your checkout; the Linux build gets its own target
+   folder so it never mixes with the Windows one):
+
+   ```powershell
+   wsl -d Debian --exec bash -lc 'cd /mnt/d/path/to/rosetun && export CARGO_TARGET_DIR=$HOME/.cache/rosetun-manual && cargo +1.96.0 build --release --locked -p rosetun-helper-privileged -p rosetun && mkdir -p target/linux-manual && cp $CARGO_TARGET_DIR/release/rosetun-helper-privileged $CARGO_TARGET_DIR/release/rosetun packaging/linux/rosetun-helper.service packaging/linux/rosetun.sysusers target/linux-manual/'
+   ```
+
+2. **Copy** them to the guest with the stand's key and pinned host key
+   (`<address>` from `(Get-VMNetworkAdapter -VMName rosetun-linux-l2).IPAddresses`,
+   the alias is your `StandId`):
+
+   ```powershell
+   ssh -i "$env:USERPROFILE\.ssh\rosetun-l2" -o UserKnownHostsFile="$env:USERPROFILE\.ssh\rosetun-l2.known_hosts" -o HostKeyAlias=rosetun-l2-stand-1 -o StrictHostKeyChecking=yes l2admin@<address> 'mkdir -p -m 700 rosetun-manual'
+   scp -i "$env:USERPROFILE\.ssh\rosetun-l2" -o UserKnownHostsFile="$env:USERPROFILE\.ssh\rosetun-l2.known_hosts" -o HostKeyAlias=rosetun-l2-stand-1 -o StrictHostKeyChecking=yes target\linux-manual\* l2admin@<address>:rosetun-manual/
+   ```
+
+3. **Engines**, in the guest as `l2admin`. The versions must be the pinned
+   ones (`SUPPORTED_SING_BOX_VERSION` and `SUPPORTED_XRAY_VERSION` in the engine
+   crates; 1.14.3 and 26.10.21 at the time of writing). Compare each archive with
+   the checksum its release page publishes before you install it:
+
+   ```sh
+   cd ~/rosetun-manual
+   sudo apt-get install --no-install-recommends curl unzip
+   curl -fLO https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64.tar.gz
+   curl -fLO https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-linux-64.zip
+   sha256sum sing-box-1.14.3-linux-amd64.tar.gz Xray-linux-64.zip
+   tar -xzf sing-box-1.14.3-linux-amd64.tar.gz --strip-components=1 sing-box-1.14.3-linux-amd64/sing-box
+   unzip -o Xray-linux-64.zip xray
+   ```
+
+4. **Install** (root, 0755 binaries in a root-owned folder: the helper refuses
+   engines that anyone but root can change, and every folder above them must be
+   root's too):
+
+   ```sh
+   cd ~/rosetun-manual
+   sudo install -d -m 0755 -o root -g root /usr/lib/rosetun
+   sudo install -m 0755 -o root -g root rosetun-helper-privileged rosetun sing-box xray /usr/lib/rosetun/
+   sudo ln -sfn /usr/lib/rosetun/rosetun /usr/local/bin/rosetun
+   sudo install -m 0644 -o root -g root rosetun-helper.service /usr/lib/systemd/system/rosetun-helper.service
+   sudo install -m 0644 -o root -g root rosetun.sysusers /usr/lib/sysusers.d/rosetun.conf
+   sudo systemd-sysusers
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now rosetun-helper
+   systemctl status rosetun-helper
+   ```
+
+   `systemd-sysusers` creates group `rosetun` only where it is missing; in the
+   stand it already exists (step 2 of the preparation).
+
+5. **Group membership.** Only members of `rosetun` may connect. Add the account
+   that runs the CLI or the GUI, then log out and in again: a session keeps the
+   groups it started with (`id` shows `rosetun` once it took effect):
+
+   ```sh
+   sudo usermod -aG rosetun <account>
+   ```
+
+6. **Removal**, if you do not simply restore `l2-clean`:
+
+   ```sh
+   sudo systemctl disable --now rosetun-helper
+   sudo rm -f /usr/lib/systemd/system/rosetun-helper.service /usr/lib/sysusers.d/rosetun.conf /usr/local/bin/rosetun
+   sudo rm -rf /usr/lib/rosetun /var/lib/rosetun
+   sudo systemctl daemon-reload
+   ```
+
+What the unit does: `Type=notify` (the helper reports ready once its socket is
+published), `/run/rosetun` and `/var/lib/rosetun` created by systemd
+(`RuntimeDirectory`, `StateDirectory`) and the runtime one removed on every stop
+or crash, so a killed helper's socket never blocks the restart, `KillMode=mixed`
+(the helper stops its engines itself) and `Restart=on-failure`. The comments in
+the unit file explain each line.
+
 ## Next stages (not implemented here)
 
 Each needs its own stand extension and a decision by the owner first:
 
-- L3: a systemd unit for Rosetun and real helper lifecycle, engine identification.
+- L3: stand scenarios for the systemd unit (installed by hand above) and the real
+  helper lifecycle, engine identification.
 - Kill switch and DNS lock on nftables, and the Linux contract for protection after
   a helper crash (the Windows fail-open expectation is **not** carried over).
 - Lockdown, reboot and power-cut scenarios; the missing-group case on a clean VM.

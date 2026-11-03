@@ -1,0 +1,58 @@
+# Rosetun privileged helper. Installed as
+# /usr/lib/systemd/system/rosetun-helper.service; the helper, sing-box and xray
+# live in /usr/lib/rosetun, owned by root and writable by nobody else (the
+# helper refuses to run engines from anywhere else).
+
+[Unit]
+Description=Rosetun privileged helper
+After=network.target
+
+[Service]
+# The helper sends READY=1 once its socket is published and STOPPING=1 when a
+# stop begins. Only the main process may notify: the engines it starts never
+# speak for the service.
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/lib/rosetun/rosetun-helper-privileged --service
+
+# /run/rosetun holds the client socket (group rosetun, mode 0660) and the
+# helper's private engine configuration. systemd removes the folder on every
+# stop, crash and restart, so a socket left by a killed helper never blocks
+# the next start; the helper itself never deletes an endpoint it does not own.
+RuntimeDirectory=rosetun
+RuntimeDirectoryMode=0755
+# /var/lib/rosetun: lists and state, root only.
+StateDirectory=rosetun
+StateDirectoryMode=0700
+
+# SIGTERM goes to the helper alone, which stops the engines itself (SIGTERM
+# to each engine's process group, then a kill after 12 s) before it exits.
+# Whatever is left after that is killed with the rest of the unit. If the
+# helper dies instead, the kernel sends each engine SIGTERM at once (the
+# helper sets a parent-death signal), and systemd kills what remains.
+KillMode=mixed
+# The session's sing-box (12 s) and Xray (5 s), and a running server check's
+# pair, can each take their full wait; the rest of the teardown is short.
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=2
+
+# Hardening, limited to what cannot touch the TUN device, routes, /proc or
+# nftables:
+# - the helper runs no set-user-ID program, and needs no privilege it lacks;
+NoNewPrivileges=yes
+# - neither the helper nor the engines use /tmp;
+PrivateTmp=yes
+# - nothing here sets the host name;
+ProtectHostname=yes
+# - Go and Rust programs never change the execution domain;
+LockPersonality=yes
+# - nothing here asks for real-time scheduling;
+RestrictRealtime=yes
+# - nothing here creates set-user-ID or set-group-ID files;
+RestrictSUIDSGID=yes
+# - the helper and the engines are native 64-bit programs.
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
