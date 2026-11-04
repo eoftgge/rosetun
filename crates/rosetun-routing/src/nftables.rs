@@ -551,7 +551,11 @@ mod tests {
             for tunnel in [None, Some(&tunnel)] {
                 for (scope, hold, expected) in [
                     (ProtectionScope::AllTraffic, None, LeftBehind::KillSwitch),
-                    (ProtectionScope::AllTraffic, Some(&helper), LeftBehind::KillSwitch),
+                    (
+                        ProtectionScope::AllTraffic,
+                        Some(&helper),
+                        LeftBehind::KillSwitch,
+                    ),
                     (ProtectionScope::DnsOnly, None, LeftBehind::DnsLock),
                 ] {
                     let text = listing(&Rules {
