@@ -589,6 +589,20 @@ finally {
     Remove-Item -LiteralPath $l3tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# --- timeout runs programs: a job's shell function after it only fails in the guest
+foreach ($job in @('run-l2.sh', 'run-l3.sh', 'run-l4.sh')) {
+    $text = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\guest\$job") -Raw
+    $functions = @([regex]::Matches($text, '(?m)^\s*([a-z_][a-z0-9_]*)\(\) \{') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    $commands = @([regex]::Matches($text, '\btimeout(?: --?[a-z-]+(?:=\S+)?)* +\S+ +([a-z_][a-z0-9_]*)(?=\s)') | ForEach-Object { $_.Groups[1].Value })
+    $wrong = @($commands | Where-Object { $_ -in $functions })
+    Assert-That "$job gives timeout no shell function" ($wrong.Count -eq 0) ($wrong -join ', ')
+    Assert-That "$job has functions to check against" ($functions.Count -gt 0)
+}
+$probe = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\guest\run-l4.sh') -Raw
+Assert-That 'the check catches the mistake it is for' ('timeout --kill-after=3 60 as_user /usr/bin/x' -match '\btimeout(?: --?[a-z-]+(?:=\S+)?)* +\S+ +([a-z_][a-z0-9_]*)(?=\s)' -and $Matches[1] -eq 'as_user')
+$unguarded = [regex]::Matches($probe, '(?m)^\s*scope_probe [a-z-]+\s*$').Count
+Assert-That 'every L4 scope probe stops on a scope that did not run' ($unguarded -eq 0) "$unguarded unguarded"
+
 Write-Host "Test-LinuxHarness: $script:Passed passed, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }
 exit 0

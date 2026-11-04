@@ -110,12 +110,14 @@ passed() { grep -q "\"id\":\"$1\".*\"result\":\"PASS\"" "$RESULTS"; }
 uid_of() { id -u -- "$1"; }
 gid_of() { id -g -- "$1"; }
 
-# as_user COMMAND...: the first account, with its user manager's runtime folder,
-# as a program of its desktop session would run.
+# as_user SECONDS COMMAND...: the first account, with its user manager's runtime
+# folder, as a program of its desktop session would run. The limit is in here
+# because timeout runs programs and cannot run this function.
 as_user() {
-    local uid
+    local seconds=$1 uid
+    shift
     uid=$(uid_of "$USER_A")
-    setpriv --reuid="$uid" --regid="$(gid_of "$USER_A")" --init-groups --reset-env -- \
+    timeout --kill-after=3 "$seconds" setpriv --reuid="$uid" --regid="$(gid_of "$USER_A")" --init-groups --reset-env -- \
         /usr/bin/env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
         NO_COLOR=1 "$@"
 }
@@ -124,7 +126,7 @@ as_user() {
 cli() {
     local seconds=$1
     shift
-    CLI_OUT=$(cd "$RUN/work-$USER_A" && timeout --kill-after=3 "$seconds" as_user "$CLI" "$@" 2>&1 </dev/null)
+    CLI_OUT=$(cd "$RUN/work-$USER_A" && as_user "$seconds" "$CLI" "$@" 2>&1 </dev/null)
     CLI_RC=$?
     CLI_OUT=$(printf '%s' "$CLI_OUT" | sed 's/\x1b\[[0-9;]*m//g')
 }
@@ -209,22 +211,36 @@ expect_reached() {
 # scope of that name, as the GUI and the CLI put themselves in theirs. The
 # command's last output line is its result.
 in_scope() {
-    timeout --kill-after=3 60 as_user /usr/bin/systemd-run --user --scope --quiet --collect \
+    as_user 60 /usr/bin/systemd-run --user --scope --quiet --collect \
         --slice=app.slice --unit="$1" -- /bin/sh -c "$2" 2>&1 </dev/null | tail -n 1
 }
 
-# What a program in the scope gets: `rosetun status` first (its hello is what
-# makes the service look for the scope), then HTTPS on the physical interface,
-# and one UDP datagram to port 53 there ("refused" when the output hook drops it).
+# scope_line "RC COUNT": whether a probe's last line holds its two numbers. Any
+# other text is systemd-run's error, which must not pass for a curl result.
+scope_line() { [[ $1 =~ ^[0-9]+\ [0-9]+$ ]]; }
+
+# What a program in the scope gets, all in one run of the scope: a scope made
+# again is a new cgroup, with a new ID the table does not name until the next
+# hello. So `rosetun status` first (its hello makes the service look for the
+# scope), then HTTPS on the physical interface, and one UDP datagram to port 53
+# there, counted as 1 when the output hook refuses it. Fails when the scope did
+# not run; a scope of the same name must be gone before the next can be made.
 scope_probe() {
-    local unit=$1
-    SCOPE_HTTPS=$(in_scope "$unit" "$CLI status >/dev/null 2>&1; curl -s -o /dev/null --connect-timeout 3 --max-time 8 --interface $PHYS https://$PROBE_ADDRESS/ </dev/null; echo \$?")
-    SCOPE_DNS=$(in_scope "$unit" "curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 --interface $PHYS tftp://$DNS_PROBE_ADDRESS:53/rosetun-l4 2>&1 </dev/null | grep -c 'Operation not permitted'")
+    local unit=$1 uid line deadline=$((SECONDS + 15))
+    uid=$(uid_of "$USER_A")
+    while [ -e "/sys/fs/cgroup/user.slice/user-$uid.slice/user@$uid.service/app.slice/$unit.scope" ]; do
+        [ "$SECONDS" -lt "$deadline" ] || { fail_reason="$unit.scope of the last probe is still there"; return 1; }
+        sleep 1
+    done
+    line=$(in_scope "$unit" "$CLI status >/dev/null 2>&1; curl -s -o /dev/null --connect-timeout 3 --max-time 8 --interface $PHYS https://$PROBE_ADDRESS/ </dev/null; https=\$?; dns=\$(curl -v -s -o /dev/null --connect-timeout 3 --max-time 4 --interface $PHYS tftp://$DNS_PROBE_ADDRESS:53/rosetun-l4 2>&1 </dev/null | grep -c 'Operation not permitted'); echo \"\$https \$dns\"")
+    scope_line "$line" || { fail_reason="$unit.scope did not run: $line"; return 1; }
+    SCOPE_HTTPS=${line%% *}
+    SCOPE_DNS=${line##* }
 }
 
 # A process of the same account outside any permitted scope.
 user_direct_https() {
-    as_user /usr/bin/curl -s -o /dev/null --connect-timeout 3 --max-time 8 --interface "$PHYS" "https://$PROBE_ADDRESS/" </dev/null
+    as_user 20 /usr/bin/curl -s -o /dev/null --connect-timeout 3 --max-time 8 --interface "$PHYS" "https://$PROBE_ADDRESS/" </dev/null
     printf '%s' "$?"
 }
 
@@ -461,23 +477,23 @@ scenario_enable() {
     passed lockdown.direct-blocked || return
 
     gui_scope() {
-        scope_probe rosetun-gui
-        reached_rc "${SCOPE_HTTPS:-x}" || { fail_reason="HTTPS from rosetun-gui.scope did not answer (curl exit '$SCOPE_HTTPS')"; return 1; }
+        scope_probe rosetun-gui || return 1
+        reached_rc "$SCOPE_HTTPS" || { fail_reason="HTTPS from rosetun-gui.scope did not answer (curl exit '$SCOPE_HTTPS')"; return 1; }
         [ "$SCOPE_DNS" = 0 ] || { fail_reason="UDP 53 from rosetun-gui.scope was refused"; return 1; }
     }
     check lockdown.gui-scope "the GUI's scope gets HTTPS and DNS out of the physical interface" gui_scope
 
     cli_scope() {
-        scope_probe rosetun-cli
-        reached_rc "${SCOPE_HTTPS:-x}" || { fail_reason="HTTPS from rosetun-cli.scope did not answer (curl exit '$SCOPE_HTTPS')"; return 1; }
+        scope_probe rosetun-cli || return 1
+        reached_rc "$SCOPE_HTTPS" || { fail_reason="HTTPS from rosetun-cli.scope did not answer (curl exit '$SCOPE_HTTPS')"; return 1; }
         [ "$SCOPE_DNS" = 0 ] || { fail_reason="UDP 53 from rosetun-cli.scope was refused"; return 1; }
     }
     check lockdown.cli-scope "the CLI's scope gets HTTPS and DNS out of the physical interface" cli_scope
 
     others() {
         expect_blocked "HTTPS from $USER_A outside a scope" user_direct_https || return 1
-        scope_probe rosetun-other
-        blocked_rc "${SCOPE_HTTPS:-x}" || { fail_reason="HTTPS from rosetun-other.scope was not refused (curl exit '$SCOPE_HTTPS')"; return 1; }
+        scope_probe rosetun-other || return 1
+        blocked_rc "$SCOPE_HTTPS" || { fail_reason="HTTPS from rosetun-other.scope was not refused (curl exit '$SCOPE_HTTPS')"; return 1; }
         [ "$SCOPE_DNS" = 1 ] || { fail_reason="UDP 53 from rosetun-other.scope was not refused"; return 1; }
     }
     check lockdown.other-process "the same account outside the two scopes is refused" others
@@ -508,16 +524,16 @@ scenario_session() {
     check lockdown.session "a session without the kill switch connects, gets the kill switch and the tunnel answers" session
 
     scope_closed() {
-        scope_probe rosetun-gui
-        blocked_rc "${SCOPE_HTTPS:-x}" || { fail_reason="HTTPS from rosetun-gui.scope on $PHYS was not refused during the session (curl exit '$SCOPE_HTTPS')"; return 1; }
+        scope_probe rosetun-gui || return 1
+        blocked_rc "$SCOPE_HTTPS" || { fail_reason="HTTPS from rosetun-gui.scope on $PHYS was not refused during the session (curl exit '$SCOPE_HTTPS')"; return 1; }
     }
     check lockdown.session-scope-closed "during the session the GUI's scope does not get past the tunnel" scope_closed
 
     after() {
         disconnect || return 1
         expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS" direct_https || return 1
-        scope_probe rosetun-gui
-        reached_rc "${SCOPE_HTTPS:-x}" || { fail_reason="the GUI's scope did not get its permit back (curl exit '$SCOPE_HTTPS')"; return 1; }
+        scope_probe rosetun-gui || return 1
+        reached_rc "$SCOPE_HTTPS" || { fail_reason="the GUI's scope did not get its permit back (curl exit '$SCOPE_HTTPS')"; return 1; }
     }
     check lockdown.after-session "after the disconnect the network stays closed and the GUI's scope gets out again" after
 }
@@ -551,8 +567,8 @@ scenario_crash() {
         [[ $(lockdown_line) == on ]] || { fail_reason="the restarted helper does not report Lockdown: $CLI_OUT"; return 1; }
         ! printf '%s\n' "$CLI_OUT" | grep -q '^network: held closed' || { fail_reason="Lockdown is reported as the crash hold"; return 1; }
         expect_blocked "HTTPS to $PROBE_ADDRESS on $PHYS after the restart" direct_https || return 1
-        scope_probe rosetun-cli
-        reached_rc "${SCOPE_HTTPS:-x}" || { fail_reason="the CLI's scope has no permit from the restarted helper (curl exit '$SCOPE_HTTPS')"; return 1; }
+        scope_probe rosetun-cli || return 1
+        reached_rc "$SCOPE_HTTPS" || { fail_reason="the CLI's scope has no permit from the restarted helper (curl exit '$SCOPE_HTTPS')"; return 1; }
     }
     check crash.killed "a killed helper leaves the network closed; the restarted one writes its permits again" killed
 }
