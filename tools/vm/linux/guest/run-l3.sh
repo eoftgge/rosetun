@@ -92,8 +92,17 @@ cli() {
     local seconds=$1
     shift
     CLI_OUT=$(cd "$RUN/work-$USER_A" && timeout --kill-after=3 "$seconds" setpriv --reuid="$(uid_of "$USER_A")" \
-        --regid="$(gid_of "$USER_A")" --init-groups --reset-env -- "$CLI" "$@" 2>&1 </dev/null)
+        --regid="$(gid_of "$USER_A")" --init-groups --reset-env -- /usr/bin/env NO_COLOR=1 "$CLI" "$@" 2>&1 </dev/null)
     CLI_RC=$?
+    # The report keeps 300 characters: no colour codes, and the error first.
+    CLI_OUT=$(printf '%s' "$CLI_OUT" | sed 's/\x1b\[[0-9;]*m//g')
+}
+
+# The CLI's own error line without its time stamp, or the whole output.
+cli_error() {
+    local line
+    line=$(printf '%s\n' "$CLI_OUT" | grep -E ' ERROR ' | tail -n 1 | sed 's/^[0-9T:.Z-]* *//')
+    printf '%s' "${line:-$CLI_OUT}"
 }
 
 state_line() {
@@ -119,7 +128,7 @@ connect_with() {
     [[ $(state_line) =~ ^Disconnected ]] || cli 60 disconnect
     install -m 0600 -o "$(uid_of "$USER_A")" -g "$(gid_of "$USER_A")" -- "$ART/$request" "$RUN/work-$USER_A/$request"
     cli 120 connect "$request"
-    [ "$CLI_RC" -eq 0 ] || { fail_reason="connect with $request failed: $CLI_OUT"; return 1; }
+    [ "$CLI_RC" -eq 0 ] || { fail_reason="connect with $request failed: $(cli_error)"; return 1; }
     wait_state '^Connected' 30
 }
 
@@ -386,6 +395,8 @@ scenario_dns_lock() {
     }
     check dnslock.direct-blocked "UDP 53 was refused locally, HTTPS answered" dns_lock
     dns_tunnel() {
+        passed dnslock.direct-blocked || { fail_reason="no DNS-lock session to test through"; return 1; }
+        [[ $(state_line) =~ ^Connected ]] || { fail_reason="the DNS-lock session is not Connected"; return 1; }
         system_dns_answers || { fail_reason="dig with the guest's resolver got no answer through the tunnel"; return 1; }
         disconnect
     }
@@ -479,6 +490,11 @@ finalize() {
     [ -f "$REPORT/report.json" ] && return 0
     local started_cleanup
     started_cleanup=$(l2_now_ms)
+    # The host restores the checkpoint after the run, so it fetches this copy.
+    if [ -f "$STATE/installed" ]; then
+        journalctl -b -u rosetun-helper.service --no-pager -o short-monotonic 2>/dev/null | tail -n 400 |
+            LC_ALL=C tr -c '\n -~' '?' | l2_atomic_write "$REPORT/helper-journal.txt" 0644
+    fi
     cleanup
     local cleanup_ms=$(($(l2_now_ms) - started_cleanup))
 

@@ -466,6 +466,18 @@ if ($mode -eq 'Run') {
         Write-Step "Waiting for the job (at most $(Format-RosetunLinuxElapsed ([TimeSpan]::FromSeconds($wait))))"
         $verdict = Invoke-StandCollect -RunId $newRunId -WaitSeconds $wait -Progress
         Write-Step "Result: $verdict"
+        if ($Stage -eq 'L3') {
+            # The restore below removes the guest's copy; the journal explains a failure.
+            try {
+                $journal = Read-RosetunLinuxGuestFile -Target (Wait-StandTarget -TimeoutSeconds 60) -Path "$guestBase/$newRunId/report/helper-journal.txt"
+                if ($null -ne $journal) {
+                    $journalPath = Join-Path $runLog 'helper-journal.txt'
+                    [IO.File]::WriteAllText($journalPath, $journal, [Text.UTF8Encoding]::new($false))
+                    Write-Host "Helper journal: $journalPath"
+                }
+            }
+            catch { Write-Warning "Could not read the helper journal: $_" }
+        }
     }
     finally {
         if ($Stage -eq 'L3') {
