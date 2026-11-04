@@ -22,8 +22,8 @@ pub(super) fn release_discovery_routes(
     discovery_routes::release(tunnel, ipv6)
 }
 
-pub(super) fn flush_discovery_paths() -> Option<u32> {
-    discovery_routes::flush_paths()
+pub(super) fn flush_discovery_paths(tunnel: &crate::TunnelInterface) -> crate::DiscoveryFlush {
+    discovery_routes::flush_for_tunnel(tunnel)
 }
 
 use session::Engine;

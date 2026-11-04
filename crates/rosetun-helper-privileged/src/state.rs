@@ -320,6 +320,7 @@ struct Session {
     /// for a session without them off.
     discovery_routes_released: bool,
     discovery_path_flush: lan::DiscoveryPathFlush,
+    discovery_flushes: u8,
     /// The segment Lockdown's set was last written for without a session.
     lockdown_segment: rosetun_routing::lan::LanSegment,
 }
@@ -433,6 +434,7 @@ impl Helper {
                 discovery_path_flush: rosetun_routing::flush_discovery_paths,
                 #[cfg(test)]
                 discovery_path_flush: lan::test_flush,
+                discovery_flushes: 0,
                 lockdown_segment: rosetun_routing::lan::LanSegment::default(),
                 #[cfg(not(test))]
                 adapter_lookup: rosetun_routing::tunnel_adapter_present,
@@ -2258,6 +2260,7 @@ impl Session {
         self.lan_servers = servers;
         self.lan_watch = lan::LanWatch::default();
         self.discovery_route_failure = None;
+        self.discovery_flushes = 0;
         let cold_start = self.cold_start;
 
         if chain {
@@ -2437,7 +2440,7 @@ impl Session {
         if settings.allow_lan {
             self.release_discovery_routes(&settings.tun);
         } else {
-            self.forget_released_discovery_routes();
+            self.forget_released_discovery_routes(&settings.tun);
         }
 
         if let Some(server) = dns_server {

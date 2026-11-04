@@ -88,14 +88,18 @@ pub(super) fn release_discovery_routes(
     }
 }
 
-pub(super) fn flush_discovery_paths() -> Option<u32> {
+pub(super) fn flush_discovery_paths(tunnel: &crate::TunnelInterface) -> crate::DiscoveryFlush {
     #[cfg(windows)]
     {
-        windows::flush_discovery_paths()
+        windows::flush_discovery_paths(tunnel)
     }
     #[cfg(not(windows))]
     {
-        None
+        let _ = tunnel;
+        crate::DiscoveryFlush {
+            settled: true,
+            failure: None,
+        }
     }
 }
 

@@ -63,6 +63,15 @@ pub struct DiscoveryRoutes {
     pub failure: Option<u32>,
 }
 
+/// What one `flush_discovery_paths` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiscoveryFlush {
+    /// A fresh lookup of the discovery groups takes the tunnel.
+    pub settled: bool,
+    /// The first Windows error code.
+    pub failure: Option<u32>,
+}
+
 /// What the boot unit did (Linux).
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,9 +115,9 @@ pub fn release_discovery_routes(tunnel: &TunnelInterface, ipv6: bool) -> Discove
 
 /// Makes sockets look discovery destinations up again, once the tunnel has its
 /// routes back: Windows would otherwise keep the adapter
-/// `release_discovery_routes` sent them to. The Windows error code on failure.
-pub fn flush_discovery_paths() -> Option<u32> {
-    platform::flush_discovery_paths()
+/// `release_discovery_routes` sent them to. Repeat until `settled`.
+pub fn flush_discovery_paths(tunnel: &TunnelInterface) -> DiscoveryFlush {
+    platform::flush_discovery_paths(tunnel)
 }
 
 /// Choose the physical default route: a probe engine without its own TUN would
