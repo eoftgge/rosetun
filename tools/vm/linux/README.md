@@ -397,7 +397,7 @@ checking, restore `l2-clean` again.
    folder so it never mixes with the Windows one):
 
    ```powershell
-   wsl -d Debian --exec bash -lc 'cd /mnt/d/path/to/rosetun && export CARGO_TARGET_DIR=$HOME/.cache/rosetun-manual && cargo +1.96.0 build --release --locked -p rosetun-helper-privileged -p rosetun && mkdir -p target/linux-manual && cp $CARGO_TARGET_DIR/release/rosetun-helper-privileged $CARGO_TARGET_DIR/release/rosetun packaging/linux/rosetun-helper.service packaging/linux/rosetun.sysusers target/linux-manual/'
+   wsl -d Debian --exec bash -lc 'cd /mnt/d/path/to/rosetun && export CARGO_TARGET_DIR=$HOME/.cache/rosetun-manual && cargo +1.96.0 build --release --locked -p rosetun-helper-privileged -p rosetun && mkdir -p target/linux-manual && cp $CARGO_TARGET_DIR/release/rosetun-helper-privileged $CARGO_TARGET_DIR/release/rosetun packaging/linux/rosetun-helper.service packaging/linux/rosetun-lockdown.service packaging/linux/io.github.eoftgge.rosetun.policy packaging/linux/rosetun.sysusers target/linux-manual/'
    ```
 
 2. **Copy** them to the guest with the stand's key and pinned host key
@@ -434,9 +434,12 @@ checking, restore `l2-clean` again.
    sudo install -m 0755 -o root -g root rosetun-helper-privileged rosetun sing-box xray /usr/lib/rosetun/
    sudo ln -sfn /usr/lib/rosetun/rosetun /usr/local/bin/rosetun
    sudo install -m 0644 -o root -g root rosetun-helper.service /usr/lib/systemd/system/rosetun-helper.service
+   sudo install -m 0644 -o root -g root rosetun-lockdown.service /usr/lib/systemd/system/rosetun-lockdown.service
+   sudo install -m 0644 -o root -g root io.github.eoftgge.rosetun.policy /usr/share/polkit-1/actions/io.github.eoftgge.rosetun.policy
    sudo install -m 0644 -o root -g root rosetun.sysusers /usr/lib/sysusers.d/rosetun.conf
    sudo systemd-sysusers
    sudo systemctl daemon-reload
+   sudo systemctl enable rosetun-lockdown
    sudo systemctl enable --now rosetun-helper
    systemctl status rosetun-helper
    ```
@@ -487,11 +490,45 @@ checking, restore `l2-clean` again.
    network while the kill switch is on. The DNS lock drops only their DNS
    beside the tunnel.
 
-7. **Removal**, if you do not simply restore `l2-clean`:
+7. **Lockdown.** The helper offers it only while `rosetun-lockdown.service` is
+   enabled (a link in `sysinit.target.wants`, made by `systemctl enable` in
+   step 4; enable it before the helper starts, which reads it at start).
+   Turn it on as root, or from the GUI, which asks for an administrator's
+   password through polkit (`pkexec`):
 
    ```sh
+   sudo rosetun lockdown on            # or: sudo rosetun lockdown on --lan on
+   rosetun status                      # lockdown: on
+   sudo cat /var/lib/rosetun/lockdown  # the record the boot unit reads
+   sudo nft list table inet rosetun    # chains input, output, forward, policy drop
+   ```
+
+   Without a connection only the GUI and the CLI get out (TCP and DNS), and
+   only from their own user scopes (`app.slice/rosetun-gui.scope`,
+   `rosetun-cli.scope`), which they make themselves with
+   `systemd-run --user --scope`; the account must be in group `rosetun` and
+   have a running user manager (`systemctl --user` works). Install the GUI as
+   `/usr/lib/rosetun/rosetun-gui` for its permit; without that file only the
+   CLI has one. The table survives `systemctl stop rosetun-helper` and a
+   crash. After a reboot `rosetun-lockdown.service` writes it again before
+   the network comes up:
+
+   ```sh
+   systemctl status rosetun-lockdown
+   journalctl -b -o short-monotonic -u rosetun-lockdown -u NetworkManager -u systemd-networkd -u networking | head
+   ```
+
+   The way out without the service: `sudo rosetun reset-firewall` stops the
+   helper, removes the table and the record, and starts the helper again.
+   `sudo rosetun lockdown off` does the same through the running service.
+
+8. **Removal**, if you do not simply restore `l2-clean`:
+
+   ```sh
+   sudo rosetun reset-firewall
    sudo systemctl disable --now rosetun-helper
-   sudo rm -f /usr/lib/systemd/system/rosetun-helper.service /usr/lib/sysusers.d/rosetun.conf /usr/local/bin/rosetun
+   sudo systemctl disable rosetun-lockdown
+   sudo rm -f /usr/lib/systemd/system/rosetun-helper.service /usr/lib/systemd/system/rosetun-lockdown.service /usr/share/polkit-1/actions/io.github.eoftgge.rosetun.policy /usr/lib/sysusers.d/rosetun.conf /usr/local/bin/rosetun
    sudo rm -rf /usr/lib/rosetun /var/lib/rosetun
    sudo systemctl daemon-reload
    ```

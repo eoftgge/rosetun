@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Rosetun's polkit policy. Installed as
+  /usr/share/polkit-1/actions/io.github.eoftgge.rosetun.policy.
+
+  The GUI turns Lockdown on and off with
+  `pkexec /usr/lib/rosetun/rosetun lockdown on|off ...`: polkit asks for an
+  administrator's password, as UAC does on Windows, and runs the installed
+  CLI as root, which the service accepts. The action covers that program
+  path alone, and pkexec gives it a clean environment.
+-->
+<policyconfig>
+  <vendor>Rosetun</vendor>
+  <vendor_url>https://github.com/eoftgge/rosetun</vendor_url>
+
+  <action id="io.github.eoftgge.rosetun.lockdown">
+    <description>Change Rosetun Lockdown</description>
+    <description xml:lang="ru">Изменение Lockdown в Rosetun</description>
+    <message>Authentication is required to turn Rosetun Lockdown on or off</message>
+    <message xml:lang="ru">Чтобы включить или выключить Lockdown в Rosetun, нужна аутентификация</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/rosetun/rosetun</annotate>
+  </action>
+</policyconfig>
